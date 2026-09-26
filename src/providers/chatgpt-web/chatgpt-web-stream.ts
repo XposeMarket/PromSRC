@@ -189,6 +189,10 @@ export class ChatGPTWebStreamParser {
 
   getConversationId(): string { return this.conversationId; }
   getModelSlug(): string { return this.modelSlug; }
+  /** Ids of the final-answer messages (the web client downloads sandbox files by message id). */
+  getFinalMessageIds(): string[] {
+    return [...this.messages.values()].filter((m) => this.isFinalText(m)).map((m) => m.id);
+  }
 
   /** Final answer text with citations rendered as markdown links. */
   getFinalText(): string {

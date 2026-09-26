@@ -17,6 +17,7 @@ import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 
 const WEB_MEDIA_TOOL_NAMES = new Set([
+  'chatgpt_sandbox',
   'social_intel',
   'web_search',
   'web_search_single',
@@ -115,6 +116,11 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
     const { name, args, deps, sessionId } = ctx;
 
     switch (name) {
+      case 'chatgpt_sandbox': {
+        const { executeChatGPTSandbox } = await import('../../../tools/chatgpt-sandbox.js');
+        const out = await executeChatGPTSandbox(args, { abortSignal: (deps as any)?.abortSignal });
+        return { name, args, result: out.result, error: out.error };
+      }
       case 'social_intel': {
         const tr = await socialIntelTool.execute(args) as any;
         const resultStr = tr?.stdout ?? tr?.error ?? JSON.stringify(tr);

@@ -238,7 +238,41 @@ async function main() {
     assert.strictEqual(notif, null);
   }
 
-  // 10. Concurrent ChatGPT chats: calls route by conversation id, never to the
+  // 9c. Sandbox links, bot-check classification, sandbox file save.
+{
+  const { extractSandboxPaths, toNativeAbortSignal } = await import('./chatgpt-web-client');
+  {
+    // Foreign signal-like objects must become native AbortSignals (fetch rejects them otherwise).
+    const listeners: Array<() => void> = [];
+    const fake: any = { aborted: false, reason: undefined, addEventListener: (_: string, fn: () => void) => listeners.push(fn) };
+    const native = toNativeAbortSignal(fake)!;
+    assert.ok(native instanceof AbortSignal && !native.aborted);
+    listeners.forEach((fn) => fn());
+    assert.ok(native.aborted, 'foreign abort propagates');
+    assert.strictEqual(toNativeAbortSignal(undefined), undefined);
+    const real = new AbortController().signal;
+    assert.strictEqual(toNativeAbortSignal(real), real);
+  }
+  assert.deepStrictEqual(
+    extractSandboxPaths('Download [zip](sandbox:/mnt/data/neon_courier_game.zip). Also sandbox:/mnt/data/a b.png and sandbox:/mnt/data/../etc/passwd, again sandbox:/mnt/data/neon_courier_game.zip.'),
+    ['/mnt/data/neon_courier_game.zip', '/mnt/data/a'],
+    'sandbox paths are extracted, deduped, trailing punctuation trimmed, traversal rejected',
+  );
+  const os = await import('os');
+  const fsm = await import('fs');
+  const pathm = await import('path');
+  const { saveChatGPTSandboxFile } = await import('./chatgpt-sandbox-files');
+  const root = fsm.mkdtempSync(pathm.join(os.tmpdir(), 'cg-sbx-'));
+  const a = await saveChatGPTSandboxFile('abcdef123456', 'game.zip', Buffer.from('x'), root);
+  const b = await saveChatGPTSandboxFile('abcdef123456', 'game.zip', Buffer.from('y'), root);
+  const c = await saveChatGPTSandboxFile('abcdef123456', '..\\evil:name.txt', Buffer.from('z'), root);
+  assert.strictEqual(a, 'chatgpt-files/abcdef12/game.zip');
+  assert.strictEqual(b, 'chatgpt-files/abcdef12/game-2.zip', 'never overwrites');
+  assert.ok(c.startsWith('chatgpt-files/abcdef12/') && !c.includes('..'), `unsafe names are sanitized: ${c}`);
+  fsm.rmSync(root, { recursive: true, force: true });
+}
+
+// 10. Concurrent ChatGPT chats: calls route by conversation id, never to the
   //     newest turn by default; unmatched multi-turn calls are refused.
   {
     const { handleBridgeRpc } = await import('../../gateway/routes/chatgpt-bridge.router');
