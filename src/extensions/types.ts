@@ -32,6 +32,9 @@ export type ExtensionConnectionStrategy = {
   authentication?: {
     type: string;
     scopes?: string[];
+    /** Extra provider scopes added only when the matching capability is
+     * explicitly requested on a non-read-only connection plan. */
+    capabilityScopes?: Record<string, string[]>;
     audience?: string;
     authorizationUrl?: string;
     tokenUrl?: string;

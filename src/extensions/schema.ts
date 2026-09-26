@@ -166,7 +166,8 @@ export const ExtensionDescriptorSchema = z.object({
       id: z.string().min(1), adapter: z.string().min(1), priority: z.number().optional(),
       capabilities: z.array(z.string()).optional(), readOnlyDefault: z.boolean().optional(),
       authentication: z.object({
-        type: z.string().min(1), scopes: z.array(z.string()).optional(), audience: z.string().optional(),
+        type: z.string().min(1), scopes: z.array(z.string()).optional(),
+        capabilityScopes: z.record(z.array(z.string().min(1))).optional(), audience: z.string().optional(),
         authorizationUrl: z.string().url().optional(), tokenUrl: z.string().url().optional(), revokeUrl: z.string().url().optional(),
         pkceRequired: z.boolean().optional(), nonceRequired: z.boolean().optional(),
         callback: z.object({ host: z.string().optional(), port: z.number().int().positive().optional(), path: z.string().optional() }).optional(),

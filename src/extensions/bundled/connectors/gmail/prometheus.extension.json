@@ -102,6 +102,10 @@
       "authentication": {
         "type": "oauth2",
         "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/userinfo.email", "openid"],
+        "capabilityScopes": {
+          "email.send": ["https://www.googleapis.com/auth/gmail.send"],
+          "email.modify": ["https://www.googleapis.com/auth/gmail.modify"]
+        },
         "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
         "tokenUrl": "https://oauth2.googleapis.com/token",
         "pkceRequired": false,

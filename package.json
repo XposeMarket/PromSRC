@@ -103,6 +103,7 @@
     "test:workspace-tools": "npm run build:backend && node scripts/test-workspace-process-health.mjs",
     "test:integrations": "npm run build:backend && node scripts/test-integration-runtime-contract.mjs && tsx src/extensions/bundled/connectors/vercel/runtime.regression.ts",
     "test:connections": "npm run build:backend && node scripts/test-connection-orchestrator.mjs",
+    "test:connection-plan-scopes": "tsx src/connections/plugin-plan-resolver.regression.ts",
     "test:plugin-tool-surface": "tsx src/connections/tool-surface.regression.ts",
     "test:x-api-request-policy": "tsx src/gateway/tools/x-api-request-policy.regression.ts",
     "test:connector-oauth": "npm run build:backend && node scripts/test-connector-oauth-contract.mjs",
