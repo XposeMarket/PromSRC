@@ -3656,7 +3656,6 @@ function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
       || embedded.prompt
       || ''
   ).trim();
-  if (direct) return direct;
   const args = msg.args && typeof msg.args === 'object' ? msg.args
     : (msg.params && typeof msg.params === 'object' ? msg.params
       : (msg.input && typeof msg.input === 'object' ? msg.input
@@ -3664,7 +3663,9 @@ function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
           : (embedded.params && typeof embedded.params === 'object' ? embedded.params
             : (embedded.input && typeof embedded.input === 'object' ? embedded.input : null)))));
   const fromArgs = args ? String(args.task_prompt || args.taskPrompt || args.prompt || args.task || '').trim() : '';
-  return fromArgs || String(existing.prompt || existing.task || '').trim();
+  // Assignment text is immutable for a run. Partial status/replay frames must
+  // never replace it with their preview; steer messages have their own timeline.
+  return _mobileBackgroundFullPrompt(direct, fromArgs, existing.prompt, existing.task, existing.taskPrompt);
 }
 
 function _mobileParseBackgroundStatus(value) {
@@ -3724,7 +3725,8 @@ function _collectMobileBackgroundSpawnRecoveries(frames = [], sessionId = __pmCh
     }
     if (evt.type !== 'tool_result') continue;
     const parsed = _mobileParseBackgroundStatus(evt.result || evt.output || evt);
-    const prompt = String(parsed?.prompt || parsed?.taskPrompt || parsed?.promptPreview || promptQueue.shift() || '').trim();
+    const queuedPrompt = promptQueue.shift();
+    const prompt = _mobileBackgroundFullPrompt(parsed?.prompt, parsed?.taskPrompt, queuedPrompt, parsed?.promptPreview);
     if (parsed?.id) remember({ ...parsed, prompt, taskPrompt: prompt });
   }
   return [...byId.values()];
@@ -3937,8 +3939,8 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     label: identity.name,
     agentName: identity.name,
     agentColor: identity.color,
-    task: prompt || stored?.task || '',
-    prompt: prompt || stored?.task || '',
+    task: _mobileBackgroundFullPrompt(prompt, stored?.task, stored?.prompt, stored?.taskPrompt),
+    prompt: _mobileBackgroundFullPrompt(prompt, stored?.task, stored?.prompt, stored?.taskPrompt),
     model: msg.model || embedded.model || existing.model || stored?.model || '',
     providerId: msg.providerId || embedded.providerId || existing.providerId || stored?.providerId || '',
     reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || embedded.reasoningEffort || embedded.executor_reasoning_effort || existing.reasoningEffort || stored?.reasoningEffort || '',

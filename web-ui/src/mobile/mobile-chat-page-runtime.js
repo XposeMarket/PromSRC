@@ -4834,6 +4834,12 @@ void main() {
 
   function _mergeMobileBackgroundAgentSessionSnapshot(lane, session) {
     if (!lane?.message || !session || typeof session !== 'object') return false;
+    const assignment = (Array.isArray(session.history) ? session.history : []).find((turn) =>
+      turn?.role === 'user' && turn?.messageKind !== 'background_agent_steer'
+      && String(turn?.backgroundAgentId || lane.id) === String(lane.id));
+    const durablePrompt = String(assignment?.content || assignment?.body?.text || '').trim();
+    const promptRestored = durablePrompt.length > String(lane.prompt || lane.task || '').length;
+    if (promptRestored) lane.task = lane.prompt = durablePrompt;
     const durableSteers = (Array.isArray(session.history) ? session.history : [])
       .filter((turn) => turn?.role === 'user'
         && String(turn?.messageKind || '') === 'background_agent_steer'
@@ -4852,7 +4858,7 @@ void main() {
     const entries = (Array.isArray(session.processLog) ? session.processLog : [])
       .map(_normalizeMobileProcessEntry)
       .filter(Boolean);
-    let changed = lane.steerMessages.length !== priorSteerCount;
+    let changed = promptRestored || lane.steerMessages.length !== priorSteerCount;
     for (const entry of entries) {
       const type = String(entry?.type || 'info').trim() || 'info';
       const text = String(entry?.text || entry?.content || entry?.message || '').trim();
