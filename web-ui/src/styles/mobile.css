@@ -3005,12 +3005,23 @@ html.pm-session-context-open * {
 
 .pm-voice-chat-lyrics {
   max-width: min(100%, 640px);
-  color: rgba(255,255,255,.42);
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 21px;
-  font-weight: 500;
-  line-height: 1.36;
-  letter-spacing: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+}
+/* Keep spoken Markdown in the ordinary chat type scale and layout. Only the
+   word emphasis changes during playback; unspoken text stays readable. */
+.pm-msg.from-ai .pm-voice-answer-speaking .pm-voice-word--pending { opacity: .72; }
+.pm-msg.from-ai .pm-voice-answer-speaking .pm-voice-word--spoken { opacity: 1; }
+.pm-msg.from-ai .pm-voice-answer-speaking .pm-voice-word--active {
+  opacity: 1;
+  color: var(--prom-accent, currentColor);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: .16em;
 }
 .pm-voice-chat-transcript {
   max-width: min(100%, 640px);

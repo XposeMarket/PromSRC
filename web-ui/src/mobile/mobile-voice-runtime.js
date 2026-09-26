@@ -2535,8 +2535,9 @@ export function createMobileVoiceRuntime(context = {}) {
     if (!activeTurn) return 0;
     const audio = __pmRealtimeAgent?.conn?.audio;
     const mediaNow = Number(audio?.currentTime);
-    if (Number.isFinite(mediaNow)) {
-      const previousMediaTime = Number(activeTurn.voiceRealtimeMediaLastTime);
+    if (Number.isFinite(mediaNow) && mediaNow > 0) {
+      const previousMediaTime = activeTurn.voiceRealtimeMediaLastTime == null
+        ? NaN : Number(activeTurn.voiceRealtimeMediaLastTime);
       if (!Number.isFinite(previousMediaTime)) {
         activeTurn.voiceRealtimeMediaLastTime = mediaNow;
         activeTurn.voiceRealtimePlaybackClockPrimedAt = Date.now();
@@ -2551,7 +2552,11 @@ export function createMobileVoiceRuntime(context = {}) {
         activeTurn.voiceRealtimePlaybackClockObservedAt = Date.now();
         return activeTurn.voiceRealtimePlaybackMs;
       }
-      if (Number(activeTurn.voiceRealtimePlaybackMs || 0) > 0) return activeTurn.voiceRealtimePlaybackMs;
+      // A stalled WebRTC clock must not leave the text frozen halfway through
+      // speech. Prefer playout time when it moves, then advance from wall time.
+      const observedAt = Number(activeTurn.voiceRealtimePlaybackClockObservedAt || activeTurn.voiceRealtimePlaybackClockPrimedAt || 0);
+      const played = Number(activeTurn.voiceRealtimePlaybackMs || 0);
+      if (observedAt && played >= 0) return played + Math.max(0, Date.now() - observedAt);
     }
     const started = Number(activeTurn?.voiceRealtimeAudioStartedAt || activeTurn?.voiceRealtimeUpdatedAt || Date.now());
     return Math.max(0, Date.now() - started);

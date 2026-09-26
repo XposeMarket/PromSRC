@@ -5944,6 +5944,15 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
     return normalized === 'ai' || normalized === 'assistant' ? 'assistant' : normalized;
   };
   if (role(a.role) !== role(b.role)) return false;
+  // Realtime Voice: one row per exchange part, even though its text grows.
+  const voiceKey = (m) => {
+    const group = String(m?.workflowGroupId || '').trim();
+    const part = String(m?.workflowPart || '').trim();
+    return /^voice_exchange_/.test(group) && /^voice_(?:user|assistant)$/.test(part) ? `${group}|${part}` : '';
+  };
+  const aVoice = voiceKey(a);
+  const bVoice = voiceKey(b);
+  if (aVoice && bVoice) return aVoice === bVoice;
   if (_mobileMessagesRepresentSameTurn(a, b)) return true;
   const aRequest = String(a._clientRequestId || a.clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || b.clientRequestId || '').trim();
@@ -11253,6 +11262,24 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_notifyMobileChatVoiceUpdate": { enumerable: true, get: () => _notifyMobileChatVoiceUpdate },
   "_notifyMobileVoiceAgentConnection": { enumerable: true, get: () => _notifyMobileVoiceAgentConnection },
   "_markMobileRealtimeAgentBackendReady": { enumerable: true, get: () => _markMobileRealtimeAgentBackendReady },
+  // The realtime runtime destructures these from its scope. They were missing
+  // from this context, so inline chat Voice threw "is not a function" when it
+  // created the assistant row (no AI text in chat) and after every user
+  // transcript (skipping the chat repaint/notify that follows _renderRecent).
+  "_activeMobileThread": { enumerable: true, get: () => _activeMobileThread },
+  "_appendVoiceAgentProcessEntriesToTurn": { enumerable: true, get: () => _appendVoiceAgentProcessEntriesToTurn },
+  "_attachVoiceAgentProcessEntriesToMobileTurn": { enumerable: true, get: () => _attachVoiceAgentProcessEntriesToMobileTurn },
+  "_isMobileHiddenVoiceDraftMessage": { enumerable: true, get: () => _isMobileHiddenVoiceDraftMessage },
+  "_isMobileRestartContextPacketText": { enumerable: true, get: () => _isMobileRestartContextPacketText },
+  "_mobileMessageCopyText": { enumerable: true, get: () => _mobileMessageCopyText },
+  "_mobileVoiceSettingsFromAgentProfile": { enumerable: true, get: () => _mobileVoiceSettingsFromAgentProfile },
+  "_normalizeVoiceAgentProcessEntry": { enumerable: true, get: () => _normalizeVoiceAgentProcessEntry },
+  "_takePendingVoiceAgentProcessEntries": { enumerable: true, get: () => _takePendingVoiceAgentProcessEntries },
+  // Voice-page-local UI hooks. Inline chat Voice has no Voice page, so route to
+  // the page's registered hooks when present and otherwise no-op.
+  "_renderRecent": { enumerable: true, get: () => (...args) => { try { return __pmVoice.renderRecent?.(...args); } catch {} } },
+  "_setStatus": { enumerable: true, get: () => (...args) => { try { return __pmVoice.setStatus?.(...args); } catch {} } },
+  "_setReadyVoiceState": { enumerable: true, get: () => (...args) => { try { return __pmVoice.setReadyVoiceState?.(...args); } catch {} } },
   "_nowTime": { enumerable: true, get: () => _nowTime },
   "_pmApprovalCanSave": { enumerable: true, get: () => _pmApprovalCanSave },
   "_pmApprovalTechnicalText": { enumerable: true, get: () => _pmApprovalTechnicalText },

@@ -9,6 +9,15 @@ export function historyMessageMergeKey(msg: any): string {
   if (role === 'user' && clientRequestId) return `${role}|client:${clientRequestId}`;
   const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
   if (!role || !content) return '';
+  // Realtime Voice rows grow in place while the user keeps talking (and while
+  // the reply streams). Each exchange owns exactly one voice_user and one
+  // voice_assistant row, so the exchange id is the identity. Keying by text
+  // made every partial transcript sync append another user bubble.
+  const voiceGroup = String(msg?.workflowGroupId || '').trim();
+  const voicePart = String(msg?.workflowPart || '').trim();
+  if (/^voice_exchange_/.test(voiceGroup) && /^voice_(?:user|assistant)$/.test(voicePart)) {
+    return `${role}|voice:${voiceGroup}|${voicePart}`;
+  }
   const eventId = String(msg?.voiceInterruptionEventId || msg?.eventId || '').trim();
   if (eventId) return `${role}|event:${eventId}|${content}`;
   // One runtime request can produce multiple assistant segments after a steer.
@@ -16,6 +25,11 @@ export function historyMessageMergeKey(msg: any): string {
   // alone is a safe fallback identity.
   if (clientRequestId) return `${role}|client:${clientRequestId}|${content}`;
   return `${role}|at:${Number(msg?.timestamp || 0) || 0}|${content}`;
+}
+
+function isRealtimeVoiceRow(msg: any): boolean {
+  return /^voice_exchange_/.test(String(msg?.workflowGroupId || '').trim())
+    && /^voice_(?:user|assistant)$/.test(String(msg?.workflowPart || '').trim());
 }
 
 function isInterruptedAssistantMessage(msg: any): boolean {
@@ -203,7 +217,10 @@ export function mergeHistoryWithExistingMessageMetadata(
           } : {}),
         } : {
           ...mergeHistoryMetadataFromPrior(raw, merged),
-          content: merged.content || raw.content,
+          // A realtime Voice row is still growing on the phone; its latest
+          // snapshot text is authoritative over the older partial copy.
+          content: (isRealtimeVoiceRow(raw) && String(raw.content || '').trim()) ? raw.content : (merged.content || raw.content),
+          ...(isRealtimeVoiceRow(raw) && raw.body && typeof raw.body === 'object' ? { body: raw.body } : {}),
           timestamp: Number(merged.timestamp || 0) || raw.timestamp,
           messageId: merged.messageId || (/^mobile-request:/.test(String(raw.messageId || '')) ? undefined : raw.messageId),
         }
