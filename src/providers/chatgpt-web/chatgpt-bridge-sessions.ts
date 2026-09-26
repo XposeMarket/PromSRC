@@ -35,6 +35,13 @@ const MAX_TURN_MS = 30 * 60_000;
 const turns = new Map<string, ChatGPTBridgeTurn>();
 /** ChatGPT conversation id -> bridge turn key (set once the SSE stream names it). */
 const conversationTurns = new Map<string, string>();
+/**
+ * ChatGPT's per-chat MCP session id (header x-openai-session / _meta
+ * "openai/session"; opaque, stable for every call of one chat, different per
+ * chat, verified 2026-09-26) -> bridge turn key. Learned on the first call
+ * that routes unambiguously.
+ */
+const sessionTurns = new Map<string, string>();
 let lastCatalog: BridgeToolSpec[] = [];
 
 export function chatGPTBridgeTurnKey(turn: Pick<ChatGPTBridgeTurn, 'sessionId' | 'turnId'>): string {
@@ -53,7 +60,45 @@ export function beginChatGPTBridgeTurn(turn: ChatGPTBridgeTurn): () => void {
     for (const [conversationId, turnKey] of conversationTurns) {
       if (turnKey === key) conversationTurns.delete(conversationId);
     }
+    for (const [openaiSession, turnKey] of sessionTurns) {
+      if (turnKey === key) sessionTurns.delete(openaiSession);
+    }
   };
+}
+
+// Only the per-chat session id counts: the conversation id arrives early from
+// the SSE stream but ChatGPT never echoes it on tool calls (2026-09-26), so a
+// conversation-bound turn is still unidentified to the bridge.
+function turnHasBinding(key: string): boolean {
+  for (const turnKey of sessionTurns.values()) if (turnKey === key) return true;
+  return false;
+}
+
+/** Live turns whose ChatGPT chat has not been identified yet. */
+export function unboundChatGPTBridgeTurnCount(now = Date.now()): number {
+  let count = 0;
+  for (const [key, turn] of turns) {
+    if (now - turn.startedAt > MAX_TURN_MS) continue;
+    if (!turnHasBinding(key)) count++;
+  }
+  return count;
+}
+
+/**
+ * Serialize only the unidentified window: a new ChatGPT turn waits while
+ * another live turn has not yet been matched to its ChatGPT chat (it binds on
+ * its first tool call, or ends). That keeps at most one unknown chat, so every
+ * unknown session id maps to exactly one turn. Bounded; proceeds after
+ * timeoutMs (calls that are still ambiguous are then refused, never guessed).
+ */
+export async function waitForChatGPTBridgeSlot(timeoutMs = 60_000, pollMs = 250, signal?: { aborted: boolean }): Promise<{ waitedMs: number; timedOut: boolean }> {
+  const started = Date.now();
+  while (unboundChatGPTBridgeTurnCount() > 0) {
+    if (signal?.aborted) break;
+    if (Date.now() - started >= timeoutMs) return { waitedMs: Date.now() - started, timedOut: true };
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return { waitedMs: Date.now() - started, timedOut: false };
 }
 
 /**
@@ -91,10 +136,12 @@ export interface ChatGPTBridgeRouteHints {
   /** Every string ChatGPT sent alongside the call (_meta values, headers). */
   candidateIds?: string[];
   toolName?: string;
+  /** ChatGPT's per-chat MCP session id, when present. */
+  openaiSession?: string;
 }
 
 export type ChatGPTBridgeRouteResult =
-  | { turn: ChatGPTBridgeTurn; via: 'conversation' | 'only_turn' | 'only_tool_owner' }
+  | { turn: ChatGPTBridgeTurn; via: 'conversation' | 'openai_session' | 'only_turn' | 'only_tool_owner' | 'only_unbound' }
   | { turn: null; reason: 'idle' | 'ambiguous' | 'tool_not_allowed' };
 
 /**
@@ -107,20 +154,38 @@ export type ChatGPTBridgeRouteResult =
 export function routeChatGPTBridgeCall(hints: ChatGPTBridgeRouteHints = {}, now = Date.now()): ChatGPTBridgeRouteResult {
   const live = liveTurns(now);
   if (!live.length) return { turn: null, reason: 'idle' };
+  const keyOf = (turn: ChatGPTBridgeTurn) => chatGPTBridgeTurnKey(turn);
+  const openaiSession = String(hints.openaiSession || '').trim();
+  const bind = (result: ChatGPTBridgeRouteResult): ChatGPTBridgeRouteResult => {
+    if (result.turn && openaiSession && !sessionTurns.has(openaiSession)) sessionTurns.set(openaiSession, keyOf(result.turn));
+    return result;
+  };
+  if (openaiSession) {
+    const key = sessionTurns.get(openaiSession);
+    const turn = key ? turns.get(key) : undefined;
+    if (turn && live.includes(turn)) return { turn, via: 'openai_session' };
+    if (key) sessionTurns.delete(openaiSession);
+  }
   for (const candidate of hints.candidateIds || []) {
     const key = conversationTurns.get(String(candidate || '').trim());
     const turn = key ? turns.get(key) : undefined;
-    if (turn && live.includes(turn)) return { turn, via: 'conversation' };
+    if (turn && live.includes(turn)) return bind({ turn, via: 'conversation' });
   }
   const allows = (turn: ChatGPTBridgeTurn) => {
     if (!hints.toolName) return true;
     try { return turn.allowedTools().some((tool) => tool.name === hints.toolName); } catch { return false; }
   };
   if (live.length === 1) {
-    return allows(live[0]) ? { turn: live[0], via: 'only_turn' } : { turn: null, reason: 'tool_not_allowed' };
+    return allows(live[0]) ? bind({ turn: live[0], via: 'only_turn' }) : { turn: null, reason: 'tool_not_allowed' };
   }
-  const owners = live.filter(allows);
-  if (owners.length === 1) return { turn: owners[0], via: 'only_tool_owner' };
+  // An unknown chat can only belong to a turn that has not been identified yet.
+  const unbound = openaiSession ? live.filter((turn) => !turnHasBinding(keyOf(turn))) : [];
+  if (unbound.length === 1) {
+    return allows(unbound[0]) ? bind({ turn: unbound[0], via: 'only_unbound' }) : { turn: null, reason: 'tool_not_allowed' };
+  }
+  const pool = unbound.length ? unbound : live;
+  const owners = pool.filter(allows);
+  if (owners.length === 1) return bind({ turn: owners[0], via: 'only_tool_owner' });
   if (!owners.length) return { turn: null, reason: 'tool_not_allowed' };
   return { turn: null, reason: 'ambiguous' };
 }
@@ -167,5 +232,6 @@ export function hasActiveChatGPTBridgeTurn(): boolean {
 export function clearChatGPTBridgeTurns(): void {
   turns.clear();
   conversationTurns.clear();
+  sessionTurns.clear();
   lastCatalog = [];
 }

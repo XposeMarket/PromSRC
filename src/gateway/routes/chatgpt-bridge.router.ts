@@ -76,6 +76,14 @@ function collectRouteCandidates(message: any, headers?: Record<string, unknown>)
   return [...out];
 }
 
+/** ChatGPT's per-chat MCP session id (header, else _meta). */
+function extractOpenAISession(message: any, headers?: Record<string, unknown>): string {
+  const fromHeader = headers?.['x-openai-session'];
+  const header = Array.isArray(fromHeader) ? fromHeader[0] : fromHeader;
+  const meta = message?.params?._meta?.['openai/session'] ?? message?.params?.arguments?._meta?.['openai/session'];
+  return String(header || meta || '').trim().slice(0, 200);
+}
+
 export async function handleBridgeRpc(message: JsonRpcRequest, headers?: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   const id = message?.id;
   const method = String(message?.method || '');
@@ -109,9 +117,10 @@ export async function handleBridgeRpc(message: JsonRpcRequest, headers?: Record<
     const name = String(message?.params?.name || '');
     const rawArgs = message?.params?.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};
     const { _meta: _ignoredMeta, ...args } = rawArgs as Record<string, unknown>;
-    const routed = routeChatGPTBridgeCall({ candidateIds: collectRouteCandidates(message, headers), toolName: name });
+    const openaiSession = extractOpenAISession(message, headers);
+    const routed = routeChatGPTBridgeCall({ candidateIds: collectRouteCandidates(message, headers), toolName: name, openaiSession });
     try {
-      logBridgeEvent({ event: 'route', tool: name, via: routed.turn ? routed.via : undefined, reason: routed.turn ? undefined : routed.reason, liveTurns: activeChatGPTBridgeTurnCount(), session: routed.turn?.sessionId });
+      logBridgeEvent({ event: 'route', tool: name, via: routed.turn ? routed.via : undefined, reason: routed.turn ? undefined : routed.reason, liveTurns: activeChatGPTBridgeTurnCount(), session: routed.turn?.sessionId, chat: openaiSession ? openaiSession.slice(-8) : undefined });
     } catch { /* diagnostics only */ }
     if (!routed.turn) {
       const text = routed.reason === 'idle'

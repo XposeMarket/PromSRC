@@ -2064,7 +2064,7 @@ import {
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../providers/chatgpt-web/chatgpt-web-models';
-import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
+import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, waitForChatGPTBridgeSlot } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 // â”€â”€â”€ Injected singletons (set by initChatRouter in server-v2.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _cronScheduler: CronScheduler;
@@ -7568,6 +7568,12 @@ RULES:
       const chatgptBridgeActive = String(generationOverride.providerId || '') === 'openai_codex' && isChatGPTWebModel(generationOverride.model);
       const chatgptBridgeTurnId = `${turnTiming.turnId}:${round}`;
       currentChatGPTBridgeTurnKey = chatgptBridgeActive ? chatGPTBridgeTurnKey({ sessionId, turnId: chatgptBridgeTurnId }) : '';
+      if (chatgptBridgeActive) {
+        // Another ChatGPT chat not yet matched to its ChatGPT session would make
+        // this turn's first tool call ambiguous. Wait (bounded) until it binds.
+        const slot = await waitForChatGPTBridgeSlot(60_000, 250, abortSignal).catch(() => null);
+        if (slot && slot.waitedMs > 500) turnTiming.mark('chatgpt_bridge_slot_wait', { waitedMs: slot.waitedMs, timedOut: slot.timedOut });
+      }
       const endChatGPTBridgeTurn = chatgptBridgeActive
         ? beginChatGPTBridgeTurn({
             sessionId,
