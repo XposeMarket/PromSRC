@@ -67,30 +67,44 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
       description: item.description,
       risk: item.risk || 'high_impact',
     }));
-    let strategies: ConnectionStrategy[] = declared.map((item) => ({
-      id: item.id, adapter: item.adapter, priority: item.priority, capabilities: item.capabilities || input.requestedCapabilities,
-      capabilityContracts,
-      readOnly: item.readOnlyDefault ?? input.readOnly,
-      authentication: item.authentication ? {
-        type: item.authentication.type,
-        scopes: item.authentication.scopes,
-        authorizationUrl: item.authentication.authorizationUrl,
-        tokenUrl: item.authentication.tokenUrl,
-        revokeUrl: item.authentication.revokeUrl,
-        pkceRequired: item.authentication.pkceRequired,
-        nonceRequired: item.authentication.nonceRequired,
-        callback: item.authentication.callback,
-        clientIdEnv: item.authentication.clientIdEnv,
-        clientSecretEnv: item.authentication.clientSecretEnv,
-      } : undefined,
-      configuration: {
-        ...(item.config || {}),
-        providerApp: descriptor?.connection?.providerApp,
-        registeredTools: getDeclaredExtensionTools(descriptor),
-        ...(input.metadata || {}),
-      },
-      verification: item.verification,
-    }));
+    const knownCapabilityIds = new Set(capabilityContracts?.map((item) => item.id) || []);
+    let strategies: ConnectionStrategy[] = declared.map((item) => {
+      const requestedKnownCapabilities = input.requestedCapabilities.filter((id) => knownCapabilityIds.has(id));
+      const capabilities = [...new Set([
+        ...(item.capabilities || input.requestedCapabilities),
+        ...(!input.readOnly ? requestedKnownCapabilities : []),
+      ])];
+      const scopes = item.authentication ? [...new Set([
+        ...(item.authentication.scopes || []),
+        ...(!input.readOnly ? requestedKnownCapabilities.flatMap((id) => item.authentication?.capabilityScopes?.[id] || []) : []),
+      ])] : undefined;
+      return {
+        id: item.id, adapter: item.adapter, priority: item.priority, capabilities,
+        capabilityContracts,
+        // readOnlyDefault is the safe default used by callers. An explicit
+        // readOnly:false request must be allowed to opt into reviewed writes.
+        readOnly: input.readOnly === false ? false : (item.readOnlyDefault ?? true),
+        authentication: item.authentication ? {
+          type: item.authentication.type,
+          scopes,
+          authorizationUrl: item.authentication.authorizationUrl,
+          tokenUrl: item.authentication.tokenUrl,
+          revokeUrl: item.authentication.revokeUrl,
+          pkceRequired: item.authentication.pkceRequired,
+          nonceRequired: item.authentication.nonceRequired,
+          callback: item.authentication.callback,
+          clientIdEnv: item.authentication.clientIdEnv,
+          clientSecretEnv: item.authentication.clientSecretEnv,
+        } : undefined,
+        configuration: {
+          ...(item.config || {}),
+          providerApp: descriptor?.connection?.providerApp,
+          registeredTools: getDeclaredExtensionTools(descriptor),
+          ...(input.metadata || {}),
+        },
+        verification: item.verification,
+      };
+    });
 
     const mcp = this.getMcpConfigs().find((item) => normalize(item.id) === normalize(canonicalServiceId) || normalize(item.name || '') === normalize(canonicalServiceId));
     if (!strategies.length && mcp) {
