@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import type { ChatMessage, ChatOptions, ChatResult, ModelStreamEvent } from '../LLMProvider';
 import { contentToString, stripCacheMarker } from '../content-utils';
-import { startConversation, hideConversation, uploadChatGPTWebImage, ChatGPTWebError, type ChatGPTWebCredentials, type ChatGPTWebUploadedImage } from './chatgpt-web-client';
+import { startConversation, hideConversation, uploadChatGPTWebImage, extractSandboxPaths, downloadChatGPTSandboxFile, ChatGPTWebError, type ChatGPTWebCredentials, type ChatGPTWebUploadedImage } from './chatgpt-web-client';
 import { ChatGPTWebStreamParser, type ChatGPTWebStreamEvent } from './chatgpt-web-stream';
 import { resolveChatGPTWebMode, CHATGPT_WEB_MODEL } from './chatgpt-web-models';
 
@@ -42,6 +42,12 @@ export interface ChatGPTWebAdapterDeps {
   providerId?: string;
   /** Called once ChatGPT names the conversation (routes bridge tool calls to this turn). */
   onConversationId?: (conversationId: string) => void;
+  /**
+   * Persist a file ChatGPT wrote to its own sandbox (/mnt/data). Returns the
+   * workspace-relative path it was saved to. Without this, `sandbox:` links in
+   * answers point at nothing outside chatgpt.com (2026-09-26 game report).
+   */
+  saveSandboxFile?: (conversationId: string, fileName: string, data: Buffer) => Promise<string>;
 }
 
 /** ChatGPT's file service rejects very large images; the web client caps near 20 MB. */
@@ -109,8 +115,9 @@ export function buildChatGPTWebMessages(messages: ChatMessage[], bridge: boolean
       '[PROMETHEUS BRIDGE]',
       'You are running inside Prometheus through the ChatGPT backend. The "Prometheus" connector (app) is attached and connected in this chat: it exposes the Prometheus tools named in the instructions above and runs them on the user\'s own computer (files, shell, browser, memory, notes).',
       `Call them with api_tool.call_tool${toolPath ? ` using path "${toolPath}"` : ''} and the tool\'s JSON arguments. They are available right now: never say the connector or a tool is unavailable without calling it first. Prefer calling a tool over guessing.`,
+      'Where work goes: deliverables the user asked for (apps, games, documents, code, projects) belong on the user\'s computer, so write them with the Prometheus file tools into the workspace. Your own python sandbox (/mnt/data) is for scratch work, computation, data analysis and charts. If you do produce a file in the sandbox, link it as sandbox:/mnt/data/<name>; Prometheus copies linked sandbox files into the workspace automatically.',
     ].join('\n')
-    : '[PROMETHEUS BRIDGE]\nYou are running inside Prometheus through the ChatGPT backend. The Prometheus tool bridge is not connected for this chat, so you cannot act on the user\'s computer; say so plainly if a request needs local tools.';
+    : '[PROMETHEUS BRIDGE]\nYou are running inside Prometheus through the ChatGPT backend. The Prometheus tool bridge is not connected for this chat, so you cannot act on the user\'s computer; say so plainly if a request needs local tools. Files you create in your python sandbox are copied to the user when you link them as sandbox:/mnt/data/<name>.';
   const system = [clip(systemText, MAX_SYSTEM_CHARS), bridgeNote].filter(Boolean).join('\n\n');
   push('system', system, { is_visually_hidden_from_conversation: true });
 
@@ -283,13 +290,18 @@ export class ChatGPTWebAdapter {
     };
 
     const wantTemporary = this.deps.temporaryChats ? this.deps.temporaryChats() : true;
+    // chatgpt_sandbox delegations must be saved chats: the interpreter/download
+    // endpoint answers 404 "You don't have access to this conversation" for
+    // Temporary Chats (live 2026-09-26), so their files could never come back.
+    // They are hidden afterwards like connector turns.
+    const keepForFiles = !!(options as any)?.chatgptNoBridge;
     try {
       resetIdle();
       const response = await startConversation(creds, {
         messages: chatMessages,
         model: mode.slug,
         thinkingEffort: mode.thinkingEffort,
-        temporary: wantTemporary,
+        temporary: wantTemporary && !keepForFiles,
         mcpSources: bridge ? [{ id: bridge.id, name: bridge.name, status: 'ONLY_ME' }] : undefined,
       }, controller.signal);
       resetIdle();
@@ -319,14 +331,42 @@ export class ChatGPTWebAdapter {
       clearTimeout(requestTimer);
       if (idleTimer) clearTimeout(idleTimer);
       options?.abortSignal?.removeEventListener?.('abort', onExternalAbort);
-      // Connector turns cannot be Temporary Chats (ChatGPT drops apps there),
-      // so hide the saved conversation instead to keep the sidebar clean.
-      if (bridge && wantTemporary && parser.getConversationId()) {
-        void hideConversation(creds, parser.getConversationId());
-      }
     }
 
-    const finalText = parser.getFinalText() || streamedText.trim();
+    let finalText = parser.getFinalText() || streamedText.trim();
+    // Pull sandbox files back before the conversation is hidden: the download
+    // endpoint is addressed by (conversation, message, path).
+    const conversationId = parser.getConversationId();
+    const sandboxPaths = extractSandboxPaths(finalText);
+    if (sandboxPaths.length && conversationId && this.deps.saveSandboxFile) {
+      const messageIds = parser.getFinalMessageIds();
+      const saved: string[] = [];
+      for (const sandboxPath of sandboxPaths.slice(0, 20)) {
+        let savedPath = '';
+        let lastErr = '';
+        for (const messageId of messageIds.length ? messageIds : ['']) {
+          try {
+            const data = await downloadChatGPTSandboxFile(creds, conversationId, messageId, sandboxPath, options?.abortSignal);
+            savedPath = await this.deps.saveSandboxFile(conversationId, sandboxPath.split('/').pop() || 'file', data);
+            break;
+          } catch (error: any) { lastErr = String(error?.message || error).slice(0, 200); }
+        }
+        if (savedPath) {
+          finalText = finalText.split(`sandbox:${sandboxPath}`).join(savedPath.replace(/\\/g, '/'));
+          saved.push(savedPath);
+          emit({ type: 'provider_event', nativeType: 'chatgpt.sandbox_file', data: { sandboxPath, savedPath } } as any);
+        } else {
+          console.warn(`[chatgpt-web] sandbox download failed for ${sandboxPath}: ${lastErr}`);
+          finalText += `\n\n_(Could not copy \`${sandboxPath}\` from ChatGPT's sandbox: ${lastErr || 'unknown error'})_`;
+        }
+      }
+      if (saved.length) finalText += `\n\nSaved to your workspace: ${saved.map((p) => `\`${p.replace(/\\/g, '/')}\``).join(', ')}`;
+    }
+    // Connector turns cannot be Temporary Chats (ChatGPT drops apps there),
+    // so hide the saved conversation instead to keep the sidebar clean.
+    if ((bridge || keepForFiles) && wantTemporary && conversationId) {
+      void hideConversation(creds, conversationId);
+    }
     if (assistantStarted) emit({ type: 'assistant_item_done', text: finalText, phase: 'final_answer', nativeType: 'chatgpt.message' });
     if (!finalText) {
       throw new ChatGPTWebError('CHATGPT_WEB_STREAM', streamError ? `ChatGPT stream error: ${streamError}` : 'ChatGPT returned no answer text.');

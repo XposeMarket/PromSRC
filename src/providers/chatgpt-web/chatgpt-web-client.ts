@@ -114,8 +114,12 @@ function classifyHttpError(status: number, bodyText: string, stage: string): Cha
     }
   })().replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 300);
   if (status === 401 || status === 403) {
-    if (/turnstile|cloudflare|challenge/i.test(bodyText.slice(0, 2000))) {
-      return new ChatGPTWebError('CHATGPT_WEB_TURNSTILE', `ChatGPT rejected the request with a bot check (${stage}). The web backend now enforces Turnstile for this account.`, status);
+    // An HTML 403 is Cloudflare's bot-check page, not an auth answer: the API
+    // answers auth failures with JSON. The keywords sit past the inline CSS, so
+    // a 2000-char scan missed them and told the user to reconnect a login that
+    // was fine (2026-09-26 16:06, cleared by itself at 16:09).
+    if (/^\s*<(!doctype|html)/i.test(bodyText) || /turnstile|cloudflare|challenge|cf-ray|cf_chl/i.test(bodyText)) {
+      return new ChatGPTWebError('CHATGPT_WEB_TURNSTILE', `ChatGPT served a Cloudflare bot check (${stage}, HTTP ${status}). This is usually temporary; your Codex login is fine. Try again in a minute.`, status);
     }
     return new ChatGPTWebError('CHATGPT_WEB_AUTH', `ChatGPT rejected the Codex session (${stage}, HTTP ${status})${detail ? `: ${detail}` : ''}. Reconnect OpenAI Codex in Settings -> Models.`, status);
   }
@@ -126,6 +130,19 @@ function classifyHttpError(status: number, bodyText: string, stage: string): Cha
 }
 
 export async function fetchChatRequirements(creds: ChatGPTWebCredentials, signal?: AbortSignal): Promise<ChatRequirements> {
+  // Bot-check pages are short-lived; retry twice with backoff before failing.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchChatRequirementsOnce(creds, signal);
+    } catch (error) {
+      const retryable = error instanceof ChatGPTWebError && error.code === 'CHATGPT_WEB_TURNSTILE' && attempt < 2 && !signal?.aborted;
+      if (!retryable) throw error;
+      await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 4000));
+    }
+  }
+}
+
+async function fetchChatRequirementsOnce(creds: ChatGPTWebCredentials, signal?: AbortSignal): Promise<ChatRequirements> {
   const response = await fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/sentinel/chat-requirements`, {
     method: 'POST',
     headers: buildChatGPTWebHeaders(creds),
@@ -295,6 +312,77 @@ export async function uploadChatGPTWebImage(
   if (!done.ok) throw classifyHttpError(done.status, await done.text().catch(() => ''), 'files');
   const { width, height } = imageDimensions(image.data);
   return { fileId, name: image.name, mimeType: image.mimeType, size: image.data.length, width, height };
+}
+
+/** `sandbox:/mnt/data/...` paths referenced in an answer (deduped, in order). */
+export function extractSandboxPaths(text: string): string[] {
+  const seen = new Set<string>();
+  for (const m of String(text || '').matchAll(/sandbox:(\/mnt\/data\/[^\s)\]"'<>`]+)/g)) {
+    const p = m[1].replace(/[.,;:]+$/, '');
+    if (!p.includes('..')) seen.add(p);
+  }
+  return [...seen];
+}
+
+/**
+ * Download one file ChatGPT's python tool wrote to its sandbox. Same two steps
+ * as the web client's sandbox link: ask for a signed URL for
+ * (conversation, message, sandbox path), then GET the bytes.
+ */
+export function toNativeAbortSignal(signal: any): AbortSignal | undefined {
+  if (!signal) return undefined;
+  if (signal instanceof AbortSignal) return signal;
+  if (typeof signal.addEventListener !== 'function') return undefined;
+  const controller = new AbortController();
+  if (signal.aborted) controller.abort(signal.reason);
+  else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  return controller.signal;
+}
+
+export async function downloadChatGPTSandboxFile(
+  creds: ChatGPTWebCredentials,
+  conversationId: string,
+  messageId: string,
+  sandboxPath: string,
+  signal?: AbortSignal,
+  maxBytes = 100 * 1024 * 1024,
+): Promise<Buffer> {
+  // Do not hand the signal to fetch: in the gateway the global AbortController
+  // can come from a different implementation than undici's, and even a freshly
+  // constructed AbortController().signal was rejected live ("member signal is
+  // not of type AbortSignal", 2026-09-26). Race against abort + a timeout instead.
+  const guarded = <T>(work: Promise<T>, label: string): Promise<T> => new Promise<T>((resolve, reject) => {
+    const s: any = signal;
+    if (s?.aborted) { reject(new ChatGPTWebError('CHATGPT_WEB_HTTP', `Sandbox download of ${sandboxPath} was cancelled.`)); return; }
+    const timer = setTimeout(() => reject(new ChatGPTWebError('CHATGPT_WEB_HTTP', `Sandbox ${label} timed out for ${sandboxPath}.`)), 120_000);
+    const onAbort = () => { clearTimeout(timer); reject(new ChatGPTWebError('CHATGPT_WEB_HTTP', `Sandbox download of ${sandboxPath} was cancelled.`)); };
+    try { s?.addEventListener?.('abort', onAbort, { once: true }); } catch { /* signal optional */ }
+    work.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+  const qs = new URLSearchParams({ message_id: messageId, sandbox_path: sandboxPath });
+  const meta = await guarded(fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/conversation/${encodeURIComponent(conversationId)}/interpreter/download?${qs}`, {
+    headers: buildChatGPTWebHeaders(creds),
+  }), 'download lookup');
+  const metaText = await meta.text().catch(() => '');
+  if (!meta.ok) throw classifyHttpError(meta.status, metaText, 'sandbox download');
+  let url = '';
+  try { url = String(JSON.parse(metaText)?.download_url || ''); } catch { /* handled below */ }
+  // download_url can be relative or point back at chatgpt.com (files/…/download);
+  // those need the same session headers. A signed CDN URL must not get them.
+  if (url.startsWith('/')) url = `${CHATGPT_WEB_ORIGIN}${url}`;
+  if (!/^https:\/\//.test(url)) throw new ChatGPTWebError('CHATGPT_WEB_HTTP', `ChatGPT returned no download URL for ${sandboxPath}: ${metaText.slice(0, 200)}`);
+  let host = '';
+  try { host = new URL(url).host; } catch { /* validated above */ }
+  const sameOrigin = host === new URL(CHATGPT_WEB_ORIGIN).host;
+  let file = await guarded(fetch(url, sameOrigin ? { headers: buildChatGPTWebHeaders(creds) } : undefined), 'file download');
+  if (!file.ok && !sameOrigin && (file.status === 401 || file.status === 403)) {
+    // Some estuary/file hosts still expect the bearer token.
+    file = await guarded(fetch(url, { headers: buildChatGPTWebHeaders(creds) }), 'file download');
+  }
+  if (!file.ok) throw new ChatGPTWebError('CHATGPT_WEB_HTTP', `Sandbox file download failed (${file.status}, host ${host}) for ${sandboxPath}.`, file.status);
+  const buf = Buffer.from(await file.arrayBuffer());
+  if (buf.length > maxBytes) throw new ChatGPTWebError('CHATGPT_WEB_HTTP', `Sandbox file ${sandboxPath} is larger than ${Math.round(maxBytes / 1048576)} MB.`);
+  return buf;
 }
 
 /**
