@@ -15,7 +15,7 @@ import { ChatGPTWebStreamParser, applyContentReferences, stripCitationMarkers, p
 import { resolveChatGPTWebMode, isChatGPTWebModel, CHATGPT_WEB_MODES } from './chatgpt-web-models';
 import { buildChatGPTWebMessages } from './chatgpt-web-adapter';
 import { buildConversationBody, solveProofOfWork } from './chatgpt-web-client';
-import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, clearChatGPTBridgeTurns, getActiveChatGPTBridgeTurn } from './chatgpt-bridge-sessions';
+import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, clearChatGPTBridgeTurns, getActiveChatGPTBridgeTurn, unboundChatGPTBridgeTurnCount, waitForChatGPTBridgeSlot } from './chatgpt-bridge-sessions';
 import { getReasoningCapability } from '../reasoning-capabilities';
 
 const fixture = fs.readFileSync(path.join(__dirname, '__fixtures__', 'web-search-stream.sse'), 'utf8');
@@ -268,6 +268,36 @@ async function main() {
     endB();
     assert.deepStrictEqual(ran, ['A:write_file', 'A:read_file', 'A:read_file', 'B:read_file']);
   }
+
+  // 10b. Real ChatGPT shape (2026-09-26): no conversation id in the call, only a
+  //      per-chat x-openai-session header. Turn A binds while it is the only
+  //      turn; B then gets every unknown session; neither ever crosses over.
+  {
+    const { handleBridgeRpc } = await import('../../gateway/routes/chatgpt-bridge.router');
+    clearChatGPTBridgeTurns();
+    const ran: string[] = [];
+    const mk = (sessionId: string, startedAt: number) => ({
+      sessionId, turnId: 't', startedAt,
+      allowedTools: () => [{ name: 'read_file', description: 'r', parameters: { type: 'object' } }],
+      executeTool: async (name: string) => { ran.push(`${sessionId}:${name}`); return { result: sessionId, error: false }; },
+    });
+    const call = (id: number, chat: string) => handleBridgeRpc({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'read_file', arguments: {} } }, { 'x-openai-session': chat }) as Promise<any>;
+    const endA = beginChatGPTBridgeTurn(mk('A', Date.now() - 1000));
+    bindChatGPTBridgeConversation(chatGPTBridgeTurnKey({ sessionId: 'A', turnId: 't' }), 'conv-from-sse');
+    assert.strictEqual(unboundChatGPTBridgeTurnCount(), 1, 'A is unidentified until its first call (SSE conversation id does not count)');
+    const slowSlot = waitForChatGPTBridgeSlot(5_000, 10);
+    assert.strictEqual((await call(1, 'v1/chatA')).result.content[0].text, 'A', 'single turn binds its chat');
+    assert.strictEqual((await slowSlot).timedOut, false, 'a waiting turn proceeds once A binds');
+    const endB = beginChatGPTBridgeTurn(mk('B', Date.now()));
+    assert.strictEqual((await call(2, 'v1/chatB')).result.content[0].text, 'B', 'unknown chat goes to the only unbound turn');
+    assert.strictEqual((await call(3, 'v1/chatA')).result.content[0].text, 'A', 'A keeps its chat with two live turns');
+    assert.strictEqual((await call(4, 'v1/chatB')).result.content[0].text, 'B', 'B keeps its chat');
+    endA();
+    endB();
+    assert.deepStrictEqual(ran, ['A:read_file', 'B:read_file', 'A:read_file', 'B:read_file']);
+    assert.strictEqual(unboundChatGPTBridgeTurnCount(), 0);
+  }
+
 
   // 11. Images on the latest user message become multimodal_text parts.
   {
