@@ -95,6 +95,14 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   return { type: eventType === 'error' ? 'error' : eventType === 'warn' ? 'warn' : 'info', actor: 'Prom', text, extra: baseExtra };
 }
 
+// Token packets are replayable in memory but are not durable process entries.
+// Retain the public answer tail until a tool proves it was commentary, matching
+// the live UI reducer. Weak keys keep this state scoped to one run/checkpoint.
+const backgroundNarrationTails = new WeakMap<Record<string, any>[], {
+  text: string;
+  frame: BackgroundAgentStreamFrame;
+}>();
+
 export function appendBackgroundSseTrace(
   processEntries: Record<string, any>[],
   liveTraceEntries: Record<string, any>[],
@@ -102,6 +110,28 @@ export function appendBackgroundSseTrace(
   data: any,
   frame: BackgroundAgentStreamFrame,
 ): void {
+  if (backgroundNarrationTails.get(liveTraceEntries)?.frame.streamId !== frame.streamId) {
+    backgroundNarrationTails.delete(liveTraceEntries);
+  }
+  if (event === 'token') {
+    const visibility = String(data?.visibility || data?.extra?.visibility || '').toLowerCase();
+    if (visibility !== 'private' && visibility !== 'internal') {
+      const previous = backgroundNarrationTails.get(liveTraceEntries)?.text || '';
+      backgroundNarrationTails.set(liveTraceEntries, { text: (previous + String(data?.text || '')).slice(-12_000), frame });
+    }
+    return;
+  }
+  const pendingNarration = backgroundNarrationTails.get(liveTraceEntries);
+  if (event === 'tool_call' && pendingNarration?.text.trim()) {
+    appendBackgroundSseTrace(processEntries, liveTraceEntries, 'token_narration_boundary',
+      { text: pendingNarration.text }, pendingNarration.frame);
+  }
+  if (event === 'token_narration_boundary') {
+    data = { ...data, text: data?.text || data?.message || data?.narration || pendingNarration?.text };
+  }
+  if (['tool_call', 'token_narration_boundary', 'final_response_start', 'final', 'done', 'error'].includes(event)) {
+    backgroundNarrationTails.delete(liveTraceEntries);
+  }
   const raw = backgroundProcessEntryFromSseEvent(event, data);
   if (!raw) return;
   const at = Number(frame.at || Date.now()) || Date.now();

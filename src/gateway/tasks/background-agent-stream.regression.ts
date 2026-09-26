@@ -182,3 +182,53 @@ testStartupDiagnosticsStayOutOfActivity();
   assert.equal(plan?.extra?.activeIndex, 0, 'the first active plan step is retained');
 }
 console.log('background-agent-stream regression: ok');
+
+// Cold checkpoint recovery must keep visible commentary even when the provider
+// only emits tokens followed by a tool (no explicit narration boundary).
+{
+  const stream = createBackgroundAgentStream(1000);
+  const processEntries: Record<string, any>[] = [];
+  const liveTraceEntries: Record<string, any>[] = [];
+  const emit = (event: string, data: any) => {
+    const frame = appendBackgroundAgentStreamEvent(stream, event, data);
+    appendBackgroundSseTrace(processEntries, liveTraceEntries, event, data, frame);
+  };
+  emit('token', { text: 'I found ' });
+  emit('token', { text: 'the cause.' });
+  emit('tool_call', { name: 'workspace_read' });
+  assert.equal(liveTraceEntries[0].type, 'preamble');
+  assert.equal(liveTraceEntries[0].text, 'I found the cause.');
+  assert.equal(liveTraceEntries[1].type, 'tool');
+  emit('token', { text: 'Checking the fix.' });
+  emit('token_narration_boundary', {});
+  emit('tool_call', { name: 'workspace_run' });
+  assert.equal(liveTraceEntries.filter(e => e.type === 'preamble').length, 2, 'explicit boundaries must not duplicate commentary');
+  emit('token', { text: 'Final answer only.' });
+  emit('final', { text: 'Final answer only.' });
+  emit('tool_call', { name: 'later_tool' });
+  emit('thinking_delta', { thinking: 'PRIVATE THINKING', visibility: 'private' });
+  emit('token', { text: 'PRIVATE TOKEN', visibility: 'private' });
+  emit('tool_call', { name: 'safe_tool' });
+  const recovered = JSON.parse(JSON.stringify({ processEntries, liveTraceEntries }));
+  assert.equal(recovered.liveTraceEntries.filter((e: any) => e.type === 'preamble').length, 2);
+  assert.doesNotMatch(JSON.stringify(recovered), /PRIVATE/);
+  assert.match(JSON.stringify(recovered), /I found the cause/);
+  console.log('background commentary checkpoint recovery: ok');
+}
+
+// Team callers intentionally discard process entries but retain their trace.
+{
+  const stream = createBackgroundAgentStream(1000);
+  const trace: Record<string, any>[] = [];
+  for (const [event, data] of [['token', { text: 'Team commentary.' }], ['tool_call', { name: 'read' }]] as const) {
+    appendBackgroundSseTrace([], trace, event, data, appendBackgroundAgentStreamEvent(stream, event, data));
+  }
+  assert.equal(trace[0].text, 'Team commentary.');
+  assert.equal(trace[0].type, 'preamble');
+  assert.equal(trace[1].type, 'tool');
+  appendBackgroundSseTrace([], trace, 'token', { text: 'Old stream tail.' }, appendBackgroundAgentStreamEvent(stream, 'token', {}));
+  const next = createBackgroundAgentStream(2000);
+  appendBackgroundSseTrace([], trace, 'tool_call', { name: 'new_run' }, appendBackgroundAgentStreamEvent(next, 'tool_call', {}));
+  assert.doesNotMatch(JSON.stringify(trace), /Old stream tail/);
+  console.log('team transient process-array commentary recovery: ok');
+}

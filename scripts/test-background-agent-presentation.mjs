@@ -56,6 +56,28 @@ const runtime = createMobileChatRendererRuntime({
   _nowTime: () => '12:00', escapeHtml,
 });
 
+// Full assignments must survive every partial status/replay update, including
+// cold hydration from durable work and more than one spawn in a recovery batch.
+const fullPrompt = 'Inspect the background agent task. '.repeat(45) + 'END OF ASSIGNMENT';
+runtime._upsertMobileBackgroundSpawnLane({ bgId: 'prompt-test', taskPrompt: fullPrompt }, 'main');
+for (let poll = 0; poll < 4; poll += 1) {
+  runtime._applyMobileBackgroundSpawnStatus({ id: 'prompt-test', state: 'running', promptPreview: fullPrompt.slice(0, 160) }, 'main');
+  runtime._upsertMobileBackgroundSpawnLane({ bgId: 'prompt-test', taskPrompt: fullPrompt.slice(0, 250) }, 'main');
+  assert.equal(runtime._mobileBackgroundSpawnLanes()['prompt-test'].prompt, fullPrompt);
+}
+persisted.set('cold-prompt', normalizeBackgroundAgentWork({ id: 'cold-prompt', sessionId: 'main', task: fullPrompt }));
+runtime._applyMobileBackgroundSpawnStatus({ id: 'cold-prompt', state: 'running', promptPreview: fullPrompt.slice(0, 160) }, 'main');
+assert.equal(runtime._mobileBackgroundSpawnLanes()['cold-prompt'].task, fullPrompt);
+const nextPrompt = 'Second unrelated assignment. '.repeat(30).trim();
+const recoveredPrompts = runtime._collectMobileBackgroundSpawnRecoveries([
+  { type: 'tool_call', data: { action: 'background_spawn', args: { prompt: fullPrompt } } },
+  { type: 'tool_result', data: { action: 'background_spawn', result: { id: 'recovered-first', promptPreview: fullPrompt.slice(0, 160) } } },
+  { type: 'tool_call', data: { action: 'background_spawn', args: { prompt: nextPrompt } } },
+  { type: 'tool_result', data: { action: 'background_spawn', result: { id: 'recovered-second', promptPreview: nextPrompt.slice(0, 160) } } },
+], 'main');
+assert.equal(recoveredPrompts[0].prompt, fullPrompt);
+assert.equal(recoveredPrompts[1].prompt, nextPrompt);
+
 // A server status cursor is not a receipt. Cold-open must consume earlier frames.
 runtime._applyMobileBackgroundSpawnStatus({ id: 'a', state: 'running', model: 'gpt-6-astra', providerId: 'openai', reasoningEffort: 'high', stream: { streamId: 'run1', lastSeq: 90 } }, 'main');
 const lane = runtime._mobileBackgroundSpawnLanes().a;
@@ -132,9 +154,28 @@ function extract(file, names) {
   return names.map(name => { assert.ok(functions.has(name), name); return functions.get(name); }).join('\n');
 }
 const pageFile = 'web-ui/src/mobile/mobile-chat-page-runtime.js';
+const snapshotMerge = extract(pageFile, ['_mergeMobileBackgroundAgentSessionSnapshot']);
+const snapshotContext = {
+  mergeBackgroundAgentSteerMessages: (a, b) => [...(a || []), ...b],
+  _normalizeMobileProcessEntry: entry => entry,
+  _mapServerHistoryToMobile: () => [],
+  _mergeMobileWorkflowTraceFromProcessEntries() {},
+  persistBackgroundAgentWork() {},
+  _mobileBackgroundSpawnWorkRecord: lane => lane,
+};
+vm.createContext(snapshotContext);
+vm.runInContext(snapshotMerge, snapshotContext);
+const coldLane = { id: 'cold', message: {}, task: fullPrompt.slice(0, 160), prompt: fullPrompt.slice(0, 160) };
+assert.equal(snapshotContext._mergeMobileBackgroundAgentSessionSnapshot(coldLane, { history: [
+  { role: 'user', content: 'Do not treat steer text as the assignment.', messageKind: 'background_agent_steer' },
+  { role: 'user', content: fullPrompt, backgroundAgentId: 'cold' },
+] }), true);
+assert.equal(coldLane.prompt, fullPrompt, 'cold session snapshot restores the complete initial assignment');
+
 const geometry = extract(pageFile, ['syncMobileSideSheetViewport']);
 const vars = {};
 const sideInput = {};
+
 const sandbox = {
   document: { activeElement: null },
   sideInput,
