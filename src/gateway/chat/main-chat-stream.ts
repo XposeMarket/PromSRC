@@ -15,6 +15,8 @@ export const MAIN_CHAT_STREAM_EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
   'reasoning_summary_delta',
   'model_stream_event',
   'process_run_output',
+  // Watchdog keepalive while joining background agents; live-only.
+  'background_wait',
 ]);
 
 export const MAIN_CHAT_WS_DIRECT_EVENTS: ReadonlySet<string> = new Set([

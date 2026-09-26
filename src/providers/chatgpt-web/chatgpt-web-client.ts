@@ -221,6 +221,82 @@ export async function startConversation(
   return response;
 }
 
+export interface ChatGPTWebUploadedImage {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  width: number;
+  height: number;
+}
+
+/** Pixel size from PNG / JPEG / GIF / WEBP headers (0x0 when unknown). */
+export function imageDimensions(buf: Buffer): { width: number; height: number } {
+  try {
+    if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    if (buf.length > 10 && buf.toString('ascii', 0, 3) === 'GIF') return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+    if (buf.length > 30 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+      const kind = buf.toString('ascii', 12, 16);
+      if (kind === 'VP8X') return { width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+      if (kind === 'VP8 ') return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+      if (kind === 'VP8L') { const b = buf.readUInt32LE(21); return { width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 }; }
+    }
+    if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let i = 2;
+      while (i + 9 < buf.length) {
+        if (buf[i] !== 0xff) { i += 1; continue; }
+        const marker = buf[i + 1];
+        const len = buf.readUInt16BE(i + 2);
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+        }
+        i += 2 + len;
+      }
+    }
+  } catch { /* fall through */ }
+  return { width: 0, height: 0 };
+}
+
+/**
+ * Upload one image to ChatGPT's file service (the web client's attach flow):
+ * create the file record, PUT the bytes to the returned blob URL, then mark it
+ * uploaded. The returned file id is referenced as file-service://<id>.
+ */
+export async function uploadChatGPTWebImage(
+  creds: ChatGPTWebCredentials,
+  image: { data: Buffer; mimeType: string; name: string },
+  signal?: AbortSignal,
+): Promise<ChatGPTWebUploadedImage> {
+  const headers = buildChatGPTWebHeaders(creds);
+  const create = await fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/files`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ file_name: image.name, file_size: image.data.length, use_case: 'multimodal', reset_rate_limits: false }),
+    signal,
+  });
+  if (!create.ok) throw classifyHttpError(create.status, await create.text().catch(() => ''), 'files');
+  const created: any = await create.json();
+  const fileId = String(created?.file_id || '');
+  const uploadUrl = String(created?.upload_url || '');
+  if (!fileId || !uploadUrl) throw new ChatGPTWebError('CHATGPT_WEB_STREAM', 'ChatGPT file upload did not return an upload URL.');
+  const put = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'x-ms-blob-type': 'BlockBlob', 'x-ms-version': '2020-04-08', 'content-type': image.mimeType },
+    body: image.data,
+    signal,
+  });
+  if (!put.ok) throw new ChatGPTWebError('CHATGPT_WEB_STREAM', `ChatGPT image upload failed (${put.status}).`, put.status);
+  const done = await fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/files/${encodeURIComponent(fileId)}/uploaded`, {
+    method: 'POST',
+    headers,
+    body: '{}',
+    signal,
+  });
+  if (!done.ok) throw classifyHttpError(done.status, await done.text().catch(() => ''), 'files');
+  const { width, height } = imageDimensions(image.data);
+  return { fileId, name: image.name, mimeType: image.mimeType, size: image.data.length, width, height };
+}
+
 /**
  * Remove a finished conversation from the user's ChatGPT sidebar (same call as
  * the web client's "Delete chat": PATCH is_visible=false). Best-effort.

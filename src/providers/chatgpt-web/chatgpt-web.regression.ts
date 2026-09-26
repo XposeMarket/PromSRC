@@ -15,7 +15,7 @@ import { ChatGPTWebStreamParser, applyContentReferences, stripCitationMarkers, p
 import { resolveChatGPTWebMode, isChatGPTWebModel, CHATGPT_WEB_MODES } from './chatgpt-web-models';
 import { buildChatGPTWebMessages } from './chatgpt-web-adapter';
 import { buildConversationBody, solveProofOfWork } from './chatgpt-web-client';
-import { beginChatGPTBridgeTurn, clearChatGPTBridgeTurns, getActiveChatGPTBridgeTurn } from './chatgpt-bridge-sessions';
+import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, clearChatGPTBridgeTurns, getActiveChatGPTBridgeTurn } from './chatgpt-bridge-sessions';
 import { getReasoningCapability } from '../reasoning-capabilities';
 
 const fixture = fs.readFileSync(path.join(__dirname, '__fixtures__', 'web-search-stream.sse'), 'utf8');
@@ -79,6 +79,28 @@ async function main() {
     const { parser } = parseAll([lines]);
     assert.strictEqual(parser.getFinalText(), 'Hello world');
   }
+
+  // 4b. Echoed input history must not leak into the new answer (2026-09-25:
+  // every earlier assistant reply was re-appended, doubling each turn).
+  {
+    const add = (id: string, role: string, text: string) => `data: {"p":"","o":"add","v":{"message":{"id":"${id}","author":{"role":"${role}"},"recipient":"all","content":{"content_type":"text","parts":["${text}"]},"status":"finished_successfully","metadata":{}}}}`;
+    const lines = [
+      add('h1', 'assistant', 'Yo Raul old reply'),
+      add('u1', 'user', 'new question'),
+      add('a1', 'assistant', ''),
+      'data: {"p":"/message/content/parts/0","o":"append","v":"Fresh answer"}',
+      'data: [DONE]',
+      '',
+    ].join('\n');
+    const byId = new ChatGPTWebStreamParser({ inputMessageIds: ['h1', 'u1'] });
+    const deltas = byId.push(lines).concat(byId.end()).filter((e: any) => e.type === 'text_delta').map((e: any) => e.text).join('');
+    assert.strictEqual(byId.getFinalText(), 'Fresh answer');
+    assert.strictEqual(deltas, 'Fresh answer');
+    const byUserEcho = new ChatGPTWebStreamParser();
+    byUserEcho.push(lines); byUserEcho.end();
+    assert.strictEqual(byUserEcho.getFinalText(), 'Fresh answer', 'user echo marks prior messages as history even without ids');
+  }
+
 
   // 5. Modes.
   assert.ok(isChatGPTWebModel('chatgpt') && isChatGPTWebModel('openai_codex/chatgpt') && !isChatGPTWebModel('gpt-6-astra'));
@@ -214,6 +236,56 @@ async function main() {
     assert.strictEqual(getActiveChatGPTBridgeTurn(), null, 'bridge closes when the provider call ends');
     const notif = await handleBridgeRpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
     assert.strictEqual(notif, null);
+  }
+
+  // 10. Concurrent ChatGPT chats: calls route by conversation id, never to the
+  //     newest turn by default; unmatched multi-turn calls are refused.
+  {
+    const { handleBridgeRpc } = await import('../../gateway/routes/chatgpt-bridge.router');
+    clearChatGPTBridgeTurns();
+    const ran: string[] = [];
+    const mk = (sessionId: string, startedAt: number, tools: string[]) => ({
+      sessionId, turnId: 't', startedAt,
+      allowedTools: () => tools.map((name) => ({ name, description: name, parameters: { type: 'object' } })),
+      executeTool: async (name: string) => { ran.push(`${sessionId}:${name}`); return { result: sessionId, error: false }; },
+    });
+    const endA = beginChatGPTBridgeTurn(mk('A', Date.now() - 1000, ['read_file', 'write_file']));
+    const endB = beginChatGPTBridgeTurn(mk('B', Date.now(), ['read_file']));
+    const list: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.deepStrictEqual(list.result.tools.map((t: any) => t.name).sort(), ['read_file', 'write_file'], 'catalog is the union of live turns');
+    const ambiguous: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read_file', arguments: {} } });
+    assert.strictEqual(ambiguous.result.isError, true, 'unmatched call with two live turns is refused, not sent to the newest');
+    const onlyOwner: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'write_file', arguments: {} } });
+    assert.strictEqual(onlyOwner.result.content[0].text, 'A', 'a tool only one turn exposes routes there');
+    bindChatGPTBridgeConversation(chatGPTBridgeTurnKey({ sessionId: 'A', turnId: 't' }), 'conv-aaaa-1111');
+    const byConv: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'read_file', arguments: { path: 'x' }, _meta: { 'openai/conversationId': 'conv-aaaa-1111' } } });
+    assert.strictEqual(byConv.result.content[0].text, 'A', 'conversation id wins over recency');
+    const byHeader: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'read_file', arguments: {} } }, { 'x-openai-conversation-id': 'conv-aaaa-1111' });
+    assert.strictEqual(byHeader.result.content[0].text, 'A', 'conversation id in headers also routes');
+    endA();
+    const single: any = await handleBridgeRpc({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'read_file', arguments: {} } });
+    assert.strictEqual(single.result.content[0].text, 'B', 'a single live turn still works without ids');
+    endB();
+    assert.deepStrictEqual(ran, ['A:write_file', 'A:read_file', 'A:read_file', 'B:read_file']);
+  }
+
+  // 11. Images on the latest user message become multimodal_text parts.
+  {
+    const { extractImageParts, attachImagesToLastUser } = await import('./chatgpt-web-adapter');
+    const { imageDimensions } = await import('./chatgpt-web-client');
+    const png = Buffer.alloc(33);
+    png.writeUInt32BE(0x89504e47, 0); png.writeUInt32BE(640, 16); png.writeUInt32BE(480, 20);
+    assert.deepStrictEqual(imageDimensions(png), { width: 640, height: 480 });
+    const parts = extractImageParts([{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } }]);
+    assert.strictEqual(parts.length, 1);
+    assert.strictEqual(parts[0].mimeType, 'image/png');
+    const msgs = buildChatGPTWebMessages([{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] as any }], null);
+    attachImagesToLastUser(msgs, [{ fileId: 'file-123', name: 'image_1.png', mimeType: 'image/png', size: 33, width: 640, height: 480 }]);
+    const last: any = msgs[msgs.length - 1];
+    assert.strictEqual(last.content.content_type, 'multimodal_text');
+    assert.strictEqual(last.content.parts[0].asset_pointer, 'file-service://file-123');
+    assert.strictEqual(last.content.parts[1], 'what is this', 'the omitted-image note is stripped once images are attached');
+    assert.strictEqual(last.metadata.attachments[0].id, 'file-123');
   }
 
   console.log('chatgpt-web regression: all checks passed');

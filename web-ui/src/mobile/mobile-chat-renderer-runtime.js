@@ -3570,6 +3570,22 @@ function _mobileBackgroundEmbeddedPayload(msg = {}) {
   return merged;
 }
 
+/**
+ * Poll responses only carry a 160-char promptPreview; the full prompt arrives
+ * once with the spawn. Ranking the preview above the stored prompt made the
+ * agent sheet flip between the full and the cut-off prompt on every poll
+ * (2026-09-25). Return the longest candidate; the preview only wins when
+ * nothing longer is known.
+ */
+function _mobileBackgroundFullPrompt(...candidates) {
+  let best = '';
+  for (const candidate of candidates) {
+    const text = String(candidate || '').trim();
+    if (text.length > best.length) best = text;
+  }
+  return best;
+}
+
 function _mobileBackgroundField(msg = {}, name = '') {
   const direct = msg?.[name];
   if (direct !== undefined && direct !== null && direct !== '') return direct;
@@ -3687,8 +3703,8 @@ function _collectMobileBackgroundSpawnRecoveries(frames = [], sessionId = __pmCh
       backgroundId: id,
       sessionId: String(sessionId || item.sessionId || '').trim(),
       spawnerSessionId: String(sessionId || item.spawnerSessionId || '').trim(),
-      prompt: String(item.prompt || item.taskPrompt || item.promptPreview || existing.prompt || '').trim(),
-      taskPrompt: String(item.taskPrompt || item.prompt || item.promptPreview || existing.taskPrompt || existing.prompt || '').trim(),
+      prompt: _mobileBackgroundFullPrompt(item.prompt, item.taskPrompt, existing.prompt, existing.taskPrompt, item.promptPreview),
+      taskPrompt: _mobileBackgroundFullPrompt(item.taskPrompt, item.prompt, existing.taskPrompt, existing.prompt, item.promptPreview),
     });
   };
   for (const frame of Array.isArray(frames) ? frames : []) {
@@ -3796,8 +3812,8 @@ async function _recoverMobileBackgroundSpawnDock({ sessionId = __pmChat.activeSe
       backgroundId: id,
       sessionId: sid,
       spawnerSessionId: sid,
-      prompt: String(status.prompt || status.taskPrompt || status.promptPreview || prev.prompt || '').trim(),
-      taskPrompt: String(status.taskPrompt || status.prompt || status.promptPreview || prev.taskPrompt || prev.prompt || '').trim(),
+      prompt: _mobileBackgroundFullPrompt(status.prompt, status.taskPrompt, prev.prompt, prev.taskPrompt, status.promptPreview),
+      taskPrompt: _mobileBackgroundFullPrompt(status.taskPrompt, status.prompt, prev.taskPrompt, prev.prompt, status.promptPreview),
       _fromStatus: prev._fromStatus || fromStatus,
     });
   };

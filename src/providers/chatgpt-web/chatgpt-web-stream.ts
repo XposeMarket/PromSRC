@@ -69,6 +69,8 @@ interface TrackedMessage {
   emittedReasoning: Set<string>;
   toolStarted: boolean;
   toolFinished: boolean;
+  /** Echo of a message we sent (prior history), never part of this answer. */
+  history?: boolean;
   connectorCall?: ConnectorCall;
 }
 
@@ -140,6 +142,16 @@ export class ChatGPTWebStreamParser {
   private modelSlug = '';
   private buffer = '';
   private done = false;
+  /**
+   * Ids of the messages we sent. ChatGPT echoes the input history back in the
+   * stream; without this every earlier assistant reply was re-emitted as part
+   * of the new answer, doubling the transcript each turn (2026-09-25).
+   */
+  private readonly inputIds: Set<string>;
+
+  constructor(options: { inputMessageIds?: Iterable<string> } = {}) {
+    this.inputIds = new Set(Array.from(options.inputMessageIds || [], String));
+  }
 
   /** Feed raw SSE text (any chunking). Returns the events produced by complete lines. */
   push(chunk: string): ChatGPTWebStreamEvent[] {
@@ -276,7 +288,14 @@ export class ChatGPTWebStreamParser {
       emittedReasoning: new Set(),
       toolStarted: false,
       toolFinished: false,
+      history: this.inputIds.has(id),
     };
+    // A user message in the stream is the echo of our input turn: anything
+    // tracked before it is history, even if ChatGPT re-keyed the ids.
+    if (msg.role === 'user') {
+      for (const prior of this.messages.values()) prior.history = true;
+      msg.history = true;
+    }
     this.messages.set(id, msg);
     this.current = msg;
     const slug = String(msg.metadata.model_slug || msg.metadata.default_model_slug || '');
@@ -320,7 +339,8 @@ export class ChatGPTWebStreamParser {
   }
 
   private isFinalText(msg: TrackedMessage): boolean {
-    return msg.role === 'assistant'
+    return !msg.history
+      && msg.role === 'assistant'
       && msg.recipient === 'all'
       && msg.contentType === 'text'
       && (!msg.channel || msg.channel === 'final')
@@ -328,7 +348,7 @@ export class ChatGPTWebStreamParser {
   }
 
   private onMessageUpdated(msg: TrackedMessage, events: ChatGPTWebStreamEvent[]): void {
-    if (msg.role === 'system' || msg.role === 'user') return;
+    if (msg.history || msg.role === 'system' || msg.role === 'user') return;
 
     // ChatGPT invoking one of its own tools (web.run, python, an MCP connector...).
     if (msg.role === 'assistant' && msg.recipient && msg.recipient !== 'all') {

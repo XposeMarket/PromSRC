@@ -21,6 +21,7 @@ import {
   reasoningSelectorOptions,
   formatReasoningSelectorLabel,
   hasReasoningCapabilityPolicy,
+  isChatGPTWebModel,
   supportsFastSpeed,
   validEffort,
 } from '../reasoning-capabilities.js';
@@ -612,7 +613,11 @@ function _setBadgeLabel(label) {
 
 function _setComposerModelIdentity(provider, model, effort) {
   window.__pmModelBadgeModelLabel = formatModelDisplayName(model, provider);
-  window.__pmModelBadgeReasoningLabel = formatReasoningDisplayName(effort);
+  // ChatGPT has modes (Instant … Pro), not effort levels; the generic
+  // formatter would show "Ultra" for Pro.
+  window.__pmModelBadgeReasoningLabel = String(provider || '').toLowerCase() === 'openai_codex' && isChatGPTWebModel(model)
+    ? (effort ? formatReasoningSelectorLabel(effort, provider, model) : '')
+    : formatReasoningDisplayName(effort);
   const key = String(provider || '').toLowerCase();
   const name = String(model || '').toLowerCase();
   const asset = key === 'anthropic' || name.includes('claude') ? 'claude'

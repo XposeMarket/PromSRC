@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import type { ChatMessage, ChatOptions, ChatResult, ModelStreamEvent } from '../LLMProvider';
 import { contentToString, stripCacheMarker } from '../content-utils';
-import { startConversation, hideConversation, ChatGPTWebError, type ChatGPTWebCredentials } from './chatgpt-web-client';
+import { startConversation, hideConversation, uploadChatGPTWebImage, ChatGPTWebError, type ChatGPTWebCredentials, type ChatGPTWebUploadedImage } from './chatgpt-web-client';
 import { ChatGPTWebStreamParser, type ChatGPTWebStreamEvent } from './chatgpt-web-stream';
 import { resolveChatGPTWebMode, CHATGPT_WEB_MODEL } from './chatgpt-web-models';
 
@@ -40,6 +40,36 @@ export interface ChatGPTWebAdapterDeps {
   getBridgeSource?: (sessionHint?: string) => Promise<ChatGPTWebBridgeSource | null>;
   temporaryChats?: () => boolean;
   providerId?: string;
+  /** Called once ChatGPT names the conversation (routes bridge tool calls to this turn). */
+  onConversationId?: (conversationId: string) => void;
+}
+
+/** ChatGPT's file service rejects very large images; the web client caps near 20 MB. */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGES_PER_MESSAGE = 10;
+
+/** Decode data: URLs (and local file paths) from image_url parts of one message. */
+export function extractImageParts(content: unknown): Array<{ data: Buffer; mimeType: string; name: string }> {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ data: Buffer; mimeType: string; name: string }> = [];
+  for (const part of content as any[]) {
+    if (part?.type !== 'image_url') continue;
+    const url = String(part?.image_url?.url || '');
+    const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+    let data: Buffer | null = null;
+    let mimeType = 'image/png';
+    if (m) {
+      mimeType = m[1];
+      data = Buffer.from(m[2], 'base64');
+    } else if (url && !/^https?:/i.test(url)) {
+      try { data = fs.readFileSync(url.replace(/^file:\/\//, '')); } catch { data = null; }
+    }
+    if (!data || !data.length) continue;
+    const ext = (mimeType.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    out.push({ data, mimeType, name: `image_${out.length + 1}.${ext}` });
+    if (out.length >= MAX_IMAGES_PER_MESSAGE) break;
+  }
+  return out;
 }
 
 function textOf(content: unknown): string {
@@ -100,12 +130,46 @@ export function buildChatGPTWebMessages(messages: ChatMessage[], bridge: boolean
     const parts = Array.isArray(m.content) ? m.content : null;
     const imageCount = parts ? parts.filter((p: any) => p?.type === 'image_url').length : 0;
     const text = clip(textOf(m.content), MAX_MESSAGE_CHARS);
-    push('user', imageCount ? `${text}\n\n[${imageCount} image attachment(s) omitted: images are not forwarded to ChatGPT yet]` : text);
+    // Images on the latest user message are uploaded and attached by
+    // attachImagesToLastUser(); older ones are only noted to keep requests small.
+    push('user', imageCount ? `${text}\n\n[${imageCount} image(s) were attached to this earlier message]` : text);
   }
 
   // ChatGPT needs the turn to end on a user message.
   if (!out.length || out[out.length - 1].author.role !== 'user') push('user', 'Continue.');
   return out;
+}
+
+/**
+ * Turn the final user message into a multimodal_text message carrying the
+ * uploaded images (image_asset_pointer parts first, like the web client).
+ */
+export function attachImagesToLastUser(
+  out: ReturnType<typeof buildChatGPTWebMessages>,
+  images: ChatGPTWebUploadedImage[],
+): void {
+  if (!images.length) return;
+  const last = out[out.length - 1];
+  if (!last || last.author.role !== 'user') return;
+  const text = String(last.content?.parts?.[last.content.parts.length - 1] || '')
+    .replace(/\n\n\[\d+ image\(s\) were attached to this earlier message\]$/, '');
+  last.content = {
+    content_type: 'multimodal_text',
+    parts: [
+      ...images.map((img) => ({
+        content_type: 'image_asset_pointer',
+        asset_pointer: `file-service://${img.fileId}`,
+        size_bytes: img.size,
+        width: img.width,
+        height: img.height,
+      })),
+      text,
+    ],
+  };
+  last.metadata = {
+    ...last.metadata,
+    attachments: images.map((img) => ({ id: img.fileId, name: img.name, size: img.size, mime_type: img.mimeType, width: img.width, height: img.height })),
+  };
 }
 
 export class ChatGPTWebAdapter {
@@ -121,6 +185,25 @@ export class ChatGPTWebAdapter {
     const creds = await this.deps.getCredentials();
     const bridge = this.deps.getBridgeSource ? await this.deps.getBridgeSource().catch(() => null) : null;
     const chatMessages = buildChatGPTWebMessages(messages, bridge);
+    // Real image input: upload the latest user message's images to ChatGPT's
+    // file service. Previously they were dropped with an "omitted" note, so
+    // ChatGPT answered "nothing came through" (2026-09-26 phone report).
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const pendingImages = extractImageParts(lastUser?.content).filter((img) => img.data.length <= MAX_IMAGE_BYTES);
+    if (pendingImages.length) {
+      const uploaded: ChatGPTWebUploadedImage[] = [];
+      for (const img of pendingImages) {
+        try { uploaded.push(await uploadChatGPTWebImage(creds, img, options?.abortSignal)); }
+        catch (error: any) { console.warn(`[chatgpt-web] image upload failed: ${String(error?.message || error).slice(0, 200)}`); }
+      }
+      attachImagesToLastUser(chatMessages, uploaded);
+      if (uploaded.length < pendingImages.length) {
+        const last = chatMessages[chatMessages.length - 1];
+        const note = `[${pendingImages.length - uploaded.length} image(s) could not be uploaded to ChatGPT]`;
+        const parts = last.content.parts;
+        parts[parts.length - 1] = `${parts[parts.length - 1] || ''}\n\n${note}`.trim();
+      }
+    }
 
     const controller = new AbortController();
     let abortReason = '';
@@ -138,7 +221,7 @@ export class ChatGPTWebAdapter {
       idleTimer = setTimeout(() => abortFor(`ChatGPT stream had no activity for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s`), IDLE_TIMEOUT_MS);
     };
 
-    const parser = new ChatGPTWebStreamParser();
+    const parser = new ChatGPTWebStreamParser({ inputMessageIds: chatMessages.map((m) => m.id) });
     let streamedText = '';
     let thinking = '';
     let actualModel = '';
@@ -183,6 +266,12 @@ export class ChatGPTWebAdapter {
           }
           case 'model':
             actualModel = ev.model;
+            break;
+          case 'conversation':
+            try { this.deps.onConversationId?.(ev.conversationId); } catch { /* routing hint only */ }
+            // The provider call may run in a model worker; the bridge lives in the
+            // gateway, so the id travels as a model event to chat.router.
+            emit({ type: 'provider_event', nativeType: 'chatgpt.conversation', data: { conversationId: ev.conversationId } } as any);
             break;
           case 'error':
             streamError = ev.message;
