@@ -115,6 +115,18 @@ const flatTrace = lane.message.liveTraceEntries.filter(entry => entry.extra?.sou
 const flatRendered = runtime._renderMobileAgentChatBubble({ ...lane.message, liveTraceEntries: flatTrace, traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'a' });
 assert.match(flatRendered, /pm-trace-tool-rows pm-trace-tool-body/);
 assert.doesNotMatch(flatRendered, /<details class="pm-trace-tool-group"/, 'work timer exposes rows without another generic disclosure');
+// Commentary must break tool phases; image replay with another event ID must
+// not render the same preview twice in the background detail sheet.
+send(6, 'vision_injected', { source: 'media_analysis', label: 'Same image from replay', preview: { dataUrl: '/api/canvas/inline?path=frozen.png', artifactKind: 'sample_frame' } });
+send(7, 'token_narration_boundary', { text: 'Now I will verify the asset.' });
+send(8, 'tool_call', { action: 'workspace_read', toolCallId: 'read2', args: { path: 'asset.png' } });
+const phased = runtime._renderMobileAgentChatBubble({ ...lane.message, traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'a' });
+assert.equal((phased.match(/pm-trace-thought-group/g) || []).length, 2, 'each public commentary boundary owns a separate thought block');
+assert.equal((phased.match(/pm-trace-tool-rows pm-trace-tool-body/g) || []).length, 2, 'commentary splits consecutive inline tool phases');
+assert.doesNotMatch(phased, /<details class="pm-trace-tool-group"/, 'an active summary must not collapse background tools into an item-count drawer');
+assert.equal((phased.match(/<img src="\/api\/canvas\/inline\?path=frozen\.png"/g) || []).length, 1, 'a replayed preview renders once');
+assert.ok(phased.indexOf('I found the capture path.') < phased.indexOf('Now I will verify the asset.'), 'commentary remains chronological');
+
 send(1, 'tool_call', { action: 'write_note', args: { content: 'Restart recovered.' } }, 'run2');
 assert.equal(lane.lastSeq, 1, 'new streams start with a fresh receipt cursor');
 assert.equal(lane.message.liveTraceEntries.length, 1);

@@ -3,6 +3,7 @@ import {
   MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
   MAIN_CHAT_ORPHAN_GRACE_MS,
   isMainChatExecutionAgeExceeded,
+  isLiveBackgroundJoin,
   isMainChatAbortSettleExpired,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressEvent,
@@ -100,5 +101,11 @@ assert.equal(isMainChatExecutionAgeExceeded({
   maxAgeMs: 10 * 60 * 1000,
   streamActive: false,
 }), false, 'completed streams must not be age-aborted');
+
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', lastSemanticProgressAt: now - 30_000, activeBackgroundCount: 2 }), true, 'live joined workers suppress the absolute age watchdog');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'active_tool_wait', lastSemanticProgressAt: now - 5_000, activeBackgroundCount: 2 }), true, 'the five-second foreground tool heartbeat must not mask a live join');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', lastSemanticProgressAt: now - 130_000, activeBackgroundCount: 2 }), false, 'a stale join cannot mask a dead owner');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', lastSemanticProgressAt: now - 30_000, activeBackgroundCount: 0 }), false, 'a completed worker cannot indefinitely mask a stuck foreground');
+assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'heartbeat', lastSemanticProgressAt: now, activeBackgroundCount: 2 }), false, 'transport heartbeats are not join liveness');
 
 console.log('main chat execution owner regression passed');

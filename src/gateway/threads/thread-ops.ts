@@ -1,4 +1,5 @@
 import { managedPrompt } from './thread-handoff';
+import { readDurableDetachedTurns, removeDurableDetachedTurn, saveDurableDetachedTurn, type DurableDetachedTurn } from './detached-turn-continuity';
 import crypto from 'crypto';
 import {
   flushSession,
@@ -20,7 +21,7 @@ import { unsettleSessionSafely } from '../session-settlement';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
 import { handleMainChatGoalCommand } from '../main-chat-goals';
-import { abortLiveRuntime, addPendingRuntimeSteerForSession, clearStartingSessionSteers, listLiveRuntimes } from '../live-runtime-registry';
+import { abortLiveRuntime, addPendingRuntimeSteerForSession, clearStartingSessionSteers, finishLiveRuntime, listInterruptedRuntimes, listLiveRuntimes, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import {
   cancelThreadSupervision,
   assertThreadSupervisionFollowUpAllowed,
@@ -291,7 +292,12 @@ function isSessionRunStarting(sessionId: string): boolean {
 }
 
 export function getPendingDetachedRun(targetSessionId: string): PendingDetachedRun | undefined {
-  return pendingDetachedRuns.get(String(targetSessionId || '').trim());
+  const id = String(targetSessionId || '').trim();
+  const live = pendingDetachedRuns.get(id);
+  if (live) return live;
+  const saved = readDurableDetachedTurns().find((item) => item.targetSessionId === id);
+  return saved ? { targetSessionId: id, prompt: saved.prompt, queuedAt: saved.queuedAt,
+    steers: saved.steers, cancelled: false } : undefined;
 }
 
 function composeQueuedPrompt(pending: PendingDetachedRun): string {
@@ -305,6 +311,39 @@ function composeQueuedPrompt(pending: PendingDetachedRun): string {
   ].join('\n');
 }
 
+export function resumeDurableDetachedTurns(deps: PrometheusThreadOpsDeps): number {
+  if (!deps.runInteractiveTurn) return 0;
+  let count = 0;
+  for (const turn of readDurableDetachedTurns()) {
+    // A registered owner is recovered from its runtime checkpoint. Replaying
+    // the accepted prompt as a new turn would duplicate tool side effects.
+    if (listInterruptedRuntimes().some((runtime) => runtime.kind === 'main_chat'
+      && runtime.sessionId === turn.targetSessionId && !runtime.recoveryData?.recoveredAt)) {
+      removeDurableDetachedTurn(turn.targetSessionId, turn.queuedAt);
+      continue;
+    }
+    if (listLiveRuntimes().some((runtime) => runtime.kind === 'main_chat' && runtime.sessionId === turn.targetSessionId)) {
+      removeDurableDetachedTurn(turn.targetSessionId, turn.queuedAt);
+      continue;
+    }
+    const history = getHistory(turn.targetSessionId, 40);
+    if (history.some((message: any) => message.role === 'assistant'
+      && Number(message.timestamp || 0) >= turn.queuedAt
+      && message.messageKind !== 'restart_status' && message.messageKind !== 'runtime_status')) {
+      removeDurableDetachedTurn(turn.targetSessionId, turn.queuedAt);
+      continue;
+    }
+    runDetached(deps, turn.ownerSessionId, turn.targetSessionId, turn.prompt, {
+      supervisionId: turn.supervisionId,
+      notifyOnComplete: turn.notifyOnComplete,
+      notifyOnFailure: turn.notifyOnFailure,
+      recovered: turn,
+    });
+    count++;
+  }
+  return count;
+}
+
 function runDetached(
   deps: PrometheusThreadOpsDeps,
   ownerSessionId: string,
@@ -314,6 +353,7 @@ function runDetached(
     supervisionId?: string;
     notifyOnComplete?: boolean;
     notifyOnFailure?: boolean;
+    recovered?: DurableDetachedTurn;
   } = {},
 ): void {
   if (!deps.runInteractiveTurn) throw new Error('Interactive turn runtime is unavailable.');
@@ -331,10 +371,14 @@ function runDetached(
   const pending: PendingDetachedRun = {
     targetSessionId,
     prompt,
-    queuedAt: Date.now(),
-    steers: [],
+    queuedAt: options.recovered?.queuedAt || Date.now(),
+    steers: options.recovered?.steers || [],
     cancelled: false,
   };
+  // Accepted turns must survive a restart even before runtime admission.
+  // Do not report the launch as queued if its receipt cannot be written.
+  saveDurableDetachedTurn({ ownerSessionId, targetSessionId, prompt, queuedAt: pending.queuedAt,
+    steers: pending.steers, supervisionId, notifyOnComplete, notifyOnFailure });
   pendingDetachedRuns.set(targetSessionId, pending);
   // Defer one tick so a steer/interrupt issued in the same tool round (or just
   // after create/send) lands before the turn is handed to the runtime.
@@ -342,23 +386,43 @@ function runDetached(
     await new Promise((resolve) => setTimeout(resolve, 250));
     if (pendingDetachedRuns.get(targetSessionId) === pending) pendingDetachedRuns.delete(targetSessionId);
     if (pending.cancelled) {
+      removeDurableDetachedTurn(targetSessionId, pending.queuedAt);
       return { text: '', cancelledBeforeStart: true, reason: pending.cancelReason };
     }
     startingDetachedSessions.set(targetSessionId, Date.now());
-    return deps.runInteractiveTurn!(
-    composeQueuedPrompt(pending),
-    targetSessionId,
-    () => undefined,
-    undefined,
-    undefined,
-    `[PEER SESSION CONTEXT]\nThis turn was started by Prometheus session ${ownerSessionId}. Work only on the target thread's stated objective. Report durable progress in this target thread.`,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    origin,
-    );
+    const queuedPrompt = composeQueuedPrompt(pending);
+    const peerContext = `[PEER SESSION CONTEXT]\nThis turn was started by Prometheus session ${ownerSessionId}. Work only on the target thread's stated objective. Report durable progress in this target thread.`;
+    const controller = new AbortController();
+    const abortSignal = { aborted: false, signal: controller.signal };
+    const runtimeId = registerLiveRuntime({
+      kind: 'main_chat', label: 'Managed thread turn', sessionId: targetSessionId, source: 'system',
+      detail: queuedPrompt.slice(0, 160), recoveryPolicy: 'mark_interrupted', deferTerminalCleanup: true,
+      abortSignal, onAbort: () => { abortSignal.aborted = true; controller.abort(); },
+      recoveryData: { message: `${queuedPrompt}\n\n${peerContext}`, origin, rootStartedAt: pending.queuedAt },
+    });
+    removeDurableDetachedTurn(targetSessionId, pending.queuedAt);
+    try {
+      return await deps.runInteractiveTurn!(
+        queuedPrompt,
+        targetSessionId,
+        (event: string, data: any) => updateLiveRuntimeCheckpoint(runtimeId, {
+          event, at: Date.now(),
+          ...(data?.message ? { message: String(data.message).slice(0, 1000) } : {}),
+          ...(data?.action || data?.name ? { toolName: String(data.action || data.name) } : {}),
+        }),
+        undefined,
+        abortSignal,
+        peerContext,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { runtimeId },
+        origin,
+      );
+    } finally {
+      finishLiveRuntime(runtimeId);
+    }
   };
   const settle = () => { startingDetachedSessions.delete(targetSessionId); };
   void start().finally(settle).then((result: any) => {
@@ -373,6 +437,7 @@ function runDetached(
       });
       return;
     }
+    removeDurableDetachedTurn(targetSessionId, pending.queuedAt);
     const summary = String(result?.text || '').slice(0, 2000);
     const targetTitle = getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread';
     if (notifyOnComplete) {
@@ -882,6 +947,8 @@ export async function executePrometheusThreadOps(
     // Queued but not started yet: fold the steer into the prompt it will run.
     const pendingRun = pendingDetachedRuns.get(targetSessionId);
     if (pendingRun && !pendingRun.cancelled) {
+      const durable = readDurableDetachedTurns().find((item) => item.targetSessionId === targetSessionId && item.queuedAt === pendingRun.queuedAt);
+      if (durable) saveDurableDetachedTurn({ ...durable, steers: [...pendingRun.steers, message] });
       pendingRun.steers.push(message);
       if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
       return { ok: true, queued: true, appliedTo: 'queued_run_prompt', sessionId: targetSessionId };
@@ -1004,6 +1071,7 @@ export async function executePrometheusThreadOps(
     const cancelledQueued: string[] = [];
     const pendingRun = pendingDetachedRuns.get(targetSessionId);
     if (pendingRun && !pendingRun.cancelled) {
+      removeDurableDetachedTurn(targetSessionId, pendingRun.queuedAt);
       pendingRun.cancelled = true;
       pendingRun.cancelReason = reason;
       cancelledQueued.push('queued_run');

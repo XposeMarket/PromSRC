@@ -4653,7 +4653,8 @@ void main() {
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : {};
     if (type === 'vision' && (normalizedEntry.preview || extra.preview)) {
       const preview = normalizedEntry.preview || extra.preview;
-      if (message.liveTraceEntries?.some(item => item.type === 'vision' && item.preview?.dataUrl === preview.dataUrl && item.text === text)) return false;
+      if (message.liveTraceEntries?.some(item => item.type === 'vision'
+        && _mobileVisionPreviewKey(item.preview?.dataUrl, item.preview) === _mobileVisionPreviewKey(preview.dataUrl, preview))) return false;
       _appendMobileVisionTrace(message, { ...extra, label: text, preview, previewTitle: normalizedEntry.previewTitle });
       return true;
     }
@@ -4696,6 +4697,7 @@ void main() {
     });
     const liveTraceEntries = [];
     const traceKeys = new Set();
+    const visionKeys = new Set();
     [
       ...(Array.isArray(source.liveTraceEntries) ? source.liveTraceEntries : []),
       ...(Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : []),
@@ -4703,8 +4705,14 @@ void main() {
       const normalized = _normalizeMobileRecoveredTraceEntry(entry);
       if (!normalized) return;
       const key = String(normalized.id || normalized.eventKey || normalized.extra?.eventKey || `${normalized.type || ''}|${normalized.text || normalized.content || ''}`);
-      if (traceKeys.has(key)) return;
+      const preview = normalized.preview || normalized.extra?.preview;
+      const visionKey = String(normalized.type || '').toLowerCase() === 'vision' && preview?.dataUrl
+        ? _mobileVisionPreviewKey(preview.dataUrl, preview) : '';
+      // Different stream/process IDs can refer to the same injected screenshot.
+      // Deduplicate by the image, not by its transport event ID.
+      if (traceKeys.has(key) || (visionKey && visionKeys.has(visionKey))) return;
       traceKeys.add(key);
+      if (visionKey) visionKeys.add(visionKey);
       liveTraceEntries.push(normalized);
     });
     if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
@@ -4759,6 +4767,18 @@ void main() {
     // process-log entries recovered after a gateway restart (tool calls,
     // results, and explicit user-visible reasoning summaries).
     _mergeMobileWorkflowTraceFromProcessEntries(traceMessage);
+    // Process-log recovery may reintroduce a vision entry with a new event ID.
+    // Keep the first chronological occurrence of each image in the sheet.
+    const seenImages = new Set();
+    traceMessage.liveTraceEntries = traceMessage.liveTraceEntries.filter((entry) => {
+      if (String(entry?.type || '').toLowerCase() !== 'vision') return true;
+      const preview = entry.preview || entry.extra?.preview;
+      if (!preview?.dataUrl) return true;
+      const imageKey = _mobileVisionPreviewKey(preview.dataUrl, preview);
+      if (seenImages.has(imageKey)) return false;
+      seenImages.add(imageKey);
+      return true;
+    });
     const workStartedAt = Number(source.workStartedAt || record?.startedAt || record?.createdAt || Date.now()) || Date.now();
     const workEndedAt = running
       ? 0

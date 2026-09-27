@@ -1455,6 +1455,7 @@ export function getAgentTeamScheduleTools(): any[] {
             model: { type: 'string', description: 'Optional explicit spawn model override. Use a provider model ID (for example gpt-5.6-sol or gpt-5.6-luna); otherwise background_task routing is used.' },
             provider: { type: 'string', description: 'Optional explicit provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional provider/model-aware reasoning override for this spawn.' },
+            speed: { type: 'string', enum: ['standard', 'fast'], description: 'Optional spawn speed tier. "fast" = OpenAI/Codex priority service tier (GPT-5.x/GPT-6) or Anthropic fast mode (Opus 5 / Opus 4.8); requires explicit provider+model. Use only when the user asks for fast mode.' },
             tool_categories: {
               type: 'array',
               items: { type: 'string' },
@@ -1496,6 +1497,7 @@ export function getAgentTeamScheduleTools(): any[] {
             model: { type: 'string', description: 'Optional provider model ID, for example gpt-5.6-sol or gpt-5.6-luna.' },
             provider: { type: 'string', description: 'Optional provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },
+            speed: { type: 'string', enum: ['standard', 'fast'], description: 'Optional spawn speed tier. "fast" = OpenAI/Codex priority service tier (GPT-5.x/GPT-6) or Anthropic fast mode (Opus 5 / Opus 4.8); requires explicit provider+model. Use only when the user asks for fast mode.' },
           },
         },
       },

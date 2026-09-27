@@ -1,3 +1,5 @@
+import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
+
 /**
  * Owns the mobile rich-message renderer's presentation boundary.
  *
@@ -140,12 +142,14 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // headings/lists into strings such as `text### Heading` while streaming.
       const answerStreaming = messageIsLive;
       const realtimeVoiceSpeaking = m.source === 'voice_agent_realtime' && m.voiceRealtimeActive === true;
-      // Realtime Voice deliberately owns a synchronized lyric presentation
-      // while audio is playing. Once playback settles, the same turn falls
-      // through to normal Markdown without creating a second message.
-      inner += realtimeVoiceSpeaking
-        ? _renderMobileVoiceLyrics(b.text, m.voiceRealtimeProgress, { compact: true })
-        : `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}"${answerStreaming ? ' aria-busy="true"' : ''}>${_renderMobileMarkdown(b.text, m)}</div>`;
+      // Voice uses the same Markdown and typography as every other answer.
+      // Highlight words in the rendered text, never in the Markdown source:
+      // splitting source Markdown into spans breaks links, lists, and emphasis.
+      const answerHtml = _renderMobileMarkdown(b.text, m);
+      const voiceHtml = realtimeVoiceSpeaking
+        ? highlightMobileVoiceMarkdown(answerHtml, m.voiceRealtimeProgress)
+        : answerHtml;
+      inner += `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}${realtimeVoiceSpeaking ? ' pm-voice-answer-speaking' : ''}"${answerStreaming ? ' aria-busy="true"' : ''}>${voiceHtml}</div>`;
       // rendered above with the shared desktop Markdown renderer
     }
     if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');

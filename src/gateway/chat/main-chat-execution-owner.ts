@@ -99,6 +99,19 @@ export function isMainChatSemanticProgressStalled(input: {
   return lastProgressAt > 0 && now - lastProgressAt > stallMs;
 }
 
+export function isLiveBackgroundJoin(input: {
+  lastSemanticEvent?: string;
+  lastSemanticProgressAt?: number;
+  now?: number;
+  activeBackgroundCount: number;
+}): boolean {
+  const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+  return (input.lastSemanticEvent === 'background_wait' || input.lastSemanticEvent === 'active_tool_wait')
+    && input.activeBackgroundCount > 0
+    && Number(input.lastSemanticProgressAt || 0) > 0
+    && now - Number(input.lastSemanticProgressAt) < 2 * 60_000;
+}
+
 export function isMainChatExecutionAgeExceeded(input: {
   now?: number;
   startedAt: number;

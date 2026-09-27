@@ -663,6 +663,8 @@ export function createMobileChatRendererRuntime(context = {}) {
     const list = _mobileVisibleTraceEntries(entries);
     const groups = [];
     let activeToolGroup = null;
+    const backgroundCommentary = (entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_thought'
+      && String(entry?.extra?.visibility || entry?.visibility || 'user').toLowerCase() === 'user';
     list.forEach((entry) => {
       if (_isMobileTraceCompactionEntry(entry)) {
         activeToolGroup = null;
@@ -691,7 +693,9 @@ export function createMobileChatRendererRuntime(context = {}) {
         const thoughtKind = _mobileTraceThoughtKind(entry);
         const groupKind = thoughtKind === 'summary' ? 'thought-summary' : 'thought';
         const previous = groups[groups.length - 1];
-        if (previous?.kind === groupKind) previous.entries.push(entry);
+        // Public narration boundaries must stay separate even when consecutive
+        // commentary packets arrive without a tool between them.
+        if (previous?.kind === groupKind && !backgroundCommentary(entry)) previous.entries.push(entry);
         else groups.push({ kind: groupKind, entries: [entry] });
         return;
       }
@@ -1077,8 +1081,12 @@ export function createMobileChatRendererRuntime(context = {}) {
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
       const itemLabel = callCount ? 'call' : 'item';
       const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
-      if (expandTools && !progressSummary) {
-        return `<div class="pm-trace-tool-rows pm-trace-tool-body" data-pm-trace-group="${escapeHtml(group.id)}"><div class="pm-live-trace">${toolBodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`;
+      if (expandTools) {
+        // Background details already have a work-timer disclosure. Keep every
+        // tool phase inline, even while a model progress summary is active;
+        // otherwise that summary turns the entire phase into "24 items".
+        const liveLabel = progressSummary ? `<div class="pm-trace-phase-label" aria-live="polite">${renderThinkingState(progressSummary)}</div>` : '';
+        return `<div class="pm-trace-tool-rows pm-trace-tool-body" data-pm-trace-group="${escapeHtml(group.id)}">${liveLabel}<div class="pm-live-trace">${toolBodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`;
       }
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
@@ -3218,6 +3226,7 @@ function _mobileBackgroundDisplayTraceEntries(entries) {
     'preamble', 'assistant', 'think', 'thinking', 'thought', 'agent_thought',
     'reasoning_summary',
   ]);
+  const seenImages = new Set();
   return (Array.isArray(entries) ? entries : []).filter((entry) => {
     if (!entry || typeof entry !== 'object') return false;
     const text = String(entry.text || entry.content || entry.message || '').trim();
@@ -3226,7 +3235,17 @@ function _mobileBackgroundDisplayTraceEntries(entries) {
     const event = String(extra.event || extra.eventType || entry.event || '').toLowerCase();
     if (['ui_preflight', 'progress_state', 'model_stream_event', 'latency'].includes(event)) return false;
     const type = String(entry.type || entry.kind || '').toLowerCase();
-    return visibleTypes.has(type) || !!entry.activity;
+    if (!visibleTypes.has(type) && !entry.activity) return false;
+    if (type === 'vision') {
+      const preview = entry.preview || extra.preview;
+      if (preview?.dataUrl) {
+        // Different event IDs may carry the same image after reconnect.
+        const key = String(preview.dataUrl);
+        if (seenImages.has(key)) return false;
+        seenImages.add(key);
+      }
+    }
+    return true;
   });
 }
 

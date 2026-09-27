@@ -3044,7 +3044,11 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       const pendingEntries = _takePendingVoiceAgentProcessEntries(sid);
       if (pendingEntries.length) _appendVoiceAgentProcessEntriesToTurn(turn, pendingEntries);
     }
-    const value = _cleanVoiceSpeechText(text || turn.content || turn.body?.text || '');
+    // Assistant display text may contain Markdown and non-ASCII characters;
+    // speech-only sanitization would destroy headings, lists, and Unicode.
+    const value = role === 'ai'
+      ? String(text || turn.content || turn.body?.text || '').trim()
+      : _cleanVoiceSpeechText(text || turn.content || turn.body?.text || '');
     if (!value) {
       const thread = __pmChat.threads?.[sid];
       if (Array.isArray(thread)) {
@@ -3163,9 +3167,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
     // Establish this reply's playback baseline once. The media element stays live
     // for the whole conversation, so its absolute currentTime is not a reply clock.
-    if (!Number.isFinite(Number(turn.voiceRealtimeMediaLastTime))) {
+    if (turn.voiceRealtimeMediaLastTime == null) {
       const mediaNow = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
-      if (Number.isFinite(mediaNow)) turn.voiceRealtimeMediaLastTime = mediaNow;
+      if (Number.isFinite(mediaNow) && mediaNow > 0) turn.voiceRealtimeMediaLastTime = mediaNow;
     }
     turn.voiceRealtimeActive = true;
     if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
@@ -3178,10 +3182,10 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         return;
       }
       const text = String(activeTurn.body?.text || activeTurn.content || '').trim();
-      const estimatedMs = Math.max(
-        Number(activeTurn.voiceRealtimeAudioMs || 0) || 0,
-        _estimateMobileRealtimeSpeechMs(text),
-      );
+      // Actual decoded audio duration beats the word-count estimate. The
+      // estimate is only a fallback while audio chunks have not arrived.
+      const estimatedMs = Number(activeTurn.voiceRealtimeAudioMs || 0) > 0
+        ? Number(activeTurn.voiceRealtimeAudioMs) : _estimateMobileRealtimeSpeechMs(text);
       const elapsed = _mobileRealtimeAudioPlaybackMs(activeTurn);
       const progress = Math.max(Number(activeTurn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, elapsed / Math.max(1, estimatedMs)));
       activeTurn.voiceRealtimeProgress = progress;
@@ -3231,9 +3235,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
       if (Number.isFinite(mediaTime)) turn.voiceRealtimeMediaStartTime = mediaTime;
     }
-    if (!Number.isFinite(Number(turn.voiceRealtimeMediaLastTime))) {
+    if (turn.voiceRealtimeMediaLastTime == null) {
       const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
-      if (Number.isFinite(mediaTime)) turn.voiceRealtimeMediaLastTime = mediaTime;
+      if (Number.isFinite(mediaTime) && mediaTime > 0) turn.voiceRealtimeMediaLastTime = mediaTime;
     }
     _startMobileRealtimeAssistantLyricProgress(sid);
   }
@@ -3962,7 +3966,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       || (type === 'response.output_item.done' && String(event?.item?.role || event?.item?.type || '').toLowerCase() !== 'function_call')
     ) {
       if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
-      const transcript = _cleanVoiceSpeechText(_eventText(event, { preferLongest: true }) || __pmRealtimeAgent.turn.liveAssistantTranscript || '');
+      const transcript = String(_eventText(event, { preferLongest: true }) || __pmRealtimeAgent.turn.liveAssistantTranscript || '').trim();
       if (transcript) {
         if (_isVoiceRoomEnabled()) {
           const roomParticipant = _voiceRoomActiveParticipant();
@@ -4091,14 +4095,19 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       const activeLyricTurn = _mobileRealtimeActiveAssistantTurn(sessionId);
       let responseStatusHoldMs = lastRealtimeReply ? 8500 : 1200;
       if (activeLyricTurn) {
-        const estimatedMs = Math.max(Number(activeLyricTurn.voiceRealtimeAudioMs || 0) || 0, _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply));
+        const audioMs = Number(activeLyricTurn.voiceRealtimeAudioMs || 0);
+        const estimatedMs = audioMs > 0 ? audioMs : _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply);
         const playedMs = _mobileRealtimeAudioPlaybackMs(activeLyricTurn);
-        // Keep the karaoke rendering alive through the actual output tail.  The
-        // per-turn media clock above filters historical WebRTC timeline jumps;
-        // this small cushion accounts for the browser's playout buffer.
-        const remainingMs = Math.max(850, Math.min(120000, estimatedMs - playedMs + 350));
+        // response.done can precede the playout tail. Wait for the remaining
+        // measured audio, but bind this timer to this exact reply: a later reply
+        // must never be finalized by an older completion callback.
+        const remainingMs = Math.max(350, Math.min(120000, estimatedMs - playedMs + 350));
         responseStatusHoldMs = Math.max(1200, remainingMs + 900);
-        setTimeout(() => _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 }), remainingMs);
+        setTimeout(() => {
+          if (_mobileRealtimeActiveAssistantTurn(sessionId) === activeLyricTurn) {
+            _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 });
+          }
+        }, remainingMs);
       }
       setTimeout(() => {
         if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();

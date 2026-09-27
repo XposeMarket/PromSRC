@@ -76,6 +76,7 @@ import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
+import { resumeDurableDetachedTurns } from './threads/thread-ops';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import { assertSupportedNodeRuntime } from './runtime/node-runtime';
 import {
@@ -1327,14 +1328,20 @@ async function startGatewayListeners(): Promise<void> {
     try { startupMark(`model workers prewarmed (${prewarmModelCallWorkers()})`); } catch {}
     const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
     try { startHandoffSyntheticRuntimeFixture(); } catch {}
+    // Accepted peer turns can die before the chat runtime registers. Drain
+    // their durable queue independently of the interrupted-runtime ledger.
+    try {
+      const resumed = resumeDurableDetachedTurns({ runInteractiveTurn, broadcastWS });
+      if (resumed) console.info(`[runtime-recovery] Resumed ${resumed} queued detached thread turn(s).`);
+    } catch (error) { console.warn('[runtime-recovery] Queued detached turn recovery failed:', error); }
     // Foreground recovery checkpoints are durable before the listener binds,
     // but their model turns are deliberately drained only after readiness.
-    // Start one at a time and wait for the shared model-busy guard to clear so
-    // a restart cannot immediately recreate a CPU-bound context backlog.
+    // Stagger admissions briefly to avoid a CPU-bound context backlog, but
+    // do not let one long-running thread block every other session's recovery.
     if (deferredMainChatRecoveries.length > 0) {
       // A self-triggered mid-turn restart is a suspension of a turn the user is
-      // actively watching, so it must resume promptly. Only crash recovery pays
-      // the long cool-down that exists to avoid recreating a CPU-bound backlog.
+      // actively watching, so it must resume promptly. Crash recovery is
+      // staggered briefly without leaving other interrupted threads stranded.
       //
       // The cadence is chosen PER RUNTIME rather than for the whole queue. A
       // queue-wide `.some()` let a single planned continuation pull every
@@ -1353,43 +1360,36 @@ async function startGatewayListeners(): Promise<void> {
       // dead time on every self-restart.
       const plannedDelayMs = Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 400));
       const crashDelayMs = isHotRestartBoot
-        ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
-        : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+        ? Math.max(1_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 4_000))
+        : Math.max(2_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 10_000));
       const recoveryQueue = [...deferredMainChatRecoveries];
       // Planned continuations resume first; they are the turns a user is watching.
       recoveryQueue.sort((a, b) => Number(isPlannedMainChatRestartRuntime(b)) - Number(isPlannedMainChatRestartRuntime(a)));
 
-      // First crash retry of a lone turn: the user is usually watching it, and
-      // the per-turn attempt cap (MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS)
-      // already stops a crash loop. The long cool-down is kept for repeat
-      // attempts and for multi-turn backlogs, which is what it exists for.
+      // First crash retry of a lone turn: the user is usually watching it.
+      // Other interrupted turns still resume with a short stagger instead of
+      // waiting a minute behind the first long-running recovery.
       const firstCrashRetryDelayMs = Math.max(1_000, Number(process.env.PROMETHEUS_FIRST_CRASH_RETRY_DELAY_MS || 4_000));
       const delayForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => {
         if (!runtime) return crashDelayMs;
         if (isPlannedMainChatRestartRuntime(runtime)) return plannedDelayMs;
         return isFirstLoneCrashRetry(runtime, recoveryQueue.length) ? firstCrashRetryDelayMs : crashDelayMs;
       };
-      // Planned continuations also must not sit behind the model-busy poll for
-      // a full cycle; keep their retry cadence tight.
-      const pollForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
-        runtime && isPlannedMainChatRestartRuntime(runtime) ? 250 : 5_000
-      );
+      // Resume each distinct session even while another model turn is active;
+      // failed admissions retry at a bounded cadence without duplicating work.
       const scheduleRecoveryDrain = (delayMs: number): void => {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
       };
       const drainRecoveryQueue = (): void => {
         if (shuttingDown || draining || recoveryQueue.length === 0) return;
-        if (isModelBusy()) {
-          scheduleRecoveryDrain(pollForRuntime(recoveryQueue[0]));
-          return;
-        }
         const runtime = recoveryQueue.shift();
         if (!runtime) return;
         if (!retriggerDeferredMainChatRuntime(runtime, retriggerInterruptedMainChat)) {
           recoveryQueue.push(runtime);
         }
-        scheduleRecoveryDrain(pollForRuntime(recoveryQueue[0]));
+        scheduleRecoveryDrain(recoveryQueue[0] && isPlannedMainChatRestartRuntime(recoveryQueue[0])
+          ? plannedDelayMs : crashDelayMs);
       };
       const firstDelayMs = delayForRuntime(recoveryQueue[0]);
       scheduleRecoveryDrain(firstDelayMs);
