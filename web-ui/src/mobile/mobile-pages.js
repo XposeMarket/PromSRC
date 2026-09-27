@@ -4758,8 +4758,11 @@ function _appendMobileVisionTrace(message, evt) {
     );
     if (priorIndex >= 0) message.liveTraceEntries.splice(priorIndex, 1);
   }
-  const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
-  if (last && last.type === 'vision' && String(last.text || '') === text && String(last?.preview?.dataUrl || '') === dataUrl) return;
+  // A background poll, session snapshot, and SSE replay can deliver the same
+  // preview after intervening tool events. The prior last-entry-only check
+  // allowed the image to be appended again on every refresh.
+  if (normalizedPreview.artifactKind !== 'generated_image_partial' && message.liveTraceEntries.some((entry) => entry?.type === 'vision'
+    && _mobileVisionPreviewKey(entry?.preview?.dataUrl, entry?.preview) === _mobileVisionPreviewKey(dataUrl, normalizedPreview))) return;
   message.liveTraceEntries.push({
     id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: 'vision',
@@ -5058,7 +5061,7 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   const traceDedupeKey = (entry) => {
     const type = String(entry?.type || '').toLowerCase();
     const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
-    const preview = String(entry?.preview?.dataUrl || entry?.dataUrl || '').slice(0, 120);
+    const preview = _mobileVisionPreviewKey(entry?.preview?.dataUrl || entry?.dataUrl || '', entry?.preview || {});
     const thoughtType = type === 'preamble' || type === 'think' || type === 'assistant';
     const thoughtKind = thoughtType ? _mobileTraceThoughtKind(entry) : '';
     return `${thoughtType ? 'thought' : type}|${thoughtKind}|${text}|${preview}`;
@@ -5944,6 +5947,15 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
     return normalized === 'ai' || normalized === 'assistant' ? 'assistant' : normalized;
   };
   if (role(a.role) !== role(b.role)) return false;
+  // Realtime Voice: one row per exchange part, even though its text grows.
+  const voiceKey = (m) => {
+    const group = String(m?.workflowGroupId || '').trim();
+    const part = String(m?.workflowPart || '').trim();
+    return /^voice_exchange_/.test(group) && /^voice_(?:user|assistant)$/.test(part) ? `${group}|${part}` : '';
+  };
+  const aVoice = voiceKey(a);
+  const bVoice = voiceKey(b);
+  if (aVoice && bVoice) return aVoice === bVoice;
   if (_mobileMessagesRepresentSameTurn(a, b)) return true;
   const aRequest = String(a._clientRequestId || a.clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || b.clientRequestId || '').trim();
@@ -11253,6 +11265,24 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_notifyMobileChatVoiceUpdate": { enumerable: true, get: () => _notifyMobileChatVoiceUpdate },
   "_notifyMobileVoiceAgentConnection": { enumerable: true, get: () => _notifyMobileVoiceAgentConnection },
   "_markMobileRealtimeAgentBackendReady": { enumerable: true, get: () => _markMobileRealtimeAgentBackendReady },
+  // The realtime runtime destructures these from its scope. They were missing
+  // from this context, so inline chat Voice threw "is not a function" when it
+  // created the assistant row (no AI text in chat) and after every user
+  // transcript (skipping the chat repaint/notify that follows _renderRecent).
+  "_activeMobileThread": { enumerable: true, get: () => _activeMobileThread },
+  "_appendVoiceAgentProcessEntriesToTurn": { enumerable: true, get: () => _appendVoiceAgentProcessEntriesToTurn },
+  "_attachVoiceAgentProcessEntriesToMobileTurn": { enumerable: true, get: () => _attachVoiceAgentProcessEntriesToMobileTurn },
+  "_isMobileHiddenVoiceDraftMessage": { enumerable: true, get: () => _isMobileHiddenVoiceDraftMessage },
+  "_isMobileRestartContextPacketText": { enumerable: true, get: () => _isMobileRestartContextPacketText },
+  "_mobileMessageCopyText": { enumerable: true, get: () => _mobileMessageCopyText },
+  "_mobileVoiceSettingsFromAgentProfile": { enumerable: true, get: () => _mobileVoiceSettingsFromAgentProfile },
+  "_normalizeVoiceAgentProcessEntry": { enumerable: true, get: () => _normalizeVoiceAgentProcessEntry },
+  "_takePendingVoiceAgentProcessEntries": { enumerable: true, get: () => _takePendingVoiceAgentProcessEntries },
+  // Voice-page-local UI hooks. Inline chat Voice has no Voice page, so route to
+  // the page's registered hooks when present and otherwise no-op.
+  "_renderRecent": { enumerable: true, get: () => (...args) => { try { return __pmVoice.renderRecent?.(...args); } catch {} } },
+  "_setStatus": { enumerable: true, get: () => (...args) => { try { return __pmVoice.setStatus?.(...args); } catch {} } },
+  "_setReadyVoiceState": { enumerable: true, get: () => (...args) => { try { return __pmVoice.setReadyVoiceState?.(...args); } catch {} } },
   "_nowTime": { enumerable: true, get: () => _nowTime },
   "_pmApprovalCanSave": { enumerable: true, get: () => _pmApprovalCanSave },
   "_pmApprovalTechnicalText": { enumerable: true, get: () => _pmApprovalTechnicalText },

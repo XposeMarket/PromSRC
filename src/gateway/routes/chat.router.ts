@@ -109,7 +109,8 @@ import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
-import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
+import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../tasks/task-runner';
+import { formatBackgroundSpawnContinuity } from '../tasks/background-spawn-continuity';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
 import { getVerificationFlowManager, getApprovalQueue } from '../verification-flow';
@@ -136,6 +137,7 @@ import {
   MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
   MAIN_CHAT_SEMANTIC_STALL_MS,
   isMainChatExecutionAgeExceeded,
+  isLiveBackgroundJoin,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
@@ -1203,7 +1205,12 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       const age = now - Number(runtime.abortRequestedAt || now);
       if (age > MAIN_CHAT_ABORT_SETTLE_GRACE_MS) {
         if (runtime.abortSource === 'main_chat_owner_watchdog') {
-          interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout');
+          const interrupted = interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout').runtime;
+          if (interrupted?.sessionId && listActiveBackgroundIdsForSession(interrupted.sessionId).length === 0) {
+            setTimeout(() => {
+              wakeInterruptedBackgroundOwner(interrupted.sessionId || '');
+            }, 100).unref?.();
+          }
         } else {
           finishLiveRuntime(runtime.id);
         }
@@ -1221,7 +1228,17 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       streamActive: stream.active,
       maxAgeMs: MAIN_CHAT_MAX_AGE_MS,
     });
-    if (ageExceeded) {
+    // A wait_all join can legitimately outlast the foreground age limit.
+    // Do not age-kill it while its workers are active and the keepalive is
+    // fresh; retain the absolute cap when a worker or keepalive disappears.
+    const activeBackgroundIds = listActiveBackgroundIdsForSession(stream.sessionId);
+    const waitingOnBackground = isLiveBackgroundJoin({
+      now,
+      lastSemanticEvent: stream.lastSemanticEvent,
+      lastSemanticProgressAt: stream.lastSemanticProgressAt,
+      activeBackgroundCount: activeBackgroundIds.length,
+    });
+    if (ageExceeded && !waitingOnBackground) {
       const memory = process.memoryUsage();
       const diagnostic = {
         reason: 'max_age_exceeded',
@@ -1240,7 +1257,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (isMainChatSemanticProgressStalled({
+    if (!waitingOnBackground && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,
@@ -1286,7 +1303,12 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
         // Keep watchdog-originated work in the durable interrupted ledger so a
         // restart can retrigger it exactly once.  Do not require a live stream
         // to still exist: the abort callback may have already closed it.
-        interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout');
+        const interrupted = interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout').runtime;
+        if (interrupted?.sessionId && listActiveBackgroundIdsForSession(interrupted.sessionId).length === 0) {
+          setTimeout(() => {
+            wakeInterruptedBackgroundOwner(interrupted.sessionId || '');
+          }, 100).unref?.();
+        }
       } else {
         // Explicit user/operator stops are terminal and must not be replayed.
         finishLiveRuntime(runtime.id);
@@ -1910,6 +1932,7 @@ import {
   markLiveRuntimeProgress,
   interruptLiveRuntimeForRecovery,
   listLiveRuntimes,
+  listInterruptedRuntimes,
   getLiveRuntime,
   abortLiveRuntime,
   addPendingRuntimeSteer,
@@ -1945,7 +1968,7 @@ import { router as connectionsRouter } from './connections.router';
 import { router as canvasRouter, initCanvasRouter } from './canvas.router';
 import { addCanvasFile, getCanvasContextBlock } from './canvas-state';
 import { getMCPManager } from '../mcp-manager';
-import { resumePlannedRestartMainChats, registerRestartContinuityEmitter } from '../runtime-recovery';
+import { resumePlannedRestartMainChats, retriggerDeferredMainChatRuntime, registerRestartContinuityEmitter } from '../runtime-recovery';
 import {
   // Core exports
   buildTools,
@@ -2631,7 +2654,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -7507,7 +7530,7 @@ RULES:
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
         num_predict: grokGreetingLikeTurn ? 256 : modelResponseRecovery.outputBudget(generationOverride.providerId || '', generationOverride.model || ''),
 	        think: primaryThinkMode,
-	        speed: activeGenerationRouteSnapshot?.speed,
+	        speed: runtimeOptions?.speedOverride || activeGenerationRouteSnapshot?.speed,
 	        model: generationOverride.model,
 	        provider: generationOverride.provider,
 	        onToken: emitStreamToken,
@@ -11317,6 +11340,7 @@ async function runInteractiveTurn(
   // Carry what each step actually produced, not just "tool: ok". A resumed or
   // aborted turn used to see only tool names + "Completed N tool step(s)" and
   // had to re-run commands to rediscover its own results.
+  const backgroundContinuity = formatBackgroundSpawnContinuity(sessionId, turnWorkStartedAt - 60_000);
   const packetToolActions = toolObservations.map((observation) => {
     const paths = Array.isArray(observation.pathsTouched) && observation.pathsTouched.length
       ? ` (${observation.pathsTouched.slice(0, 2).join(', ')})`
@@ -11370,6 +11394,7 @@ async function runInteractiveTurn(
         reasoningSummary: result.reasoningSummary,
         findings: [
           ...packetCommentary,
+          ...(backgroundContinuity ? [backgroundContinuity] : []),
           ...(packetToolActions.length ? [`Completed ${packetToolActions.length} tool step(s); results below.`] : []),
         ],
         decisions: result.reasoningSummary
@@ -11726,6 +11751,35 @@ export function buildPreRestartWorkDigest(runtime: any, maxChars = 6000): string
   return `${header}\n${kept.join('\n')}${said}`;
 }
 
+const pendingBackgroundWakeRetries = new Set<string>();
+function wakeInterruptedBackgroundOwner(sessionId: string): void {
+  const interrupted = listInterruptedRuntimes()
+    .filter((runtime) => runtime.kind === 'main_chat' && runtime.sessionId === sessionId && !runtime.recoveryData?.recoveredAt)
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+  if (!interrupted || listActiveBackgroundIdsForSession(sessionId).length > 0) return;
+  // Do not race an active owner or duplicate a restart recovery already queued.
+  const activeOwner = listLiveRuntimes().some((runtime) => runtime.kind === 'main_chat' && runtime.sessionId === sessionId);
+  if (activeOwner) {
+    if (!pendingBackgroundWakeRetries.has(sessionId)) {
+      pendingBackgroundWakeRetries.add(sessionId);
+      setTimeout(() => {
+        pendingBackgroundWakeRetries.delete(sessionId);
+        wakeInterruptedBackgroundOwner(sessionId);
+      }, 1_000).unref?.();
+    }
+    return;
+  }
+  if (!retriggerDeferredMainChatRuntime(interrupted, retriggerInterruptedMainChat)
+    && !pendingBackgroundWakeRetries.has(sessionId)) {
+    pendingBackgroundWakeRetries.add(sessionId);
+    setTimeout(() => {
+      pendingBackgroundWakeRetries.delete(sessionId);
+      wakeInterruptedBackgroundOwner(sessionId);
+    }, 1_000).unref?.();
+  }
+}
+registerBackgroundCompletionWake(wakeInterruptedBackgroundOwner);
+
 export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
   const sessionId = String(runtime?.sessionId || '').trim();
   const recoveryData = runtime?.recoveryData || {};
@@ -11858,12 +11912,14 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };
+  const backgroundContinuity = formatBackgroundSpawnContinuity(sessionId, Number(recoveryData.rootStartedAt || (runtime as any).startedAt || 0) - 60_000);
   const checkpointSummary = [
     '[GATEWAY RESTART RECOVERY]',
     `You are resuming YOUR OWN in-flight turn. The gateway restarted in the middle of it (usually because you called the restart yourself); everything listed below was done by you, in this conversation, minutes ago (runtime ${runtime.id}).`,
     describeRestartProvenance(runtime),
     'Continue the same turn automatically. Do not ask the user to send "continue" and do not repeat completed or destructive work.',
     buildPreRestartWorkDigest(runtime),
+    backgroundContinuity,
     runtime.checkpoint?.toolName ? `Last tool boundary: ${String(runtime.checkpoint.toolName)}` : '',
     /^(gateway_restart|prom_apply_dev_changes)$/i.test(String(runtime.checkpoint?.toolName || ''))
       ? 'That restart/apply tool boundary completed successfully. Do not invoke that same restart or apply tool again for this work; continue with post-restart verification and every remaining step of the original request.'
@@ -17823,7 +17879,11 @@ export async function withBackgroundJoinKeepalive<T>(
 ): Promise<T> {
   const startedAt = Date.now();
   const tick = () => {
-    try { send('background_wait', { backgroundIds, pending: backgroundIds.length, waitedMs: Date.now() - startedAt }); } catch { /* keepalive is best effort */ }
+    const pending = backgroundIds.filter((id) => {
+      const state = backgroundStatus(id)?.state;
+      return state === 'queued' || state === 'in_progress';
+    }).length;
+    try { send('background_wait', { backgroundIds, pending, waitedMs: Date.now() - startedAt }); } catch { /* keepalive is best effort */ }
   };
   tick();
   const timer = setInterval(tick, intervalMs);
@@ -22328,8 +22388,8 @@ router.post('/api/chat', async (req, res) => {
     const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
     const activity = foregroundActivity.current();
     // An open tool call is execution activity even when a long build has not
-    // produced a new output chunk. Its own timeout and the absolute turn age
-    // limit still bound a tool that never returns.
+    // produced a new output chunk. The turn-age limit still bounds a tool
+    // unless an active background join is independently reporting liveness.
     if (activity) {
       chatStream.lastSemanticProgressAt = now;
       chatStream.lastSemanticEvent = 'active_tool_wait';
@@ -22536,6 +22596,7 @@ router.post('/api/chat', async (req, res) => {
       findings: [
         completedActions.length ? `The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.` : '',
         visibleCommentary ? `Last visible commentary before cancellation: ${visibleCommentary}` : '',
+        formatBackgroundSpawnContinuity(resolvedSessionId, Number(runtime?.recoveryData?.rootStartedAt || runtime?.startedAt || Date.now()) - 60_000),
       ].filter(Boolean),
       completedActions,
       toolState: activeTool ? `Last runtime boundary: ${activeTool}` : '',
@@ -22548,11 +22609,13 @@ router.post('/api/chat', async (req, res) => {
           ? `The boundary for ${activeTool} may have been in flight when cancellation arrived; verify its effect before retrying.`
           : 'The active model turn was cancelled before a final boundary was recorded.',
       ],
-      pendingTasks: ['Resume the original request from this checkpoint when the user asks to continue.'],
+      pendingTasks: [/watchdog|restart|shutdown|drain/i.test(String(abortSignal.reason || ''))
+        ? 'Resume the original request automatically from this checkpoint; reconcile spawned agents before repeating work.'
+        : 'Resume the original request from this checkpoint when the user asks to continue.'],
       continueFromHere: activeTool
         ? `Verify whether ${activeTool} completed, then continue the original request without repeating confirmed work.`
         : 'Continue the original request from the recorded completed steps.',
-      abortReason: 'User cancelled the active runtime before normal turn finalization.',
+      abortReason: describeTurnAbortCause(abortSignal),
     });
     recordWorkingContextPacket(resolvedSessionId, packet, { flush: true });
   };
@@ -22678,9 +22741,28 @@ router.post('/api/chat', async (req, res) => {
       if (dedupeEntry?.streamId === chatStream.streamId) dedupeEntry.at = Date.now();
     }
     clearInterval(heartbeat);
-    finishLiveRuntime(runtimeId);
+    const watchdogInterrupted = abortSignal.aborted && /watchdog/i.test(String(abortSignal.reason || ''));
+    if (watchdogInterrupted) {
+      // A watchdog abort is recoverable, not a normal terminal finish. Preserve
+      // the request and process checkpoint before releasing its owner lease.
+      interruptLiveRuntimeForRecovery(runtimeId, 'main_chat_owner_watchdog_timeout');
+    } else {
+      finishLiveRuntime(runtimeId);
+    }
     finishMainChatStream(resolvedSessionId, chatStream.streamId);
     mainChatTurnCoordinator.release(admissionLease);
+    if (watchdogInterrupted) {
+      // Watchdog is not user cancellation. Once the request owner has actually
+      // released its lease, recover immediately if its workers have settled.
+      // Otherwise their terminal callback wakes this interrupted runtime.
+      const workerIds = listActiveBackgroundIdsForSession(resolvedSessionId);
+      if (workerIds.length === 0) {
+        const interrupted = listInterruptedRuntimes().find((entry) => entry.id === runtimeId);
+        if (interrupted) {
+          setTimeout(() => wakeInterruptedBackgroundOwner(resolvedSessionId), 0).unref?.();
+        }
+      }
+    }
     setModelBusy(false); // release busy guard â€” cron scheduler may now run
     const goalAfterUserTurn = snapshotMainChatGoal(resolvedSessionId);
     if (goalAfterUserTurn?.status === 'active') {

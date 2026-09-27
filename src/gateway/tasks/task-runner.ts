@@ -11,10 +11,11 @@
  */
 
 import crypto from 'crypto';
+import { persistBackgroundSpawnReceipt } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
-import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
+import { normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
@@ -103,6 +104,8 @@ export interface EphemeralBackgroundStatus {
   model?: string;
   modelSource?: string;
   reasoningEffort?: string;
+  /** Per-spawn speed tier ('fast' = OpenAI priority service tier / Anthropic fast mode). */
+  speed?: 'standard' | 'fast';
   /** Stable snake_case field exposed to tool callers and benchmark runners. */
   executor_reasoning_effort?: string;
   /** Explicit tool categories the worker starts with (core tools are always present). */
@@ -459,6 +462,8 @@ export interface EphemeralBackgroundSpawnInput {
   modelOverride?: string;
   providerOverride?: string;
   reasoningEffort?: string;
+  /** Optional 'fast' speed tier for supported OpenAI/Anthropic models. */
+  speed?: string;
   /**
    * Explicit tool categories for the worker. Background spawns never run the
    * keyword auto-activation pass over their task prompt (it would provision
@@ -572,12 +577,32 @@ function persistBackgroundVoiceWorker(record: EphemeralBackgroundRecord): void {
   }
 }
 
+let backgroundCompletionWake: ((sessionId: string) => void) | null = null;
+export function registerBackgroundCompletionWake(callback: (sessionId: string) => void): void {
+  backgroundCompletionWake = callback;
+}
+
+function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
+  if (!record.spawnerSessionId) return;
+  persistBackgroundSpawnReceipt({
+    id: record.id,
+    spawnerSessionId: record.spawnerSessionId,
+    state: record.state,
+    startedAt: record.startedAt,
+    completedAt: record.completedAt,
+    promptPreview: record.promptPreview,
+    result: record.result,
+    error: record.error,
+  });
+}
+
 function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): boolean {
   const spawnerSessionId = String(record.spawnerSessionId || '').trim();
   if (!spawnerSessionId || (record.state !== 'completed' && record.state !== 'failed')) return false;
   const outcome = record.state === 'completed'
     ? String(record.result || 'Background task completed with no textual output.').trim()
     : String(record.error || 'Background task failed without an error message.').trim();
+  persistBackgroundReceipt(record);
   const queued = addPendingRuntimeSteerForSession(spawnerSessionId, {
     message: outcome,
     source: 'background_spawn_completion',
@@ -590,6 +615,11 @@ function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): 
   });
   if (!queued.ok) {
     console.warn(`[Background Agent] ${record.id} could not inject completion into foreground runtime: ${queued.error || 'unknown error'}`);
+  }
+  // Even a successful steer can target an owner already aborting. The wake
+  // callback checks for an interrupted owner after its finalizer settles.
+  try { backgroundCompletionWake?.(spawnerSessionId); } catch (error) {
+    console.warn(`[Background Agent] ${record.id} could not wake its interrupted owner:`, error);
   }
   return queued.ok;
 }
@@ -745,6 +775,17 @@ function clampBackgroundTimeoutMs(raw: number | undefined): number {
   return Math.max(500, Math.min(BACKGROUND_WAIT_ALL_CAP_MS, Math.floor(n)));
 }
 
+export function resolveBackgroundSpawnSpeed(providerId: string | undefined, model: string | undefined, requested: unknown): 'standard' | 'fast' | undefined {
+  const want = String(requested || '').trim().toLowerCase();
+  if (!want) return undefined;
+  if (want !== 'fast' && want !== 'standard') throw new Error(`Unsupported spawn speed "${requested}". Use "fast" or "standard".`);
+  if (want === 'standard') return 'standard';
+  if (!supportsFastSpeed(String(providerId || ''), String(model || ''))) {
+    throw new Error(`Fast mode is not supported by ${providerId || 'the default provider'}/${model || 'the default model'}. Supported: OpenAI/Codex GPT-5.x/GPT-6 models and Anthropic Opus 5 / Opus 4.8. Pass an explicit provider+model.`);
+  }
+  return normalizeSpeed(String(providerId || ''), String(model || ''), 'fast');
+}
+
 export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgroundRecord, 'providerId' | 'model' | 'reasoningEffort'>): { providerId?: string; model?: string; reasoningEffort?: string; source: string } {
   if (record?.providerId || record?.model) {
     const rawProvider = String(record.providerId || '').trim();
@@ -861,6 +902,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       },
     });
     record.state = 'in_progress';
+    persistBackgroundReceipt(record);
     emitBackgroundAgentEvent(record, 'status', {
       state: 'in_progress',
       phase: 'started',
@@ -1019,7 +1061,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           sendSSE,
           undefined,   // extra
           abortSignal,
-          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.`,
+          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}, speed=${record.speed || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.`,
           record.model,   // modelOverride
           'background_task',
           undefined,   // toolFilter — full tool access
@@ -1029,7 +1071,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
             : undefined,
           record.providerId,
           undefined,
-          { admissionLease: runtimeAdmissionLease || undefined, skipAutomaticToolCategoryActivation: true },
+          { admissionLease: runtimeAdmissionLease || undefined, skipAutomaticToolCategoryActivation: true, ...(record.speed ? { speedOverride: record.speed } : {}) },
         );
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
@@ -1041,6 +1083,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           persistBackgroundSessionCheckpoint(true, '', String((chatResult as any)?.reasoningSummary || ''));
           finishBackgroundAgentStream(record.backgroundStream);
           persistBackgroundVoiceWorker(record);
+          // Operator cancellation is terminal; persist it without waking a
+          // foreground owner that the user explicitly stopped.
+          persistBackgroundReceipt(record);
           emitBackgroundAgentDone(record, 'failed', { error: record.error }, sessionId);
           finishLiveRuntime(runtimeId);
           return;
@@ -1143,6 +1188,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     model: resolvedRouting.model,
     modelSource: resolvedRouting.source,
     reasoningEffort: resolvedRouting.reasoningEffort,
+    speed: resolveBackgroundSpawnSpeed(resolvedRouting.providerId, resolvedRouting.model, input?.speed),
     toolCategories: normalizeBackgroundSpawnToolCategories(input?.toolCategories),
     backgroundStream: createBackgroundAgentStream(),
   };
@@ -1152,6 +1198,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
     : undefined;
   _ephemeralBackgroundRuns.set(id, record);
+  persistBackgroundReceipt(record);
   record.promise = startBackgroundExecution(record, prompt);
   console.log(`[Background Agent] spawned ${id} (policy=${joinPolicy}, timeoutMs=${timeoutMs})`);
 
@@ -1172,6 +1219,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     modelSource: record.modelSource,
     reasoningEffort: record.reasoningEffort,
     executor_reasoning_effort: record.reasoningEffort,
+    ...(record.speed ? { speed: record.speed } : {}),
     stream: backgroundAgentStreamSummary(record.backgroundStream),
     startedAt: record.startedAt,
   };
@@ -1333,6 +1381,7 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
   emitBackgroundAgentEvent(rec, 'error', { message: rec.error, state: 'failed' });
   finishBackgroundAgentStream(rec.backgroundStream);
   persistBackgroundVoiceWorker(rec);
+  persistBackgroundReceipt(rec);
   emitBackgroundAgentDone(rec, 'failed', { error: rec.error });
   return { ok: true, status: statusFromRecord(rec) };
 }

@@ -15225,6 +15225,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             modelOverride: args.model ? String(args.model) : undefined,
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
+            speed: args.speed ? String(args.speed) : (args.fast_mode === true ? 'fast' : undefined),
             toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
           });
           return { name, args, result: JSON.stringify(status), error: false };

@@ -28,6 +28,7 @@ import {
 import { buildTaskContinuitySnapshot } from './tasks/task-continuity';
 import { appendSubagentChatMessage } from './agents-runtime/subagent-chat-store';
 import { broadcastWS } from './comms/broadcaster';
+import { formatBackgroundSpawnContinuity } from './tasks/background-spawn-continuity';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -305,6 +306,7 @@ function buildCheckpointText(
   const plannedTool = plannedRestartToolName(runtime);
   const includeProcessPacket = opts.includeProcessPacket !== false;
   const processPacket = includeProcessPacket ? formatCheckpointProcessPacket(runtime) : [];
+  const backgroundContinuity = formatBackgroundSpawnContinuity(runtime.sessionId || '', Number(runtime.recoveryData?.rootStartedAt || runtime.startedAt || 0) - 60_000);
   if (plannedTool) {
     if (phase === 'recovered') {
       // "Back online" used to be asserted as soon as the process booted, even
@@ -322,6 +324,7 @@ function buildCheckpointText(
         'This is a continuation of the same in-flight turn, not a fresh user request.',
         'Use the preserved process/tool context below as authoritative progress. Do not repeat steps already recorded as completed or successful.',
         'The gateway restart that resumed this turn is already complete. Do not call gateway_restart or repeat the original restart step unless new post-recovery work genuinely requires another restart.',
+        backgroundContinuity,
         '',
         ...processPacket,
       ].join('\n');
@@ -332,6 +335,7 @@ function buildCheckpointText(
       '',
       `Restart trigger: ${plannedTool}`,
       'Prometheus called this restart tool from this chat.',
+      backgroundContinuity,
       includeProcessPacket ? '' : 'Detailed recovery context was saved internally.',
       '',
       ...processPacket,
@@ -346,6 +350,7 @@ function buildCheckpointText(
     runtime.checkpoint?.event ? `Last event: ${runtime.checkpoint.event}` : '',
     runtime.checkpoint?.message ? `Last progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
     runtime.checkpoint?.toolName ? `Last tool: ${runtime.checkpoint.toolName}` : '',
+    backgroundContinuity,
     ...processPacket,
     '',
     includeProcessPacket
