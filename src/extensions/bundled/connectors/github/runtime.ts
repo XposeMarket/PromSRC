@@ -32,7 +32,39 @@ const tools = [
   'connector_github_list_check_runs',
   'connector_github_get_file',
   'connector_github_search',
+  'connector_github_update_pr',
+  'connector_github_close_pr',
+  'connector_github_update_issue',
+  'connector_github_comment',
+  'connector_github_api_request',
 ];
+
+const GITHUB_API_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const MAX_GITHUB_API_PATH_CHARS = 2000;
+const MAX_GITHUB_API_BODY_CHARS = 200_000;
+const MAX_GITHUB_API_RESULT_CHARS = 60_000;
+const WRITE_EFFECTS = { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true };
+
+/** Only relative api.github.com paths: no scheme, host, traversal, or control chars. */
+export function validateGitHubApiPath(path: unknown): string | null {
+  const value = typeof path === 'string' ? path.trim() : '';
+  if (!value) return 'path is required, for example /repos/OWNER/REPO/pulls/12.';
+  if (!value.startsWith('/') || value.startsWith('//')) return 'path must be a relative GitHub API path starting with a single /.';
+  if (/[\s\x00-\x1f\\]/.test(value) || /:\/\//.test(value)) return 'path must not contain whitespace, backslashes, control characters, or a URL scheme.';
+  if (value.split('?')[0].split('/').some((seg) => seg === '..' || seg === '.')) return 'path must not contain . or .. segments.';
+  if (value.length > MAX_GITHUB_API_PATH_CHARS) return `path must be ${MAX_GITHUB_API_PATH_CHARS} characters or fewer.`;
+  return null;
+}
+
+function cleanPatch<T extends Record<string, any>>(patch: T): Partial<T> {
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(patch)) if (value !== undefined && value !== null && value !== '') out[key] = value;
+  return out as Partial<T>;
+}
+
+function resolveIssueNumber(args: any): number | null {
+  return resolvePullRequestNumber({ pr_number: args?.issue_number ?? args?.issueNumber ?? args?.pr_number ?? args?.pull_number ?? args?.number });
+}
 
 function gh(): GitHubConnector | undefined {
   return getLiveConnector<GitHubConnector>(ID);
@@ -171,6 +203,153 @@ const ext: PrometheusExtensionDefinition = {
       }),
     });
 
+
+    api.registerTool({
+      name: 'connector_github_update_pr',
+      description: '[GitHub] Update a pull request: close or reopen it (state), or change its title, body, or base branch. Requires approval in Default permissions mode.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'pr_number'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          pr_number: { type: 'number', description: 'Pull request number' },
+          state: { type: 'string', enum: ['open', 'closed'], description: 'Set to closed to close the PR, open to reopen it' },
+          title: { type: 'string', description: 'New title' },
+          body: { type: 'string', description: 'New description (markdown)' },
+          base: { type: 'string', description: 'New base branch' },
+          comment: { type: 'string', description: 'Optional comment posted before the update, e.g. "Superseded by #464"' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: WRITE_EFFECTS,
+      execute: (args: any) => withConn(async (c) => {
+        const prNumber = resolvePullRequestNumber(args);
+        if (prNumber === null) return toolError('pr_number is required and must be a positive integer (pull request number).');
+        const patch = cleanPatch({ state: args.state, title: args.title, body: args.body, base: args.base });
+        if (patch.state && patch.state !== 'open' && patch.state !== 'closed') return toolError('state must be open or closed.');
+        const comment = typeof args.comment === 'string' ? args.comment.trim() : '';
+        if (!Object.keys(patch).length && !comment) return toolError('Nothing to update: pass state, title, body, base, or comment.');
+        if (comment) await c.createIssueComment(args.owner, args.repo, prNumber, comment);
+        if (!Object.keys(patch).length) return toolOk(`Commented on PR #${prNumber}.`);
+        const pr = await c.updatePullRequest(args.owner, args.repo, prNumber, patch as any);
+        return toolOk(`PR #${pr.number} [${pr.state}] ${pr.title}${comment ? ' (comment posted)' : ''}\n  ${pr.html_url}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_close_pr',
+      description: '[GitHub] Close a pull request without merging, optionally leaving a comment first (e.g. "Superseded by #464"). Requires approval in Default permissions mode.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'pr_number'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          pr_number: { type: 'number', description: 'Pull request number' },
+          comment: { type: 'string', description: 'Optional closing comment' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: WRITE_EFFECTS,
+      execute: (args: any) => withConn(async (c) => {
+        const prNumber = resolvePullRequestNumber(args);
+        if (prNumber === null) return toolError('pr_number is required and must be a positive integer (pull request number).');
+        const comment = typeof args.comment === 'string' ? args.comment.trim() : '';
+        if (comment) await c.createIssueComment(args.owner, args.repo, prNumber, comment);
+        const pr = await c.updatePullRequest(args.owner, args.repo, prNumber, { state: 'closed' });
+        if (pr.state !== 'closed') return toolError(`GitHub did not close PR #${prNumber} (state: ${pr.state}).`);
+        return toolOk(`Closed PR #${pr.number}: ${pr.title}${comment ? ' (comment posted)' : ''}\n  ${pr.html_url}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_update_issue',
+      description: '[GitHub] Update an issue: close or reopen it, or change its title, body, labels, or assignees. Requires approval in Default permissions mode.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'issue_number'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          issue_number: { type: 'number', description: 'Issue number' },
+          state: { type: 'string', enum: ['open', 'closed'], description: 'closed to close, open to reopen' },
+          state_reason: { type: 'string', enum: ['completed', 'not_planned', 'reopened'], description: 'Optional reason for the state change' },
+          title: { type: 'string', description: 'New title' },
+          body: { type: 'string', description: 'New body (markdown)' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Replace labels with this list' },
+          assignees: { type: 'array', items: { type: 'string' }, description: 'Replace assignees with this list' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: WRITE_EFFECTS,
+      execute: (args: any) => withConn(async (c) => {
+        const issueNumber = resolveIssueNumber(args);
+        if (issueNumber === null) return toolError('issue_number is required and must be a positive integer.');
+        const patch = cleanPatch({ state: args.state, state_reason: args.state_reason, title: args.title, body: args.body, labels: Array.isArray(args.labels) ? args.labels : undefined, assignees: Array.isArray(args.assignees) ? args.assignees : undefined });
+        if (!Object.keys(patch).length) return toolError('Nothing to update: pass state, title, body, labels, or assignees.');
+        const issue = await c.updateIssue(args.owner, args.repo, issueNumber, patch as any);
+        return toolOk(`#${issue.number} [${issue.state}] ${issue.title}\n  ${issue.html_url}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_comment',
+      description: '[GitHub] Post a comment on an issue or pull request. Requires approval in Default permissions mode.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'issue_number', 'body'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          issue_number: { type: 'number', description: 'Issue or pull request number' },
+          body: { type: 'string', description: 'Comment text (markdown)' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: WRITE_EFFECTS,
+      execute: (args: any) => withConn(async (c) => {
+        const issueNumber = resolveIssueNumber(args);
+        if (issueNumber === null) return toolError('issue_number is required and must be a positive integer (issue or PR number).');
+        const body = typeof args.body === 'string' ? args.body.trim() : '';
+        if (!body) return toolError('body is required.');
+        const comment = await c.createIssueComment(args.owner, args.repo, issueNumber, body);
+        return toolOk(`Comment posted: ${comment.html_url}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_api_request',
+      description: '[GitHub] Call any GitHub REST API endpoint not covered by a first-class tool (reviews, labels, releases, workflows, branches, reactions, etc.). Paths are restricted to api.github.com. GET/HEAD are read-only; other methods use the normal external-write approval gate.',
+      parameters: {
+        type: 'object',
+        required: ['path'],
+        properties: {
+          path: { type: 'string', description: 'Relative GitHub API path beginning with /, query string allowed, e.g. /repos/OWNER/REPO/pulls/12/reviews' },
+          method: { type: 'string', enum: GITHUB_API_METHODS, description: 'HTTP method, default GET' },
+          body: { type: 'object', description: 'Optional JSON body for write methods' },
+        },
+      },
+      connectorId: ID, capability: 'api',
+      execute: (args: any) => withConn(async (c) => {
+        const path = typeof args?.path === 'string' ? args.path.trim() : '';
+        const pathError = validateGitHubApiPath(path);
+        if (pathError) return toolError(pathError);
+        const method = String(args?.method || 'GET').trim().toUpperCase();
+        if (!GITHUB_API_METHODS.includes(method)) return toolError(`method must be one of ${GITHUB_API_METHODS.join(', ')}.`);
+        if (args?.body !== undefined && method !== 'GET' && method !== 'HEAD') {
+          let serialized: string | undefined;
+          try { serialized = JSON.stringify(args.body); } catch { return toolError('body must be JSON-serializable.'); }
+          if (serialized === undefined) return toolError('body must be a JSON value.');
+          if (serialized.length > MAX_GITHUB_API_BODY_CHARS) return toolError(`body must be ${MAX_GITHUB_API_BODY_CHARS} characters or fewer.`);
+        }
+        const res = await c.apiRequest(method, path, args?.body);
+        let text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2);
+        if (text.length > MAX_GITHUB_API_RESULT_CHARS) text = `${text.slice(0, MAX_GITHUB_API_RESULT_CHARS)}\n...[truncated ${text.length - MAX_GITHUB_API_RESULT_CHARS} chars]`;
+        const head = `GitHub API ${method} ${path} -> ${res.status}`;
+        return res.ok ? toolOk(text ? `${head}\n${text}` : head) : toolError(`${head}\n${text}`);
+      }),
+    });
 
     api.registerTool({
       name: 'connector_github_get_pr',
