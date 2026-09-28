@@ -69,7 +69,7 @@ import {
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
@@ -2655,7 +2655,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -2907,9 +2907,29 @@ async function handleChat(
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
   htime('pre_context.legacy_history_migrated');
+  // Runtimes that wrap the real request in boilerplate (team dispatch) pass the
+  // bare task as toolCategoryDetectionText so the wrapper's own wording never
+  // provisions categories. Everyone else is scanned exactly like main chat.
+  const toolCategoryDetectionText = String(runtimeOptions?.toolCategoryDetectionText || '').trim() || message;
   const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
-    ? autoActivateToolCategories(sessionId, message, history.length, (label, fields) => htime(label, fields))
+    ? autoActivateToolCategories(sessionId, toolCategoryDetectionText, history.length, (label, fields) => htime(label, fields))
     : [];
+  // Minimal agents (explicit tool allowlist): load the categories that hold the
+  // allowlisted tools, otherwise e.g. allowed_tools:["workspace_run"] would be
+  // filtered out because workspace_write was never activated. The filter below
+  // still hides everything that is not on the list.
+  if (Array.isArray(toolFilter) && toolFilter.length > 0 && !isSupervisionLoop) {
+    const allowlistCategories = new Set<string>();
+    for (const pattern of toolFilter) {
+      const toolName = String(pattern || '').trim();
+      if (!toolName || toolName.endsWith('*')) continue;
+      const category = getToolCategory(toolName);
+      if (category) allowlistCategories.add(category);
+    }
+    for (const category of allowlistCategories) {
+      try { activateToolCategory(sessionId, category, { scope: 'turn' }); } catch { /* unknown category */ }
+    }
+  }
   htime('pre_context.tool_categories_activated');
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,

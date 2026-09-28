@@ -15,6 +15,7 @@ import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import crypto from 'crypto';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { ensureTeamAgentIdentity } from '../teams/team-workspace.js';
 import {
   loadTask,
@@ -231,11 +232,10 @@ function resolveRoundTimeoutMs(isResearchTask?: boolean): number {
   return DEFAULT_ROUND_TIMEOUT_MS;
 }
 
-function buildSubagentToolFilter(subagentProfile: string | undefined): string[] | undefined {
-  void subagentProfile;
-  // Standalone subagents inherit the main runtime tool surface. Keep this hook
-  // only for future explicit filters; the default must remain unrestricted.
-  return undefined;
+function buildSubagentToolFilter(agentId: string | undefined): string[] | undefined {
+  // Subagents inherit the main runtime tool system (core + automatic category
+  // activation). Only an explicit allowed_tools list narrows it (minimal agent).
+  return resolveAgentToolFilter(agentId);
 }
 
 function splitExecutorProviderRef(ref?: string): { modelOverride?: string; providerOverride?: string } {
@@ -2533,7 +2533,7 @@ export class BackgroundTaskRunner {
         abortSignal,
         undefined,
         taskModelOverride,
-        buildSubagentToolFilter(task.subagentProfile),
+        buildSubagentToolFilter(task.teamSubagent?.agentId || task.subagentProfile),
         undefined,
         taskProviderOverride,
 	        task.teamSubagent ? 'team_subagent' : task.subagentProfile ? 'background_agent' : isProposalLikeSourceSession ? 'proposal_execution' : 'background_task',

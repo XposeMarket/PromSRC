@@ -252,7 +252,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 allowed_tools: {
                   type: 'array',
                   items: { type: 'string' },
-                  description: 'Legacy metadata only. Subagents receive the full standard tool surface at runtime.',
+                  description: 'Optional minimal-agent allowlist of exact tool names, e.g. ["workspace_read","workspace_run","write_note"]. Leave empty (default) for the full main-chat tool system: core tools plus automatic and on-demand category activation. When set, the agent only ever sees these tools; their categories load automatically.',
                 },
                 forbidden_tools: {
                   type: 'array',
@@ -371,7 +371,7 @@ export function getAgentTeamScheduleTools(): any[] {
             allowed_work_paths: { type: 'array', items: { type: 'string' }, description: 'Alias for allowedWorkPaths.' },
             constraints: { type: 'array', items: { type: 'string' }, description: 'Full replacement constraints list' },
             success_criteria: { type: 'string', description: 'Full replacement success criteria' },
-            allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Legacy full replacement individual tool names' },
+            allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement minimal-agent allowlist of exact tool names. Empty array = full main-chat tool system.' },
             forbidden_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement explicit blacklist' },
             skillIds: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of installed skill IDs attached to this subagent' },
             context_refs: {
