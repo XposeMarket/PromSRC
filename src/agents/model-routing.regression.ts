@@ -24,6 +24,9 @@ assert.deepEqual(parseProviderModelRef('openai_codex/terra'), { providerId: 'ope
 assert.equal(normalizeProviderModel('anthropic', 'opus-5.5'), 'claude-opus-5-5');
 assert.equal(normalizeProviderModel('anthropic', 'opus-5-5'), 'claude-opus-5-5');
 assert.equal(normalizeProviderModel('anthropic', 'claude-opus-5.5'), 'claude-opus-5-5');
+assert.equal(normalizeProviderModel('anthropic', 'sonnet-5.5'), 'claude-sonnet-5-5');
+assert.ok(ANTHROPIC_MODELS.includes('claude-sonnet-5-5'), 'claude-sonnet-5-5 must be listed in the Anthropic model catalog');
+assert.ok(getReasoningCapability('anthropic', 'claude-sonnet-5-5').efforts.includes('xhigh'), 'Sonnet 5.5 must accept xhigh effort');
 // Opus 5 must keep resolving to itself; 5.5 must not shadow it.
 assert.equal(normalizeProviderModel('anthropic', 'opus-5'), 'claude-opus-5');
 assert.deepEqual(

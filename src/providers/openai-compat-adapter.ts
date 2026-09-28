@@ -51,7 +51,7 @@ function normalizeModelSlug(modelName: string): string {
 
 function xaiModelSupportsXHighReasoningEffort(modelName: string): boolean {
   const name = normalizeModelSlug(modelName);
-  return /^grok-4\.7(?:-|$)/i.test(name)
+  return /^grok-4\.(?:6|7)(?:-|$)/i.test(name)
     || /^grok-4\.20-multi-agent(?:-|$)/i.test(name);
 }
 

@@ -23,6 +23,37 @@ function safeId(value, fallback = 'reasoning') {
   return id || fallback;
 }
 
+// Pill-slider geometry. The thumb centers on the selected segment: index 0
+// sits over the first segment's center and the last index over the last
+// segment's center, so Low starts at the beginning and Max never runs past
+// the track edge. Width is expressed against the track's inner box (the
+// fill is absolutely positioned inside the track padding).
+export function reasoningSliderCenter(progress, count) {
+  const n = Math.max(1, Number(count) || 1);
+  const p = Math.max(0, Math.min(1, Number(progress) || 0));
+  return n <= 1 ? 0.5 : (0.5 + p * (n - 1)) / n;
+}
+
+export function reasoningSliderFillWidth(progress, count) {
+  const center = reasoningSliderCenter(progress, count);
+  return `calc((100% - 2 * var(--pm-reasoning-inset, 7px)) * ${center.toFixed(5)})`;
+}
+
+// Inverse of reasoningSliderCenter for a pointer event over the control.
+export function reasoningProgressFromPointer(event, control, count) {
+  const n = Math.max(1, Number(count) || 1);
+  if (n <= 1 || !control) return 0;
+  const track = control.querySelector?.('.pm-reasoning-track') || control;
+  const rect = track.getBoundingClientRect();
+  if (!rect.width) return 0;
+  const scale = track.offsetWidth ? rect.width / track.offsetWidth : 1;
+  const padding = parseFloat(getComputedStyle(track).paddingLeft) || 0;
+  const inset = padding * scale;
+  const inner = Math.max(1, rect.width - 2 * inset);
+  const pos = (Number(event?.clientX || 0) - rect.left - inset) / inner;
+  return Math.max(0, Math.min(1, (pos * n - 0.5) / (n - 1)));
+}
+
 function wheelRotation(progress, optionCount = 1) {
   const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
   const count = Math.max(1, Number(optionCount) || 1);
@@ -62,9 +93,7 @@ export function renderReasoningSelector({
   const current = String(effort || '').trim().toLowerCase();
   const selectedIndex = Math.max(0, options ? Math.max(0, options.indexOf(current)) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
-  const selectedFillWidth = options && options.length
-    ? ((1 / options.length) + selectedProgress * ((options.length - 1) / options.length)) * 100
-    : 0;
+  const selectedFillWidth = options && options.length ? reasoningSliderFillWidth(selectedProgress, options.length) : '0px';
   const selectedWheelRotation = wheelRotation(selectedProgress, options?.length || 1);
   const modelName = model ? formatModelDisplayName(model, provider) : 'Default model';
   const effortName = options ? formatReasoningSelectorLabel(options[selectedIndex], provider, model) : 'Default';
@@ -73,7 +102,7 @@ export function renderReasoningSelector({
   const safeLiveLabelId = safeId(liveLabelId, `${rootId}-live-label`);
   const safeAdvancedId = safeId(advancedId, `${rootId}-advanced`);
   const slider = options ? `
-     <div class="pm-reasoning-control" id="${esc(safeControlId)}" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth}%;--pm-reasoning-fill-height:${selectedFillWidth}%;--pm-reasoning-color-strength:${Math.round(selectedProgress * 100)}%;--pm-reasoning-arc-gradient:url(#${esc(safeControlId)}-arc-gradient);--pm-reasoning-wheel-rotation:${selectedWheelRotation}deg;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level. Swipe down for higher reasoning and up for lower reasoning." aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${esc(effortName)}">
+     <div class="pm-reasoning-control" id="${esc(safeControlId)}" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth};--pm-reasoning-fill-height:${Math.round(reasoningSliderCenter(selectedProgress, options.length) * 100)}%;--pm-reasoning-color-strength:${Math.round(selectedProgress * 100)}%;--pm-reasoning-arc-gradient:url(#${esc(safeControlId)}-arc-gradient);--pm-reasoning-wheel-rotation:${selectedWheelRotation}deg;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level. Swipe down for higher reasoning and up for lower reasoning." aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${esc(effortName)}">
        <div class="pm-reasoning-track">
          <div class="pm-reasoning-fill"></div>
          <svg class="pm-reasoning-wheel-svg" viewBox="0 0 240 126" preserveAspectRatio="xMidYMid meet" focusable="false">
@@ -129,8 +158,7 @@ export function wireReasoningSelector(root, { onChange } = {}) {
     const rotation = wheelRotation(progress, segments.length);
     control.style.setProperty('--pm-reasoning-index', String(next));
     control.style.setProperty('--pm-reasoning-progress', String(progress));
-    const fillWidth = segments.length ? ((1 / segments.length) + progress * (maxIndex / segments.length)) * 100 : 0;
-    control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
+    control.style.setProperty('--pm-reasoning-fill-width', reasoningSliderFillWidth(progress, segments.length));
     control.style.setProperty('--pm-reasoning-wheel-rotation', `${rotation}deg`);
     control.setAttribute('aria-valuenow', String(next));
     control.setAttribute('aria-valuetext', label);
@@ -145,9 +173,10 @@ export function wireReasoningSelector(root, { onChange } = {}) {
     lastProgress = progress;
   };
 
-  const progressFromEvent = (event) => {
-    const rect = control.getBoundingClientRect();
-    return rect.width ? Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) : 0;
+  const progressFromEvent = (event) => reasoningProgressFromPointer(event, control, segments.length);
+  // Drag/tap on the track: snap to the nearest level. Commits only on release.
+  const commitFromEvent = (event, immediate) => {
+    update(Math.round(progressFromEvent(event) * maxIndex), immediate);
   };
   const onPointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;

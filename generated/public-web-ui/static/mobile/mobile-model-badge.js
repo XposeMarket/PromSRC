@@ -26,7 +26,7 @@ import {
   validEffort,
 } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, formatModelWithReasoning, formatReasoningDisplayName } from '../model-display.js';
-import { renderReasoningSelector } from '../components/reasoning-selector.js';
+import { renderReasoningSelector, reasoningSliderFillWidth, reasoningProgressFromPointer } from '../components/reasoning-selector.js';
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const BUILTIN_LABELS = {
@@ -44,7 +44,7 @@ const BUILTIN_LABELS = {
 const BUILTIN_STATIC_MODELS = {
   openai: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['chatgpt', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
   xai: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
@@ -946,8 +946,7 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     const setProgress = (progress) => {
       const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
       control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
-      const fillWidth = ((1 / options.length) + safeProgress * ((options.length - 1) / options.length)) * 100;
-      control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
+      control.style.setProperty('--pm-reasoning-fill-width', reasoningSliderFillWidth(safeProgress, options.length));
     };
     const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
       const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
@@ -977,15 +976,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
       }
     };
-    const progressFromEvent = (event) => {
-      const rect = control.getBoundingClientRect();
-      if (!rect.width) return 0;
-      const pointerPosition = (Number(event.clientX || 0) - rect.left) / rect.width;
-      // The first thumb center starts one segment into the track. Map finger
-      // position to those actual thumb endpoints so dragging follows the touch.
-      const firstCenter = 1 / options.length;
-      return (pointerPosition - firstCenter) / (1 - firstCenter);
-    };
+    // Thumb centers sit on segment centers; map the finger onto them.
+    const progressFromEvent = (event) => reasoningProgressFromPointer(event, control, options.length);
     const indexFromProgress = (progress) => {
       return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
     };

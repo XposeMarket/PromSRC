@@ -36,7 +36,7 @@ export interface SubagentDefinition {
   // Capabilities
   // Runtime access is full standard core + category tool access.
   // The remaining lists are legacy metadata only.
-  allowed_tools: string[];  // Legacy metadata only. Team dispatch runtime does not restrict by this list.
+  allowed_tools: string[];  // Optional minimal-agent allowlist; empty = full main-chat tool system (see agent-tool-policy.ts).
   forbidden_tools: string[];  // Explicit blacklist
   mcp_servers?: string[];    // Piece 4: MCP server IDs this subagent can use
   skillIds?: string[];       // Skill playbooks attached to this subagent
@@ -1119,7 +1119,7 @@ export const subagentSpawnTool = {
           allowed_tools: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Legacy metadata only. Subagents receive the full standard tool surface at runtime.',
+            description: 'Optional minimal-agent allowlist of exact tool names. Leave empty (default) for the full main-chat tool system: core tools plus automatic and on-demand category activation.',
           },
           mcp_servers: {
             type: 'array',

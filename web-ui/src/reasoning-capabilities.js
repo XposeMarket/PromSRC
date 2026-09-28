@@ -62,10 +62,12 @@ export function reasoningCapability(provider, model) {
     const efforts = ['low','medium','high'];
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
-    return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
+    // Opus 5.5 is the only effort model whose API default is medium.
+    return { efforts, defaultEffort: /^claude-opus-5-5(?:-|$)/.test(name) ? 'medium' : 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
   }
   if (id === 'perplexity') return { efforts: ['low','medium','high'] };
-  if (id === 'xai') return { efforts: /^(?:grok-4\.7(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'] };
+  // docs.x.ai: xhigh is available on grok-4.6 and later (+ 4.20 multi-agent).
+  if (id === 'xai') return { efforts: /^(?:grok-4\.(?:6|7)(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'], defaultEffort: 'high' };
   return { efforts: [] };
 }
 
@@ -87,7 +89,7 @@ export function formatReasoningSelectorLabel(value, provider, model = '') {
   const id = String(provider || '').trim().toLowerCase();
   if (!effort) return 'Provider default';
   if (id === 'openai_codex' && isChatGPTWebModel(model) && CHATGPT_MODE_LABELS[effort]) return CHATGPT_MODE_LABELS[effort];
-  if (effort === 'xhigh') return 'X high';
+  if (effort === 'xhigh' || effort === 'extra_high') return 'Extra High';
   if (effort === 'max') return 'Max';
   if (effort === 'ultra') return 'Ultra';
   return effort.charAt(0).toUpperCase() + effort.slice(1);

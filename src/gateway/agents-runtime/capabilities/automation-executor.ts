@@ -1,5 +1,6 @@
 import path from 'path';
 import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait } from '../../tasks/task-runner';
+import { normalizeSpawnToolCategoriesArg } from '../../tasks/spawn-tool-categories-arg';
 import {
   automationDashboardTool,
   scheduleJobDetailTool,
@@ -39,6 +40,7 @@ import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '
 import { executePrometheusRequestOps } from '../../requests/request-ops';
 import { executePrometheusAuditOpsInWorker } from '../../audit/audit-ops-worker-client';
 import { getResourceStore } from '../../resources/resource-store';
+import { executeTriggerOps } from '../../triggers/trigger-rule-input';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -50,6 +52,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'task_control',
   'timer',
   'internal_watch',
+  'trigger_ops',
   'schedule_job',
   'schedule_job_history',
   'schedule_job_detail',
@@ -97,7 +100,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
             speed: args.speed ? String(args.speed) : (args.fast_mode === true ? 'fast' : undefined),
-            toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
+            toolCategories: normalizeSpawnToolCategoriesArg(args.tool_categories),
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
@@ -155,6 +158,11 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         } catch (err: any) {
           return { name, args, result: `background_join error: ${err.message}`, error: true };
         }
+      }
+
+      case 'trigger_ops': {
+        const [result, isError] = await executeTriggerOps(args || {}, sessionId);
+        return { name, args, result, error: isError };
       }
 
       case 'task_control': {

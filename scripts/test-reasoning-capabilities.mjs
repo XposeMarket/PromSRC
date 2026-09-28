@@ -63,7 +63,13 @@ assert.equal(getReasoningCapability('anthropic', 'claude-haiku-4-5-20251001').th
 assert.deepEqual(efforts('perplexity', 'sonar-reasoning-pro'), ['low', 'medium', 'high']);
 assert.deepEqual(efforts('xai', 'grok-4.20-multi-agent'), ['low', 'medium', 'high', 'xhigh']);
 assert.deepEqual(efforts('xai', 'grok-4.3'), ['low', 'medium', 'high']);
-assert.deepEqual(efforts('xai', 'grok-4.6'), ['low', 'medium', 'high']);
+// docs.x.ai: xhigh is available on grok-4.6 and later; grok-4.5 caps at high.
+assert.deepEqual(efforts('xai', 'grok-4.6'), ['low', 'medium', 'high', 'xhigh']);
+assert.deepEqual(efforts('xai', 'grok-4.5'), ['low', 'medium', 'high']);
+assert.deepEqual(efforts('anthropic', 'claude-sonnet-5-5'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(efforts('anthropic', 'claude-opus-5-5'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.equal(getReasoningCapability('anthropic', 'claude-opus-5-5').defaultEffort, 'medium');
+assert.equal(getReasoningCapability('anthropic', 'claude-sonnet-5-5').defaultEffort, 'high');
 assert.deepEqual(efforts('xai', 'grok-4.7'), ['low', 'medium', 'high', 'xhigh']);
 for (const provider of ['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']) {
   for (const model of ['gpt-5.6', 'gpt-5.5', 'gpt-5', 'claude-sonnet-4-6', 'sonar-reasoning-pro', 'grok-4.6', 'grok-4.7']) {

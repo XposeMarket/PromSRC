@@ -2188,6 +2188,11 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     let chunksEnqueued = 0;
     let samplesEnqueued = 0;
     let droppedChunks = 0;
+    // Samples actually handed to the speaker. This is the real playout clock for
+    // the WebSocket transports (no media element exists), so the lyric highlight
+    // follows what the user hears instead of when chunks arrived.
+    let playedSamples = 0;
+    let lastEnqueueAt = 0;
     let lastDebugAt = 0;
     let resampleInput = [];
     let resampleBaseIndex = 0;
@@ -2271,7 +2276,10 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         out.fill(0);
         return;
       }
-      if (!playing && queuedSamples >= prebufferSamples) {
+      // Start at the prebuffer mark, or play a short tail that will never reach
+      // it. After an underrun the last <prebuffer of a reply otherwise sat in
+      // the queue unplayed, so audio and the lyric stalled short of the end.
+      if (!playing && queuedSamples > 0 && (queuedSamples >= prebufferSamples || Date.now() - lastEnqueueAt > 320)) {
         playing = true;
         debugPlayback('started', { prebufferMs: Math.round((prebufferSamples / outputRate) * 1000) }, true);
       }
@@ -2292,6 +2300,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           out[i] = 0;
         } else {
           emptySamples = 0;
+          playedSamples += 1;
           const step = 1 / 960;
           smoothGain = Math.min(1, smoothGain + step);
           out[i] = sample * smoothGain;
@@ -2320,6 +2329,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         if (!float.length) return;
         queue.push(float);
         queuedSamples += float.length;
+        lastEnqueueAt = Date.now();
         chunksEnqueued += 1;
         samplesEnqueued += float.length;
         trimQueue();
@@ -2342,6 +2352,8 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         if (isXai) debugPlayback('interrupted', {}, true);
       },
       async resume() { try { await ctx.resume?.(); } catch {} },
+      playedMs() { return (playedSamples / outputRate) * 1000; },
+      queuedMs() { return (queuedSamples / outputRate) * 1000; },
       close() {
         closed = true;
         this.interrupt();
@@ -2521,6 +2533,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     if (!ws) throw new Error(lastWsError || 'OpenAI realtime WebSocket failed.');
     openAiCapture.ws = ws;
     const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE, provider: 'openai_ws' });
+    const openAiWsAudioItem = { id: '', contentIndex: 0, baseMs: 0 };
     await playback.resume?.();
 
     ws.addEventListener('close', (ev) => {
@@ -2568,6 +2581,14 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         if (b64) {
           try {
             const pcm = _mobileBase64ToInt16(b64);
+            // Track which assistant item is playing and where its audio starts on
+            // the playout clock, so a barge-in can truncate it at the heard point.
+            const itemId = String(event.item_id || '').trim();
+            if (itemId && openAiWsAudioItem.id !== itemId) {
+              openAiWsAudioItem.id = itemId;
+              openAiWsAudioItem.contentIndex = Number(event.content_index || 0) || 0;
+              openAiWsAudioItem.baseMs = playback.playedMs() + playback.queuedMs();
+            }
             _noteMobileRealtimeAssistantAudioChunk(sid, pcm);
             playback.enqueue(pcm);
           } catch {}
@@ -2576,7 +2597,25 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       }
       if (type === 'input_audio_buffer.speech_started') {
         if (!_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput('openai_ws')) {
+          const heardMs = openAiWsAudioItem.id ? Math.max(0, Math.round(playback.playedMs() - openAiWsAudioItem.baseMs)) : 0;
+          const stillPlaying = playback.queuedMs() > 40;
           try { playback.interrupt(); } catch {}
+          // OpenAI Realtime over WebSocket does not know what the user actually
+          // heard. Without truncate, the model's context keeps the unplayed tail.
+          // (WebRTC truncates server-side; this only applies to the WS path.)
+          if (openAiWsAudioItem.id && stillPlaying) {
+            try {
+              ws.send(JSON.stringify({
+                type: 'conversation.item.truncate',
+                item_id: openAiWsAudioItem.id,
+                content_index: openAiWsAudioItem.contentIndex,
+                audio_end_ms: heardMs,
+              }));
+            } catch {}
+            _voiceDebug('openai-realtime-ws-truncate', { itemId: openAiWsAudioItem.id, audioEndMs: heardMs });
+          }
+          openAiWsAudioItem.id = '';
+          try { _finishMobileRealtimeAssistantLyricProgress(sid, { delayMs: 650 }); } catch {}
         }
       }
       if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
@@ -2837,6 +2876,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         if (type === 'input_audio_buffer.speech_started') {
           if (!_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput('xai')) {
             try { playback.interrupt(); } catch {}
+            // Barge-in: stop the underline where the voice stopped instead of
+            // waiting for the finish poll's hard cap.
+            try { _finishMobileRealtimeAssistantLyricProgress(sid, { delayMs: 650 }); } catch {}
           }
         }
         if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
@@ -3131,12 +3173,149 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
 
 
 
+  const MOBILE_REALTIME_LYRIC_FIELDS = [
+    'voiceLyricKey', 'voiceRealtimeAudioMs', 'voiceRealtimeAudioStartedAt', 'voiceRealtimeAudioLastAt',
+    'voiceRealtimeMediaStartTime', 'voiceRealtimeMediaLastTime', 'voiceRealtimePlaybackMs',
+    'voiceRealtimePlaybackClockPrimedAt', 'voiceRealtimePlaybackClockObservedAt', 'voiceRealtimePlayoutBaseMs',
+    'voiceRealtimeAudioFinal',
+  ];
+
+  // History reconcile / final-message sync can replace the live assistant turn
+  // object with a copy. Matching by object identity alone orphaned the lyric
+  // timer mid-reply (the "stuck at 3/4" underline). Re-find the same reply by
+  // lyric key / id / exchange and rebind to the replacement.
+  function _findMobileRealtimeReplacementTurn(thread, turn) {
+    if (!Array.isArray(thread) || !turn) return null;
+    const text = String(turn.body?.text || turn.content || '').trim();
+    for (let i = thread.length - 1; i >= 0; i -= 1) {
+      const m = thread[i];
+      if (!m || m.role !== 'ai') continue;
+      if (turn.voiceLyricKey && m.voiceLyricKey === turn.voiceLyricKey) return m;
+      if (turn.id && m.id && m.id === turn.id) return m;
+      if (turn.workflowGroupId && m.workflowGroupId === turn.workflowGroupId && (m.workflowPart || 'voice_assistant') === (turn.workflowPart || 'voice_assistant')) return m;
+      if (text && m.source === 'voice_agent_realtime' && String(m.body?.text || m.content || '').trim() === text) return m;
+    }
+    return null;
+  }
+
   function _mobileRealtimeActiveAssistantTurn(sessionId = '') {
     const turn = __pmRealtimeAgent?.turn?.mobileAssistantTurn || null;
     const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
     if (!turn || !sid) return null;
     const thread = __pmChat?.threads?.[sid];
-    return Array.isArray(thread) && thread.includes(turn) ? turn : null;
+    if (!Array.isArray(thread)) return null;
+    if (thread.includes(turn)) return turn;
+    const replacement = _findMobileRealtimeReplacementTurn(thread, turn);
+    if (!replacement) return null;
+    for (const field of MOBILE_REALTIME_LYRIC_FIELDS) {
+      if (turn[field] != null && replacement[field] == null) replacement[field] = turn[field];
+    }
+    replacement.voiceRealtimeActive = turn.voiceRealtimeActive === true;
+    replacement.voiceRealtimeProgress = Math.max(Number(replacement.voiceRealtimeProgress || 0) || 0, Number(turn.voiceRealtimeProgress || 0) || 0);
+    if (!replacement.source) replacement.source = 'voice_agent_realtime';
+    __pmRealtimeAgent.turn.mobileAssistantTurn = replacement;
+    return replacement;
+  }
+
+  // A reply restored from history/cache can still carry voiceRealtimeActive from
+  // a previous page life. Nothing will ever finish it, so it stays underlined
+  // forever. Clear every realtime reply that is not the live one.
+  function _sweepStaleMobileRealtimeLyricTurns(sessionId = '', keepTurn = null) {
+    const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmChat?.activeSessionId || '').trim();
+    const thread = sid ? __pmChat?.threads?.[sid] : null;
+    if (!Array.isArray(thread)) return false;
+    let changed = false;
+    for (const m of thread) {
+      if (!m || m === keepTurn || m.voiceRealtimeActive !== true) continue;
+      m.voiceRealtimeActive = false;
+      m.voiceRealtimeHighlight = '';
+      m.voiceRealtimeProgress = 1;
+      changed = true;
+    }
+    return changed;
+  }
+
+  // Settle a reply's underline on BOTH the object we hold and whatever copy is
+  // actually rendered in the thread (history sync / final-message reconcile can
+  // swap the object). Settling only the held object left the rendered copy
+  // stuck mid-underline (the xAI "stops at 3/4" bug).
+  function _settleMobileRealtimeLyricTurn(sessionId = '', turn = null) {
+    if (!turn) return;
+    const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmChat?.activeSessionId || '').trim();
+    const thread = sid ? __pmChat?.threads?.[sid] : null;
+    const targets = [turn];
+    if (Array.isArray(thread) && !thread.includes(turn)) {
+      const copy = _findMobileRealtimeReplacementTurn(thread, turn);
+      if (copy) targets.push(copy);
+    }
+    for (const t of targets) {
+      t.voiceRealtimeActive = false;
+      t.voiceRealtimeHighlight = '';
+      t.voiceRealtimeProgress = 1;
+      t._pmLyricDraining = false;
+    }
+    if (__pmRealtimeAgent?.turn?.lastLyricTurn && targets.includes(__pmRealtimeAgent.turn.lastLyricTurn)) {
+      __pmRealtimeAgent.turn.lastLyricTurn = null;
+    }
+    try { _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_final', force: true }); } catch {}
+  }
+
+  // The live lyric reference (turn.mobileAssistantTurn) is nulled on several
+  // paths (finalize miss, tool-call responses, reconcile). Recover the last
+  // reply we started underlining if it is still rendered and still active, so
+  // the ticker and response.done finisher keep driving it instead of orphaning it.
+  function _mobileRealtimeLyricTurnForProgress(sessionId = '') {
+    const active = _mobileRealtimeActiveAssistantTurn(sessionId);
+    if (active) return active;
+    const last = __pmRealtimeAgent?.turn?.lastLyricTurn || null;
+    if (!last) return null;
+    const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmChat?.activeSessionId || '').trim();
+    const thread = sid ? __pmChat?.threads?.[sid] : null;
+    if (!Array.isArray(thread)) return null;
+    const rendered = thread.includes(last) ? last : _findMobileRealtimeReplacementTurn(thread, last);
+    if (!rendered || rendered.voiceRealtimeActive !== true) return null;
+    if (rendered !== last) {
+      for (const field of MOBILE_REALTIME_LYRIC_FIELDS) {
+        if (last[field] != null && rendered[field] == null) rendered[field] = last[field];
+      }
+    }
+    __pmRealtimeAgent.turn.mobileAssistantTurn = rendered;
+    __pmRealtimeAgent.turn.lastLyricTurn = rendered;
+    return rendered;
+  }
+
+  function _mobileRealtimePlayoutMs() {
+    const playback = __pmRealtimeAgent?.conn?.playback;
+    if (!playback || typeof playback.playedMs !== 'function') return null;
+    const played = Number(playback.playedMs());
+    const queued = typeof playback.queuedMs === 'function' ? Number(playback.queuedMs()) : 0;
+    return Number.isFinite(played) ? { played, queued: Number.isFinite(queued) ? queued : 0 } : null;
+  }
+
+  // Finish a reply that is no longer the live lyric turn (superseded by a new
+  // response) when its audio has actually played out, advancing its underline
+  // on the playout clock meanwhile. Hard-capped so it can never stick.
+  function _drainMobileRealtimeLyricTurn(sessionId = '', turn = null) {
+    if (!turn || turn.voiceRealtimeActive !== true || turn._pmLyricDraining) return;
+    turn._pmLyricDraining = true;
+    const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmChat?.activeSessionId || '').trim();
+    const text = String(turn.body?.text || turn.content || '').trim();
+    const total = Number(turn.voiceRealtimeAudioMs || 0) || _estimateMobileRealtimeSpeechMs(text);
+    const deadline = Date.now() + Math.max(1500, total - _mobileRealtimeAudioPlaybackMs(turn)) + 3000;
+    const tick = () => {
+      if (turn.voiceRealtimeActive !== true) { turn._pmLyricDraining = false; return; }
+      const played = _mobileRealtimeAudioPlaybackMs(turn);
+      const playout = _mobileRealtimePlayoutMs();
+      const drained = played >= total - 120 || (playout && playout.queued <= 40 && played > 0);
+      if (drained || Date.now() >= deadline) {
+        _settleMobileRealtimeLyricTurn(sid, turn);
+        return;
+      }
+      turn.voiceRealtimeProgress = Math.max(Number(turn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, played / Math.max(1, total)));
+      try { _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress', force: true }); } catch {}
+      setTimeout(tick, 180);
+    };
+    setTimeout(tick, 180);
   }
 
   function _estimateMobileRealtimeSpeechMs(text = '') {
@@ -3165,6 +3344,12 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     }
     __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime = null;
     if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
+    if (!turn.voiceLyricKey) turn.voiceLyricKey = `lyric_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (turn.voiceRealtimePlayoutBaseMs == null && __pmRealtimeAgent.turn.voiceRealtimePendingPlayoutBaseMs != null) {
+      turn.voiceRealtimePlayoutBaseMs = __pmRealtimeAgent.turn.voiceRealtimePendingPlayoutBaseMs;
+    }
+    __pmRealtimeAgent.turn.voiceRealtimePendingPlayoutBaseMs = null;
+    _sweepStaleMobileRealtimeLyricTurns(sid, turn);
     // Establish this reply's playback baseline once. The media element stays live
     // for the whole conversation, so its absolute currentTime is not a reply clock.
     if (turn.voiceRealtimeMediaLastTime == null) {
@@ -3172,20 +3357,33 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       if (Number.isFinite(mediaNow) && mediaNow > 0) turn.voiceRealtimeMediaLastTime = mediaNow;
     }
     turn.voiceRealtimeActive = true;
+    __pmRealtimeAgent.turn.lastLyricTurn = turn;
     if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
     if (__pmRealtimeAgent.turn.voiceLyricTimer) return;
     __pmRealtimeAgent.turn.voiceLyricTimer = setInterval(() => {
-      const activeTurn = _mobileRealtimeActiveAssistantTurn(sid);
+      const activeTurn = _mobileRealtimeLyricTurnForProgress(sid);
       if (!activeTurn || !activeTurn.voiceRealtimeActive) {
         clearInterval(__pmRealtimeAgent.turn.voiceLyricTimer);
         __pmRealtimeAgent.turn.voiceLyricTimer = null;
         return;
       }
       const text = String(activeTurn.body?.text || activeTurn.content || '').trim();
-      // Actual decoded audio duration beats the word-count estimate. The
-      // estimate is only a fallback while audio chunks have not arrived.
-      const estimatedMs = Number(activeTurn.voiceRealtimeAudioMs || 0) > 0
-        ? Number(activeTurn.voiceRealtimeAudioMs) : _estimateMobileRealtimeSpeechMs(text);
+      // While the reply is still streaming, received audio understates the final
+      // length (it grows every chunk), which made the text race and then crawl.
+      // Use the larger of received audio and the transcript-based estimate until
+      // response.done marks the audio length final.
+      const receivedAudioMs = Number(activeTurn.voiceRealtimeAudioMs || 0) || 0;
+      // PCM transports (xAI, OpenAI WS) burst the whole reply's audio well ahead
+      // of playout. Once chunks stop arriving, the received length IS the spoken
+      // length; the words/sec transcript estimate often overshoots Grok's real
+      // pace, which made the underline lag and end around 3/4 when audio ended.
+      const audioIdle = receivedAudioMs > 0
+        && Number(activeTurn.voiceRealtimeAudioLastAt || 0) > 0
+        && Date.now() - Number(activeTurn.voiceRealtimeAudioLastAt) > 350;
+      const pcmClock = activeTurn.voiceRealtimePlayoutBaseMs != null && !!__pmRealtimeAgent?.conn?.playback;
+      const estimatedMs = receivedAudioMs > 0 && (activeTurn.voiceRealtimeAudioFinal === true || (pcmClock && audioIdle))
+        ? receivedAudioMs
+        : Math.max(receivedAudioMs, _estimateMobileRealtimeSpeechMs(text));
       const elapsed = _mobileRealtimeAudioPlaybackMs(activeTurn);
       const progress = Math.max(Number(activeTurn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, elapsed / Math.max(1, estimatedMs)));
       activeTurn.voiceRealtimeProgress = progress;
@@ -3202,12 +3400,19 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     turn.voiceRealtimeProgress = 1;
     _setMobileVoiceLyricProgress(String(turn.body?.text || turn.content || ''), 1, 'Realtime agent response');
     _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_done', force: true });
+    const lyricKey = turn.voiceLyricKey || '';
     setTimeout(() => {
-      if (turn !== _mobileRealtimeActiveAssistantTurn(sid)) return;
-      turn.voiceRealtimeActive = false;
-      turn.voiceRealtimeHighlight = '';
-      turn.voiceRealtimeProgress = 1;
-      if (__pmRealtimeAgent.turn?.mobileAssistantTurn === turn) __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+      const current = _mobileRealtimeActiveAssistantTurn(sid);
+      // Compare by lyric key, not object identity: the reply may have been
+      // replaced by a history-synced copy in the meantime.
+      const target = current && (current === turn || (lyricKey && current.voiceLyricKey === lyricKey)) ? current : null;
+      if (target) {
+        _settleMobileRealtimeLyricTurn(sid, target);
+        if (__pmRealtimeAgent.turn?.mobileAssistantTurn === target) __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+      }
+      _settleMobileRealtimeLyricTurn(sid, turn);
+      const liveTurn = __pmRealtimeAgent.turn?.mobileAssistantTurn || null;
+      _sweepStaleMobileRealtimeLyricTurns(sid, liveTurn && liveTurn.voiceLyricKey !== lyricKey ? liveTurn : null);
       _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_final', force: true });
     }, delayMs);
   }
@@ -3217,7 +3422,15 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     const turn = _mobileRealtimeActiveAssistantTurn(sid);
     const samples = int16 && typeof int16.length === 'number' ? Number(int16.length || 0) : 0;
     const chunkMs = samples > 0 ? (samples / MOBILE_XAI_REALTIME_SAMPLE_RATE) * 1000 : 0;
+    // Called before playback.enqueue(): this reply starts where everything already
+    // played + queued ends on the shared playout clock.
+    const playout = chunkMs > 0 ? _mobileRealtimePlayoutMs() : null;
+    const playoutBase = playout ? playout.played + playout.queued : null;
+    if (turn && turn.voiceRealtimePlayoutBaseMs == null && playoutBase != null) turn.voiceRealtimePlayoutBaseMs = playoutBase;
     if (!turn) {
+      if (playoutBase != null && __pmRealtimeAgent.turn.voiceRealtimePendingPlayoutBaseMs == null) {
+        __pmRealtimeAgent.turn.voiceRealtimePendingPlayoutBaseMs = playoutBase;
+      }
       if (chunkMs > 0) {
         __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = (Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioMs || 0) || 0) + chunkMs;
         if (!Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt || 0)) __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = Date.now();
@@ -3626,7 +3839,11 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       __pmRealtimeAgent.turn.dispatchedWorkerThisResponse = false;
       __pmRealtimeAgent.turn.lastAssistantTranscript = '';
       __pmRealtimeAgent.turn.liveAssistantTranscript = '';
+      // A new response (e.g. after a tool call) used to orphan the previous
+      // reply mid-underline. Let it finish on its own playout instead.
+      try { _drainMobileRealtimeLyricTurn(sessionId, _mobileRealtimeLyricTurnForProgress(sessionId)); } catch {}
       __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+      __pmRealtimeAgent.turn.lastLyricTurn = null;
       if (__pmRealtimeAgent.turn.voiceLyricTimer) {
         clearInterval(__pmRealtimeAgent.turn.voiceLyricTimer);
         __pmRealtimeAgent.turn.voiceLyricTimer = null;
@@ -3790,6 +4007,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           return;
         }
         _releaseMobileVoiceRoomHandoffAckGuard('same_agent_turn');
+        try { _refreshMobileRealtimeToolSurfaceForTranscript(sessionId, transcript); } catch {}
         if (_handleMobileRealtimeAgentQuietTranscript(transcript)) {
           __pmRealtimeAgent.turn.liveUserTranscript = '';
           return;
@@ -4092,22 +4310,43 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       __pmRealtimeAgent.lastResponseEndedAt = Date.now();
       const lastRealtimeReply = String(__pmRealtimeAgent.turn.lastAssistantTranscript || __pmRealtimeAgent.turn.liveAssistantTranscript || '').trim();
       if (lastRealtimeReply) _voiceShowRealtimeAgentMessage(lastRealtimeReply, 'Realtime agent response');
-      const activeLyricTurn = _mobileRealtimeActiveAssistantTurn(sessionId);
+      const activeLyricTurn = _mobileRealtimeLyricTurnForProgress(sessionId);
       let responseStatusHoldMs = lastRealtimeReply ? 8500 : 1200;
       if (activeLyricTurn) {
+        // All audio for this reply has arrived: its length is now final.
+        activeLyricTurn.voiceRealtimeAudioFinal = true;
         const audioMs = Number(activeLyricTurn.voiceRealtimeAudioMs || 0);
         const estimatedMs = audioMs > 0 ? audioMs : _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply);
         const playedMs = _mobileRealtimeAudioPlaybackMs(activeLyricTurn);
-        // response.done can precede the playout tail. Wait for the remaining
-        // measured audio, but bind this timer to this exact reply: a later reply
-        // must never be finalized by an older completion callback.
         const remainingMs = Math.max(350, Math.min(120000, estimatedMs - playedMs + 350));
         responseStatusHoldMs = Math.max(1200, remainingMs + 900);
-        setTimeout(() => {
-          if (_mobileRealtimeActiveAssistantTurn(sessionId) === activeLyricTurn) {
-            _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 });
+        // response.done precedes the playout tail. Finish when the speaker has
+        // actually played this reply's audio (polled on the playout clock), with a
+        // hard cap so a stalled clock can never leave the underline frozen. Bound
+        // to this reply by lyric key so a newer reply is never finalized early.
+        const lyricKey = activeLyricTurn.voiceLyricKey || '';
+        const deadline = Date.now() + remainingMs + 4000;
+        const pollFinish = () => {
+          const current = _mobileRealtimeLyricTurnForProgress(sessionId);
+          if (!current || (lyricKey && current.voiceLyricKey !== lyricKey) || (!lyricKey && current !== activeLyricTurn)) {
+            // Lost or replaced: let this reply finish on its real playout (drain),
+            // settling the rendered copy too, instead of snapping or orphaning it.
+            if (current) {
+              try { _drainMobileRealtimeLyricTurn(sessionId, activeLyricTurn); } catch { _settleMobileRealtimeLyricTurn(sessionId, activeLyricTurn); }
+            } else {
+              _settleMobileRealtimeLyricTurn(sessionId, activeLyricTurn);
+            }
+            return;
           }
-        }, remainingMs);
+          const total = Number(current.voiceRealtimeAudioMs || 0) || estimatedMs;
+          const played = _mobileRealtimeAudioPlaybackMs(current);
+          if (played >= total - 120 || Date.now() >= deadline) {
+            _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 650 });
+            return;
+          }
+          setTimeout(pollFinish, Math.max(120, Math.min(600, total - played)));
+        };
+        setTimeout(pollFinish, Math.max(120, Math.min(remainingMs, 600)));
       }
       setTimeout(() => {
         if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();
@@ -4168,7 +4407,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
             turn.liveUserTranscript = '';
             _ensureMobileRealtimeExchangeId({ forceNew: true });
             turn.mobileUserTurn = null;
+            try { _drainMobileRealtimeLyricTurn(sessionId, _mobileRealtimeLyricTurnForProgress(sessionId)); } catch {}
             turn.mobileAssistantTurn = null;
+            turn.lastLyricTurn = null;
             turn.currentUserTranscriptItemId = '';
             turn.currentUserTranscriptPrefix = '';
             turn.currentUserTranscriptSegment = '';
@@ -4831,7 +5072,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
 
       // Apply wake phrase / quiet mode directives to the live realtime session.
       const directive = result.runtimeDirective;
-      if (directive?.action) {
+      if (directive?.action === 'refresh_tools') {
+        _updateMobileRealtimeAgentTools(directive.tools, `tool:${name}`);
+      } else if (directive?.action) {
         const phrase = String(directive.wakePhrase || '').trim();
         if (directive.action === 'set_wake_phrase' && phrase) {
           _setMobileRealtimeAgentWakePhrase(phrase);
@@ -5042,6 +5285,39 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
   // RTCDataChannel.send() throws on a closed native channel, while the OpenAI
   // WebSocket shim historically swallowed the same failure. Keep image delivery
   // transactional: callers only mark an image injected after this returns true.
+  // Hot-swap the live realtime tool list after a Prometheus tool category
+  // activates (auto on the spoken turn, or request_tool_category). Codex AVAS
+  // tools are fixed per call; there prometheus_tools remains the path.
+  function _updateMobileRealtimeAgentTools(tools, reason = 'tool_surface') {
+    const conn = __pmRealtimeAgent?.conn;
+    if (!conn || !Array.isArray(tools) || !tools.length) return false;
+    if (_isMobileCodexV3RealtimeConnection(conn)) return false;
+    const sent = _sendMobileRealtimeDataChannelEvent(conn.dc, {
+      type: 'session.update',
+      session: conn.provider === 'xai'
+        ? { tools, tool_choice: 'auto' }
+        : { type: 'realtime', tools, tool_choice: 'auto' },
+    });
+    _voiceDebug('realtime-agent-tools-updated', { reason, count: tools.length, sent });
+    return sent;
+  }
+
+  // Main-chat parity: each finalized spoken turn runs the same category
+  // auto-activation main chat runs on every message.
+  function _refreshMobileRealtimeToolSurfaceForTranscript(sessionId = '', transcript = '') {
+    const text = String(transcript || '').trim();
+    if (!sessionId || text.length < 3 || _currentMobileSubagentVoiceTarget()) return;
+    mobileGatewayFetch('/api/voice-agent/realtime-tool-surface', {
+      method: 'POST',
+      timeoutMs: 8000,
+      body: JSON.stringify({ sessionId, transcript: text }),
+    }).then((result) => {
+      if (result?.changed && Array.isArray(result.tools)) {
+        _updateMobileRealtimeAgentTools(result.tools, `auto_activate:${(result.activated || []).join(',')}`);
+      }
+    }).catch(() => {});
+  }
+
   function _sendMobileRealtimeDataChannelEvent(dc, event) {
     if (!dc || dc.readyState !== 'open') return false;
     try {

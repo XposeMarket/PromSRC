@@ -93,15 +93,19 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     // Opus 4.5 keeps manual thinking budgets but still accepts native effort.
     const thinkingMode = /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive';
-    return { efforts, defaultEffort: 'high', thinkingMode, nativeEffort: true };
+    // Opus 5.5 is the only effort model whose API default is medium.
+    const defaultEffort: ReasoningEffort = /^claude-opus-5-5(?:-|$)/.test(name) ? 'medium' : 'high';
+    return { efforts, defaultEffort, thinkingMode, nativeEffort: true };
   }
 
   if (id === 'perplexity') return { efforts: ['low', 'medium', 'high'] };
   if (id === 'xai') {
     return {
-      efforts: /^(?:grok-4\.7(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name)
+      // docs.x.ai: xhigh is available on grok-4.6 and later (+ 4.20 multi-agent).
+      efforts: /^(?:grok-4\.(?:6|7)(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name)
         ? ['low', 'medium', 'high', 'xhigh']
         : ['low', 'medium', 'high'],
+      defaultEffort: 'high',
     };
   }
 

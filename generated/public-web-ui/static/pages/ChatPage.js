@@ -35,6 +35,7 @@ import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
   reconcileKeyedTimelineRows,
+  swapKeyedTimelineSession,
 } from '../features/chat/timeline/keyed-dom.js';
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { mountThinkingOrbWhenReady } from '../features/chat/optional/thinking-orb-runtime.js';
@@ -15272,6 +15273,23 @@ function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
+  // All desktop threads share #chat-messages, and no row key survives a thread
+  // switch, so reconcile deleted every row (live tool stream included) and
+  // rebuilt the incoming thread from HTML. Park the outgoing thread's row nodes
+  // and restore the incoming thread's last-rendered rows before reconciling.
+  // Split layouts own pane children, so they keep the plain render path.
+  if (container && !window.sideChatSplitOpen && !window.backgroundAgentDetailId && window.activeChatSessionId) {
+    try {
+      swapKeyedTimelineSession(container, window.activeChatSessionId, {
+        namespace: 'desktop-main',
+        scroller: container,
+        maxSessions: 8,
+      });
+    } catch {}
+  } else if (container) {
+    // Split panes are not a session's rows; never park them under a session.
+    container.__promTimelineSessionKey = '';
+  }
   // Preserve rich-control state while keyed rows independently reconcile.
   const _panelScroll = captureProcessPanelScroll();
   const _questionDraft = captureQuestionDraftState();
@@ -47258,12 +47276,63 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   sess.updatedAt = Date.now();
   sess.lastMessageAt = getSessionLastMessageAt(sess);
   if (sid !== window.activeChatSessionId) sess.unread = true;
-  window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
-  saveChatSessions();
-  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
-  refreshVisibleChannelsList();
+  // Per-token events used to re-sort every session, JSON.stringify ALL session
+  // histories into localStorage (synchronously) and rebuild the sidebar for
+  // EVERY token of EVERY observed thread. With several live threads that is
+  // hundreds of full-history serializations per second (renderer spiked to
+  // 4.4 GB / 124% CPU). Coalesce the bookkeeping to ~1/s and flush immediately
+  // on structural/terminal events.
+  scheduleMainChatStreamSessionBookkeeping(!MAIN_CHAT_STREAM_HOT_EVENT_TYPES.has(evt.type));
   restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, sid);
 }
+
+const MAIN_CHAT_STREAM_HOT_EVENT_TYPES = new Set([
+  'token',
+  'thinking_delta',
+  'reasoning_delta',
+  'thinking',
+  'text_delta',
+  'progress_state',
+  'tool_progress',
+  'heartbeat',
+]);
+let _mainChatStreamBookkeepingTimer = null;
+let _mainChatStreamBookkeepingLastAt = 0;
+const MAIN_CHAT_STREAM_BOOKKEEPING_INTERVAL_MS = 1000;
+
+function runMainChatStreamSessionBookkeeping() {
+  if (_mainChatStreamBookkeepingTimer) {
+    clearTimeout(_mainChatStreamBookkeepingTimer);
+    _mainChatStreamBookkeepingTimer = null;
+  }
+  _mainChatStreamBookkeepingLastAt = Date.now();
+  try {
+    window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
+    saveChatSessions();
+    if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+    refreshVisibleChannelsList();
+  } catch (err) {
+    console.warn('[ChatPage] stream session bookkeeping failed', err);
+  }
+}
+
+function scheduleMainChatStreamSessionBookkeeping(immediate = false) {
+  if (immediate) {
+    runMainChatStreamSessionBookkeeping();
+    return;
+  }
+  if (_mainChatStreamBookkeepingTimer) return;
+  const waitMs = Math.max(0, MAIN_CHAT_STREAM_BOOKKEEPING_INTERVAL_MS - (Date.now() - _mainChatStreamBookkeepingLastAt));
+  _mainChatStreamBookkeepingTimer = setTimeout(runMainChatStreamSessionBookkeeping, waitMs);
+}
+
+// Never lose a coalesced save when the window is hidden or closed.
+try {
+  window.addEventListener('pagehide', () => { if (_mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && _mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping();
+  });
+} catch {}
 
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
 

@@ -20,6 +20,7 @@ import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context
 import { getActiveHistoryForPersistence, getSession, setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
 import { buildTaskContinuitySnapshot, serializeTaskSessionMessage } from '../tasks/task-continuity';
 import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
@@ -55,6 +56,8 @@ type HandleChatFn = (
   attachments?: undefined,
   reasoningOptions?: undefined,
   providerOverride?: string,
+  callerOnToken?: undefined,
+  runtimeOptions?: { toolCategoryDetectionText?: string },
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 type BroadcastFn = (data: object) => void;
@@ -793,10 +796,13 @@ async function runTeamAgentViaChatInternal(
       callerContext,
       agentRouting.modelOverride,
       'team_subagent',
-      toolFilter,
+      toolFilter && toolFilter.length > 0 ? toolFilter : resolveAgentToolFilter(agentId),
       undefined,
       undefined,
       agentRouting.providerOverride,
+      undefined,
+      // Scan only the real task for tool categories, never the dispatch wrapper.
+      { toolCategoryDetectionText: extractTeamDispatchTaskText(task) },
     ));
 
     const finalTask = loadTask(cronTask.id);
@@ -1209,9 +1215,9 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
   sections.push(
     '',
     'TOOL RULES — follow exactly:',
-    '1. You have FULL tool access. NEVER claim you cannot use tools — call them directly.',
-    '2. For web/browser automation call browser_open directly.',
-    '3. For workspace listing use list_directory with path="." — never path="". Skip .git/ entirely.',
+    '1. You start with core tools; categories your task needs load automatically. If a tool you need is missing, call request_tool_category once, then use it. NEVER claim you cannot use tools.',
+    '2. Prefer one terminal command over many file round trips when a command answers the question.',
+    '3. For directory listings use path="." — never path="". Skip .git/ entirely.',
     '4. Do NOT blindly scan directories at startup. Read only what you need, starting from:',
     ...(focusedPaths.length > 0 ? focusedPaths : ['  - Your task instructions above.']),
     '',
@@ -1227,6 +1233,29 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
 /**
  * Builds a generic team context block for any agent dispatched to any team.
  */
+/**
+ * Pull the real task out of a buildTeamDispatchTask() wrapper so tool-category
+ * detection scans what the agent was asked to do, not the wrapper boilerplate
+ * ("[TEAM DISPATCH]", tool rules, team workspace paths), which alone used to
+ * provision browser/agents/tasks/workspace categories on every dispatch.
+ * Non-wrapped text is returned unchanged.
+ */
+export function extractTeamDispatchTaskText(effectiveTask: string): string {
+  const text = String(effectiveTask || '');
+  const marker = 'YOUR TASK:';
+  const start = text.startsWith('[TEAM DISPATCH]') ? text.indexOf(marker) : -1;
+  if (start < 0) return text;
+  const body = text.slice(start + marker.length);
+  const stops = ['\n\n[TEAM CONTEXT', '\n\nCONSTRAINTS:', '\n\nSUCCESS CRITERIA:', '\n\nTOOL RULES'];
+  let end = body.length;
+  for (const stop of stops) {
+    const index = body.indexOf(stop);
+    if (index >= 0 && index < end) end = index;
+  }
+  const task = body.slice(0, end).replace(/\n\nADDITIONAL CONTEXT:\n/, '\n\n').trim();
+  return task || text;
+}
+
 function buildGenericTeamContext(agentId: string, teamId?: string): string {
   if (!teamId) {
     const { listManagedTeams } = require('./managed-teams');

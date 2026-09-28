@@ -2533,6 +2533,14 @@ export function createMobileVoiceRuntime(context = {}) {
   function _mobileRealtimeAudioPlaybackMs(turn = null) {
     const activeTurn = turn || _mobileRealtimeActiveAssistantTurn();
     if (!activeTurn) return 0;
+    // WebSocket transports (OpenAI WS, xAI): read the real speaker playout clock
+    // from the PCM player, relative to where this reply's audio starts.
+    const pcmPlayback = __pmRealtimeAgent?.conn?.playback;
+    const playoutBase = activeTurn.voiceRealtimePlayoutBaseMs;
+    if (pcmPlayback && typeof pcmPlayback.playedMs === 'function' && playoutBase != null && Number.isFinite(Number(playoutBase))) {
+      const played = Number(pcmPlayback.playedMs());
+      if (Number.isFinite(played)) return Math.max(0, played - Number(playoutBase));
+    }
     const audio = __pmRealtimeAgent?.conn?.audio;
     const mediaNow = Number(audio?.currentTime);
     if (Number.isFinite(mediaNow) && mediaNow > 0) {
