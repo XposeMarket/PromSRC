@@ -63,7 +63,7 @@ export function captureKeyedScrollState(root, scroller = root, options = {}) {
     anchorOffset = Number(rect.top || 0) - metrics.top;
     break;
   }
-  return Object.freeze({
+  const state = Object.freeze({
     anchorKey,
     anchorOffset,
     nearBottom: distanceFromBottom <= threshold,
@@ -71,6 +71,10 @@ export function captureKeyedScrollState(root, scroller = root, options = {}) {
     scrollTop: metrics.scrollTop,
     pinnedKeys: selectedTimelineRowKeys(root),
   });
+  // Remember the last observed position so a session swap can restore it even
+  // when the old container is already detached (no live scroller to read).
+  try { if (root && root.children?.length) root.__promLastScrollState = state; } catch {}
+  return state;
 }
 
 function syncAttributes(current, next) {
@@ -109,6 +113,133 @@ function restoreScroll(root, scroller, snapshot, followBottom) {
     scroller.scrollTop = Math.max(0, scroller.scrollHeight - Number(scroller.clientHeight || 0) - Number(snapshot.distanceFromBottom || 0));
   }
 }
+
+function holdBottom(root, scroller, durationMs = 4000) {
+  try { scroller.__promHoldBottomCancel?.(); } catch {}
+  const win = globalThis;
+  let done = false;
+  let resizeObs = null;
+  let mutationObs = null;
+  let timer = 0;
+  const pinNow = () => { if (!done) scroller.scrollTop = Number(scroller.scrollHeight || 0); };
+  const stopEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    try { resizeObs?.disconnect(); } catch {}
+    try { mutationObs?.disconnect(); } catch {}
+    try { win.clearTimeout?.(timer); } catch {}
+    for (const type of stopEvents) { try { scroller.removeEventListener?.(type, cancel); } catch {} }
+    if (scroller.__promHoldBottomCancel === cancel) scroller.__promHoldBottomCancel = null;
+  };
+  scroller.__promHoldBottomCancel = cancel;
+  for (const type of stopEvents) { try { scroller.addEventListener?.(type, cancel, { passive: true }); } catch {} }
+  try {
+    if (typeof win.ResizeObserver === 'function') {
+      resizeObs = new win.ResizeObserver(pinNow);
+      resizeObs.observe(root);
+      for (const child of Array.from(root.children || []).slice(-4)) resizeObs.observe(child);
+    }
+    if (typeof win.MutationObserver === 'function') {
+      mutationObs = new win.MutationObserver(() => {
+        pinNow();
+        const last = root.lastElementChild;
+        if (last && resizeObs) { try { resizeObs.observe(last); } catch {} }
+      });
+      mutationObs.observe(root, { childList: true });
+    }
+  } catch {}
+  try { win.requestAnimationFrame?.(pinNow); } catch {}
+  timer = win.setTimeout?.(cancel, durationMs) || 0;
+}
+
+// Per-session rendered-row cache. Every thread renders into ONE shared
+// container, so switching A -> B -> A used to discard all of A's rows and
+// rebuild every message, trace drawer and tool card from scratch. Instead we
+// park the outgoing session's row nodes in a detached fragment and put them
+// back when that session is shown again; reconcileKeyedTimelineRows then only
+// touches rows whose signature actually changed while the thread was hidden.
+const sessionRowCaches = new Map();
+
+export function swapKeyedTimelineSession(root, sessionKey, options = {}) {
+  const key = String(sessionKey || '').trim();
+  if (!root || !key) return false;
+  const namespace = String(options.namespace || 'default');
+  const maxSessions = Math.max(1, Number(options.maxSessions) || 6);
+  let state = sessionRowCaches.get(namespace);
+  if (!state) {
+    state = { entries: new Map(), lastRoot: null };
+    sessionRowCaches.set(namespace, state);
+  }
+  const documentRef = root.ownerDocument || globalThis.document;
+  const scroller = options.scroller || root;
+  const stash = (host, hostKey, hostScroller) => {
+    if (!host || !hostKey || !host.children?.length || !documentRef?.createDocumentFragment) return;
+    // Read scroll BEFORE moving rows out. A detached host has no live scroller,
+    // so fall back to the last observed render snapshot; unknown => bottom.
+    // (Saving 0 here is what made reopened threads jump to the top.)
+    let nearBottom = true;
+    let distanceFromBottom = 0;
+    if (hostScroller && hostScroller.scrollHeight > 0) {
+      distanceFromBottom = Math.max(0, Number(hostScroller.scrollHeight || 0) - Number(hostScroller.scrollTop || 0) - Number(hostScroller.clientHeight || 0));
+      nearBottom = distanceFromBottom <= 72;
+    } else if (host.__promLastScrollState) {
+      nearBottom = host.__promLastScrollState.nearBottom !== false;
+      distanceFromBottom = Number(host.__promLastScrollState.distanceFromBottom || 0);
+    }
+    const fragment = documentRef.createDocumentFragment();
+    while (host.firstChild) fragment.appendChild(host.firstChild);
+    state.entries.delete(hostKey);
+    state.entries.set(hostKey, { fragment, nearBottom, distanceFromBottom });
+    while (state.entries.size > maxSessions) state.entries.delete(state.entries.keys().next().value);
+  };
+  // The page shell can be rebuilt (new container) while the old one still
+  // holds the previous session's rows; rescue them before they are GC'd.
+  const lastRoot = state.lastRoot;
+  if (lastRoot && lastRoot !== root && lastRoot.isConnected === false && lastRoot.__promTimelineSessionKey) {
+    stash(lastRoot, lastRoot.__promTimelineSessionKey, null);
+  }
+  state.lastRoot = root;
+  const mounted = String(root.__promTimelineSessionKey || '');
+  if (mounted === key) return false;
+  if (mounted) stash(root, mounted, scroller);
+  root.__promTimelineSessionKey = key;
+  root.__promLastScrollState = null;
+  const cached = state.entries.get(key);
+  const pin = (entry) => {
+    if (!scroller) return;
+    const toBottom = !entry || entry.nearBottom !== false;
+    const apply = () => {
+      const height = Number(scroller.scrollHeight || 0);
+      scroller.scrollTop = toBottom
+        ? height
+        : Math.max(0, height - Number(scroller.clientHeight || 0) - Number(entry.distanceFromBottom || 0));
+    };
+    apply();
+    // Late layout (history fetch, markdown, images, fonts, tool cards) keeps
+    // growing a cold thread for a second or two after the first render; one
+    // rAF re-pin was not enough, so cold opens landed mid-thread. Hold the
+    // bottom while content grows, until the user touches/scrolls or ~4s.
+    if (toBottom) holdBottom(root, scroller);
+    else { try { globalThis.requestAnimationFrame?.(apply); } catch {} }
+  };
+  if (!cached) {
+    // Newly opened thread: start pinned to the bottom so the render that
+    // follows sees nearBottom and keeps following the tail.
+    pin(null);
+    return false;
+  }
+  state.entries.delete(key);
+  root.textContent = '';
+  root.appendChild(cached.fragment);
+  pin(cached);
+  return true;
+}
+
+export function dropKeyedTimelineSession(sessionKey, namespace = 'default') {
+  sessionRowCaches.get(String(namespace))?.entries.delete(String(sessionKey || '').trim());
+}
+
 
 export function reconcileKeyedTimelineRows(root, html, options = {}) {
   if (!root) return Object.freeze({ created: 0, updated: 0, removed: 0, reused: 0, total: 0, durationMs: 0 });

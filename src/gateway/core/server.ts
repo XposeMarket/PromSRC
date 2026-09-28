@@ -18,7 +18,7 @@ import zlib from 'zlib';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getConfig } from '../../config/config';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
-import { setWss } from '../comms/broadcaster';
+import { setWss, setWsClientStreamFocus } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import {
@@ -755,6 +755,10 @@ export function createServer(
             }
           });
         };
+        if (msg?.type === 'stream_focus') {
+          setWsClientStreamFocus(ws, msg.sessionIds);
+          return;
+        }
         if (msg?.type === 'startup_notification_ack' && msg?.notificationId) {
           const notificationId = String(msg.notificationId);
           const item = listPendingStartupNotifications().find((n: any) => String(n?.id || '') === notificationId);

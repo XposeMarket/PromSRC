@@ -6,6 +6,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
@@ -1956,6 +1957,20 @@ export function createMobileChatRendererRuntime(context = {}) {
     const thread = runtimeRows.map((row) => row.msg);
     __pmChat.thread = thread;
     const bodyEl = document.getElementById('pm-chat-body');
+    // Each thread switch mounts a brand-new #pm-chat-thread, so an in-progress
+    // turn's tool stream, trace drawers and markdown were rebuilt from scratch
+    // (and every trace row re-animated in) whenever you returned to a thread.
+    // Put back the rows this session last had on screen; the keyed reconcile
+    // below then only patches rows that changed while you were away.
+    if (threadEl?.id === 'pm-chat-thread') {
+      try {
+        swapKeyedTimelineSession(threadEl, sid, {
+          namespace: 'mobile-main',
+          scroller: _mobileChatScrollTarget(bodyEl),
+          maxSessions: 6,
+        });
+      } catch {}
+    }
     const timelineScroll = captureKeyedScrollState(threadEl, _mobileChatScrollTarget(bodyEl));
     _captureMobileWorkerDeckViewState(threadEl);
     const openProc = {};

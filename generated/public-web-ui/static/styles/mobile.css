@@ -18760,3 +18760,56 @@ p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
   border: 0; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff;
   font-size: 26px; line-height: 40px; cursor: pointer;
 }
+
+/* Inline voice orb states (final authority). The #pm-composer dock rule above
+   carries ID specificity, which beat the class-only focus rule, so the orb
+   opened at the bottom in BOTH states. Focus = centered over a hidden thread;
+   docked = above the controls with the thread readable behind it. */
+/* Anchored from the bottom on purpose: a transformed composer ancestor becomes
+   the containing block for this fixed orb, so top:50% resolved against a short
+   bottom box and hid the orb behind the tab bar. Bottom offsets resolve against
+   that same box's bottom edge (the viewport bottom), which is what docked uses. */
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus #pm-composer.is-voice-active #pm-voice-mic.pm-voice-particle-orb {
+  top: auto !important;
+  bottom: calc(50dvh - min(21vw, 88px)) !important;
+  width: min(42vw, 176px) !important;
+  height: min(42vw, 176px) !important;
+  transform: translate(-50%, var(--pm-inline-orb-drag-y, 0px)) !important;
+  transition: width .24s cubic-bezier(.22,.74,.22,1), height .24s cubic-bezier(.22,.74,.22,1), transform .24s cubic-bezier(.22,.74,.22,1) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked #pm-composer.is-voice-active #pm-voice-mic.pm-voice-particle-orb {
+  top: auto !important;
+  bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 116px) !important;
+  transform: translate(-50%, var(--pm-inline-orb-drag-y, 0px)) !important;
+  transition: width .24s cubic-bezier(.22,.74,.22,1), height .24s cubic-bezier(.22,.74,.22,1), transform .24s cubic-bezier(.22,.74,.22,1) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active #pm-composer.is-voice-active #pm-voice-mic.pm-voice-particle-orb.dragging {
+  transition: none !important;
+}
+/* Docked: messages dissolve as they pass behind the orb. Pure alpha mask on
+   the scroller, no border, no backdrop. The last message can still scroll
+   fully above the orb. */
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked {
+  --pm-voice-orb-clear: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 116px + min(36vw, 148px));
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-body.pm-chat-body.pm-chat-voice-occluded {
+  padding-bottom: calc(var(--pm-voice-orb-clear) + 18px) !important;
+  scroll-padding-bottom: calc(var(--pm-voice-orb-clear) + 18px) !important;
+  --pm-voice-top-fade: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h, 56px));
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0,
+    transparent calc(var(--pm-voice-top-fade) - 12px),
+    #000 calc(var(--pm-voice-top-fade) + 18px),
+    #000 calc(100% - var(--pm-voice-orb-clear) - 26px),
+    rgba(0,0,0,.35) calc(100% - var(--pm-voice-orb-clear) + 34px),
+    transparent calc(100% - var(--pm-voice-orb-clear) + 96px),
+    transparent 100%) !important;
+  mask-image: linear-gradient(to bottom,
+    transparent 0,
+    transparent calc(var(--pm-voice-top-fade) - 12px),
+    #000 calc(var(--pm-voice-top-fade) + 18px),
+    #000 calc(100% - var(--pm-voice-orb-clear) - 26px),
+    rgba(0,0,0,.35) calc(100% - var(--pm-voice-orb-clear) + 34px),
+    transparent calc(100% - var(--pm-voice-orb-clear) + 96px),
+    transparent 100%) !important;
+}
