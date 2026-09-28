@@ -22,6 +22,7 @@ import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worke
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 import { registerStartupAsyncRequest } from '../startup-async-diagnostics';
 import { registerCreativeCompositionRoutes } from '../routes/creative-composition.routes';
+import { triggerHookRawBodyMiddleware } from '../routes/triggers.router';
 
 const startedAt = Date.now();
 // Request timing is intentionally separate from the normal startup profile:
@@ -185,6 +186,9 @@ export function createApp(): express.Application {
   // parser buffers or parses the request. The raw parser preserves exact HMAC bytes.
   const hookPath = resolveHookConfig().path;
   app.use(`${hookPath}/provider/:provider`, providerWebhookRawBodyMiddleware());
+  // Trigger webhook endpoints verify HMAC over the exact raw bytes, so they
+  // also bypass the JSON parser (2 MiB cap enforced by the raw parser).
+  app.use('/triggers/hook', triggerHookRawBodyMiddleware());
   app.use(express.json({ limit: '50mb' }));
   // Large JSON API responses (chat history pages reach several MB, mostly
   // repetitive trace JSON) were sent uncompressed. Over LAN/Tailscale that is

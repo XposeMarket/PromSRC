@@ -51,6 +51,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   'desktop_set_clipboard', 'desktop_launch_app', 'desktop_close_app',
   'desktop_wait_for_change', 'desktop_diff_screenshot',
   'desktop_background_prepare_sandbox', 'desktop_record_macro', 'desktop_stop_macro',
+  'trigger_ops',
 ]);
 
 const DESTRUCTIVE_TOOLS = new Set([

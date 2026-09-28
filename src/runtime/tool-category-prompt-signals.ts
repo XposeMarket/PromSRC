@@ -54,6 +54,8 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
       'background task', 'background run', 'running tasks', 'tasks are currently running',
       'queued tasks', 'task status', 'task output', 'task outputs', 'run this task now',
       'automation dashboard', 'task_control', 'run_task_now', 'internal_watch',
+      'webhook', 'webhooks', 'web hook', 'trigger_ops', 'trigger rule', 'event trigger',
+      'when a pr is opened', 'when a pull request', 'on pull request', 'github webhook',
     ],
     allOf: [
       ['task', 'run'], ['task', 'watch'], ['task', 'monitor'], ['task', 'status'],

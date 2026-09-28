@@ -40,6 +40,7 @@ import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '
 import { executePrometheusRequestOps } from '../../requests/request-ops';
 import { executePrometheusAuditOpsInWorker } from '../../audit/audit-ops-worker-client';
 import { getResourceStore } from '../../resources/resource-store';
+import { executeTriggerOps } from '../../triggers/trigger-rule-input';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -51,6 +52,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'task_control',
   'timer',
   'internal_watch',
+  'trigger_ops',
   'schedule_job',
   'schedule_job_history',
   'schedule_job_detail',
@@ -156,6 +158,11 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         } catch (err: any) {
           return { name, args, result: `background_join error: ${err.message}`, error: true };
         }
+      }
+
+      case 'trigger_ops': {
+        const [result, isError] = await executeTriggerOps(args || {}, sessionId);
+        return { name, args, result, error: isError };
       }
 
       case 'task_control': {
