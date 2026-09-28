@@ -25,6 +25,7 @@ import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
 import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
@@ -551,11 +552,14 @@ function resolveTeamMemberAllowedWorkPaths(agentId: string, teamId: string): str
 
 function buildTeamMemberToolFilter(
   deps: TeamMemberRoomDeps,
+  agentId: string,
   mode: 'room' | 'direct' = 'room',
 ): string[] | undefined {
   void deps;
   void mode;
-  return undefined;
+  // Default: undefined = the full main-chat tool system. A configured
+  // allowed_tools list turns the member into a minimal agent.
+  return resolveAgentToolFilter(agentId);
 }
 
 function readTeamMemberRoleBlock(teamId: string, agentId: string, agentName: string): string {
@@ -818,7 +822,7 @@ async function runTeamMemberRoomTurnInternal(
     allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
   });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
-  const toolFilter = buildTeamMemberToolFilter(deps, 'room');
+  const toolFilter = buildTeamMemberToolFilter(deps, agentId, 'room');
   const agentRouting = resolveTeamMemberModelRouting(agentId);
   const abortSignal = options.abortSignal || { aborted: false };
   const autoWakeReason = String(options.autoWakeReason || '').trim();
@@ -1149,7 +1153,7 @@ async function runTeamMemberDirectTurnInternal(
     allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
   });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
-  const toolFilter = buildTeamMemberToolFilter(deps, 'direct');
+  const toolFilter = buildTeamMemberToolFilter(deps, agentId, 'direct');
   const agentRouting = resolveTeamMemberModelRouting(agentId);
   const abortSignal = options.abortSignal || { aborted: false };
   const autoWakeReason = String(options.autoWakeReason || '').trim();

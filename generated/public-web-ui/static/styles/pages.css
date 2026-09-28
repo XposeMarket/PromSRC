@@ -4001,7 +4001,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.subagent-reasoning-popover .pm-reasoning-control { width: 100%; }
+.subagent-reasoning-popover .pm-reasoning-control { width: 100%; --pm-reasoning-inset: 5px; }
 .subagent-reasoning-popover .pm-reasoning-track {
   height: 48px;
   padding: 5px;

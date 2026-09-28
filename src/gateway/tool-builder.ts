@@ -374,6 +374,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'task_control',
   'run_task_now',
   'internal_watch',
+  'trigger_ops',
 ]);
 
 // Skill authoring/packaging/maintenance — only skill_list and skill_read stay core.

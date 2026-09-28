@@ -146,6 +146,8 @@ import {
 import { router as settingsRouter, initSettingsRouter } from './routes/settings.router';
 import { router as accountRouter, refreshPersistedSession, requireAccountAccess } from './routes/account.router';
 import { router as goalsRouter, initGoalsRouter } from './routes/goals.router';
+import { triggerHookRouter, triggersAdminRouter } from './routes/triggers.router';
+import { initTriggerService } from './triggers/trigger-service';
 import { router as proposalsRouter, setProposalsBroadcast, broadcastProposalCreated } from './routes/proposals.router';
 import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
@@ -958,6 +960,16 @@ initTeamsRouter({
 initCanvasRouter({ requireGatewayAuth, broadcastWS });
 initSettingsRouter({ requireGatewayAuth });
 initGoalsRouter({ requireGatewayAuth, cronScheduler, telegramChannel, handleChat });
+try {
+  initTriggerService({
+    handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
+      handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
+    runCronJobNow: (jobId: string) => cronScheduler.runJobNow(jobId, { respectActiveHours: false }),
+    telegramChannel,
+  });
+} catch (err: any) {
+  console.warn('[Triggers] Trigger service failed to initialize:', err?.message || err);
+}
 startupMark('routers initialized');
 
 // Pairing is mounted before gateway auth only so certificate/claim/poll can be
@@ -965,6 +977,10 @@ startupMark('routers initialized');
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
 app.use('/', mcpOAuthCallbackRouter);
+// Trigger webhooks are called by external services (GitHub, Zapier, local
+// scripts) that cannot present a gateway token. Each endpoint authenticates
+// with its own per-endpoint secret (HMAC or URL token); see triggers.router.ts.
+app.use('/', triggerHookRouter);
 // ChatGPT-as-model tool bridge: called by ChatGPT's servers, which cannot
 // present a gateway token. Guarded by the per-install URL secret and by
 // "only while a ChatGPT turn is active"; see chatgpt-bridge.router.ts.
@@ -988,6 +1004,7 @@ app.use('/', requireGatewayAuth, requireAccountAccess, channelsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, teamsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, settingsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, goalsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, triggersAdminRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, proposalsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, auditLogRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);

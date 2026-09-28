@@ -252,7 +252,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 allowed_tools: {
                   type: 'array',
                   items: { type: 'string' },
-                  description: 'Legacy metadata only. Subagents receive the full standard tool surface at runtime.',
+                  description: 'Optional minimal-agent allowlist of exact tool names, e.g. ["workspace_read","workspace_run","write_note"]. Leave empty (default) for the full main-chat tool system: core tools plus automatic and on-demand category activation. When set, the agent only ever sees these tools; their categories load automatically.',
                 },
                 forbidden_tools: {
                   type: 'array',
@@ -371,7 +371,7 @@ export function getAgentTeamScheduleTools(): any[] {
             allowed_work_paths: { type: 'array', items: { type: 'string' }, description: 'Alias for allowedWorkPaths.' },
             constraints: { type: 'array', items: { type: 'string' }, description: 'Full replacement constraints list' },
             success_criteria: { type: 'string', description: 'Full replacement success criteria' },
-            allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Legacy full replacement individual tool names' },
+            allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement minimal-agent allowlist of exact tool names. Empty array = full main-chat tool system.' },
             forbidden_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement explicit blacklist' },
             skillIds: { type: 'array', items: { type: 'string' }, description: 'Full replacement list of installed skill IDs attached to this subagent' },
             context_refs: {
@@ -903,6 +903,50 @@ export function getAgentTeamScheduleTools(): any[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'trigger_ops',
+        description:
+          'Event triggers + inbound webhooks. Create a webhook endpoint (gets a public URL + secret; GitHub X-Hub-Signature-256 HMAC, generic HMAC, header token, or secret-in-URL all supported), ' +
+          'then create rules that fire when a matching event arrives. Rule actions: agent (isolated background agent runs the prompt, result posted to report_session), ' +
+          'wake (queue a turn in a chat session, like a timer), team (post to a managed team room + wake its manager), task (run a scheduled job now), notify (post text to a chat/channel). ' +
+          'Prompts support {{payload.a.b}}, {{eventType}}, {{subject}} placeholders. GitHub event types are "<X-GitHub-Event>.<action>", e.g. pull_request.opened, push, issues.opened. ' +
+          'Actions: list, create_endpoint, show_endpoint, update_endpoint, delete_endpoint, set_public_url, create_rule, update_rule, delete_rule, runs, test.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['list', 'create_endpoint', 'show_endpoint', 'update_endpoint', 'delete_endpoint', 'set_public_url', 'create_rule', 'update_rule', 'delete_rule', 'runs', 'test'] },
+            endpoint_id: { type: 'string', description: 'Endpoint id (lowercase slug) for *_endpoint actions, or webhook source for test.' },
+            kind: { type: 'string', enum: ['generic', 'github'], description: 'create_endpoint: github parses X-GitHub-Event/X-GitHub-Delivery.' },
+            name: { type: 'string', description: 'Display name for an endpoint or rule.' },
+            description: { type: 'string' },
+            enabled: { type: 'boolean' },
+            reveal: { type: 'boolean', description: 'show_endpoint: include the secret and token_url.' },
+            rotate_secret: { type: 'boolean', description: 'update_endpoint: issue a new secret (old one stops working).' },
+            public_base_url: { type: 'string', description: 'set_public_url: public origin used to build endpoint URLs, e.g. https://host.ts.net' },
+            rule_id: { type: 'string', description: 'Rule id for update_rule/delete_rule (optional for create_rule; derived from name).' },
+            endpoint_ids: { type: 'array', items: { type: 'string' }, description: 'create/update_rule: only match events from these webhook endpoints.' },
+            sources: { type: 'array', items: { type: 'string' }, description: 'Match sources: webhook, manual, schedule, heartbeat, connector, internal_watch, event_queue.' },
+            event_types: { type: 'array', items: { type: 'string' }, description: 'Match event types, e.g. ["pull_request.opened","pull_request.reopened"]. "*" = any.' },
+            conditions: { type: 'array', items: { type: 'object' }, description: 'Extra filters: [{field:"pull_request.base.ref", operator:"equals", value:"main"}]. Operators: equals, not_equals, contains, not_contains, exists, not_exists, in. Fields default to payload.*.' },
+            action_kind: { type: 'string', enum: ['agent', 'wake', 'team', 'task', 'notify'] },
+            prompt: { type: 'string', description: 'What to do when the rule fires. Use {{payload...}} placeholders for event data.' },
+            target_id: { type: 'string', description: 'team: team id; task: scheduled job id; wake: chat session id (default: this chat).' },
+            model: { type: 'string', description: 'agent: provider/model override, e.g. openai_codex/gpt-6-sol.' },
+            report_session: { type: 'string', description: 'Chat session that receives agent results / notify text / wake turns. Defaults to the chat creating the rule.' },
+            delivery_channel: { type: 'string', description: 'Optional extra delivery: telegram, mobile, web, all.' },
+            only_on_failure: { type: 'boolean', description: 'agent: only report when the run fails.' },
+            cooldown_seconds: { type: 'number', description: 'Minimum seconds between runs of this rule.' },
+            event_type: { type: 'string', description: 'test: event type to simulate.' },
+            payload: { type: 'object', description: 'test: event payload to simulate.' },
+            limit: { type: 'number', description: 'runs: how many recent runs to return.' },
+          },
+        },
+      },
+    },
+
 	    {
 	      type: 'function',
 	      function: {

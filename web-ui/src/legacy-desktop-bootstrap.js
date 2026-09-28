@@ -2159,6 +2159,8 @@ const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
 function _documentedReasoningCapability(provider, model) {
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
   if (provider === 'openai_codex') {
+    if (name === 'chatgpt') return { efforts: ['low','medium','high','xhigh','max','ultra'], defaultEffort: 'high' };
+    if (/^gpt-6-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max','ultra'], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
@@ -2168,6 +2170,7 @@ function _documentedReasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (provider === 'openai') {
+    if (/^gpt-6-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh','max'], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
@@ -2182,7 +2185,7 @@ function _documentedReasoningCapability(provider, model) {
     const efforts = ['low','medium','high'];
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
-    return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
+    return { efforts, defaultEffort: /^claude-opus-5-5(?:-|$)/.test(name) ? 'medium' : 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
   }
   return { efforts: [] };
 }
@@ -2245,11 +2248,21 @@ function _effortLevelsForProvider(provider, model) {
   }
   if (provider === 'anthropic') {
     const cap = _documentedReasoningCapability(provider, model);
-    return [{ v: '', label: 'Provider Default', desc: 'Anthropic default (High)' }]
+    return [{ v: '', label: 'Provider Default', desc: `Anthropic default (${cap.defaultEffort === 'medium' ? 'Medium' : 'High'})` }]
       .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: '' })));
   }
   if (provider === 'xai') {
-    if (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || '').trim())) {
+    const xaiName = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
+    if (/^grok-4\.(?:6|7)(?:-|$)/.test(xaiName)) {
+      return [
+        { v: '',       label: 'Provider Default', desc: 'Use xAI default (High)' },
+        { v: 'low',    label: 'Low',              desc: 'Fast tool use and general agent work' },
+        { v: 'medium', label: 'Medium',           desc: 'More thinking for complex work' },
+        { v: 'high',   label: 'High',             desc: 'Deep reasoning' },
+        { v: 'xhigh',  label: 'Extra High',       desc: 'Maximum reasoning depth' },
+      ];
+    }
+    if (/^grok-4\.20-multi-agent(?:-|$)/i.test(xaiName)) {
       return [
         { v: '',       label: 'Provider Default', desc: 'Use xAI default agent count' },
         { v: 'low',    label: 'Low',              desc: 'Fewer collaborating agents' },
@@ -3520,7 +3533,7 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['chatgpt', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };

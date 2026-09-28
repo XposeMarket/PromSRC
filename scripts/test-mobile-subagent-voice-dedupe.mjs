@@ -9,6 +9,8 @@ const pages = [
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8'),
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8'),
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-subagent-pages.js'), 'utf8'),
+  // Voice delivery helpers moved into the voice runtime module.
+  fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-runtime.js'), 'utf8'),
 ].join('\n');
 
 const streamStart = api.indexOf('export function streamSubagentChat');

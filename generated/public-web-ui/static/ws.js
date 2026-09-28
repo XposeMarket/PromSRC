@@ -360,6 +360,31 @@ export function wsSend(msg) {
   }
 }
 
+// Tell the gateway which sessions this window is actually viewing so it only
+// streams per-token frames for those (structural frames always arrive). Before
+// this, every window received and processed every token of every thread.
+let _wsStreamFocusSent = '';
+function _currentStreamFocusIds() {
+  const ids = new Set();
+  const add = (value) => { const id = String(value || '').trim(); if (id) ids.add(id); };
+  add(window.activeChatSessionId);
+  add(window.__pmChat?.activeSessionId);
+  add(window.__pmVoice?.targetSessionId);
+  try { (window.__promExtraStreamFocusSessionIds || []).forEach(add); } catch {}
+  return [...ids].sort();
+}
+export function syncWsStreamFocus(force = false) {
+  if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
+  const ids = _currentStreamFocusIds();
+  const key = ids.join('|');
+  if (!force && key === _wsStreamFocusSent) return;
+  _wsStreamFocusSent = key;
+  try { window.ws.send(JSON.stringify({ type: 'stream_focus', sessionIds: ids })); } catch {}
+}
+wsEventBus.on('ws:open', () => { _wsStreamFocusSent = ''; syncWsStreamFocus(true); });
+setInterval(() => syncWsStreamFocus(false), 400);
+window.syncWsStreamFocus = syncWsStreamFocus;
+
 // Expose on window
 window.connectWS = connectWS;
 window.ensureWSConnected = ensureWSConnected;

@@ -339,6 +339,7 @@ import {
 import { searchMemoryInWorker } from '../memory-index/search-worker-client';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait } from '../tasks/task-runner';
+import { normalizeSpawnToolCategoriesArg } from '../tasks/spawn-tool-categories-arg';
 import { saveSiteShortcut } from '../site-shortcuts';
 import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
@@ -1383,7 +1384,7 @@ function getStandaloneSubagentForChat(agentId: string): { agent?: any; error?: s
   }
   const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(cleanAgentId));
   if (team) {
-    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use target_type="team_member" with team_id for team agents.` };
+    return { error: `Agent "${cleanAgentId}" belongs to team "${team.name}" (${team.id}). Use agent_message_send (or agent_chat_ops action "send") with target_type="team_member", team_id="${team.id}" and request_turn=true, or team dispatch.` };
   }
   return { agent };
 }
@@ -6157,6 +6158,29 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         const message = String(args?.message || '').trim();
         const context = String(args?.context || '').trim();
         if (!message) return { name, args, result: 'chat_with_subagent requires message', error: true };
+        {
+          // Team members are reachable through the same chat tool: when the caller
+          // passes target_type=team_member (or a team_id), or the agent belongs to a
+          // team, route to the team direct-thread path instead of rejecting with an
+          // error that tells the caller to do exactly what it just did.
+          const requestedType = String(args?.target_type || '').trim();
+          const owningTeam = agentId
+            ? listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(agentId))
+            : undefined;
+          if (requestedType === 'team_member' || requestedType === 'team_manager' || args?.team_id || owningTeam) {
+            const delegated = await executeTool('agent_message_send', {
+              target_type: requestedType === 'team_manager' ? 'team_manager' : 'team_member',
+              team_id: String(args?.team_id || owningTeam?.id || '').trim(),
+              agent_id: agentId,
+              message,
+              context,
+              request_turn: true,
+              background: false,
+              user_label: args?.user_label,
+            }, workspacePath, deps, sessionId);
+            return { name, args, result: delegated.result, error: delegated.error };
+          }
+        }
         const { error } = getStandaloneSubagentForChat(agentId);
         if (error) return { name, args, result: error, error: true };
 
@@ -15226,7 +15250,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
             speed: args.speed ? String(args.speed) : (args.fast_mode === true ? 'fast' : undefined),
-            toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
+            toolCategories: normalizeSpawnToolCategoriesArg(args.tool_categories),
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
