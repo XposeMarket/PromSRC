@@ -50,7 +50,8 @@
       "connector_hubspot_get_contact",
       "connector_hubspot_create_contact",
       "connector_hubspot_search",
-      "connector_hubspot_list_deals"
+      "connector_hubspot_list_deals",
+      "connector_hubspot_api_request"
     ]
   },
   "setup": {

@@ -2,10 +2,11 @@
 import type { SlackConnector } from '../../../../integrations/connectors/slack.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'slack';
 const NAME = 'Slack';
-const tools = ['connector_slack_list_channels', 'connector_slack_send_message', 'connector_slack_get_history', 'connector_slack_search'];
+const tools = ['connector_slack_list_channels', 'connector_slack_send_message', 'connector_slack_get_history', 'connector_slack_search', 'connector_slack_api_request'];
 
 async function withConn(fn: (c: SlackConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -21,6 +22,13 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['chat'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<SlackConnector>(api, {
+      connectorId: 'slack', displayName: 'Slack',
+      bases: { slack: 'https://slack.com' },
+      examplePath: '/api/conversations.history?channel=C123',
+      coverageHint: 'any Web API method: history, replies, reactions, users, files, pins, updates/deletes',
     });
 
     api.registerTool({

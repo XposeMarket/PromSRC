@@ -26,7 +26,8 @@
       "connector_stripe_get_balance",
       "connector_stripe_list_customers",
       "connector_stripe_list_charges",
-      "connector_stripe_list_products"
+      "connector_stripe_list_products",
+      "connector_stripe_api_request"
     ]
   },
   "setup": {

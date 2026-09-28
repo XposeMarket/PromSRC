@@ -70,7 +70,7 @@ export class SalesforceConnector extends OAuthConnector {
     return res.json();
   }
 
-  private getInstanceUrl(): string {
+  getInstanceUrl(): string {
     if (!this.instanceUrl) {
       const saved = this.loadTokens() as any;
       if (saved?.instance_url) this.instanceUrl = saved.instance_url;

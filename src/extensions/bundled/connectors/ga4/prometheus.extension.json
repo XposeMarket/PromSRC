@@ -25,7 +25,8 @@
     "tools": [
       "connector_ga4_run_report",
       "connector_ga4_realtime_users",
-      "connector_ga4_list_properties"
+      "connector_ga4_list_properties",
+      "connector_ga4_api_request"
     ]
   },
   "setup": {

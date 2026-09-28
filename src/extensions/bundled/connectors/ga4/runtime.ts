@@ -11,6 +11,7 @@ import {
   toolError,
   toolOk,
 } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const CONNECTOR_ID = 'ga4';
 const DISPLAY_NAME = 'Google Analytics';
@@ -27,10 +28,17 @@ const ga4Extension: PrometheusExtensionDefinition = {
       name: DISPLAY_NAME,
       authType: 'oauth',
       capabilities: ['analytics'],
-      toolNames: ['connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties'],
+      toolNames: ['connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties', 'connector_ga4_api_request'],
       isConnected: () => connectorConnected(CONNECTOR_ID),
       hasCredentials: () => connectorHasCredentials(CONNECTOR_ID),
       describeStatus: () => (connectorConnected(CONNECTOR_ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<GoogleAnalyticsConnector>(api, {
+      connectorId: 'ga4', displayName: 'Google Analytics',
+      bases: { data: 'https://analyticsdata.googleapis.com', admin: 'https://analyticsadmin.googleapis.com' },
+      examplePath: '/v1beta/properties/PROPERTY_ID:runReport',
+      coverageHint: 'custom reports, pivots, funnels, metadata, admin: accounts, streams, custom dimensions',
     });
 
     api.registerTool({

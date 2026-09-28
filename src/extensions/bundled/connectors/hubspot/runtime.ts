@@ -2,10 +2,11 @@
 import type { HubSpotConnector } from '../../../../integrations/connectors/hubspot.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'hubspot';
 const NAME = 'HubSpot';
-const tools = ['connector_hubspot_list_contacts', 'connector_hubspot_get_contact', 'connector_hubspot_create_contact', 'connector_hubspot_search', 'connector_hubspot_list_deals'];
+const tools = ['connector_hubspot_list_contacts', 'connector_hubspot_get_contact', 'connector_hubspot_create_contact', 'connector_hubspot_search', 'connector_hubspot_list_deals', 'connector_hubspot_api_request'];
 
 async function withConn(fn: (c: HubSpotConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -21,6 +22,13 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['crm'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<HubSpotConnector>(api, {
+      connectorId: 'hubspot', displayName: 'HubSpot',
+      bases: { hubspot: 'https://api.hubapi.com' },
+      examplePath: '/crm/v3/objects/companies?limit=10',
+      coverageHint: 'companies, tickets, notes, tasks, associations, pipelines, owners, updates/deletes',
     });
 
     api.registerTool({

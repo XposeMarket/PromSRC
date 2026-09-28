@@ -15,6 +15,7 @@ import {
   toolError,
   toolOk,
 } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const CONNECTOR_ID = 'stripe';
 const DISPLAY_NAME = 'Stripe';
@@ -36,10 +37,19 @@ const stripeExtension: PrometheusExtensionDefinition = {
         'connector_stripe_list_customers',
         'connector_stripe_list_charges',
         'connector_stripe_list_products',
+        'connector_stripe_api_request'
       ],
       isConnected: () => connectorConnected(CONNECTOR_ID),
       hasCredentials: () => connectorHasCredentials(CONNECTOR_ID),
       describeStatus: () => (connectorConnected(CONNECTOR_ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<StripeConnector>(api, {
+      connectorId: 'stripe', displayName: 'Stripe',
+      bases: { stripe: 'https://api.stripe.com' },
+      bodyEncoding: 'form',
+      examplePath: '/v1/subscriptions?limit=10',
+      coverageHint: 'subscriptions, invoices, payment intents, refunds, prices, payouts, create/update objects',
     });
 
     api.registerTool({

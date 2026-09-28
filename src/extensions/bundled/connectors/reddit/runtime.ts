@@ -2,10 +2,11 @@
 import type { RedditConnector } from '../../../../integrations/connectors/reddit.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'reddit';
 const NAME = 'Reddit';
-const tools = ['connector_reddit_get_posts', 'connector_reddit_search', 'connector_reddit_submit_post', 'connector_reddit_get_comments'];
+const tools = ['connector_reddit_get_posts', 'connector_reddit_search', 'connector_reddit_submit_post', 'connector_reddit_get_comments', 'connector_reddit_api_request'];
 
 async function withConn(fn: (c: RedditConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -21,6 +22,15 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['social'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<RedditConnector>(api, {
+      connectorId: 'reddit', displayName: 'Reddit',
+      bases: { reddit: 'https://oauth.reddit.com' },
+      headers: { 'User-Agent': 'Prometheus-CIS/1.0' },
+      bodyEncoding: 'form',
+      examplePath: '/api/comment',
+      coverageHint: 'comments, votes, saves, inbox/messages, subreddit info, edits/deletes',
     });
 
     api.registerTool({
