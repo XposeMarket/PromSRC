@@ -1290,7 +1290,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
             case 'voice_milestone': if (evt.text) cb('onVoiceMilestone', evt); break;
             case 'tool_call':     cb('onToolCall', evt); break;
             case 'tool_result':   cb('onToolResult', evt); break;
-            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || evt.content || ''), evt); cb('onDone'); return;
+            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || evt.content || ''), evt); finishOnce(); return;
             case 'done':
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
               finishOnce(); return;

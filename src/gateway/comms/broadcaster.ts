@@ -466,6 +466,40 @@ export function getWebSocketClientCount(): number {
   return count;
 }
 
+// High-frequency main-chat frames that only matter to a client currently
+// viewing that session. token/thinking_delta are deliberately NOT filtered:
+// they are not retained for replay, so a window that switches into a thread
+// mid-reply needs the text it accumulated in the background. The frames below
+// are either raw provider internals, live process output, or keepalives that
+// an unfocused window never renders. Clients opt in with
+// {type:'stream_focus', sessionIds:[...]}; clients that never declared focus
+// keep receiving everything (old builds, mobile-v2).
+// (process_run_output / heartbeat / background_wait stay broadcast: terminal
+// cards and stall detection for background threads read them.)
+const FOCUS_FILTERED_STREAM_EVENTS: ReadonlySet<string> = new Set([
+  'reasoning_summary_delta',
+  'model_stream_event',
+]);
+
+export function setWsClientStreamFocus(client: any, sessionIds: unknown): void {
+  if (!client) return;
+  const ids = Array.isArray(sessionIds)
+    ? sessionIds.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 32)
+    : [];
+  client.__pmStreamFocus = new Set(ids);
+}
+
+function wsClientWantsFrame(client: any, data: any): boolean {
+  const focus: Set<string> | undefined = client?.__pmStreamFocus;
+  if (!focus) return true;
+  if (data?.type !== 'main_chat_stream_event') return true;
+  if (!FOCUS_FILTERED_STREAM_EVENTS.has(String(data?.event || ''))) return true;
+  // Tool boundaries ride model_stream_event and are replayable; always send.
+  const modelType = String(data?.data?.event?.type || '').toLowerCase();
+  if (modelType === 'tool_call_start' || modelType === 'tool_call_done') return true;
+  return focus.has(String(data?.sessionId || ''));
+}
+
 export function broadcastWS(data: object): void {
   if (_drainBroadcastRelay) {
     try { _drainBroadcastRelay(data); } catch {}
@@ -474,6 +508,7 @@ export function broadcastWS(data: object): void {
   wssInstances.forEach((server) => {
     server.clients.forEach((client: any) => {
       if (client.readyState === 1) {
+        if (!wsClientWantsFrame(client, data)) return;
         try {
           const buffered = Number(client.bufferedAmount || 0);
           if (buffered > 5 * 1024 * 1024) {

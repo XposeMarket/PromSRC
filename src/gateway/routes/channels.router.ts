@@ -27,6 +27,7 @@ import { installAgentProfilePack, isMarketplaceImportedAgent, previewAgentProfil
 import { deleteAgentCompletely } from '../agents-runtime/entity-delete';
 import { AGENT_PROMPT_FILENAME, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
 import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 
@@ -1112,7 +1113,8 @@ async function runSubagentChatTurn(
         Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
         undefined,
         effectiveModel.model || undefined,
-        { directSubagentChat: true },
+        // Same tool system as main chat; an allowed_tools list makes it a minimal agent.
+        { directSubagentChat: true, toolFilter: resolveAgentToolFilter(agentId) },
       ),
       timeoutErr,
     ]).finally(() => {

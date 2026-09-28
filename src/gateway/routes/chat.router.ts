@@ -25,6 +25,7 @@ import { createForegroundToolActivityTracker, foregroundConnectionMessage, type 
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
+import { getRuntimeToolCategories as getVoiceRuntimeToolCategories } from '../tool-builder';
 import { getWorkspaceToolMode } from '../../runtime/workspace-tool-mode';
 import { buildOperatingInstructions } from '../../runtime/operating-instructions';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
@@ -68,7 +69,7 @@ import {
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
@@ -2654,7 +2655,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -2906,9 +2907,29 @@ async function handleChat(
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
   htime('pre_context.legacy_history_migrated');
+  // Runtimes that wrap the real request in boilerplate (team dispatch) pass the
+  // bare task as toolCategoryDetectionText so the wrapper's own wording never
+  // provisions categories. Everyone else is scanned exactly like main chat.
+  const toolCategoryDetectionText = String(runtimeOptions?.toolCategoryDetectionText || '').trim() || message;
   const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
-    ? autoActivateToolCategories(sessionId, message, history.length, (label, fields) => htime(label, fields))
+    ? autoActivateToolCategories(sessionId, toolCategoryDetectionText, history.length, (label, fields) => htime(label, fields))
     : [];
+  // Minimal agents (explicit tool allowlist): load the categories that hold the
+  // allowlisted tools, otherwise e.g. allowed_tools:["workspace_run"] would be
+  // filtered out because workspace_write was never activated. The filter below
+  // still hides everything that is not on the list.
+  if (Array.isArray(toolFilter) && toolFilter.length > 0 && !isSupervisionLoop) {
+    const allowlistCategories = new Set<string>();
+    for (const pattern of toolFilter) {
+      const toolName = String(pattern || '').trim();
+      if (!toolName || toolName.endsWith('*')) continue;
+      const category = getToolCategory(toolName);
+      if (category) allowlistCategories.add(category);
+    }
+    for (const category of allowlistCategories) {
+      try { activateToolCategory(sessionId, category, { scope: 'turn' }); } catch { /* unknown category */ }
+    }
+  }
   htime('pre_context.tool_categories_activated');
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
@@ -14192,6 +14213,7 @@ function voiceRuntimeDirectiveFromToolResult(result: any): Record<string, any> |
   if (wakePhrase) directive.wakePhrase = wakePhrase;
   if (result.activateAfterReply === true || result.activate_after_reply === true) directive.activateAfterReply = true;
   if (result.requiresWakePhrase === true || result.requires_wake_phrase === true) directive.requiresWakePhrase = true;
+  if (Array.isArray(result.realtimeTools)) directive.tools = result.realtimeTools;
   return directive.action ? directive : null;
 }
 
@@ -16061,8 +16083,258 @@ async function executeVoiceThreadOps(sessionId: string, args: Record<string, any
   });
 }
 
+// ─── Unified Prometheus tools for voice ─────────────────────────────────────
+// The realtime model (gpt-realtime / Grok / Codex AVAS) gets ONE gateway
+// function instead of the full schema set, so the realtime session stays small
+// and fast. It lists/describes/calls the exact same tool surface main chat has
+// for this session (same activated categories, same executeTool, same approval
+// queue and policy engine), so voice and chat never drift apart.
+const VOICE_PROMETHEUS_TOOL_BLOCKLIST = new Set([
+  // Need an interactive chat turn/plan state that voice does not have.
+  'declare_plan', 'complete_plan_step', 'ask_prometheus_questions', 'await_prometheus_question_response',
+  'switch_model', 'set_current_model', 'request_browser_login', 'request_final_action_approval',
+  // Voice already owns these with dedicated realtime-safe tools.
+  'prometheus_tools',
+]);
+const VOICE_PROMETHEUS_TOOL_TIMEOUT_MS = 45_000;
+const VOICE_PROMETHEUS_RESULT_MAX_CHARS = 6000;
+
+function voicePrometheusToolName(tool: any): string {
+  return String(tool?.function?.name || tool?.name || '').trim();
+}
+
+function voicePrometheusToolSurface(sessionId: string): any[] {
+  let tools: any[] = [];
+  try { tools = buildTools(sessionId) as any[]; } catch { tools = []; }
+  return tools.filter((tool) => {
+    const name = voicePrometheusToolName(tool);
+    return name && !VOICE_PROMETHEUS_TOOL_BLOCKLIST.has(name);
+  });
+}
+
+function voicePrometheusToolSummary(tool: any): string {
+  const description = String(tool?.function?.description || tool?.description || '').replace(/\s+/g, ' ').trim();
+  const firstSentence = description.split(/(?<=[.!?])\s/)[0] || description;
+  return `${voicePrometheusToolName(tool)}: ${firstSentence.slice(0, 180)}`;
+}
+
+function buildVoicePrometheusToolsDefinition(): any {
+  return {
+    type: 'function',
+    name: 'prometheus_tools',
+    description: [
+      'Use the full Prometheus tool set (the same tools main chat has): files, shell, git, web, memory, connectors (GitHub, Gmail, Drive, Vercel, X), agents/background spawns, automations, media generation, and more.',
+      'action=list shows the currently active tools and the inactive categories; action=describe returns exact parameter schemas for named tools; action=call runs one tool; action=activate_category unlocks a category (e.g. workspace_write, browser_automation, agents_and_teams, media_generation, external_apps).',
+      'Prefer your dedicated voice_* / show_* tools for quick voice actions and voice_thread_ops for long multi-step work; use this for any single concrete Prometheus action they do not cover.',
+      'Always describe a tool once before the first call if you are unsure of its arguments. Risky actions still go through the normal Prometheus approval queue.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      required: ['action'],
+      properties: {
+        action: { type: 'string', enum: ['list', 'describe', 'call', 'activate_category'] },
+        tool: { type: 'string', description: 'For call: exact tool name from list.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'For describe: tool names to fetch schemas for (max 6).' },
+        args: { type: 'object', description: 'For call: the tool arguments, matching the described schema.', additionalProperties: true },
+        category: { type: 'string', description: 'For activate_category: category id.' },
+        query: { type: 'string', description: 'For list: optional filter text.' },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
+function buildVoicePrometheusExecuteDeps(sessionId: string, trace: string[]): any {
+  return {
+    cronScheduler: _cronScheduler,
+    handleChat,
+    runInteractiveTurn,
+    telegramChannel: _telegramChannel,
+    skillsManager: _skillsManager,
+    sanitizeAgentId,
+    normalizeAgentsForSave,
+    buildTeamDispatchContext,
+    runTeamAgentViaChat,
+    bindTeamNotificationTargetFromSession,
+    pauseManagedTeamInternal,
+    resumeManagedTeamInternal,
+    handleTaskControlAction,
+    makeBroadcastForTask,
+    sendSSE: (event: string, data: any) => {
+      if (trace.length >= 40) return;
+      const text = typeof data?.message === 'string' ? data.message : '';
+      if (text) trace.push(`${event}: ${text.slice(0, 200)}`);
+    },
+    toolCallId: `voice_${sessionId}_${Date.now().toString(36)}`,
+    supportsDirectMediaObservation: false,
+  };
+}
+
+async function executeVoicePrometheusTools(sessionId: string, args: Record<string, any>): Promise<string> {
+  const action = String(args?.action || '').trim().toLowerCase();
+  const workspacePath = getConfig().getWorkspacePath();
+  const surface = voicePrometheusToolSurface(sessionId);
+  const byName = new Map(surface.map((tool) => [voicePrometheusToolName(tool), tool]));
+  const activeCategories = Array.from(getActivatedToolCategories(sessionId)).sort();
+  const allCategories = (() => { try { return getVoiceRuntimeToolCategories().map(String); } catch { return [] as string[]; } })();
+  const inactiveCategories = allCategories.filter((category) => !activeCategories.includes(category));
+
+  if (action === 'list' || !action) {
+    const query = String(args?.query || '').trim().toLowerCase();
+    const rows = surface
+      .filter((tool) => !query || JSON.stringify(tool).toLowerCase().includes(query))
+      .map(voicePrometheusToolSummary);
+    return voiceToolResult(true, `${rows.length} Prometheus tools active.`, {
+      tools: rows,
+      activeCategories,
+      inactiveCategories,
+      hint: 'describe a tool before calling it; activate_category to unlock more tools.',
+    });
+  }
+
+  if (action === 'describe') {
+    const names = (Array.isArray(args?.tools) ? args.tools : [args?.tool]).map((n: any) => String(n || '').trim()).filter(Boolean).slice(0, 6);
+    if (!names.length) return voiceToolResult(false, 'describe needs tools: [names].');
+    const described = names.map((name: string) => {
+      const tool = byName.get(name);
+      if (!tool) return { name, available: false };
+      return {
+        name,
+        available: true,
+        description: String(tool?.function?.description || tool?.description || '').slice(0, 1200),
+        parameters: tool?.function?.parameters || tool?.parameters || {},
+      };
+    });
+    const missing = described.filter((d: any) => !d.available).map((d: any) => d.name);
+    return voiceToolResult(true, missing.length ? `Not active: ${missing.join(', ')}. Use list or activate_category.` : 'Schemas loaded.', { tools: described });
+  }
+
+  if (action === 'activate_category') {
+    const category = String(args?.category || '').trim();
+    if (!category) return voiceToolResult(false, 'activate_category needs category.', { inactiveCategories });
+    const result = await executeTool('request_tool_category', { category, scope: 'ttl', turns: 6 }, workspacePath, buildVoicePrometheusExecuteDeps(sessionId, []), sessionId);
+    const after = voicePrometheusToolSurface(sessionId).map(voicePrometheusToolName);
+    const added = after.filter((name) => !byName.has(name));
+    return voiceToolResult(!result.error, String(result.result || '').slice(0, 600), { newTools: added.slice(0, 60) });
+  }
+
+  if (action === 'call') {
+    const toolName = String(args?.tool || '').trim();
+    if (!toolName) return voiceToolResult(false, 'call needs tool.');
+    if (VOICE_PROMETHEUS_TOOL_BLOCKLIST.has(toolName)) return voiceToolResult(false, `${toolName} is not available from voice.`);
+    if (!byName.has(toolName) && args?.bypassSurfaceCheck !== true) {
+      return voiceToolResult(false, `${toolName} is not in the active tool surface. Call list, or activate_category first.`, { inactiveCategories });
+    }
+    const toolArgs = args?.args && typeof args.args === 'object' ? args.args : {};
+    const trace: string[] = [];
+    const run = executeTool(toolName, toolArgs, workspacePath, buildVoicePrometheusExecuteDeps(sessionId, trace), sessionId);
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), VOICE_PROMETHEUS_TOOL_TIMEOUT_MS); });
+    const outcome = await Promise.race([run, timeout]);
+    if (timer) clearTimeout(timer);
+    if (outcome === 'timeout') {
+      run.catch(() => {});
+      return voiceToolResult(true, `${toolName} is still running (it may be waiting for approval in the Prometheus app). It will keep going in the background.`, { pending: true });
+    }
+    const resultText = typeof outcome.result === 'string' ? outcome.result : JSON.stringify(outcome.result ?? '');
+    return voiceToolResult(!outcome.error, outcome.error ? `${toolName} failed.` : `${toolName} done.`, {
+      tool: toolName,
+      result: resultText.length > VOICE_PROMETHEUS_RESULT_MAX_CHARS
+        ? `${resultText.slice(0, VOICE_PROMETHEUS_RESULT_MAX_CHARS)}\n[truncated ${resultText.length - VOICE_PROMETHEUS_RESULT_MAX_CHARS} chars]`
+        : resultText,
+      ...(trace.length ? { progress: trace.slice(-8) } : {}),
+    });
+  }
+
+  return voiceToolResult(false, `Unknown prometheus_tools action: ${action}. Use list, describe, call, or activate_category.`);
+}
+
+// ─── Voice = Prometheus core tools ───────────────────────────────────────────
+// The main realtime voice agent gets the SAME core tool set main chat has
+// (buildTools for this session, incl. request_tool_category / tool_search /
+// tool_call and any activated categories). Voice-only tools stay for things
+// core has no equivalent for (threads, live browser/desktop wrappers, quiet
+// mode, cards). Voice aliases that duplicate a core tool are dropped.
+const VOICE_TOOLS_SUPERSEDED_BY_CORE = new Set([
+  'voice_web_search', 'voice_web_fetch', 'voice_write_note', 'voice_memory_search', 'voice_send_screenshot',
+  'voice_browser_screenshot', 'voice_browser_open', 'voice_browser_scroll', 'voice_browser_snapshot', 'voice_browser_click',
+  'voice_browser_vision_click', 'voice_browser_fill', 'voice_browser_type', 'voice_browser_vision_type', 'voice_browser_press_key',
+  'voice_browser_wait', 'voice_desktop_screenshot', 'voice_desktop_click', 'voice_desktop_window_control', 'voice_desktop_focus_window',
+  'voice_desktop_launch_app', 'voice_desktop_find_app', 'voice_desktop_list_windows', 'voice_desktop_window_click',
+  'voice_desktop_window_type', 'voice_desktop_window_press_key', 'voice_desktop_window_scroll',
+  'show_weather', 'show_market', 'show_stocks', 'show_prediction_market', 'show_map', 'show_sources', 'show_comparison',
+  'show_chart', 'show_product_carousel', 'show_agent_work', 'show_run_result',
+]);
+// Core tools voice already covers with a voice-aware version.
+const VOICE_CORE_TOOLS_SHADOWED = new Set(['skill_list', 'skill_read', 'timer', 'show_ui_card']);
+const VOICE_EXTRA_TOOL_NAMES = ['voice_thread_ops', 'restart_gateway_quick', 'steer_active_worker', 'interrupt_active_worker', 'voice_room_handoff', 'prometheus_tools'];
+let voiceOwnToolNamesCache: Set<string> | null = null;
+function voiceOwnToolNames(): Set<string> {
+  if (!voiceOwnToolNamesCache) {
+    voiceOwnToolNamesCache = new Set([
+      ...buildVoiceToolDefinitions().map((tool: any) => String(tool?.function?.name || tool?.name || '')),
+      ...VOICE_EXTRA_TOOL_NAMES,
+    ].filter(Boolean));
+  }
+  return voiceOwnToolNamesCache;
+}
+
+function voiceCoreToolSurface(sessionId: string): any[] {
+  return voicePrometheusToolSurface(sessionId).filter((tool) => !VOICE_CORE_TOOLS_SHADOWED.has(voicePrometheusToolName(tool)));
+}
+
+function toRealtimeFunctionTool(tool: any): any {
+  return {
+    type: 'function',
+    name: voicePrometheusToolName(tool),
+    description: String(tool?.function?.description || tool?.description || '').slice(0, 1800),
+    parameters: tool?.function?.parameters || tool?.parameters || { type: 'object', properties: {} },
+  };
+}
+
+function voiceCoreSurfaceSignature(sessionId: string): string {
+  return voiceCoreToolSurface(sessionId).map(voicePrometheusToolName).sort().join(',');
+}
+
+async function executeVoiceCoreTool(sessionId: string, name: string, rawArgs: Record<string, any>): Promise<string> {
+  const { voiceTarget: _vt, contextPacket: _cp, ...args } = rawArgs || {};
+  const before = voiceCoreSurfaceSignature(sessionId);
+  const raw = await executeVoicePrometheusTools(sessionId, { action: 'call', tool: name, args, bypassSurfaceCheck: true });
+  const after = voiceCoreSurfaceSignature(sessionId);
+  if (before === after) return raw;
+  // The tool changed the active surface (request_tool_category, auto
+  // activation...). Hand the client a refreshed list to hot-swap into the
+  // live realtime session so the new tools are callable on the next step.
+  try {
+    const parsed = JSON.parse(raw);
+    parsed.runtimeAction = 'refresh_tools';
+    parsed.realtimeTools = buildRealtimeVoiceAgentTools(undefined, null, sessionId);
+    parsed.note = 'New tools are active and appear in your function list on your next step. Call them directly (prometheus_tools call also works right now).';
+    return JSON.stringify(parsed);
+  } catch {
+    return raw;
+  }
+}
+
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
   const workspacePath = getConfig().getWorkspacePath();
+  // Wrapper normalization (voice_ops/voice_browser/show_ui) produces internal
+  // voice_* / show_* names that are not in the definition list; keep them here.
+  if (name && !voiceOwnToolNames().has(name) && !/^(voice_|show_|skill_)/.test(name)) {
+    if (VOICE_PROMETHEUS_TOOL_BLOCKLIST.has(name)) return voiceToolResult(false, `${name} is not available from voice.`);
+    try {
+      return await executeVoiceCoreTool(sessionId, name, args || {});
+    } catch (err: any) {
+      return voiceToolResult(false, `${name} failed: ${String(err?.message || err).slice(0, 300)}`);
+    }
+  }
+  if (name === 'prometheus_tools') {
+    try {
+      return await executeVoicePrometheusTools(sessionId, args || {});
+    } catch (err: any) {
+      return voiceToolResult(false, `Prometheus tool failed: ${String(err?.message || err).slice(0, 300)}`);
+    }
+  }
   try {
     if (VOICE_SHOW_ARTIFACT_TOOLS.has(name)) {
       const built = await buildVoiceShowArtifact(name, args || {});
@@ -20399,18 +20671,32 @@ function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTI
 // canonical voice_thread_ops tool is intentionally included in this set so the
 // realtime coordinator creates first-class Prometheus threads directly rather
 // than delegating through a separate worker-group transport.
-function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext, voiceRoom?: Record<string, any> | null): any[] {
+function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext, voiceRoom?: Record<string, any> | null, sessionId = ''): any[] {
   const identity = voiceAgentTargetIdentity(voiceTarget);
-  const chatTools = buildVoiceToolDefinitions().filter((tool: any) => (
-    !identity.isSubagent || String(tool?.function?.name || tool?.name || '') !== 'voice_thread_ops'
-  ));
+  const withCore = !identity.isSubagent && !!sessionId;
+  const chatTools = buildVoiceToolDefinitions().filter((tool: any) => {
+    const name = String(tool?.function?.name || tool?.name || '');
+    if (identity.isSubagent && name === 'voice_thread_ops') return false;
+    return !(withCore && VOICE_TOOLS_SUPERSEDED_BY_CORE.has(name));
+  });
   const realtimeTools: any[] = chatTools.map((tool: any) => ({
     type: 'function',
     name: tool.function?.name || tool.name,
     description: tool.function?.description || tool.description,
     parameters: tool.function?.parameters || tool.parameters,
   }));
+  if (withCore) {
+    const taken = new Set(realtimeTools.map((tool: any) => tool.name));
+    for (const tool of voiceCoreToolSurface(sessionId)) {
+      const realtimeTool = toRealtimeFunctionTool(tool);
+      if (realtimeTool.name && !taken.has(realtimeTool.name)) {
+        taken.add(realtimeTool.name);
+        realtimeTools.push(realtimeTool);
+      }
+    }
+  }
   if (!identity.isSubagent) {
+    realtimeTools.push(buildVoicePrometheusToolsDefinition());
     realtimeTools.push({
       type: 'function',
       name: 'restart_gateway_quick',
@@ -20603,6 +20889,9 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user wants quick voice-scope work â€” call voice_ops, voice_browser, voice_desktop, or skill_* as appropriate, then narrate the result. For automation/operator status snapshots, call voice_ops action automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
+      ? ''
+      : '- You are Prometheus with a voice: your function list IS the Prometheus core tool set (web_search, web_fetch, memory, write_note, delivery_send, background_ops, chatgpt_sandbox, request_tool_category, tool_search/tool_call for connected apps, etc.), plus voice extras (voice_thread_ops, voice_ops, voice_browser, voice_desktop, show_ui, quiet mode). Call them directly, exactly like main chat. When you need a category (workspace_write for files/shell/git, browser_automation, desktop_automation, agents_and_teams, media_generation...), call request_tool_category; the new tools appear in your function list on your next step. Categories also auto-activate from what the user says. prometheus_tools call works as a fallback for any tool not yet in your list. Keep long multi-step coding or research in voice_thread_ops so voice stays responsive.',
+    identity.isSubagent
       ? `- For work needing files, shell, coding, long research, or a durable artifact, call voice_ops action agent_control with agent_action chat so ${identity.label}'s own worker performs it. Wait for the returned reply and summarize it in this same voice. Use agent_action dispatch only when the user explicitly requests background execution and does not expect an immediate result.`
       : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately with an explicit launch_mode. Use supervise when the user expects ongoing verification/steering, ping for a one-shot completion notification, and forget when they do not want a notification. For several independent work items, call create_many with a route on each item. Keep user choices, approvals, and interactive judgment here in Voice.',
     identity.isSubagent
@@ -20712,7 +21001,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       currentTime,
       voiceTarget,
     });
-    const tools = buildRealtimeVoiceAgentTools(voiceTarget, contextPacket.voiceRoom || null);
+    const tools = buildRealtimeVoiceAgentTools(voiceTarget, contextPacket.voiceRoom || null, sessionId);
 
     const model = sanitizeRealtimeAgentModel(body.model);
     // AVAS voices (for example `juniper`) are valid only when this route is
@@ -21116,7 +21405,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       currentTime,
       voiceTarget,
     });
-    const tools = buildRealtimeVoiceAgentTools(voiceTarget);
+    const tools = buildRealtimeVoiceAgentTools(voiceTarget, null, sessionId);
 
     const model = sanitizeXaiRealtimeModel(body.model);
     const voice = sanitizeXaiRealtimeVoice(body.voice);
@@ -21554,6 +21843,33 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
     });
   } catch (err: any) {
     res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+// Same per-message category auto-activation main chat runs, applied to each
+// finalized spoken user turn. Returns a refreshed realtime tool list when the
+// surface changed so the client can hot-swap it via session.update.
+router.post('/api/voice-agent/realtime-tool-surface', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
+    const transcript = String(body.transcript || '').slice(0, 4000);
+    const voiceTarget = body.voiceTarget || body.voice_target || body.target ? normalizeVoiceAgentTarget(body) : undefined;
+    if (voiceAgentTargetIdentity(voiceTarget).isSubagent || !transcript.trim()) {
+      res.json({ ok: true, changed: false });
+      return;
+    }
+    const before = voiceCoreSurfaceSignature(sessionId);
+    const activated = autoActivateToolCategories(sessionId, transcript, 0).map((entry: any) => entry.category);
+    const changed = voiceCoreSurfaceSignature(sessionId) !== before;
+    res.json({
+      ok: true,
+      changed,
+      activated,
+      ...(changed ? { tools: buildRealtimeVoiceAgentTools(voiceTarget, null, sessionId) } : {}),
+    });
+  } catch (err: any) {
+    res.status(storageAwareStatus(err)).json({ ok: false, error: String(err?.message || err) });
   }
 });
 

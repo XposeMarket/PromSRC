@@ -1,5 +1,6 @@
 import path from 'path';
 import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait } from '../../tasks/task-runner';
+import { normalizeSpawnToolCategoriesArg } from '../../tasks/spawn-tool-categories-arg';
 import {
   automationDashboardTool,
   scheduleJobDetailTool,
@@ -97,7 +98,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
             speed: args.speed ? String(args.speed) : (args.fast_mode === true ? 'fast' : undefined),
-            toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
+            toolCategories: normalizeSpawnToolCategoriesArg(args.tool_categories),
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
