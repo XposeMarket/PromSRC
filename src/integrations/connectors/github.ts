@@ -168,6 +168,46 @@ export class GitHubConnector extends OAuthConnector {
     return this.ghPost(`/repos/${owner}/${repo}/pulls`, payload);
   }
 
+  /** PATCH a pull request: close/reopen (state), title, body, base. */
+  async updatePullRequest(owner: string, repo: string, prNumber: number, patch: { state?: 'open' | 'closed'; title?: string; body?: string; base?: string }): Promise<any> {
+    return this.ghWrite('PATCH', `/repos/${owner}/${repo}/pulls/${prNumber}`, patch);
+  }
+
+  /** PATCH an issue: close/reopen, title, body, labels, assignees. */
+  async updateIssue(owner: string, repo: string, issueNumber: number, patch: { state?: 'open' | 'closed'; state_reason?: string; title?: string; body?: string; labels?: string[]; assignees?: string[] }): Promise<any> {
+    return this.ghWrite('PATCH', `/repos/${owner}/${repo}/issues/${issueNumber}`, patch);
+  }
+
+  /** Comment on an issue or pull request (PRs share the issue comment API). */
+  async createIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<any> {
+    return this.ghPost(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });
+  }
+
+  /**
+   * Raw GitHub REST request against api.github.com for endpoints without a
+   * first-class tool. Callers must validate the path; this never follows a
+   * foreign host.
+   */
+  async apiRequest(method: string, path: string, body?: any): Promise<{ status: number; ok: boolean; data: any }> {
+    const token = await this.getValidAccessToken();
+    const hasBody = body !== undefined && method !== 'GET' && method !== 'HEAD';
+    const res = await fetch(`https://api.github.com${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'Prometheus-CIS',
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: hasBody ? JSON.stringify(body) : undefined,
+    });
+    const text = method === 'HEAD' ? '' : await res.text().catch(() => '');
+    let data: any = text;
+    if (text) { try { data = JSON.parse(text); } catch { /* keep text */ } }
+    return { status: res.status, ok: res.ok, data };
+  }
+
   async searchCode(query: string, perPage = 20): Promise<any[]> {
     const params = new URLSearchParams({ q: query, per_page: String(perPage) });
     const data = await this.ghGet(`/search/code?${params}`);

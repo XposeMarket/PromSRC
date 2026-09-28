@@ -1,7 +1,7 @@
 ---
 name: "GitHub connector"
 description: "Use the connected GitHub account for pull requests, issues, commits, CI checks, files and code search via the connector_github wrapper. Use instead of the gh CLI, which is not installed."
-triggers: ["github pr", "pull request", "open a pr", "merge the pr", "github issue", "ci checks", "check runs"]
+triggers: ["github pr", "pull request", "open a pr", "merge the pr", "close the pr", "close pr", "comment on pr", "close issue", "github issue", "ci checks", "check runs"]
 requiredTools: ["connector_github"]
 ---
 
@@ -14,6 +14,11 @@ Call `connector_github({action, ...args})`. If it is not in your tool list, call
 | List / read PRs | `list_prs`, `get_pr` | owner, repo, number |
 | Open PR | `create_pr` | owner, repo, title, head, base, body, draft |
 | Merge PR | `merge_pr` | owner, repo, number (asks for approval) |
+| Close PR | `close_pr` | owner, repo, pr_number, comment? (e.g. "Superseded by #464") |
+| Edit / reopen PR | `update_pr` | owner, repo, pr_number, state?, title?, body?, base?, comment? |
+| Comment on PR/issue | `comment` | owner, repo, issue_number, body |
+| Close / edit issue | `update_issue` | owner, repo, issue_number, state?, state_reason?, title?, body?, labels?, assignees? |
+| Anything else | `api_request` | path (/repos/...), method, body: reviews, labels, releases, workflows, branches |
 | CI status | `list_check_runs` | owner, repo, ref (branch or sha) |
 | Issues | `list_issues`, `create_issue` | owner, repo |
 | Files / search | `get_file`, `search` | path + ref / query |
@@ -22,4 +27,5 @@ Call `connector_github({action, ...args})`. If it is not in your tool list, call
 Rules:
 - Local git (worktree, branch, commit, push) stays in the terminal. Only the GitHub API goes through this connector.
 - Before `merge_pr`, check `get_pr` (mergeable state) and `list_check_runs` on the head sha. Never self-merge without explicit approval.
+- Missing a first-class action? Use `api_request` with the GitHub REST path instead of telling the user it can't be done. GET is read-only; writes go through approval.
 - A 401/403 means the token needs re-auth: run `connection_ops` (integration_admin), don't retry in a loop.
