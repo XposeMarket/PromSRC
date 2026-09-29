@@ -2,6 +2,7 @@
 // Tool definitions for file operations, web tools, and memory tools.
 
 import { getVideoProjectToolDef } from '../../../media-engine/tool.js';
+import { getGameProjectToolDef } from '../../../games-engine/tool.js';
 import { filterPublicBuildToolDefs } from '../../../runtime/distribution.js';
 
 export function getFileWebMemoryTools(): any[] {
@@ -2086,6 +2087,7 @@ export function getFileWebMemoryTools(): any[] {
       },
     },
     getVideoProjectToolDef(),
+    getGameProjectToolDef(),
     {
       type: 'function',
       function: {

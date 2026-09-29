@@ -206,6 +206,14 @@ export function resolveToolCapabilityMetadata(
     if (action === 'delete' || action === 'cast_delete' || action === 'brand_delete') return DESTRUCTIVE;
     return LOCAL_WRITE;
   }
+  // Games mode: reads are local; generate_assets/reroll_asset spend money (server cost gate still applies).
+  if (name === 'game_project') {
+    const action = String(args?.action || '').trim().toLowerCase();
+    if (['help', 'list', 'get', 'questions', 'estimate', 'play_url'].includes(action)) return READ_ONLY;
+    if (action === 'generate_assets' || action === 'reroll_asset') return EXTERNAL_WRITE;
+    if (action === 'delete') return DESTRUCTIVE;
+    return LOCAL_WRITE;
+  }
   // Authenticated-user lookup: reads the credential's own profile only.
   if (name === 'x_api_me') return CREDENTIAL_READ_ONLY;
   // Plugin import: reads are local scans; install/uninstall write skills, MCP

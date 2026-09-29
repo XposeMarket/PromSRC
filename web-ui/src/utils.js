@@ -9,6 +9,7 @@
  */
 
 import { installVideoProjectCards } from './components/video-project-card.js';
+import { installGameProjectCards } from './components/game-project-card.js';
 
 // ─── HTML Escaping ─────────────────────────────────────────────
 // NOTE: The original index.html had TWO escape functions:
@@ -1119,6 +1120,19 @@ function videoProjectCardHtml(body) {
   return `<div class="prom-vp-card" data-vp-project="${id}"></div>`;
 }
 
+// ```game-project {"projectId":"gp_..."}``` becomes a live Games-mode card
+// (components/game-project-card.js): stage, art approval, audio, playable iframe.
+const GAME_PROJECT_FENCE_RE = /```game-project[ \t]*\n([\s\S]*?)```/g;
+const GAME_PROJECT_OPEN_RE = /```game-project[ \t]*\n[\s\S]*$/;
+
+function gameProjectCardHtml(body) {
+  let id = '';
+  try { id = String(JSON.parse(String(body || '').trim())?.projectId || ''); }
+  catch { id = (String(body || '').match(/gp_[A-Za-z0-9_-]+/) || [''])[0]; }
+  if (!/^gp_[A-Za-z0-9_-]{3,64}$/.test(id)) return '';
+  return `<div class="prom-gp-card" data-gp-project="${id}"></div>`;
+}
+
 function renderMdUncached(text, options = {}) {
   try {
     const visuals = [];
@@ -1130,7 +1144,12 @@ function renderMdUncached(text, options = {}) {
         vpCards.push(videoProjectCardHtml(body));
         return `\n\n${vpPrefix}${vpCards.length - 1}END\n\n`;
       })
-      .replace(VIDEO_PROJECT_OPEN_RE, '');
+      .replace(VIDEO_PROJECT_OPEN_RE, '')
+      .replace(GAME_PROJECT_FENCE_RE, (_, body) => {
+        vpCards.push(gameProjectCardHtml(body));
+        return `\n\n${vpPrefix}${vpCards.length - 1}END\n\n`;
+      })
+      .replace(GAME_PROJECT_OPEN_RE, '');
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
@@ -1186,6 +1205,7 @@ window.escapeHtml = escHtml;
 window.sanitizeHtml = sanitizeHtml;
 window.renderMd = renderMd;
 installVideoProjectCards();
+installGameProjectCards();
 window.timeAgo = timeAgo;
 window.fmtPercent = fmtPercent;
 window.fmtMemoryGb = fmtMemoryGb;

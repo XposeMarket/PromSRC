@@ -31,6 +31,7 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'generate_image',
   'generate_video',
   'video_project',
+  'game_project',
   'analyze_image',
   'analyze_video',
   'video_analyze_imported_video',
@@ -124,6 +125,15 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: JSON.stringify(out, null, 1), error: false };
         } catch (e: any) {
           return { name, args, result: `video_project ${String(args?.action || '')} failed: ${String(e?.message || e)}`, error: true };
+        }
+      }
+      case 'game_project': {
+        const { executeGameProject } = await import('../../../games-engine/tool.js');
+        try {
+          const out = await executeGameProject(args || {}, { workspacePath: ctx.workspacePath, sessionId: ctx.sessionId });
+          return { name, args, result: JSON.stringify(out, null, 1), error: false };
+        } catch (e: any) {
+          return { name, args, result: `game_project ${String(args?.action || '')} failed: ${String(e?.message || e)}`, error: true };
         }
       }
       case 'chatgpt_sandbox': {

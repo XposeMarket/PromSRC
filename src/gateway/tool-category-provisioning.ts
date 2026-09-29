@@ -19,7 +19,7 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   workspace_write: ['workspace_edit', 'workspace_run', 'workspace_read'],
   advanced_memory: ['memory_search_project', 'memory_graph_snapshot'],
   media_assets: ['download_media', 'analyze_image'],
-  media_generation: ['media_generate', 'video_project'],
+  media_generation: ['media_generate', 'video_project', 'game_project'],
   automations: ['schedule_job', 'task_control'],
   automation_scheduling: ['schedule_job'],
   automation_tasks: ['task_control'],

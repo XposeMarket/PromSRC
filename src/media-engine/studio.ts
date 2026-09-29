@@ -229,6 +229,18 @@ export function listMusicBeds() {
   return Object.entries(BEDS).map(([id, b]) => ({ id, label: b.label, bpm: b.bpm }));
 }
 
+/** Render a builtin music bed to an mp3 (used by game projects). Free, local ffmpeg. */
+export async function synthMusicBed(bedId: string, seconds: number, outAbs: string): Promise<{ path: string; label: string }> {
+  const id = String(bedId || 'pulse').toLowerCase();
+  const bed = BEDS[id];
+  if (!bed) throw new Error(`music: unknown bed "${id}". Use one of ${Object.keys(BEDS).join(', ')}.`);
+  fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+  const { code, stderr } = await runFfmpeg(['-y', '-hide_banner', '-f', 'lavfi', '-i', `aevalsrc='${bed.expr(bed.bpm)}':s=44100:d=${Math.max(4, seconds)}`,
+    '-af', 'highpass=f=30,lowpass=f=9000,acompressor=threshold=0.25:ratio=3,afade=t=in:d=0.4,volume=0.9', '-ac', '2', '-c:a', 'libmp3lame', '-b:a', '160k', outAbs], 120_000);
+  if (code !== 0) throw new Error(`music synth failed: ${stderr.slice(-300)}`);
+  return { path: outAbs, label: bed.label };
+}
+
 export async function music(ws: string, projectId: string, args: { builtin?: string; path?: string; volume?: number; duck?: boolean } = {}): Promise<{ path: string; label: string; volume: number; durationSec: number }> {
   let rel: string;
   let label: string;
