@@ -107,6 +107,7 @@ export function createStudioPanel({ container, inspector, store, getScene, apply
       state.history = res.history || state.history;
       try { localStorage.setItem(LS_ACTIVE, id); } catch { /* ignore */ }
       if (!state.project.shots.some((s) => s.id === state.selectedShotId)) state.selectedShotId = state.project.shots[0]?.id || null;
+      mirrorProjectToScene({ force: true });
       subscribe(id);
       setTitle?.(state.project.title);
     } catch (err) {
@@ -117,8 +118,11 @@ export function createStudioPanel({ container, inspector, store, getScene, apply
   }
 
   function applyProjectResponse(res) {
-    if (res?.project) state.project = res.project;
     if (res?.history) state.history = res.history;
+    if (res?.project) {
+      state.project = res.project;
+      mirrorProjectToScene();
+    }
   }
 
   async function ops(list, label = 'Saving') {
@@ -179,46 +183,186 @@ export function createStudioPanel({ container, inspector, store, getScene, apply
     await openProject(pid);
   }
 
-  // ── editor timeline bridge ─────────────────────────────────────────────
-  function sendCutToTimeline() {
+  // ── editor timeline bridge (two-way) ───────────────────────────────────
+  // Project → scene: every clip on a visual track becomes a scene element
+  // tagged meta.vpProjectId / meta.vpClipId. Mirroring runs automatically on
+  // open and whenever the project changes (Prom's tool edits, new takes).
+  // Scene → project: after a committed timeline edit, the tagged elements are
+  // diffed against the project and pushed as clip.move / clip.trim /
+  // clip.add (splits) / clip.remove ops, one project undo step per edit.
+  const ASPECT_SIZE = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
+  let lastMirrorSig = '';
+  let mirroredClipIds = new Set();
+  let pushTimer = null;
+  let pushing = false;
+
+  function clipMedia(p, clip) {
+    if ('shotId' in clip.source) {
+      const shot = p.shots.find((s) => s.id === clip.source.shotId);
+      const take = selectedTake(shot);
+      return take ? { rel: take.path, name: shot.title } : null;
+    }
+    return clip.source.assetPath ? { rel: clip.source.assetPath, name: clip.label || clip.source.assetPath.split('/').pop() } : null;
+  }
+
+  function visualClips(p) {
+    const order = new Map(p.tracks.map((t, i) => [t.id, i]));
+    return p.clips
+      .filter((c) => { const t = p.tracks.find((x) => x.id === c.trackId); return t && t.kind !== 'audio' && t.kind !== 'caption'; })
+      .map((c) => ({ clip: c, media: clipMedia(p, c), trackIndex: order.get(c.trackId) || 0 }))
+      .filter((x) => x.media?.rel)
+      .sort((a, b) => a.clip.startMs - b.clip.startMs);
+  }
+
+  function projectSig(p) {
+    if (!p) return '';
+    return `${p.id}:${p.target?.aspect}:` + visualClips(p)
+      .map(({ clip, media, trackIndex }) => `${clip.id}|${trackIndex}|${clip.startMs}|${clip.inMs}|${clip.outMs}|${media.rel}`).join(';');
+  }
+
+  function mirrorProjectToScene({ force = false } = {}) {
     const p = state.project;
     const scene = getScene?.();
-    if (!p || !scene || typeof applyOps !== 'function') return;
-    const existing = (scene.elements || []).filter((el) => el?.meta?.vpProjectId === p.id).map((el) => ({ op: 'delete', id: el.id }));
-    const shotById = new Map(p.shots.map((s) => [s.id, s]));
-    const video = p.clips
-      .filter((c) => p.tracks.find((t) => t.id === c.trackId)?.kind !== 'audio')
-      .sort((a, b) => a.startMs - b.startMs);
+    if (!p || !scene || typeof applyOps !== 'function') return false;
+    const sig = projectSig(p);
+    if (!force && sig === lastMirrorSig) return false;
+    const [w, h] = ASPECT_SIZE[p.target?.aspect] || [scene.width || 1920, scene.height || 1080];
+    // Replace every project-tagged element (this or a previously open project).
+    const removes = (scene.elements || []).filter((el) => el?.meta?.vpProjectId).map((el) => ({ op: 'delete', id: el.id }));
+    const foreign = (scene.elements || []).filter((el) => !el?.meta?.vpProjectId).length;
     const adds = [];
-    for (const clip of video) {
-      let rel = '';
-      let name = clip.label || 'Clip';
-      if ('shotId' in clip.source) {
-        const shot = shotById.get(clip.source.shotId);
-        const take = selectedTake(shot);
-        if (!take) continue;
-        rel = take.path;
-        name = shot.title;
-      } else rel = clip.source.assetPath;
-      if (!rel) continue;
+    const ids = new Set();
+    for (const { clip, media, trackIndex } of visualClips(p)) {
       const durMs = Math.max(100, clip.outMs - clip.inMs);
       const el = assetToSceneElement({
-        id: `vp_${clip.id}`, type: isVideo(rel) ? 'video' : 'image', name, src: mediaUrl(rel), path: rel,
-        duration: durMs, width: scene.width || 1920, height: scene.height || 1080, persisted: true,
-      }, scene);
-      el.x = 0; el.y = 0; el.width = scene.width || 1920; el.height = scene.height || 1080;
+        id: `vp_${clip.id}`, type: isVideo(media.rel) ? 'video' : 'image', name: clip.label || media.name,
+        src: mediaUrl(media.rel), path: media.rel, duration: durMs, width: w, height: h, persisted: true,
+      }, { ...scene, width: w, height: h });
+      el.id = `vp_${clip.id}`;
+      el.x = 0; el.y = 0; el.width = w; el.height = h;
+      el.zIndex = 5 + trackIndex;
       el.meta = {
         ...el.meta, startMs: clip.startMs, endMs: clip.startMs + durMs, durationMs: durMs,
-        trimStartMs: clip.inMs, trimEndMs: 0, vpProjectId: p.id, vpClipId: clip.id,
+        trimStartMs: clip.inMs, trimEndMs: 0, volume: clip.volume ?? 1,
+        vpProjectId: p.id, vpClipId: clip.id, vpTrackId: clip.trackId,
         vpShotId: 'shotId' in clip.source ? clip.source.shotId : undefined,
       };
       adds.push({ op: 'add', ...el });
+      ids.add(clip.id);
     }
-    if (!adds.length) { state.error = 'Nothing on the project timeline yet. Generate shots, then Assemble.'; render(); return; }
-    const end = Math.max(...adds.map((a) => a.meta.endMs));
-    applyOps([...existing, ...adds, { op: 'set-scene', patch: { durationMs: Math.max(scene.durationMs || 0, end) } }]);
+    const end = adds.length ? Math.max(...adds.map((a) => a.meta.endMs)) : 0;
+    const scenePatch = { durationMs: Math.max(1000, end || scene.durationMs || 5000) };
+    // Only resize the canvas when the project owns it (no foreign layers).
+    if (!foreign) { scenePatch.width = w; scenePatch.height = h; }
+    applyOps([...removes, ...adds, { op: 'set-scene', patch: scenePatch }], { history: false, fromStudio: true });
+    lastMirrorSig = sig;
+    mirroredClipIds = ids;
+    return true;
+  }
+
+  function sendCutToTimeline() {
+    if (!state.project?.clips.length) { state.error = 'Nothing on the project timeline yet. Generate shots, then Assemble.'; render(); return; }
+    mirrorProjectToScene({ force: true });
     store?.setState?.({ timeMs: 0 });
   }
+
+  function sceneDiffOps() {
+    const p = state.project;
+    const scene = getScene?.();
+    if (!p || !scene) return [];
+    const els = (scene.elements || []).filter((el) => el?.meta?.vpProjectId === p.id && el.meta.vpClipId);
+    const byClip = new Map();
+    for (const el of els) {
+      const list = byClip.get(el.meta.vpClipId) || [];
+      list.push(el);
+      byClip.set(el.meta.vpClipId, list);
+    }
+    const out = [];
+    const round = (n) => Math.round(Number(n) || 0);
+    const timing = (el) => {
+      const start = Math.max(0, round(el.meta.startMs));
+      const end = Math.max(start + 100, round(el.meta.endMs ?? start + (el.meta.durationMs || 100)));
+      const speed = Math.max(0.05, Number(el.meta.speed) || 1);
+      const inMs = Math.max(0, round(el.meta.trimStartMs));
+      return { startMs: start, inMs, outMs: inMs + Math.round((end - start) * speed) };
+    };
+    for (const [clipId, list] of byClip) {
+      const clip = p.clips.find((c) => c.id === clipId);
+      if (!clip) continue;
+      list.sort((a, b) => round(a.meta.startMs) - round(b.meta.startMs));
+      const [first, ...extra] = list;
+      const t = timing(first);
+      if (Math.abs(t.startMs - clip.startMs) > 15) out.push({ op: 'clip.move', id: clip.id, startMs: t.startMs });
+      if (Math.abs(t.inMs - clip.inMs) > 15 || Math.abs(t.outMs - clip.outMs) > 15) out.push({ op: 'clip.trim', id: clip.id, inMs: t.inMs, outMs: t.outMs });
+      // Split pieces (and duplicates) carry a copied vpClipId → new clips.
+      for (const el of extra) {
+        const x = timing(el);
+        const src = 'shotId' in clip.source ? { shotId: clip.source.shotId } : { assetPath: clip.source.assetPath };
+        out.push({ op: 'clip.add', ...src, trackId: clip.trackId, startMs: x.startMs, inMs: x.inMs, outMs: x.outMs, label: clip.label });
+      }
+    }
+    // Deleted in the editor → removed from the project (only clips we mirrored).
+    for (const id of mirroredClipIds) {
+      if (!byClip.has(id) && p.clips.some((c) => c.id === id)) out.push({ op: 'clip.remove', id });
+    }
+    return out;
+  }
+
+  async function pushSceneToProject() {
+    const p = state.project;
+    if (!p || pushing || disposed) return;
+    const list = sceneDiffOps();
+    if (!list.length) { lastEditWasProject = false; redoIsProject = false; return; }
+    pushing = true;
+    try {
+      const res = await call(`/${p.id}/ops`, { ops: list });
+      lastEditWasProject = true;
+      redoIsProject = false;
+      const structural = list.some((o) => o.op === 'clip.add' || o.op === 'clip.remove');
+      // Moves/trims already match the editor, so skip the rebuild (no flicker).
+      // Splits/deletes re-mirror so new pieces carry their real server clip ids.
+      if (!structural && res?.project) lastMirrorSig = projectSig(res.project);
+      applyProjectResponse(res);
+      render();
+    } catch (err) {
+      state.error = `Timeline sync failed: ${String(err?.message || err).replace(/^API \d+:\s*/, '')}`;
+      render();
+    } finally { pushing = false; }
+  }
+
+  function onSceneCommitted() {
+    if (!state.project) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushSceneToProject, 350);
+  }
+
+  // Shared undo: when the latest edit went to the project (a timeline change
+  // on generated clips), the editor's Undo/Redo drives the project op log so
+  // Prom's edits and yours unwind in one history. Otherwise the editor's own
+  // scene history handles it (text, shapes, effects on non-project layers).
+  let lastEditWasProject = false;
+  let redoIsProject = false;
+  function handleUndo(direction) {
+    const p = state.project;
+    if (!p) return false;
+    if (direction === 'undo' && lastEditWasProject && state.history.undo > 0) {
+      redoIsProject = true;
+      guard('Undoing', () => call(`/${p.id}/undo`, {})).then((res) => { applyProjectResponse(res); render(); });
+      return true;
+    }
+    if (direction === 'redo' && redoIsProject && state.history.redo > 0) {
+      guard('Redoing', () => call(`/${p.id}/redo`, {})).then((res) => { applyProjectResponse(res); render(); });
+      return true;
+    }
+    return false;
+  }
+
+  // After the editor restores one of its own snapshots, project clips must
+  // still match the server document.
+  function onSceneRestored() {
+    if (state.project) mirrorProjectToScene({ force: true });
+  }
+
 
   async function renderFinal() {
     if (!state.project) return;
@@ -367,7 +511,7 @@ export function createStudioPanel({ container, inspector, store, getScene, apply
         ${iconButton({ name: 'redo', label: `Redo (${state.history.redo})`, attrs: 'data-vp-act="redo"', disabled: !state.history.redo })}
         <span class="ce-studio-toolbar__sep"></span>
         ${iconButton({ name: 'sequence', label: 'Assemble project timeline from selected takes', attrs: 'data-vp-act="assemble"', disabled: !readyShots })}
-        ${iconButton({ name: 'timelineAdd', label: 'Send cut to editor timeline', attrs: 'data-vp-act="to-timeline"', disabled: !p.clips.length })}
+        ${iconButton({ name: 'refresh', label: 'Reload editor timeline from project (sync is automatic)', attrs: 'data-vp-act="to-timeline"', disabled: !p.clips.length })}
         ${iconButton({ name: 'export', label: 'Render final MP4 (server)', attrs: 'data-vp-act="render"', disabled: !p.clips.length })}
         <span class="ce-studio-toolbar__spacer"></span>
         ${budgetMeter(p)}
@@ -616,10 +760,15 @@ export function createStudioPanel({ container, inspector, store, getScene, apply
     render,
     reload: async () => { await loadProjects(); if (state.project) await openProject(state.project.id); },
     getProject: () => state.project,
+    onSceneCommitted,
+    onSceneRestored,
+    handleUndo,
+    mirror: () => mirrorProjectToScene({ force: true }),
     dispose() {
       disposed = true;
       closeEvents();
       clearTimeout(reloadTimer);
+      clearTimeout(pushTimer);
       container.removeEventListener('click', onClick);
       container.removeEventListener('change', onChange);
       container.removeEventListener('focusout', onBriefBlur);

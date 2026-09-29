@@ -8,6 +8,7 @@ import {
   creativeExtractLayers,
   loadCanvasImageDataUrl,
   loadCreativeGallery,
+  mobileGatewayFetch,
   streamChat,
   uploadMobileBinaryFile,
 } from './mobile-api.js';
@@ -104,6 +105,8 @@ export async function renderCreativePage(page, { navigate } = {}) {
         <div class="pm-creative-templates" id="pm-creative-templates"></div>
       </section>
 
+      <section id="pm-vstudio" class="pm-creative-section pm-vstudio" hidden></section>
+
       <section id="pm-creative-video-stage" class="pm-creative-section" hidden>
         <div class="pm-creative-preview" id="pm-creative-video-preview">
           <div class="pm-creative-preview-empty">
@@ -188,6 +191,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
   const previewEl = page.querySelector('#pm-creative-video-preview');
   const promptInput = page.querySelector('#pm-creative-prompt');
   const sendBtn = page.querySelector('#pm-creative-send');
+  const vstudio = _mountMobileVideoStudio(page.querySelector('#pm-vstudio'), { navigate });
 
   function paintProviders() {
     providersBar.innerHTML = PM_CREATIVE_PROVIDERS[state.mode].map(p => `
@@ -334,6 +338,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
     imageStage.hidden = !isImage;
     videoStage.hidden = isImage;
     videoBottom.hidden = isImage;
+    vstudio.setVisible(!isImage);
     // Reset provider if current isn't valid for this mode.
     if (!PM_CREATIVE_PROVIDERS[state.mode].find(p => p.id === state.provider)) {
       state.provider = PM_CREATIVE_PROVIDERS[state.mode][0].id;
@@ -698,5 +703,280 @@ export async function renderCreativePage(page, { navigate } = {}) {
   page._pmCleanup = () => {
     try { window.wsEventBus?.off('creative_extract_layers_progress', onExtractProgress); } catch {}
     try { activeStream?.abort?.(); } catch {}
+    try { vstudio.dispose(); } catch {}
+  };
+}
+
+/* ---------------- VIDEO STUDIO (server video projects) ----------------
+ * Phone view of the same /api/video-projects document the desktop Studio tab
+ * and Prom's video_project tool edit: pick a project, review shots, approve
+ * generations, pick takes, assemble, render, and paste provider keys.
+ * Full timeline editing stays on desktop. */
+
+const VS_LS_ACTIVE = 'prometheus_vp_active_project';
+const VS_BASE = '/api/video-projects';
+const VS_SVG = {
+  gen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8z"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>',
+  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M17 6l3 3M15 8l2 2"/></svg>',
+  seq: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="6" height="12" rx="1"/><rect x="9" y="6" width="6" height="12" rx="1"/><rect x="16" y="6" width="6" height="12" rx="1"/></svg>',
+  film: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"/></svg>',
+  export: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 15v4a2 2 0 002 2h10a2 2 0 002-2v-4"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/></svg>',
+  redo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 000 10h3"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 01-11.6 7.1L4 20l1-4.6A8 8 0 1121 12z"/></svg>',
+};
+
+function _vsUsd(n) { return `$${(Number(n) || 0).toFixed(2)}`; }
+function _vsIsVideo(rel) { return /\.(mp4|webm|mov|m4v)$/i.test(String(rel || '')); }
+function _vsTake(shot) {
+  if (!shot?.takes?.length) return null;
+  return shot.takes.find((t) => t.id === shot.selectedTakeId) || shot.takes[shot.takes.length - 1];
+}
+function _vsThumb(rel, cls) {
+  if (!rel) return `<div class="${cls} is-empty">${VS_SVG.film}</div>`;
+  const url = escapeHtml(buildInlineMediaUrl(rel));
+  return _vsIsVideo(rel)
+    ? `<video class="${cls}" src="${url}#t=0.1" muted playsinline preload="metadata"></video>`
+    : `<img class="${cls}" src="${url}" alt="" loading="lazy">`;
+}
+
+function _mountMobileVideoStudio(root, { navigate } = {}) {
+  const noop = { setVisible() {}, dispose() {} };
+  if (!root) return noop;
+  const st = {
+    visible: false, loaded: false, projects: [], project: null, history: { undo: 0, redo: 0 },
+    providers: {}, openShot: '', busy: '', keysOpen: false, renderPath: '',
+  };
+  let poll = null;
+  let disposed = false;
+
+  async function call(path, body, timeoutMs = 30000) {
+    const res = await mobileGatewayFetch(`${VS_BASE}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      body: body === undefined ? undefined : JSON.stringify(body),
+      timeoutMs,
+    });
+    if (res && res.success === false) throw new Error(res.error || 'Request failed');
+    return res || {};
+  }
+  async function guard(label, fn) {
+    st.busy = label; paint();
+    try { return await fn(); }
+    catch (err) { pmToast(String(err?.message || err), 'error'); return null; }
+    finally { st.busy = ''; paint(); }
+  }
+  function take(res) {
+    if (res?.project) st.project = res.project;
+    if (res?.history) st.history = res.history;
+  }
+  async function loadAll() {
+    try {
+      const [list, prov] = await Promise.all([call(''), call('/providers')]);
+      st.projects = list.projects || [];
+      st.providers = prov.providers || {};
+      let last = '';
+      try { last = localStorage.getItem(VS_LS_ACTIVE) || ''; } catch { /* ignore */ }
+      const id = st.projects.find((p) => p.id === last)?.id || st.projects[0]?.id || '';
+      if (id) await open(id); else st.project = null;
+    } catch (err) { pmToast(`Video projects: ${err?.message || err}`, 'error'); }
+    st.loaded = true;
+    paint();
+  }
+  async function open(id) {
+    if (!id) { st.project = null; paint(); return; }
+    const res = await call(`/${encodeURIComponent(id)}`);
+    take(res);
+    try { localStorage.setItem(VS_LS_ACTIVE, id); } catch { /* ignore */ }
+    schedulePoll();
+    paint();
+  }
+  async function refresh() {
+    if (!st.project || disposed) return;
+    try { take(await call(`/${encodeURIComponent(st.project.id)}`)); paint(); } catch { /* keep last */ }
+    schedulePoll();
+  }
+  function schedulePoll() {
+    clearTimeout(poll);
+    const running = (st.project?.jobs || []).some((j) => j.state === 'queued' || j.state === 'running');
+    if (running && st.visible && !disposed) poll = setTimeout(refresh, 4000);
+  }
+  async function ops(list, label = 'Saving') {
+    if (!st.project) return;
+    take(await guard(label, () => call(`/${st.project.id}/ops`, { ops: list })));
+    paint();
+  }
+  async function generate(shotIds, count = 1) {
+    const pid = st.project?.id;
+    if (!pid) return;
+    let res = await guard('Estimating', () => call(`/${pid}/generate`, { shotIds, count }, 120000));
+    if (!res) return;
+    if (res.needsApproval) {
+      const lines = (res.estimate?.shots || []).map((s) => `${s.title}: ${s.count}x ${s.modelId} ~ ${_vsUsd(s.usd)}`).join('\n');
+      if (!window.confirm(`${res.reason || 'Approve this generation?'}\n\n${lines}\n\nTotal ~ ${_vsUsd(res.estimate?.total)}`)) return;
+      res = await guard('Submitting', () => call(`/${pid}/generate`, { shotIds, count, approved: true }, 120000));
+    }
+    if (res) pmToast('Generating. Takes appear here when ready.', 'success');
+    await refresh();
+  }
+
+  function providerChips() {
+    const names = { xai: 'Grok', openai: 'OpenAI', fal: 'fal', higgsfield: 'Higgsfield' };
+    return Object.keys(names).map((k) => {
+      const ok = !!st.providers?.[k]?.configured;
+      return `<span class="pm-vs-chip${ok ? ' ok' : ''}" title="${ok ? 'Ready' : 'Not configured'}"><i></i>${names[k]}</span>`;
+    }).join('');
+  }
+
+  function keysSheet() {
+    if (!st.keysOpen) return '';
+    return `<div class="pm-vs-keys">
+      <label>fal API key<input type="password" autocomplete="off" data-vs-key="fal" placeholder="${st.providers?.fal?.configured ? 'Configured. Paste to replace' : 'fal.ai key'}"></label>
+      <label>Higgsfield key<input type="password" autocomplete="off" data-vs-key="higgsfield" placeholder="${st.providers?.higgsfield?.configured ? 'Configured. Paste to replace' : 'id:secret'}"></label>
+      <button class="pm-vs-btn primary" data-vs="save-keys">${VS_SVG.check}<span>Save keys</span></button>
+      <p class="pm-vs-hint">Stored encrypted in the vault. Never shown again.</p>
+    </div>`;
+  }
+
+  function shotCard(shot, i) {
+    const t = _vsTake(shot);
+    const open = st.openShot === shot.id;
+    const takes = open ? (shot.takes || []).slice().reverse().map((tk) => `
+      <div class="pm-vs-take${tk.id === t?.id ? ' is-selected' : ''}">
+        ${_vsIsVideo(tk.path)
+          ? `<video src="${escapeHtml(buildInlineMediaUrl(tk.path))}#t=0.1" controls playsinline preload="metadata"></video>`
+          : `<img src="${escapeHtml(buildInlineMediaUrl(tk.path))}" alt="">`}
+        <div class="pm-vs-take-row">
+          <small>${escapeHtml(tk.modelId || '')} · ${_vsUsd(tk.costUsd)}</small>
+          ${tk.id === t?.id
+            ? `<span class="pm-vs-used">${VS_SVG.check} In cut</span>`
+            : `<button class="pm-vs-btn" data-vs="use-take" data-shot="${escapeHtml(shot.id)}" data-take="${escapeHtml(tk.id)}">${VS_SVG.check}<span>Use</span></button>`}
+        </div>
+      </div>`).join('') : '';
+    return `<div class="pm-vs-shot${open ? ' is-open' : ''}">
+      <button class="pm-vs-shot-head" data-vs="toggle-shot" data-shot="${escapeHtml(shot.id)}">
+        ${_vsThumb(t?.path, 'pm-vs-thumb')}
+        <div class="pm-vs-shot-meta">
+          <strong>${i + 1}. ${escapeHtml(shot.title || 'Shot')}</strong>
+          <small>${escapeHtml(String(shot.prompt || '').slice(0, 90) || 'No prompt yet')}</small>
+          <span class="pm-vs-status is-${escapeHtml(shot.status)}">${escapeHtml(shot.status)} · ${shot.durationSec}s · ${(shot.takes || []).length} take${(shot.takes || []).length === 1 ? '' : 's'}</span>
+        </div>
+      </button>
+      ${open ? `<div class="pm-vs-shot-body">
+        <div class="pm-vs-row">
+          <button class="pm-vs-btn primary" data-vs="gen" data-shot="${escapeHtml(shot.id)}" data-count="1">${VS_SVG.gen}<span>Generate</span></button>
+          <button class="pm-vs-btn" data-vs="gen" data-shot="${escapeHtml(shot.id)}" data-count="3">${VS_SVG.gen}<span>3 variations</span></button>
+        </div>
+        <div class="pm-vs-takes">${takes || '<p class="pm-vs-hint">No takes yet.</p>'}</div>
+      </div>` : ''}
+    </div>`;
+  }
+
+  function paint() {
+    if (disposed) return;
+    if (!st.visible) { root.hidden = true; return; }
+    root.hidden = false;
+    const p = st.project;
+    const running = (p?.jobs || []).filter((j) => j.state === 'queued' || j.state === 'running');
+    const drafts = (p?.shots || []).filter((s) => !_vsTake(s)).map((s) => s.id);
+    root.innerHTML = `
+      <div class="pm-creative-section-head">
+        <h2>Video projects</h2>
+        <button class="pm-vs-icon" data-vs="keys" aria-label="Provider keys" title="Provider keys">${VS_SVG.key}</button>
+      </div>
+      <div class="pm-vs-chips">${providerChips()}</div>
+      ${keysSheet()}
+      ${!st.loaded ? '<p class="pm-vs-hint">Loading projects...</p>' : !st.projects.length ? `
+        <div class="pm-vs-empty">
+          <p>No video projects yet. Describe a video and Prom plans the shots.</p>
+          <button class="pm-vs-btn primary" data-vs="new">${VS_SVG.gen}<span>New project</span></button>
+        </div>` : `
+        <div class="pm-vs-row">
+          <select class="pm-vs-select" data-vs-project>${st.projects.map((x) => `<option value="${escapeHtml(x.id)}"${x.id === p?.id ? ' selected' : ''}>${escapeHtml(x.title)} · ${x.shots} shots</option>`).join('')}</select>
+          <button class="pm-vs-icon" data-vs="new" aria-label="New project" title="New project">${ICONS.plus}</button>
+        </div>`}
+      ${p ? `
+        <div class="pm-vs-toolbar">
+          <button class="pm-vs-icon" data-vs="undo" aria-label="Undo" title="Undo"${st.history.undo ? '' : ' disabled'}>${VS_SVG.undo}</button>
+          <button class="pm-vs-icon" data-vs="redo" aria-label="Redo" title="Redo"${st.history.redo ? '' : ' disabled'}>${VS_SVG.redo}</button>
+          <button class="pm-vs-icon" data-vs="plan" aria-label="Plan with Prom" title="Plan with Prom">${VS_SVG.chat}</button>
+          <span class="pm-vs-spacer"></span>
+          <span class="pm-vs-spent">${_vsUsd(p.budget?.spentUsd)}${p.budget?.capUsd ? ` / ${_vsUsd(p.budget.capUsd)}` : ''}</span>
+        </div>
+        ${st.busy ? `<p class="pm-vs-busy">${escapeHtml(st.busy)}...</p>` : ''}
+        ${running.length ? `<div class="pm-vs-jobs">${running.map((j) => `<div class="pm-vs-job"><span class="pm-vs-spin"></span><span>${escapeHtml(j.modelId)} · ${escapeHtml(j.state)}</span><button class="pm-vs-icon sm" data-vs="cancel-job" data-job="${escapeHtml(j.id)}" aria-label="Cancel job" title="Cancel">${VS_SVG.stop}</button></div>`).join('')}</div>` : ''}
+        <div class="pm-vs-shots">${p.shots.length ? p.shots.map(shotCard).join('') : '<p class="pm-vs-hint">No shots yet. Tap the chat icon to plan them with Prom.</p>'}</div>
+        <div class="pm-vs-row wrap">
+          ${drafts.length ? `<button class="pm-vs-btn" data-vs="gen-drafts">${VS_SVG.gen}<span>Generate ${drafts.length} draft${drafts.length === 1 ? '' : 's'}</span></button>` : ''}
+          <button class="pm-vs-btn" data-vs="assemble"${p.shots.some(_vsTake) ? '' : ' disabled'}>${VS_SVG.seq}<span>Assemble</span></button>
+          <button class="pm-vs-btn primary" data-vs="render"${p.clips?.length ? '' : ' disabled'}>${VS_SVG.export}<span>Render MP4</span></button>
+        </div>
+        ${st.renderPath ? `<video class="pm-vs-render" src="${escapeHtml(buildInlineMediaUrl(st.renderPath))}" controls playsinline></video>` : ''}
+      ` : ''}`;
+  }
+
+  async function onClick(e) {
+    const el = e.target.closest('[data-vs]');
+    if (!el || el.disabled) return;
+    const act = el.dataset.vs;
+    const p = st.project;
+    if (act === 'keys') { st.keysOpen = !st.keysOpen; paint(); return; }
+    if (act === 'save-keys') {
+      for (const input of root.querySelectorAll('[data-vs-key]')) {
+        const key = input.value.trim();
+        if (!key) continue;
+        const ok = await guard('Saving key', () => call(`/providers/${input.dataset.vsKey}/key`, { key }));
+        if (ok) pmToast(`${input.dataset.vsKey} key saved`, 'success');
+      }
+      try { st.providers = (await call('/providers')).providers || st.providers; } catch { /* ignore */ }
+      st.keysOpen = false; paint(); return;
+    }
+    if (act === 'new') {
+      const title = window.prompt('Project name', 'New video');
+      if (!title) return;
+      const res = await guard('Creating', () => call('', { title }));
+      if (res?.project) { st.projects = (await call('')).projects || []; await open(res.project.id); }
+      return;
+    }
+    if (act === 'toggle-shot') { st.openShot = st.openShot === el.dataset.shot ? '' : el.dataset.shot; paint(); return; }
+    if (!p) return;
+    if (act === 'plan') {
+      const brief = window.prompt('Describe the video (scenes, characters, mood):', p.brief || '');
+      if (!brief) return;
+      try { sessionStorage.setItem('pm_mobile_prefill_chat', `Plan my video project "${p.title}" (${p.id}) with video_project: ${brief} Target ${p.target?.aspect}. Build characters and a shot list with plan.setShots, show me the estimate, and wait for my approval before generating.`); } catch { /* ignore */ }
+      pmToast('Brief ready. Send it in chat.', 'success');
+      navigate?.('#mobile/chat');
+      return;
+    }
+    if (act === 'gen') { await generate([el.dataset.shot], Number(el.dataset.count) || 1); return; }
+    if (act === 'gen-drafts') { await generate(p.shots.filter((s) => !_vsTake(s)).map((s) => s.id), 1); return; }
+    if (act === 'use-take') { await ops([{ op: 'take.select', shotId: el.dataset.shot, takeId: el.dataset.take }], 'Selecting'); return; }
+    if (act === 'assemble') { await ops([{ op: 'timeline.assemble' }], 'Assembling'); pmToast('Cut assembled', 'success'); return; }
+    if (act === 'undo' || act === 'redo') { take(await guard(act === 'undo' ? 'Undoing' : 'Redoing', () => call(`/${p.id}/${act}`, {}))); paint(); return; }
+    if (act === 'cancel-job') { await guard('Canceling', () => call(`/${p.id}/jobs/${el.dataset.job}/cancel`, {})); await refresh(); return; }
+    if (act === 'render') {
+      const res = await guard('Rendering', () => call(`/${p.id}/render`, {}, 600000));
+      if (res?.path) { st.renderPath = res.path; pmToast('Render ready', 'success'); }
+      paint();
+    }
+  }
+  async function onChange(e) {
+    if (e.target.matches('[data-vs-project]')) { st.renderPath = ''; st.openShot = ''; await guard('Opening', () => open(e.target.value)); }
+  }
+  root.addEventListener('click', onClick);
+  root.addEventListener('change', onChange);
+
+  return {
+    setVisible(v) {
+      st.visible = !!v;
+      if (st.visible && !st.loaded) loadAll(); else { paint(); schedulePoll(); }
+    },
+    dispose() {
+      disposed = true;
+      clearTimeout(poll);
+      root.removeEventListener('click', onClick);
+      root.removeEventListener('change', onChange);
+    },
   };
 }

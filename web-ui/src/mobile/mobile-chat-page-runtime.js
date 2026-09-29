@@ -897,6 +897,15 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
   if (input) input.value = readComposerDraft(draftKeyFor());
+  // One-shot handoff from other routes (e.g. Creative → Video "Plan with Prom").
+  try {
+    const handoff = sessionStorage.getItem('pm_mobile_prefill_chat');
+    if (handoff && input) {
+      sessionStorage.removeItem('pm_mobile_prefill_chat');
+      input.value = handoff;
+      saveComposerDraft(draftKeyFor(), handoff);
+    }
+  } catch { /* storage unavailable */ }
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
   const targetChip = page.querySelector('#pm-chat-target-chip');
