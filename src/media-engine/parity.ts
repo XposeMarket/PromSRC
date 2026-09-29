@@ -32,6 +32,19 @@ function requireModel(id: string) {
   return m;
 }
 
+/**
+ * Approval re-calls must not duplicate shots: when a paid action stops at the
+ * cost gate it returns shotId, and the approved retry passes it back as
+ * pendingShotId. Reuse it while it still has no takes.
+ */
+async function reuseOrAddShot(ws: string, projectId: string, pendingShotId: string | undefined, fields: Partial<Shot> & Record<string, unknown>): Promise<string> {
+  if (pendingShotId) {
+    const s = loadProject(ws, projectId).shots.find((x) => x.id === pendingShotId);
+    if (s && !s.takes.length) return s.id;
+  }
+  return addShot(ws, projectId, fields);
+}
+
 async function addShot(ws: string, projectId: string, fields: Partial<Shot> & Record<string, unknown>): Promise<string> {
   const before = new Set(loadProject(ws, projectId).shots.map((s) => s.id));
   await applyOps(ws, projectId, [{ op: 'shot.add', ...fields } as any], 'agent');
@@ -60,7 +73,7 @@ async function sourceDuration(ws: string, projectId: string, ref: string): Promi
 
 export async function recast(ws: string, projectId: string, args: {
   sourcePath?: string; shotId?: string; takeId?: string; prompt: string; characterId?: string;
-  mode?: 'edit' | 'motion' | 'swap'; modelId?: string; approved?: boolean;
+  mode?: 'edit' | 'motion' | 'swap'; modelId?: string; approved?: boolean; pendingShotId?: string;
 }): Promise<GenerateResult & { shotId: string; modelId: string }> {
   const mode = args.mode || 'edit';
   const source = args.sourcePath || (args.shotId ? (args.takeId ? `${args.shotId}:${args.takeId}` : args.shotId) : '');
@@ -70,7 +83,7 @@ export async function recast(ws: string, projectId: string, args: {
   if ((mode === 'motion' || mode === 'swap') && !args.characterId) throw new Error(`recast mode ${mode} needs characterId (the new character/element; its anchor is sent as the reference image).`);
   if (args.characterId && !loadProject(ws, projectId).characters.some((c) => c.id === args.characterId)) throw new Error(`Character "${args.characterId}" not found.`);
   const dur = Math.max(1, Math.min(60, Math.round(await sourceDuration(ws, projectId, source))));
-  const shotId = await addShot(ws, projectId, {
+  const shotId = await reuseOrAddShot(ws, projectId, args.pendingShotId, {
     title: `Recast (${mode})`, prompt: String(args.prompt || ''), sourceVideo: source, modelId, durationSec: dur,
     characterIds: args.characterId ? [args.characterId] : [], anchorMode: 'reference',
   });
@@ -81,7 +94,7 @@ export async function recast(ws: string, projectId: string, args: {
 // ── lip-sync / talking photo ───────────────────────────────────────────
 
 export async function lipsync(ws: string, projectId: string, args: {
-  shotId?: string; sourcePath?: string; audioPath?: string; line?: string; modelId?: string; approved?: boolean;
+  shotId?: string; sourcePath?: string; audioPath?: string; line?: string; modelId?: string; approved?: boolean; pendingShotId?: string;
 }): Promise<GenerateResult & { shotId: string; modelId: string }> {
   const modelId = args.modelId || DEFAULT_MODELS.lipsync;
   requireModel(modelId);
@@ -104,7 +117,7 @@ export async function lipsync(ws: string, projectId: string, args: {
   }
   if (!args.sourcePath) throw new Error('lipsync needs shotId (with a video take) or sourcePath (workspace video).');
   const dur = Math.max(1, Math.min(60, Math.round(await sourceDuration(ws, projectId, args.sourcePath))));
-  const shotId = await addShot(ws, projectId, {
+  const shotId = await reuseOrAddShot(ws, projectId, args.pendingShotId, {
     title: 'Lip-sync', prompt: '', sourceVideo: args.sourcePath, audio: args.audioPath, line: args.line?.trim(), modelId, durationSec: dur,
   });
   const r = await generateShots(ws, projectId, { shotIds: [shotId], approved: args.approved === true });
@@ -112,14 +125,14 @@ export async function lipsync(ws: string, projectId: string, args: {
 }
 
 export async function talkingPhoto(ws: string, projectId: string, args: {
-  imagePath?: string; characterId?: string; line?: string; audioPath?: string; prompt?: string; modelId?: string; approved?: boolean;
+  imagePath?: string; characterId?: string; line?: string; audioPath?: string; prompt?: string; modelId?: string; approved?: boolean; pendingShotId?: string;
 }): Promise<GenerateResult & { shotId: string; modelId: string }> {
   const modelId = args.modelId || DEFAULT_MODELS.talkingPhoto;
   requireModel(modelId);
   if (!args.imagePath && !args.characterId) throw new Error('talking_photo needs imagePath (a portrait) or characterId (uses its anchor).');
   if (!args.line?.trim() && !args.audioPath) throw new Error('talking_photo needs line (auto-voiced) or audioPath.');
   const words = (args.line || '').trim().split(/\s+/).filter(Boolean).length;
-  const shotId = await addShot(ws, projectId, {
+  const shotId = await reuseOrAddShot(ws, projectId, args.pendingShotId, {
     title: 'Talking photo', prompt: args.prompt || 'The person talks naturally to camera with subtle head movement and expressive face.',
     startImage: args.imagePath, characterIds: args.characterId ? [args.characterId] : [], anchorMode: 'start',
     line: args.line?.trim(), audio: args.audioPath, modelId, durationSec: Math.max(2, Math.min(30, Math.ceil(words / 2.6) || 5)),
@@ -131,12 +144,16 @@ export async function talkingPhoto(ws: string, projectId: string, args: {
 // ── draw-to-video ──────────────────────────────────────────────────────
 
 export async function drawToVideo(ws: string, projectId: string, args: {
-  sketchPath?: string; dataBase64?: string; prompt: string; modelId?: string; approved?: boolean; durationSec?: number;
+  sketchPath?: string; dataBase64?: string; prompt: string; modelId?: string; approved?: boolean; durationSec?: number; pendingShotId?: string;
 }): Promise<any> {
-  if (!args.sketchPath && !args.dataBase64) throw new Error('draw_to_video needs sketchPath or dataBase64 (PNG).');
-  const imp = await importAsset(ws, projectId, { path: args.sketchPath, dataBase64: args.dataBase64, filename: 'sketch.png', role: 'sketch' });
+  // Approved retry of a gated call: reuse the sketch shot instead of importing again.
+  const pending = args.pendingShotId ? loadProject(ws, projectId).shots.find((s) => s.id === args.pendingShotId && !s.takes.length && (s as any).sketch) : undefined;
+  if (!pending && !args.sketchPath && !args.dataBase64) throw new Error('draw_to_video needs sketchPath or dataBase64 (PNG).');
+  const imp = pending
+    ? { assetPath: String((pending as any).sketch) }
+    : await importAsset(ws, projectId, { path: args.sketchPath, dataBase64: args.dataBase64, filename: 'sketch.png', role: 'sketch' });
   const p = loadProject(ws, projectId);
-  const shotId = await addShot(ws, projectId, {
+  const shotId = pending ? pending.id : await addShot(ws, projectId, {
     title: 'Sketch', prompt: String(args.prompt || 'Bring this scene to life'), sketch: imp.assetPath,
     modelId: args.modelId, durationSec: Math.max(1, Math.min(15, Number(args.durationSec) || 5)),
   });
