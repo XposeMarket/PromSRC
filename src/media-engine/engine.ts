@@ -226,6 +226,25 @@ async function failJob(workspacePath: string, projectId: string, jobId: string, 
   });
 }
 
+/** Rate-limit (429 / resource-exhausted / "too many requests") errors are transient. */
+export function isRateLimitError(e: unknown): boolean {
+  const s = String((e as any)?.message || e || '');
+  return /resource-exhausted|too many requests|rate.?limit|\b429\b/i.test(s);
+}
+
+/** Retry fn on provider rate limits with jittered exponential backoff (xAI teams cap at 2 req/s). */
+export async function withRateLimitRetry<T>(fn: () => Promise<T>, tries = 5, baseMs = 1500): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); } catch (e) {
+      last = e;
+      if (!isRateLimitError(e) || i === tries - 1) throw e;
+      await sleep(baseMs * 2 ** i + Math.floor(Math.random() * 700));
+    }
+  }
+  throw last;
+}
+
 async function runJob(workspacePath: string, projectId: string, jobId: string, resume = false): Promise<void> {
   const key = `${projectId}:${jobId}`;
   if (running.has(key)) return;
@@ -240,7 +259,7 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
     if (!resume || !job.requestId) {
       await patchJob(workspacePath, projectId, jobId, { state: 'running' });
       const input = job.input as unknown as ShotInput;
-      const result = await submit(model, { ...input, count: job.count }, { outputDir: toWorkspaceRel(workspacePath, mediaDir(workspacePath, projectId)) });
+      const result = await withRateLimitRetry(() => submit(model, { ...input, count: job!.count }, { outputDir: toWorkspaceRel(workspacePath, mediaDir(workspacePath, projectId)) }));
       if (result.state === 'done') {
         await finishJob(workspacePath, projectId, { ...job, requestId: result.requestId }, model, result.outputs || []);
         return;

@@ -121,9 +121,10 @@ async function tts(text: string, voice: { provider: 'openai' | 'xai'; voice: str
     return { buffer: r.buffer, ext: r.mimeType.includes('wav') ? '.wav' : '.mp3', provider: 'xai', voice: resolved.voice };
   };
   const order = voice.provider === 'xai' ? [tryXai, tryOpenAi] : [tryOpenAi, tryXai];
-  let last: any;
-  for (const fn of order) { try { return await fn(); } catch (e) { last = e; } }
-  throw last || new Error('No TTS provider available.');
+  const errs: string[] = [];
+  for (const fn of order) { try { return await fn(); } catch (e: any) { errs.push(String(e?.message || e).slice(0, 300)); } }
+  // Report every provider's failure: the last one alone hid the real cause (e.g. OpenAI 401 behind "xAI not connected").
+  throw new Error(`Voiceover failed on every TTS provider: ${errs.join(' || ') || 'none available'}`);
 }
 
 /** Voice every shot that has a line; place clips on the VO track aligned to the edit. */
@@ -295,9 +296,13 @@ export async function qaTake(ws: string, p: VideoProject, shot: Shot, take: Take
     }
   } else frames.push(toDataUrl(abs));
   const { executeVisionJudge } = await import('../gateway/tools/handlers/xai-handlers.js');
-  const res = await executeVisionJudge(QA_PROMPT(shot, p), frames, { maxTokens: 300 });
-  if (!res.success || !res.text) throw new Error(`QA vision failed: ${res.error || 'no response'}`);
-  return { ...parseQa(res.text), model: res.model || 'vision' };
+  const { withRateLimitRetry } = await import('./engine.js');
+  const res = await withRateLimitRetry(async () => {
+    const r = await executeVisionJudge(QA_PROMPT(shot, p), frames, { maxTokens: 300 });
+    if (!r.success || !r.text) throw new Error(`QA vision failed: ${r.error || 'no response'}`);
+    return r;
+  });
+  return { ...parseQa(res.text || ''), model: res.model || 'vision' };
 }
 
 export async function qa(ws: string, projectId: string, args: { shotIds?: string[] } = {}): Promise<{ results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[] }>; failed: string[] }> {
@@ -305,11 +310,16 @@ export async function qa(ws: string, projectId: string, args: { shotIds?: string
   const results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[]; model: string }> = [];
   const failed: string[] = [];
   const shots = p.shots.filter((s) => (!args.shotIds?.length || args.shotIds.includes(s.id)) && selectedTake(s));
-  await Promise.all(shots.map(async (shot) => {
-    const take = selectedTake(shot)!;
-    try { results.push({ shotId: shot.id, title: shot.title, takeId: take.id, ...(await qaTake(ws, p, shot, take)) }); }
-    catch (e: any) { failed.push(`${shot.title}: ${String(e?.message || e).slice(0, 200)}`); }
-  }));
+  // Two at a time: vision providers rate-limit per team (xAI: 2 req/s).
+  const queue = [...shots];
+  const worker = async () => {
+    for (let shot = queue.shift(); shot; shot = queue.shift()) {
+      const take = selectedTake(shot)!;
+      try { results.push({ shotId: shot.id, title: shot.title, takeId: take.id, ...(await qaTake(ws, p, shot, take)) }); }
+      catch (e: any) { failed.push(`${shot.title}: ${String(e?.message || e).slice(0, 200)}`); }
+    }
+  };
+  await Promise.all([worker(), worker()]);
   await mutateProject(ws, projectId, 'qa', (proj) => {
     for (const r of results) {
       const t = proj.shots.find((s) => s.id === r.shotId)?.takes.find((x) => x.id === r.takeId);
@@ -580,8 +590,12 @@ export async function runAutopilot(ws: string, projectId: string, args: {
     // Voiceover before video so shot lengths fit the lines.
     if (want('voiceover') && loadProject(ws, projectId).shots.some((s) => s.line?.trim())) {
       await progress('voiceover', 'running');
-      const v = await voiceover(ws, projectId, {});
-      await progress('voiceover', 'done', `${v.voiced.length} line(s) · ${v.voice}`);
+      // A dead TTS login must not throw away the paid anchors/storyboards: keep going
+      // without VO (captions then skip) and say why on the card.
+      let v: Awaited<ReturnType<typeof voiceover>> | null = null;
+      try { v = await voiceover(ws, projectId, {}); }
+      catch (e: any) { await progress('voiceover', 'skipped', `TTS unavailable: ${String(e?.message || e).slice(0, 160)}`); }
+      if (v) await progress('voiceover', 'done', `${v.voiced.length} line(s) · ${v.voice}`);
     } else await progress('voiceover', 'skipped', 'no lines');
 
     // Video.
