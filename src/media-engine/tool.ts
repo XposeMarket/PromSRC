@@ -74,6 +74,7 @@ export function getVideoProjectToolDef(): any {
           jobIds: { type: 'array', items: { type: 'string' } },
           jobId: { type: 'string' },
           timeoutMs: { type: 'integer', description: 'For wait (max 600000).' },
+          pendingShotId: { type: 'string', description: 'recast/lipsync/talking_photo/draw_to_video: the shotId returned by a needsApproval response; pass it with approved:true so the approved retry reuses that shot instead of creating a duplicate.' },
           kind: { type: 'string', enum: ['video', 'image'], description: 'models filter' },
           provider: { type: 'string', enum: ['xai', 'openai', 'fal', 'higgsfield'], description: 'models filter / import_models / set_key provider' },
           endpoint: { type: 'string', description: 'import_models: fal endpoint id or Higgsfield path (omit for all Higgsfield models).' },
@@ -341,16 +342,16 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       return { presets: listPresets(args.group) };
     case 'recast': {
       const pid = need(args.projectId, 'projectId');
-      const r: any = await parity.recast(ws, pid, { sourcePath: args.sourcePath, shotId: args.shotId, takeId: args.takeId, prompt: String(args.prompt || ''), characterId: args.characterId, mode: args.mode, modelId: args.modelId, approved: args.approved === true });
+      const r: any = await parity.recast(ws, pid, { sourcePath: args.sourcePath, shotId: args.shotId, takeId: args.takeId, prompt: String(args.prompt || ''), characterId: args.characterId, mode: args.mode, modelId: args.modelId, approved: args.approved === true, pendingShotId: args.pendingShotId });
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Recast take is ready.', args.notify === true);
       return wake ? { ...r, wake } : r;
     }
     case 'lipsync':
-      return await parity.lipsync(ws, need(args.projectId, 'projectId'), { shotId: args.shotId, sourcePath: args.sourcePath, audioPath: args.audioPath, line: args.line, modelId: args.modelId, approved: args.approved === true });
+      return await parity.lipsync(ws, need(args.projectId, 'projectId'), { shotId: args.shotId, sourcePath: args.sourcePath, audioPath: args.audioPath, line: args.line, modelId: args.modelId, approved: args.approved === true, pendingShotId: args.pendingShotId });
     case 'talking_photo':
-      return await parity.talkingPhoto(ws, need(args.projectId, 'projectId'), { imagePath: args.imagePath, characterId: args.characterId, line: args.line, audioPath: args.audioPath, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true });
+      return await parity.talkingPhoto(ws, need(args.projectId, 'projectId'), { imagePath: args.imagePath, characterId: args.characterId, line: args.line, audioPath: args.audioPath, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true, pendingShotId: args.pendingShotId });
     case 'draw_to_video':
-      return await parity.drawToVideo(ws, need(args.projectId, 'projectId'), { sketchPath: args.sketchPath, dataBase64: args.dataBase64, prompt: String(args.prompt || ''), modelId: args.modelId, approved: args.approved === true });
+      return await parity.drawToVideo(ws, need(args.projectId, 'projectId'), { sketchPath: args.sketchPath, dataBase64: args.dataBase64, prompt: String(args.prompt || ''), modelId: args.modelId, approved: args.approved === true, pendingShotId: args.pendingShotId });
     case 'upscale':
       return await parity.upscale(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, factor: args.factor, modelId: args.modelId, approved: args.approved === true });
     case 'foley':

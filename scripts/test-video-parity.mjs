@@ -187,7 +187,11 @@ const pid = await mkProject();
   const data = fs.readFileSync(img).toString('base64');
   const gate = await run({ action: 'draw_to_video', projectId: d.id, dataBase64: data, prompt: 'a castle at dusk' });
   assert.equal(gate.needsApproval, true);
-  const r = await run({ action: 'draw_to_video', projectId: d.id, sketchPath: 'uploads/face.png', prompt: 'a castle at dusk', approved: true });
+  assert.ok(gate.shotId, 'gate returns the pending shot');
+  // Approved retry reuses the gated shot + sketch (no duplicate shot, no re-upload).
+  const r = await run({ action: 'draw_to_video', projectId: d.id, pendingShotId: gate.shotId, prompt: 'a castle at dusk', approved: true });
+  assert.equal(r.shotId, gate.shotId, 'approved retry reuses the pending shot');
+  assert.equal(project.loadProject(ws, d.id).shots.length, 1, 'no duplicate sketch shot');
   const ib = lastBody(/test-image/).body;
   assert.match(ib.prompt, /Turn this sketch into a finished/);
   await engine.waitForJobs(ws, d.id, r.jobs.map((j) => j.id), 30_000);

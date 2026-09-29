@@ -176,8 +176,12 @@ function mountCard(el) {
     const na = res.needsApproval;
     if (na) {
       const lr = res.lastRun?.needsApproval;
+      // Paid actions that create a shot return its id at the gate; the approved
+      // retry reuses it (no duplicate shot, no re-upload of the sketch).
+      const retryArgs = res.shotId ? { ...args, pendingShotId: res.shotId } : args;
+      if (retryArgs.pendingShotId && retryArgs.dataBase64) delete retryArgs.dataBase64;
       st.actPending = {
-        action, args,
+        action, args: retryArgs,
         usd: Number(lr?.usd ?? na?.usd ?? res.estimateUsd ?? res.totalUsd ?? res.estimate?.total ?? 0),
         breakdown: lr?.breakdown || na?.breakdown || res.breakdown || [],
       };
