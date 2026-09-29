@@ -29,7 +29,10 @@ export const ANTHROPIC_OVERLOAD_MAX_RETRIES = 3;
 // long a streamed reply may run; see ANTHROPIC_STREAM_IDLE_TIMEOUT_MS.
 export const ANTHROPIC_HEADER_TIMEOUT_MS = 180_000;
 // A live stream that sends nothing (not even a ping) for this long is dead.
-export const ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 120_000;
+export const ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = Math.max(
+  50,
+  Number(process.env.PROMETHEUS_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS) || 120_000,
+);
 
 export function anthropicOverloadDelayMs(retry: number): number {
   return Math.min(20_000, 2_000 * 2 ** Math.max(0, retry - 1));
@@ -1228,13 +1231,27 @@ export class AnthropicAdapter implements LLMProvider {
     // Idle watchdog: abort only when the stream goes silent, never because a
     // healthy stream is simply long. Anthropic sends ping events during long
     // generations, so a multi-minute silence means a dead connection.
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    //
+    // Each read owns its own timer. The first version shared one `idleTimer`
+    // variable and cleared it in a `.finally()` that ran AFTER the loop had
+    // already armed the next read's timer, so every read cleared its
+    // successor's timer and the very first timer was never cleared. It fired
+    // 120s into every stream, cancelled the reader, and the stream ended as a
+    // silent `incomplete_stream` (2026-09-29: repeated ~121s out=0 rounds ->
+    // "model repeatedly returned an empty or incomplete response").
     const readWithIdleTimeout = () => new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
-      idleTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
+        // A genuinely dead connection ends the stream; the missing message_stop
+        // then surfaces as `incomplete_stream`, which ModelResponseRecovery
+        // retries with tools intact instead of failing the whole turn.
+        console.warn(`[anthropic] ${model}: stream stalled, no data for ${Math.round(ANTHROPIC_STREAM_IDLE_TIMEOUT_MS / 1000)}s; ending stream as incomplete`);
         reader.cancel().catch(() => undefined);
-        reject(new Error(`${this.id} stream stalled: no data for ${Math.round(ANTHROPIC_STREAM_IDLE_TIMEOUT_MS / 1000)}s`));
+        resolve({ done: true, value: undefined } as Awaited<ReturnType<typeof reader.read>>);
       }, ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
-      reader.read().then(resolve, reject).finally(() => clearTimeout(idleTimer));
+      reader.read().then(
+        (result) => { clearTimeout(timer); resolve(result); },
+        (err) => { clearTimeout(timer); reject(err); },
+      );
     });
 
     try {
