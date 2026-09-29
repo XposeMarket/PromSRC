@@ -22,6 +22,7 @@ import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worke
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 import { registerStartupAsyncRequest } from '../startup-async-diagnostics';
 import { registerCreativeCompositionRoutes } from '../routes/creative-composition.routes';
+import { registerVideoProjectRoutes } from '../routes/video-project.routes';
 import { triggerHookRawBodyMiddleware } from '../routes/triggers.router';
 
 const startedAt = Date.now();
@@ -202,6 +203,8 @@ export function createApp(): express.Application {
   // the small route family at app creation so the editor and agent tools share
   // one persistent multi-clip contract instead of maintaining a UI-only bridge.
   registerCreativeCompositionRoutes(app);
+  // Generative video projects (shots/takes/timeline). Server-owned, op-based.
+  registerVideoProjectRoutes(app);
 
   app.get('/api/health', (_req, res) => {
     const memoryMaintenance = getMemoryIndexRefreshWorkerStatus();

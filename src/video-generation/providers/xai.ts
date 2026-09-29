@@ -14,8 +14,12 @@ import {
   resolveVideoInput,
 } from '../utils.js';
 
-const DEFAULT_MODEL = 'grok-imagine-video';
-const MODEL_IDS = ['grok-imagine-video'] as const;
+const DEFAULT_MODEL = 'grok-imagine-video-1.5';
+const MODEL_IDS = ['grok-imagine-video-1.5', 'grok-imagine-video-1.5-preview', 'grok-imagine-video'] as const;
+/** Only the 1.5 family renders 1080p; older models are capped at 720p. */
+function supports1080p(model: string): boolean {
+  return model.startsWith('grok-imagine-video-1.5');
+}
 const DEFAULT_ENDPOINT = 'https://api.x.ai/v1';
 
 const XAI_ASPECT_RATIO_BY_PROMETHEUS: Record<string, string> = {
@@ -171,7 +175,7 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
       } else {
         body.duration = request.duration;
         body.aspect_ratio = aspectRatio;
-        body.resolution = request.resolution;
+        body.resolution = request.resolution === '1080p' && !supports1080p(model) ? '720p' : request.resolution;
 
         if (request.image) {
           const imageInput = await resolveVideoInput(request.image);

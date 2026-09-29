@@ -196,6 +196,15 @@ export function resolveToolCapabilityMetadata(
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
     return EXTERNAL_WRITE;
   }
+  // Generative video projects: reads are local; set_key stores a credential;
+  // generate/generate_anchor spend money with an external provider.
+  if (name === 'video_project') {
+    const action = String(args?.action || '').trim().toLowerCase();
+    if (['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame'].includes(action)) return READ_ONLY;
+    if (action === 'generate' || action === 'generate_anchor' || action === 'set_key') return EXTERNAL_WRITE;
+    if (action === 'delete') return DESTRUCTIVE;
+    return LOCAL_WRITE;
+  }
   // Authenticated-user lookup: reads the credential's own profile only.
   if (name === 'x_api_me') return CREDENTIAL_READ_ONLY;
   // Plugin import: reads are local scans; install/uninstall write skills, MCP

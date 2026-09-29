@@ -30,6 +30,7 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'video_social_cut',
   'generate_image',
   'generate_video',
+  'video_project',
   'analyze_image',
   'analyze_video',
   'video_analyze_imported_video',
@@ -116,6 +117,15 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
     const { name, args, deps, sessionId } = ctx;
 
     switch (name) {
+      case 'video_project': {
+        const { executeVideoProject } = await import('../../../media-engine/tool.js');
+        try {
+          const out = await executeVideoProject(args || {}, { workspacePath: ctx.workspacePath });
+          return { name, args, result: JSON.stringify(out, null, 1), error: false };
+        } catch (e: any) {
+          return { name, args, result: `video_project ${String(args?.action || '')} failed: ${String(e?.message || e)}`, error: true };
+        }
+      }
       case 'chatgpt_sandbox': {
         const { executeChatGPTSandbox } = await import('../../../tools/chatgpt-sandbox.js');
         const out = await executeChatGPTSandbox(args, { abortSignal: (deps as any)?.abortSignal });

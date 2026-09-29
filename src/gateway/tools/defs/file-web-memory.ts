@@ -1,6 +1,7 @@
 // src/gateway/tools/defs/file-web-memory.ts
 // Tool definitions for file operations, web tools, and memory tools.
 
+import { getVideoProjectToolDef } from '../../../media-engine/tool.js';
 import { filterPublicBuildToolDefs } from '../../../runtime/distribution.js';
 
 export function getFileWebMemoryTools(): any[] {
@@ -2084,6 +2085,7 @@ export function getFileWebMemoryTools(): any[] {
         },
       },
     },
+    getVideoProjectToolDef(),
     {
       type: 'function',
       function: {
@@ -2166,9 +2168,9 @@ export function getFileWebMemoryTools(): any[] {
             mode: { type: 'string', enum: ['generate', 'edit', 'extend'], description: 'Video request mode. Defaults to generate, or edit when video is provided.' },
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired video aspect ratio' },
             duration: { type: 'integer', minimum: 1, maximum: 15, description: 'Video duration in seconds. xAI supports 1-15 for generation, max 10 for reference/extension.' },
-            resolution: { type: 'string', enum: ['480p', '720p'], description: 'Video resolution' },
-            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Optional video provider override. Use xai for Grok Imagine Video.' },
-            model: { type: 'string', description: 'Optional video model override, e.g. grok-imagine-video' },
+            resolution: { type: 'string', enum: ['480p', '720p', '1080p'], description: 'Video resolution. 1080p requires grok-imagine-video-1.5.' },
+            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Optional video provider override. Use xai for Grok Imagine Video. For fal/Higgsfield models and multi-shot projects use video_project.' },
+            model: { type: 'string', description: 'Optional video model override: grok-imagine-video-1.5 (default) or grok-imagine-video' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/videos' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the video only in Prometheus cache' },
             poll_interval_ms: { type: 'integer', minimum: 1000, maximum: 30000, description: 'Optional polling interval in milliseconds' },
