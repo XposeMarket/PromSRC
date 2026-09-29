@@ -10,6 +10,7 @@ import {
   publicEndpointView,
   verifyWebhookRequest,
 } from './webhook-endpoints';
+import { isProviderErrorText, isTransientProviderFailure } from './transient-failure';
 import { buildTriggerRuleFromInput } from './trigger-rule-input';
 import { TriggerEngine } from './trigger-engine';
 import { JsonTriggerStore } from './trigger-store';
@@ -81,6 +82,20 @@ async function main(): Promise<void> {
   assert.deepEqual(otherBranch.matchedRuleIds, [], 'condition filters base branch');
   const otherEndpoint = await engine.dispatch(webhookTriggerEvent({ provider: 'someone-else', deliveryId: 'd-3', eventType: 'pull_request.opened', payload: parsed }));
   assert.deepEqual(otherEndpoint.matchedRuleIds, [], 'endpoint scoping');
+
+  // Provider-outage classification for trigger agent retries.
+  assert.equal(isTransientProviderFailure('Error: openai_codex API error 503'), true, '503 retried');
+  assert.equal(isTransientProviderFailure('anthropic overloaded_error'), true, 'overloaded retried');
+  assert.equal(isTransientProviderFailure('Error: openai_codex API error 429: {"type":"usage_limit_reached"}'), false, 'usage limit not retried');
+  assert.equal(isTransientProviderFailure('X API 402 credits depleted'), false, 'credits not retried');
+  assert.equal(isTransientProviderFailure('Posted P2 and R4. ' + 'x'.repeat(700) + ' API error 503'), false, 'long real output not retried');
+  assert.equal(isTransientProviderFailure('Posted R4: https://x.com/Raulinvests/status/1'), false, 'success not retried');
+  const xaiCredits = 'Error: xai API error 403 via raulinvests: {"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}';
+  assert.equal(isTransientProviderFailure(xaiCredits), false, 'xai spending limit not retried');
+  assert.equal(isProviderErrorText(xaiCredits), true, 'xai spending limit counts as failed run');
+  assert.equal(isProviderErrorText('Error: openai_codex API error 503'), true, 'bare 503 counts as failed');
+  assert.equal(isProviderErrorText('quiet. next scan 17:05 ET'), false, 'normal output is not an error');
+  assert.equal(isProviderErrorText('Posted P2. Error: none'), false, 'mid-text error word is not an error');
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('PASS webhook endpoints + trigger rules (auth, envelope, rule input, dedupe, conditions)');
