@@ -5,6 +5,7 @@
  */
 
 import { getAllEffects, getEffect } from '../effects/registry.js';
+import { icon } from '../icons.js';
 
 function _safe(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -42,7 +43,7 @@ export function createEffectsPanel({ container, store, getScene, applyOps }) {
                 return `
                   <div class="ce-effect-chip">
                     <span>${EFFECT_ICONS[ef.id] || '🔧'} ${_safe(def?.label || ef.id)}</span>
-                    <button class="ce-effect-chip-remove" data-remove-idx="${i}" title="Remove">✕</button>
+                    <button type="button" class="ce-effect-chip-remove ce-icon-btn" data-remove-idx="${i}" title="Remove effect" aria-label="Remove effect">${icon('close', 12)}</button>
                   </div>
                 `;
               }).join('')}

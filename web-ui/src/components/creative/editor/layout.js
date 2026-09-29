@@ -10,6 +10,8 @@
  * Sizes persisted in localStorage under 'prometheus_ce_layout'.
  */
 
+import { icon } from './icons.js';
+
 const LS_KEY = 'prometheus_ce_layout';
 const MIN_LEFT_W     = 180;
 const MAX_LEFT_W     = 560;
@@ -18,11 +20,12 @@ const MAX_RIGHT_W    = 560;
 const MIN_TIMELINE_H = 120;
 const MAX_TIMELINE_H = 500;
 
-const LEFT_TABS  = ['media', 'audio', 'text', 'shapes', 'effects', 'filters', 'captions'];
-const RIGHT_TABS = ['properties', 'keyframes'];
+const LEFT_TABS  = ['studio', 'media', 'audio', 'text', 'shapes', 'effects', 'filters', 'captions'];
+const RIGHT_TABS = ['shot', 'properties', 'keyframes'];
 
-const LEFT_TAB_LABELS  = { media:'Media', audio:'Audio', text:'Text', shapes:'Shapes', effects:'Effects', filters:'Filters', captions:'Captions' };
-const RIGHT_TAB_LABELS = { properties:'Properties', keyframes:'Keyframes' };
+const LEFT_TAB_LABELS  = { studio:'Studio', media:'Media', audio:'Audio', text:'Text', shapes:'Shapes', effects:'Effects', filters:'Filters', captions:'Captions' };
+const RIGHT_TAB_LABELS = { shot:'Shot', properties:'Properties', keyframes:'Keyframes' };
+const TAB_ICONS = { studio:'sparkles', media:'film', audio:'music', text:'type', shapes:'shapes', effects:'wand', filters:'sliders', captions:'captions', shot:'clapper', properties:'settings', keyframes:'diamond' };
 
 function loadSizes() {
   try {
@@ -43,7 +46,7 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function makeTabs(tabs, labels, activeTab, side) {
   return tabs.map(t =>
-    `<button class="ce-tab${t === activeTab ? ' ce-tab--active' : ''}" data-ce-tab="${t}" data-ce-tab-side="${side}">${labels[t]}</button>`
+    `<button type="button" class="ce-tab ce-tab--icon${t === activeTab ? ' ce-tab--active' : ''}" data-ce-tab="${t}" data-ce-tab-side="${side}" title="${labels[t]}" aria-label="${labels[t]}">${icon(TAB_ICONS[t] || 'grid', 16)}<span class="ce-tab__label">${labels[t]}</span></button>`
   ).join('');
 }
 function makePanels(tabs, activeTab) {
@@ -61,11 +64,11 @@ export function createEditorLayout(container) {
     <!-- ROW 1: Header bar -->
     <header class="ce-editor-header">
       <div class="ce-editor-header__left">
-        <button class="ce-hdr-btn" data-ce-hdr="undo" title="Undo (Ctrl+Z)">↩</button>
-        <button class="ce-hdr-btn" data-ce-hdr="redo" title="Redo (Ctrl+Y)">↪</button>
+        <button type="button" class="ce-hdr-btn" data-ce-hdr="undo" title="Undo (Ctrl+Z)" aria-label="Undo">${icon('undo', 15)}</button>
+        <button type="button" class="ce-hdr-btn" data-ce-hdr="redo" title="Redo (Ctrl+Y)" aria-label="Redo">${icon('redo', 15)}</button>
       </div>
       <div class="ce-editor-header__center">
-        <span class="ce-editor-title">Prometheus Editor</span>
+        <span class="ce-editor-title" data-ce-editor-title>Prometheus Studio</span>
       </div>
       <div class="ce-editor-header__right" data-ce-export-host></div>
     </header>
@@ -73,9 +76,9 @@ export function createEditorLayout(container) {
     <!-- ROW 2: Main content -->
     <div class="ce-pane ce-pane--left" data-pane="left">
       <nav class="ce-tab-bar" data-ce-tab-bar="left">
-        ${makeTabs(LEFT_TABS, LEFT_TAB_LABELS, 'media', 'left')}
+        ${makeTabs(LEFT_TABS, LEFT_TAB_LABELS, 'studio', 'left')}
       </nav>
-      <div class="ce-tab-body">${makePanels(LEFT_TABS, 'media')}</div>
+      <div class="ce-tab-body">${makePanels(LEFT_TABS, 'studio')}</div>
     </div>
 
     <div class="ce-resize-handle ce-resize-handle--col" data-resize="left" title="Drag to resize panel"></div>
@@ -180,6 +183,8 @@ export function createEditorLayout(container) {
     root,
     panes: {
       // Left tabs
+      studio:     root.querySelector('#ce-panel-studio'),
+      shot:       root.querySelector('#ce-panel-shot'),
       media:      root.querySelector('#ce-panel-media'),
       audio:      root.querySelector('#ce-panel-audio'),
       text:       root.querySelector('#ce-panel-text'),

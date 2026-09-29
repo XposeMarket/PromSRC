@@ -27,6 +27,8 @@ import { createShapesPanel } from './panels/shapes-panel.js';
 import { createEffectsPanel } from './panels/effects-panel.js';
 import { createFiltersPanel } from './panels/filters-panel.js';
 import { syncCreativeAudioPreviewToTimeline, stopCreativeAudioPreview } from '../audioEngine.js';
+import { icon } from './icons.js';
+import { createStudioPanel } from './studio/panel.js';
 
 // ── Feature flag ─────────────────────────────────────────────────────────────
 // Server config (creative_editor.enabled) wins; localStorage is dev override.
@@ -137,6 +139,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
   let _effectsPanel = null;
   let _filtersPanel = null;
   let _playbackOverlay = null;
+  let _studioPanel = null;
 
   function replaceScene(nextScene) {
     const target = getScene();
@@ -233,6 +236,16 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
 
     _subsPanel = createSubtitlesPanel({
       container: p.captions, store, getScene, applyOps: applyEditorOps,
+    });
+
+    _studioPanel = createStudioPanel({
+      container: p.studio,
+      inspector: p.shot,
+      store,
+      getScene,
+      applyOps: applyEditorOps,
+      switchTab: (side, tab) => layout?.switchTab(side, tab),
+      setTitle: (text) => { const t = layout?.root?.querySelector('[data-ce-editor-title]'); if (t) t.textContent = text || 'Prometheus Studio'; },
     });
 
     // ── Center: viewport + renderer ──────────────────────────────────────────
@@ -384,8 +397,10 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
   function mountExportBtn(panes) {
     _exportDialog = createExportDialog({ store, getScene });
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'ce-export-trigger-btn';
-    btn.textContent = '⬆ Export';
+    btn.title = 'Export video';
+    btn.innerHTML = `${icon('export', 14)}<span>Export</span>`;
     btn.addEventListener('click', () => _exportDialog.open());
     // Place export button in the header's right slot (not on the grid root)
     const host = panes.exportHost || panes.preview?.parentElement;
@@ -400,7 +415,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     const overlay = document.createElement('div');
     overlay.className = 'ce-playback-overlay';
     overlay.innerHTML = `
-      <button class="ce-ctrl-btn" data-ce-action="play" title="Play / Pause">▶</button>
+      <button type="button" class="ce-ctrl-btn" data-ce-action="play" title="Play / Pause (Space)" aria-label="Play">${icon('play', 14)}</button>
       <div class="ce-timecode" data-ce-timecode>0:00.000</div>
       <input type="range" class="ce-scrubber" data-ce-scrubber
         min="0" max="${store.getState().durationMs || 5000}" step="10" value="0">
@@ -418,7 +433,11 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       const t = Math.round(s.timeMs);
       if (timecode) timecode.textContent = fmtTime(t);
       if (scrubber && !scrubber.matches(':active')) scrubber.value = t;
-      if (playBtn) playBtn.textContent = s.playing ? '⏸' : '▶';
+      if (playBtn && playBtn.dataset.state !== (s.playing ? 'pause' : 'play')) {
+        playBtn.dataset.state = s.playing ? 'pause' : 'play';
+        playBtn.innerHTML = icon(s.playing ? 'pause' : 'play', 14);
+        playBtn.setAttribute('aria-label', s.playing ? 'Pause' : 'Play');
+      }
       if (durLabel && s.durationMs) {
         if (scrubber) scrubber.max = s.durationMs;
         durLabel.textContent = fmtTime(s.durationMs);
@@ -472,6 +491,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     if (_playbackOverlay?._unsub) { _playbackOverlay._unsub(); _playbackOverlay = null; }
     if (_graphEditor)  { _graphEditor.dispose();  _graphEditor  = null; }
     if (_subsPanel)    { _subsPanel.dispose();    _subsPanel    = null; }
+    if (_studioPanel)  { _studioPanel.dispose();  _studioPanel  = null; }
     if (_effectsPanel) { _effectsPanel.dispose(); _effectsPanel = null; }
     if (_filtersPanel) { _filtersPanel.dispose(); _filtersPanel = null; }
     if (_textPanel)    { _textPanel.dispose();    _textPanel    = null; }

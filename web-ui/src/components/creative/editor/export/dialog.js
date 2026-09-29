@@ -3,6 +3,7 @@
  */
 
 import { encodeVideo, downloadBlob, buildDrawFn } from './encoder.js';
+import { icon } from '../icons.js';
 
 function _safeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -25,7 +26,7 @@ export function createExportDialog({ store, getScene }) {
       <div class="ce-export-modal" role="dialog" aria-label="Export video">
         <div class="ce-export-modal__header">
           <span class="ce-export-modal__title">Export Video</span>
-          <button class="ce-export-modal__close" data-ce-close>✕</button>
+          <button type="button" class="ce-export-modal__close ce-icon-btn" data-ce-close title="Close" aria-label="Close">${icon('close', 16)}</button>
         </div>
         <div class="ce-export-modal__body">
           <div class="ce-export-row">
