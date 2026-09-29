@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { isRateLimitError, withRateLimitRetry } from './engine.js';
+import { isCreditError, isRateLimitError, withRateLimitRetry } from './engine.js';
+
+// Out-of-credits is not a rate limit (no retry) but is detected for provider fallback.
+const xaiCredits = 'xAI Grok Imagine image generation failed: {"code":"personal-team-blocked:spending-limit","error":"You have run out of credits or need a Grok subscription."}';
+assert.ok(isCreditError(new Error(xaiCredits)));
+assert.ok(!isRateLimitError(new Error(xaiCredits)));
+assert.ok(isCreditError('OpenAI: insufficient_quota'));
+assert.ok(!isCreditError(new Error('content moderation rejected')));
 
 assert.ok(isRateLimitError(new Error('xAI Grok Imagine video generation failed: {"code":"resource-exhausted"}')));
 assert.ok(isRateLimitError('Too many requests for team x'));

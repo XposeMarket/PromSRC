@@ -8,7 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import { estimateCostUsd, getModel, type MediaModelManifest } from '../media-engine/catalog.js';
 import { downloadOutput, submit, type MediaOutput } from '../media-engine/providers.js';
-import { mediaDurationSec, runFfmpeg, withRateLimitRetry } from '../media-engine/engine.js';
+import { mediaDurationSec, runFfmpeg, submitWithFallback } from '../media-engine/engine.js';
 import {
   advanceStage, fromRel, gameDir, loadGame, mutateGame, newId, toRel,
   type AssetKind, type GameAsset, type GameDesign, type GameProject, type GameQuestion,
@@ -105,17 +105,20 @@ export function gameImageModel(p: GameProject, override?: string): MediaModelMan
   throw new Error('No image model available in the media catalog.');
 }
 
-async function providerGenerate(args: { prompt: string; outDir: string; baseName: string; model: MediaModelManifest; size?: { w: number; h: number } }): Promise<string> {
+async function providerGenerate(args: { prompt: string; outDir: string; baseName: string; model: MediaModelManifest; size?: { w: number; h: number }; usedModel?: string }): Promise<string> {
   if (imageGeneratorOverride) return imageGeneratorOverride(args);
   const aspect = args.size && args.size.w > args.size.h * 1.3 ? '16:9' : args.size && args.size.h > args.size.w * 1.3 ? '9:16' : '1:1';
-  const r = await withRateLimitRetry(() => submit(args.model, { prompt: args.prompt, aspectRatio: aspect, count: 1 }, { outputDir: args.outDir }));
+  // Falls back to the next image provider when the chosen one is out of credits.
+  const sub = await submitWithFallback(args.model, { prompt: args.prompt, aspectRatio: aspect, count: 1 }, { outputDir: args.outDir });
+  const r = sub.result;
+  if (sub.fallbackFrom) args.usedModel = sub.model.id;
   let outputs: MediaOutput[] | undefined = r.outputs;
   if (r.state !== 'done' || !outputs?.length) {
     const { poll } = await import('../media-engine/providers.js');
     const deadline = Date.now() + 5 * 60_000;
     while (Date.now() < deadline) {
       await new Promise((res) => setTimeout(res, 2500));
-      const st = await poll(args.model, { requestId: String(r.requestId || ''), statusUrl: r.statusUrl, responseUrl: r.responseUrl });
+      const st = await poll(sub.model, { requestId: String(r.requestId || ''), statusUrl: r.statusUrl, responseUrl: r.responseUrl });
       if (st.state === 'done') { outputs = st.outputs; break; }
       if (st.state === 'failed') throw new Error(st.error);
     }
@@ -194,7 +197,8 @@ async function generateOne(ws: string, projectId: string, assetId: string, model
   const n = (a.candidates?.length || 0) + 1;
   const base = `${a.name}_${n}`;
   try {
-    const raw = await providerGenerate({ prompt: a.prompt, outDir: rawDir, baseName: `${base}_raw`, model, size: a.size });
+    const genArgs: Parameters<typeof providerGenerate>[0] = { prompt: a.prompt, outDir: rawDir, baseName: `${base}_raw`, model, size: a.size };
+    const raw = await providerGenerate(genArgs);
     const out = path.join(dir, `${base}.png`);
     if (a.transparent) await chromaKeyToPng(raw, out, a.size);
     else await fitImage(raw, out, a.size);
@@ -205,7 +209,7 @@ async function generateOne(ws: string, projectId: string, assetId: string, model
       x.candidates = [...(x.candidates || []), toRel(ws, out)];
       x.path = toRel(ws, out);
       x.status = 'candidate';
-      x.modelId = model.id;
+      x.modelId = genArgs.usedModel || model.id;
       delete x.error;
     });
   } catch (e: any) {
