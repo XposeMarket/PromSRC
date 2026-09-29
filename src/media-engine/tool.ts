@@ -34,6 +34,8 @@ export function getVideoProjectToolDef(): any {
         'Server-owned project; works without the editor open. All edits are ops (one undo step per apply_ops call, shared with the user).',
         'Providers: xAI Grok Imagine (video 1.5, image 2.0), OpenAI images, fal (Kling/Seedance/Veo/Wan/FLUX), Higgsfield (Soul, Kling, Hailuo). Models are catalog manifests; import more with import_models.',
         'Flow: create -> apply_ops plan.setShots (+character.upsert) -> generate_anchor (optional identity still) -> estimate -> generate (needs approved:true above the auto-approve limit; confirm cost with the user first) -> wait -> apply_ops timeline.assemble / take.select / clip.trim -> render.',
+        'Anchors from generate_anchor arrive as character candidates; the user approves one (character.approveAnchor) before it drives identity. Shot anchorMode "start" uses the anchor as the first frame, "reference" as reference images.',
+        'CHAT CARD: put the project\'s chatCard fence (```video-project\n{"projectId":"vp_..."}\n```) in your reply once per project. It renders a live card in chat (desktop + phone) with anchor approve/reroll, shot list, cost + Approve & generate, takes, redo, and Render/final video, so the user never has to leave chat.',
         'Call action "help" for the op reference.',
       ].join(' '),
       parameters: {
@@ -165,7 +167,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       return await generateShots(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, count: args.count, modelId: args.modelId, approved: args.approved === true });
     case 'generate_anchor':
       return await generateCharacterAnchor(ws, need(args.projectId, 'projectId'), {
-        characterId: need(args.characterId, 'characterId'), prompt: need(args.prompt, 'prompt'),
+        characterId: need(args.characterId, 'characterId'), prompt: args.prompt ? String(args.prompt) : undefined,
         modelId: args.modelId, count: args.count, approved: args.approved === true, referenceImages: args.referenceImages,
       });
     case 'jobs': {

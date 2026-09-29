@@ -97,7 +97,8 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
   }
   // Identity frame: when the model animates from a still and nothing else was
   // chosen, the first character anchor carries identity (Higgsfield-style).
-  if (!startImage && model.map.startImage && !model.map.referenceImages) {
+  if (!startImage && model.map.startImage && refs.length
+    && (shot.anchorMode === 'start' || (!shot.anchorMode && !model.map.referenceImages))) {
     startImage = refs[0];
   }
   const abs = (ref: string | undefined) => (!ref || /^(https?:|data:)/i.test(ref) ? ref : fromWorkspaceRel(workspacePath, ref));
@@ -182,8 +183,10 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
       }
       shot.status = 'ready';
     } else if ('characterId' in j.target) {
+      // Anchors land as candidates; the user approves one (chat card / Studio)
+      // with character.approveAnchor before it drives identity.
       const c = p.characters.find((x) => x.id === (j.target as any).characterId);
-      if (c) c.anchors.push(...saved.map((s) => s.rel));
+      if (c) c.candidates = [...(c.candidates || []), ...saved.map((s) => s.rel)].slice(-12);
     }
     for (const s of saved) {
       p.assets.push({ id: newId('asset'), kind: model.kind, path: s.rel, origin: 'generated', modelId: model.id, prompt, createdAt: Date.now() });
@@ -320,13 +323,17 @@ export async function generateShots(workspacePath: string, projectId: string, ar
 
 /** Generate an anchor still for a character (Higgsfield-style identity frame). */
 export async function generateCharacterAnchor(workspacePath: string, projectId: string, args: {
-  characterId: string; prompt: string; modelId?: string; count?: number; approved?: boolean; referenceImages?: string[];
+  characterId: string; prompt?: string; modelId?: string; count?: number; approved?: boolean; referenceImages?: string[];
 }): Promise<GenerateResult> {
   const p = loadProject(workspacePath, projectId);
   const c = p.characters.find((x) => x.id === args.characterId);
   if (!c) throw new Error(`Character "${args.characterId}" not found.`);
-  const model = getModel(args.modelId || p.defaults.imageModel);
-  if (!model || model.kind !== 'image') throw new Error(`"${args.modelId || p.defaults.imageModel}" is not an image model.`);
+  // Reroll reuses the last prompt/model when none is given.
+  const anchorPrompt = String(args.prompt || c.anchorPrompt || '').trim();
+  if (!anchorPrompt) throw new Error('prompt is required for the first anchor of a character.');
+  const modelId = args.modelId || c.anchorModel || p.defaults.imageModel;
+  const model = getModel(modelId);
+  if (!model || model.kind !== 'image') throw new Error(`"${modelId}" is not an image model.`);
   const count = Math.max(1, Math.min(4, Number(args.count) || 1));
   const usd = estimateCostUsd(model, { count });
   const est = { total: usd, shots: [{ shotId: '', title: `${c.name} anchor`, modelId: model.id, count, usd, problems: [] }] };
@@ -336,7 +343,7 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
   const refs = [...(args.referenceImages || []), ...c.refs]
     .map((r) => (/^(https?:|data:)/i.test(r) ? r : fromWorkspaceRel(workspacePath, r)));
   const input: ShotInput = {
-    prompt: [args.prompt, c.notes].filter(Boolean).join(' '),
+    prompt: [anchorPrompt, c.notes].filter(Boolean).join(' '),
     startImage: model.map.startImage ? refs[0] : undefined,
     referenceImages: model.map.referenceImages ? refs.slice(0, 5) : undefined,
     aspectRatio: p.target.aspect,
@@ -347,7 +354,11 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
     id: newId('job'), target: { characterId: c.id }, modelId: model.id, input: input as any, count,
     state: 'queued', estimateUsd: usd, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),
   };
-  await mutateProject(workspacePath, projectId, 'generate', (proj) => { proj.jobs.push(job); });
+  await mutateProject(workspacePath, projectId, 'generate', (proj) => {
+    proj.jobs.push(job);
+    const ch = proj.characters.find((x) => x.id === c.id);
+    if (ch) { ch.anchorPrompt = anchorPrompt; ch.anchorModel = model.id; }
+  });
   void runJob(workspacePath, projectId, job.id);
   return { estimate: est, jobs: [{ id: job.id, target: job.target, modelId: model.id, estimateUsd: usd }] };
 }
@@ -500,7 +511,11 @@ export async function renderProject(workspacePath: string, projectId: string, ar
   a[a.indexOf('-filter_complex') + 1] = f.join(';');
   const res = await ffmpeg(['-y', '-hide_banner', ...a, '-t', total.toFixed(3), '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outAbs]);
   if (res.code !== 0) throw new Error(`Export failed: ${res.stderr.slice(-900)}`);
-  return { path: toWorkspaceRel(workspacePath, outAbs), durationSec: +total.toFixed(2), width, height, layers: plan.layers.length };
+  const rel = toWorkspaceRel(workspacePath, outAbs);
+  await mutateProject(workspacePath, projectId, 'export', (proj) => {
+    proj.exports = [...(proj.exports || []), { path: rel, createdAt: Date.now(), durationSec: +total.toFixed(2) }].slice(-20);
+  });
+  return { path: rel, durationSec: +total.toFixed(2), width, height, layers: plan.layers.length };
 }
 
 /** Grab a still of the timeline at a given time (cheap preview for the agent/UI). */

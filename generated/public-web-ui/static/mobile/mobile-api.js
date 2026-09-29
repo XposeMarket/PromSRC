@@ -2230,6 +2230,9 @@ export function buildInlineMediaUrl(relPath) {
 // paths through this hook so they carry the gateway origin + pairing token.
 if (typeof window !== 'undefined') {
   window.__promResolveWorkspaceMediaUrl = (relPath) => buildInlineMediaUrl(relPath);
+  // Chat video-project cards (components/video-project-card.js) call the
+  // paired gateway through this so they carry the pairing token.
+  window.__promVideoProjectFetch = (path, opts = {}) => mfetch(path, opts);
 }
 
 export function buildDownloadMediaUrl(relPath) {
