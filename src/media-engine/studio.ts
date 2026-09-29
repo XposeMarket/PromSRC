@@ -26,6 +26,7 @@ import {
 } from './project.js';
 import { brandToProjectOps, castFromCharacter, castToCharacterOp, getBrand, getCast, listBrands, listCast, saveBrand } from './library.js';
 import { getTemplate, listTemplates, planFromTemplate } from './templates.js';
+import { transcribeTakes } from './transcribe.js';
 
 // ── import ──────────────────────────────────────────────────────────────
 
@@ -156,6 +157,8 @@ export async function voiceover(ws: string, projectId: string, args: { shotIds?:
       // A line longer than the shot would get cut: stretch the shot to fit.
       if (v.durationSec + 0.4 > s.durationSec && !s.takes.length) s.durationSec = Math.min(15, Math.ceil(v.durationSec + 0.5));
     }
+    // Asking for a narrator means the narrator carries the words (clips go under it).
+    if (voiced.length) proj.audioMode = 'voiceover';
     layoutVoiceover(proj);
     if (proj.captions?.enabled) proj.captions.cues = buildCaptionCues(proj);
   });
@@ -170,7 +173,11 @@ export async function captions(ws: string, projectId: string, args: { style?: st
     const style = (['bold', 'pop', 'minimal', 'karaoke'].includes(String(args.style)) ? args.style : proj.captions?.style || 'pop') as any;
     proj.captions = { enabled: args.enabled !== false, style, cues: buildCaptionCues(proj) };
   });
-  if (!p.captions!.cues.length) throw new Error('No voiceover on the timeline to caption. Run voiceover (and timeline.assemble) first.');
+  if (!p.captions!.cues.length) {
+    throw new Error(p.audioMode === 'native'
+      ? 'No speech found in the clips to caption. Run transcribe after the takes land (and timeline.assemble), or switch audioMode to voiceover.'
+      : 'No voiceover on the timeline to caption. Run voiceover (and timeline.assemble) first.');
+  }
   return { cues: p.captions!.cues.length, style: p.captions!.style, sample: p.captions!.cues.slice(0, 4).map((c) => c.text) };
 }
 
@@ -431,7 +438,7 @@ export async function applyTemplate(ws: string, projectId: string, args: {
   const productCharId = args.productCharId || p.characters.find((c) => c.kind === 'product')?.id;
   const personCharId = args.personCharId || p.characters.find((c) => (c.kind || 'person') === 'person')?.id;
   const plan = planFromTemplate(t, { brief: args.brief || p.brief, product: args.product, character: args.character, brand: args.brand || p.brand?.name }, { productCharId, personCharId });
-  const ops = [...plan.ops, { op: 'project.update', templateId: t.id, hookVariants: plan.hookVariants || [] }];
+  const ops = [...plan.ops, { op: 'project.update', templateId: t.id, hookVariants: plan.hookVariants || [], audioMode: t.audioMode || 'voiceover' }];
   const { summaries } = await applyOps(ws, projectId, ops as any, 'agent');
   if (args.music !== false && plan.music?.builtin && plan.music.builtin !== 'none') {
     try { await music(ws, projectId, { builtin: plan.music.builtin, volume: plan.music.volume }); } catch { /* music is optional */ }
@@ -472,7 +479,7 @@ export { listTemplates, listCast, listBrands, saveBrand, getCast, getBrand };
 
 // ── autopilot ───────────────────────────────────────────────────────────
 
-const RUN_STEPS = ['plan', 'anchors', 'storyboard', 'voiceover', 'generate', 'qa', 'assemble', 'captions', 'music', 'render'] as const;
+const RUN_STEPS = ['plan', 'anchors', 'storyboard', 'voiceover', 'generate', 'qa', 'assemble', 'transcribe', 'captions', 'music', 'render'] as const;
 type RunStepName = typeof RUN_STEPS[number];
 
 async function setRun(ws: string, projectId: string, fn: (r: RunState) => void): Promise<RunState> {
@@ -509,7 +516,7 @@ export async function planRunCost(ws: string, projectId: string, opts: { storybo
       if (opts.qaRerolls) breakdown.push({ item: `QA reroll reserve (≤${opts.qaRerolls})`, usd: +(est.total / Math.max(1, todo.length) * opts.qaRerolls).toFixed(3) });
     }
   }
-  if (p.shots.some((s) => s.line && !s.voiceover)) breakdown.push({ item: 'Voiceover (TTS)', usd: 0.01 });
+  if (p.audioMode === 'voiceover' && p.shots.some((s) => s.line && !s.voiceover)) breakdown.push({ item: 'Voiceover (TTS)', usd: 0.01 });
   const usd = +breakdown.reduce((a, b) => a + b.usd, 0).toFixed(3);
   return { usd, breakdown };
 }
@@ -587,8 +594,10 @@ export async function runAutopilot(ws: string, projectId: string, args: {
       }
     } else await progress('storyboard', 'skipped');
 
-    // Voiceover before video so shot lengths fit the lines.
-    if (want('voiceover') && loadProject(ws, projectId).shots.some((s) => s.line?.trim())) {
+    // Voiceover before video so shot lengths fit the lines. Native dialogue
+    // skips it: the video model speaks the lines on camera.
+    if (loadProject(ws, projectId).audioMode === 'native') await progress('voiceover', 'skipped', 'native dialogue: lines are spoken on camera');
+    else if (want('voiceover') && loadProject(ws, projectId).shots.some((s) => s.line?.trim())) {
       await progress('voiceover', 'running');
       // A dead TTS login must not throw away the paid anchors/storyboards: keep going
       // without VO (captions then skip) and say why on the card.
@@ -647,11 +656,26 @@ export async function runAutopilot(ws: string, projectId: string, args: {
       await progress('assemble', 'done');
     } else await progress('assemble', 'skipped');
 
+    // Native dialogue: hear what the clips actually say (free, local Whisper).
+    if (want('transcribe') && loadProject(ws, projectId).audioMode === 'native') {
+      await progress('transcribe', 'running');
+      try {
+        const t = await transcribeTakes(ws, projectId, {});
+        const spoken = loadProject(ws, projectId).shots.filter((s) => selectedTake(s)?.transcript?.words.length).length;
+        await progress('transcribe', 'done', `${spoken} shot(s) with speech${t.failed.length ? ` · ${t.failed.length} failed` : ''}`);
+      } catch (e: any) {
+        await progress('transcribe', 'failed', String(e?.message || e).slice(0, 160));
+      }
+    } else await progress('transcribe', 'skipped');
+
     const pc = loadProject(ws, projectId);
-    if (want('captions') && pc.shots.some((s) => s.voiceover) && pc.captions?.enabled !== false) {
+    const hasSpeech = pc.audioMode === 'native'
+      ? pc.shots.some((s) => selectedTake(s)?.transcript?.words.length)
+      : pc.shots.some((s) => s.voiceover);
+    if (want('captions') && hasSpeech && pc.captions?.enabled !== false) {
       const c = await captions(ws, projectId, { style: pc.captions?.style || 'pop' });
-      await progress('captions', 'done', `${c.cues} cues · ${c.style}`);
-    } else await progress('captions', 'skipped');
+      await progress('captions', 'done', `${c.cues} cues · ${c.style} · from ${pc.audioMode === 'native' ? 'clip audio' : 'voiceover'}`);
+    } else await progress('captions', 'skipped', hasSpeech ? undefined : 'no speech to caption');
 
     if (want('music') && !loadProject(ws, projectId).music) {
       const m = await music(ws, projectId, { builtin: 'pulse' });

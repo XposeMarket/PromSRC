@@ -66,7 +66,18 @@ export interface Take {
   poster?: string;
   /** Vision QA verdict. */
   qa?: TakeQa;
+  /** What the clip actually says (transcribed from its own audio, word-timed, ms relative to the take). */
+  transcript?: TakeTranscript;
 }
+
+export interface TakeTranscript { text: string; words: Array<{ text: string; startMs: number; endMs: number }>; provider: string; at: number }
+
+/**
+ * native: the video model speaks each shot's line on camera; captions come from
+ *         transcribing the clip audio.
+ * voiceover: silent-dialogue clips + TTS narrator track; captions follow the VO.
+ */
+export type AudioMode = 'native' | 'voiceover';
 
 export interface TakeQa { score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string; at: number }
 
@@ -192,6 +203,8 @@ export interface VideoProject {
   /** Finished MP4 renders, newest last. */
   exports: Array<{ path: string; createdAt: number; durationSec: number; aspect?: string; variant?: string }>;
   voice?: { provider: 'openai' | 'xai'; voice: string; speed?: number };
+  /** Where the spoken audio comes from. See AudioMode. */
+  audioMode: AudioMode;
   captions?: { enabled: boolean; style: CaptionStyle; cues: CaptionCue[] };
   music?: { path: string; volume: number; duck: boolean; label?: string };
   brand?: { id?: string; name: string; logo?: string; colors?: string[]; watermark?: boolean };
@@ -344,6 +357,10 @@ export function normalizeProject(raw: any): VideoProject {
     assets: arr<Asset>(raw.assets),
     jobs: arr<Job>(raw.jobs),
     exports: arr<VideoProject['exports'][number]>(raw.exports).slice(-30),
+    // Legacy projects that already carry a TTS voiceover stay in voiceover mode.
+    audioMode: raw.audioMode === 'native' || raw.audioMode === 'voiceover'
+      ? raw.audioMode
+      : (arr<any>(raw.shots).some((s) => s?.voiceover?.path) ? 'voiceover' : 'native'),
     voice: raw.voice && raw.voice.voice ? { provider: raw.voice.provider === 'xai' ? 'xai' : 'openai', voice: String(raw.voice.voice), speed: raw.voice.speed != null ? num(raw.voice.speed, 1) : undefined } : undefined,
     captions: raw.captions ? { enabled: !!raw.captions.enabled, style: (['bold', 'pop', 'minimal', 'karaoke'].includes(raw.captions.style) ? raw.captions.style : 'pop'), cues: arr<CaptionCue>(raw.captions.cues) } : undefined,
     music: raw.music?.path ? { path: String(raw.music.path), volume: num(raw.music.volume, 0.25), duck: raw.music.duck !== false, label: raw.music.label } : undefined,
@@ -501,7 +518,8 @@ export function mainVideoTrack(p: VideoProject): Track | undefined {
  */
 export function layoutVoiceover(p: VideoProject): number {
   const main = mainVideoTrack(p);
-  const voShots = p.shots.filter((s) => s.voiceover?.path);
+  // Native dialogue: the clips carry the voice, so no narrator track (voiceover data is kept for undo/switch-back).
+  const voShots = p.audioMode === 'native' ? [] : p.shots.filter((s) => s.voiceover?.path);
   let vo = p.tracks.find((t) => t.kind === 'audio' && t.label === VO_TRACK_LABEL);
   if (!voShots.length) {
     if (vo) p.clips = p.clips.filter((c) => c.trackId !== vo!.id);
@@ -544,6 +562,10 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
       if (o.brand !== undefined) p.brand = o.brand && o.brand.name ? o.brand : undefined;
       if (o.templateId !== undefined) p.templateId = o.templateId ? String(o.templateId) : undefined;
       if (o.hookVariants !== undefined) p.hookVariants = arr<string>(o.hookVariants);
+      if (o.audioMode === 'native' || o.audioMode === 'voiceover') {
+        p.audioMode = o.audioMode;
+        layoutVoiceover(p); // native drops the VO clips; voiceover restores them
+      }
       if (o.budget) {
         if (o.budget.capUsd !== undefined) p.budget.capUsd = o.budget.capUsd === null ? undefined : num(o.budget.capUsd, 0);
         if (o.budget.autoApproveUsd !== undefined) p.budget.autoApproveUsd = Math.max(0, num(o.budget.autoApproveUsd, 1));
@@ -885,6 +907,7 @@ export function summarizeProject(p: VideoProject, depth: { undo: number; redo: n
     history: depth,
     characters: p.characters.map((c) => ({ id: c.id, name: c.name, kind: c.kind || 'person', castId: c.castId, anchors: c.anchors, candidates: c.candidates || [], notes: c.notes })),
     voice: p.voice,
+    audioMode: p.audioMode,
     captions: p.captions ? { enabled: p.captions.enabled, style: p.captions.style, cues: p.captions.cues.length } : undefined,
     music: p.music,
     brand: p.brand ? { id: p.brand.id, name: p.brand.name, watermark: p.brand.watermark } : undefined,

@@ -25,6 +25,8 @@ export interface VideoTemplate {
   durationSec: number;
   defaultVideoModel?: string;
   needs: { product?: boolean; character?: boolean };
+  /** native = the on-screen creator speaks the lines (UGC); voiceover = narrator track. */
+  audioMode?: 'native' | 'voiceover';
   voice?: { provider: 'openai'; voice: string };
   captions: { enabled: boolean; style: 'bold' | 'pop' | 'minimal' | 'karaoke' };
   music: { builtin: 'pulse' | 'chill' | 'none'; volume: number };
@@ -52,6 +54,7 @@ const TEMPLATES: VideoTemplate[] = [
     description: 'Authentic creator-style selfie testimonial: car hook, product reveal, reaction, lifestyle payoff, CTA.',
     aspect: '9:16', durationSec: 15,
     needs: { product: true, character: true },
+    audioMode: 'native',
     voice: { provider: 'openai', voice: 'nova' },
     captions: { enabled: true, style: 'karaoke' },
     music: { builtin: 'pulse', volume: 0.18 },
@@ -168,6 +171,7 @@ const TEMPLATES: VideoTemplate[] = [
     description: 'Vertical transformation ad: dull before, product moment, striking after, reaction, CTA.',
     aspect: '9:16', durationSec: 15,
     needs: { product: true, character: true },
+    audioMode: 'native',
     voice: { provider: 'openai', voice: 'shimmer' },
     captions: { enabled: true, style: 'pop' },
     music: { builtin: 'pulse', volume: 0.2 },

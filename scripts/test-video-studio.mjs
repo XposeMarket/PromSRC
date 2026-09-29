@@ -39,6 +39,7 @@ fs.copyFileSync(img, path.join(ws, 'uploads', 'can.png'));
 let visionCalls = 0;
 let visionScores = [4, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8]; // first judged take is bad -> reroll
 const hits = { tts: 0, falImg: 0, falVid: 0 };
+const vidPrompts = [];
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -47,7 +48,7 @@ const server = http.createServer((req, res) => {
     const u = req.url;
     if (req.method === 'POST' && u.startsWith('/fal-ai/')) {
       const isImg = /flux|image/i.test(u);
-      if (isImg) hits.falImg += 1; else hits.falVid += 1;
+      if (isImg) hits.falImg += 1; else { hits.falVid += 1; try { vidPrompts.push(String(JSON.parse(body).prompt || '')); } catch { /* ignore */ } }
       const id = `${isImg ? 'img' : 'vid'}${hits.falImg + hits.falVid}`;
       res.end(JSON.stringify({ request_id: id, status_url: `${base}/status/${id}`, response_url: `${base}/result/${id}` }));
     } else if (u.startsWith('/status/')) res.end(JSON.stringify({ status: 'COMPLETED' }));
@@ -131,9 +132,11 @@ assert.equal(p.lastRun?.state, 'needs_approval');
 assert.equal(hits.falVid + hits.falImg, 0, 'nothing spent before approval');
 ok(`quickstart: template (5 shots), product import, music, whole-run estimate $${qs.needsApproval.usd} gated`);
 
+// UGC defaults to native on-camera dialogue; this block covers the narrator path.
+assert.equal(p.audioMode, 'native', 'UGC template defaults to on-camera dialogue');
 // Route everything to the fake models.
 await project.applyOps(ws, pid, [
-  { op: 'project.update', defaults: { imageModel: 'fal/test-img', videoModel: 'fal/test-vid' } },
+  { op: 'project.update', audioMode: 'voiceover', defaults: { imageModel: 'fal/test-img', videoModel: 'fal/test-vid' } },
   ...p.shots.map((s) => ({ op: 'shot.update', id: s.id, modelId: 'fal/test-vid', durationSec: 3 })),
 ]);
 
@@ -262,6 +265,81 @@ await project.applyOps(ws, pid, [
   const routes = fs.readFileSync(path.join(root, 'src/gateway/routes/video-project.routes.ts'), 'utf8');
   for (const a of ['import_asset', 'storyboard', 'voiceover', 'captions', 'music', 'qa', 'run', 'render_variants']) assert.ok(routes.includes(`'${a}'`), `route allows ${a}`);
   ok('wake watch registers; capability gates; card actions all routed by /action');
+}
+
+// ── native dialogue: creator speaks the lines on camera; captions come from the clip audio ──
+{
+  const transcribe = await load('media-engine/transcribe.js');
+  // units: script snapping + trim-aware cue mapping + legacy defaults
+  const snapped = transcribe.snapToScript([{ text: 'okay', startMs: 0, endMs: 300 }, { text: 'i', startMs: 300, endMs: 400 }, { text: 'need', startMs: 400, endMs: 700 }], 'Okay, I need.');
+  assert.deepEqual(snapped.map((w) => w.text), ['Okay,', 'I', 'need.'], 'heard line adopts script spelling');
+  assert.equal(transcribe.snapToScript([{ text: 'hey', startMs: 0, endMs: 200 }], 'Totally different line here')[0].text, 'hey', 'unmatched speech stays as heard');
+  assert.deepEqual(transcribe.dropPhantomSpeech([{ text: 'You', startMs: 0, endMs: 300, p: 0.4 }]), [], 'Whisper "You" on ambience is dropped');
+  assert.deepEqual(transcribe.dropPhantomSpeech([{ text: 'Thank', startMs: 0, endMs: 200 }, { text: 'you.', startMs: 200, endMs: 400 }]), []);
+  assert.equal(transcribe.dropPhantomSpeech([{ text: 'Mmm,', startMs: 0, endMs: 200, p: 0.9 }, { text: 'this', startMs: 200, endMs: 400 }, { text: 'is', startMs: 400, endMs: 500 }, { text: 'good.', startMs: 500, endMs: 800 }]).length, 4, 'real speech kept');
+  assert.equal(project.normalizeProject({ id: 'vp_legacy01', shots: [{ id: 's', title: 'x', voiceover: { path: 'a.mp3' } }] }).audioMode, 'voiceover', 'legacy VO projects stay narrator');
+  const np = project.normalizeProject({
+    id: 'vp_native01',
+    audioMode: 'native',
+    shots: [{ id: 's1', title: 'A', takes: [{ id: 't1', kind: 'video', path: 'x.mp4', transcript: { text: 'a b c d', provider: 't', at: 0, words: [
+      { text: 'a', startMs: 100, endMs: 400 }, { text: 'b', startMs: 1200, endMs: 1500 }, { text: 'c', startMs: 1600, endMs: 1900 }, { text: 'd', startMs: 3500, endMs: 3800 }] } }], selectedTakeId: 't1' }],
+    tracks: [{ id: 'tv', kind: 'video', label: 'V1' }],
+    clips: [{ id: 'c1', trackId: 'tv', source: { shotId: 's1' }, startMs: 5000, inMs: 1000, outMs: 3000 }],
+  });
+  const nc = captionsMod.buildNativeCaptionCues(np);
+  assert.equal(nc.map((c) => c.text).join(' '), 'b c', 'words trimmed out of the clip are not captioned');
+  assert.equal(nc[0].startMs, 5200, 'word time maps through the trim onto the timeline');
+
+  // Full autopilot in native mode against the fakes, with a deterministic transcriber.
+  let sttCalls = 0;
+  transcribe.setTranscriberForTests(async (wavs) => { sttCalls += wavs.length; return wavs.map(() => ({ text: 'okay this is', provider: 'fake-stt', words: [
+    { text: 'okay', startMs: 200, endMs: 600 }, { text: 'this', startMs: 700, endMs: 950 }, { text: 'is', startMs: 1000, endMs: 1200 }] })); });
+  const q = await tool.executeVideoProject({ action: 'quickstart', brief: 'UGC ad for Volt', productPath: 'uploads/can.png', productName: 'Volt', capUsd: 6 }, { workspacePath: ws });
+  const nid = q.projectId;
+  let n = project.loadProject(ws, nid);
+  assert.equal(n.audioMode, 'native');
+  assert.ok(!q.needsApproval.breakdown.some((b) => /Voiceover/.test(b.item)), 'native run does not budget TTS');
+  await project.applyOps(ws, nid, [
+    { op: 'project.update', defaults: { imageModel: 'fal/test-img', videoModel: 'fal/test-vid' } },
+    ...n.shots.map((s) => ({ op: 'shot.update', id: s.id, modelId: 'fal/test-vid', durationSec: 3 })),
+  ]);
+  const ttsBefore = hits.tts;
+  vidPrompts.length = 0;
+  const run = await tool.executeVideoProject({ action: 'run', projectId: nid, approved: true, wait: true, storyboard: false, qa: false }, { workspacePath: ws });
+  const st = Object.fromEntries(run.lastRun.steps.map((s) => [s.step, s]));
+  assert.equal(run.lastRun.state, 'done', `native run failed: ${run.lastRun.error} ${JSON.stringify(run.lastRun.steps)}`);
+  assert.equal(st.voiceover.state, 'skipped');
+  assert.match(st.voiceover.note, /native/);
+  assert.equal(st.transcribe.state, 'done');
+  assert.equal(st.captions.state, 'done');
+  assert.match(st.captions.note, /clip audio/);
+  assert.equal(hits.tts, ttsBefore, 'no TTS in native mode');
+  n = project.loadProject(ws, nid);
+  const lined = n.shots.filter((s) => s.line);
+  assert.equal(vidPrompts.length, n.shots.length);
+  assert.ok(lined.every((s) => vidPrompts.some((pr) => pr.includes(`saying exactly: "${s.line.replace(/"/g, "'")}"`))), 'each shot prompt carries its own line');
+  assert.ok(!vidPrompts.some((pr) => /No dialogue/.test(pr)), 'native prompts never mute dialogue');
+  assert.ok(n.shots.every((s) => !s.voiceover), 'no VO recorded');
+  const voT = n.tracks.find((t) => t.label === 'VO');
+  assert.ok(!voT || !n.clips.some((c) => c.trackId === voT.id), 'no narrator clips on the timeline');
+  assert.equal(sttCalls, n.shots.length, 'every take transcribed once');
+  assert.ok(n.shots.every((s) => project.selectedTake(s).transcript.words.length === 3));
+  const main = n.tracks.find((t) => t.kind === 'video');
+  const firstClip = n.clips.filter((c) => c.trackId === main.id).sort((a, b) => a.startMs - b.startMs)[0];
+  assert.equal(n.captions.cues[0].text, 'okay this is', 'captions are what the clip says, not the script');
+  assert.equal(n.captions.cues[0].startMs, firstClip.startMs + 200);
+  assert.equal(n.captions.cues.length, n.shots.length);
+  const rendered = run.render?.exports?.[0] || project.loadProject(ws, nid).exports.at(-1);
+  assert.ok(rendered && fs.existsSync(path.join(ws, rendered.path)), 'native render exported');
+  // Re-running transcribe is idempotent (skips), and switching to narrator mutes clip dialogue in prompts.
+  const again = await tool.executeVideoProject({ action: 'transcribe', projectId: nid }, { workspacePath: ws });
+  assert.equal(again.transcribed.length, 0);
+  assert.equal(again.skipped.length, n.shots.length);
+  await project.applyOps(ws, nid, [{ op: 'project.update', audioMode: 'voiceover' }]);
+  const vo = project.loadProject(ws, nid);
+  assert.match(engine.dialogueDirection(vo, vo.shots[0]), /No dialogue/);
+  transcribe.setTranscriberForTests(null);
+  ok('native dialogue: lines spoken on camera, no TTS, captions transcribed from the clips (trim-aware), narrator switch mutes clips');
 }
 
 server.close();

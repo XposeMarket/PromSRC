@@ -132,7 +132,7 @@ export function registerVideoProjectRoutes(router: IRouter): void {
   // tool (same cost gates), so UI and Prom share one code path.
   const UI_ACTIONS = new Set([
     'templates', 'music_beds', 'models', 'providers', 'cast_list', 'brand_list', 'run_cost',
-    'import_asset', 'apply_template', 'storyboard', 'voiceover', 'captions', 'music', 'qa', 'hooks',
+    'import_asset', 'apply_template', 'storyboard', 'voiceover', 'captions', 'transcribe', 'music', 'qa', 'hooks',
     'render', 'render_variants', 'upgrade', 'route', 'run', 'cast_save', 'cast_add', 'brand_apply', 'estimate', 'generate', 'generate_anchor',
   ]);
   const runAction = async (req: any, res: any, projectId?: string) => {
