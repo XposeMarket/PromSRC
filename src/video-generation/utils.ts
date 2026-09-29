@@ -118,6 +118,7 @@ export function normalizeVideoAspectRatio(value?: string): VideoAspectRatio {
 
 export function normalizeVideoResolution(value?: string): VideoResolution {
   const raw = String(value || '').trim().toLowerCase();
+  if (raw === '1080p') return '1080p';
   return raw === '720p' ? '720p' : DEFAULT_VIDEO_RESOLUTION;
 }
 
@@ -167,7 +168,8 @@ export function getVideoGenerationConfig(): {
   const videoCfg = (cfg.video_generation || {}) as any;
   return {
     provider: String(videoCfg.provider || 'auto').trim() || 'auto',
-    model: String(videoCfg.model || 'grok-imagine-video').trim() || 'grok-imagine-video',
+    // Empty means "provider default" (grok-imagine-video-1.5 for xAI).
+    model: String(videoCfg.model || '').trim(),
     save_to_workspace: videoCfg.save_to_workspace !== false,
     default_output_dir: String(videoCfg.default_output_dir || DEFAULT_VIDEO_OUTPUT_DIR).trim() || DEFAULT_VIDEO_OUTPUT_DIR,
     duration: normalizeVideoDuration(videoCfg.duration),

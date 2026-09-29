@@ -1,5 +1,5 @@
 export const VALID_VIDEO_ASPECT_RATIOS = ['landscape', 'square', 'portrait'] as const;
-export const VALID_VIDEO_RESOLUTIONS = ['480p', '720p'] as const;
+export const VALID_VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
 export const VALID_VIDEO_MODES = ['generate', 'edit', 'extend'] as const;
 
 export type VideoAspectRatio = typeof VALID_VIDEO_ASPECT_RATIOS[number];
