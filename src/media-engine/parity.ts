@@ -169,7 +169,10 @@ export async function drawToVideo(ws: string, projectId: string, args: {
   const sb = await generateStoryboards(ws, projectId, { shotIds: [shotId], approved: true });
   if (sb.jobs.length) await waitForJobs(ws, projectId, sb.jobs.map((j) => j.id), 180_000);
   const after = loadProject(ws, projectId).shots.find((s) => s.id === shotId);
-  if (!after?.storyboardCandidates?.length) throw new Error('Sketch cleanup produced no frame (check the image model / provider).');
+  if (!after?.storyboardCandidates?.length) {
+    const failed = loadProject(ws, projectId).jobs.filter((j) => sb.jobs.some((x) => x.id === j.id) && j.state === 'failed').map((j) => j.error).filter(Boolean);
+    throw new Error(`Sketch cleanup produced no frame${failed.length ? `: ${String(failed[0]).slice(0, 300)}` : ' (check the image model / provider).'}`);
+  }
   await applyOps(ws, projectId, [{ op: 'shot.approveStoryboard', id: shotId }], 'agent');
   const g = await generateShots(ws, projectId, { shotIds: [shotId], approved: true });
   return { ...g, shotId, sketch: imp.assetPath, storyboard: loadProject(ws, projectId).shots.find((s) => s.id === shotId)?.storyboard };

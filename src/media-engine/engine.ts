@@ -294,6 +294,36 @@ export function isRateLimitError(e: unknown): boolean {
   return /resource-exhausted|too many requests|rate.?limit|\b429\b/i.test(s);
 }
 
+/** Out-of-credits / billing errors: permanent for this provider, but another provider may work. */
+export function isCreditError(e: unknown): boolean {
+  const s = String((e as any)?.message || e || '');
+  return /spending-limit|run out of credits|out of credits|insufficient[_ ]?(credits|quota|balance|funds)|billing[_ ]?(hard[_ ]?limit|not active)|payment required|\b402\b/i.test(s);
+}
+
+/** Image models to try when the chosen provider is out of credits (in order). */
+export const IMAGE_CREDIT_FALLBACKS = ['openai/gpt-image', 'xai/grok-imagine-image-2.0'];
+
+/**
+ * Submit with rate-limit retry; image jobs whose provider is out of credits
+ * fall back to the next configured image provider. Returns the model used.
+ */
+export async function submitWithFallback(model: MediaModelManifest, input: ShotInput & { count?: number }, opts: { outputDir: string }): Promise<{ model: MediaModelManifest; result: Awaited<ReturnType<typeof submit>>; fallbackFrom?: string; firstError?: string }> {
+  try {
+    return { model, result: await withRateLimitRetry(() => submit(model, input, opts)) };
+  } catch (e) {
+    if (model.kind !== 'image' || !isCreditError(e)) throw e;
+    const firstError = String((e as any)?.message || e).slice(0, 240);
+    for (const id of IMAGE_CREDIT_FALLBACKS) {
+      const fb = getModel(id);
+      if (!fb || fb.id === model.id || fb.provider === model.provider) continue;
+      try {
+        return { model: fb, result: await withRateLimitRetry(() => submit(fb, input, opts)), fallbackFrom: model.id, firstError };
+      } catch (e2) { if (!isCreditError(e2)) throw e2; }
+    }
+    throw e;
+  }
+}
+
 /** Retry fn on provider rate limits with jittered exponential backoff (xAI teams cap at 2 req/s). */
 export async function withRateLimitRetry<T>(fn: () => Promise<T>, tries = 5, baseMs = 1500): Promise<T> {
   let last: unknown;
@@ -315,13 +345,19 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
     let p = loadProject(workspacePath, projectId);
     let job = p.jobs.find((j) => j.id === jobId);
     if (!job || job.state === 'done' || job.state === 'failed' || job.state === 'canceled') return;
-    const model = getModel(job.modelId);
+    let model = getModel(job.modelId);
     if (!model) { await failJob(workspacePath, projectId, jobId, `Model ${job.modelId} is no longer in the catalog.`, 'invalid_model'); return; }
 
     if (!resume || !job.requestId) {
       await patchJob(workspacePath, projectId, jobId, { state: 'running' });
       const input = job.input as unknown as ShotInput;
-      const result = await withRateLimitRetry(() => submit(model, { ...input, count: job!.count }, { outputDir: toWorkspaceRel(workspacePath, mediaDir(workspacePath, projectId)) }));
+      const sub = await submitWithFallback(model, { ...input, count: job!.count }, { outputDir: toWorkspaceRel(workspacePath, mediaDir(workspacePath, projectId)) });
+      const result = sub.result;
+      if (sub.fallbackFrom) {
+        model = sub.model;
+        job = { ...job, modelId: model.id };
+        await patchJob(workspacePath, projectId, jobId, { modelId: model.id, fallbackFrom: sub.fallbackFrom } as any);
+      }
       if (result.state === 'done') {
         await finishJob(workspacePath, projectId, { ...job, requestId: result.requestId }, model, result.outputs || []);
         return;
