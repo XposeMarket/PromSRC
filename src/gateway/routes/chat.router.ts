@@ -7809,6 +7809,8 @@ RULES:
             stageDurationMs: Date.now() - providerRequestStartedAt,
             firstProviderEventMs: providerPassFirstEventAt ? providerPassFirstEventAt - providerRequestStartedAt : undefined,
             firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
+            stopReason: result.stopReason,
+            outputTokens: result.usage?.outputTokens,
           });
 	        response = result.message;
           responseStopReason = result.stopReason;
@@ -7828,6 +7830,8 @@ RULES:
           stageDurationMs: Date.now() - providerRequestStartedAt,
           firstProviderEventMs: providerPassFirstEventAt ? providerPassFirstEventAt - providerRequestStartedAt : undefined,
           firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
+          stopReason: result.stopReason,
+          outputTokens: result.usage?.outputTokens,
         });
 	        response = result.message;
           responseStopReason = result.stopReason;
@@ -7877,7 +7881,9 @@ RULES:
     const recovery = modelResponseRecovery.inspect(response, responseStopReason, abortSignal?.aborted);
     if (recovery.action === 'retry') {
       console.log(`[v2] MODEL RESPONSE RECOVERY: reason=${recovery.reason} attempt=${recovery.attempt}; retaining tools`);
-      sendSSE('info', { message: `The model returned an incomplete response (${recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
+      sendSSE('info', { message: recovery.reason === 'max_tokens'
+        ? `The model hit its output limit; retrying with smaller tool calls (${recovery.attempt}/2).`
+        : `The model returned an incomplete response (${recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
       // Keep partial visible text, but never insert an empty assistant turn or
       // fabricate a tool result for a call that was not executed.
       if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
@@ -7887,7 +7893,11 @@ RULES:
     if (recovery.action === 'exhausted') {
       return {
         type: 'execute',
-        text: 'The model repeatedly returned an empty or incomplete response after automatic recovery. The task is unfinished; completed tool results have been saved.',
+        text: recovery.reason === 'max_tokens'
+          ? 'The model hit its output token limit repeatedly, possibly while generating a large tool call. The task is unfinished; completed tool results have been saved.'
+          : recovery.reason === 'incomplete_stream'
+            ? 'The model response stream ended before completion repeatedly (connection or idle timeout). The task is unfinished; completed tool results have been saved.'
+            : `The model repeatedly returned an empty response (${recovery.reason}). The task is unfinished; completed tool results have been saved.`,
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length ? allToolResults : undefined,
       };
