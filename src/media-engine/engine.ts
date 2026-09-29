@@ -355,8 +355,10 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
       const result = sub.result;
       if (sub.fallbackFrom) {
         model = sub.model;
-        job = { ...job, modelId: model.id };
-        await patchJob(workspacePath, projectId, jobId, { modelId: model.id, fallbackFrom: sub.fallbackFrom } as any);
+        // Bill at the fallback model's price, not the original model's estimate.
+        const estimateUsd = estimateCostUsd(model, { count: job.count });
+        job = { ...job, modelId: model.id, estimateUsd };
+        await patchJob(workspacePath, projectId, jobId, { modelId: model.id, estimateUsd, fallbackFrom: sub.fallbackFrom } as any);
       }
       if (result.state === 'done') {
         await finishJob(workspacePath, projectId, { ...job, requestId: result.requestId }, model, result.outputs || []);
