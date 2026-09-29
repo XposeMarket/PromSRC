@@ -121,6 +121,16 @@ export interface Shot {
   storyboard?: string;
   storyboardCandidates?: string[];
   voiceover?: { path: string; durationSec: number; text: string; voice: string };
+  /** Video-to-video source: workspace path or take ref "shotId:takeId" (recast, lipsync, upscale, foley). */
+  sourceVideo?: string;
+  /** Driving audio (lipsync / talking photo); auto-TTS from line when missing. */
+  audio?: string;
+  /** Draw-to-video sketch (workspace path). */
+  sketch?: string;
+  /** Motion/VFX/look preset id (see video_project presets). */
+  presetId?: string;
+  /** Render still takes with a slow Ken Burns push-in instead of a frozen frame. */
+  kenBurns?: boolean;
 }
 
 export interface Track {
@@ -502,7 +512,7 @@ function trackEndMs(p: VideoProject, trackId: string): number {
   return p.clips.filter((c) => c.trackId === trackId).reduce((m, c) => Math.max(m, c.startMs + (c.outMs - c.inMs)), 0);
 }
 
-const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'anchorMode', 'modelId', 'params', 'notes', 'line', 'storyboard'] as const;
+const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'anchorMode', 'modelId', 'params', 'notes', 'line', 'storyboard', 'sourceVideo', 'audio', 'sketch', 'presetId', 'kenBurns'] as const;
 
 export const VO_TRACK_LABEL = 'VO';
 
@@ -918,6 +928,7 @@ export function summarizeProject(p: VideoProject, depth: { undo: number; redo: n
       return {
         n: i + 1, id: s.id, title: s.title, status: s.status, durationSec: s.durationSec,
         model: s.modelId || p.defaults.videoModel, camera: s.camera, characters: s.characterIds,
+        presetId: s.presetId, sourceVideo: s.sourceVideo, audio: s.audio, kenBurns: s.kenBurns || undefined,
         prompt: s.prompt.slice(0, 220), line: s.line, storyboard: s.storyboard, storyboardCandidates: s.storyboardCandidates?.length || 0,
         voiceover: s.voiceover ? { durationSec: s.voiceover.durationSec } : undefined,
         takes: s.takes.length, selectedTake: take ? { id: take.id, path: take.path, model: take.modelId, qa: take.qa ? { score: take.qa.score, verdict: take.qa.verdict, issues: take.qa.issues } : undefined } : null,

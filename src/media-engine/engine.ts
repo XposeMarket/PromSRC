@@ -18,6 +18,7 @@ import {
   timelineDurationMs, toWorkspaceRel, VO_TRACK_LABEL, type Job, type Shot, type Take, type VideoProject,
 } from './project.js';
 import { buildAss, buildCaptionCues } from './captions.js';
+import { getPreset } from './presets.js';
 
 // ── ffmpeg helpers ──────────────────────────────────────────────────────
 
@@ -94,9 +95,12 @@ export function dialogueDirection(p: VideoProject, shot: Shot): string {
     : `An off-camera voice says exactly: "${line}" No other dialogue, no background music.`;
 }
 
-function composePrompt(p: VideoProject, shot: Shot): string {
+export function composePrompt(p: VideoProject, shot: Shot): string {
   const parts = [shot.prompt.trim()];
-  if (shot.camera) parts.push(`Camera: ${shot.camera}.`);
+  const preset = getPreset(shot.presetId);
+  const camera = shot.camera || preset?.camera;
+  if (camera) parts.push(`Camera: ${camera}.`);
+  if (preset?.promptSuffix) parts.push(preset.promptSuffix);
   for (const cid of shot.characterIds) {
     const c = p.characters.find((x) => x.id === cid);
     if (c?.notes) parts.push(`${c.name}: ${c.notes}.`);
@@ -105,6 +109,37 @@ function composePrompt(p: VideoProject, shot: Shot): string {
   if (style?.promptSuffix) parts.push(style.promptSuffix);
   parts.push(dialogueDirection(p, shot));
   return parts.filter(Boolean).join(' ');
+}
+
+/**
+ * Resolve a media ref to an absolute path / URL: http(s)/data pass through,
+ * "shotId" or "shotId:takeId" picks a take, anything else is workspace-relative.
+ */
+export function resolveMediaRef(workspacePath: string, p: VideoProject, ref: string | undefined): string | undefined {
+  const r = String(ref || '').trim();
+  if (!r) return undefined;
+  if (/^(https?:|data:)/i.test(r)) return r;
+  const m = r.match(/^(shot_[a-z0-9_-]+)(?::(take_[a-z0-9_-]+))?$/i);
+  if (m) {
+    const s = p.shots.find((x) => x.id === m[1]);
+    const t = s && (m[2] ? s.takes.find((x) => x.id === m[2]) : selectedTake(s));
+    if (!t) throw new Error(`Media ref "${r}" has no take yet: generate that shot first or pass a workspace file path.`);
+    return fromWorkspaceRel(workspacePath, t.path);
+  }
+  return fromWorkspaceRel(workspacePath, r);
+}
+
+/** What the user should add when a required neutral field is missing. */
+const FIELD_HINT: Record<string, string> = {
+  startImage: 'add a character anchor, startImage, storyboard or chainFromPrevious',
+  sourceVideo: 'set shot.sourceVideo to a workspace clip or "shotId:takeId" (import_asset role footage)',
+  audio: 'set shot.audio to an audio file, or give the shot a line to auto-voice',
+  prompt: 'write a shot prompt',
+  referenceImages: 'add a character anchor or style reference',
+};
+
+export function missingFieldsMessage(model: MediaModelManifest, missing: string[]): string {
+  return `${model.id} needs ${missing.map((f) => `${f} (${FIELD_HINT[f] || 'set it on the shot'})`).join(', ')}`;
 }
 
 async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Shot, model: MediaModelManifest): Promise<ShotInput> {
@@ -135,8 +170,12 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
     startImage = refs[0];
   }
   const abs = (ref: string | undefined) => (!ref || /^(https?:|data:)/i.test(ref) ? ref : fromWorkspaceRel(workspacePath, ref));
+  const preset = getPreset(shot.presetId);
   return {
     prompt: composePrompt(p, shot),
+    negativePrompt: preset?.negativePrompt,
+    sourceVideo: model.map.sourceVideo ? resolveMediaRef(workspacePath, p, shot.sourceVideo) : undefined,
+    audio: model.map.audio ? resolveMediaRef(workspacePath, p, shot.audio) : undefined,
     startImage: abs(startImage),
     endImage: abs(shot.endImage),
     referenceImages: model.map.referenceImages && !startImage ? Array.from(new Set(refs)).slice(0, 5).map((r) => abs(r)!) : undefined,
@@ -151,7 +190,7 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
 
 export interface ShotEstimate { shotId: string; title: string; modelId: string; count: number; usd: number; problems: string[] }
 
-export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
+export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
   const p = loadProject(workspacePath, projectId);
   const ids = args.shotIds?.length ? args.shotIds : p.shots.map((s) => s.id);
   const count = Math.max(1, Math.min(4, Number(args.count) || 1));
@@ -163,8 +202,9 @@ export async function estimate(workspacePath: string, projectId: string, args: {
     const problems: string[] = [];
     try {
       const input = await resolveShotInput(workspacePath, p, shot, model);
-      const missing = missingRequiredFields(model, input);
-      if (missing.length) problems.push(`${model.id} needs ${missing.join(', ')} (add a character anchor, startImage, or chainFromPrevious)`);
+      // A line is auto-voiced (TTS) at generate time for audio-driven models.
+      const missing = missingRequiredFields(model, input).filter((f) => !(f === 'audio' && shot.line?.trim()) && !(f === 'sourceVideo' && args.sourceFromSelectedTake && selectedTake(shot)?.kind === 'video'));
+      if (missing.length) problems.push(missingFieldsMessage(model, missing));
     } catch (e: any) { problems.push(String(e?.message || e)); }
     if (!model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd) problems.push('model has no pricing; cost is unknown');
     shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count }), problems });
@@ -199,25 +239,28 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
     const abs = await downloadOutput(outputs[i], dir, base, model.kind);
     let poster: string | undefined;
     if (model.kind === 'video') {
+      // Upscaled/lip-synced takes keep the clip; poster is best-effort.
       try { poster = toWorkspaceRel(workspacePath, await extractFrameAt(abs, 0.1, path.join(dir, 'posters', `${base}.jpg`), 640)); } catch { /* thumbnail is best-effort */ }
     }
-    saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind === 'video' ? await mediaDurationSec(abs) : undefined, poster });
+    saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind !== 'image' ? await mediaDurationSec(abs) : undefined, poster });
   }
   const perOutputUsd = saved.length ? job.estimateUsd / saved.length : 0;
   await patchJob(workspacePath, projectId, job.id, { state: 'done' }, (p, j) => {
     p.budget.spentUsd = Math.round((p.budget.spentUsd + j.estimateUsd) * 1000) / 1000;
     const prompt = String(j.input.prompt || '');
-    if ('shotId' in j.target) {
+    if (model.kind === 'audio') {
+      // Generated audio (music / SFX) lands as project assets only.
+    } else if ('shotId' in j.target) {
       const shot = p.shots.find((s) => s.id === (j.target as any).shotId);
       if (!shot) return;
       for (const s of saved) {
         const take: Take = {
-          id: newId('take'), jobId: j.id, modelId: model.id, kind: model.kind, path: s.rel, prompt,
+          id: newId('take'), jobId: j.id, modelId: model.id, kind: model.kind as 'video' | 'image', path: s.rel, prompt,
           costUsd: perOutputUsd, createdAt: Date.now(), durationSec: s.durationSec, poster: s.poster,
         };
         shot.takes.push(take);
         j.takeIds.push(take.id);
-        if (!shot.selectedTakeId) shot.selectedTakeId = take.id;
+        if (!shot.selectedTakeId || (j.input as any).selectNew) shot.selectedTakeId = take.id;
       }
       shot.status = 'ready';
     } else if ('characterId' in j.target) {
@@ -344,6 +387,14 @@ export async function generateShots(workspacePath: string, projectId: string, ar
   promptOverride?: string;
   /** Draft -> final: re-generate at a higher resolution than the project target. */
   resolution?: string;
+  /** Make the new take the selected one (upscale / foley / lipsync passes). */
+  selectNew?: boolean;
+  /** Extra provider params merged into the request body. */
+  extra?: Record<string, unknown>;
+  /** Post passes (upscale / foley / lipsync): feed each shot's own selected take as sourceVideo. */
+  sourceFromSelectedTake?: boolean;
+  /** Send this prompt verbatim ("{shot}" = the shot prompt) instead of the composed shot prompt. */
+  rawPrompt?: string;
 }): Promise<GenerateResult> {
   const est = await estimate(workspacePath, projectId, args);
   const blocking = est.shots.filter((s) => s.problems.some((x) => !x.startsWith('model has no pricing')));
@@ -359,6 +410,19 @@ export async function generateShots(workspacePath: string, projectId: string, ar
     return { needsApproval: true, reason: `Estimated $${est.total.toFixed(2)} is above the auto-approve limit ($${p0.budget.autoApproveUsd.toFixed(2)}). Confirm with the user, then call again with approved:true.`, estimate: est, jobs: [] };
   }
 
+  // Audio-driven shots (lipsync / talking photo) with a line but no audio: voice the line first.
+  {
+    const pa = loadProject(workspacePath, projectId);
+    for (const s of est.shots) {
+      const shot = pa.shots.find((x) => x.id === s.shotId)!;
+      const model = shotModel(pa, shot, args.modelId);
+      if (model.map.audio && !shot.audio && shot.line?.trim()) {
+        const { ttsLineToFile } = await import('./studio.js');
+        const rel = await ttsLineToFile(workspacePath, projectId, shot.line.trim(), `${shot.id}_line`);
+        await mutateProject(workspacePath, projectId, 'tts', (proj) => { const t = proj.shots.find((x) => x.id === shot.id); if (t) t.audio = rel; });
+      }
+    }
+  }
   const created: GenerateResult['jobs'] = [];
   const p = loadProject(workspacePath, projectId);
   const pending: Job[] = [];
@@ -368,6 +432,13 @@ export async function generateShots(workspacePath: string, projectId: string, ar
     const input = await resolveShotInput(workspacePath, p, shot, model);
     if (args.promptOverride) input.prompt = composePrompt(p, { ...shot, prompt: String(args.promptOverride) });
     if (args.resolution) input.resolution = String(args.resolution);
+    if (args.sourceFromSelectedTake && model.map.sourceVideo) {
+      const t = selectedTake(shot);
+      if (t?.kind === 'video') input.sourceVideo = fromWorkspaceRel(workspacePath, t.path);
+    }
+    if (args.rawPrompt !== undefined) input.prompt = String(args.rawPrompt).replace(/\{shot\}/g, shot.prompt.trim());
+    if (args.extra) input.extra = { ...(input.extra || {}), ...args.extra };
+    if (args.selectNew) (input as any).selectNew = true;
     const job: Job = {
       id: newId('job'), target: { shotId: shot.id }, modelId: model.id, input: input as any,
       count: s.count, state: 'queued', estimateUsd: s.usd, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),
@@ -415,7 +486,7 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
     aspectRatio: p.target.aspect,
   };
   const missing = missingRequiredFields(model, input);
-  if (missing.length) throw new Error(`${model.id} needs ${missing.join(', ')}.`);
+  if (missing.length) throw new Error(`${missingFieldsMessage(model, missing)}.`);
   const job: Job = {
     id: newId('job'), target: { characterId: c.id }, modelId: model.id, input: input as any, count,
     state: 'queued', estimateUsd: usd, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),
@@ -471,7 +542,11 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
     }
     const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
     if (style) refs.push(...style.refs.slice(0, 1));
+    // Draw-to-video: the sketch leads, composition must be kept.
+    if (shot.sketch) refs.unshift(shot.sketch);
+    const look = getPreset(shot.presetId)?.group === 'look' ? getPreset(shot.presetId)!.label : (style?.name || 'photorealistic');
     const prompt = [
+      shot.sketch ? `Turn this sketch into a finished ${look} frame, keep composition.` : '',
       `Storyboard frame: the exact opening frame of a video shot, ${aspectWords}.`,
       composePrompt(p, { ...shot, line: undefined }),
       hasProduct ? 'The product must match the reference photo exactly: same shape, label, logo and colors.' : '',
@@ -537,7 +612,7 @@ export function canvasSize(target: VideoProject['target']): { width: number; hei
     : { width: even(short), height: even((short * rh) / rw) };
 }
 
-interface RenderLayer { abs: string; startSec: number; inSec: number; durSec: number; kind: 'video' | 'image' | 'audio'; trackIndex: number; volume: number; overlay: boolean }
+interface RenderLayer { abs: string; startSec: number; inSec: number; durSec: number; kind: 'video' | 'image' | 'audio'; trackIndex: number; volume: number; overlay: boolean; kenBurns?: boolean }
 
 export function buildRenderPlan(workspacePath: string, p: VideoProject): { layers: RenderLayer[]; durationSec: number; missing: string[] } {
   const layers: RenderLayer[] = [];
@@ -547,12 +622,14 @@ export function buildRenderPlan(workspacePath: string, p: VideoProject): { layer
     for (const clip of p.clips.filter((c) => c.trackId === track.id)) {
       let rel: string | undefined;
       let kind: RenderLayer['kind'] = track.kind === 'audio' ? 'audio' : 'video';
+      let kenBurns = false;
       if ('shotId' in clip.source) {
         const shot = p.shots.find((s) => s.id === (clip.source as any).shotId);
         const take = shot && selectedTake(shot);
         if (!take) { missing.push(`${shot?.title || clip.source.shotId} has no take`); continue; }
         rel = take.path;
-        if (take.kind === 'image') kind = 'image';
+        // Shot stills are first-class clips: slow Ken Burns push-in (opt out with kenBurns:false).
+        if (take.kind === 'image') { kind = 'image'; kenBurns = shot!.kenBurns !== false; }
       } else {
         rel = clip.source.assetPath;
         if (/\.(png|jpe?g|webp)$/i.test(rel)) kind = 'image';
@@ -566,6 +643,7 @@ export function buildRenderPlan(workspacePath: string, p: VideoProject): { layer
         startSec: clip.startMs / 1000, inSec: clip.inMs / 1000, durSec: Math.max(0.05, (clip.outMs - clip.inMs) / 1000),
         volume: track.muted ? 0 : clip.volume ?? 1,
         overlay: track.kind === 'overlay',
+        kenBurns: kenBurns && track.kind !== 'overlay',
       });
     }
   });
@@ -637,11 +715,17 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     if (l.kind !== 'image' && !audioOk.has(l.abs)) audioOk.set(l.abs, await hasAudioStream(l.abs));
   }
   visual.forEach((l, i) => {
-    if (l.kind === 'image') inputs.push('-loop', '1', '-t', l.durSec.toFixed(3), '-i', l.abs);
+    if (l.kenBurns) inputs.push('-i', l.abs);
+    else if (l.kind === 'image') inputs.push('-loop', '1', '-t', l.durSec.toFixed(3), '-i', l.abs);
     else inputs.push('-ss', l.inSec.toFixed(3), '-t', l.durSec.toFixed(3), '-i', l.abs);
     const idx = n++;
     const tail = `fps=${fps},format=yuva420p,setpts=PTS-STARTPTS+${l.startSec.toFixed(3)}/TB[v${i}]`;
-    if (reframe && !l.overlay) {
+    if (l.kenBurns) {
+      // Ken Burns: one still -> N frames of a slow centered push-in (1.0 -> 1.12).
+      const frames = Math.max(2, Math.round(l.durSec * fps));
+      const W2 = width * 2; const H2 = height * 2;
+      filters.push(`[${idx}:v]scale=${W2}:${H2}:force_original_aspect_ratio=increase,crop=${W2}:${H2},zoompan=z='1+0.12*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=${fps},trim=duration=${l.durSec.toFixed(3)},${tail}`);
+    } else if (reframe && !l.overlay) {
       // Reframe: sharp fit-inside over a blurred cover copy (no hard crop of the subject).
       filters.push(`[${idx}:v]split=2[fg${i}][bs${i}]`);
       filters.push(`[bs${i}]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=24:2[bg${i}]`);

@@ -38,8 +38,8 @@ const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
  * Accepts a workspace path (chat uploads land in uploads/) or base64 data.
  */
 export async function importAsset(ws: string, projectId: string, args: {
-  path?: string; dataBase64?: string; filename?: string; role?: 'product' | 'character' | 'asset'; name?: string; notes?: string;
-}): Promise<{ assetPath: string; characterId?: string; role: string }> {
+  path?: string; dataBase64?: string; filename?: string; role?: 'product' | 'character' | 'asset' | 'footage' | 'sketch'; name?: string; notes?: string;
+}): Promise<{ assetPath: string; characterId?: string; role: string; kind?: string }> {
   const dir = path.join(mediaDir(ws, projectId), 'imports');
   fs.mkdirSync(dir, { recursive: true });
   let dest: string;
@@ -49,7 +49,7 @@ export async function importAsset(ws: string, projectId: string, args: {
     if (!buf.length) throw new Error('import_asset: empty file data.');
     if (buf.length > 25 * 1024 * 1024) throw new Error('import_asset: file is larger than 25 MB.');
     const safe = String(args.filename || 'upload.png').replace(/[^a-z0-9._-]+/gi, '_').slice(-80);
-    dest = path.join(dir, `${Date.now().toString(36)}_${IMAGE_EXT.test(safe) || /\.(mp4|mp3|wav|m4a)$/i.test(safe) ? safe : `${safe}.png`}`);
+    dest = path.join(dir, `${Date.now().toString(36)}_${IMAGE_EXT.test(safe) || /\.(mp4|webm|mov|mp3|wav|m4a)$/i.test(safe) ? safe : `${safe}.png`}`);
     fs.writeFileSync(dest, buf);
   } else if (args.path) {
     const src = fromWorkspaceRel(ws, String(args.path));
@@ -59,10 +59,11 @@ export async function importAsset(ws: string, projectId: string, args: {
   } else throw new Error('import_asset needs path (workspace file) or dataBase64.');
   const rel = toWorkspaceRel(ws, dest);
   const role = args.role || 'asset';
-  if (role === 'asset' || !IMAGE_EXT.test(dest)) {
+  if (role === 'asset' || role === 'footage' || role === 'sketch' || !IMAGE_EXT.test(dest)) {
     const kind = /\.(mp4|webm|mov)$/i.test(dest) ? 'video' : /\.(mp3|wav|m4a|aac|ogg)$/i.test(dest) ? 'audio' : 'image';
-    await applyOps(ws, projectId, [{ op: 'asset.add', path: rel, kind, label: args.name }], 'user');
-    return { assetPath: rel, role: 'asset' };
+    if (role === 'footage' && kind !== 'video') throw new Error('import_asset role footage needs a video file (.mp4/.webm/.mov).');
+    await applyOps(ws, projectId, [{ op: 'asset.add', path: rel, kind, label: args.name || (role === 'footage' ? 'Footage' : role === 'sketch' ? 'Sketch' : undefined) }], 'user');
+    return { assetPath: rel, role: role === 'footage' || role === 'sketch' ? role : 'asset', kind };
   }
   const name = String(args.name || (role === 'product' ? 'Product' : 'Creator')).trim();
   const existing = loadProject(ws, projectId).characters.find((c) => c.name.toLowerCase() === name.toLowerCase() && (c.kind || 'person') === (role === 'product' ? 'product' : 'person'));
@@ -126,6 +127,18 @@ async function tts(text: string, voice: { provider: 'openai' | 'xai'; voice: str
   for (const fn of order) { try { return await fn(); } catch (e: any) { errs.push(String(e?.message || e).slice(0, 300)); } }
   // Report every provider's failure: the last one alone hid the real cause (e.g. OpenAI 401 behind "xAI not connected").
   throw new Error(`Voiceover failed on every TTS provider: ${errs.join(' || ') || 'none available'}`);
+}
+
+/** TTS one line with the project voice into media/vo; returns the workspace path (lipsync / talking photo). */
+export async function ttsLineToFile(ws: string, projectId: string, text: string, baseName = 'line'): Promise<string> {
+  const p = loadProject(ws, projectId);
+  const voice = p.voice || { provider: 'openai' as const, voice: 'nova' };
+  const out = await tts(text, voice);
+  const dir = path.join(mediaDir(ws, projectId), 'vo');
+  fs.mkdirSync(dir, { recursive: true });
+  const abs = path.join(dir, `${baseName.replace(/[^a-z0-9_-]+/gi, '_')}_${Date.now().toString(36)}${out.ext}`);
+  fs.writeFileSync(abs, out.buffer);
+  return toWorkspaceRel(ws, abs);
 }
 
 /** Voice every shot that has a line; place clips on the VO track aligned to the edit. */
@@ -324,7 +337,33 @@ export async function qaTake(ws: string, p: VideoProject, shot: Shot, take: Take
   return { ...parseQa(res.text || ''), model: res.model || 'vision' };
 }
 
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
+
+/** Word-overlap similarity (0..1) between what the clip said and the scripted line. */
+export function lineSimilarity(said: string, line: string): number {
+  const a = norm(said); const b = norm(line);
+  if (!a.length || !b.length) return 0;
+  const pool = new Map<string, number>();
+  for (const w of a) pool.set(w, (pool.get(w) || 0) + 1);
+  let hit = 0;
+  for (const w of b) { const n = pool.get(w) || 0; if (n) { hit += 1; pool.set(w, n - 1); } }
+  return (2 * hit) / (a.length + b.length);
+}
+
+/** Native dialogue: flag clips that went off-script (or silent) as rerolls. */
+export function onScriptIssue(p: VideoProject, shot: Shot, take: Take): string | null {
+  if (p.audioMode !== 'native' || take.kind !== 'video' || !shot.line?.trim() || !take.transcript) return null;
+  const said = String(take.transcript.text || '').trim();
+  if (!said) return 'off-script: no speech (the line was not said)';
+  if (lineSimilarity(said, shot.line) < 0.5) return `off-script: said '${said.slice(0, 120)}'`;
+  return null;
+}
+
 export async function qa(ws: string, projectId: string, args: { shotIds?: string[] } = {}): Promise<{ results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[] }>; failed: string[] }> {
+  // Native dialogue: transcribe first so the on-script check has words to compare (free, local).
+  if (loadProject(ws, projectId).audioMode === 'native') {
+    try { await transcribeTakes(ws, projectId, { shotIds: args.shotIds }); } catch { /* on-script check is best-effort */ }
+  }
   const p = loadProject(ws, projectId);
   const results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[]; model: string }> = [];
   const failed: string[] = [];
@@ -334,7 +373,12 @@ export async function qa(ws: string, projectId: string, args: { shotIds?: string
   const worker = async () => {
     for (let shot = queue.shift(); shot; shot = queue.shift()) {
       const take = selectedTake(shot)!;
-      try { results.push({ shotId: shot.id, title: shot.title, takeId: take.id, ...(await qaTake(ws, p, shot, take)) }); }
+      try {
+        const v = await qaTake(ws, p, shot, take);
+        const off = onScriptIssue(p, shot, take);
+        if (off) { v.verdict = 'reroll'; v.issues = [off, ...v.issues]; v.score = Math.min(v.score, 4); }
+        results.push({ shotId: shot.id, title: shot.title, takeId: take.id, ...v });
+      }
       catch (e: any) { failed.push(`${shot.title}: ${String(e?.message || e).slice(0, 200)}`); }
     }
   };
@@ -518,13 +562,16 @@ export async function planRunCost(ws: string, projectId: string, opts: { storybo
   for (const c of p.characters) {
     if (!c.anchors.length && img) breakdown.push({ item: `${c.name} anchor`, usd: estimateCostUsd(img, { count: 1 }) });
   }
-  const needBoards = opts.storyboard ? p.shots.filter((s) => !s.storyboard && !s.takes.length) : [];
+  const needBoards = opts.storyboard ? p.shots.filter((s) => !s.storyboard && !s.takes.length && getModel(s.modelId || p.defaults.videoModel)?.kind !== 'image') : [];
   if (needBoards.length && img) breakdown.push({ item: `${needBoards.length} storyboard stills`, usd: +(estimateCostUsd(img, { count: 1 }) * needBoards.length).toFixed(3) });
   const todo = p.shots.filter((s) => !s.takes.length);
   if (todo.length) {
     const est = await estimate(ws, projectId, { shotIds: todo.map((s) => s.id) }).catch(() => null);
     if (est) {
-      breakdown.push({ item: `${todo.length} video shots`, usd: est.total });
+      const stills = est.shots.filter((s) => getModel(s.modelId)?.kind === 'image');
+      const vids = est.shots.filter((s) => getModel(s.modelId)?.kind !== 'image');
+      if (stills.length) breakdown.push({ item: `${stills.length} still shots (Ken Burns)`, usd: +stills.reduce((a, s) => a + s.usd, 0).toFixed(3) });
+      if (vids.length) breakdown.push({ item: `${vids.length} video shots`, usd: +vids.reduce((a, s) => a + s.usd, 0).toFixed(3) });
       if (opts.qaRerolls) breakdown.push({ item: `QA reroll reserve (≤${opts.qaRerolls})`, usd: +(est.total / Math.max(1, todo.length) * opts.qaRerolls).toFixed(3) });
     }
   }
@@ -592,7 +639,9 @@ export async function runAutopilot(ws: string, projectId: string, args: {
 
     // Storyboard stills -> auto-approve first candidate per shot.
     if (want('storyboard') && storyboard) {
-      const need = loadProject(ws, projectId).shots.filter((s) => !s.storyboard && !s.takes.length);
+      const pb = loadProject(ws, projectId);
+      // Still shots are their own image: no storyboard pass needed.
+      const need = pb.shots.filter((s) => !s.storyboard && !s.takes.length && getModel(s.modelId || pb.defaults.videoModel)?.kind !== 'image');
       if (!need.length) await progress('storyboard', 'skipped', 'already boarded');
       else {
         await progress('storyboard', 'running');
