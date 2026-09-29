@@ -1051,7 +1051,7 @@ function openAiVoiceKey(): string {
   return providerApiKey('openai', ['OPENAI_REALTIME_API_KEY', 'OPENAI_API_KEY', 'VOICE_TOOLS_OPENAI_KEY']);
 }
 
-async function openAiVoiceAuthCandidates(): Promise<Array<{ token: string; auth: 'api_key' | 'openai_oauth_api_key' | 'openai_oauth_access_token' }>> {
+export async function openAiVoiceAuthCandidates(): Promise<Array<{ token: string; auth: 'api_key' | 'openai_oauth_api_key' | 'openai_oauth_access_token' }>> {
   const candidates: Array<{ token: string; auth: 'api_key' | 'openai_oauth_api_key' | 'openai_oauth_access_token' }> = [];
   const explicit = openAiVoiceKey();
   if (explicit) candidates.push({ token: explicit, auth: 'api_key' });
@@ -1076,7 +1076,7 @@ async function openAiVoiceAuthCandidates(): Promise<Array<{ token: string; auth:
 
 const OPENAI_CREATIVE_TTS_VOICES = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'marin', 'nova', 'onyx', 'sage', 'shimmer', 'verse']);
 
-function normalizeOpenAiTtsVoice(value: string | undefined): string {
+export function normalizeOpenAiTtsVoice(value: string | undefined): string {
   const requested = String(value || process.env.OPENAI_TTS_VOICE || 'alloy').trim();
   return OPENAI_CREATIVE_TTS_VOICES.has(requested) ? requested : 'alloy';
 }
@@ -1086,14 +1086,14 @@ function xaiVoiceKey(): string {
   return /^xai-[A-Za-z0-9_-]+/.test(key) ? key : '';
 }
 
-async function xaiVoiceAuthToken(): Promise<string> {
+export async function xaiVoiceAuthToken(): Promise<string> {
   const key = xaiVoiceKey();
   if (key) return key;
   if (!isXAIConnected(getConfig().getConfigDir())) return '';
   return getValidXAIToken(getConfig().getConfigDir());
 }
 
-function xaiVoiceBaseUrl(): string {
+export function xaiVoiceBaseUrl(): string {
   const configured = String(providerConfig('xai')?.endpoint || process.env.XAI_TTS_ENDPOINT || process.env.XAI_STT_ENDPOINT || process.env.XAI_ENDPOINT || 'https://api.x.ai/v1').trim();
   return (configured || 'https://api.x.ai/v1').replace(/\/+$/, '');
 }
@@ -1120,7 +1120,7 @@ async function listXaiVoiceIds(key: string): Promise<string[]> {
   }
 }
 
-async function resolveXaiVoiceId(key: string, requested?: string): Promise<{ voice: string; available: string[]; substituted: boolean }> {
+export async function resolveXaiVoiceId(key: string, requested?: string): Promise<{ voice: string; available: string[]; substituted: boolean }> {
   const fallback = ['eve', 'ara', 'rex', 'sal', 'leo'];
   const available = [...new Set([...(await listXaiVoiceIds(key)), ...fallback])];
   const preferred = String(requested || process.env.XAI_TTS_VOICE || '').trim();
@@ -1140,7 +1140,7 @@ function audioExtensionForMime(mimeType: string, fallback = '.mp3'): string {
   return fallback;
 }
 
-async function fetchBinaryOrThrow(url: string, init: any): Promise<{ buffer: Buffer; mimeType: string; status: number; text: string }> {
+export async function fetchBinaryOrThrow(url: string, init: any): Promise<{ buffer: Buffer; mimeType: string; status: number; text: string }> {
   const response = await fetch(url, init);
   const mimeType = String(response.headers.get('content-type') || '').split(';')[0].trim();
   const arrayBuffer = await response.arrayBuffer();

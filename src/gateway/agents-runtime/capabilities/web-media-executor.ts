@@ -120,7 +120,7 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
       case 'video_project': {
         const { executeVideoProject } = await import('../../../media-engine/tool.js');
         try {
-          const out = await executeVideoProject(args || {}, { workspacePath: ctx.workspacePath });
+          const out = await executeVideoProject(args || {}, { workspacePath: ctx.workspacePath, sessionId: ctx.sessionId });
           return { name, args, result: JSON.stringify(out, null, 1), error: false };
         } catch (e: any) {
           return { name, args, result: `video_project ${String(args?.action || '')} failed: ${String(e?.message || e)}`, error: true };

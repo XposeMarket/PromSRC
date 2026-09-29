@@ -11,18 +11,24 @@ import {
   summarizeProject, undoRedo,
 } from './project.js';
 import {
-  cancelJob, estimate, generateCharacterAnchor, generateShots, renderFrame, renderProject, resumeJobs, waitForJobs,
+  cancelJob, estimate, generateCharacterAnchor, generateShots, generateStoryboards, renderFrame, renderProject, resumeJobs, waitForJobs,
 } from './engine.js';
+import * as studio from './studio.js';
+import { deleteBrand, deleteCast, saveCast } from './library.js';
 
 export const VIDEO_PROJECT_ACTIONS = [
   'help', 'list', 'create', 'get', 'delete', 'apply_ops', 'undo', 'redo',
   'models', 'import_models', 'add_model', 'remove_model', 'providers', 'set_key',
   'estimate', 'generate', 'generate_anchor', 'jobs', 'wait', 'cancel_job', 'render', 'frame',
+  // studio
+  'quickstart', 'templates', 'apply_template', 'import_asset', 'storyboard', 'voiceover', 'captions', 'music', 'music_beds',
+  'qa', 'hooks', 'render_variants', 'upgrade', 'route', 'run', 'run_cost', 'watch',
+  'cast_list', 'cast_save', 'cast_add', 'cast_delete', 'brand_list', 'brand_save', 'brand_apply', 'brand_delete',
 ] as const;
 
-export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame']);
-/** Actions that spend money with an external provider. */
-export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor']);
+export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list']);
+/** Actions that can spend money with an external provider. */
+export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart']);
 
 export function getVideoProjectToolDef(): any {
   return {
@@ -36,6 +42,9 @@ export function getVideoProjectToolDef(): any {
         'Flow: create -> apply_ops plan.setShots (+character.upsert) -> generate_anchor (optional identity still) -> estimate -> generate (needs approved:true above the auto-approve limit; confirm cost with the user first) -> wait -> apply_ops timeline.assemble / take.select / clip.trim -> render.',
         'Anchors from generate_anchor arrive as character candidates; the user approves one (character.approveAnchor) before it drives identity. Shot anchorMode "start" uses the anchor as the first frame, "reference" as reference images.',
         'CHAT CARD: put the project\'s chatCard fence (```video-project\n{"projectId":"vp_..."}\n```) in your reply once per project. It renders a live card in chat (desktop + phone) with anchor approve/reroll, shot list, cost + Approve & generate, takes, redo, and Render/final video, so the user never has to leave chat.',
+        'SUPERCOMPUTER MODE: quickstart {brief, templateId?, productPath? (a chat upload like uploads/can.png), productName?, capUsd?} creates the project, imports the product photo, applies a template (ugc-testimonial, product-demo, cinematic-trailer, explainer, before-after, local-business-promo) and runs the autopilot: anchors -> storyboard stills -> voiceover -> video -> vision QA (+rerolls) -> assemble -> captions -> music -> render. It returns needsApproval with a whole-run cost breakdown first; show it, get ONE yes, then call run {projectId, approved:true}. run is resumable and skips finished steps.',
+        'Studio actions: import_asset (product/character photo), apply_template, storyboard (cheap stills per shot, approve with shot.approveStoryboard), voiceover (shot.line -> TTS VO track; voice.set op picks openai/xai voice), captions {style: pop|bold|minimal|karaoke}, music {builtin: pulse|chill|hype}, qa (vision score per take), hooks (A/B hook takes) + render_variants, render {aspects:["9:16","1:1","16:9"]}, upgrade (re-generate picked shots at 720p/1080p), route (smart model per shot), cast_*/brand_* (persistent cast + brand kits across projects).',
+        'ASYNC: long generations do not need you to wait. generate/storyboard/run/hooks accept notify:true (default for run): Prometheus wakes this chat with a [video_project wake] message when the jobs settle, so end your turn after kicking them off.',
         'Call action "help" for the op reference.',
       ].join(' '),
       parameters: {
@@ -67,6 +76,36 @@ export function getVideoProjectToolDef(): any {
           apiKey: { type: 'string', description: 'set_key: provider API key (stored in the vault). Only when the user pastes it.' },
           output: { type: 'string', description: 'render: workspace-relative output path (.mp4).' },
           atSec: { type: 'number', description: 'frame: timeline time in seconds.' },
+          templateId: { type: 'string', description: 'quickstart/apply_template: template id (see templates).' },
+          productPath: { type: 'string', description: 'quickstart: workspace path of the product photo (e.g. uploads/can.png).' },
+          productName: { type: 'string' },
+          creator: { type: 'string', description: 'quickstart: description of the on-camera creator.' },
+          capUsd: { type: 'number', description: 'quickstart: project budget cap in USD (default 5).' },
+          path: { type: 'string', description: 'import_asset: workspace file; music: custom audio path.' },
+          dataBase64: { type: 'string', description: 'import_asset: base64 file data (UI uploads).' },
+          filename: { type: 'string' },
+          role: { type: 'string', enum: ['product', 'character', 'asset'], description: 'import_asset role.' },
+          name: { type: 'string' },
+          notes: { type: 'string' },
+          style: { type: 'string', enum: ['pop', 'bold', 'minimal', 'karaoke'], description: 'captions style.' },
+          builtin: { type: 'string', enum: ['pulse', 'chill', 'hype'], description: 'music: generated bed.' },
+          volume: { type: 'number' },
+          aspects: { type: 'array', items: { type: 'string' }, description: 'render: one export per aspect, e.g. ["9:16","1:1","16:9"].' },
+          aspect: { type: 'string' },
+          shotId: { type: 'string' },
+          prompts: { type: 'array', items: { type: 'string' }, description: 'hooks: alternative hook prompts.' },
+          resolution: { type: 'string', enum: ['480p', '720p', '1080p'], description: 'upgrade target resolution.' },
+          quality: { type: 'string', enum: ['draft', 'premium'], description: 'route.' },
+          storyboard: { type: 'boolean', description: 'run: generate storyboard stills first (default true).' },
+          qa: { type: 'boolean', description: 'run: vision QA + rerolls (default true).' },
+          maxRerolls: { type: 'integer' },
+          steps: { type: 'array', items: { type: 'string' }, description: 'run: limit to these steps.' },
+          notify: { type: 'boolean', description: 'Wake this chat when the started jobs finish (default true for run/quickstart).' },
+          castId: { type: 'string' },
+          brandId: { type: 'string' },
+          castIds: { type: 'array', items: { type: 'string' } },
+          brand: { type: 'object', description: 'brand_save: {name, logo?, colors?, tone?, promptSuffix?, tagline?, cta?, castIds?, productIds?, watermark?, voice?}.' },
+          tags: { type: 'array', items: { type: 'string' } },
         },
       },
     },
@@ -104,7 +143,35 @@ function brief(p: ReturnType<typeof loadProject>, ws: string) {
 
 let resumedFor = new Set<string>();
 
-export async function executeVideoProject(args: any, ctx: { workspacePath: string }): Promise<any> {
+/** Wake the calling chat when these jobs settle (async generation). */
+async function maybeWatch(ctx: { workspacePath: string; sessionId?: string }, projectId: string, jobIds: string[] | undefined, note: string, on: boolean): Promise<string | undefined> {
+  if (!on || !ctx.sessionId || !jobIds?.length) return undefined;
+  try {
+    const { watchVideoJobs } = await import('../gateway/video-project-wake.js');
+    watchVideoJobs({ workspacePath: ctx.workspacePath, sessionId: ctx.sessionId, projectId, jobIds, note });
+    return 'This chat will be woken automatically when these jobs finish; you can end your turn.';
+  } catch { return undefined; }
+}
+
+/** Autopilot runs in the background and wakes the chat when it settles. */
+const activeRuns = new Map<string, Promise<unknown>>();
+function startRunInBackground(ctx: { workspacePath: string; sessionId?: string }, projectId: string, runArgs: any): { started: boolean; note: string } {
+  if (activeRuns.has(projectId)) return { started: false, note: 'An autopilot run is already in progress for this project; the card shows live progress.' };
+  const p = studio.runAutopilot(ctx.workspacePath, projectId, runArgs).then(async (out) => {
+    if (!ctx.sessionId) return;
+    try {
+      const { wakeSession } = await import('../gateway/session-wake.js');
+      const r = out.lastRun;
+      const steps = r.steps.filter((s) => s.state !== 'pending').map((s) => `${s.step}:${s.state}${s.note ? ` (${s.note})` : ''}`).join('; ');
+      const exp = (out.render?.exports || []).map((e: any) => e.path).join(', ');
+      wakeSession(ctx.sessionId, `[video_project wake] Autopilot ${r.state} for ${projectId}. ${steps}.${r.error ? ` Error: ${r.error}.` : ''}${exp ? ` Exports: ${exp}.` : ''} Review the result (show the card and embed the final video), then suggest improvements.`, { source: 'video_run', key: `run:${r.id}` });
+    } catch { /* wake is best-effort */ }
+  }).finally(() => activeRuns.delete(projectId));
+  activeRuns.set(projectId, p);
+  return { started: true, note: 'Autopilot started in the background. The chat card shows live progress, and this chat is woken when it finishes, so end your turn now.' };
+}
+
+export async function executeVideoProject(args: any, ctx: { workspacePath: string; sessionId?: string }): Promise<any> {
   const ws = ctx.workspacePath;
   if (!resumedFor.has(ws)) { resumedFor.add(ws); try { resumeJobs(ws); } catch { /* ignore */ } }
   const action = String(args?.action || '').trim();
@@ -163,13 +230,106 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     }
     case 'estimate':
       return await estimate(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, count: args.count, modelId: args.modelId });
-    case 'generate':
-      return await generateShots(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, count: args.count, modelId: args.modelId, approved: args.approved === true });
-    case 'generate_anchor':
-      return await generateCharacterAnchor(ws, need(args.projectId, 'projectId'), {
+    case 'generate': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await generateShots(ws, pid, { shotIds: args.shotIds, count: args.count, modelId: args.modelId, approved: args.approved === true });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Shots generated.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    case 'generate_anchor': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await generateCharacterAnchor(ws, pid, {
         characterId: need(args.characterId, 'characterId'), prompt: args.prompt ? String(args.prompt) : undefined,
         modelId: args.modelId, count: args.count, approved: args.approved === true, referenceImages: args.referenceImages,
       });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Anchor candidates ready for approval on the card.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    // ── studio ──
+    case 'templates':
+      return { templates: studio.listTemplates() };
+    case 'music_beds':
+      return { beds: studio.listMusicBeds() };
+    case 'quickstart': {
+      const out = await studio.quickstart(ws, {
+        brief: need(args.brief, 'brief'), templateId: args.templateId, title: args.title, productPath: args.productPath, productName: args.productName,
+        creator: args.creator, brandId: args.brandId, castIds: args.castIds, capUsd: args.capUsd, aspect: args.aspect, resolution: args.resolution, run: false,
+      });
+      const cost = await studio.planRunCost(ws, out.projectId, { storyboard: args.storyboard !== false, qaRerolls: args.qa === false ? 0 : 1 });
+      const p = loadProject(ws, out.projectId);
+      if (!args.approved && cost.usd > p.budget.autoApproveUsd + 1e-9) {
+        await studio.runAutopilot(ws, out.projectId, { approved: false });
+        return { ...out, needsApproval: cost, next: 'Show the card + this breakdown; after the user approves call run {projectId, approved:true}.', project: brief(p, ws) };
+      }
+      return { ...out, ...startRunInBackground(ctx, out.projectId, { approved: true, storyboard: args.storyboard, qa: args.qa, aspects: args.aspects }) };
+    }
+    case 'apply_template':
+      return await studio.applyTemplate(ws, need(args.projectId, 'projectId'), { templateId: need(args.templateId, 'templateId'), product: args.productName, character: args.creator, brief: args.brief });
+    case 'import_asset':
+      return await studio.importAsset(ws, need(args.projectId, 'projectId'), { path: args.path, dataBase64: args.dataBase64, filename: args.filename, role: args.role, name: args.name, notes: args.notes });
+    case 'storyboard': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await generateStoryboards(ws, pid, { shotIds: args.shotIds, modelId: args.modelId, approved: args.approved === true, count: args.count });
+      if (r.needsApproval) return { ...r, estimateUsd: r.estimate?.total };
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Storyboard stills are on the card for approval.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    case 'voiceover':
+      return await studio.voiceover(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, force: args.force === true });
+    case 'captions':
+      return await studio.captions(ws, need(args.projectId, 'projectId'), { style: args.style, enabled: args.enabled });
+    case 'music':
+      return await studio.music(ws, need(args.projectId, 'projectId'), { builtin: args.builtin, path: args.path, volume: args.volume, duck: args.duck });
+    case 'qa':
+      return await studio.qa(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds });
+    case 'hooks': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await studio.generateHookVariants(ws, pid, { prompts: args.prompts, shotId: args.shotId, approved: args.approved === true });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Hook variants ready: call render_variants for the A/B exports.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    case 'render_variants':
+      return await studio.renderVariants(ws, need(args.projectId, 'projectId'), { shotId: need(args.shotId, 'shotId'), aspect: args.aspect });
+    case 'upgrade': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await studio.upgradeFinal(ws, pid, { shotIds: args.shotIds, resolution: args.resolution, approved: args.approved === true });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Final-resolution takes are ready.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    case 'route':
+      return await studio.routeModels(ws, need(args.projectId, 'projectId'), { quality: args.quality, apply: args.apply });
+    case 'run_cost':
+      return await studio.planRunCost(ws, need(args.projectId, 'projectId'), { storyboard: args.storyboard !== false, qaRerolls: args.qa === false ? 0 : Math.max(0, Math.min(3, Number(args.maxRerolls ?? 1))) });
+    case 'run': {
+      const pid = need(args.projectId, 'projectId');
+      const runArgs = { approved: args.approved === true, storyboard: args.storyboard, qa: args.qa, maxRerolls: args.maxRerolls, aspects: args.aspects, steps: args.steps };
+      const cost = await studio.planRunCost(ws, pid, { storyboard: args.storyboard !== false, qaRerolls: args.qa === false ? 0 : Math.max(0, Math.min(3, Number(args.maxRerolls ?? 1))) });
+      const p = loadProject(ws, pid);
+      if (!runArgs.approved && cost.usd > p.budget.autoApproveUsd + 1e-9) {
+        const r = await studio.runAutopilot(ws, pid, runArgs);
+        return { ...r, next: 'Show the cost breakdown; call run again with approved:true once the user says yes.' };
+      }
+      if (args.wait === true) return await studio.runAutopilot(ws, pid, { ...runArgs, approved: true });
+      return { ...startRunInBackground(ctx, pid, { ...runArgs, approved: true }), costUsd: cost.usd };
+    }
+    case 'watch':
+      return { note: await maybeWatch(ctx, need(args.projectId, 'projectId'), args.jobIds, String(args.note || ''), true) || 'No session to wake (not called from a chat).' };
+    case 'cast_list':
+      return { cast: studio.listCast(ws, args.kind ? { kind: args.kind } : undefined) };
+    case 'cast_save':
+      return { saved: studio.castSave(ws, need(args.projectId, 'projectId'), need(args.characterId, 'characterId'), { tags: args.tags }) };
+    case 'cast_add':
+      return await studio.castAdd(ws, need(args.projectId, 'projectId'), need(args.castId, 'castId'));
+    case 'cast_delete':
+      return { deleted: deleteCast(ws, need(args.castId, 'castId')) };
+    case 'brand_list':
+      return { brands: studio.listBrands(ws) };
+    case 'brand_save':
+      return { saved: studio.saveBrand(ws, { ...(args.brand || {}), name: need(args.brand?.name || args.name, 'brand.name') }) };
+    case 'brand_apply':
+      return await studio.brandApply(ws, need(args.projectId, 'projectId'), need(args.brandId, 'brandId'));
+    case 'brand_delete':
+      return { deleted: deleteBrand(ws, need(args.brandId, 'brandId')) };
     case 'jobs': {
       const p = loadProject(ws, need(args.projectId, 'projectId'));
       const jobs = (args.jobIds?.length ? p.jobs.filter((j) => args.jobIds.includes(j.id)) : p.jobs.slice(-15));
@@ -183,8 +343,11 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     }
     case 'cancel_job':
       return { canceled: await cancelJob(ws, need(args.projectId, 'projectId'), need(args.jobId, 'jobId')) };
-    case 'render':
-      return await renderProject(ws, need(args.projectId, 'projectId'), { output: args.output });
+    case 'render': {
+      const pid = need(args.projectId, 'projectId');
+      if (Array.isArray(args.aspects) && args.aspects.length) return await studio.renderAll(ws, pid, { aspects: args.aspects });
+      return await renderProject(ws, pid, { output: args.output, aspect: args.aspect });
+    }
     case 'frame':
       return { path: await renderFrame(ws, need(args.projectId, 'projectId'), Number(args.atSec) || 0) };
     default:
@@ -194,3 +357,6 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
 
 /** Test hook. */
 export function __resetVideoProjectResume(): void { resumedFor = new Set(); }
+
+/** Test hook: wait for a background autopilot run. */
+export async function __awaitRun(projectId: string): Promise<void> { await activeRuns.get(projectId); }

@@ -128,6 +128,27 @@ export function registerVideoProjectRoutes(router: IRouter): void {
     req.on('close', () => { off(); clearInterval(ping); });
   });
 
+  // Generic action surface for the chat card / Studio: mirrors the video_project
+  // tool (same cost gates), so UI and Prom share one code path.
+  const UI_ACTIONS = new Set([
+    'templates', 'music_beds', 'models', 'providers', 'cast_list', 'brand_list', 'run_cost',
+    'import_asset', 'apply_template', 'storyboard', 'voiceover', 'captions', 'music', 'qa', 'hooks',
+    'render', 'render_variants', 'upgrade', 'route', 'run', 'cast_save', 'cast_add', 'brand_apply', 'estimate', 'generate', 'generate_anchor',
+  ]);
+  const runAction = async (req: any, res: any, projectId?: string) => {
+    try {
+      const action = String(req.body?.action || '').trim();
+      if (!UI_ACTIONS.has(action)) { res.status(400).json({ success: false, error: `Unsupported action "${action}".` }); return; }
+      const { executeVideoProject } = await import('../../media-engine/tool.js');
+      const sessionId = String(req.body?.sessionId || req.query?.sessionId || '').trim() || undefined;
+      const { sessionId: _s, ...rest } = req.body || {};
+      const out = await executeVideoProject({ ...rest, action, ...(projectId ? { projectId } : {}) }, { workspacePath: workspaceFor(req), sessionId });
+      res.json({ success: true, ...(out && typeof out === 'object' && !Array.isArray(out) ? out : { result: out }) });
+    } catch (e) { sendError(res, e); }
+  };
+  router.post('/api/video-projects/action', (req, res) => runAction(req, res));
+  router.post('/api/video-projects/:id/action', (req, res) => runAction(req, res, req.params.id));
+
   router.post('/api/video-projects/:id/ops', async (req, res) => {
     try {
       const ws = workspaceFor(req);

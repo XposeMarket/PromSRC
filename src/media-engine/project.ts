@@ -38,6 +38,10 @@ export interface Character {
   /** Last anchor prompt/model, reused by reroll. */
   anchorPrompt?: string;
   anchorModel?: string;
+  /** person = a creator/actor; product = a product photo used as a reference. */
+  kind?: 'person' | 'product';
+  /** Source cast member in the persistent library (video-library/cast). */
+  castId?: string;
 }
 
 export interface Style {
@@ -58,6 +62,26 @@ export interface Take {
   costUsd: number;
   createdAt: number;
   durationSec?: number;
+  /** First-frame JPG of a video take (thumbnails). */
+  poster?: string;
+  /** Vision QA verdict. */
+  qa?: TakeQa;
+}
+
+export interface TakeQa { score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string; at: number }
+
+export interface CaptionCue { startMs: number; endMs: number; text: string; words?: Array<{ text: string; startMs: number; endMs: number }> }
+export type CaptionStyle = 'bold' | 'pop' | 'minimal' | 'karaoke';
+
+export interface RunStep { step: string; state: 'pending' | 'running' | 'done' | 'skipped' | 'failed' | 'needs_approval'; note?: string }
+export interface RunState {
+  id: string;
+  state: 'running' | 'done' | 'failed' | 'needs_approval';
+  steps: RunStep[];
+  needsApproval?: { usd: number; breakdown: Array<{ item: string; usd: number }> };
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
 }
 
 export interface Shot {
@@ -80,6 +104,12 @@ export interface Shot {
   takes: Take[];
   selectedTakeId?: string;
   notes?: string;
+  /** Spoken voiceover/dialogue line for this shot. */
+  line?: string;
+  /** Approved storyboard still; image-to-video models animate from it. */
+  storyboard?: string;
+  storyboardCandidates?: string[];
+  voiceover?: { path: string; durationSec: number; text: string; voice: string };
 }
 
 export interface Track {
@@ -120,7 +150,7 @@ export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 
 export interface Job {
   id: string;
-  target: { shotId: string } | { characterId: string } | { asset: true };
+  target: { shotId: string } | { characterId: string } | { storyboardShotId: string } | { asset: true };
   modelId: string;
   input: Record<string, unknown>;
   count: number;
@@ -160,7 +190,15 @@ export interface VideoProject {
   assets: Asset[];
   jobs: Job[];
   /** Finished MP4 renders, newest last. */
-  exports: Array<{ path: string; createdAt: number; durationSec: number }>;
+  exports: Array<{ path: string; createdAt: number; durationSec: number; aspect?: string; variant?: string }>;
+  voice?: { provider: 'openai' | 'xai'; voice: string; speed?: number };
+  captions?: { enabled: boolean; style: CaptionStyle; cues: CaptionCue[] };
+  music?: { path: string; volume: number; duck: boolean; label?: string };
+  brand?: { id?: string; name: string; logo?: string; colors?: string[]; watermark?: boolean };
+  /** Autopilot progress (bookkeeping; never rewound by undo). */
+  lastRun?: RunState;
+  templateId?: string;
+  hookVariants?: string[];
   opLog: OpRecord[];
   version: number;
   createdAt: number;
@@ -299,12 +337,20 @@ export function normalizeProject(raw: any): VideoProject {
       characterIds: arr(s.characterIds),
       status: s.status || 'draft',
       takes: arr(s.takes),
+      storyboardCandidates: arr(s.storyboardCandidates),
     })),
     tracks: tracks.length ? tracks : [{ id: 'track_v1', kind: 'video', label: 'V1', muted: false, locked: false }],
     clips: arr<Clip>(raw.clips),
     assets: arr<Asset>(raw.assets),
     jobs: arr<Job>(raw.jobs),
-    exports: arr<{ path: string; createdAt: number; durationSec: number }>(raw.exports).slice(-20),
+    exports: arr<VideoProject['exports'][number]>(raw.exports).slice(-30),
+    voice: raw.voice && raw.voice.voice ? { provider: raw.voice.provider === 'xai' ? 'xai' : 'openai', voice: String(raw.voice.voice), speed: raw.voice.speed != null ? num(raw.voice.speed, 1) : undefined } : undefined,
+    captions: raw.captions ? { enabled: !!raw.captions.enabled, style: (['bold', 'pop', 'minimal', 'karaoke'].includes(raw.captions.style) ? raw.captions.style : 'pop'), cues: arr<CaptionCue>(raw.captions.cues) } : undefined,
+    music: raw.music?.path ? { path: String(raw.music.path), volume: num(raw.music.volume, 0.25), duck: raw.music.duck !== false, label: raw.music.label } : undefined,
+    brand: raw.brand?.name ? raw.brand : undefined,
+    lastRun: raw.lastRun || undefined,
+    templateId: raw.templateId || undefined,
+    hookVariants: raw.hookVariants ? arr<string>(raw.hookVariants) : undefined,
     opLog: arr<OpRecord>(raw.opLog).slice(-200),
     version: num(raw.version, 0),
     createdAt: num(raw.createdAt, now),
@@ -381,7 +427,7 @@ export interface ProjectOp { op: string; [key: string]: any }
 
 function snapshotForUndo(p: VideoProject): string {
   // Jobs and budget are generation bookkeeping, not edits: never rewound by undo.
-  const { jobs: _j, opLog: _l, budget: _b, version: _v, updatedAt: _u, ...editable } = p;
+  const { jobs: _j, opLog: _l, budget: _b, version: _v, updatedAt: _u, lastRun: _r, exports: _x, ...editable } = p;
   return JSON.stringify(editable);
 }
 
@@ -389,12 +435,18 @@ function restoreFromUndo(p: VideoProject, snap: string): VideoProject {
   const editable = JSON.parse(snap);
   // Takes generated after the snapshot must survive undo (they cost money).
   const liveTakes = new Map<string, Take[]>(p.shots.map((s) => [s.id, s.takes]));
-  const restored = normalizeProject({ ...p, ...editable, jobs: p.jobs, opLog: p.opLog, budget: p.budget, version: p.version });
+  const liveBoards = new Map<string, string[]>(p.shots.map((s) => [s.id, s.storyboardCandidates || []]));
+  const restored = normalizeProject({ ...p, ...editable, jobs: p.jobs, opLog: p.opLog, budget: p.budget, version: p.version, lastRun: p.lastRun, exports: p.exports });
   for (const shot of restored.shots) {
     const live = liveTakes.get(shot.id);
-    if (!live) continue;
-    const known = new Set(shot.takes.map((t) => t.id));
-    for (const t of live) if (!known.has(t.id)) shot.takes.push(t);
+    if (live) {
+      const known = new Set(shot.takes.map((t) => t.id));
+      for (const t of live) if (!known.has(t.id)) shot.takes.push(t);
+    }
+    // Paid storyboard stills survive undo too.
+    const boards = liveBoards.get(shot.id) || [];
+    const have = new Set([...(shot.storyboardCandidates || []), shot.storyboard || '']);
+    shot.storyboardCandidates = [...(shot.storyboardCandidates || []), ...boards.filter((b) => !have.has(b))];
   }
   return restored;
 }
@@ -433,7 +485,46 @@ function trackEndMs(p: VideoProject, trackId: string): number {
   return p.clips.filter((c) => c.trackId === trackId).reduce((m, c) => Math.max(m, c.startMs + (c.outMs - c.inMs)), 0);
 }
 
-const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'anchorMode', 'modelId', 'params', 'notes'] as const;
+const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'anchorMode', 'modelId', 'params', 'notes', 'line', 'storyboard'] as const;
+
+export const VO_TRACK_LABEL = 'VO';
+
+/** Main video track = first video track. */
+export function mainVideoTrack(p: VideoProject): Track | undefined {
+  return p.tracks.find((t) => t.kind === 'video');
+}
+
+/**
+ * Place each shot's voiceover on the VO audio track, aligned to where that
+ * shot sits on the main video track. Pure layout: safe to call after any
+ * timeline change.
+ */
+export function layoutVoiceover(p: VideoProject): number {
+  const main = mainVideoTrack(p);
+  const voShots = p.shots.filter((s) => s.voiceover?.path);
+  let vo = p.tracks.find((t) => t.kind === 'audio' && t.label === VO_TRACK_LABEL);
+  if (!voShots.length) {
+    if (vo) p.clips = p.clips.filter((c) => c.trackId !== vo!.id);
+    return 0;
+  }
+  if (!vo) {
+    vo = { id: newId('track'), kind: 'audio', label: VO_TRACK_LABEL, muted: false, locked: false };
+    p.tracks.push(vo);
+  }
+  p.clips = p.clips.filter((c) => c.trackId !== vo!.id);
+  let placed = 0;
+  let cursor = 0;
+  for (const shot of p.shots) {
+    const clip = main ? p.clips.find((c) => c.trackId === main.id && 'shotId' in c.source && c.source.shotId === shot.id) : undefined;
+    const shotStart = clip ? clip.startMs : cursor;
+    cursor = shotStart + (clip ? clip.outMs - clip.inMs : Math.round(shot.durationSec * 1000));
+    if (!shot.voiceover?.path) continue;
+    const dur = Math.round(shot.voiceover.durationSec * 1000);
+    p.clips.push({ id: newId('clip'), trackId: vo.id, source: { assetPath: shot.voiceover.path }, startMs: shotStart + 150, inMs: 0, outMs: Math.max(200, dur), volume: 1, label: `VO ${shot.title}` });
+    placed += 1;
+  }
+  return placed;
+}
 
 function pickShotFields(src: any): Partial<Shot> {
   const out: any = {};
@@ -450,6 +541,9 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
       if (o.brief !== undefined) p.brief = String(o.brief);
       if (o.target) p.target = { ...p.target, ...o.target };
       if (o.defaults) p.defaults = { ...p.defaults, ...o.defaults };
+      if (o.brand !== undefined) p.brand = o.brand && o.brand.name ? o.brand : undefined;
+      if (o.templateId !== undefined) p.templateId = o.templateId ? String(o.templateId) : undefined;
+      if (o.hookVariants !== undefined) p.hookVariants = arr<string>(o.hookVariants);
       if (o.budget) {
         if (o.budget.capUsd !== undefined) p.budget.capUsd = o.budget.capUsd === null ? undefined : num(o.budget.capUsd, 0);
         if (o.budget.autoApproveUsd !== undefined) p.budget.autoApproveUsd = Math.max(0, num(o.budget.autoApproveUsd, 1));
@@ -468,6 +562,8 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
         candidates: o.candidates !== undefined ? arr<string>(o.candidates) : existing?.candidates || [],
         anchorPrompt: o.anchorPrompt !== undefined ? String(o.anchorPrompt) : existing?.anchorPrompt,
         anchorModel: o.anchorModel !== undefined ? String(o.anchorModel) : existing?.anchorModel,
+        kind: o.kind === 'product' || o.kind === 'person' ? o.kind : existing?.kind,
+        castId: o.castId !== undefined ? String(o.castId) : existing?.castId,
       };
       if (existing) Object.assign(existing, next); else p.characters.push(next);
       return `${existing ? 'Updated' : 'Added'} character ${next.name} (${next.id})`;
@@ -657,8 +753,47 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
         at += dur;
         placed += 1;
       }
+      layoutVoiceover(p);
       return `Assembled ${placed} shots on ${track.label} (${(at / 1000).toFixed(1)}s)`;
     }
+    case 'shot.approveStoryboard': {
+      const shot = findShot(p, o.id);
+      const pick = String(o.path || shot.storyboardCandidates?.[0] || '');
+      if (!pick) throw new Error('shot.approveStoryboard needs path (no candidates).');
+      if (shot.storyboard && shot.storyboard !== pick) shot.storyboardCandidates = [...(shot.storyboardCandidates || []), shot.storyboard];
+      shot.storyboard = pick;
+      shot.storyboardCandidates = (shot.storyboardCandidates || []).filter((x) => x !== pick);
+      return `Approved storyboard for ${shot.title}`;
+    }
+    case 'shot.rejectStoryboard': {
+      const shot = findShot(p, o.id);
+      const drop = String(o.path || '');
+      if (!drop || drop === shot.storyboard) shot.storyboard = undefined;
+      shot.storyboardCandidates = drop ? (shot.storyboardCandidates || []).filter((x) => x !== drop) : [];
+      return `Rejected storyboard for ${shot.title}`;
+    }
+    case 'captions.set': {
+      const style = (['bold', 'pop', 'minimal', 'karaoke'].includes(o.style) ? o.style : p.captions?.style || 'pop') as CaptionStyle;
+      p.captions = { enabled: o.enabled !== undefined ? !!o.enabled : p.captions?.enabled ?? true, style, cues: o.cues !== undefined ? arr<CaptionCue>(o.cues) : p.captions?.cues || [] };
+      return `Captions ${p.captions.enabled ? 'on' : 'off'} (${style})`;
+    }
+    case 'music.set': {
+      const pth = String(o.path || p.music?.path || '');
+      if (!pth) throw new Error('music.set needs path.');
+      p.music = { path: pth, volume: Math.max(0, Math.min(1, num(o.volume, p.music?.volume ?? 0.25))), duck: o.duck !== undefined ? !!o.duck : p.music?.duck ?? true, label: o.label ?? p.music?.label };
+      return `Music ${p.music.label || pth} at ${Math.round(p.music.volume * 100)}%`;
+    }
+    case 'music.clear':
+      p.music = undefined;
+      return 'Removed music';
+    case 'voice.set': {
+      const voice = String(o.voice || '').trim();
+      if (!voice) throw new Error('voice.set needs voice.');
+      p.voice = { provider: o.provider === 'xai' ? 'xai' : 'openai', voice, speed: o.speed != null ? num(o.speed, 1) : p.voice?.speed };
+      return `Voice ${p.voice.provider}/${voice}`;
+    }
+    case 'timeline.layoutVoiceover':
+      return `Placed ${layoutVoiceover(p)} voiceover clips`;
     case 'asset.add': {
       const asset: Asset = {
         id: newId('asset'), kind: o.kind === 'video' || o.kind === 'audio' ? o.kind : 'image',
@@ -678,6 +813,7 @@ export const OP_NAMES = [
   'plan.setShots', 'shot.add', 'shot.update', 'shot.remove', 'shot.move', 'take.select', 'take.remove',
   'track.add', 'track.update', 'clip.add', 'clip.trim', 'clip.move', 'clip.split', 'clip.remove', 'clip.update',
   'timeline.assemble', 'asset.add',
+  'shot.approveStoryboard', 'shot.rejectStoryboard', 'captions.set', 'music.set', 'music.clear', 'voice.set', 'timeline.layoutVoiceover',
 ];
 
 /**
@@ -747,14 +883,21 @@ export function summarizeProject(p: VideoProject, depth: { undo: number; redo: n
     budget: p.budget,
     version: p.version,
     history: depth,
-    characters: p.characters.map((c) => ({ id: c.id, name: c.name, anchors: c.anchors, candidates: c.candidates || [], notes: c.notes })),
+    characters: p.characters.map((c) => ({ id: c.id, name: c.name, kind: c.kind || 'person', castId: c.castId, anchors: c.anchors, candidates: c.candidates || [], notes: c.notes })),
+    voice: p.voice,
+    captions: p.captions ? { enabled: p.captions.enabled, style: p.captions.style, cues: p.captions.cues.length } : undefined,
+    music: p.music,
+    brand: p.brand ? { id: p.brand.id, name: p.brand.name, watermark: p.brand.watermark } : undefined,
+    lastRun: p.lastRun,
     styles: p.styles.map((s) => ({ id: s.id, name: s.name, promptSuffix: s.promptSuffix, refs: s.refs.length })),
     shots: p.shots.map((s, i) => {
       const take = selectedTake(s);
       return {
         n: i + 1, id: s.id, title: s.title, status: s.status, durationSec: s.durationSec,
         model: s.modelId || p.defaults.videoModel, camera: s.camera, characters: s.characterIds,
-        prompt: s.prompt.slice(0, 220), takes: s.takes.length, selectedTake: take ? { id: take.id, path: take.path, model: take.modelId } : null,
+        prompt: s.prompt.slice(0, 220), line: s.line, storyboard: s.storyboard, storyboardCandidates: s.storyboardCandidates?.length || 0,
+        voiceover: s.voiceover ? { durationSec: s.voiceover.durationSec } : undefined,
+        takes: s.takes.length, selectedTake: take ? { id: take.id, path: take.path, model: take.modelId, qa: take.qa ? { score: take.qa.score, verdict: take.qa.verdict, issues: take.qa.issues } : undefined } : null,
       };
     }),
     tracks: p.tracks.map((t) => ({ id: t.id, kind: t.kind, label: t.label, clips: p.clips.filter((c) => c.trackId === t.id).length })),
