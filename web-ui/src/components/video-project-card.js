@@ -16,6 +16,12 @@
  *   assemble + render -> final MP4 plays inline
  */
 
+import {
+  ICON2, V2_CSS, shotThumb, productBadge, loadModels, shotEditor, qaChip,
+  storyboardSection, audioSection, autopilotSection, exportsSection,
+  handleV2Click, handleV2Change,
+} from './video-project-card/v2.js';
+
 const STYLE_ID = 'prom-vp-card-style';
 const CARD_SEL = '.prom-vp-card[data-vp-project]:not([data-vp-mounted])';
 const cache = new Map(); // projectId -> { project, history, at }
@@ -103,7 +109,9 @@ function mountCard(el) {
     project: cached?.project || null,
     history: cached?.history || { undo: 0, redo: 0 },
     busy: '', error: '', openShot: '', pending: null, estimate: null, estimateKey: '', rendering: false,
+    actPending: null, models: [], aspects: new Set(), toast: '',
   };
+  const h = { esc, usd, isVideo, mediaUrl, thumb, iconBtn, vpFetch };
   let timer = null;
   const alive = () => el.isConnected;
 
@@ -161,6 +169,24 @@ function mountCard(el) {
     await load();
   }
 
+  // Generic v2 action route. Handles the needsApproval cost gate inline.
+  async function act(action, args = {}, label = 'Working', timeoutMs = 120000) {
+    const res = await run(label, () => vpFetch(`/${encodeURIComponent(id)}/action`, { action, ...args }, timeoutMs));
+    if (!res) return null;
+    const na = res.needsApproval;
+    if (na) {
+      const lr = res.lastRun?.needsApproval;
+      st.actPending = {
+        action, args,
+        usd: Number(lr?.usd ?? na?.usd ?? res.estimateUsd ?? res.totalUsd ?? res.estimate?.total ?? 0),
+        breakdown: lr?.breakdown || na?.breakdown || res.breakdown || [],
+      };
+    } else st.actPending = null;
+    st.estimateKey = '';
+    await load();
+    return res;
+  }
+
   // Every generate goes through the server cost gate. Under the auto-approve
   // limit it just runs; above it we show an inline confirm with the estimate.
   async function generate(path, body, label) {
@@ -181,6 +207,12 @@ function mountCard(el) {
     if (!p) return;
     const hasVideoClips = (p.clips || []).some((c) => c.source && 'shotId' in c.source);
     st.rendering = true;
+    if (st.aspects.size) {
+      await act('render', { aspects: [...st.aspects] }, 'Rendering', 15 * 60 * 1000);
+      st.rendering = false;
+      await load();
+      return;
+    }
     if (!hasVideoClips) {
       const ok = await run('Assembling', () => vpFetch(`/${encodeURIComponent(id)}/ops`, { ops: [{ op: 'timeline.assemble' }] }));
       if (!ok) { st.rendering = false; paint(); return; }
@@ -201,7 +233,8 @@ function mountCard(el) {
 
   // ── painting ──────────────────────────────────────────────────────────
   function charSection(p) {
-    if (!(p.characters || []).length) return '';
+    const upload = `${iconBtn('upload-product', ICON2.box, 'Upload product photo')}${iconBtn('upload-character', ICON2.userPlus, 'Upload character photo')}`;
+    if (!(p.characters || []).length) return `<section class="vpc-sec"><h4 class="vpc-row">Cast<span class="vpc-grow"></span>${upload}</h4></section>`;
     const anchorJobs = running().filter((j) => j.target?.characterId);
     const rows = p.characters.map((c) => {
       const pendingJob = anchorJobs.some((j) => j.target.characterId === c.id);
@@ -221,7 +254,7 @@ function mountCard(el) {
       ].join('');
       return `<div class="vpc-char">
         <div class="vpc-row">
-          <span class="vpc-char-name">${ICON.user}<strong>${esc(c.name)}</strong></span>
+          <span class="vpc-char-name">${ICON.user}<strong>${esc(c.name)}</strong>${productBadge(c)}</span>
           <span class="vpc-muted">${esc(status)}</span>
           <span class="vpc-grow"></span>
           ${c.anchorPrompt ? iconBtn('reroll', ICON.reroll, 'Generate another anchor', `data-c="${esc(c.id)}"`) : ''}
@@ -229,7 +262,7 @@ function mountCard(el) {
         ${tiles ? `<div class="vpc-strip">${tiles}</div>` : ''}
       </div>`;
     }).join('');
-    return `<section class="vpc-sec"><h4>Characters</h4>${rows}</section>`;
+    return `<section class="vpc-sec"><h4 class="vpc-row">Cast<span class="vpc-grow"></span>${upload}</h4>${rows}</section>`;
   }
 
   function shotSection(p) {
@@ -247,7 +280,7 @@ function mountCard(el) {
             ? `<video src="${esc(mediaUrl(tk.path))}#t=0.1" controls playsinline preload="metadata"></video>`
             : `<img src="${esc(mediaUrl(tk.path))}" alt="" loading="lazy">`}
           <div class="vpc-row">
-            <span class="vpc-muted">${esc(shortModel(tk.modelId))} · ${usd(tk.costUsd)}</span>
+            ${qaChip(tk, h)}<span class="vpc-muted">${esc(shortModel(tk.modelId))} · ${usd(tk.costUsd)}</span>
             <span class="vpc-grow"></span>
             ${tk.id === t?.id
               ? `<span class="vpc-inuse">${ICON.check}In cut</span>`
@@ -256,7 +289,7 @@ function mountCard(el) {
         </div>`).join('') : '';
       return `<div class="vpc-shot${open ? ' is-open' : ''}">
         <button type="button" class="vpc-shot-head" data-vpa="toggle" data-s="${esc(s.id)}" aria-expanded="${open}">
-          ${gen && !t ? '<span class="vpc-thumb is-empty"><span class="vpc-spin"></span></span>' : thumb(t?.path)}
+          ${gen && !t ? '<span class="vpc-thumb is-empty"><span class="vpc-spin"></span></span>' : shotThumb(s, t, p, h)}
           <span class="vpc-shot-meta">
             <strong>${i + 1}. ${esc(s.title || 'Shot')}</strong>
             <small>${esc(String(s.prompt || '').slice(0, 110))}</small>
@@ -265,7 +298,8 @@ function mountCard(el) {
           <span class="vpc-chev">${ICON.chevron}</span>
         </button>
         ${open ? `<div class="vpc-shot-body">
-          <p class="vpc-prompt">${esc(s.prompt || '')}${s.camera ? `<br><span class="vpc-muted">Camera: ${esc(s.camera)}</span>` : ''}</p>
+          ${shotEditor(s, i, shots.length, st, h)}
+          ${s.camera ? `<p class="vpc-muted">Camera: ${esc(s.camera)}</p>` : ''}
           <div class="vpc-row">
             <button type="button" class="vpc-btn" data-vpa="redo-shot" data-s="${esc(s.id)}" data-n="1" ${gen ? 'disabled' : ''}>${ICON.reroll}<span>${n ? 'Redo' : 'Generate'}</span></button>
             <button type="button" class="vpc-btn" data-vpa="redo-shot" data-s="${esc(s.id)}" data-n="3" ${gen ? 'disabled' : ''}>${ICON.layers}<span>3 variations</span></button>
@@ -330,6 +364,9 @@ function mountCard(el) {
 
   function paint() {
     if (!alive()) return;
+    // Don't clobber an in-progress edit; the 'change' (blur) save repaints.
+    const ae = document.activeElement;
+    if (ae && el.contains(ae) && ae.matches?.('textarea[data-vpf]') && !st.busy) return;
     const p = st.project;
     if (!p) {
       el.innerHTML = `<div class="vpc"><div class="vpc-head"><span class="vpc-kicker">${ICON.film}Video project</span></div>
@@ -347,14 +384,21 @@ function mountCard(el) {
         <div class="vpc-tools">
           ${iconBtn('undo', ICON.undo, 'Undo', st.history?.undo ? '' : 'disabled')}
           ${iconBtn('redo', ICON.redo, 'Redo', st.history?.redo ? '' : 'disabled')}
+          ${iconBtn('storyboard', ICON2.grid, 'Generate storyboard')}
+          ${iconBtn('qa', ICON2.gauge, 'QA: score selected takes')}
           ${iconBtn('refresh', ICON.refresh, 'Refresh')}
         </div>
       </div>
       ${st.busy ? `<div class="vpc-busy"><span class="vpc-spin"></span>${esc(st.busy)}…</div>` : ''}
       ${st.error ? `<p class="vpc-err">${esc(st.error)}</p>` : ''}
+      ${st.toast ? `<div class="vpc-toast">${esc(st.toast)}</div>` : ''}
       ${charSection(p)}
+      ${storyboardSection(p, h)}
       ${shotSection(p)}
+      ${audioSection(p, st, h)}
       ${actionSection(p)}
+      ${autopilotSection(p, st, h)}
+      ${exportsSection(p, st, h)}
     </div>`;
   }
 
@@ -368,7 +412,10 @@ function mountCard(el) {
     const a = t.dataset.vpa;
     const d = t.dataset;
     switch (a) {
-      case 'toggle': st.openShot = st.openShot === d.s ? '' : d.s; paint(); return;
+      case 'toggle':
+        st.openShot = st.openShot === d.s ? '' : d.s; paint();
+        if (st.openShot && !st.models.length) loadModels(h).then((m) => { st.models = m; if (m.length) paint(); });
+        return;
       case 'view': if (d.path) openMedia(d.path); return;
       case 'refresh': st.estimateKey = ''; await load(); return;
       case 'undo': case 'redo':
@@ -397,8 +444,18 @@ function mountCard(el) {
       case 'assemble': await ops([{ op: 'timeline.assemble' }], 'Assembling'); return;
       case 'render': await render(); return;
       default:
+        st.toast = '';
+        await handleV2Click(a, { st, d, act, ops, paint, h });
     }
   });
+
+  // Field edits (prompt/line save on blur via 'change'; selects/toggles/slider on change).
+  el.addEventListener('change', async (ev) => {
+    const f = ev.target.closest?.('[data-vpf]');
+    if (!f || !el.contains(f) || st.busy) return;
+    await handleV2Change(f.dataset.vpf, { st, d: f.dataset, ops, act, value: f.value, checked: f.checked });
+  });
+  el.addEventListener('click', (ev) => { if (ev.target.closest?.('[data-vpf]')) ev.stopPropagation(); });
 
   paint();
   const fresh = cached && Date.now() - cached.at < 3000;
@@ -421,7 +478,7 @@ export function installVideoProjectCards() {
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    style.textContent = CARD_CSS;
+    style.textContent = CARD_CSS + V2_CSS;
     document.head.appendChild(style);
   }
   hydrateAll();
