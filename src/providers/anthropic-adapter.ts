@@ -25,6 +25,12 @@ import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
  * the turn. Also covers the SSE `error` event form thrown by the stream parser.
  */
 export const ANTHROPIC_OVERLOAD_MAX_RETRIES = 3;
+// Time allowed for Anthropic to return response headers. Not a cap on how
+// long a streamed reply may run; see ANTHROPIC_STREAM_IDLE_TIMEOUT_MS.
+export const ANTHROPIC_HEADER_TIMEOUT_MS = 180_000;
+// A live stream that sends nothing (not even a ping) for this long is dead.
+export const ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 120_000;
+
 export function anthropicOverloadDelayMs(retry: number): number {
   return Math.min(20_000, 2_000 * 2 ** Math.max(0, retry - 1));
 }
@@ -1074,14 +1080,31 @@ export class AnthropicAdapter implements LLMProvider {
     const send = async (): Promise<Response> => {
       let overloadRetries = 0;
       for (let attempt = 1; ; attempt += 1) {
-        const response = await fetch(this.getMessagesEndpoint(), {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body),
-          signal: options?.abortSignal
-            ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
-            : AbortSignal.timeout(180_000),
-        });
+        // The 180s deadline covers only "no response headers yet". It used to be
+        // AbortSignal.timeout on the fetch itself, which stays armed while the
+        // SSE body streams, so any single streamed reply longer than 3 minutes
+        // (long thinking + a big tool-call payload) died mid-stream with
+        // "The operation was aborted due to timeout" (2026-09-29, two main-chat
+        // turns lost). Stalled streams are handled by the idle watchdog in
+        // parseStreamingResponse instead.
+        const headerDeadline = new AbortController();
+        const headerTimer = setTimeout(
+          () => headerDeadline.abort(new DOMException('Anthropic did not respond within 180s', 'TimeoutError')),
+          ANTHROPIC_HEADER_TIMEOUT_MS,
+        );
+        let response: Response;
+        try {
+          response = await fetch(this.getMessagesEndpoint(), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            signal: options?.abortSignal
+              ? AbortSignal.any([options.abortSignal, headerDeadline.signal])
+              : headerDeadline.signal,
+          });
+        } finally {
+          clearTimeout(headerTimer);
+        }
         if (response.ok) {
           logSuccess(response, attempt);
           return response;
@@ -1202,9 +1225,21 @@ export class AnthropicAdapter implements LLMProvider {
     // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
+    // Idle watchdog: abort only when the stream goes silent, never because a
+    // healthy stream is simply long. Anthropic sends ping events during long
+    // generations, so a multi-minute silence means a dead connection.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const readWithIdleTimeout = () => new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+      idleTimer = setTimeout(() => {
+        reader.cancel().catch(() => undefined);
+        reject(new Error(`${this.id} stream stalled: no data for ${Math.round(ANTHROPIC_STREAM_IDLE_TIMEOUT_MS / 1000)}s`));
+      }, ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
+      reader.read().then(resolve, reject).finally(() => clearTimeout(idleTimer));
+    });
+
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithIdleTimeout();
         buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n');

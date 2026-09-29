@@ -24,12 +24,12 @@ import { getConfig } from '../../config/config.js';
 import { requireGatewayAuth } from '../gateway-auth.js';
 import { getWorkspace, sessionExists } from '../session.js';
 import { listModels } from '../../media-engine/catalog.js';
-import { providerStatus } from '../../media-engine/providers.js';
+import { providerKeyHint, providerStatus, setProviderKey } from '../../media-engine/providers.js';
 import {
-  applyOps, createProject, historyDepth, listProjects, loadProject, onProjectChange, projectDir,
+  applyOps, createProject, deleteProject, historyDepth, listProjects, loadProject, onProjectChange, projectDir,
   summarizeProject, undoRedo,
 } from '../../media-engine/project.js';
-import { cancelJob, estimate, generateShots, renderProject, resumeJobs } from '../../media-engine/engine.js';
+import { cancelJob, estimate, generateCharacterAnchor, generateShots, renderFrame, renderProject, resumeJobs } from '../../media-engine/engine.js';
 
 function workspaceFor(req: any): string {
   const sessionId = String(req.query?.sessionId || req.body?.sessionId || '').trim();
@@ -80,6 +80,23 @@ export function registerVideoProjectRoutes(router: IRouter): void {
   router.get('/api/video-projects/providers', async (_req, res) => {
     try { res.json({ success: true, providers: await providerStatus() }); }
     catch (e) { sendError(res, e); }
+  });
+
+  // Provider keys (fal / Higgsfield). Write-only: the key is stored in the
+  // encrypted vault and never echoed back; GET /providers reports configured.
+  router.post('/api/video-projects/providers/:provider/key', (req, res) => {
+    try {
+      const provider = String(req.params.provider || '').toLowerCase();
+      if (provider !== 'fal' && provider !== 'higgsfield') { res.status(400).json({ success: false, error: 'provider must be fal or higgsfield.' }); return; }
+      setProviderKey(provider, String(req.body?.key || ''));
+      res.json({ success: true, provider, configured: true });
+    } catch (e) { sendError(res, e); }
+  });
+
+  router.get('/api/video-projects/providers/:provider/hint', (req, res) => {
+    const provider = String(req.params.provider || '').toLowerCase();
+    if (provider !== 'fal' && provider !== 'higgsfield') { res.status(400).json({ success: false, error: 'provider must be fal or higgsfield.' }); return; }
+    res.json({ success: true, provider, hint: providerKeyHint(provider) });
   });
 
   router.get('/api/video-projects/:id', (req, res) => {
@@ -140,6 +157,26 @@ export function registerVideoProjectRoutes(router: IRouter): void {
       // The user pressing Generate in the UI is the approval.
       res.json({ success: true, ...(await generateShots(workspaceFor(req), req.params.id, { shotIds: b.shotIds, count: b.count, modelId: b.modelId, approved: b.approved === true })) });
     } catch (e) { sendError(res, e); }
+  });
+
+  router.post('/api/video-projects/:id/characters/:characterId/anchor', async (req, res) => {
+    try {
+      const b = req.body || {};
+      res.json({ success: true, ...(await generateCharacterAnchor(workspaceFor(req), req.params.id, {
+        characterId: req.params.characterId, prompt: String(b.prompt || ''), modelId: b.modelId,
+        count: b.count, approved: b.approved === true, referenceImages: Array.isArray(b.referenceImages) ? b.referenceImages : undefined,
+      })) });
+    } catch (e) { sendError(res, e); }
+  });
+
+  router.post('/api/video-projects/:id/frame', async (req, res) => {
+    try { res.json({ success: true, path: await renderFrame(workspaceFor(req), req.params.id, Number(req.body?.atSec) || 0) }); }
+    catch (e) { sendError(res, e); }
+  });
+
+  router.delete('/api/video-projects/:id', (req, res) => {
+    try { res.json({ success: true, deleted: deleteProject(workspaceFor(req), req.params.id) }); }
+    catch (e) { sendError(res, e); }
   });
 
   router.post('/api/video-projects/:id/jobs/:jobId/cancel', async (req, res) => {
