@@ -15,14 +15,15 @@ import { estimateCostUsd, getModel, type MediaModelManifest } from './catalog.js
 import { cancel, downloadOutput, missingRequiredFields, poll, submit, type ShotInput } from './providers.js';
 import {
   fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, projectDir, selectedTake,
-  timelineDurationMs, toWorkspaceRel, type Job, type Shot, type Take, type VideoProject,
+  timelineDurationMs, toWorkspaceRel, VO_TRACK_LABEL, type Job, type Shot, type Take, type VideoProject,
 } from './project.js';
+import { buildAss } from './captions.js';
 
 // ── ffmpeg helpers ──────────────────────────────────────────────────────
 
-function ffmpeg(args: string[], timeoutMs = 15 * 60_000): Promise<{ code: number; stderr: string }> {
+function ffmpeg(args: string[], timeoutMs = 15 * 60_000, cwd?: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), args, { windowsHide: true });
+    const proc = spawn(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), args, { windowsHide: true, cwd });
     let stderr = '';
     const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('ffmpeg timed out')); }, timeoutMs);
     proc.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-8000); });
@@ -45,6 +46,18 @@ export async function mediaDurationSec(absPath: string): Promise<number | undefi
 async function hasAudioStream(absPath: string): Promise<boolean> {
   const { stderr } = await ffmpeg(['-hide_banner', '-i', absPath], 30_000).catch(() => ({ code: 1, stderr: '' }));
   return /Stream #\d+:\d+.*Audio:/.test(stderr);
+}
+
+/** Shared ffmpeg runner for the studio/captions/music helpers. */
+export const runFfmpeg = ffmpeg;
+
+/** Grab one frame at atSec (optionally downscaled to maxWidth). */
+export async function extractFrameAt(videoAbs: string, atSec: number, outAbs: string, maxWidth?: number): Promise<string> {
+  fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+  const vf = maxWidth ? ['-vf', `scale='min(${maxWidth},iw)':-2`] : [];
+  const { code, stderr } = await ffmpeg(['-y', '-ss', Math.max(0, atSec).toFixed(3), '-i', videoAbs, '-frames:v', '1', ...vf, '-q:v', '3', outAbs], 60_000);
+  if (code !== 0 || !fs.existsSync(outAbs)) throw new Error(`Could not extract frame: ${stderr.slice(-300)}`);
+  return outAbs;
 }
 
 async function extractLastFrame(videoAbs: string, outAbs: string): Promise<string> {
@@ -84,7 +97,8 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
   const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
   if (style) refs.push(...style.refs);
 
-  let startImage = shot.startImage;
+  // An approved storyboard still is the strongest first frame (identity + product + framing).
+  let startImage = shot.startImage || (model.map.startImage ? shot.storyboard : undefined);
   if (!startImage && shot.chainFromPrevious) {
     const idx = p.shots.findIndex((s) => s.id === shot.id);
     const prev = idx > 0 ? p.shots[idx - 1] : undefined;
@@ -159,11 +173,16 @@ async function patchJob(workspacePath: string, projectId: string, jobId: string,
 
 async function finishJob(workspacePath: string, projectId: string, job: Job, model: MediaModelManifest, outputs: Array<{ url?: string; localPath?: string; mimeType?: string }>) {
   const dir = mediaDir(workspacePath, projectId);
-  const saved: Array<{ rel: string; durationSec?: number }> = [];
+  const saved: Array<{ rel: string; durationSec?: number; poster?: string }> = [];
   for (let i = 0; i < outputs.length; i++) {
-    const base = `${'shotId' in job.target ? job.target.shotId : 'characterId' in job.target ? job.target.characterId : 'asset'}_${job.id}_${i}`;
+    const t = job.target as any;
+    const base = `${t.shotId || t.characterId || (t.storyboardShotId ? `sb_${t.storyboardShotId}` : 'asset')}_${job.id}_${i}`;
     const abs = await downloadOutput(outputs[i], dir, base, model.kind);
-    saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind === 'video' ? await mediaDurationSec(abs) : undefined });
+    let poster: string | undefined;
+    if (model.kind === 'video') {
+      try { poster = toWorkspaceRel(workspacePath, await extractFrameAt(abs, 0.1, path.join(dir, 'posters', `${base}.jpg`), 640)); } catch { /* thumbnail is best-effort */ }
+    }
+    saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind === 'video' ? await mediaDurationSec(abs) : undefined, poster });
   }
   const perOutputUsd = saved.length ? job.estimateUsd / saved.length : 0;
   await patchJob(workspacePath, projectId, job.id, { state: 'done' }, (p, j) => {
@@ -175,7 +194,7 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
       for (const s of saved) {
         const take: Take = {
           id: newId('take'), jobId: j.id, modelId: model.id, kind: model.kind, path: s.rel, prompt,
-          costUsd: perOutputUsd, createdAt: Date.now(), durationSec: s.durationSec,
+          costUsd: perOutputUsd, createdAt: Date.now(), durationSec: s.durationSec, poster: s.poster,
         };
         shot.takes.push(take);
         j.takeIds.push(take.id);
@@ -187,6 +206,9 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
       // with character.approveAnchor before it drives identity.
       const c = p.characters.find((x) => x.id === (j.target as any).characterId);
       if (c) c.candidates = [...(c.candidates || []), ...saved.map((s) => s.rel)].slice(-12);
+    } else if ('storyboardShotId' in j.target) {
+      const shot = p.shots.find((s) => s.id === (j.target as any).storyboardShotId);
+      if (shot) shot.storyboardCandidates = [...(shot.storyboardCandidates || []), ...saved.map((s) => s.rel)].slice(-8);
     }
     for (const s of saved) {
       p.assets.push({ id: newId('asset'), kind: model.kind, path: s.rel, origin: 'generated', modelId: model.id, prompt, createdAt: Date.now() });
@@ -280,6 +302,10 @@ export interface GenerateResult {
 
 export async function generateShots(workspacePath: string, projectId: string, args: {
   shotIds?: string[]; count?: number; modelId?: string; approved?: boolean;
+  /** Hook A/B: generate this shot with an alternative prompt. */
+  promptOverride?: string;
+  /** Draft -> final: re-generate at a higher resolution than the project target. */
+  resolution?: string;
 }): Promise<GenerateResult> {
   const est = await estimate(workspacePath, projectId, args);
   const blocking = est.shots.filter((s) => s.problems.some((x) => !x.startsWith('model has no pricing')));
@@ -302,6 +328,8 @@ export async function generateShots(workspacePath: string, projectId: string, ar
     const shot = p.shots.find((x) => x.id === s.shotId)!;
     const model = shotModel(p, shot, args.modelId);
     const input = await resolveShotInput(workspacePath, p, shot, model);
+    if (args.promptOverride) input.prompt = composePrompt(p, { ...shot, prompt: String(args.promptOverride) });
+    if (args.resolution) input.resolution = String(args.resolution);
     const job: Job = {
       id: newId('job'), target: { shotId: shot.id }, modelId: model.id, input: input as any,
       count: s.count, state: 'queued', estimateUsd: s.usd, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),
@@ -361,6 +389,72 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
   });
   void runJob(workspacePath, projectId, job.id);
   return { estimate: est, jobs: [{ id: job.id, target: job.target, modelId: model.id, estimateUsd: usd }] };
+}
+
+/**
+ * Storyboard stills (our "Popcorn"): one cheap image per shot, generated from
+ * the shot prompt with every character/product anchor as a reference, so the
+ * user approves framing + identity at ~4-7c a shot before paying for video.
+ * Approved stills become the shot's first frame.
+ */
+export async function generateStoryboards(workspacePath: string, projectId: string, args: {
+  shotIds?: string[]; modelId?: string; approved?: boolean; count?: number;
+}): Promise<GenerateResult> {
+  const p = loadProject(workspacePath, projectId);
+  const model = getModel(args.modelId || p.defaults.imageModel);
+  if (!model || model.kind !== 'image') throw new Error(`"${args.modelId || p.defaults.imageModel}" is not an image model.`);
+  const shots = args.shotIds?.length ? p.shots.filter((s) => args.shotIds!.includes(s.id)) : p.shots.filter((s) => !s.storyboard && !s.takes.length);
+  const count = Math.max(1, Math.min(3, Number(args.count) || 1));
+  const per = estimateCostUsd(model, { count });
+  const est = {
+    total: Math.round(per * shots.length * 1000) / 1000,
+    shots: shots.map((s) => ({ shotId: s.id, title: `${s.title} storyboard`, modelId: model.id, count, usd: per, problems: [] as string[] })),
+    budget: p.budget,
+  };
+  if (!shots.length) return { estimate: est, jobs: [] };
+  const cap = p.budget.capUsd;
+  if (cap != null && p.budget.spentUsd + est.total > cap + 1e-9) {
+    return { needsApproval: true, reason: `Budget cap $${cap.toFixed(2)} would be exceeded by storyboards ($${est.total.toFixed(2)}).`, estimate: est, jobs: [] };
+  }
+  if (!args.approved && est.total > p.budget.autoApproveUsd + 1e-9) {
+    return { needsApproval: true, reason: `Storyboards cost ~$${est.total.toFixed(2)}, above auto-approve. Call again with approved:true after the user confirms.`, estimate: est, jobs: [] };
+  }
+  const aspectWords = p.target.aspect === '9:16' ? 'vertical 9:16 phone frame' : p.target.aspect === '1:1' ? 'square 1:1 frame' : `${p.target.aspect} widescreen frame`;
+  const abs = (r: string) => (/^(https?:|data:)/i.test(r) ? r : fromWorkspaceRel(workspacePath, r));
+  const pending: Job[] = [];
+  for (const shot of shots) {
+    const refs: string[] = [];
+    let hasProduct = false;
+    for (const cid of shot.characterIds) {
+      const c = p.characters.find((x) => x.id === cid);
+      if (!c) continue;
+      if (c.kind === 'product') hasProduct = true;
+      refs.push(...c.anchors.slice(0, 2), ...c.refs.slice(0, 1));
+    }
+    const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
+    if (style) refs.push(...style.refs.slice(0, 1));
+    const prompt = [
+      `Storyboard frame: the exact opening frame of a video shot, ${aspectWords}.`,
+      composePrompt(p, shot),
+      hasProduct ? 'The product must match the reference photo exactly: same shape, label, logo and colors.' : '',
+      refs.length ? 'Keep every person identical to the reference images.' : '',
+      'Photorealistic, natural light, no on-screen text, no captions, no watermark.',
+    ].filter(Boolean).join(' ');
+    const uniq = Array.from(new Set(refs)).slice(0, 5).map(abs);
+    const input: ShotInput = {
+      prompt,
+      referenceImages: model.map.referenceImages && uniq.length ? uniq : undefined,
+      startImage: !model.map.referenceImages && model.map.startImage ? uniq[0] : undefined,
+      aspectRatio: p.target.aspect,
+    };
+    pending.push({
+      id: newId('job'), target: { storyboardShotId: shot.id }, modelId: model.id, input: input as any, count,
+      state: 'queued', estimateUsd: per, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),
+    });
+  }
+  await mutateProject(workspacePath, projectId, 'generate', (proj) => { proj.jobs.push(...pending); proj.jobs = proj.jobs.slice(-300); });
+  for (const job of pending) void runJob(workspacePath, projectId, job.id);
+  return { estimate: est, jobs: pending.map((j) => ({ id: j.id, target: j.target, modelId: j.modelId, estimateUsd: j.estimateUsd })) };
 }
 
 export async function cancelJob(workspacePath: string, projectId: string, jobId: string): Promise<boolean> {
@@ -446,18 +540,45 @@ export function buildRenderPlan(workspacePath: string, p: VideoProject): { layer
  * are fit inside it (picture-in-picture/logos use them). Audio from video
  * clips and audio tracks is delayed to its timeline position and mixed.
  */
-export async function renderProject(workspacePath: string, projectId: string, args: { output?: string; includeClipAudio?: boolean } = {}): Promise<{ path: string; durationSec: number; width: number; height: number; layers: number }> {
+export interface RenderArgs {
+  output?: string;
+  includeClipAudio?: boolean;
+  /** Reframe to another aspect (blur-fill instead of hard crop). */
+  aspect?: string;
+  /** Label stored on the export (hook A/B). */
+  variant?: string;
+  /** Render with a different take for one shot (hook variants) without touching the project. */
+  takeOverride?: { shotId: string; takeId: string };
+  captions?: boolean;
+  music?: boolean;
+  watermark?: boolean;
+}
+
+export async function renderProject(workspacePath: string, projectId: string, args: RenderArgs = {}): Promise<{ path: string; durationSec: number; width: number; height: number; layers: number; aspect: string; variant?: string; captions: number; music: boolean; watermark: boolean }> {
   const p = loadProject(workspacePath, projectId);
+  if (args.takeOverride) {
+    const shot = p.shots.find((s) => s.id === args.takeOverride!.shotId);
+    if (!shot || !shot.takes.some((t) => t.id === args.takeOverride!.takeId)) throw new Error('takeOverride does not match a take of that shot.');
+    shot.selectedTakeId = args.takeOverride.takeId;
+  }
   const plan = buildRenderPlan(workspacePath, p);
   if (plan.missing.length) throw new Error(`Cannot render: ${plan.missing.join('; ')}`);
   if (!plan.layers.some((l) => l.kind !== 'audio')) throw new Error('Nothing to render: timeline has no video/image clips. Use timeline.assemble after generating takes.');
-  const { width, height } = canvasSize(p.target);
+  const aspect = args.aspect || p.target.aspect;
+  const reframe = aspect !== p.target.aspect;
+  const { width, height } = canvasSize({ ...p.target, aspect });
   const fps = p.target.fps || 30;
   const total = Math.max(0.5, plan.durationSec);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const tag = `${aspect.replace(':', 'x')}${args.variant ? `_${args.variant.replace(/[^a-z0-9]+/gi, '-')}` : ''}`;
   const outAbs = args.output
     ? fromWorkspaceRel(workspacePath, args.output)
-    : path.join(projectDir(workspacePath, p.id), 'exports', `${p.id}_${new Date().toISOString().replace(/[:.]/g, '-')}.mp4`);
+    : path.join(projectDir(workspacePath, p.id), 'exports', `${p.id}_${tag}_${stamp}.mp4`);
   fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+  const voTrack = p.tracks.find((t) => t.kind === 'audio' && t.label === VO_TRACK_LABEL);
+  const voClips = voTrack ? p.clips.filter((c) => c.trackId === voTrack.id) : [];
+  // Generated clips carry ambient/random audio: sit it under the voiceover.
+  const clipAudioGain = voClips.length ? 0.22 : 1;
 
   const inputs: string[] = ['-f', 'lavfi', '-i', `color=c=black:s=${width}x${height}:r=${fps}:d=${total.toFixed(3)}`];
   const filters: string[] = [];
@@ -473,15 +594,24 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     if (l.kind === 'image') inputs.push('-loop', '1', '-t', l.durSec.toFixed(3), '-i', l.abs);
     else inputs.push('-ss', l.inSec.toFixed(3), '-t', l.durSec.toFixed(3), '-i', l.abs);
     const idx = n++;
-    const fit = l.overlay
-      ? `scale=${width}:${height}:force_original_aspect_ratio=decrease`
-      : `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
-    filters.push(`[${idx}:v]${fit},fps=${fps},format=yuva420p,setpts=PTS-STARTPTS+${l.startSec.toFixed(3)}/TB[v${i}]`);
+    const tail = `fps=${fps},format=yuva420p,setpts=PTS-STARTPTS+${l.startSec.toFixed(3)}/TB[v${i}]`;
+    if (reframe && !l.overlay) {
+      // Reframe: sharp fit-inside over a blurred cover copy (no hard crop of the subject).
+      filters.push(`[${idx}:v]split=2[fg${i}][bs${i}]`);
+      filters.push(`[bs${i}]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=24:2[bg${i}]`);
+      filters.push(`[fg${i}]scale=${width}:${height}:force_original_aspect_ratio=decrease[fs${i}]`);
+      filters.push(`[bg${i}][fs${i}]overlay=x=(W-w)/2:y=(H-h)/2,${tail}`);
+    } else {
+      const fit = l.overlay
+        ? `scale=${width}:${height}:force_original_aspect_ratio=decrease`
+        : `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
+      filters.push(`[${idx}:v]${fit},${tail}`);
+    }
     const out = `[b${i}]`;
     filters.push(`${base}[v${i}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:enable='between(t,${l.startSec.toFixed(3)},${(l.startSec + l.durSec).toFixed(3)})'${out}`);
     base = out;
     if (l.kind === 'video' && args.includeClipAudio !== false && l.volume > 0 && audioOk.get(l.abs)) {
-      audioLabels.push(`__v:${idx}:${l.startSec}:${l.volume}`);
+      audioLabels.push(`__v:${idx}:${l.startSec}:${l.volume * clipAudioGain}`);
     }
   });
   for (const l of plan.layers.filter((x) => x.kind === 'audio')) {
@@ -496,6 +626,51 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     filters.push(`[${idx}:a]aresample=48000,volume=${Number(vol).toFixed(3)},adelay=${ms}|${ms}[a${i}]`);
     mixed.push(`[a${i}]`);
   });
+
+  // Music bed: looped to length, ducked under every voiceover line.
+  let musicOn = false;
+  if (args.music !== false && p.music?.path) {
+    let musicAbs = '';
+    try { musicAbs = fromWorkspaceRel(workspacePath, p.music.path); } catch { /* ignore */ }
+    if (musicAbs && fs.existsSync(musicAbs)) {
+      inputs.push('-stream_loop', '-1', '-t', total.toFixed(3), '-i', musicAbs);
+      const idx = n++;
+      const duck = p.music.duck && voClips.length
+        ? `,volume='if(${voClips.map((c) => `between(t,${((c.startMs - 250) / 1000).toFixed(2)},${((c.startMs + c.outMs - c.inMs + 250) / 1000).toFixed(2)})`).join('+')},0.3,1)':eval=frame`
+        : '';
+      filters.push(`[${idx}:a]aresample=48000,volume=${p.music.volume.toFixed(3)}${duck},afade=t=out:st=${Math.max(0, total - 1).toFixed(2)}:d=1[am]`);
+      mixed.push('[am]');
+      musicOn = true;
+    }
+  }
+
+  // Brand watermark (logo, top-right).
+  let wmOn = false;
+  if (args.watermark !== false && p.brand?.watermark && p.brand.logo) {
+    let logoAbs = '';
+    try { logoAbs = fromWorkspaceRel(workspacePath, p.brand.logo); } catch { /* ignore */ }
+    if (logoAbs && fs.existsSync(logoAbs)) {
+      inputs.push('-loop', '1', '-t', total.toFixed(3), '-i', logoAbs);
+      const idx = n++;
+      const m = Math.round(Math.min(width, height) * 0.04);
+      filters.push(`[${idx}:v]scale=${Math.round(width * 0.2)}:-1,format=rgba,colorchannelmixer=aa=0.85[wm]`);
+      filters.push(`${base}[wm]overlay=x=W-w-${m}:y=${m}:shortest=0[bwm]`);
+      base = '[bwm]';
+      wmOn = true;
+    }
+  }
+
+  // Burned-in captions (libass).
+  let cwd: string | undefined;
+  const cueCount = args.captions !== false && p.captions?.enabled ? p.captions.cues.length : 0;
+  if (cueCount) {
+    const assName = `captions_${stamp}.ass`;
+    cwd = path.dirname(outAbs);
+    fs.writeFileSync(path.join(cwd, assName), buildAss(p.captions!.cues, p.captions!.style, width, height), 'utf-8');
+    const fontsdir = process.platform === 'win32' ? `:fontsdir=${(process.env.WINDIR || 'C:/Windows').replace(/\\/g, '/').replace(':', '\\\\:')}/Fonts` : '';
+    filters.push(`${base}subtitles=${assName}${fontsdir}[bcap]`);
+    base = '[bcap]';
+  }
   filters.push(`${base}format=yuv420p[vout]`);
 
   const f = [...filters];
@@ -512,13 +687,14 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     a.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '192k');
   }
   a[a.indexOf('-filter_complex') + 1] = f.join(';');
-  const res = await ffmpeg(['-y', '-hide_banner', ...a, '-t', total.toFixed(3), '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outAbs], Math.max(120_000, Math.round(total * 30_000)));
+  const res = await ffmpeg(['-y', '-hide_banner', ...a, '-t', total.toFixed(3), '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outAbs], Math.max(120_000, Math.round(total * 30_000)), cwd);
+  if (cwd) { try { for (const f of fs.readdirSync(cwd)) if (f === `captions_${stamp}.ass`) fs.unlinkSync(path.join(cwd, f)); } catch { /* ignore */ } }
   if (res.code !== 0) throw new Error(`Export failed: ${res.stderr.slice(-900)}`);
   const rel = toWorkspaceRel(workspacePath, outAbs);
   await mutateProject(workspacePath, projectId, 'export', (proj) => {
-    proj.exports = [...(proj.exports || []), { path: rel, createdAt: Date.now(), durationSec: +total.toFixed(2) }].slice(-20);
+    proj.exports = [...(proj.exports || []), { path: rel, createdAt: Date.now(), durationSec: +total.toFixed(2), aspect, variant: args.variant }].slice(-30);
   });
-  return { path: rel, durationSec: +total.toFixed(2), width, height, layers: plan.layers.length };
+  return { path: rel, durationSec: +total.toFixed(2), width, height, layers: plan.layers.length, aspect, variant: args.variant, captions: cueCount, music: musicOn, watermark: wmOn };
 }
 
 /** Grab a still of the timeline at a given time (cheap preview for the agent/UI). */

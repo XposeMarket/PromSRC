@@ -458,6 +458,46 @@ async function executeOpenAiVisionFallback(
   return { success: false, model, error: lastError || 'OpenAI vision fallback failed.' };
 }
 
+/**
+ * Generic vision call for internal judges (video take QA etc.): xAI vision
+ * first, then OpenAI Codex OAuth, then an OpenAI API key. Returns raw text.
+ */
+export async function executeVisionJudge(promptText: string, images: string[], opts: { maxTokens?: number; system?: string } = {}): Promise<{ success: boolean; text?: string; model?: string; error?: string }> {
+  const imgs = images.filter((u) => String(u || '').startsWith('data:image')).slice(0, 8);
+  if (!imgs.length) return { success: false, error: 'No image data provided.' };
+  const system = opts.system || 'You are a strict visual QA reviewer. Answer only with the requested JSON.';
+  const errors: string[] = [];
+  // Tests pin the judge to the API-key path so OAuth tokens are never touched.
+  const keyOnly = process.env.PROMETHEUS_VISION_JUDGE_ONLY === 'openai-key';
+  const creds = keyOnly ? null : await resolveXAICredentials();
+  if (creds) {
+    try {
+      const content: any[] = [{ type: 'text', text: promptText }, ...imgs.map((url) => ({ type: 'image_url', image_url: { url, detail: 'high' } }))];
+      const body = { model: DEFAULT_XAI_VISION_MODEL, messages: [{ role: 'system', content: system }, { role: 'user', content }], temperature: 0.1 };
+      const { res } = await fetchXaiJsonWithOAuthRefresh('/chat/completions', creds, body);
+      if (res.ok) {
+        const data = await res.json() as any;
+        const text = String(data?.choices?.[0]?.message?.content || '').trim();
+        if (text) return { success: true, text, model: DEFAULT_XAI_VISION_MODEL };
+        errors.push('xAI vision returned empty text');
+      } else errors.push(`xAI: ${await readHttpError(res)}`);
+    } catch (err: any) { errors.push(`xAI: ${String(err?.message || err)}`); }
+  }
+  if (!keyOnly) try {
+    const configDir = getConfigDir();
+    if (loadOpenAiCodexTokens(configDir)) {
+      const adapter = new OpenAICodexAdapter(configDir);
+      const content: any[] = [{ type: 'text', text: promptText }, ...imgs.map((url) => ({ type: 'image_url', image_url: { url, detail: 'low' } }))];
+      const result = await adapter.chat([{ role: 'system', content: system }, { role: 'user', content }], DEFAULT_XAI_VISION_FALLBACK_MODEL, { temperature: 0.1, max_tokens: opts.maxTokens || 400, think: 'low' });
+      const text = extractCodexChatResultText(result);
+      if (text) return { success: true, text, model: DEFAULT_XAI_VISION_FALLBACK_MODEL };
+    }
+  } catch (err: any) { errors.push(`codex: ${String(err?.message || err)}`); }
+  const fb = await executeOpenAiVisionFallback(`${system}\n\n${promptText}`, imgs);
+  if (fb.success && fb.summary) return { success: true, text: fb.summary, model: fb.model };
+  return { success: false, error: [...errors, fb.error || ''].filter(Boolean).join(' | ') || 'No vision provider available.' };
+}
+
 export async function executeXaiImageVisionSummary(input: {
   dataUrl?: string;
   frames?: Array<{ dataUrl?: string }>;

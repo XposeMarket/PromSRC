@@ -200,9 +200,10 @@ export function resolveToolCapabilityMetadata(
   // generate/generate_anchor spend money with an external provider.
   if (name === 'video_project') {
     const action = String(args?.action || '').trim().toLowerCase();
-    if (['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame'].includes(action)) return READ_ONLY;
-    if (action === 'generate' || action === 'generate_anchor' || action === 'set_key') return EXTERNAL_WRITE;
-    if (action === 'delete') return DESTRUCTIVE;
+    if (['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list'].includes(action)) return READ_ONLY;
+    // Money-spending actions still enforce the project cost gate (auto-approve limit + cap) server-side.
+    if (['generate', 'generate_anchor', 'set_key', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart'].includes(action)) return EXTERNAL_WRITE;
+    if (action === 'delete' || action === 'cast_delete' || action === 'brand_delete') return DESTRUCTIVE;
     return LOCAL_WRITE;
   }
   // Authenticated-user lookup: reads the credential's own profile only.
