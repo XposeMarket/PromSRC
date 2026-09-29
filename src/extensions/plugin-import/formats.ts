@@ -232,10 +232,20 @@ export function readPluginBundle(dir: string): PluginBundle | null {
   // Skills: explicit manifest path(s), then the conventional skills/ dir.
   const skillRoots = new Set<string>();
   for (const rel of asList(manifest.skills)) { const p = within(root, rel); if (p) skillRoots.add(p); }
+  // Dual-format repos (e.g. higgsfield-ai/skills) ship both .claude-plugin and
+  // .codex-plugin; detection picks Claude, but the skills path may only be
+  // declared in the sibling manifest ("skills": "./"). Honor it too.
+  for (const sibling of [path.join(root, '.claude-plugin', 'plugin.json'), path.join(root, '.codex-plugin', 'plugin.json')]) {
+    if (sibling === manifestPath || !isFile(sibling)) continue;
+    const other = readJson(sibling);
+    for (const rel of asList(other?.skills)) { const p = within(root, rel); if (p) skillRoots.add(p); }
+  }
   if (isDir(path.join(root, 'skills'))) skillRoots.add(path.join(root, 'skills'));
   // Hermes/OpenClaw plugins may keep a SKILL.md at the plugin root.
   if (isFile(path.join(root, 'SKILL.md'))) bundle.skillDirs.push(root);
   for (const sr of skillRoots) for (const d of findSkillDirs(sr)) if (!bundle.skillDirs.includes(d)) bundle.skillDirs.push(d);
+  // Last resort: skills kept as top-level <name>/SKILL.md dirs with no manifest path.
+  if (!bundle.skillDirs.length) for (const d of findSkillDirs(root, 2)) if (d !== root) bundle.skillDirs.push(d);
 
   if (format === 'claude' || format === 'codex') {
     const cmdDirs = asList(manifest.commands).map((r) => within(root, r)).filter(Boolean) as string[];

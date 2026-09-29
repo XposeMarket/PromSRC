@@ -5,6 +5,7 @@
  * Supports dragging keyframe points to change value + time.
  * Properties: x, y, width, height, opacity, rotation.
  */
+import { icon } from '../icons.js';
 
 const GRAPH_H    = 120;
 const POINT_R    = 5;
@@ -28,8 +29,8 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
         <select class="ce-graph-prop-select" data-ce-graph-prop>
           ${PROPS.map(p => `<option value="${p}"${p === 'opacity' ? ' selected' : ''}>${p}</option>`).join('')}
         </select>
-        <button class="ce-graph-btn" data-ce-graph-add title="Add keyframe at current time">+KF</button>
-        <button class="ce-graph-btn" data-ce-graph-clear title="Clear all keyframes">Clear</button>
+        <button type="button" class="ce-graph-btn ce-icon-btn" data-ce-graph-add title="Add keyframe at playhead" aria-label="Add keyframe">${icon('diamondPlus', 15)}</button>
+        <button type="button" class="ce-graph-btn ce-icon-btn" data-ce-graph-clear title="Clear all keyframes" aria-label="Clear keyframes">${icon('eraser', 15)}</button>
       </div>
       <canvas class="ce-graph-canvas" height="${GRAPH_H}"></canvas>
       <div class="ce-graph-hint">Click canvas to add keyframe. Drag to adjust.</div>

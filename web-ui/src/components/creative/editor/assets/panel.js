@@ -4,6 +4,7 @@
  */
 
 import { importFiles, revokeAsset, assetToSceneElement } from './importer.js';
+import { icon } from '../icons.js';
 
 function _safeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -31,7 +32,7 @@ function renderAssetCard(asset) {
     ? `<img class="ce-asset-thumb" src="${_safeHtml(asset.thumbnail)}" alt="">`
     : asset.type === 'audio'
       ? renderWaveform(asset.peaks)
-      : `<div class="ce-asset-thumb ce-asset-thumb--placeholder">${asset.type === 'video' ? '▶' : '?'}</div>`;
+      : `<div class="ce-asset-thumb ce-asset-thumb--placeholder">${icon(asset.type === 'video' ? 'film' : 'image', 20)}</div>`;
 
   const dur = asset.duration ? `<span class="ce-asset-dur">${fmtDuration(asset.duration)}</span>` : '';
   const badge = `<span class="ce-asset-badge ce-asset-badge--${asset.type}">${asset.type}</span>`;
@@ -66,7 +67,7 @@ export function createAssetsPanel({ container, store, getScene, applyOps, onAddT
       <div class="ce-assets-panel">
         <div class="ce-assets-toolbar">
           <span class="ce-assets-toolbar__title">${_safeHtml(title)}</span>
-          <button class="ce-assets-upload-btn" data-ce-upload>+ Import${filterType === 'audio' ? ' audio' : ''}</button>
+          <button type="button" class="ce-assets-upload-btn ce-icon-btn" data-ce-upload title="Import ${filterType === 'audio' ? 'audio' : 'media'}" aria-label="Import ${filterType === 'audio' ? 'audio' : 'media'}">${icon('plus', 15)}</button>
           <input type="file" class="ce-assets-file-input" data-ce-file-input
             accept="${filterType === 'audio' ? 'audio/*' : 'video/*,audio/*,image/*'}" multiple style="display:none">
         </div>

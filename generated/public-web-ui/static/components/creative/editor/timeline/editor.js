@@ -13,6 +13,7 @@
  */
 
 import { assetToSceneElement } from '../assets/importer.js';
+import { icon } from '../icons.js';
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -235,8 +236,8 @@ export function createTimelineEditor({ container, store, getScene, applyOps, get
       return `<div class="ce-tl-gutter-row" title="${safeHtml(row.label)}">
         <span class="ce-tl-gutter-label">${safeHtml(row.label)}</span>
         <span class="ce-tl-gutter-actions">
-          <button type="button" data-ce-lane-action="mute" data-ce-lane="${row.cat}" class="ce-tl-lane-btn${muted ? ' is-active' : ''}" title="Mute ${safeHtml(row.label)}">M</button>
-          <button type="button" data-ce-lane-action="hide" data-ce-lane="${row.cat}" class="ce-tl-lane-btn${hidden ? ' is-active' : ''}" title="Hide ${safeHtml(row.label)}">H</button>
+          <button type="button" data-ce-lane-action="mute" data-ce-lane="${row.cat}" class="ce-tl-lane-btn${muted ? ' is-active' : ''}" title="${muted ? 'Unmute' : 'Mute'} ${safeHtml(row.label)}" aria-label="Mute ${safeHtml(row.label)}">${icon(muted ? 'mute' : 'volume', 12)}</button>
+          <button type="button" data-ce-lane-action="hide" data-ce-lane="${row.cat}" class="ce-tl-lane-btn${hidden ? ' is-active' : ''}" title="${hidden ? 'Show' : 'Hide'} ${safeHtml(row.label)}" aria-label="Hide ${safeHtml(row.label)}">${icon(hidden ? 'eyeOff' : 'eye', 12)}</button>
         </span>
       </div>`;
     }).join('');
@@ -245,11 +246,12 @@ export function createTimelineEditor({ container, store, getScene, applyOps, get
       ? `Sequence · ${safeHtml(seq.title || seq.id)} · ${safeHtml(seq.status || 'draft')}`
       : (compClips.length ? `Composition · ${compClips.length} clips` : 'Timeline');
     const compositionToolbar = b ? `
-      <button type="button" data-ce-comp-action="open" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Open sequence</button>
-      ${seq?.id ? '<button type="button" data-ce-comp-action="save" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Save</button>' : ''}
-      <button type="button" data-ce-comp-action="split" style="border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f5f5f4;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Split</button>
-      <button type="button" data-ce-comp-action="delete" style="border:1px solid rgba(244,63,94,0.35);background:rgba(244,63,94,0.1);color:#fca5a5;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Del</button>
-      <button type="button" data-ce-comp-action="render" style="border:1px solid rgba(168,85,247,0.35);background:rgba(168,85,247,0.1);color:#c4b5fd;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Render</button>
+      <span class="ce-timeline-toolbar__sep" aria-hidden="true"></span>
+      <button type="button" data-ce-comp-action="open" class="ce-timeline-tool-btn" title="Open sequence" aria-label="Open sequence">${icon('folderOpen', 14)}</button>
+      ${seq?.id ? `<button type="button" data-ce-comp-action="save" class="ce-timeline-tool-btn" title="Save sequence" aria-label="Save sequence">${icon('save', 14)}</button>` : ''}
+      <button type="button" data-ce-comp-action="split" class="ce-timeline-tool-btn" title="Split sequence clip at playhead" aria-label="Split sequence clip">${icon('scissors', 14)}</button>
+      <button type="button" data-ce-comp-action="delete" class="ce-timeline-tool-btn ce-timeline-tool-btn--danger" title="Delete sequence clip" aria-label="Delete sequence clip">${icon('trash', 14)}</button>
+      <button type="button" data-ce-comp-action="render" class="ce-timeline-tool-btn" title="Render sequence" aria-label="Render sequence">${icon('export', 14)}</button>
     ` : '';
 
     container.innerHTML = `
@@ -258,12 +260,13 @@ export function createTimelineEditor({ container, store, getScene, applyOps, get
           <span class="ce-timeline-stub__label">${seqTitle}</span>
           <span class="ce-timeline-toolbar__controls">
             <span class="ce-timeline-stub__dur">${fmtTime(timeMs)} / ${fmtTime(duration)}</span>
-            <button type="button" data-ce-timeline-action="snap" class="ce-timeline-tool-btn${store.getState().timelineSnap !== false ? ' is-active' : ''}" title="Toggle snapping">Snap</button>
-            <button type="button" data-ce-timeline-action="split" class="ce-timeline-tool-btn" title="Split selected clips at playhead">Split</button>
-            <button type="button" data-ce-timeline-action="delete" class="ce-timeline-tool-btn ce-timeline-tool-btn--danger" title="Delete selected clips">Delete</button>
-            <button type="button" data-ce-timeline-action="zoom-out" class="ce-timeline-tool-btn" title="Zoom timeline out">−</button>
-            <button type="button" data-ce-timeline-action="zoom-fit" class="ce-timeline-tool-btn" title="Fit timeline">Fit</button>
-            <button type="button" data-ce-timeline-action="zoom-in" class="ce-timeline-tool-btn" title="Zoom timeline in">+</button>
+            <button type="button" data-ce-timeline-action="snap" class="ce-timeline-tool-btn${store.getState().timelineSnap !== false ? ' is-active' : ''}" title="Snapping" aria-label="Toggle snapping">${icon('magnet', 14)}</button>
+            <button type="button" data-ce-timeline-action="split" class="ce-timeline-tool-btn" title="Split at playhead (S)" aria-label="Split selected clips at playhead">${icon('scissors', 14)}</button>
+            <button type="button" data-ce-timeline-action="delete" class="ce-timeline-tool-btn ce-timeline-tool-btn--danger" title="Delete selected (Del)" aria-label="Delete selected clips">${icon('trash', 14)}</button>
+            <span class="ce-timeline-toolbar__sep" aria-hidden="true"></span>
+            <button type="button" data-ce-timeline-action="zoom-out" class="ce-timeline-tool-btn" title="Zoom out" aria-label="Zoom timeline out">${icon('zoomOut', 14)}</button>
+            <button type="button" data-ce-timeline-action="zoom-fit" class="ce-timeline-tool-btn" title="Fit timeline" aria-label="Fit timeline">${icon('fit', 14)}</button>
+            <button type="button" data-ce-timeline-action="zoom-in" class="ce-timeline-tool-btn" title="Zoom in" aria-label="Zoom timeline in">${icon('zoomIn', 14)}</button>
             ${compositionToolbar}
           </span>
         </div>

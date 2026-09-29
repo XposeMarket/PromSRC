@@ -5,6 +5,7 @@
  */
 
 import { getAllEffects, getEffect } from '../effects/registry.js';
+import { icon } from '../icons.js';
 
 function num(v, fallback = 0) {
   const n = parseFloat(v);
@@ -296,7 +297,7 @@ function renderEffectsSection(el) {
               <div class="ce-effect-row" data-ef-idx="${ef._idx}">
                 <div class="ce-effect-row__header">
                   <span class="ce-effect-label">${_safeHtml(def?.label || ef.id)}</span>
-                  <button class="ce-effect-remove" data-remove-ef="${ef._idx}" title="Remove">✕</button>
+                  <button type="button" class="ce-effect-remove ce-icon-btn" data-remove-ef="${ef._idx}" title="Remove effect" aria-label="Remove effect">${icon('close', 13)}</button>
                 </div>
                 <div class="ce-effect-params">${renderEffectParams(ef, def)}</div>
               </div>
@@ -308,7 +309,7 @@ function renderEffectsSection(el) {
           <option value="">Add effect…</option>
           ${allEfx.map(e => `<option value="${_safeHtml(e.id)}">${_safeHtml(e.label)}</option>`).join('')}
         </select>
-        <button class="ce-prop-btn" data-ce-add-ef>+</button>
+        <button type="button" class="ce-prop-btn ce-icon-btn" data-ce-add-ef title="Add effect" aria-label="Add effect">${icon('plus', 14)}</button>
       </div>
     </div>
   `;

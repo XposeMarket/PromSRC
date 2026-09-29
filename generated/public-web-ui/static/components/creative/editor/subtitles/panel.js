@@ -4,6 +4,7 @@
  * Stored on scene.subtitles: [{ id, startMs, endMs, text }]
  * Rendered as an overlay in the preview canvas when timeMs is in range.
  */
+import { icon } from '../icons.js';
 
 function uid() { return Math.random().toString(36).slice(2); }
 function fmtT(ms) {
@@ -37,7 +38,7 @@ export function createSubtitlesPanel({ container, store, getScene, applyOps }) {
       <div class="ce-subs-panel">
         <div class="ce-subs-toolbar">
           <span class="ce-subs-title">Subtitles</span>
-          <button class="ce-subs-add-btn" data-ce-subs-add>+ Add</button>
+          <button type="button" class="ce-subs-add-btn ce-icon-btn" data-ce-subs-add title="Add subtitle at playhead" aria-label="Add subtitle">${icon('plus', 15)}</button>
         </div>
         <div class="ce-subs-list">
           ${subs.length === 0
@@ -54,7 +55,7 @@ export function createSubtitlesPanel({ container, store, getScene, applyOps }) {
                 <div class="ce-sub-text-row">
                   <textarea class="ce-sub-textarea" data-sub="${i}" data-field="text"
                     rows="2">${_safe(sub.text || '')}</textarea>
-                  <button class="ce-sub-remove" data-sub-remove="${i}" title="Delete">✕</button>
+                  <button type="button" class="ce-sub-remove ce-icon-btn" data-sub-remove="${i}" title="Delete subtitle" aria-label="Delete subtitle">${icon('close', 13)}</button>
                 </div>
               </div>
             `).join('')

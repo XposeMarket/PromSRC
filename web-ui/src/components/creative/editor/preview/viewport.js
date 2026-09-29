@@ -10,6 +10,7 @@
  *   scene → view: (x * scale + panX,  y * scale + panY)
  *   view → scene: ((x - panX) / scale, (y - panY) / scale)
  */
+import { icon } from '../icons.js';
 
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 8;
@@ -33,9 +34,9 @@ export function createViewport({ container, store, onHitTest }) {
   root.innerHTML = `
     <canvas class="ce-viewport-canvas"></canvas>
     <div class="ce-viewport-controls">
-      <button class="ce-viewport-btn" data-action="zoom-out" title="Zoom out">−</button>
-      <button class="ce-viewport-btn" data-action="fit" title="Fit to screen">Fit</button>
-      <button class="ce-viewport-btn" data-action="zoom-in" title="Zoom in">+</button>
+      <button type="button" class="ce-viewport-btn" data-action="zoom-out" title="Zoom out" aria-label="Zoom out">${icon('zoomOut', 15)}</button>
+      <button type="button" class="ce-viewport-btn" data-action="fit" title="Fit to screen" aria-label="Fit to screen">${icon('fit', 15)}</button>
+      <button type="button" class="ce-viewport-btn" data-action="zoom-in" title="Zoom in" aria-label="Zoom in">${icon('zoomIn', 15)}</button>
       <span class="ce-viewport-zoom-label" data-zoom-label>100%</span>
     </div>
   `;
