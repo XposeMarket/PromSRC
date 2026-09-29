@@ -2,10 +2,11 @@
 import type { NotionConnector } from '../../../../integrations/connectors/notion.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'notion';
 const NAME = 'Notion';
-const tools = ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database'];
+const tools = ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database', 'connector_notion_api_request'];
 
 async function withConn(fn: (c: NotionConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -21,6 +22,14 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['drive'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<NotionConnector>(api, {
+      connectorId: 'notion', displayName: 'Notion',
+      bases: { notion: 'https://api.notion.com' },
+      headers: { 'Notion-Version': '2022-06-28' },
+      examplePath: '/v1/blocks/BLOCK_ID/children',
+      coverageHint: 'append/update blocks, update pages and properties, databases, comments, users',
     });
 
     api.registerTool({

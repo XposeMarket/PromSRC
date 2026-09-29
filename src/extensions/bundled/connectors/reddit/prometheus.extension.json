@@ -45,7 +45,8 @@
       "connector_reddit_get_posts",
       "connector_reddit_search",
       "connector_reddit_submit_post",
-      "connector_reddit_get_comments"
+      "connector_reddit_get_comments",
+      "connector_reddit_api_request"
     ]
   },
   "setup": {

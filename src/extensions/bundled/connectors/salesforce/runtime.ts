@@ -2,10 +2,11 @@
 import type { SalesforceConnector } from '../../../../integrations/connectors/salesforce.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'salesforce';
 const NAME = 'Salesforce';
-const tools = ['connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_create_record', 'connector_salesforce_get_record'];
+const tools = ['connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_create_record', 'connector_salesforce_get_record', 'connector_salesforce_api_request'];
 
 async function withConn(fn: (c: SalesforceConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -21,6 +22,13 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['crm'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<SalesforceConnector>(api, {
+      connectorId: 'salesforce', displayName: 'Salesforce',
+      bases: { salesforce: (c: any) => c.getInstanceUrl() },
+      examplePath: '/services/data/v60.0/sobjects/Account/describe',
+      coverageHint: 'any sObject CRUD, SOQL/SOSL, describe, composite, reports',
     });
 
     api.registerTool({

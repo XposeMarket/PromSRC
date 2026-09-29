@@ -190,7 +190,8 @@ export function resolveToolCapabilityMetadata(
   }
   // Raw provider API escape hatches: read-only only for an explicit safe
   // method; a missing or mutating method fails toward the write gate.
-  if (name === 'x_api_request' || name === 'connector_vercel_api_request' || name === 'connector_github_api_request') {
+  // connector_gdrive_api_request is a GET-only read tool with its own declaration.
+  if (name === 'x_api_request' || (/^connector_[a-z0-9]+_api_request$/.test(name) && name !== 'connector_gdrive_api_request')) {
     const method = String(args?.method || '').trim().toUpperCase();
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
     return EXTERNAL_WRITE;

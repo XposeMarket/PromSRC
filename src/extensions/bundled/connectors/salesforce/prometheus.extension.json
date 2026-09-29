@@ -45,7 +45,8 @@
       "connector_salesforce_query",
       "connector_salesforce_search",
       "connector_salesforce_create_record",
-      "connector_salesforce_get_record"
+      "connector_salesforce_get_record",
+      "connector_salesforce_api_request"
     ]
   },
   "setup": {

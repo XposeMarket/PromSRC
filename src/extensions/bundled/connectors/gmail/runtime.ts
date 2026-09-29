@@ -4,10 +4,11 @@
 import type { GmailConnector } from '../../../../integrations/connectors/gmail.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'gmail';
 const NAME = 'Gmail';
-const tools = ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_get_thread', 'connector_gmail_prepare_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'];
+const tools = ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_get_thread', 'connector_gmail_prepare_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels', 'connector_gmail_api_request'];
 
 async function withConn(fn: (c: GmailConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -87,6 +88,13 @@ const ext: PrometheusExtensionDefinition = {
       id: ID, name: NAME, authType: 'oauth', capabilities: ['email'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
       describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+    });
+
+    registerConnectorApiRequestTool<GmailConnector>(api, {
+      connectorId: 'gmail', displayName: 'Gmail',
+      bases: { gmail: 'https://gmail.googleapis.com' },
+      examplePath: '/gmail/v1/users/me/labels',
+      coverageHint: 'drafts, labels, filters, trash/modify messages, settings, history',
     });
 
     api.registerTool({
