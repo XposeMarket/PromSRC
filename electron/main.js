@@ -93,7 +93,12 @@ const ICON_PATH    = path.join(
   process.platform === 'darwin' ? 'Prometheus.png' : 'Prometheus.ico',
 );
 const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
-const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
+// Readiness is a wall-clock deadline, not a probe count: the fast 50ms probe
+// phase used to burn 160 of 200 retries in 8s, so a "60s" wait gave up after
+// ~20s and a cold boot after a rebuild (~45s import+listen) was declared dead
+// while it was still starting (2026-09-29 video-engine restart).
+const GATEWAY_READY_TIMEOUT_MS = 150_000;
+const MAX_RETRIES  = 500;  // safety cap only; GATEWAY_READY_TIMEOUT_MS governs
 const RETRY_DELAY  = 300;
 // Keep the renderer header and the native Windows/Linux caption controls on
 // the same physical row. This value is also mirrored by --window-chrome-height
@@ -2254,7 +2259,15 @@ async function restartGatewayFromElectron(options = {}) {
     const message = err && err.message ? err.message : String(err);
     writeGatewayLog(`[main] Electron-managed gateway restart failed: ${message}\n`);
     gatewayRelay?.setState('failed');
-    gatewayProcess = null;
+    // A slow boot is not a dead gateway. Keep ownership of a still-running
+    // child (dropping it orphaned a live gateway and let a second one spawn on
+    // the same port) and flip the relay back to ready once it answers.
+    const pending = gatewayProcess;
+    if (pending && pending.exitCode == null && pending.signalCode == null) {
+      adoptLateGatewayReady(pending);
+    } else {
+      gatewayProcess = null;
+    }
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('gateway-degraded', {
@@ -2273,6 +2286,44 @@ async function restartGatewayFromElectron(options = {}) {
   } finally {
     isGatewayRestarting = false;
   }
+}
+
+// Background follow-up for a gateway that missed the readiness deadline but is
+// still alive: keep probing and restore the relay (and reload the window) when
+// it finally answers, instead of leaving every client on a permanent 503.
+function adoptLateGatewayReady(child) {
+  writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} still starting; will adopt it when it becomes healthy\n`);
+  const startedAt = Date.now();
+  const probe = () => {
+    if (isQuitting || gatewayProcess !== child || child.exitCode != null || child.signalCode != null) return;
+    if (Date.now() - startedAt > 10 * 60_000) {
+      writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} never became healthy; leaving relay failed\n`);
+      return;
+    }
+    const request = http.request({
+      hostname: '127.0.0.1',
+      port: parseGatewayPort(gatewayBackendPort),
+      path: '/api/health',
+      method: 'HEAD',
+      timeout: GATEWAY_HEALTH_TIMEOUT_MS,
+      headers: { Connection: 'close' },
+    }, (res) => {
+      res.resume();
+      const code = Number(res.statusCode || 0);
+      if (code >= 200 && code < 300 && gatewayProcess === child) {
+        gatewayRelay?.setState('ready');
+        gatewayRecoveryAttempts.length = 0;
+        writeGatewayLog(`[main] Late gateway pid=${child.pid || 'unknown'} became healthy after ${Math.round((Date.now() - startedAt) / 1000)}s; relay ready\n`);
+        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL); } catch {}
+        return;
+      }
+      setTimeout(probe, 1_000);
+    });
+    request.on('timeout', () => { request.destroy(); });
+    request.on('error', () => setTimeout(probe, 1_000));
+    request.end();
+  };
+  setTimeout(probe, 1_000);
 }
 
 function waitForGateway(retries = MAX_RETRIES) {
@@ -2315,23 +2366,24 @@ function waitForGateway(retries = MAX_RETRIES) {
           done(resolve);
           return;
         }
-        if (retries-- > 0) {
+        if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
           setTimeout(attempt, nextHealthDelay());
         } else {
           if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
           done(() => reject(new Error(
-            `Gateway did not become ready at ${GATEWAY_URL} after ${(MAX_RETRIES * RETRY_DELAY) / 1000}s`
+            `Gateway did not become ready at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
           )));
         }
       });
+      request.on('timeout', () => { request.destroy(); });
       request.on('error', () => {
         if (settled) return;
-        if (retries-- > 0) {
+        if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
           setTimeout(attempt, nextHealthDelay());
         } else {
           if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
           done(() => reject(new Error(
-            `Gateway did not respond at ${GATEWAY_URL} after ${(MAX_RETRIES * RETRY_DELAY) / 1000}s`
+            `Gateway did not respond at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
           )));
         }
       });

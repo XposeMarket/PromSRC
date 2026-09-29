@@ -58,4 +58,21 @@ if (!processWithMarker[marker]) {
   process.on('exit', (code) => {
     appendExitDiagnostic('process_exit', { code });
   });
+
+  // A stray rejected promise (e.g. Playwright's dialog auto-close racing an
+  // already-dismissed dialog: "Protocol error (Page.handleJavaScriptDialog):
+  // No dialog is showing") used to hit Node's default and kill the whole
+  // gateway with code 1, taking every chat, team and Brain run with it. Record
+  // it and keep serving; genuine faults still surface in the diagnostics log.
+  process.on('unhandledRejection', (reason) => {
+    const error = reason instanceof Error ? reason : null;
+    appendExitDiagnostic('unhandled_rejection', {
+      error: error?.stack || error?.message || String(reason),
+    });
+    try {
+      console.error('[gateway] Unhandled promise rejection (gateway kept alive):', error?.message || String(reason));
+    } catch {
+      // Logging must never throw from the rejection handler.
+    }
+  });
 }
