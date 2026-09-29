@@ -505,11 +505,14 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     const mix = mixed.length === 1
       ? `${mixed[0]}anull`
       : `${mixed.join('')}amix=inputs=${mixed.length}:duration=longest:dropout_transition=0,volume=${mixed.length}`;
-    f.push(`${mix},apad,atrim=0:${total.toFixed(3)}[aout]`);
+    // No apad: the bundled ffmpeg (4.1) never ends an infinite apad stream behind
+    // amix, so multi-clip exports hung until the timeout. A short audio track is
+    // fine in MP4; -t below still caps the output length.
+    f.push(`${mix},atrim=0:${total.toFixed(3)}[aout]`);
     a.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '192k');
   }
   a[a.indexOf('-filter_complex') + 1] = f.join(';');
-  const res = await ffmpeg(['-y', '-hide_banner', ...a, '-t', total.toFixed(3), '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outAbs]);
+  const res = await ffmpeg(['-y', '-hide_banner', ...a, '-t', total.toFixed(3), '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outAbs], Math.max(120_000, Math.round(total * 30_000)));
   if (res.code !== 0) throw new Error(`Export failed: ${res.stderr.slice(-900)}`);
   const rel = toWorkspaceRel(workspacePath, outAbs);
   await mutateProject(workspacePath, projectId, 'export', (proj) => {
