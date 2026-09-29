@@ -161,11 +161,15 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     _renderer?.markDirty?.();
     if (options.history !== false) _history?.commit();
     if (options.persist !== false) persistSceneSoon();
+    // Committed edits flow back into the server video project (clip moves,
+    // trims, splits, deletes on generated clips). Studio mirrors are excluded.
+    if (options.history !== false && !options.fromStudio && !options.fromSnapshot) _studioPanel?.onSceneCommitted?.();
     return getScene();
   }
 
   function applySceneSnapshot(snapshot) {
-    applyEditorOps({ op: 'set-scene', patch: snapshot }, { history: false });
+    applyEditorOps({ op: 'set-scene', patch: snapshot }, { history: false, fromSnapshot: true });
+    _studioPanel?.onSceneRestored?.();
     // Track buttons mirror persisted element/audio metadata. Reset their
     // transient category flags when undo/redo swaps in a snapshot.
     const validIds = new Set((getScene()?.elements || []).map(element => element.id));
@@ -277,7 +281,16 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     // Export button
     mountExportBtn(layout.panes);
 
-    _history = createHistory({ getScene, applySnapshot: applySceneSnapshot });
+    const sceneHistory = createHistory({ getScene, applySnapshot: applySceneSnapshot });
+    // One undo for the whole editor: project-clip edits unwind through the
+    // server op log (shared with Prom), everything else through scene history.
+    _history = {
+      ...sceneHistory,
+      undo: () => (_studioPanel?.handleUndo?.('undo') ? true : sceneHistory.undo()),
+      redo: () => (_studioPanel?.handleUndo?.('redo') ? true : sceneHistory.redo()),
+      canUndo: () => sceneHistory.canUndo() || !!_studioPanel?.getProject?.(),
+      canRedo: () => sceneHistory.canRedo() || !!_studioPanel?.getProject?.(),
+    };
     _shortcuts = createShortcuts({
       store,
       getScene,
