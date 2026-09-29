@@ -26,7 +26,136 @@ export const ICON2 = {
   download: S('<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>'),
   check: S('<path d="M5 12l5 5L20 7"/>'),
   x: S('<path d="M18 6L6 18M6 6l12 12"/>'),
+  pen: S('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>'),
+  film: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"/>'),
+  talk: S('<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0114 0"/><path d="M17 7a4 4 0 010 6M20 4a8 8 0 010 12"/>'),
+  sparkle: S('<path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M19 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/>'),
+  speaker: S('<path d="M11 5L6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 010 7M19 5a10 10 0 010 14"/>'),
+  copies: S('<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 00-2-2H5a2 2 0 00-2 2v9a2 2 0 002 2h3"/>'),
+  undo: S('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-4"/>'),
+  trash: S('<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15"/>'),
 };
+
+// ── parity: presets, kind badges, toolbar, sketch pad ───────────────────
+let presetsPromise = null;
+export function loadPresets(h) {
+  if (!presetsPromise) {
+    presetsPromise = h.vpFetch('/action', { action: 'presets' })
+      .then((r) => r?.presets || [])
+      .catch(() => { presetsPromise = null; return []; });
+  }
+  return presetsPromise;
+}
+
+function presetSelect(s, st, h) {
+  const list = st.presets || [];
+  const cur = s.presetId || '';
+  const groups = { camera: 'Camera', vfx: 'VFX', look: 'Look' };
+  const body = Object.entries(groups).map(([g, label]) => {
+    const items = list.filter((x) => x.group === g);
+    return items.length ? `<optgroup label="${label}">${items.map((x) => `<option value="${h.esc(x.id)}"${x.id === cur ? ' selected' : ''}>${h.esc(x.label)}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  const extra = cur && !list.some((x) => x.id === cur) ? `<option value="${h.esc(cur)}" selected>${h.esc(cur)}</option>` : '';
+  return `<select class="vpc-select" data-vpf="presetId" data-s="${h.esc(s.id)}" aria-label="Preset" title="Motion / VFX / look preset"><option value="">No preset</option>${extra}${body}</select>`;
+}
+
+export function kindBadge(s, t) {
+  const m = String(s.modelId || '');
+  let k = '';
+  if (/lipsync/.test(m)) k = 'lipsync';
+  else if (/omnihuman|ai-avatar/.test(m)) k = 'talking';
+  else if (s.sourceVideo) k = 'recast';
+  else if (s.sketch) k = 'sketch';
+  else if (t?.kind === 'image' || s.kenBurns) k = 'still';
+  return k ? ` <span class="vpc-pill is-kind">${k}</span>` : '';
+}
+
+export function parityToolbar(h) {
+  return `<span class="vpc-ptools" role="toolbar" aria-label="Studio tools">
+    ${h.iconBtn('draw', ICON2.pen, 'Draw to video (sketch pad)')}
+    ${h.iconBtn('recast', ICON2.film, 'Recast a video (upload footage)')}
+    ${h.iconBtn('talking-photo', ICON2.talk, 'Talking photo (upload portrait)')}
+    ${h.iconBtn('upscale', ICON2.sparkle, 'Upscale selected takes')}
+    ${h.iconBtn('foley', ICON2.speaker, 'Add foley / sound effects')}
+    ${h.iconBtn('batch', ICON2.copies, 'Make ad variants (hooks + creators)')}
+  </span>`;
+}
+
+/**
+ * Inline text sheet (replaces window.prompt, which some webviews/PWAs block and
+ * which looks out of place on phones). Resolves to the trimmed text or ''.
+ */
+export function askText(title, placeholder = '', initial = '') {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'vpc-sketch';
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    wrap.innerHTML = `<div class="vpc-sketch-box vpc-ask" role="dialog" aria-label="${esc(title)}">
+      <label class="vpc-ask-title">${esc(title)}</label>
+      <textarea rows="3" placeholder="${esc(placeholder)}">${esc(initial)}</textarea>
+      <div class="vpc-sketch-bar"><span style="flex:1"></span>
+        <button type="button" class="vpc-icon" data-k="cancel" title="Cancel" aria-label="Cancel">${ICON2.x}</button>
+        <button type="button" class="vpc-icon is-go" data-k="ok" title="Continue" aria-label="Continue">${ICON2.check}</button>
+      </div></div>`;
+    document.body.appendChild(wrap);
+    const ta = wrap.querySelector('textarea');
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 30);
+    const done = (v) => { wrap.remove(); resolve(v); };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) done(ta.value.trim());
+      if (e.key === 'Escape') done('');
+    });
+    wrap.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) { if (e.target === wrap) done(''); return; }
+      done(b.dataset.k === 'ok' ? ta.value.trim() : '');
+    });
+  });
+}
+
+/** Modal canvas sketch pad; resolves base64 PNG (no prefix) or null. */
+export function openSketchPad() {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'vpc-sketch';
+    wrap.innerHTML = `<div class="vpc-sketch-box" role="dialog" aria-label="Sketch pad">
+      <canvas width="720" height="720"></canvas>
+      <div class="vpc-sketch-bar">
+        ${[3, 8, 18].map((w, i) => `<button type="button" class="vpc-icon${i === 1 ? ' is-on' : ''}" data-w="${w}" title="Brush ${['S', 'M', 'L'][i]}" aria-label="Brush ${['small', 'medium', 'large'][i]}"><span class="vpc-dotb" style="width:${w / 2 + 4}px;height:${w / 2 + 4}px"></span></button>`).join('')}
+        <button type="button" class="vpc-icon" data-k="undo" title="Undo" aria-label="Undo">${ICON2.undo}</button>
+        <button type="button" class="vpc-icon" data-k="clear" title="Clear" aria-label="Clear">${ICON2.trash}</button>
+        <span style="flex:1"></span>
+        <button type="button" class="vpc-icon" data-k="cancel" title="Cancel" aria-label="Cancel">${ICON2.x}</button>
+        <button type="button" class="vpc-icon is-go" data-k="ok" title="Use sketch" aria-label="Use sketch">${ICON2.check}</button>
+      </div></div>`;
+    document.body.appendChild(wrap);
+    const cv = wrap.querySelector('canvas');
+    const cx = cv.getContext('2d');
+    const strokes = [];
+    let width = 8; let cur = null;
+    const redraw = () => {
+      cx.fillStyle = '#fff'; cx.fillRect(0, 0, cv.width, cv.height);
+      cx.strokeStyle = '#111'; cx.lineCap = 'round'; cx.lineJoin = 'round';
+      for (const s of strokes) { cx.lineWidth = s.w; cx.beginPath(); s.pts.forEach(([x, y], i) => (i ? cx.lineTo(x, y) : cx.moveTo(x, y))); if (s.pts.length === 1) cx.lineTo(s.pts[0][0] + 0.1, s.pts[0][1]); cx.stroke(); }
+    };
+    const pos = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height)]; };
+    cv.style.touchAction = 'none';
+    cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); cur = { w: width, pts: [pos(e)] }; strokes.push(cur); redraw(); });
+    cv.addEventListener('pointermove', (e) => { if (!cur) return; cur.pts.push(pos(e)); redraw(); });
+    const end = () => { cur = null; };
+    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+    redraw();
+    const done = (v) => { wrap.remove(); resolve(v); };
+    wrap.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) { if (e.target === wrap) done(null); return; }
+      if (b.dataset.w) { width = Number(b.dataset.w); wrap.querySelectorAll('[data-w]').forEach((x) => x.classList.toggle('is-on', x === b)); return; }
+      const k = b.dataset.k;
+      if (k === 'undo') { strokes.pop(); redraw(); } else if (k === 'clear') { strokes.length = 0; redraw(); } else if (k === 'cancel') done(null);
+      else if (k === 'ok') done(strokes.length ? cv.toDataURL('image/png').replace(/^data:[^,]*,/, '') : null);
+    });
+  });
+}
 
 export const VOICES = {
   openai: ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'],
@@ -82,6 +211,7 @@ export function shotEditor(s, i, total, st, h) {
         ${h.iconBtn('dur', ICON2.plus, 'Longer', `data-s="${sid}" data-d="1"`)}
       </div>
       <select class="vpc-select" data-vpf="modelId" data-s="${sid}" aria-label="Model">${opts.join('')}</select>
+      ${presetSelect(s, st, h)}
       <span class="vpc-grow"></span>
       ${h.iconBtn('move', ICON2.up, 'Move up', `data-s="${sid}" data-i="${i - 1}" ${i === 0 ? 'disabled' : ''}`)}
       ${h.iconBtn('move', ICON2.down, 'Move down', `data-s="${sid}" data-i="${i + 1}" ${i >= total - 1 ? 'disabled' : ''}`)}
@@ -209,11 +339,11 @@ export function exportsSection(p, st, h) {
 }
 
 // ── file upload ─────────────────────────────────────────────────────────
-export function pickImage() {
+export function pickImage(accept = 'image/*') {
   return new Promise((resolve) => {
     const inp = document.createElement('input');
     inp.type = 'file';
-    inp.accept = 'image/*';
+    inp.accept = accept;
     inp.style.display = 'none';
     inp.addEventListener('change', () => {
       const f = inp.files && inp.files[0];
@@ -299,6 +429,37 @@ export async function handleV2Click(a, ctx) {
     }
     case 'act-cancel': st.actPending = null; if (p.lastRun) p.lastRun.needsApproval = undefined; paint(); return true;
     case 'aspect': { if (st.aspects.has(d.v)) st.aspects.delete(d.v); else st.aspects.add(d.v); paint(); return true; }
+    case 'draw': {
+      const data = await openSketchPad();
+      if (!data) return true;
+      const prompt = await askText('What should this sketch become?', 'A cinematic scene at golden hour');
+      if (!prompt) return true;
+      await act('draw_to_video', { dataBase64: data, prompt }, 'Sketch to video', 15 * 60 * 1000);
+      return true;
+    }
+    case 'recast': {
+      const file = await pickImage('video/*');
+      if (!file) return true;
+      const imp = await act('import_asset', { ...file, role: 'footage' }, 'Uploading footage', 5 * 60 * 1000);
+      if (!imp?.assetPath) return true;
+      const prompt = await askText('Recast it as…', 'New character, outfit, world or style');
+      if (!prompt) return true;
+      await act('recast', { sourcePath: imp.assetPath, prompt, mode: 'edit' }, 'Recasting', 15 * 60 * 1000);
+      return true;
+    }
+    case 'talking-photo': {
+      const file = await pickImage();
+      if (!file) return true;
+      const imp = await act('import_asset', { ...file, role: 'asset' }, 'Uploading portrait');
+      if (!imp?.assetPath) return true;
+      const line = await askText('What should they say?', 'Hey! You have to try this.');
+      if (!line) return true;
+      await act('talking_photo', { imagePath: imp.assetPath, line }, 'Talking photo', 15 * 60 * 1000);
+      return true;
+    }
+    case 'upscale': await act('upscale', {}, 'Upscaling', 15 * 60 * 1000); return true;
+    case 'foley': await act('foley', {}, 'Adding sound', 15 * 60 * 1000); return true;
+    case 'batch': await act('batch_variants', { count: 3, vary: ['hook', 'creator'] }, 'Planning variants', 5 * 60 * 1000); return true;
     case 'share': { const msg = await shareExport(d.path, h); if (msg) { st.error = ''; st.busy = ''; st.toast = msg; paint(); } return true; }
     default: return false;
   }
@@ -308,7 +469,7 @@ export async function handleV2Click(a, ctx) {
 export async function handleV2Change(f, ctx) {
   const { d, ops, value, checked, st } = ctx;
   switch (f) {
-    case 'prompt': case 'line': case 'modelId': {
+    case 'prompt': case 'line': case 'modelId': case 'presetId': {
       const s = (st.project?.shots || []).find((x) => x.id === d.s);
       if (s && String(s[f] || '') === value) return;
       await ops([{ op: 'shot.update', id: d.s, [f]: value }], 'Saving');
@@ -379,5 +540,19 @@ export const V2_CSS = `
 .prom-vp-card .vpc-export video{display:block;width:100%;max-height:260px;background:#000}
 .prom-vp-card .vpc-export .vpc-row{padding:2px 6px}
 .prom-vp-card .vpc-toast{padding:6px 12px;font-size:12px;color:var(--vpc-accent);border-bottom:1px solid var(--vpc-line)}
+.prom-vp-card .vpc-ptools{display:inline-flex;flex-wrap:wrap;gap:2px}
+.prom-vp-card .vpc-pill.is-kind{margin-left:6px;text-transform:uppercase;font-size:10px;color:var(--vpc-accent);border-color:var(--vpc-accent)}
+.vpc-sketch{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:10px}
+.vpc-sketch-box{width:min(94vw,520px);background:var(--prom-surface,#fff);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.vpc-sketch canvas{width:100%;aspect-ratio:1;border-radius:8px;background:#fff;touch-action:none}
+.vpc-sketch-bar{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.vpc-ask{padding:12px;gap:8px;color:var(--prom-text,#111)}
+.vpc-ask-title{font-weight:600;font-size:14px}
+.vpc-ask textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:72px;font:inherit;font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--prom-border,#ccc);background:var(--prom-bg,transparent);color:inherit}
+.vpc-sketch .vpc-icon{min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--prom-border,#ccc);border-radius:9px;background:transparent;color:var(--prom-text,#111);cursor:pointer}
+.vpc-sketch .vpc-icon svg{width:18px;height:18px}
+.vpc-sketch .vpc-icon.is-on,.vpc-sketch .vpc-icon.is-go{border-color:var(--prom-accent,#6c5ce7);color:var(--prom-accent,#6c5ce7)}
+.vpc-dotb{display:inline-block;border-radius:50%;background:currentColor}
+@media (max-width:420px){.prom-vp-card .vpc-ptools{max-width:100%}}
 @media (max-width:420px){.prom-vp-card .vpc-tools{flex-wrap:wrap;justify-content:flex-end;max-width:50%}}
 `;

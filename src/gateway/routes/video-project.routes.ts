@@ -134,6 +134,7 @@ export function registerVideoProjectRoutes(router: IRouter): void {
     'templates', 'music_beds', 'models', 'providers', 'cast_list', 'brand_list', 'run_cost',
     'import_asset', 'apply_template', 'storyboard', 'voiceover', 'captions', 'transcribe', 'music', 'qa', 'hooks',
     'render', 'render_variants', 'upgrade', 'route', 'run', 'cast_save', 'cast_add', 'brand_apply', 'estimate', 'generate', 'generate_anchor',
+    'presets', 'recast', 'draw_to_video', 'lipsync', 'talking_photo', 'upscale', 'foley', 'batch_variants', 'faceless',
   ]);
   const runAction = async (req: any, res: any, projectId?: string) => {
     try {

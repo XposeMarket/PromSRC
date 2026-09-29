@@ -14,6 +14,8 @@ import {
   cancelJob, estimate, generateCharacterAnchor, generateShots, generateStoryboards, renderFrame, renderProject, resumeJobs, waitForJobs,
 } from './engine.js';
 import * as studio from './studio.js';
+import * as parity from './parity.js';
+import { listPresets } from './presets.js';
 import { deleteBrand, deleteCast, saveCast } from './library.js';
 
 export const VIDEO_PROJECT_ACTIONS = [
@@ -24,11 +26,13 @@ export const VIDEO_PROJECT_ACTIONS = [
   'quickstart', 'templates', 'apply_template', 'import_asset', 'storyboard', 'voiceover', 'captions', 'music', 'music_beds',
   'qa', 'hooks', 'render_variants', 'upgrade', 'route', 'run', 'run_cost', 'watch', 'transcribe',
   'cast_list', 'cast_save', 'cast_add', 'cast_delete', 'brand_list', 'brand_save', 'brand_apply', 'brand_delete',
+  // parity
+  'presets', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants',
 ] as const;
 
-export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list']);
+export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets']);
 /** Actions that can spend money with an external provider. */
-export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart']);
+export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants']);
 
 export function getVideoProjectToolDef(): any {
   return {
@@ -45,6 +49,7 @@ export function getVideoProjectToolDef(): any {
         'SUPERCOMPUTER MODE: quickstart {brief, templateId?, productPath? (a chat upload like uploads/can.png), productName?, capUsd?} creates the project, imports the product photo, applies a template (ugc-testimonial, product-demo, cinematic-trailer, explainer, before-after, local-business-promo) and runs the autopilot: anchors -> storyboard stills -> voiceover -> video -> vision QA (+rerolls) -> assemble -> captions -> music -> render. It returns needsApproval with a whole-run cost breakdown first; show it, get ONE yes, then call run {projectId, approved:true}. run is resumable and skips finished steps.',
         'Studio actions: import_asset (product/character photo), apply_template, storyboard (cheap stills per shot, approve with shot.approveStoryboard), voiceover (shot.line -> TTS VO track; voice.set op picks openai/xai voice), captions {style: pop|bold|minimal|karaoke}, music {builtin: pulse|chill|hype}, qa (vision score per take), hooks (A/B hook takes) + render_variants, render {aspects:["9:16","1:1","16:9"]}, upgrade (re-generate picked shots at 720p/1080p), route (smart model per shot), cast_*/brand_* (persistent cast + brand kits across projects).',
         'ASYNC: long generations do not need you to wait. generate/storyboard/run/hooks accept notify:true (default for run): Prometheus wakes this chat with a [video_project wake] message when the jobs settle, so end your turn after kicking them off.',
+        'PARITY: presets {group?} lists camera/vfx/look presets (set shot.presetId via shot.update). recast {sourcePath|shotId, prompt, mode: edit(xAI, no fal key)|motion|swap, characterId?} restyles footage (import_asset role footage first). lipsync {shotId|sourcePath, audioPath|line} and talking_photo {imagePath|characterId, line|audioPath} need fal. draw_to_video {sketchPath|dataBase64, prompt}: sketch -> clean frame -> video. upscale {shotIds?, factor?} and foley {shotIds?, prompt?} add a new selected take. faceless {topic, minutes, style, videoEvery?, script?:[{line,visual}]} plans a 16:9 narrated long-form (Ken Burns stills + video beats) then run. batch_variants {projectId, count, vary:[hook,creator,setting,cta], approved?} clones N projects; show each chatCard.',
         'Call action "help" for the op reference.',
       ].join(' '),
       parameters: {
@@ -84,10 +89,10 @@ export function getVideoProjectToolDef(): any {
           path: { type: 'string', description: 'import_asset: workspace file; music: custom audio path.' },
           dataBase64: { type: 'string', description: 'import_asset: base64 file data (UI uploads).' },
           filename: { type: 'string' },
-          role: { type: 'string', enum: ['product', 'character', 'asset'], description: 'import_asset role.' },
+          role: { type: 'string', enum: ['product', 'character', 'asset', 'footage', 'sketch'], description: 'import_asset role (footage = video to recast/lipsync).' },
           name: { type: 'string' },
           notes: { type: 'string' },
-          style: { type: 'string', enum: ['pop', 'bold', 'minimal', 'karaoke'], description: 'captions style.' },
+          style: { type: 'string', description: 'captions style pop|bold|minimal|karaoke; faceless style documentary|2d-animated|stock-cinematic|whiteboard|history.' },
           audioMode: { type: 'string', enum: ['native', 'voiceover'], description: 'quickstart/project audio: native = the on-screen creator speaks each shot.line (captions transcribed from the clip audio, no TTS); voiceover = TTS narrator track, clips prompted dialogue-free. UGC/before-after default to native.' },
           builtin: { type: 'string', enum: ['pulse', 'chill', 'hype'], description: 'music: generated bed.' },
           volume: { type: 'number' },
@@ -107,6 +112,20 @@ export function getVideoProjectToolDef(): any {
           castIds: { type: 'array', items: { type: 'string' } },
           brand: { type: 'object', description: 'brand_save: {name, logo?, colors?, tone?, promptSuffix?, tagline?, cta?, castIds?, productIds?, watermark?, voice?}.' },
           tags: { type: 'array', items: { type: 'string' } },
+          group: { type: 'string', enum: ['camera', 'vfx', 'look'], description: 'presets filter.' },
+          sourcePath: { type: 'string', description: 'recast/lipsync: workspace video path.' },
+          takeId: { type: 'string' },
+          mode: { type: 'string', enum: ['edit', 'motion', 'swap'], description: 'recast mode.' },
+          audioPath: { type: 'string' },
+          line: { type: 'string', description: 'lipsync/talking_photo: line to voice.' },
+          imagePath: { type: 'string' },
+          sketchPath: { type: 'string' },
+          factor: { type: 'number', description: 'upscale factor (default 2).' },
+          topic: { type: 'string' },
+          minutes: { type: 'number', description: 'faceless length 1-15.' },
+          videoEvery: { type: 'integer' },
+          script: { type: 'array', items: { type: 'object' }, description: 'faceless: [{line, visual}] (preferred).' },
+          vary: { type: 'array', items: { type: 'string' }, description: 'batch_variants fields.' },
         },
       },
     },
@@ -317,6 +336,44 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       }
       if (args.wait === true) return await studio.runAutopilot(ws, pid, { ...runArgs, approved: true });
       return { ...startRunInBackground(ctx, pid, { ...runArgs, approved: true }), costUsd: cost.usd };
+    }
+    case 'presets':
+      return { presets: listPresets(args.group) };
+    case 'recast': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await parity.recast(ws, pid, { sourcePath: args.sourcePath, shotId: args.shotId, takeId: args.takeId, prompt: String(args.prompt || ''), characterId: args.characterId, mode: args.mode, modelId: args.modelId, approved: args.approved === true });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Recast take is ready.', args.notify === true);
+      return wake ? { ...r, wake } : r;
+    }
+    case 'lipsync':
+      return await parity.lipsync(ws, need(args.projectId, 'projectId'), { shotId: args.shotId, sourcePath: args.sourcePath, audioPath: args.audioPath, line: args.line, modelId: args.modelId, approved: args.approved === true });
+    case 'talking_photo':
+      return await parity.talkingPhoto(ws, need(args.projectId, 'projectId'), { imagePath: args.imagePath, characterId: args.characterId, line: args.line, audioPath: args.audioPath, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true });
+    case 'draw_to_video':
+      return await parity.drawToVideo(ws, need(args.projectId, 'projectId'), { sketchPath: args.sketchPath, dataBase64: args.dataBase64, prompt: String(args.prompt || ''), modelId: args.modelId, approved: args.approved === true });
+    case 'upscale':
+      return await parity.upscale(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, factor: args.factor, modelId: args.modelId, approved: args.approved === true });
+    case 'foley':
+      return await parity.foley(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true });
+    case 'faceless': {
+      const r = await parity.faceless(ws, { projectId: args.projectId, topic: need(args.topic, 'topic'), minutes: args.minutes, style: args.style, videoEvery: args.videoEvery, script: args.script, capUsd: args.capUsd, resolution: args.resolution });
+      return { ...r, next: r.needsApproval ? 'Show the cost breakdown; then call run {projectId, approved:true, storyboard:false, qa:false, aspects:["16:9"]}.' : 'Call run {projectId, storyboard:false, qa:false, aspects:["16:9"]}.' };
+    }
+    case 'batch_variants': {
+      const pid = need(args.projectId, 'projectId');
+      const r = await parity.batchVariants(ws, pid, { count: args.count, vary: args.vary });
+      if (args.approved !== true) return { ...r, next: 'Show the combined cost; call batch_variants again with approved:true to run them all (creates a new batch).' };
+      const ids = r.projects.map((x) => x.projectId);
+      const job = (async () => {
+        const done: string[] = [];
+        for (const id of ids) { try { const o = await studio.runAutopilot(ws, id, { approved: true }); done.push(`${id}:${o.lastRun.state}`); } catch (e: any) { done.push(`${id}:failed`); } }
+        if (ctx.sessionId) {
+          try { const { wakeSession } = await import('../gateway/session-wake.js'); wakeSession(ctx.sessionId, `[video_project wake] Batch variants finished: ${done.join(', ')}. Show each card.`, { source: 'video_run', key: `batch:${ids[0]}` }); } catch { /* best-effort */ }
+        }
+      })();
+      activeRuns.set(`batch:${pid}`, job);
+      job.finally(() => activeRuns.delete(`batch:${pid}`));
+      return { ...r, started: true, note: 'Variants run in sequence in the background; this chat is woken once when all finish.' };
     }
     case 'watch':
       return { note: await maybeWatch(ctx, need(args.projectId, 'projectId'), args.jobIds, String(args.note || ''), true) || 'No session to wake (not called from a chat).' };

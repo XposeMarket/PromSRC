@@ -227,6 +227,24 @@ const TEMPLATES: VideoTemplate[] = [
       'Overhead shot of {product} being finished and slid toward camera, 35mm, warm practical light',
     ],
   },
+  {
+    id: 'faceless-youtube',
+    name: 'Faceless YouTube (long-form)',
+    description: 'Narrated 16:9 long-form: mostly Ken Burns stills with a video beat every few segments, voiceover, captions, music. Use the faceless action to size it (8-40 segments).',
+    aspect: '16:9', durationSec: 120,
+    needs: {},
+    audioMode: 'voiceover',
+    voice: { provider: 'openai', voice: 'onyx' },
+    captions: { enabled: true, style: 'bold' },
+    music: { builtin: 'chill', volume: 0.12 },
+    shots: [
+      { title: 'Cold open', role: 'hook', durationSec: 20, prompt: 'Striking establishing image that sets up {brief}', line: 'Here is something most people never learn about {brief}.' },
+      { title: 'Context', role: 'establish', durationSec: 25, prompt: 'Illustrative scene giving context for {brief}', line: 'To understand it, we have to start at the beginning.' },
+      { title: 'Turn', role: 'broll', durationSec: 25, prompt: 'Dramatic turning-point image about {brief}', line: 'And then everything changed.' },
+      { title: 'Payoff', role: 'payoff', durationSec: 20, prompt: 'Reflective closing image about {brief}', line: 'That is why it still matters today.' },
+      { title: 'Outro', role: 'cta', durationSec: 15, prompt: 'Calm closing wide shot, space for an end card', line: 'Subscribe for the next one.' },
+    ],
+  },
 ];
 
 export function listTemplates(): TemplateSummary[] {
