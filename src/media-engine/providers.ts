@@ -30,6 +30,10 @@ export interface ShotInput {
   aspectRatio?: string;
   resolution?: string;
   count?: number;
+  /** Existing clip for video-to-video endpoints (absolute path, URL or data URI). */
+  sourceVideo?: string;
+  /** Driving audio for lip-sync / talking photo. */
+  audio?: string;
   extra?: Record<string, unknown>;
 }
 
@@ -125,6 +129,7 @@ export async function providerStatus(): Promise<Record<string, { configured: boo
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
   '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
 };
 
 /** http(s)/data URLs pass through; absolute local files become data URIs. */
@@ -150,6 +155,8 @@ async function inlineInputs(input: ShotInput): Promise<ShotInput> {
     startImage: await toRemoteMedia(input.startImage),
     endImage: await toRemoteMedia(input.endImage),
     referenceImages: input.referenceImages ? refs : undefined,
+    sourceVideo: await toRemoteMedia(input.sourceVideo),
+    audio: await toRemoteMedia(input.audio),
   };
 }
 
@@ -165,6 +172,8 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   set('negativePrompt', input.negativePrompt);
   set('startImage', await toRemoteMedia(input.startImage));
   set('endImage', await toRemoteMedia(input.endImage));
+  set('sourceVideo', await toRemoteMedia(input.sourceVideo));
+  set('audio', await toRemoteMedia(input.audio));
   if (input.referenceImages?.length && model.map.referenceImages) {
     const refs: string[] = [];
     for (const r of input.referenceImages.slice(0, 7)) {
@@ -173,7 +182,7 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
     }
     set('referenceImages', refs);
   }
-  if (model.kind === 'video' && model.map.durationSec) {
+  if (model.kind !== 'image' && model.map.durationSec) {
     const d = clampDuration(model, input.durationSec);
     set('durationSec', model.durationFormat === 'string' ? String(d) : d);
   }
@@ -241,6 +250,8 @@ export function extractOutputs(model: MediaModelManifest, payload: any): MediaOu
   push(payload?.video);
   for (const img of Array.isArray(payload?.images) ? payload.images : []) push(img);
   push(payload?.image);
+  push(payload?.audio_file);
+  push(payload?.audio);
   for (const v of Array.isArray(payload?.videos) ? payload.videos : []) push(v);
   return urls.map((url) => ({ url }));
 }
@@ -318,20 +329,36 @@ async function cancelQueue(model: MediaModelManifest, job: { requestId: string }
 
 // ── xAI / OpenAI via existing registries (synchronous from the engine's view) ──
 
+/** Registry request for an xAI video manifest (exported for tests: edit/extend mapping). */
+export function registryVideoRequest(model: MediaModelManifest, input: ShotInput, outputDir: string): any {
+  const mode = model.mode || (model.defaults?.mode as 'edit' | 'extend' | undefined);
+  if (mode) {
+    if (!input.sourceVideo) throw Object.assign(new Error(`${model.id} needs sourceVideo (set shot.sourceVideo to a workspace clip or "shotId:takeId").`), { errorType: 'invalid_argument' });
+    return {
+      prompt: input.prompt || (mode === 'extend' ? 'Continue the shot naturally.' : ''),
+      mode, video: input.sourceVideo,
+      duration: mode === 'extend' ? clampDuration(model, input.durationSec) : undefined,
+      provider: 'xai', model: model.endpoint, output_dir: outputDir,
+    };
+  }
+  return {
+    prompt: input.prompt,
+    image: input.startImage,
+    reference_images: input.startImage ? undefined : input.referenceImages,
+    aspect_ratio: toPrometheusAspect(input.aspectRatio),
+    duration: clampDuration(model, input.durationSec),
+    resolution: input.resolution,
+    provider: 'xai',
+    model: model.endpoint,
+    output_dir: outputDir,
+  };
+}
+
 async function runViaRegistry(model: MediaModelManifest, input: ShotInput, outputDir: string): Promise<SubmitResult> {
+  if (model.kind === 'audio') throw Object.assign(new Error(`${model.provider} has no audio transport.`), { errorType: 'invalid_provider' });
   if (model.kind === 'video') {
     if (model.provider !== 'xai') throw Object.assign(new Error(`${model.provider} has no video transport.`), { errorType: 'invalid_provider' });
-    const result = await generateVideo({
-      prompt: input.prompt,
-      image: input.startImage,
-      reference_images: input.startImage ? undefined : input.referenceImages,
-      aspect_ratio: toPrometheusAspect(input.aspectRatio),
-      duration: clampDuration(model, input.durationSec),
-      resolution: input.resolution,
-      provider: 'xai',
-      model: model.endpoint,
-      output_dir: outputDir,
-    });
+    const result = await generateVideo(registryVideoRequest(model, input, outputDir));
     if (!result.success) throw Object.assign(new Error(result.error), { errorType: result.error_type, requestId: result.request_id });
     return { state: 'done', requestId: result.request_id, outputs: [{ localPath: result.video.path, url: result.video_url, mimeType: result.video.mime_type }], raw: { model: result.model } };
   }
@@ -367,10 +394,11 @@ export async function cancel(model: MediaModelManifest, job: { requestId: string
 }
 
 /** Download a remote output into the project media folder. */
-export async function downloadOutput(output: MediaOutput, destDir: string, baseName: string, kind: 'video' | 'image'): Promise<string> {
+export async function downloadOutput(output: MediaOutput, destDir: string, baseName: string, kind: 'video' | 'image' | 'audio'): Promise<string> {
+  const fallbackExt = kind === 'video' ? '.mp4' : kind === 'audio' ? '.mp3' : '.png';
   if (output.localPath && fs.existsSync(output.localPath)) {
     fs.mkdirSync(destDir, { recursive: true });
-    const target = path.join(destDir, `${baseName}${path.extname(output.localPath) || (kind === 'video' ? '.mp4' : '.png')}`);
+    const target = path.join(destDir, `${baseName}${path.extname(output.localPath) || fallbackExt}`);
     fs.copyFileSync(output.localPath, target);
     return target;
   }
@@ -392,7 +420,9 @@ export async function downloadOutput(output: MediaOutput, destDir: string, baseN
     : /image\/jpe?g/.test(mime) ? '.jpg'
     : /image\/webp/.test(mime) ? '.webp'
     : /image\//.test(mime) ? '.png'
-    : (extFromUrl || (kind === 'video' ? '.mp4' : '.png'));
+    : /audio\/(wav|x-wav)/.test(mime) ? '.wav'
+    : /audio\//.test(mime) ? '.mp3'
+    : (extFromUrl || fallbackExt);
   fs.mkdirSync(destDir, { recursive: true });
   const target = path.join(destDir, `${baseName}${ext}`);
   fs.writeFileSync(target, bytes);

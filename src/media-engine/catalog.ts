@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 
-export type MediaKind = 'video' | 'image';
+export type MediaKind = 'video' | 'image' | 'audio';
 export type MediaTransport = 'xai' | 'openai' | 'fal' | 'higgsfield';
 
 /** Neutral input fields the engine can supply for a shot. */
@@ -27,7 +27,11 @@ export type NeutralField =
   | 'durationSec'
   | 'aspectRatio'
   | 'resolution'
-  | 'count';
+  | 'count'
+  /** Existing clip to edit / lip-sync / upscale / recast (workspace path or take ref). */
+  | 'sourceVideo'
+  /** Driving audio (lip-sync, talking photo). */
+  | 'audio';
 
 export interface MediaModelManifest {
   /** Stable id, conventionally "<provider>/<slug>". */
@@ -43,6 +47,8 @@ export interface MediaModelManifest {
   requires?: NeutralField[];
   /** Constant params merged into every request. */
   defaults?: Record<string, unknown>;
+  /** xAI registry mode for video-to-video endpoints (edit = restyle/recast, extend = continue the clip). */
+  mode?: 'edit' | 'extend';
   limits?: {
     durations?: number[];
     minDurationSec?: number;
@@ -91,6 +97,23 @@ const BUILTIN: MediaModelManifest[] = [
     limits: { minDurationSec: 1, maxDurationSec: 15, aspects: ['16:9', '9:16', '1:1'], resolutions: ['480p', '720p', '1080p'] },
     pricing: { perSecondUsd: 0.08, source: 'published' },
     tags: ['text-to-video', 'image-to-video', 'reference-to-video', 'cheap-draft'],
+  },
+  {
+    id: 'xai/grok-imagine-video-1.5-edit', label: 'Grok Imagine Video 1.5 Edit (recast)', provider: 'xai', kind: 'video',
+    endpoint: 'grok-imagine-video-1.5', mode: 'edit',
+    map: { prompt: 'prompt', sourceVideo: 'video' },
+    requires: ['prompt', 'sourceVideo'],
+    pricing: { perSecondUsd: 0.08, source: 'estimate' },
+    tags: ['recast', 'video-to-video'],
+  },
+  {
+    id: 'xai/grok-imagine-video-1.5-extend', label: 'Grok Imagine Video 1.5 Extend', provider: 'xai', kind: 'video',
+    endpoint: 'grok-imagine-video-1.5', mode: 'extend',
+    map: { prompt: 'prompt', sourceVideo: 'video', durationSec: 'duration' },
+    requires: ['sourceVideo'],
+    limits: { minDurationSec: 2, maxDurationSec: 10 },
+    pricing: { perSecondUsd: 0.08, source: 'estimate' },
+    tags: ['extend', 'recast', 'video-to-video'],
   },
   {
     id: 'xai/grok-imagine-video', label: 'Grok Imagine Video', provider: 'xai', kind: 'video',
@@ -186,6 +209,77 @@ const BUILTIN: MediaModelManifest[] = [
     pricing: { perImageUsd: 0.06, source: 'estimate' }, output: 'images.0.url',
     tags: ['anchor', 'photoreal'],
   },
+  // ── fal video-to-video / audio (schemas from fal OpenAPI) ──
+  {
+    id: 'fal/sync-lipsync-v2', label: 'Sync LipSync 2 via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/sync-lipsync/v2',
+    map: { sourceVideo: 'video_url', audio: 'audio_url' }, requires: ['sourceVideo', 'audio'],
+    pricing: { perSecondUsd: 0.05, source: 'estimate' }, output: 'video.url', tags: ['lipsync'],
+  },
+  {
+    id: 'fal/kling-lipsync', label: 'Kling LipSync (audio→video) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/kling-video/lipsync/audio-to-video',
+    map: { sourceVideo: 'video_url', audio: 'audio_url' }, requires: ['sourceVideo', 'audio'],
+    pricing: { perSecondUsd: 0.03, source: 'estimate' }, output: 'video.url', tags: ['lipsync'],
+  },
+  {
+    id: 'fal/omnihuman-v1.5', label: 'OmniHuman 1.5 talking photo via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/bytedance/omnihuman/v1.5',
+    map: { prompt: 'prompt', startImage: 'image_url', audio: 'audio_url', resolution: 'resolution' }, requires: ['startImage', 'audio'],
+    limits: { resolutions: ['720p', '1080p'] },
+    pricing: { perSecondUsd: 0.16, source: 'estimate' }, output: 'video.url', tags: ['talking-photo'],
+  },
+  {
+    id: 'fal/kling-ai-avatar-pro', label: 'Kling AI Avatar Pro (talking photo) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/kling-video/v1/pro/ai-avatar',
+    map: { prompt: 'prompt', startImage: 'image_url', audio: 'audio_url' }, requires: ['startImage', 'audio'],
+    pricing: { perSecondUsd: 0.115, source: 'estimate' }, output: 'video.url', tags: ['talking-photo'],
+  },
+  {
+    id: 'fal/kling-o1-edit', label: 'Kling O1 video edit (recast / element swap) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/kling-video/o1/video-to-video/edit',
+    map: { prompt: 'prompt', sourceVideo: 'video_url', referenceImages: 'image_urls' }, requires: ['prompt', 'sourceVideo'],
+    defaults: { keep_audio: true },
+    pricing: { perSecondUsd: 0.168, source: 'estimate' }, output: 'video.url', tags: ['recast', 'swap'],
+  },
+  {
+    id: 'fal/lucy-edit-pro', label: 'Decart Lucy Edit Pro (recast) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'decart/lucy-edit/pro',
+    map: { prompt: 'prompt', sourceVideo: 'video_url' }, requires: ['prompt', 'sourceVideo'],
+    pricing: { perSecondUsd: 0.1, source: 'estimate' }, output: 'video.url', tags: ['recast'],
+  },
+  {
+    id: 'fal/wan-vace-pose', label: 'Wan VACE 14B pose (motion transfer) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/wan-vace-14b/pose',
+    map: { prompt: 'prompt', sourceVideo: 'video_url', referenceImages: 'ref_image_urls' }, requires: ['prompt', 'sourceVideo'],
+    pricing: { perSecondUsd: 0.08, source: 'estimate' }, output: 'video.url', tags: ['motion-transfer'],
+  },
+  {
+    id: 'fal/luma-ray2-modify', label: 'Luma Ray 2 Modify via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/luma-dream-machine/ray-2/modify',
+    map: { prompt: 'prompt', sourceVideo: 'video_url', startImage: 'image_url' }, requires: ['sourceVideo'],
+    pricing: { perSecondUsd: 0.12, source: 'estimate' }, output: 'video.url', tags: ['recast'],
+  },
+  {
+    id: 'fal/topaz-upscale-video', label: 'Topaz video upscale via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/topaz/upscale/video',
+    map: { sourceVideo: 'video_url' }, requires: ['sourceVideo'],
+    defaults: { upscale_factor: 2 },
+    pricing: { perSecondUsd: 0.08, source: 'estimate' }, output: 'video.url', tags: ['upscale'],
+  },
+  {
+    id: 'fal/mmaudio-v2', label: 'MMAudio v2 (foley / SFX for a clip) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/mmaudio-v2',
+    map: { prompt: 'prompt', sourceVideo: 'video_url' }, requires: ['prompt', 'sourceVideo'],
+    pricing: { perSecondUsd: 0.001, perRequestUsd: 0.01, source: 'estimate' }, output: 'video.url', tags: ['foley'],
+  },
+  {
+    id: 'fal/stable-audio', label: 'Stable Audio (music / SFX) via fal', provider: 'fal', kind: 'audio',
+    endpoint: 'fal-ai/stable-audio',
+    map: { prompt: 'prompt', durationSec: 'seconds_total' }, requires: ['prompt'],
+    limits: { minDurationSec: 1, maxDurationSec: 47 },
+    pricing: { perRequestUsd: 0.02, source: 'estimate' }, output: 'audio_file.url', tags: ['music', 'foley'],
+  },
   // ── Higgsfield REST (api.higgsfield.ai, schema from docs.higgsfield.ai/docs/openapi.json) ──
   {
     id: 'higgsfield/soul-standard', label: 'Higgsfield Soul', provider: 'higgsfield', kind: 'image',
@@ -251,7 +345,7 @@ function isManifest(value: any): value is MediaModelManifest {
   return Boolean(value && typeof value === 'object'
     && typeof value.id === 'string' && value.id.includes('/')
     && ['xai', 'openai', 'fal', 'higgsfield'].includes(value.provider)
-    && (value.kind === 'video' || value.kind === 'image')
+    && (value.kind === 'video' || value.kind === 'image' || value.kind === 'audio')
     && typeof value.endpoint === 'string' && value.endpoint.trim()
     && value.map && typeof value.map === 'object');
 }
@@ -309,7 +403,7 @@ export function estimateCostUsd(model: MediaModelManifest, input: { durationSec?
   const p = model.pricing || {};
   const count = Math.max(1, Number(input.count) || 1);
   let usd = Number(p.perRequestUsd || 0);
-  if (model.kind === 'video') usd += Number(p.perSecondUsd || 0) * Math.max(1, Number(input.durationSec) || 5);
+  if (model.kind !== 'image') usd += Number(p.perSecondUsd || 0) * Math.max(1, Number(input.durationSec) || 5);
   else usd += Number(p.perImageUsd || 0);
   return Math.round(usd * count * 1000) / 1000;
 }
