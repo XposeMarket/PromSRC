@@ -33,6 +33,11 @@ export interface Character {
   notes?: string;
   /** Provider identity handles, e.g. { higgsfieldSoulId }. */
   identity?: Record<string, string>;
+  /** Generated anchor stills waiting for the user to approve one (chat card / Studio). */
+  candidates?: string[];
+  /** Last anchor prompt/model, reused by reroll. */
+  anchorPrompt?: string;
+  anchorModel?: string;
 }
 
 export interface Style {
@@ -67,6 +72,8 @@ export interface Shot {
   endImage?: string;
   /** Chain from the previous shot's last frame when no explicit start image. */
   chainFromPrevious?: boolean;
+  /** How character anchors feed the model: as the first frame, or as reference images. */
+  anchorMode?: 'start' | 'reference';
   modelId?: string;
   params?: Record<string, unknown>;
   status: 'draft' | 'generating' | 'ready' | 'failed';
@@ -152,6 +159,8 @@ export interface VideoProject {
   clips: Clip[];
   assets: Asset[];
   jobs: Job[];
+  /** Finished MP4 renders, newest last. */
+  exports: Array<{ path: string; createdAt: number; durationSec: number }>;
   opLog: OpRecord[];
   version: number;
   createdAt: number;
@@ -280,7 +289,7 @@ export function normalizeProject(raw: any): VideoProject {
       autoApproveUsd: num(raw.budget?.autoApproveUsd, 1),
       spentUsd: num(raw.budget?.spentUsd, 0),
     },
-    characters: arr<Character>(raw.characters).map((c) => ({ ...c, anchors: arr(c.anchors), refs: arr(c.refs) })),
+    characters: arr<Character>(raw.characters).map((c) => ({ ...c, anchors: arr(c.anchors), refs: arr(c.refs), candidates: arr(c.candidates) })),
     styles: arr<Style>(raw.styles).map((s) => ({ ...s, refs: arr(s.refs) })),
     shots: arr<Shot>(raw.shots).map((s) => ({
       ...s,
@@ -295,6 +304,7 @@ export function normalizeProject(raw: any): VideoProject {
     clips: arr<Clip>(raw.clips),
     assets: arr<Asset>(raw.assets),
     jobs: arr<Job>(raw.jobs),
+    exports: arr<{ path: string; createdAt: number; durationSec: number }>(raw.exports).slice(-20),
     opLog: arr<OpRecord>(raw.opLog).slice(-200),
     version: num(raw.version, 0),
     createdAt: num(raw.createdAt, now),
@@ -423,7 +433,7 @@ function trackEndMs(p: VideoProject, trackId: string): number {
   return p.clips.filter((c) => c.trackId === trackId).reduce((m, c) => Math.max(m, c.startMs + (c.outMs - c.inMs)), 0);
 }
 
-const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'modelId', 'params', 'notes'] as const;
+const SHOT_FIELDS = ['title', 'prompt', 'camera', 'durationSec', 'characterIds', 'styleId', 'startImage', 'endImage', 'chainFromPrevious', 'anchorMode', 'modelId', 'params', 'notes'] as const;
 
 function pickShotFields(src: any): Partial<Shot> {
   const out: any = {};
@@ -455,9 +465,30 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
         refs: o.refs !== undefined ? arr<string>(o.refs) : existing?.refs || [],
         notes: o.notes !== undefined ? String(o.notes) : existing?.notes,
         identity: o.identity !== undefined ? o.identity : existing?.identity,
+        candidates: o.candidates !== undefined ? arr<string>(o.candidates) : existing?.candidates || [],
+        anchorPrompt: o.anchorPrompt !== undefined ? String(o.anchorPrompt) : existing?.anchorPrompt,
+        anchorModel: o.anchorModel !== undefined ? String(o.anchorModel) : existing?.anchorModel,
       };
       if (existing) Object.assign(existing, next); else p.characters.push(next);
       return `${existing ? 'Updated' : 'Added'} character ${next.name} (${next.id})`;
+    }
+    case 'character.approveAnchor': {
+      // Promote a generated candidate (or any workspace still) to the identity frame.
+      const c = p.characters.find((x) => x.id === o.id);
+      if (!c) throw new Error(`Character "${o.id}" not found.`);
+      const pick = String(o.path || c.candidates?.[0] || '');
+      if (!pick) throw new Error('character.approveAnchor needs path (no candidates to approve).');
+      c.anchors = [pick, ...c.anchors.filter((a) => a !== pick)];
+      c.candidates = (c.candidates || []).filter((a) => a !== pick);
+      return `Approved anchor for ${c.name}`;
+    }
+    case 'character.rejectAnchor': {
+      const c = p.characters.find((x) => x.id === o.id);
+      if (!c) throw new Error(`Character "${o.id}" not found.`);
+      const drop = String(o.path || '');
+      c.candidates = drop ? (c.candidates || []).filter((a) => a !== drop) : [];
+      if (o.fromAnchors) c.anchors = c.anchors.filter((a) => a !== drop);
+      return `Rejected anchor for ${c.name}`;
     }
     case 'character.remove': {
       p.characters = p.characters.filter((c) => c.id !== o.id);
@@ -643,7 +674,7 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
 }
 
 export const OP_NAMES = [
-  'project.update', 'character.upsert', 'character.remove', 'style.upsert', 'style.remove',
+  'project.update', 'character.upsert', 'character.approveAnchor', 'character.rejectAnchor', 'character.remove', 'style.upsert', 'style.remove',
   'plan.setShots', 'shot.add', 'shot.update', 'shot.remove', 'shot.move', 'take.select', 'take.remove',
   'track.add', 'track.update', 'clip.add', 'clip.trim', 'clip.move', 'clip.split', 'clip.remove', 'clip.update',
   'timeline.assemble', 'asset.add',
@@ -716,7 +747,7 @@ export function summarizeProject(p: VideoProject, depth: { undo: number; redo: n
     budget: p.budget,
     version: p.version,
     history: depth,
-    characters: p.characters.map((c) => ({ id: c.id, name: c.name, anchors: c.anchors, notes: c.notes })),
+    characters: p.characters.map((c) => ({ id: c.id, name: c.name, anchors: c.anchors, candidates: c.candidates || [], notes: c.notes })),
     styles: p.styles.map((s) => ({ id: s.id, name: s.name, promptSuffix: s.promptSuffix, refs: s.refs.length })),
     shots: p.shots.map((s, i) => {
       const take = selectedTake(s);
@@ -734,5 +765,7 @@ export function summarizeProject(p: VideoProject, depth: { undo: number; redo: n
     durationSec: +(timelineDurationMs(p) / 1000).toFixed(2),
     activeJobs: p.jobs.filter((j) => j.state === 'queued' || j.state === 'running').map((j) => ({ id: j.id, model: j.modelId, state: j.state, target: j.target })),
     recentOps: p.opLog.slice(-5).map((o) => `${o.actor}:${o.summary}`),
+    latestExport: p.exports?.length ? p.exports[p.exports.length - 1] : null,
+    chatCard: `\`\`\`video-project\n{"projectId":"${p.id}"}\n\`\`\``,
   };
 }
