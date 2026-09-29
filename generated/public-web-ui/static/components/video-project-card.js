@@ -19,7 +19,7 @@
 import {
   ICON2, V2_CSS, shotThumb, productBadge, loadModels, shotEditor, qaChip,
   storyboardSection, audioSection, autopilotSection, exportsSection,
-  handleV2Click, handleV2Change,
+  handleV2Click, handleV2Change, parityToolbar, kindBadge, loadPresets,
 } from './video-project-card/v2.js';
 
 const STYLE_ID = 'prom-vp-card-style';
@@ -233,7 +233,7 @@ function mountCard(el) {
 
   // ── painting ──────────────────────────────────────────────────────────
   function charSection(p) {
-    const upload = `${iconBtn('upload-product', ICON2.box, 'Upload product photo')}${iconBtn('upload-character', ICON2.userPlus, 'Upload character photo')}`;
+    const upload = `${iconBtn('upload-product', ICON2.box, 'Upload product photo')}${iconBtn('upload-character', ICON2.userPlus, 'Upload character photo')}${parityToolbar(h)}`;
     if (!(p.characters || []).length) return `<section class="vpc-sec"><h4 class="vpc-row">Cast<span class="vpc-grow"></span>${upload}</h4></section>`;
     const anchorJobs = running().filter((j) => j.target?.characterId);
     const rows = p.characters.map((c) => {
@@ -291,7 +291,7 @@ function mountCard(el) {
         <button type="button" class="vpc-shot-head" data-vpa="toggle" data-s="${esc(s.id)}" aria-expanded="${open}">
           ${gen && !t ? '<span class="vpc-thumb is-empty"><span class="vpc-spin"></span></span>' : shotThumb(s, t, p, h)}
           <span class="vpc-shot-meta">
-            <strong>${i + 1}. ${esc(s.title || 'Shot')}</strong>
+            <strong>${i + 1}. ${esc(s.title || 'Shot')}${kindBadge(s, t)}</strong>
             <small>${esc(String(s.prompt || '').slice(0, 110))}</small>
             <span class="vpc-status is-${gen ? 'generating' : esc(s.status)}">${gen ? 'generating' : esc(s.status)} · ${s.durationSec}s · ${n} take${n === 1 ? '' : 's'}</span>
           </span>
@@ -415,6 +415,7 @@ function mountCard(el) {
       case 'toggle':
         st.openShot = st.openShot === d.s ? '' : d.s; paint();
         if (st.openShot && !st.models.length) loadModels(h).then((m) => { st.models = m; if (m.length) paint(); });
+        if (st.openShot && !(st.presets || []).length) loadPresets(h).then((ps) => { st.presets = ps; if (ps.length) paint(); });
         return;
       case 'view': if (d.path) openMedia(d.path); return;
       case 'refresh': st.estimateKey = ''; await load(); return;

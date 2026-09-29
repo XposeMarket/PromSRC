@@ -81,6 +81,38 @@ export function parityToolbar(h) {
   </span>`;
 }
 
+/**
+ * Inline text sheet (replaces window.prompt, which some webviews/PWAs block and
+ * which looks out of place on phones). Resolves to the trimmed text or ''.
+ */
+export function askText(title, placeholder = '', initial = '') {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'vpc-sketch';
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    wrap.innerHTML = `<div class="vpc-sketch-box vpc-ask" role="dialog" aria-label="${esc(title)}">
+      <label class="vpc-ask-title">${esc(title)}</label>
+      <textarea rows="3" placeholder="${esc(placeholder)}">${esc(initial)}</textarea>
+      <div class="vpc-sketch-bar"><span style="flex:1"></span>
+        <button type="button" class="vpc-icon" data-k="cancel" title="Cancel" aria-label="Cancel">${ICON2.x}</button>
+        <button type="button" class="vpc-icon is-go" data-k="ok" title="Continue" aria-label="Continue">${ICON2.check}</button>
+      </div></div>`;
+    document.body.appendChild(wrap);
+    const ta = wrap.querySelector('textarea');
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 30);
+    const done = (v) => { wrap.remove(); resolve(v); };
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) done(ta.value.trim());
+      if (e.key === 'Escape') done('');
+    });
+    wrap.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) { if (e.target === wrap) done(''); return; }
+      done(b.dataset.k === 'ok' ? ta.value.trim() : '');
+    });
+  });
+}
+
 /** Modal canvas sketch pad; resolves base64 PNG (no prefix) or null. */
 export function openSketchPad() {
   return new Promise((resolve) => {
@@ -400,8 +432,8 @@ export async function handleV2Click(a, ctx) {
     case 'draw': {
       const data = await openSketchPad();
       if (!data) return true;
-      const prompt = window.prompt('What should this sketch become?', 'A cinematic scene') || '';
-      if (!prompt.trim()) return true;
+      const prompt = await askText('What should this sketch become?', 'A cinematic scene at golden hour');
+      if (!prompt) return true;
       await act('draw_to_video', { dataBase64: data, prompt }, 'Sketch to video', 15 * 60 * 1000);
       return true;
     }
@@ -410,8 +442,8 @@ export async function handleV2Click(a, ctx) {
       if (!file) return true;
       const imp = await act('import_asset', { ...file, role: 'footage' }, 'Uploading footage', 5 * 60 * 1000);
       if (!imp?.assetPath) return true;
-      const prompt = window.prompt('Recast it as… (new character, outfit, world or style)', '') || '';
-      if (!prompt.trim()) return true;
+      const prompt = await askText('Recast it as…', 'New character, outfit, world or style');
+      if (!prompt) return true;
       await act('recast', { sourcePath: imp.assetPath, prompt, mode: 'edit' }, 'Recasting', 15 * 60 * 1000);
       return true;
     }
@@ -420,8 +452,8 @@ export async function handleV2Click(a, ctx) {
       if (!file) return true;
       const imp = await act('import_asset', { ...file, role: 'asset' }, 'Uploading portrait');
       if (!imp?.assetPath) return true;
-      const line = window.prompt('What should they say?', '') || '';
-      if (!line.trim()) return true;
+      const line = await askText('What should they say?', 'Hey! You have to try this.');
+      if (!line) return true;
       await act('talking_photo', { imagePath: imp.assetPath, line }, 'Talking photo', 15 * 60 * 1000);
       return true;
     }
@@ -514,6 +546,9 @@ export const V2_CSS = `
 .vpc-sketch-box{width:min(94vw,520px);background:var(--prom-surface,#fff);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px}
 .vpc-sketch canvas{width:100%;aspect-ratio:1;border-radius:8px;background:#fff;touch-action:none}
 .vpc-sketch-bar{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.vpc-ask{padding:12px;gap:8px;color:var(--prom-text,#111)}
+.vpc-ask-title{font-weight:600;font-size:14px}
+.vpc-ask textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:72px;font:inherit;font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--prom-border,#ccc);background:var(--prom-bg,transparent);color:inherit}
 .vpc-sketch .vpc-icon{min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--prom-border,#ccc);border-radius:9px;background:transparent;color:var(--prom-text,#111);cursor:pointer}
 .vpc-sketch .vpc-icon svg{width:18px;height:18px}
 .vpc-sketch .vpc-icon.is-on,.vpc-sketch .vpc-icon.is-go{border-color:var(--prom-accent,#6c5ce7);color:var(--prom-accent,#6c5ce7)}
