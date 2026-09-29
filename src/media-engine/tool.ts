@@ -357,7 +357,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'foley':
       return await parity.foley(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true });
     case 'faceless': {
-      const r = await parity.faceless(ws, { projectId: args.projectId, topic: need(args.topic, 'topic'), minutes: args.minutes, style: args.style, videoEvery: args.videoEvery, script: args.script, capUsd: args.capUsd, resolution: args.resolution });
+      const r = await parity.faceless(ws, { projectId: args.projectId, topic: need(args.topic, 'topic'), minutes: args.minutes, style: args.style, videoEvery: args.videoEvery, script: args.script, capUsd: args.capUsd, resolution: args.resolution, imageModel: args.imageModel, videoModel: args.videoModel });
       return { ...r, next: r.needsApproval ? 'Show the cost breakdown; then call run {projectId, approved:true, storyboard:false, qa:false, aspects:["16:9"]}.' : 'Call run {projectId, storyboard:false, qa:false, aspects:["16:9"]}.' };
     }
     case 'batch_variants': {
