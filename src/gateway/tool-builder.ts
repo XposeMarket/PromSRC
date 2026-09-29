@@ -319,7 +319,7 @@ const MEDIA_TOOL_NAMES = new Set([
   'analyze_video',
 ]);
 
-const MEDIA_GENERATION_TOOL_NAMES = new Set(['media_generate', 'video_project']);
+const MEDIA_GENERATION_TOOL_NAMES = new Set(['media_generate', 'video_project', 'game_project']);
 
 const MEDIA_QUALITY_TOOL_NAMES = new Set([
   'image_check_contrast',

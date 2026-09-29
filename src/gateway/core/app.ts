@@ -23,6 +23,7 @@ import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/we
 import { registerStartupAsyncRequest } from '../startup-async-diagnostics';
 import { registerCreativeCompositionRoutes } from '../routes/creative-composition.routes';
 import { registerVideoProjectRoutes } from '../routes/video-project.routes';
+import { registerGameProjectRoutes } from '../routes/game-project.routes';
 import { initVideoProjectWake } from '../video-project-wake';
 import { getConfig } from '../../config/config';
 import { triggerHookRawBodyMiddleware } from '../routes/triggers.router';
@@ -207,6 +208,7 @@ export function createApp(): express.Application {
   registerCreativeCompositionRoutes(app);
   // Generative video projects (shots/takes/timeline). Server-owned, op-based.
   registerVideoProjectRoutes(app);
+  registerGameProjectRoutes(app);
   try { initVideoProjectWake(getConfig().getWorkspacePath()); } catch (err: any) { console.warn('[VideoProjectWake] init failed:', err?.message || err); }
 
   app.get('/api/health', (_req, res) => {
