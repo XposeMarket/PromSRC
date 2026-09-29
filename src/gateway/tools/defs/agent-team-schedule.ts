@@ -1330,6 +1330,7 @@ export function getAgentTeamScheduleTools(): any[] {
             min_review_interval_ms: { type: 'number', description: 'Minimum interval between model reviews. Default 15000ms.' },
             max_consecutive_no_progress: { type: 'number', description: 'Hard stop after this many no-progress reviews. Default 3.' },
             wait: { type: 'boolean', description: 'For send: wait for the full target reply. Default false (detached).' },
+            notify_origin: { type: 'boolean', description: 'For detached send: when the target thread\'s turn finishes, automatically wake this session with a "[thread reply]" message containing the reply, so you can end your turn instead of waiting. Default true.' },
             requires_response: { type: 'boolean', description: 'For steer: whether the live worker should respond. Default true.' },
             history_limit: { type: 'number', description: 'For read: maximum recent messages, default 60, max 200.' },
             include_history: { type: 'boolean', description: 'For status: include recent messages.' },

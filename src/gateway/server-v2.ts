@@ -63,6 +63,8 @@ import {
 import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
 import { MainChatTimerRunner } from './timers/timer-runner';
+import { initSessionWake } from './session-wake';
+import { listLiveRuntimes as listLiveRuntimesForWake } from './live-runtime-registry';
 import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
 import { ActiveThreadSupervisionController } from './threads/thread-supervision-controller';
 import { BrainRunner, createBrainHandleChatAdapter, setBrainRunnerInstance } from './brain/brain-runner';
@@ -753,6 +755,12 @@ const mainChatTimerRunner = new MainChatTimerRunner({
   telegramChannel,
 });
 mainChatTimerRunner.start();
+initSessionWake({
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
+  broadcast: broadcastWS,
+  isSessionBusy: (sid) => listLiveRuntimesForWake().some((r: any) => r.kind === 'main_chat' && String(r.sessionId || '') === sid),
+});
 
 const internalWatchRunner = new InternalWatchRunner({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
