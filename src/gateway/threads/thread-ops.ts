@@ -18,6 +18,7 @@ import {
 } from '../session';
 import { searchSessionSummariesInWorker } from './session-search-worker-client.js';
 import { unsettleSessionSafely } from '../session-settlement';
+import { fireThreadCallbacks, registerThreadCallback } from '../session-wake';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
 import { handleMainChatGoalCommand } from '../main-chat-goals';
@@ -440,6 +441,7 @@ function runDetached(
     removeDurableDetachedTurn(targetSessionId, pending.queuedAt);
     const summary = String(result?.text || '').slice(0, 2000);
     const targetTitle = getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread';
+    try { fireThreadCallbacks(targetSessionId, targetTitle, String(result?.text || '')); } catch { /* best effort */ }
     if (notifyOnComplete) {
       deps.broadcastWS?.({
         type: 'managed_thread_turn_complete',
@@ -1005,6 +1007,7 @@ export async function executePrometheusThreadOps(
       if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
       return { queued: false, completed: true, result };
     }
+    if (!supervision && args?.notify_origin !== false) registerThreadCallback(actorSessionId, targetSessionId);
     runDetached(deps, actorSessionId, targetSessionId, message, {
       supervisionId: supervision?.id,
       notifyOnComplete: !supervision,
