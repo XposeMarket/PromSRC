@@ -1089,6 +1089,13 @@ function xaiVoiceKey(): string {
 export async function xaiVoiceAuthToken(): Promise<string> {
   const key = xaiVoiceKey();
   if (key) return key;
+  // Same multi-account credential pool Grok Imagine uses. The legacy default-account
+  // check below reported "not connected" for pooled xAI OAuth logins.
+  try {
+    const { resolveXAIMediaRuntime } = await import('../../media-generation/xai-runtime.js');
+    const rt = await resolveXAIMediaRuntime('https://api.x.ai/v1');
+    if (rt?.bearerToken) return rt.bearerToken;
+  } catch { /* fall through to the legacy path */ }
   if (!isXAIConnected(getConfig().getConfigDir())) return '';
   return getValidXAIToken(getConfig().getConfigDir());
 }
