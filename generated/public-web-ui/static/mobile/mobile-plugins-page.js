@@ -385,6 +385,10 @@ function footerMarkup() {
   return `
     <div class="pm-plugins-section-title">More</div>
     <div class="pm-plugins-footer">
+      <button class="pm-plugin-row compact" type="button" data-route="#mobile/creative">
+        <span class="pm-plugin-logo small">${ICONS.video}</span>
+        <span class="pm-plugin-row-text"><strong>Creative</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>
+      </button>
       <button class="pm-plugin-row compact" type="button" data-route="#mobile/more/audit">
         <span class="pm-plugin-logo small">${ICONS.clipboard}</span>
         <span class="pm-plugin-row-text"><strong>Audit</strong></span><span class="pm-plugin-trail">${ICONS.chev}</span>

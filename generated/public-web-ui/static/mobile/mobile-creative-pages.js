@@ -79,7 +79,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
   const state = _creativeState();
   const extras = `<button class="pm-icon-btn" id="pm-creative-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Creative', online: true, extras, hideTitle: true, hideBrand: true })}
+    ${renderMobileHeader({ title: 'Creative', leftIcon: 'back', onBack: () => navigate?.('#mobile/more'), online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body pm-creative" id="pm-creative-body">
       <h1 class="pm-creative-title">Creative Studio</h1>
       <div class="pm-creative-status"><span class="pm-creative-dot"></span> Online</div>
@@ -178,7 +178,7 @@ export async function renderCreativePage(page, { navigate } = {}) {
       </div>
     </div>
   `;
-  wireHeaderActions(page, {});
+  wireHeaderActions(page, { onBack: () => navigate?.('#mobile/more') });
 
   const modeBar = page.querySelector('#pm-creative-mode');
   const providersBar = page.querySelector('#pm-creative-providers');

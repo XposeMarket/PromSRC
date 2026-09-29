@@ -238,4 +238,4 @@ ${a.slice(-128*1024)}`:a,c&&(s.scrollTop=s.scrollHeight)}function ee(){if(window
         </div>
       </div>
     </div>
-  `,S(e,{onBack:()=>t("#mobile/more")}),e._pmCleanup=()=>{q(),n()},requestAnimationFrame(()=>j())}async function we(e,{section:t="",navigate:n}){if(t==="hub"){try{n?.("#mobile/hub")}catch{}return me(e,{navigate:n})}if(t==="audit")return ue(e,{navigate:n});if(t==="memory")return ye(e,{navigate:n});if(t==="overview")return oe(e,{navigate:n});let{renderMobilePluginsPage:r}=await import("./mobile-plugins-page-EQ2T3LZ2.js");return r(e,{navigate:n})}export{A as a,be as b,fe as c,$e as d,ke as e,Se as f,M as g,me as h,we as i};
+  `,S(e,{onBack:()=>t("#mobile/more")}),e._pmCleanup=()=>{q(),n()},requestAnimationFrame(()=>j())}async function we(e,{section:t="",navigate:n}){if(t==="hub"){try{n?.("#mobile/hub")}catch{}return me(e,{navigate:n})}if(t==="audit")return ue(e,{navigate:n});if(t==="memory")return ye(e,{navigate:n});if(t==="overview")return oe(e,{navigate:n});let{renderMobilePluginsPage:r}=await import("./mobile-plugins-page-5JUCEQQR.js");return r(e,{navigate:n})}export{A as a,be as b,fe as c,$e as d,ke as e,Se as f,M as g,me as h,we as i};
