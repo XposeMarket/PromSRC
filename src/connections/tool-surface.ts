@@ -1,6 +1,7 @@
 import { getConfig } from '../config/config.js';
 import { ConnectionStore } from './connection-store.js';
 import type { ConnectionRecord } from './types.js';
+import { reconcileNativeConnectorToolSnapshots } from './native-tool-reconcile.js';
 
 /**
  * The host-owned boundary between a connected integration and the model tool
@@ -37,6 +38,7 @@ interface SurfaceCache {
 }
 
 let cache: SurfaceCache | null = null;
+let reconciledConfigDir: string | null = null;
 
 function uniqueSorted(values: unknown): string[] {
   if (!Array.isArray(values)) return [];
@@ -99,7 +101,17 @@ function loadRecords(): SurfaceCache {
   if (cache && cache.configDir === configDir && now - cache.loadedAt <= CACHE_TTL_MS) return cache;
 
   try {
-    cache = { configDir, loadedAt: now, records: new ConnectionStore(configDir).list() };
+    const store = new ConnectionStore(configDir);
+    if (reconciledConfigDir !== configDir) {
+      // Once per process/config dir: native connector records snapshot their
+      // tools at connect time, so tools added by later releases must be
+      // reconciled before availability is decided.
+      reconciledConfigDir = configDir;
+      try { reconcileNativeConnectorToolSnapshots(store); } catch (error: any) {
+        console.warn('[connections] native tool reconcile failed:', error?.message || error);
+      }
+    }
+    cache = { configDir, loadedAt: now, records: store.list() };
   } catch (error) {
     cache = {
       configDir,
