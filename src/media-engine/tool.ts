@@ -22,7 +22,7 @@ export const VIDEO_PROJECT_ACTIONS = [
   'estimate', 'generate', 'generate_anchor', 'jobs', 'wait', 'cancel_job', 'render', 'frame',
   // studio
   'quickstart', 'templates', 'apply_template', 'import_asset', 'storyboard', 'voiceover', 'captions', 'music', 'music_beds',
-  'qa', 'hooks', 'render_variants', 'upgrade', 'route', 'run', 'run_cost', 'watch',
+  'qa', 'hooks', 'render_variants', 'upgrade', 'route', 'run', 'run_cost', 'watch', 'transcribe',
   'cast_list', 'cast_save', 'cast_add', 'cast_delete', 'brand_list', 'brand_save', 'brand_apply', 'brand_delete',
 ] as const;
 
@@ -88,6 +88,7 @@ export function getVideoProjectToolDef(): any {
           name: { type: 'string' },
           notes: { type: 'string' },
           style: { type: 'string', enum: ['pop', 'bold', 'minimal', 'karaoke'], description: 'captions style.' },
+          audioMode: { type: 'string', enum: ['native', 'voiceover'], description: 'quickstart/project audio: native = the on-screen creator speaks each shot.line (captions transcribed from the clip audio, no TTS); voiceover = TTS narrator track, clips prompted dialogue-free. UGC/before-after default to native.' },
           builtin: { type: 'string', enum: ['pulse', 'chill', 'hype'], description: 'music: generated bed.' },
           volume: { type: 'number' },
           aspects: { type: 'array', items: { type: 'string' }, description: 'render: one export per aspect, e.g. ["9:16","1:1","16:9"].' },
@@ -255,6 +256,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
         brief: need(args.brief, 'brief'), templateId: args.templateId, title: args.title, productPath: args.productPath, productName: args.productName,
         creator: args.creator, brandId: args.brandId, castIds: args.castIds, capUsd: args.capUsd, aspect: args.aspect, resolution: args.resolution, run: false,
       });
+      if (args.audioMode === 'native' || args.audioMode === 'voiceover') await applyOps(ws, out.projectId, [{ op: 'project.update', audioMode: args.audioMode }], 'agent');
       const cost = await studio.planRunCost(ws, out.projectId, { storyboard: args.storyboard !== false, qaRerolls: args.qa === false ? 0 : 1 });
       const p = loadProject(ws, out.projectId);
       if (!args.approved && cost.usd > p.budget.autoApproveUsd + 1e-9) {
@@ -278,6 +280,10 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       return await studio.voiceover(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, force: args.force === true });
     case 'captions':
       return await studio.captions(ws, need(args.projectId, 'projectId'), { style: args.style, enabled: args.enabled });
+    case 'transcribe': {
+      const { transcribeTakes } = await import('./transcribe.js');
+      return await transcribeTakes(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, force: args.force === true });
+    }
     case 'music':
       return await studio.music(ws, need(args.projectId, 'projectId'), { builtin: args.builtin, path: args.path, volume: args.volume, duck: args.duck });
     case 'qa':

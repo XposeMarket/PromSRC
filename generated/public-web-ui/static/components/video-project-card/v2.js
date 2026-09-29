@@ -136,12 +136,21 @@ export function audioSection(p, st, h) {
   const musKey = mus ? (/chill/i.test(mus.label || mus.path || '') ? 'chill' : /pulse/i.test(mus.label || mus.path || '') ? 'pulse' : 'custom') : 'none';
   const hasLines = (p.shots || []).some((s) => s.line);
   const vol = Math.round((mus?.volume ?? 0.3) * 100);
+  const native = (p.audioMode || 'voiceover') === 'native';
+  const modeRow = `<div class="vpc-row vpc-wrap" role="radiogroup" aria-label="Who speaks the lines">
+      <span class="vpc-muted">Speech</span>
+      ${[['native', 'On camera', 'The creator speaks each line in the clip; captions transcribe the clip audio'], ['voiceover', 'Narrator', 'TTS voiceover over dialogue-free clips; captions follow the voiceover']]
+        .map(([k, l, tip]) => `<button type="button" class="vpc-chip${(native ? 'native' : 'voiceover') === k ? ' is-on' : ''}" data-vpa="audio-mode" data-v="${k}" role="radio" aria-checked="${(native ? 'native' : 'voiceover') === k}" title="${tip}">${l}</button>`).join('')}
+    </div>`;
   return `<section class="vpc-sec vpc-audio-sec"><h4>Audio</h4>
-    <div class="vpc-row vpc-wrap">
+    ${modeRow}
+    ${native
+      ? `<div class="vpc-row vpc-wrap"><button type="button" class="vpc-btn" data-vpa="transcribe" title="Re-read what each clip says for captions">${ICON2.mic}<span>Transcribe clips</span></button></div>`
+      : `<div class="vpc-row vpc-wrap">
       ${ICON2.mic}
       <select class="vpc-select" data-vpf="voice" aria-label="Voice">${v.voice ? '' : '<option value="" selected>Pick a voice</option>'}${voiceOpts}</select>
       <button type="button" class="vpc-btn" data-vpa="voiceover" ${hasLines ? '' : 'disabled title="Add voiceover lines to shots first"'}>${ICON2.mic}<span>Voiceover</span></button>
-    </div>
+    </div>`}
     <div class="vpc-row vpc-wrap">
       <label class="vpc-switch"><input type="checkbox" data-vpf="captions"${cap.enabled ? ' checked' : ''}><span>Captions</span></label>
       ${CAPTION_STYLES.map((s) => `<button type="button" class="vpc-chip${(cap.style || 'bold') === s && cap.enabled ? ' is-on' : ''}" data-vpa="cap-style" data-v="${s}" aria-pressed="${(cap.style || 'bold') === s && !!cap.enabled}">${s}</button>`).join('')}
@@ -264,6 +273,12 @@ export async function handleV2Click(a, ctx) {
     case 'variants': await act('render_variants', { shotId: d.s }, 'Rendering hook variants', 15 * 60 * 1000); return true;
     case 'qa': await act('qa', {}, 'Scoring takes', 5 * 60 * 1000); return true;
     case 'voiceover': await act('voiceover', {}, 'Recording voiceover', 5 * 60 * 1000); return true;
+    case 'audio-mode': await ops([{ op: 'project.update', audioMode: d.v }], d.v === 'native' ? 'Using on-camera dialogue' : 'Using a narrator'); return true;
+    case 'transcribe': {
+      const r = await act('transcribe', { force: true }, 'Transcribing clips', 5 * 60 * 1000);
+      if (r && p.captions?.enabled) await act('captions', { style: p.captions.style }, 'Rebuilding captions');
+      return true;
+    }
     case 'cap-style': {
       const style = d.v;
       const r = await act('captions', { style }, 'Building captions');

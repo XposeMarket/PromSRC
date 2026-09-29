@@ -17,7 +17,7 @@ import {
   fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, projectDir, selectedTake,
   timelineDurationMs, toWorkspaceRel, VO_TRACK_LABEL, type Job, type Shot, type Take, type VideoProject,
 } from './project.js';
-import { buildAss } from './captions.js';
+import { buildAss, buildCaptionCues } from './captions.js';
 
 // ── ffmpeg helpers ──────────────────────────────────────────────────────
 
@@ -76,6 +76,24 @@ export function shotModel(p: VideoProject, shot: Shot, override?: string): Media
   return model;
 }
 
+/**
+ * Dialogue direction for the video model. native: the on-screen person speaks
+ * the shot's line (lip-synced), so captions can transcribe the clip itself.
+ * voiceover: a narrator track carries the words, so the clip must stay
+ * dialogue-free or two voices talk over each other.
+ */
+export function dialogueDirection(p: VideoProject, shot: Shot): string {
+  const line = shot.line?.trim().replace(/"/g, "'");
+  if (p.audioMode === 'voiceover') return line ? 'No dialogue and no talking: natural ambient sound only.' : '';
+  if (!line) return '';
+  const speaker = shot.characterIds
+    .map((id) => p.characters.find((c) => c.id === id))
+    .find((c) => c && (c.kind || 'person') === 'person');
+  return speaker
+    ? `${speaker.name} speaks directly to camera, clearly and naturally, with lip-synced dialogue, saying exactly: "${line}" No other dialogue, no background music.`
+    : `An off-camera voice says exactly: "${line}" No other dialogue, no background music.`;
+}
+
 function composePrompt(p: VideoProject, shot: Shot): string {
   const parts = [shot.prompt.trim()];
   if (shot.camera) parts.push(`Camera: ${shot.camera}.`);
@@ -85,6 +103,7 @@ function composePrompt(p: VideoProject, shot: Shot): string {
   }
   const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
   if (style?.promptSuffix) parts.push(style.promptSuffix);
+  parts.push(dialogueDirection(p, shot));
   return parts.filter(Boolean).join(' ');
 }
 
@@ -454,7 +473,7 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
     if (style) refs.push(...style.refs.slice(0, 1));
     const prompt = [
       `Storyboard frame: the exact opening frame of a video shot, ${aspectWords}.`,
-      composePrompt(p, shot),
+      composePrompt(p, { ...shot, line: undefined }),
       hasProduct ? 'The product must match the reference photo exactly: same shape, label, logo and colors.' : '',
       refs.length ? 'Keep every person identical to the reference images.' : '',
       'Photorealistic, natural light, no on-screen text, no captions, no watermark.',
@@ -580,6 +599,9 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     if (!shot || !shot.takes.some((t) => t.id === args.takeOverride!.takeId)) throw new Error('takeOverride does not match a take of that shot.');
     shot.selectedTakeId = args.takeOverride.takeId;
   }
+  // Native dialogue captions follow the actual clips: recompute against this
+  // exact timeline (trims, moves, hook-variant takes) instead of stale cues.
+  if (p.audioMode === 'native' && p.captions?.enabled) p.captions = { ...p.captions, cues: buildCaptionCues(p) };
   const plan = buildRenderPlan(workspacePath, p);
   if (plan.missing.length) throw new Error(`Cannot render: ${plan.missing.join('; ')}`);
   if (!plan.layers.some((l) => l.kind !== 'audio')) throw new Error('Nothing to render: timeline has no video/image clips. Use timeline.assemble after generating takes.');
@@ -596,8 +618,13 @@ export async function renderProject(workspacePath: string, projectId: string, ar
   fs.mkdirSync(path.dirname(outAbs), { recursive: true });
   const voTrack = p.tracks.find((t) => t.kind === 'audio' && t.label === VO_TRACK_LABEL);
   const voClips = voTrack ? p.clips.filter((c) => c.trackId === voTrack.id) : [];
-  // Generated clips carry ambient/random audio: sit it under the voiceover.
-  const clipAudioGain = voClips.length ? 0.22 : 1;
+  // Voiceover mode: clips only carry ambience, so sit it under the narrator.
+  // Native mode: the clip audio IS the dialogue and plays at full level.
+  const clipAudioGain = voClips.length && p.audioMode !== 'native' ? 0.22 : 1;
+  // Music ducks under whoever is talking: VO clips, or spoken caption spans in native mode.
+  const speechSpans: Array<[number, number]> = voClips.length
+    ? voClips.map((c) => [(c.startMs - 250) / 1000, (c.startMs + c.outMs - c.inMs + 250) / 1000])
+    : (p.audioMode === 'native' ? (p.captions?.cues || []).map((c) => [(c.startMs - 250) / 1000, (c.endMs + 250) / 1000] as [number, number]) : []);
 
   const inputs: string[] = ['-f', 'lavfi', '-i', `color=c=black:s=${width}x${height}:r=${fps}:d=${total.toFixed(3)}`];
   const filters: string[] = [];
@@ -654,8 +681,8 @@ export async function renderProject(workspacePath: string, projectId: string, ar
     if (musicAbs && fs.existsSync(musicAbs)) {
       inputs.push('-stream_loop', '-1', '-t', total.toFixed(3), '-i', musicAbs);
       const idx = n++;
-      const duck = p.music.duck && voClips.length
-        ? `,volume='if(${voClips.map((c) => `between(t,${((c.startMs - 250) / 1000).toFixed(2)},${((c.startMs + c.outMs - c.inMs + 250) / 1000).toFixed(2)})`).join('+')},0.3,1)':eval=frame`
+      const duck = p.music.duck && speechSpans.length
+        ? `,volume='if(${speechSpans.map(([a, b]) => `between(t,${a.toFixed(2)},${b.toFixed(2)})`).join('+')},0.3,1)':eval=frame`
         : '';
       filters.push(`[${idx}:a]aresample=48000,volume=${p.music.volume.toFixed(3)}${duck},afade=t=out:st=${Math.max(0, total - 1).toFixed(2)}:d=1[am]`);
       mixed.push('[am]');

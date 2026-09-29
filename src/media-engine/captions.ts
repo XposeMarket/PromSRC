@@ -4,6 +4,7 @@
  * ASS subtitle generation for libass burn-in with four TikTok-style presets.
  */
 import type { CaptionCue, CaptionStyle, VideoProject } from './project.js';
+import { mainVideoTrack, selectedTake } from './project.js';
 
 const MAX_WORDS_PER_CUE = 3;
 
@@ -34,7 +35,54 @@ export function timeWords(text: string, startMs: number, durMs: number): Array<{
  * Build caption cues from the VO clips on the timeline (so captions follow
  * the edit), chunked into 1-3 word pop cues with per-word timing.
  */
+type Word = { text: string; startMs: number; endMs: number };
+
+/** Chunk timed words into 1-3 word pop cues, breaking early on punctuation. */
+export function chunkWords(words: Word[]): CaptionCue[] {
+  const cues: CaptionCue[] = [];
+  for (let i = 0; i < words.length; i += MAX_WORDS_PER_CUE) {
+    let chunk = words.slice(i, i + MAX_WORDS_PER_CUE);
+    const cut = chunk.findIndex((w) => /[,.!?;:]$/.test(w.text));
+    if (cut >= 0 && cut < chunk.length - 1) { chunk = chunk.slice(0, cut + 1); i -= MAX_WORDS_PER_CUE - chunk.length; }
+    cues.push({ startMs: chunk[0].startMs, endMs: chunk[chunk.length - 1].endMs, text: chunk.map((w) => w.text).join(' '), words: chunk });
+  }
+  return cues;
+}
+
+/**
+ * Native dialogue: caption what each clip actually says. Uses the selected
+ * take's transcript (word times relative to the take), mapped through the
+ * clip's trim window onto the timeline. Clips without speech get no captions.
+ */
+export function buildNativeCaptionCues(p: VideoProject): CaptionCue[] {
+  const main = mainVideoTrack(p);
+  if (!main) return [];
+  const clips = p.clips.filter((c) => c.trackId === main.id && 'shotId' in c.source).sort((a, b) => a.startMs - b.startMs);
+  const cues: CaptionCue[] = [];
+  for (const clip of clips) {
+    const shot = p.shots.find((s) => s.id === (clip.source as { shotId: string }).shotId);
+    const words = (shot && selectedTake(shot)?.transcript?.words) || [];
+    const onTimeline: Word[] = [];
+    for (const w of words) {
+      if (w.endMs <= clip.inMs || w.startMs >= clip.outMs) continue; // trimmed away
+      onTimeline.push({
+        text: w.text,
+        startMs: clip.startMs + Math.max(0, w.startMs - clip.inMs),
+        endMs: clip.startMs + Math.min(clip.outMs, w.endMs) - clip.inMs,
+      });
+    }
+    cues.push(...chunkWords(onTimeline));
+  }
+  return cues;
+}
+
+/** Caption cues for whatever audio the project actually plays. */
 export function buildCaptionCues(p: VideoProject): CaptionCue[] {
+  if (p.audioMode === 'native') return buildNativeCaptionCues(p);
+  return buildVoiceoverCaptionCues(p);
+}
+
+export function buildVoiceoverCaptionCues(p: VideoProject): CaptionCue[] {
   const vo = p.tracks.find((t) => t.kind === 'audio' && t.label === 'VO');
   const cues: CaptionCue[] = [];
   const voClips = vo ? p.clips.filter((c) => c.trackId === vo.id).sort((a, b) => a.startMs - b.startMs) : [];
@@ -46,14 +94,7 @@ export function buildCaptionCues(p: VideoProject): CaptionCue[] {
     if (!text) continue;
     // Leave a short tail so words don't hang past the audio.
     const dur = Math.max(300, (clip.outMs - clip.inMs) - 120);
-    const words = timeWords(text, clip.startMs + 60, dur);
-    for (let i = 0; i < words.length; i += MAX_WORDS_PER_CUE) {
-      // Break early on punctuation so cues read naturally.
-      let chunk = words.slice(i, i + MAX_WORDS_PER_CUE);
-      const cut = chunk.findIndex((w) => /[,.!?;:]$/.test(w.text));
-      if (cut >= 0 && cut < chunk.length - 1) { chunk = chunk.slice(0, cut + 1); i -= MAX_WORDS_PER_CUE - chunk.length; }
-      cues.push({ startMs: chunk[0].startMs, endMs: chunk[chunk.length - 1].endMs, text: chunk.map((w) => w.text).join(' '), words: chunk });
-    }
+    cues.push(...chunkWords(timeWords(text, clip.startMs + 60, dur)));
   }
   return cues;
 }
