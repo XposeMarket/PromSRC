@@ -219,10 +219,19 @@ const st = await B.waitFor((m) => m.type === 'state');
 assert.equal(st.from, aw.playerId);
 assert.deepEqual(st.data, { x: 42, y: 7 });
 assert.ok(!A.events.some((m) => m.type === 'state'), 'sender does not get echo');
+// Public relay limits: oversized payloads and floods are refused.
+const big = await fetch(`${base}/api/game-rooms/lobby1/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playerId: aw.playerId, data: 'x'.repeat(20000) }) });
+assert.ok(!(await big.json()).success, 'oversized message rejected');
+let limited = false;
+for (let i = 0; i < 200 && !limited; i++) {
+  const r = await (await fetch(`${base}/api/game-rooms/lobby1/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playerId: aw.playerId, data: i }) })).json();
+  if (!r.success && /rate limit/i.test(String(r.error))) limited = true;
+}
+assert.ok(limited, 'per-player rate limit kicks in');
 B.close();
 await A.waitFor((m) => m.type === 'leave' && m.playerId === bw.playerId);
 A.close();
-ok('room relay: A -> B state delivery, join/leave presence, no echo');
+ok('room relay: A -> B state delivery, join/leave presence, no echo, size cap + rate limit');
 server.close();
 
 // 9. registration + capabilities
