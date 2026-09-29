@@ -52,6 +52,8 @@ export interface ChatOutput {
   message: any;
   thinking?: string;
   stopReason?: string;
+  /** Provider-reported (or estimated) usage for per-round diagnostics. */
+  usage?: { outputTokens: number };
 }
 
 export class OllamaClient {
@@ -294,7 +296,7 @@ export class OllamaClient {
       activeToolCategories: promptManifest.toolSurface.activeCategories,
       durationMs: Date.now() - startedAt,
     });
-    return { message: result.message, thinking: result.thinking, stopReason: result.stopReason };
+    return { message: result.message, thinking: result.thinking, stopReason: result.stopReason, usage };
   }
 
   // ─── Generate ───────────────────────────────────────────────────────────────
