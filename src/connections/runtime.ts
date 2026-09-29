@@ -20,6 +20,8 @@ import type { ConnectionAdapterContext } from './types';
 import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { migrateLegacyConnections } from './legacy-migration';
+import { reconcileNativeConnectorToolSnapshots } from './native-tool-reconcile';
+import { invalidateConnectionToolSurfaceCache } from './tool-surface';
 export {
   isManagedConnectorToolAvailable,
   isManagedMcpToolAvailable,
@@ -37,6 +39,13 @@ export function getConnectionRuntime() {
   const attempts = new ConnectionAttemptStore(configDir);
   const connections = new ConnectionStore(configDir);
   migrateLegacyConnections(connections);
+  // Native connectors snapshot their tool list at connect time; pick up tools
+  // added by later releases (e.g. connector_<id>_api_request) on every boot.
+  try {
+    if (reconcileNativeConnectorToolSnapshots(connections).length) invalidateConnectionToolSurfaceCache();
+  } catch (error: any) {
+    console.warn('[connections] native tool reconcile failed:', error?.message || error);
+  }
   const activity = new ConnectionActivityStore(configDir);
   const secureInput = new SecureInputService(configDir);
   const adapters = new ConnectionAdapterRegistry();
