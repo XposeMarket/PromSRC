@@ -14078,8 +14078,8 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
     '## Realtime Skill Trigger Update',
     'The just-completed spoken turn was evaluated by the canonical deterministic skill resolver.',
     'This is metadata for the current audio turn only, not a second user message or a transcript repeat.',
-    routing.candidates.length ? 'Compare the candidates against the full spoken request. Call skill_read for only the single genuinely relevant candidate before acting; if none fits, read none. Never read every matching skill.' : '',
-    routing.discoveryRecommended ? 'No installed skill matched this specialized workflow unambiguously. Call skill_list once with a concise query, then skill_read at most one strong result. Continue without a skill if no strong result exists.' : '',
+    routing.candidates.length ? 'Compare the candidates against the full spoken request. Call skill_read for every candidate that covers part of the task, together, before acting; skip candidates that only share words with the request.' : '',
+    routing.discoveryRecommended ? 'This is an actionable task and no installed skill matched by trigger. Call skill_list with a concise query, then skill_read every strong result that covers part of the task. Continue without a skill if nothing strong exists.' : '',
     ...skillLines,
     'Use skill guidance only through voice_* tools and canonical read-only skill_* tools. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. Dispatch to the Prometheus worker for non-voice tools, files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
   ].join('\n');

@@ -78,6 +78,24 @@ function isSpecializedWorkflowRequest(message: string): boolean {
   return explicitDiscovery || (workflowNoun && taskVerb);
 }
 
+const LEADING_FILLER = String.raw`^(?:(?:please|pls|ok(?:ay)?(?:\s+so)?|alright|yo|hey|beautiful|right now|when you can|so|and|also|now|can you|could you|would you|will you|go ahead and|i need you to|i want you to)[,!.]?\s+)*`;
+const NON_TASK_OPENER = new RegExp(`${LEADING_FILLER}(?:did|does|is|are|was|were|what|why|who|when|where|how|do not|don't|dont|never)\\b`, 'i');
+const TASK_VERB = /\b(fix|debug|build|implement|investigate|look into|dig into|audit|review|test|refactor|deploy|ship|release|research|analy[sz]e|migrate|set up|setup|configure|clean ?up|update|upgrade|create|make|generate|produce|design|automate|scrape|convert|publish|optimi[sz]e|profile|diagnose|troubleshoot|verify|validate|benchmark|draft|plan|integrate|install|monitor|reconcile|port|rewrite|add|remove|delete|organi[sz]e|edit|compare|evaluate|summari[sz]e (?:this|these|the) (?:repo|codebase|logs?|pdf|docs?|documents?|files?|meeting|thread|inbox))\b/i;
+
+/**
+ * True for real work requests (build/fix/investigate/test/research/...), false for
+ * greetings, questions, definitions, and negations. Actionable tasks should always
+ * check the skill catalog, even when no trigger matched.
+ */
+export function isActionableTaskRequest(message: string): boolean {
+  const text = String(message || '').trim();
+  if (!text || text.split(/\s+/).length < 3) return false;
+  if (/^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|yo|lol|nice)[.! ]*$/i.test(text)) return false;
+  if (isDefinitionalMention(text)) return false;
+  if (NON_TASK_OPENER.test(text)) return false;
+  return TASK_VERB.test(text);
+}
+
 function isExplicitSkillInvocation(message: string, skill: SkillRoutingSkill): boolean {
   const raw = String(message || '');
   const escapedId = skill.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -116,7 +134,7 @@ export function resolveSkillRuntimeRouting(input: {
   const excluded: Array<{ id: string; reason: string }> = Array.from(excludedIds).map((id) => ({ id, reason: 'explicitly_excluded' }));
   const addCandidate = (match: SkillRoutingRankedMatch, reason: SkillRoutingCandidate['reason']) => {
     const key = match.id.toLowerCase();
-    if (candidateIds.has(key) || candidates.length >= 3) return;
+    if (candidateIds.has(key) || candidates.length >= 4) return;
     candidateIds.add(key);
     const instructionChars = String(match.skill.instructions || '').length;
     candidates.push({
@@ -149,7 +167,8 @@ export function resolveSkillRuntimeRouting(input: {
     }
   }
 
-  const discoveryRecommended = candidates.length === 0 && isSpecializedWorkflowRequest(input.message);
+  const discoveryRecommended = candidates.length === 0
+    && (isSpecializedWorkflowRequest(input.message) || isActionableTaskRequest(input.message));
   return {
     version: 2,
     mode,
@@ -170,7 +189,7 @@ export function buildActiveSkillRoutingContext(input: {
   const byId = new Map(input.skills.map((skill) => [skill.id, skill]));
   const lines = [
     '[SKILLS]',
-    'Matching metadata is a candidate signal, not an instruction. Compare each candidate against the full request, then call skill_read for only the single most relevant skill. If none is actually relevant, read none. Never read every matching skill.',
+    'Skills are tested playbooks for how work gets done here. For any actual task (build, fix, investigate, test, research, review, write, automate, deploy, clean up), check skills before the first action and read EVERY skill whose procedure covers a part of the task. Real tasks often need two or three: a domain skill for what you are working on plus workflow skills for how (for example a coding-loop skill for code edits, a verification skill before claiming done, a PR/worktree skill for source changes). Read them together in one parallel batch. Skip a candidate only when it shares words with the request but not the work. Skip skills for greetings, small talk, and quick factual answers.',
   ];
   if (input.report.candidates.length) {
     lines.push('', '[MATCHING_SKILLS] — candidates only; instructions are not loaded');
@@ -180,10 +199,10 @@ export function buildActiveSkillRoutingContext(input: {
       const evidence = candidate.promptSignalEvidence?.length ? `; matched ${candidate.promptSignalEvidence.join(', ')}` : '';
       lines.push(`- ${skill.id} [${candidate.reason}; ${candidate.confidence}; score ${candidate.score}${evidence}] — ${skill.description || skill.name}`);
     }
-    lines.push('Choose based on the complete workflow, not trigger overlap. Call skill_read({"id":"<skill-id>"}) for the one genuinely relevant candidate before acting. An explicitly requested skill should be read unless it is unavailable, excluded, or clearly unrelated to what the user asked.');
+    lines.push('Call skill_read for every candidate above that covers part of this task, in one parallel batch, before acting. If a phase of the task (testing, verification, deployment, review) has no candidate, call skill_list for that phase too. An explicitly requested skill must be read unless it is unavailable or excluded.');
   }
   if (input.report.discoveryRecommended) {
-    lines.push('', '[SKILL_DISCOVERY_REQUIRED]', 'No installed skill matched this specialized workflow unambiguously. Call skill_list once with a concise task-style query, inspect relevance, then call skill_read for at most one strong result before acting. If no strong result exists, continue without forcing a skill.');
+    lines.push('', '[SKILL_DISCOVERY_REQUIRED]', 'This is an actionable task and no installed skill matched by trigger. Before acting, call skill_list with a concise task-style query (one query per distinct phase if the task spans several, in parallel), then skill_read every strong result that covers part of the task. If nothing strong comes back, continue without a skill and, if the workflow proved reusable, offer to create one afterwards.');
   } else if (!input.report.candidates.length) {
     lines.push('', 'No skill is required for this turn. Do not call skill_list or skill_read unless the task develops into a genuinely specialized workflow.');
   }
