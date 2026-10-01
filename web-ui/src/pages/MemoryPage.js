@@ -121,6 +121,7 @@ const state = {
   shuffleTimer: 0,
   simulationHeat: 1,
   raf: 0,
+  lastFrameAt: 0,
   resizeObserver: null,
   spriteCache: new Map(),
 };
@@ -862,7 +863,9 @@ function getParticleSprite(node, size, glow) {
   const key = r + ',' + g + ',' + b + ':' + sizeBucket + ':' + glowBucket;
   const cached = state.spriteCache.get(key);
   if (cached) return cached;
-  if (state.spriteCache.size > 420) state.spriteCache.clear();
+  // A dense graph needs many color/size combinations. Clearing the entire cache
+  // at 420 entries recreated hundreds of gradient canvases on every frame.
+  if (state.spriteCache.size > 2048) state.spriteCache.delete(state.spriteCache.keys().next().value);
   const halo = sizeBucket * (4.8 + glowBucket * 9.5);
   const pad = 3;
   const dim = Math.ceil((halo + pad) * 2);
@@ -1118,7 +1121,9 @@ function draw() {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const baseEdgeBudget = edgeBudget();
-  for (let i = 0; i < state.renderEdges.length; i += 1) {
+  const edgeScanLimit = (state.hoverNodeId || state.selectedNodeId)
+    ? state.renderEdges.length : Math.min(state.renderEdges.length, baseEdgeBudget);
+  for (let i = 0; i < edgeScanLimit; i += 1) {
     const edge = state.renderEdges[i];
     if (!edge.visible) continue;
     const source = state.nodeById.get(edge.source);
@@ -1191,7 +1196,16 @@ function stepSimulation() {
   scene.burst *= 0.93;
 }
 
-function animate() { stepSimulation(); draw(); state.raf = requestAnimationFrame(animate); }
+function animate(now = 0) {
+  // The full graph is expensive to paint. Cap idle animation at ~30 fps;
+  // interactions that explicitly call draw() still repaint immediately.
+  if (window.currentMode === 'memory' && (!state.lastFrameAt || now - state.lastFrameAt >= 32)) {
+    stepSimulation();
+    draw();
+    state.lastFrameAt = now;
+  }
+  state.raf = requestAnimationFrame(animate);
+}
 
 function decodeQuotedJson(value) {
   if (!value) return '';
@@ -2047,6 +2061,7 @@ export function memoryPageUnmount() {
   state.graphFetchPromise = null;
   state.resizeObserver = null;
   state.raf = 0;
+  state.lastFrameAt = 0;
 }
 
 export function memoryPageActivate() {
@@ -2054,7 +2069,8 @@ export function memoryPageActivate() {
   init();
   // init() already kicks off the first fetchGraph; only refetch on later activates if stale.
   if (wasInitialized && (Date.now() - state.graphLoadedAt) > 45000) fetchGraph().catch(() => {});
-  draw();
+  // Let the browser paint navigation before the expensive canvas redraw.
+  state.lastFrameAt = 0;
 }
 
 window.refreshMemoryGraph = refreshMemoryGraph;
