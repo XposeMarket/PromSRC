@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "2c6f15fdbb758f28",
-  "sourceDigest": "2c6f15fdbb758f280404821d601b80ae1210650bdefd06ba449cf7865556b588",
+  "buildId": "afa6fdd4bd1e3f2a",
+  "sourceDigest": "afa6fdd4bd1e3f2a6876ebc0d72ca8db55fdd3e215efda57763476be6c19f302",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-BLRJTWI5.js",
-      "css": "/build/styles/desktop-IP54VJP7.css",
+      "css": "/build/styles/desktop-QVUEBEB4.css",
       "modulePreloads": [
         "/build/chunks/chunk-36KIJFV6.js",
         "/build/chunks/chunk-HJADIT6Y.js"
@@ -109,15 +109,15 @@
         "/build/inline/index-inline-07-ecc8cfa8ff4d.js",
         "/build/inline/index-inline-08-4550e6a395a8.js",
         "/build/inline/index-inline-09-d99079ff0017.js",
-        "/build/styles/desktop-IP54VJP7.css"
+        "/build/styles/desktop-QVUEBEB4.css"
       ],
       "files": 13,
       "bytes": 832168,
-      "gzipBytes": 150756,
+      "gzipBytes": 150757,
       "jsBytes": 162101,
       "jsGzipBytes": 47122,
       "cssBytes": 670067,
-      "cssGzipBytes": 103634
+      "cssGzipBytes": 103635
     },
     "mobile": {
       "paths": [
@@ -3463,10 +3463,10 @@
       "imports": []
     },
     {
-      "path": "/build/media/p1-mark-ring-WI6KIK7C.png",
-      "bytes": 677028,
-      "gzipBytes": 677183,
-      "sha256": "18ddc9eb60fd7b3fbdd5247acf77e51f6556df4ec3d538741c7275db1710fa1b",
+      "path": "/build/media/p1-mark-ring-DLBMJEQU.png",
+      "bytes": 36346,
+      "gzipBytes": 36154,
+      "sha256": "cdbbeb743f103fb5d3ea5d6d49c1edfc2f5149e51c86543656e58051ebc909b0",
       "entryPoint": null,
       "imports": []
     },
@@ -3479,31 +3479,19 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-IP54VJP7.css",
+      "path": "/build/styles/desktop-QVUEBEB4.css",
       "bytes": 670067,
-      "gzipBytes": 103634,
-      "sha256": "f57596083f2ffdfb65d2a5fd65e3a429661da1aa14fd8111c347fcd5a7d37f5f",
+      "gzipBytes": 103635,
+      "sha256": "7bf5cb919ab511de2351b0fd50f4e09e1e2e5a422bc87a1c850fa7d3ebc9983d",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
           "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
         },
         {
           "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
-        },
-        {
-          "kind": "url-token",
-          "path": "/build/media/prometheus-avatar-column-gold-RZYNN76Y.png"
-        },
-        {
-          "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
-        },
-        {
-          "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
         },
         {
           "kind": "url-token",
@@ -3511,11 +3499,23 @@
         },
         {
           "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
         },
         {
           "kind": "url-token",
-          "path": "/build/media/p1-mark-ring-WI6KIK7C.png"
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
+        },
+        {
+          "kind": "url-token",
+          "path": "/build/media/prometheus-avatar-column-gold-RZYNN76Y.png"
+        },
+        {
+          "kind": "url-token",
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
+        },
+        {
+          "kind": "url-token",
+          "path": "/build/media/p1-mark-ring-DLBMJEQU.png"
         },
         {
           "kind": "url-token",
