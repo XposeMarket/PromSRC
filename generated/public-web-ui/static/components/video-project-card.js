@@ -487,11 +487,14 @@ export function installVideoProjectCards() {
     document.head.appendChild(style);
   }
   hydrateAll();
-  if (observer) return;
+  // Non-browser hosts (node test harnesses with a minimal document stub) have
+  // no MutationObserver; hydrate once and skip live observation there.
+  if (observer || typeof MutationObserver === 'undefined') return;
   observer = new MutationObserver(() => {
     if (scheduled) return;
     scheduled = true;
-    requestAnimationFrame(() => hydrateAll());
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+    raf(() => hydrateAll());
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
