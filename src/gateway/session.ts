@@ -516,7 +516,7 @@ const API_HISTORY_PRUNE_THRESHOLD_CHARS = 3000;
 const API_HISTORY_PRUNE_KEEP_CHARS = 2500;
 const SESSION_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_|auto_)/i;
-const INTERNAL_SESSION_ID_RE = /^(background_|brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_|prom_supervision_)/i;
+const INTERNAL_SESSION_ID_RE = /^(background_|trigger_|brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_|prom_supervision_)/i;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
 const sessionSaveRevisions = new Map<string, number>();
@@ -1893,7 +1893,7 @@ function inferChannelFromSessionId(sessionId: string): NonNullable<Session['chan
   if (sessionId.startsWith('voice_room_')) return 'voice_room';
   if (sessionId.startsWith('discord_')) return 'discord';
   if (sessionId.startsWith('whatsapp_')) return 'whatsapp';
-  if (sessionId.startsWith('task_') || sessionId.startsWith('cron_')) return 'system';
+  if (sessionId.startsWith('task_') || sessionId.startsWith('cron_') || sessionId.startsWith('trigger_')) return 'system';
   if (sessionId.startsWith('brain_')) return 'system';
   if (sessionId.startsWith('auto_')) return 'system';
   return 'web'; // default for custom/web sessions

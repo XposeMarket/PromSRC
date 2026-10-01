@@ -20,7 +20,9 @@ import { createMainChatTimer } from '../timers/timer-store';
 import { addMessage } from '../session';
 import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
 import { deliverToTargets } from '../delivery-router';
-import { appendTeamChat, getManagedTeam } from '../teams/managed-teams';
+import { appendTeamChat, getManagedTeam, getTeamForAgent } from '../teams/managed-teams';
+import { broadcastTeamEvent } from '../comms/broadcaster';
+import { getAgentById } from '../../config/config';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 
 type HandleChatFn = (
@@ -38,6 +40,8 @@ type HandleChatFn = (
 export interface TriggerServiceDeps {
   handleChat: HandleChatFn;
   runCronJobNow?: (jobId: string) => Promise<void>;
+  /** Runs one turn in a subagent's own chat thread (agent-owned rules). */
+  runAgentTurn?: (args: { agentId: string; message: string; timeoutMs: number; callerContextExtra?: string }) => Promise<{ text?: string }>;
   telegramChannel?: any;
 }
 
@@ -51,6 +55,32 @@ import { TRANSIENT_RETRY_DELAYS_MS, isProviderErrorText, isTransientProviderFail
 let service: TriggerService | null = null;
 const AGENT_TIMEOUT_MS = 15 * 60 * 1000;
 const activeAgentRuns = new Set<string>();
+// One subagent thread is a single conversation: queue its trigger turns instead of
+// running two at once (or dropping an approval because the agent was busy).
+const ownerQueues = new Map<string, Promise<unknown>>();
+
+function enqueueForOwner<T>(agentId: string, job: () => Promise<T>): Promise<T> {
+  const prev = ownerQueues.get(agentId) || Promise.resolve();
+  const next = prev.catch(() => {}).then(job);
+  ownerQueues.set(agentId, next.finally(() => { if (ownerQueues.get(agentId) === next) ownerQueues.delete(agentId); }));
+  return next;
+}
+
+/** Post an agent-owned trigger result into the owner's managed team room (no manager wake). */
+function postToOwnerTeam(agentId: string, content: string, runId: string): string | null {
+  const team = getTeamForAgent(agentId);
+  if (!team || !content.trim()) return null;
+  const agent: any = getAgentById(agentId);
+  const chatMessage = appendTeamChat(team.id, {
+    from: 'subagent',
+    fromName: String(agent?.identity?.displayName || agent?.name || agentId),
+    fromAgentId: agentId,
+    content,
+    metadata: { source: 'trigger', runId, agentId } as any,
+  });
+  if (chatMessage) broadcastTeamEvent({ type: 'team_chat_message', teamId: team.id, teamName: team.name, chatMessage, text: content });
+  return team.id;
+}
 
 function resolveSessionTarget(delivery?: TriggerDelivery, fallbackToMain = true): string {
   const explicit = String(delivery?.target || '').trim();
@@ -103,6 +133,53 @@ export function initTriggerService(deps: TriggerServiceDeps): TriggerService {
     },
 
     runAgent: async ({ prompt, model, delivery, context }): Promise<TriggerExecutionResult> => {
+      const ownerId = String(context.rule.action.agentId || '').trim();
+      if (ownerId) {
+        // Agent-owned rule: the work belongs to that subagent. It runs in the agent's own
+        // thread (its model/tools/identity), the outcome lands in that thread and its team
+        // room. Main chat hears nothing unless the rule explicitly sets delivery.target.
+        if (!deps.runAgentTurn) return { ok: false, status: 'failed', error: 'Subagent turn runner is not wired on this gateway.' };
+        if (!getAgentById(ownerId)) return { ok: false, status: 'failed', error: `Owner agent not found: ${ownerId}` };
+        const threadId = `subagent_chat_${ownerId}`;
+        const extra = [
+          `TRIGGER RUN: rule "${context.rule.name}" (${context.rule.id}) matched ${context.event.source}${context.event.sourceId ? `/${context.event.sourceId}` : ''} event "${context.event.eventType}". This message came from an automation, not from Raul typing.`,
+          untrustedNote(context),
+          'Run autonomously. Do not ask clarifying questions. Do not message main chat unless you are genuinely blocked and need the main agent. Finish with a short summary of what you did and the outcome.',
+        ].filter(Boolean).join('\n');
+        broadcastWS({ type: 'trigger_run_started', runId: context.runId, ruleId: context.rule.id, sessionId: threadId, agentId: ownerId });
+        void enqueueForOwner(ownerId, async () => {
+          let text = '';
+          let failed = false;
+          for (let attempt = 1; ; attempt++) {
+            let transient = false;
+            try {
+              const out = await deps.runAgentTurn!({ agentId: ownerId, message: prompt, timeoutMs: AGENT_TIMEOUT_MS, callerContextExtra: extra });
+              text = String(out?.text || '').trim() || 'No response generated.';
+              transient = isTransientProviderFailure(text);
+              failed = transient || isProviderErrorText(text);
+            } catch (error: any) {
+              text = `Trigger agent failed: ${String(error?.message || error).slice(0, 1000)}`;
+              transient = isTransientProviderFailure(String(error?.message || error));
+              failed = true;
+            }
+            if (!transient || attempt >= TRANSIENT_RETRY_DELAYS_MS.length + 1) break;
+            const delay = TRANSIENT_RETRY_DELAYS_MS[attempt - 1];
+            console.warn(`[Triggers] ${context.rule.id} (owner ${ownerId}): transient failure (attempt ${attempt}), retrying in ${delay / 1000}s: ${text.slice(0, 160)}`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+          const report = `**${context.rule.name}** ${failed ? 'failed' : 'finished'} (${context.event.eventType})\n\n${text}`;
+          const suppress = (delivery?.onlyOnFailure && !failed) || (delivery?.suppressEmpty && !text);
+          if (!suppress) postToOwnerTeam(ownerId, report, context.runId);
+          // Main chat only when the rule explicitly opted in with a report session.
+          const explicitReport = String(delivery?.target || '').trim();
+          if (explicitReport && !suppress) {
+            postToSession(explicitReport, report, ruleLabel(context));
+            await deliverChannel(delivery, report, explicitReport, deps.telegramChannel);
+          }
+          broadcastWS({ type: 'trigger_run_done', runId: context.runId, ruleId: context.rule.id, sessionId: threadId, agentId: ownerId, ok: !failed, preview: text.slice(0, 400) });
+        }).catch((error: any) => console.warn(`[Triggers] owner run ${context.rule.id} crashed: ${String(error?.message || error)}`));
+        return { ok: true, status: 'queued', sessionId: threadId, result: `Queued in ${ownerId}'s thread.` };
+      }
       const sessionId = `trigger_${context.rule.id}`.slice(0, 120);
       if (activeAgentRuns.has(sessionId)) {
         return { ok: true, status: 'skipped', sessionId, result: 'An agent run for this rule is already in progress.' };

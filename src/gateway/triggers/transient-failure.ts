@@ -22,5 +22,5 @@ export function isTransientProviderFailure(text: string): boolean {
   const s = String(text || '').trim();
   if (!s || s.length > 600) return false;
   if (/usage_limit_reached|out of extra usage|insufficient_quota|credits depleted|spending-limit|run out of credits/i.test(s)) return false;
-  return /\bAPI error (?:429|5\d\d)\b|\b(?:429|500|502|503|504|529)\b.*\b(?:error|unavailable|overloaded|timeout)|overloaded_error|service unavailable|bad gateway|gateway timeout|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed/i.test(s);
+  return /\bAPI error (?:429|5\d\d)\b|\b(?:429|500|502|503|504|529)\b.*\b(?:error|unavailable|overloaded|timeout)|overloaded_error|service unavailable|bad gateway|gateway timeout|worker pool is shutting down|shutting down for restart|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed/i.test(s);
 }
