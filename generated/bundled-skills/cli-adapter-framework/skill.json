@@ -5,7 +5,6 @@
   "description": "Build or harden a typed Prometheus adapter around an external command-line tool, including status checks, bounded actions, artifacts, cancellation, and side-effect controls. Use when explicitly wrapping or exposing a CLI; do not use for ordinary shell commands.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": true,
   "triggers": [
     "expose cli in prometheus",
     "add command line tool",
@@ -24,14 +23,15 @@
     "tooling"
   ],
   "requiredTools": [
-    "terminal",
+    "workspace_write",
     "connector_list"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "shell": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "resources": []
 }

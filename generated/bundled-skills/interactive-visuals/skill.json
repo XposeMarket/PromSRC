@@ -2,16 +2,17 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "interactive-visuals",
   "name": "interactive-visuals",
-  "description": "Route /visual and general visualization requests to exactly one best-fit chart, Mermaid, SVG, or interactive HTML visual skill.",
+  "description": "Choose the smallest suitable visual renderer for /visual or an ambiguous visualize-this request: native chart, Mermaid, SVG, or interactive HTML. Use for format selection, not for building an explicitly requested interactive artifact (interactive-artifacts) or a named chart (chart-visualizer).",
   "version": "2.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "/visual",
-    "visualize this",
+    "which visual should i use for these metrics",
+    "show this visually in a diagram",
     "turn this into a visual",
-    "show this visually",
+    "choose a visual format",
+    "visualize this process",
     "make a diagram",
-    "make this interactive"
+    "/visual"
   ],
   "categories": [
     "visuals",
@@ -19,7 +20,10 @@
     "cards",
     "dashboards"
   ],
-  "requiredTools": ["skills"],
+  "requiredTools": [
+    "skills"
+  ],
+  "implicitInvocation": true,
   "permissions": {},
   "resources": [
     {
@@ -27,7 +31,5 @@
       "type": "doc",
       "description": "When to use which visual skill; migrated from SOUL Visuals section"
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

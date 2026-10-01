@@ -1,11 +1,13 @@
 ---
 name: investigation-mode
-description: "Orchestrated debugging coordinator. Triggers on frustration signals (stuck, hung, broken, waiting) and systematically triages: runtime logs → workflow status → browser verify → deploy/env. Reports findings at every step."
+description: "Coordinate debugging when a user project, deployed site, API, or workflow is stuck, hung, broken, or not responding: triage runtime logs, workflow status, live browser state, then deploy/env, reporting evidence at each step. Use for 'it's stuck / not loading / broke' reports about apps and sites. Not for Prometheus itself (prometheus-runtime-forensics), failing GitHub checks (github-gh-fix-ci), or a known code bug (root-cause-debugging)."
 ---
 
 # Investigation Mode — Orchestrated Debugging
 
-When a user reports something stuck, hung, broken, or not responding, you are the **diagnostic coordinator**. Do not guess. Follow the triage order, report evidence at every step, and stop at a high-confidence root cause. This skill is Prometheus's native port of the Vercel investigation coordinator: use Prometheus workspace, shell, browser, connector, process, and workflow tools where available, and treat provider-specific CLI commands as optional adapters rather than assumptions.
+> **Routing:** if the thing that's broken is **Prometheus/Prom itself** (a turn, tool, connector, gateway, restart, steer, mobile app, spawn, model/provider error, Vita bridge), stop and use `prometheus-runtime-forensics`, which has the real log paths and methods. This skill covers user projects and deployed apps (Vercel, websites, APIs, workflows).
+
+When a user reports something stuck, hung, broken, or not responding, you are the **diagnostic coordinator**. Do not guess. Follow the triage order, report evidence at every step, and stop at a high-confidence root cause.
 
 ## Reporting Contract
 
@@ -24,7 +26,7 @@ Work through these in order. Stop as soon as you find the root cause.
 ### 1. Runtime Logs (check first — most issues leave traces here)
 
 - **Dev server**: Check terminal output for errors, warnings, unhandled rejections
-- **Hosted logs**: use the connected provider's observability/log tool when available; use `vercel logs --follow` or `vercel logs <deployment-url>` only when this is actually a Vercel project with the CLI configured
+- **Vercel logs**: `vercel logs --follow` (production) or `vercel logs <deployment-url>`
 - **Browser console**: Open DevTools → Console tab for client-side errors
 - **If no logs exist**: This is the problem. Add logging before continuing (see "Add Logging" below)
 
@@ -34,16 +36,16 @@ Tell the user: "Checking runtime logs…" → share what you found → explain n
 
 If the app uses workflows, queues, or cron jobs:
 
-- Inspect Prometheus task, process, scheduler, queue, or connector status first. For Vercel Workflow projects, `vercel workflow runs list` is an optional adapter.
+- Run `vercel workflow runs list` to check recent run statuses
 - Look for runs stuck in `running` state — likely a missing `await` or unresolved promise
-- Check individual run details with the provider's run-inspection tool, or `vercel workflow runs get <run-id>` for Vercel Workflow.
+- Check individual run details: `vercel workflow runs get <run-id>`
 - Look for failed steps, retry exhaustion, or timeout errors
 
 Tell the user: "Checking workflow run status…" → share the run state → explain next step.
 
 ### 3. Browser Verification
 
-Use Prometheus browser automation to visually verify what the user sees when a UI is involved. Reuse `local-file-browser-verification` for local HTML/browser artifacts and use the connected browser session for authenticated app state:
+Use browser automation to visually verify what the user sees:
 
 - Take a screenshot of the current page state
 - Check the browser console for JavaScript errors
@@ -54,7 +56,8 @@ Tell the user: "Taking a browser screenshot to see the current state…" → sha
 
 ### 4. Deploy / Environment Status
 
-- Inspect the deployment/build/process status through the relevant provider or Prometheus process tools. `vercel inspect <deployment-url>` and `vercel ls` are Vercel-only adapters.
+- `vercel inspect <deployment-url>` — check build output, function regions, environment
+- `vercel ls` — verify the latest deployment succeeded
 - Check for environment variable mismatches between local and production
 - Verify the correct branch/commit is deployed
 
@@ -83,7 +86,7 @@ When logs point to code issues, check these frequent culprits:
 
 ## Add Logging (If Missing)
 
-If the investigation reveals insufficient observability and the user asked for a fix or instrumentation, add the smallest structured logging patch immediately — you cannot debug what you cannot see. If the user asked for diagnosis only, propose the instrumentation and wait before changing files. Do not log credentials, tokens, request bodies containing secrets, or personal data.
+If the investigation reveals insufficient observability, **add structured logging immediately** — you cannot debug what you cannot see.
 
 ```typescript
 // API routes — wrap handlers with try/catch + logging

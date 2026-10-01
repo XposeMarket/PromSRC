@@ -3,28 +3,87 @@
   "id": "code-review",
   "name": "Code Review",
   "description": "Perform an evidence-based review of a code change or pull request for correctness, project conventions, regressions, security, performance, and maintainability. Use for review-only work; do not silently modify code or publish comments.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "review this code",
-    "review this diff",
-    "review this pull request",
+    "is this pr safe to merge",
     "find bugs in this change",
     "check this code for issues",
+    "review this pull request",
     "perform a code review",
     "audit this change",
-    "is this PR safe to merge"
+    "review this diff",
+    "review this code"
   ],
   "promptSignals": {
-    "phrases": ["review this code", "review this diff", "review this pull request", "find bugs in this change", "check this code for issues", "perform a code review", "audit this change"],
-    "allOf": [["review", "code"], ["review", "diff"], ["review", "pull", "request"], ["find", "bugs"], ["check", "issues"], ["safe", "merge"]],
-    "anyOf": ["review", "pull request", "diff", "bugs", "audit", "merge", "regression", "security issue"],
-    "noneOf": ["write a review", "review this résumé", "review my email", "review a movie", "code review checklist only"],
+    "phrases": [
+      "review this code",
+      "review this diff",
+      "review this pull request",
+      "find bugs in this change",
+      "check this code for issues",
+      "perform a code review",
+      "audit this change"
+    ],
+    "allOf": [
+      [
+        "review",
+        "code"
+      ],
+      [
+        "review",
+        "diff"
+      ],
+      [
+        "review",
+        "pull",
+        "request"
+      ],
+      [
+        "find",
+        "bugs"
+      ],
+      [
+        "check",
+        "issues"
+      ],
+      [
+        "safe",
+        "merge"
+      ]
+    ],
+    "anyOf": [
+      "pull request",
+      "audit",
+      "merge",
+      "regression",
+      "security issue"
+    ],
+    "noneOf": [
+      "write a review",
+      "review this résumé",
+      "review my email",
+      "review a movie",
+      "code review checklist only"
+    ],
     "minScore": 4
   },
-  "categories": ["review", "quality", "development", "security"],
-  "requiredTools": ["workspace", "shell", "agents_and_teams"],
-  "permissions": {"workspaceRead": true, "workspaceWrite": false, "shell": true, "externalSideEffects": false},
+  "categories": [
+    "review",
+    "quality",
+    "development",
+    "security"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "background_ops"
+  ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": []
 }

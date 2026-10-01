@@ -13,7 +13,7 @@ You are the **orchestrator**. Work in `videos/<project>/`. Run the steps in orde
 
 `SKILL_DIR` = this skill directory. `PROJECT_DIR` = `videos/<project-name>/`.
 
-Workflow: Step 0 setup → `hyperframes.json` + `assets/bgm.mp3`; Step 1 analyze → `audiomap.json`; Step 2 skeleton → `STORYBOARD.md` (frames, groups `TBD`); Step 3 plan → complete `STORYBOARD.md` + `frame.md`; Step 4 build → `compositions/frames/NN-*.html`; Step 5 assemble → `index.html`; Step 6 render → `renders/video.mp4`.
+Workflow: Step 0 setup → `hyperframes.json` + `assets/bgm.mp3` (created in the project work directory during Step 0, not shipped with the skill); Step 1 analyze → `audiomap.json`; Step 2 skeleton → `STORYBOARD.md` (frames, groups `TBD`); Step 3 plan → complete `STORYBOARD.md` + `frame.md`; Step 4 build → `compositions/frames/NN-*.html`; Step 5 assemble → `index.html`; Step 6 render → `renders/video.mp4`.
 
 ## Two ideas that shape everything
 

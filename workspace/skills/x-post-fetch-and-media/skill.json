@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "x-post-fetch-and-media",
+  "name": "x-post-fetch-and-media",
+  "description": "Use when the user supplies an X/Twitter status URL and wants its post or thread fetched, read, inspected, or summarized without interaction. Do not use for posting, liking, replying, feed browsing, or generic web research.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "inspect this x status",
+    "pull this x thread",
+    "download x post media",
+    "analyze x post media",
+    "read this x post",
+    "fetch this tweet",
+    "x status url"
+  ],
+  "categories": [
+    "x",
+    "twitter",
+    "media",
+    "research"
+  ],
+  "requiredTools": [
+    "web_fetch",
+    "web_fetch_batch",
+    "media_assets",
+    "browser_automation"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

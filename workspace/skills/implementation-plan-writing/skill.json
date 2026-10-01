@@ -8,8 +8,10 @@
   "triggers": [
     "create a step by step implementation plan",
     "turn the spec into a plan",
+    "plan out how to build this",
     "break this spec into tasks",
     "plan this feature before coding",
+    "help me plan the implementation",
     "make an implementation plan",
     "write an implementation plan",
     "plan the build"
@@ -21,7 +23,10 @@
       "turn the spec into a plan",
       "plan this feature before coding",
       "task by task plan",
-      "phased plan"
+      "phased plan",
+      "plan the implementation",
+      "implementation of",
+      "plan out how to build"
     ],
     "allOf": [
       [

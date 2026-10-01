@@ -27,7 +27,10 @@
   ],
   "requiredTools": [
     "browser_automation",
-    "web",
+    "shopping_search_products",
+    "show_ui_card",
+    "web_search",
+    "web_fetch",
     "skills"
   ],
   "implicitInvocation": true,

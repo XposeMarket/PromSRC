@@ -7,7 +7,7 @@ Context: Adding transcription workflows to X growth content research
 
 When building Prometheus X presence, transcription helps with:
 - Understanding competitor video content and positioning
-- Extracting quotes and insights from AI community discussions  
+- Extracting quotes and insights from AI community discussions
 - Analyzing viral video content for content strategy
 - Research threads that include video explanations or demos
 
@@ -32,7 +32,7 @@ When building Prometheus X presence, transcription helps with:
 4. download_media + creative_transcribe_audio for key videos
 5. Mine transcripts for:
    - Pain points with current tools
-   - Feature requests 
+   - Feature requests
    - Use case examples
    - Opportunity gaps for Prometheus
 ```
@@ -58,9 +58,9 @@ Use transcribed insights to create authentic building notes:
 ```
 "Watched [competitor] demo their new agent feature.
 
-The hard part they don't show: 
+The hard part they don't show:
 - Authentication across 12 different apps
-- Memory that survives restarts  
+- Memory that survives restarts
 - Approval flows that don't break user trust
 
 This is why Prometheus runs local and persistent."
@@ -76,7 +76,7 @@ Most stop at API calls.
 
 Prometheus:
 ✓ Opens your actual desktop apps
-✓ Remembers what worked last time  
+✓ Remembers what worked last time
 ✓ Coordinates multiple agents safely
 ✓ Runs on your machine, with your data"
 ```
@@ -102,7 +102,7 @@ When creating approval packets for Prometheus X content, include transcription e
 - [Competitor X video transcript] → Claims Y, misses Z
 - Opportunity: Position Prometheus strength in Z
 
-**Community Signals:**  
+**Community Signals:**
 - [AI builder discussion transcript] → Pain point: agent memory
 - Content angle: "Why agents need persistent memory"
 
@@ -151,7 +151,7 @@ Feed transcribed insights to the `hook-library` skill:
 
 ```
 Input to hook-library:
-"Based on competitor transcripts, everyone leads with 'AI that automates your work.' 
+"Based on competitor transcripts, everyone leads with 'AI that automates your work.'
 Need a hook that differentiates Prometheus as the first agent that actually runs on your desktop vs cloud-only tools."
 
 Hook-library output → refined opener for Prometheus posts

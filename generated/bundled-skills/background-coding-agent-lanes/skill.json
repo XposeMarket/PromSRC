@@ -3,9 +3,8 @@
   "id": "background-coding-agent-lanes",
   "name": "background-coding-agent-lanes",
   "description": "Coordinate bounded background coding-agent lanes for parallel repository investigation, isolated implementation, code review, diff handoff, verification, and patch reconciliation. Use when multiple coding agents need explicit file or worktree boundaries and Prometheus must retain lane ownership and merge decisions; do not use for a single-agent coding task or unrelated background jobs.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": true,
   "triggers": [
     "parallel source investigation",
     "background coding agents",
@@ -27,20 +26,15 @@
     "workflow"
   ],
   "requiredTools": [
-    "terminal",
+    "workspace_write",
     "agents_and_teams"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "shell": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active",
-  "resources": [
-    {
-      "path": "references/supervised-fresh-review-modes.md",
-      "type": "doc"
-    }
-  ]
+  "resources": []
 }

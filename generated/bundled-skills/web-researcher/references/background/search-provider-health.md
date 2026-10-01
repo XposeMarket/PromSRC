@@ -1,4 +1,4 @@
-# Search Provider Health Snapshot — 2026-05-22
+# Search Provider Health Snapshot - 2026-05-22
 
 Use this as a dated provider-health note when the user asks whether web search is working.
 

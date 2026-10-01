@@ -1,6 +1,6 @@
 # Migrated interactive-visuals guidance
 
-This reference preserves detailed guidance from the former `interactive-visuals` entrypoint. Read it only for the matching operation.
+This copied router reference is historical. The active format chooser is `interactive-visuals`; use `interactive-artifacts` only when HTML interaction is the deliverable.
 
 # Interactive Visuals — Router
 

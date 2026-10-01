@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "github-gh-address-comments",
+  "name": "GitHub PR Comment Handler",
+  "description": "Address actionable GitHub pull request review feedback. Use when the user wants to inspect unresolved review threads, requested changes, or inline review comments on a PR, then implement selected fixes. Use the GitHub connector for review comments and GraphQL thread state; judge feedback with receiving-code-review.",
+  "version": "2.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "go through the unresolved review threads on the pr",
+    "pull the review comments from github pr",
+    "which review threads are still unresolved"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "unresolved review threads",
+      "review threads",
+      "inline review comments",
+      "unresolved comments on the pr"
+    ],
+    "allOf": [
+      [
+        "unresolved",
+        "threads"
+      ],
+      [
+        "review",
+        "threads"
+      ]
+    ],
+    "anyOf": [
+      "review threads",
+      "inline comments",
+      "requested changes"
+    ],
+    "noneOf": [
+      "review this diff",
+      "ci is failing"
+    ],
+    "minScore": 4
+  },
+  "categories": [
+    "software-development",
+    "github",
+    "code-review"
+  ],
+  "requiredTools": [
+    "connector_github",
+    "workspace_write",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "assets/github-small.svg",
+      "type": "asset"
+    },
+    {
+      "path": "LICENSE.txt",
+      "type": "reference"
+    }
+  ]
+}

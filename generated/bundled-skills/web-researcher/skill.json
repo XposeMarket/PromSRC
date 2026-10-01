@@ -3,14 +3,12 @@
   "id": "web-researcher",
   "name": "web-researcher",
   "description": "Answer a research question with current web sources using search, batched or single-page fetch, source evaluation, triangulation, synthesis, and citations. Use for web research and current facts; do not use browser automation unless interactive/authenticated UI state is necessary.",
-  "emoji": "🔎",
-  "version": "1.0.3",
+  "version": "1.1.3",
   "entrypoint": "SKILL.md",
   "triggers": [
     "what are people saying",
     "summarize these links",
     "read this webpage",
-    "fact check this",
     "look this up",
     "search the web",
     "source-backed answer",
@@ -26,10 +24,12 @@
     "search"
   ],
   "requiredTools": [
-    "web",
+    "web_search",
+    "web_fetch",
     "web_fetch_batch",
     "skills"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -38,19 +38,14 @@
   },
   "resources": [
     {
+      "path": "references/background/product-carousel-routing.md",
+      "type": "doc",
+      "description": "Routing note: use show_product_carousel for curated shopping/product research results."
+    },
+    {
       "path": "references/background/provider-selection.md",
       "type": "doc",
       "description": "Provider selection follow-up note: corrects Google site: testing, documents provider-selectable web_search tools, and explains Google 403 interpretation."
-    },
-    {
-      "path": "references/background/tinyfish-websearch-test.md",
-      "type": "doc",
-      "description": "Live TinyFish web_search test notes and comparison against earlier Tavily/Brave behavior plus Google-provider caveats."
-    },
-    {
-      "path": "references/examples/design-operating-system-research.md",
-      "type": "example",
-      "description": "Example pattern for researching external design/UI systems and mapping them into Prometheus-native design workflows."
     },
     {
       "path": "references/background/search-provider-health.md",
@@ -58,16 +53,31 @@
       "description": "Dated provider-health snapshot: normal web search/fetch works; Google API key missing; xAI Live Search deprecated."
     },
     {
-      "path": "references/background/product-carousel-routing.md",
+      "path": "references/background/tested-tool-behavior-snapshot.md",
+      "type": "reference"
+    },
+    {
+      "path": "references/background/tinyfish-websearch-test.md",
       "type": "doc",
-      "description": "Routing note: use show_product_carousel for curated shopping/product research results."
+      "description": "Live TinyFish web_search test notes and comparison against earlier Tavily/Brave behavior plus Google-provider caveats."
     },
     {
       "path": "references/background/x-media-extraction-pattern.md",
       "type": "doc",
       "description": "X/Twitter media extraction pattern: use download_media when web_fetch doesn't capture video"
+    },
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
+    },
+    {
+      "path": "references/examples/design-operating-system-research.md",
+      "type": "example",
+      "description": "Example pattern for researching external design/UI systems and mapping them into Prometheus-native design workflows."
+    },
+    {
+      "path": "references/grounded-claim-review.md",
+      "type": "doc"
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

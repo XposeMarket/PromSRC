@@ -3,7 +3,7 @@
   "id": "product-carousel-builder",
   "name": "product-carousel-builder",
   "description": "Use when the user asks to find, compare, recommend, or display real purchasable products as product cards or a carousel. Do not use for non-shopping research or generic visual cards.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "find me a good",
@@ -27,9 +27,13 @@
   ],
   "requiredTools": [
     "browser_automation",
-    "web",
+    "shopping_search_products",
+    "show_ui_card",
+    "web_search",
+    "web_fetch",
     "skills"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "browser": true,
     "workspaceRead": false,
@@ -43,11 +47,17 @@
       "description": "Worked example based on an Amazon men’s shampoo search, including extraction fields and carousel curation logic."
     },
     {
+      "path": "references/image-requirement.md",
+      "type": "reference"
+    },
+    {
+      "path": "references/provider-first-workflow.md",
+      "type": "reference"
+    },
+    {
       "path": "references/research-first-shopping-flow.md",
       "type": "doc",
       "description": "Guardrail from the user's 2026-06-05 correction: research current best models first, then product-search exact candidates for broad/high-consideration shopping requests."
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

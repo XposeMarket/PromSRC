@@ -1,6 +1,6 @@
 ---
-name: design-critique-audit
-description: Critique or audit an existing web interface (live URL, localhost, screenshot, or HTML file) and return a scored, evidence-backed review covering hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and "generated template" tells, ending in a prioritized fix list. Use when the user asks to review, critique, roast, audit, or judge the design of a page or app. Do not use for building or redesigning a UI (web-design-skill, frontend-quality-guard), for functional bug hunts (webapp-dogfood-qa), or for brand strategy (brand-strategist).
+name: "design-critique-audit"
+description: "Critique or audit an existing web interface from a URL, localhost, screenshot, or HTML file and return a scored, evidence-backed review of hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and generated-template tells, ending in a prioritized fix list. Use for design reviews, critiques, roasts, or audits; do not use for building or redesigning UI, functional bug hunts, or brand strategy."
 ---
 
 # Design Critique and Audit

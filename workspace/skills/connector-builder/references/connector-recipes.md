@@ -1,18 +1,13 @@
-# Migrated connector-recipe-library guidance
+# Connector implementation recipes
 
-This reference preserves detailed guidance from the former `connector-recipe-library` entrypoint. Read it only for the matching operation.
+Select the matching operation; this reference is part of `connector-builder`.
 
-# Connector Recipe Library
+Use this reference to choose a connector implementation recipe. Verify the target runtime feature exists before committing to it.
 
-Use this skill to pick the right implementation recipe for a new Prometheus integration.
-
-## Current State
-
-Status: usable as guidance; needs reusable templates/resources for 110%.
-
+## Runtime substrate
 Current substrate:
 
-- Existing `connector-builder` skill explains user plugin install.
+- `connector-builder` describes user plugin install, discovery, and connection verification.
 - Extension manifest schema: `src/extensions/schema.ts`
 - Runtime API: `src/extensions/runtime-api.ts`
 - Runtime registry: `src/extensions/runtime-registry.ts`
@@ -30,7 +25,7 @@ Current substrate:
 - CLI adapter: use `cli-adapter-framework`, not raw shell.
 - MCP preset: use `mcpPreset` manifest and `/api/mcp/servers`.
 - Memory source: runtime `registerMemorySource`; verify search/read wiring before relying on it.
-- Webhook receiver: not fully ready until extension routes are mounted.
+- Webhook receiver: confirm the installed extension actually mounts the route; if it does not, use the separate `prometheus-triggers-webhooks` workflow instead.
 
 ## Acceptance Check
 

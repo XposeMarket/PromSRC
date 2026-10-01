@@ -5,7 +5,7 @@ description: "Assemble reusable Prometheus briefing packs from memory, project a
 
 # Context Pack Builder
 
-Use this skill when Prometheus needs a reusable briefing packet for a project, client, repo, team, or workflow.
+Use this skill when Prometheus needs a reusable, named briefing packet for a project, client, repo, team, or workflow. For a one-shot "continue this session" brief, use `session-handoff` instead.
 
 ## Current State
 

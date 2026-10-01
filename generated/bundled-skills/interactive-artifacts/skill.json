@@ -2,13 +2,15 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "interactive-artifacts",
   "name": "interactive-artifacts",
-  "description": "Create polished interactive HTML artifacts, dashboards, cards, comparison tools, and lightweight visual explainers with real user interaction. Use when the deliverable itself should be an interactive browser artifact; do not use for ordinary website implementation, static charts, or slide/document output.",
+  "description": "Create polished interactive HTML artifacts, dashboards, cards, comparison tools, and lightweight visual explainers with real user interaction. Use when the deliverable itself needs interactive browser controls; interactive-visuals chooses the output format for /visual or ambiguous visualization requests. Do not use for ordinary website implementation, static charts, or slide/document output.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "build an interactive html report",
     "create an interactive artifact",
     "make an explorable dashboard",
+    "build an interactive dashboard",
+    "create an interactive calculator",
     "build an interactive explainer",
     "create a comparison tool",
     "add adjustable inputs"
@@ -18,6 +20,22 @@
     "html",
     "visualization"
   ],
+  "requiredTools": [],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/html-workflows.md",
+      "type": "reference"
+    },
+    {
+      "path": "references/visual-workflows.md",
+      "type": "reference"
+    }
+  ]
 }

@@ -26,13 +26,13 @@
     "tooling"
   ],
   "requiredTools": [
-    "terminal"
+    "workspace_write"
   ],
+  "implicitInvocation": false,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "shell": true
   },
-  "implicitInvocation": false,
-  "lifecycle": "active"
+  "resources": []
 }

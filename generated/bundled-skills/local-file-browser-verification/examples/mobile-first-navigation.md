@@ -3,7 +3,7 @@
 Use when the user attached a phone screenshot, reported Safari runtime errors, or asked for mobile-friendly layout verification.
 
 ## Rule
-Set a **narrow viewport (≤390px width) before the first `browser` navigation** to the local URL — not only after load via resize.
+Set a **narrow viewport (≤390px width) before the first `browser` navigation** to the local URL - not only after load via resize.
 
 Post-hoc `resize` without reload often leaves desktop React branches mounted (e.g. chart iframe still present).
 

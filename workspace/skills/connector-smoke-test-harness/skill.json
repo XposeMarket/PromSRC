@@ -5,7 +5,6 @@
   "description": "Verify an existing Prometheus connector with status, authentication, read, pagination, rate-limit, error-shape, and dry-run write checks. Use when testing connector readiness or diagnosing an installed integration. Only use after a connector exists; exclude implementation and setup work.",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": true,
   "triggers": [
     "run connector smoke test",
     "test connector dry run",
@@ -27,10 +26,11 @@
     "external_apps",
     "integration_admin"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "resources": []
 }

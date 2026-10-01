@@ -5,6 +5,8 @@ description: "Draft, rewrite, structure, or polish a multi-post X/Twitter thread
 
 # X/Twitter Thread
 
+No em dashes in generated X copy, including hooks and every post in the thread.
+
 Turn the supplied idea, article, research, story, or draft into a coherent sequence. Do not invent facts or engagement claims.
 
 ## Structure

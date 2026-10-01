@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "blocked-page-recovery",
+  "name": "Blocked Page Recovery",
+  "description": "Recover readable content when a page fetch fails with 403, 429, a Cloudflare or bot-check interstitial, a soft paywall, a captcha, or an empty JS shell, using a cheapest-first ladder of retry, Wayback and archive.today snapshots, feeds and APIs, a real browser, and user hand-off, with provenance labels. Use when a fetch is blocked; do not use for ordinary scraping that already works or to defeat access controls the user has no right to pass.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "site won't load for the fetch",
+    "got a 429 rate limit",
+    "cloudflare just a moment",
+    "captcha blocking the page",
+    "find an archived copy",
+    "wayback machine copy",
+    "fetch returned 403",
+    "bot detection page",
+    "behind a paywall",
+    "page is blocked"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "403",
+      "429",
+      "paywall",
+      "just a moment",
+      "cloudflare",
+      "bot wall",
+      "bot detection",
+      "captcha",
+      "wayback",
+      "archive today",
+      "archived copy",
+      "access denied"
+    ],
+    "allOf": [
+      [
+        "fetch",
+        "blocked"
+      ],
+      [
+        "page",
+        "blocked"
+      ],
+      [
+        "can t",
+        "fetch"
+      ],
+      [
+        "archived",
+        "copy"
+      ],
+      [
+        "get",
+        "around",
+        "paywall"
+      ]
+    ],
+    "anyOf": [
+      "blocked",
+      "paywall",
+      "captcha",
+      "cloudflare",
+      "archive",
+      "wayback",
+      "interstitial",
+      "rate limit"
+    ],
+    "noneOf": [
+      "my api returns 403",
+      "fix my server",
+      "nginx config",
+      "cors error",
+      "unit test",
+      "write a scraper"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "research",
+    "web",
+    "browser",
+    "recovery"
+  ],
+  "requiredTools": [
+    "web_fetch",
+    "web_search",
+    "browser_automation"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": false,
+    "workspaceWrite": false,
+    "shell": false,
+    "browser": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

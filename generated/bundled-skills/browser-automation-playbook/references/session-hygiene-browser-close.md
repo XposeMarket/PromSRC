@@ -1,4 +1,4 @@
-# Session hygiene — browser_close
+# Session hygiene - browser_close
 
 Migrated from workspace SOUL.md (2026-07-07 soul slim-down).
 
@@ -12,5 +12,5 @@ Keep the browser open when the user asks for follow-up work in the same session.
 
 ## Where else
 
-- **self/04-browser.md** — §9 session records and routing
-- **MEMORY.md** — `operational_rules` (browser_close)
+- **self/04-browser.md** - §9 session records and routing
+- **MEMORY.md** - `operational_rules` (browser_close)

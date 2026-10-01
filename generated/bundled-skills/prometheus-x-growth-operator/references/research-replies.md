@@ -186,3 +186,5 @@ Do not:
 - post generic "this is important" replies
 - use em dashes
 - leave the browser open
+
+Historical replies workflow and blockers from the retired skill are preserved verbatim in [legacy-replies-workflow.md](legacy-replies-workflow.md) and [legacy-replies-blockers.md](legacy-replies-blockers.md). Check current account/browser state rather than assuming historical blocker statuses still apply.

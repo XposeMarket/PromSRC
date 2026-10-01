@@ -5,10 +5,10 @@ Create a standalone HTML report from the final qualified prospect data. Use the 
 ## Generate
 
 ```bash
-python3 scripts/generate_report.py analysis.json outputs/first-customer-finder-report.html
+python skills/first-customer-finder/scripts/generate_report.py analysis.json outputs/first-customer-finder-report.html
 ```
 
-Return a clickable absolute file link in Codex. Keep the JSON in a work or temporary directory unless the user asks for raw data.
+From the workspace root, present the HTML in Prometheus or return its workspace-relative path. Keep the JSON alongside the report when reproducibility matters.
 
 ## JSON schema
 

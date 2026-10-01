@@ -2,19 +2,47 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "independent-fresh-context-review",
   "name": "Independent Fresh-Context Review",
-  "description": "Run a genuinely independent review of completed code, research, designs, plans, or artifacts using a fresh context and structured evidence brief. Use for fresh-session review, adversarial final QA, reasoning-inertia avoidance, or independent verification.",
-  "version": "1.0.0",
+  "description": "Get a genuinely independent second opinion on finished work (code, a report, a plan, a design, research) by handing a written brief to a fresh-context reviewer agent that never saw how the work was produced. Use when the user wants an independent, fresh-eyes, or second-opinion review before shipping. Not for a normal diff review in the current context (code-review) or for acting on review feedback (receiving-code-review).",
+  "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "fresh context review",
-    "independent review session",
-    "adversarial final review",
-    "review without implementation context",
-    "reasoning inertia check",
-    "fresh codex review",
-    "create review brief",
-    "independent verifier"
+    "get an independent review of this",
+    "have a fresh agent review my work",
+    "fresh eyes review before i ship",
+    "second opinion on this report"
   ],
+  "promptSignals": {
+    "phrases": [
+      "independent review",
+      "fresh eyes",
+      "second opinion",
+      "fresh context review",
+      "fresh agent review"
+    ],
+    "allOf": [
+      [
+        "independent",
+        "review"
+      ],
+      [
+        "second",
+        "opinion"
+      ],
+      [
+        "fresh",
+        "review"
+      ]
+    ],
+    "anyOf": [
+      "independent reviewer",
+      "fresh context"
+    ],
+    "noneOf": [
+      "review this diff",
+      "review comments"
+    ],
+    "minScore": 4
+  },
   "categories": [
     "review",
     "quality",
@@ -22,7 +50,7 @@
     "agents"
   ],
   "requiredTools": [
-    "agents_and_teams",
+    "background_ops",
     "workspace_write"
   ],
   "implicitInvocation": true,
@@ -33,6 +61,11 @@
   },
   "resources": [
     {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Routing tests"
+    },
+    {
       "path": "templates/review-brief.md",
       "type": "template",
       "description": "Producer handoff"
@@ -41,11 +74,6 @@
       "path": "templates/review-verdict.md",
       "type": "template",
       "description": "Reviewer verdict"
-    },
-    {
-      "path": "references/trigger-tests.md",
-      "type": "test",
-      "description": "Routing tests"
     }
   ]
 }

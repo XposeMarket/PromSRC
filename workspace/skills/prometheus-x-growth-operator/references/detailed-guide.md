@@ -152,17 +152,17 @@ Never write:
 
 Good:
 
-> Chatbots wait for prompts.  
+> Chatbots wait for prompts.
 > Prometheus opens the app, does the work, remembers what happened, and comes back tomorrow better.
 
 Good:
 
-> The problem with most AI tools is that they stop at the answer.  
+> The problem with most AI tools is that they stop at the answer.
 > Real work starts after the answer: opening apps, checking state, making changes, following up, remembering what happened.
 
 Good:
 
-> I don’t want another tab with a smarter text box.  
+> I don’t want another tab with a smarter text box.
 > I want an assistant that can actually operate the machine.
 
 Bad:

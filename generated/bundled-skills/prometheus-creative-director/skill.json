@@ -1,12 +1,10 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "prometheus-creative-director",
+  "name": "prometheus-creative-director",
+  "description": "Orchestrate complete image, motion-graphics, and video production with Prometheus Creative Mode. Use when the user wants a finished video, promo, explainer, social clip, slideshow, captions, talking-head edit, product launch, music video, generated sequence, or multi-stage creative project and the agent must choose among Creative Mode, HyperFrames, generation, media, timeline, audio, and QA workflows.",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "categories": [
-    "creative",
-    "video",
-    "orchestration"
-  ],
   "triggers": [
     "make a product launch video",
     "build a video in creative mode",
@@ -21,22 +19,33 @@
     "edit this video project",
     "full video production"
   ],
-  "requiredTools": [
-    "creative"
+  "categories": [
+    "creative",
+    "video",
+    "orchestration"
   ],
-  "status": "ready",
+  "requiredTools": [
+    "creative_basic",
+    "creative_image",
+    "creative_video",
+    "creative_hyperframes",
+    "creative_quality"
+  ],
   "implicitInvocation": true,
-  "lifecycle": "active",
-  "health": {
-    "state": "ready",
-    "reason": "Routes Creative Mode and official HyperFrames specialists without broad multi-skill loading.",
-    "verifiedCapabilities": [
-      "creative_tool_routing",
-      "hyperframes_specialist_routing"
-    ],
-    "blockedCapabilities": {},
-    "lastVerified": "2026-07-11"
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
   },
-  "name": "prometheus-creative-director",
-  "description": "Orchestrate complete image, motion-graphics, and video production with Prometheus Creative Mode. Use when the user wants a finished video, promo, explainer, social clip, slideshow, captions, talking-head edit, product launch, music video, generated sequence, or multi-stage creative project and the agent must choose among Creative Mode, HyperFrames, generation, media, timeline, audio, and QA workflows."
+  "resources": [
+    {
+      "path": "agents/openai.yaml",
+      "type": "reference"
+    },
+    {
+      "path": "references/creative-routing.md",
+      "type": "reference"
+    }
+  ]
 }

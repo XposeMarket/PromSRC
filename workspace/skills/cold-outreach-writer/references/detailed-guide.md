@@ -140,7 +140,7 @@ Working on something in this space that [1 sentence on what you do]. Happy to sh
 
 ```
 Day 1  — Email 1: Personalized hook + value prop + low-ask CTA
-Day 3  — Email 2: Different angle. New proof point or pain framing. 
+Day 3  — Email 2: Different angle. New proof point or pain framing.
 Day 7  — Email 3: Content/insight share. No direct pitch.
 Day 14 — Email 4: "Last try" framing. Direct + honest.
 Day 21 — Email 5: Breakup email. Closes loop, sometimes generates replies.
@@ -174,7 +174,7 @@ RULE 5: If they're a 1st connection — reference the connection.
 
 ```
 Message 1 (connection request note or first message):
-"[Name], saw your post on [topic] — [one genuine observation]. 
+"[Name], saw your post on [topic] — [one genuine observation].
 Would love to connect if you're open to it."
 
 Message 2 (after they connect/reply):

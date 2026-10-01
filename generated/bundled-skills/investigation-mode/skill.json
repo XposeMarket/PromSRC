@@ -2,16 +2,16 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "investigation-mode",
   "name": "investigation-mode",
-  "description": "Orchestrated debugging coordinator. Triggers on frustration signals (stuck, hung, broken, waiting) and systematically triages: runtime logs → workflow status → browser verify → deploy/env. Reports findings at every step.",
-  "version": "1.1.0",
+  "description": "Coordinate debugging when a user project, deployed site, API, or workflow is stuck, hung, broken, or not responding: triage runtime logs, workflow status, live browser state, then deploy/env, reporting evidence at each step. Use for 'it's stuck / not loading / broke' reports about apps and sites. Not for Prometheus itself (prometheus-runtime-forensics), failing GitHub checks (github-gh-fix-ci), or a known code bug (root-cause-debugging).",
+  "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [],
   "promptSignals": {
     "phrases": [
       "nothing happened",
       "still waiting",
-      "it's stuck",
-      "it's hung",
+      "it s stuck",
+      "it s hung",
       "nothing is happening",
       "not responding",
       "just sitting there",
@@ -23,7 +23,7 @@
       "check the logs",
       "check logs",
       "where are the logs",
-      "how do I debug",
+      "how do i debug",
       "how to debug",
       "white screen",
       "blank page",
@@ -73,86 +73,209 @@
       "api not responding"
     ],
     "allOf": [
-      ["stuck", "workflow"],
-      ["stuck", "deploy"],
-      ["stuck", "loading"],
-      ["stuck", "build"],
-      ["stuck", "queue"],
-      ["stuck", "job"],
-      ["hung", "request"],
-      ["hung", "api"],
-      ["frozen", "page"],
-      ["frozen", "app"],
-      ["check", "why"],
-      ["check", "broken"],
-      ["check", "error"],
-      ["check", "status"],
-      ["check", "logs"],
-      ["debug", "workflow"],
-      ["debug", "deploy"],
-      ["debug", "api"],
-      ["debug", "issue"],
-      ["investigate", "error"],
-      ["logs", "error"],
-      ["logs", "check"],
-      ["slow", "response"],
-      ["slow", "loading"],
-      ["timeout", "api"],
-      ["timeout", "request"],
-      ["waiting", "response"],
-      ["waiting", "forever"],
-      ["waiting", "deploy"],
-      ["not working", "why"],
-      ["not", "responding"],
-      ["hanging", "for"],
-      ["been", "hanging"],
-      ["been", "stuck"],
-      ["been", "waiting"],
-      ["why", "slow"],
-      ["why", "failing"],
-      ["why", "stuck"],
-      ["why", "hanging"],
-      ["job", "failing"],
-      ["queue", "processing"]
+      [
+        "stuck",
+        "workflow"
+      ],
+      [
+        "stuck",
+        "deploy"
+      ],
+      [
+        "stuck",
+        "loading"
+      ],
+      [
+        "stuck",
+        "build"
+      ],
+      [
+        "stuck",
+        "queue"
+      ],
+      [
+        "stuck",
+        "job"
+      ],
+      [
+        "hung",
+        "request"
+      ],
+      [
+        "hung",
+        "api"
+      ],
+      [
+        "frozen",
+        "page"
+      ],
+      [
+        "frozen",
+        "app"
+      ],
+      [
+        "check",
+        "why"
+      ],
+      [
+        "check",
+        "broken"
+      ],
+      [
+        "check",
+        "error"
+      ],
+      [
+        "check",
+        "status"
+      ],
+      [
+        "check",
+        "logs"
+      ],
+      [
+        "debug",
+        "workflow"
+      ],
+      [
+        "debug",
+        "deploy"
+      ],
+      [
+        "debug",
+        "api"
+      ],
+      [
+        "debug",
+        "issue"
+      ],
+      [
+        "investigate",
+        "error"
+      ],
+      [
+        "logs",
+        "error"
+      ],
+      [
+        "logs",
+        "check"
+      ],
+      [
+        "slow",
+        "response"
+      ],
+      [
+        "slow",
+        "loading"
+      ],
+      [
+        "timeout",
+        "api"
+      ],
+      [
+        "timeout",
+        "request"
+      ],
+      [
+        "waiting",
+        "response"
+      ],
+      [
+        "waiting",
+        "forever"
+      ],
+      [
+        "waiting",
+        "deploy"
+      ],
+      [
+        "not working",
+        "why"
+      ],
+      [
+        "not",
+        "responding"
+      ],
+      [
+        "hanging",
+        "for"
+      ],
+      [
+        "been",
+        "hanging"
+      ],
+      [
+        "been",
+        "stuck"
+      ],
+      [
+        "been",
+        "waiting"
+      ],
+      [
+        "why",
+        "slow"
+      ],
+      [
+        "why",
+        "failing"
+      ],
+      [
+        "why",
+        "stuck"
+      ],
+      [
+        "why",
+        "hanging"
+      ],
+      [
+        "job",
+        "failing"
+      ],
+      [
+        "queue",
+        "processing"
+      ]
     ],
     "anyOf": [
-      "stuck",
-      "hung",
-      "frozen",
-      "broken",
-      "failing",
-      "timeout",
-      "slow",
-      "debug",
-      "investigate",
-      "check",
-      "logs",
-      "error",
-      "hanging",
-      "waiting",
-      "stalled",
-      "pending",
-      "processing",
-      "loading",
-      "unresponsive"
+      "unresponsive",
+      "not responding",
+      "spinning forever",
+      "white screen",
+      "keeps timing out"
     ],
     "noneOf": [
       "css stuck",
       "sticky position",
-      "position: sticky",
-      "z-index",
+      "position sticky",
+      "z index",
       "sticky nav",
       "sticky header",
       "sticky footer",
-      "overflow: hidden",
+      "overflow hidden",
       "add a button",
       "create a button",
-      "style the button"
+      "style the button",
+      "ci is failing",
+      "failing checks",
+      "github actions",
+      "tool failures",
+      "prometheus gateway",
+      "the gateway"
     ],
     "minScore": 4
   },
-  "categories": ["debugging", "incident-response", "operations"],
-  "requiredTools": ["workspace", "shell", "browser", "processes", "agents_and_teams"],
+  "categories": [
+    "debugging",
+    "incident-response",
+    "operations"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "browser_automation"
+  ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -160,8 +283,5 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "implicitInvocation": true,
-  "executionEnabled": true,
-  "lifecycle": "active",
-  "ownership": "prometheus-owned-overlay"
+  "resources": []
 }

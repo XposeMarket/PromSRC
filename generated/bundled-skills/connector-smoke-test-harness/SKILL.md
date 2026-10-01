@@ -9,7 +9,7 @@ Use this skill when validating a connector before Prometheus relies on it.
 
 ## Current State
 
-Status: mostly usable manually; needs a dedicated generic smoke-test tool for 110%.
+Manual smoke testing is available; do not assume a generic `connector_smoke_test` tool exists.
 
 Current support:
 
@@ -38,4 +38,4 @@ Current support:
 
 ## Gap To Implement
 
-Add a generic `connector_smoke_test` tool that consumes canonical connection records, checks transport/tool exposure, runs declared safe reads/dry-runs, and writes a standard report artifact.
+A generic `connector_smoke_test` tool is not currently exposed. To propose one, use the source PR workflow separately. For current tasks, report the manual check evidence without claiming an automated harness ran.

@@ -5,6 +5,8 @@ description: "Draft publishable content in a specific person or brand voice from
 
 # Ghostwriting
 
+For X posts or replies, remove all em dashes from generated copy.
+
 Reproduce communicative patterns without fabricating identity or experience.
 
 1. Gather audience, purpose, format, source facts, voice samples, phrases to avoid, and approval boundary.

@@ -22,13 +22,12 @@ build because user plugins live in `<DATA_DIR>/plugins/`, never in `src/`.
 | Service has a plain REST/HTTP API + a key/token | **REST connector** | manifest + `index.js` |
 | User pasted a plugin URL/repo | **Install from URL** | fetch, validate, install |
 
-Always prefer an MCP preset when an official MCP server exists. The preset must
-contribute to the universal `connection_ops` lifecycle; registration alone is not setup.
+Prefer a trusted, supported MCP preset when its server and auth flow are verified. Check `connection_ops` discovery and integration-admin support; registration alone is not setup.
 Fall back to a REST connector otherwise.
 
 ## Workflow (REST connector)
 
-1. **Research the API.** Use `web_search({ fetch_top_k })` for compact discovery and `web_fetch_batch` for selected docs pages to find: base URL, auth
+1. **Research the API.** Use `web_search({ fetch_top_k })` for compact discovery and `web_fetch({urls:[...]})` for selected docs pages to find: base URL, auth
    scheme (API key header? bearer token?), and the 4–8 most useful endpoints
    (list/get/search/create). Note the exact header name and any prefix.
 2. **Pick an id.** Lowercase, `[a-z0-9_-]`, 1–64 chars, e.g. `airtable`. It must
@@ -50,8 +49,7 @@ Fall back to a REST connector otherwise.
 
 ## Installing (HTTP API)
 
-All endpoints are on the local gateway. Use `terminal`/`run_command` with `curl`,
-or any HTTP tool. Auth uses the gateway token already in this session.
+These endpoints run on the local gateway. Prefer the supported integration-admin tool for installation, or use a bounded authenticated local request when the gateway endpoint and credential are available. Never print a gateway token, and do not infer one is present in this session.
 
 ```
 POST /api/extensions/install
@@ -75,8 +73,7 @@ an `mcpPreset` block, and a `connection` contribution, with **no `indexJs`**. Se
 - One connector = one folder = one id. Keep tool names prefixed with the id
   (`airtable_list_bases`) so they're easy to attribute.
 - Keep each tool's `description` one line, starting with `[ServiceName]`.
-- After install, use `connection_ops` to plan/connect/verify and run a safe real
-  tool. Neither install nor OAuth completion proves readiness.
+- After install, use `connection_ops` to plan/connect/verify, then discover the registered action through `tool_search` and invoke it through `tool_call` for a safe real read. Neither install nor OAuth completion proves readiness.
 - If the user just wants to remove something they added, use the remove endpoint —
   built-in connectors cannot be removed and will error, which is expected.
 
@@ -85,3 +82,4 @@ an `mcpPreset` block, and a `connection` contribution, with **no `indexJs`**. Se
 - `references/manifest-schema.md` — every manifest field, with a full example
 - `references/index-js-pattern.md` — the runtime module contract + worked example
 - `references/mcp-preset.md` — zero-code MCP server connectors
+- `references/connector-recipes.md` - choose a REST, GraphQL, OAuth, API-key, CLI, MCP, memory-source, or webhook implementation recipe.

@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "session-retro",
+  "name": "Session Retro",
+  "description": "Run a retrospective on a finished Prometheus session, task, or schedule run and propose concrete environment fixes: skill corrections, missing automated checks, memory or runbook entries, tool-economy changes, and information-access gaps. Use when the user asks for a retro, post-mortem, lessons learned, or what should change so the next run goes better. Do not use for weekly tool-log audits (tool-failure-audit), live runtime repair (self-repair-protocol), or reviewing a code diff.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "what should we change next time",
+    "lessons learned from this run",
+    "post-mortem on this session",
+    "retro on that task",
+    "run a retrospective",
+    "do a retro"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "do a retro",
+      "run a retrospective",
+      "retro on this session",
+      "post mortem",
+      "lessons learned",
+      "what should we change next time",
+      "what went wrong in that run"
+    ],
+    "allOf": [
+      [
+        "retro",
+        "session"
+      ],
+      [
+        "retro",
+        "run"
+      ],
+      [
+        "lessons",
+        "learned"
+      ],
+      [
+        "went",
+        "wrong",
+        "run"
+      ],
+      [
+        "next",
+        "time",
+        "better"
+      ]
+    ],
+    "anyOf": [
+      "retro",
+      "retrospective",
+      "post mortem",
+      "postmortem",
+      "lessons",
+      "improve",
+      "next time"
+    ],
+    "noneOf": [
+      "tool audit log",
+      "weekly tool failures",
+      "repair yourself",
+      "self repair",
+      "code review",
+      "review this pr",
+      "sprint retro template"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "meta",
+    "skills",
+    "memory",
+    "quality"
+  ],
+  "requiredTools": [
+    "memory",
+    "write_note",
+    "skill_candidate_submit",
+    "ask_prometheus_questions",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

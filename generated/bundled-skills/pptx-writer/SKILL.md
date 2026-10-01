@@ -33,8 +33,11 @@ Do not install packages, download binaries, or silently switch to screenshots. I
 4. Export to the user-requested destination or an `outputs/` directory.
 5. Confirm the final file exists and has nonzero bytes.
 6. Render every slide through the backend proven by preflight.
-7. Inspect the rendered slides for clipping, overflow, overlap, unreadable type, and broken assets. Correct problems and render again.
-8. Report the exact `.pptx` path and any validation limitation.
+7. Extract text from the deck and scan case-insensitively for `lorem`, `ipsum`, `TODO`, `xxx`, and `[insert`; resolve matches before declaring done.
+8. Inspect every rendered slide in order: text overflow and clipping; overlaps and footer collisions; gaps under about 0.3 in and margins under 0.5 in; misaligned columns; low-contrast text/icons; decoration displaced by text wrap; then broken assets and spacing. Correct defects, re-render only changed slides for one or two passes, and disclose any residual limitations.
+9. Report the exact `.pptx` path and any validation limitation.
+
+Prefer Office-safe fonts. LibreOffice can substitute fonts that differ from the target machine; give text boxes extra slack for nonstandard fonts and warn that the target PowerPoint render needs checking. For a consistent palette, see `theme-application`.
 
 For a disposable backend round trip, run:
 

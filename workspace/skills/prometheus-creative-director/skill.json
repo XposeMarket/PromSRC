@@ -25,7 +25,11 @@
     "orchestration"
   ],
   "requiredTools": [
-    "creative"
+    "creative_basic",
+    "creative_image",
+    "creative_video",
+    "creative_hyperframes",
+    "creative_quality"
   ],
   "implicitInvocation": true,
   "permissions": {

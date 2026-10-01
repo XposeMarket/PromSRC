@@ -122,7 +122,7 @@ When editing Prometheus itself:
 | Make directories | `mkdir(path)` |
 | List directories | `list_directory(path, max_depth?, max_entries?)` |
 
-For `src/`, `web-ui/`, or Prometheus root source surfaces, use the source approval route instead of casual workspace edits. For small dev edits, `request_dev_source_edit` normally needs only exact files and a short reason; use a full proposal for broad/risky changes. Never directly mutate `src/` from main chat unless running inside an approved proposal/code-execution context with the source-write tools.
+For `src/`, `web-ui/`, or other Prometheus source, follow `promsrc-pr-worktree`: edit in a linked worktree under <user-home>\promsrc-pr and open a PR, or edit the live checkout directly only when Raul asks for a direct or live-hotfix edit.
 
 ---
 
@@ -418,7 +418,7 @@ For ordinary workspace scripts, use this skill plus extra verification:
 - If behavior changed, run the relevant test/build with `run_command` only after file edits are done.
 - If no targeted test exists, run the narrowest available static check or explain the manual verification performed.
 
-For Prometheus product source under `src/` or `web-ui/`, use source inspection and either approved proposal execution or the dev-only `request_dev_source_edit` fast approval flow. Keep the fast approval lightweight: exact files, short reason, optional concise plan/evidence only when useful. Approval unlocks only scoped source-write tools for the approved chat/session; it does not remove the requirement to inspect, patch minimally, sync/build when relevant, verify, and report.
+For Prometheus product source under `src/` or `web-ui/`, follow `promsrc-pr-worktree`. Its workflow still requires inspecting first, patching minimally, syncing/building when relevant, verifying, and reporting.
 
 If creating a new module:
 

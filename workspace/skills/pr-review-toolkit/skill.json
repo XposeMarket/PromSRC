@@ -6,24 +6,92 @@
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "run a deep PR review",
-    "review this PR with all lenses",
-    "hunt silent failures",
+    "review this pr with all lenses",
+    "run a deep pr review",
+    "run the pr review toolkit",
     "review the type design",
-    "review PR comments",
     "simplify this pull request",
-    "run the PR review toolkit"
+    "hunt silent failures",
+    "review pr comments",
+    "analyze pr tests"
   ],
   "promptSignals": {
-    "phrases": ["run a deep PR review", "review this PR with all lenses", "hunt silent failures", "review the type design", "review PR comments", "run the PR review toolkit"],
-    "allOf": [["deep", "pr", "review"], ["pr", "review", "tests"], ["silent", "failures"], ["type", "design"], ["pr", "comments"], ["simplify", "pull", "request"], ["review", "all", "lenses"]],
-    "anyOf": ["PR review toolkit", "silent failures", "type design", "PR tests", "PR comments", "simplify pull request", "review lenses"],
-    "noneOf": ["review one function", "unit test only", "write a PR description", "create a pull request"],
+    "phrases": [
+      "run a deep pr review",
+      "review this pr with all lenses",
+      "analyze pr tests",
+      "hunt silent failures",
+      "review the type design",
+      "review pr comments",
+      "run the pr review toolkit"
+    ],
+    "allOf": [
+      [
+        "deep",
+        "pr",
+        "review"
+      ],
+      [
+        "pr",
+        "review",
+        "tests"
+      ],
+      [
+        "silent",
+        "failures"
+      ],
+      [
+        "type",
+        "design"
+      ],
+      [
+        "pr",
+        "comments"
+      ],
+      [
+        "simplify",
+        "pull",
+        "request"
+      ],
+      [
+        "review",
+        "all",
+        "lenses"
+      ]
+    ],
+    "anyOf": [
+      "pr review toolkit",
+      "silent failures",
+      "type design",
+      "pr tests",
+      "pr comments",
+      "simplify pull request",
+      "review lenses"
+    ],
+    "noneOf": [
+      "review one function",
+      "unit test only",
+      "write a pr description",
+      "create a pull request"
+    ],
     "minScore": 6
   },
-  "categories": ["review", "pull-request", "quality", "testing"],
-  "requiredTools": ["workspace", "shell", "agents_and_teams"],
-  "permissions": {"workspaceRead": true, "workspaceWrite": false, "shell": true, "externalSideEffects": false},
+  "categories": [
+    "review",
+    "pull-request",
+    "quality",
+    "testing"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "agents_and_teams"
+  ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": []
 }

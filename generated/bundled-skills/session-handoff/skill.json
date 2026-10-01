@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "session-handoff",
+  "name": "Session Handoff",
+  "description": "Write a HANDOFF briefing that lets a fresh Prometheus session, background agent, or peer thread continue current work without the degraded context: goal, current state, files in play, failed attempts and why, best theory, ordered next steps, constraints, memory pointers, and suggested skills. Use when the user says handoff, start fresh, I'll pick this up later, or the session is looping on the same failed fix. Do not use for reusable project briefing packs (context-pack-builder) or ordinary end-of-task summaries.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hand this off to a new session",
+    "start fresh in a new session",
+    "pick this up later",
+    "generate a handoff",
+    "write a handoff",
+    "handoff doc"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "write a handoff",
+      "generate a handoff",
+      "handoff doc",
+      "handoff md",
+      "start fresh",
+      "pick this up later",
+      "continue in a new session"
+    ],
+    "allOf": [
+      [
+        "handoff",
+        "write"
+      ],
+      [
+        "handoff",
+        "session"
+      ],
+      [
+        "start",
+        "fresh"
+      ],
+      [
+        "new",
+        "session",
+        "continue"
+      ],
+      [
+        "pick",
+        "up",
+        "later"
+      ]
+    ],
+    "anyOf": [
+      "handoff",
+      "hand off",
+      "fresh session",
+      "new session",
+      "resume later",
+      "continue later"
+    ],
+    "noneOf": [
+      "context pack",
+      "briefing pack",
+      "team handoff contract",
+      "delegate to",
+      "spawn an agent"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "meta",
+    "memory",
+    "workflow",
+    "agents"
+  ],
+  "requiredTools": [
+    "memory",
+    "write_note",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

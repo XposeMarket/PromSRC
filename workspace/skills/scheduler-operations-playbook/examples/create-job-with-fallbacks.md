@@ -6,7 +6,7 @@ Example of creating a robust scheduled job with full fallback behavior based on 
 
 Creating scheduled jobs that gracefully handle:
 - API token failures
-- External service outages  
+- External service outages
 - Browser auth issues
 - Confirm gate blockers
 
@@ -17,7 +17,7 @@ Creating scheduled jobs that gracefully handle:
 ```javascript
 {
   "action": "create",
-  "name": "prometheus-x-research-replies", 
+  "name": "prometheus-x-research-replies",
   "confirm": true,
   "schedule": {
     "kind": "recurring",
@@ -25,7 +25,7 @@ Creating scheduled jobs that gracefully handle:
   },
   "instruction_prompt": `Run the X research & replies workflow every time this job fires:
 
-1. Read the skill "prometheus-x-research-replies" first using skill_read("prometheus-x-research-replies").
+1. Read skill_read("prometheus-x-growth-operator") and its references/research-replies.md first.
 2. Read workspace/prometheus-x-posts-memory.md first using read_file to avoid duplicates and understand prior posts.
 
 3. RESEARCH PHASE - Try in order, use first one that succeeds:
@@ -58,14 +58,14 @@ SUCCESS: Real replies posted or high-quality drafts saved with thread URLs.`,
 {
   "action": "create",
   "name": "prometheus-x-posts",
-  "confirm": true, 
+  "confirm": true,
   "schedule": {
     "kind": "recurring",
     "cron": "0 */3 * * *"
   },
   "instruction_prompt": `Run the X posting workflow every time this job fires:
 
-1. Read skill "prometheus-x-posts-workflow" using skill_read("prometheus-x-posts-workflow").
+1. Read skill_read("prometheus-x-growth-operator") and its references/scheduled-posting.md.
 2. Read workspace/prometheus-x-posts-memory.md using read_file to check prior posts and avoid duplicates.
 3. Generate one original, human-tone post grounded in Prometheus product updates, AI agent memory themes, or dev insights.
 4. CRITICAL: Do NOT use em dashes (—). Use periods, commas, colons, or hyphens instead.
@@ -90,7 +90,7 @@ SUCCESS: Real tweet posted or draft saved for manual posting.`,
 - Secondary: Browser automation (most reliable)
 - Tertiary: File logging/draft mode (always works)
 
-### Error Resilience 
+### Error Resilience
 - Each phase has explicit failure handling
 - No silent failures or hanging operations
 - Clear success criteria at each level
@@ -109,7 +109,7 @@ SUCCESS: Real tweet posted or draft saved for manual posting.`,
 
 ### Subagent Assignment Problem
 ```javascript
-// WRONG - Creates isolated subagent 
+// WRONG - Creates isolated subagent
 {
   "action": "create",
   "subagent_id": "some_agent"  // Don't do this
@@ -126,7 +126,7 @@ SUCCESS: Real tweet posted or draft saved for manual posting.`,
 // BAD - Single point of failure
 "Try x_search to post to X"
 
-// GOOD - Graceful degradation  
+// GOOD - Graceful degradation
 "Try x_search → browser automation → draft file fallback"
 ```
 

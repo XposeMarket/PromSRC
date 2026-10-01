@@ -84,11 +84,10 @@ After editing a WAAPI composition:
 
 ```bash
 npx hyperframes lint
-npx hyperframes validate
 ```
 
 ## Credits And References
 
-- HyperFrames adapter source: `packages/core/src/runtime/adapters/waapi.ts`.
+- HyperFrames WAAPI adapter is provided by the `hyperframes` package runtime (exact source path varies by version; verify against the installed package rather than a hardcoded path).
 - MDN Web Animations API guide: https://developer.mozilla.org/docs/Web/API/Web_Animations_API/Using_the_Web_Animations_API
 - MDN `Animation.currentTime`: https://developer.mozilla.org/en-US/docs/Web/API/Animation/currentTime

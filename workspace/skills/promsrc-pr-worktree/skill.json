@@ -1,40 +1,46 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "entrypoint": "SKILL.md",
+  "id": "promsrc-pr-worktree",
   "name": "PromSRC PR Worktree Workflow",
-  "description": "Raul's mandatory workflow for changing Prometheus source via an isolated Git linked worktree under C:\\Users\\rafel\\promsrc-pr, opening a PR through the GitHub connector, and only pulling/restarting the live PromSRC checkout after he approves the merge.",
-  "version": "1.0.0",
-  "lifecycle": "active",
-  "implicitInvocation": true,
-  "categories": [
-    "prometheus",
-    "coding",
-    "git",
-    "workflow"
-  ],
-  "requiredTools": [
-    "terminal",
-    "workspace_write",
-    "external_apps"
-  ],
+  "description": "Raul's mandatory workflow for any Prometheus source change: linked worktree under C:\\Users\\rafel\\promsrc-pr, regression + tsc + sync:web-ui, PR via GitHub connector (pr_number), merge only on explicit ask, then pull/build/restart live PromSRC with the right restart scope and verify on the real device. Includes the live-hotfix mode and worktree cleanup.",
+  "version": "1.2.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
   "promptSignals": {
     "phrases": [
       "promsrc pr",
       "prometheus pr",
       "pr worktree",
       "promsrc worktree",
-      "open a pr for prometheus",
-      "create a pr for prometheus",
       "pr for prometheus",
       "fix prometheus source",
       "edit prometheus source",
       "change prometheus source",
       "prometheus fix pr",
-      "promsrc-pr",
       "git worktree",
       "linked worktree",
-      "promsrc"
+      "promsrc",
+      "merge it",
+      "merge the pr",
+      "pull and restart",
+      "restart the gateway",
+      "ship it",
+      "edit live",
+      "clean up worktrees",
+      "prometheus src",
+      "prometheus source",
+      "src change",
+      "fix prometheus",
+      "prometheus bug",
+      "change the mobile app",
+      "fix the app",
+      "fix your ui",
+      "gateway route fix",
+      "change your source",
+      "open a promsrc pr",
+      "prometheus source pr"
     ],
+    "allOf": [],
     "anyOf": [
       "live checkout",
       "gateway restart",
@@ -43,8 +49,36 @@
       "fix pr"
     ],
     "noneOf": [
-      "github actions"
+      "github actions",
+      "review this diff",
+      "review this pr",
+      "before i merge",
+      "my website repo"
     ],
     "minScore": 4
-  }
+  },
+  "categories": [
+    "prometheus",
+    "coding",
+    "git",
+    "workflow"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "external_apps",
+    "connector_github"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/example-runtime-to-tool-category-pr.md",
+      "type": "reference"
+    }
+  ]
 }

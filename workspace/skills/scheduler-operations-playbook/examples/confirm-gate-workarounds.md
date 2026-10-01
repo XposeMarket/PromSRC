@@ -22,7 +22,7 @@ This happens even when `confirm: true` is already in the request.
 - Sonnet 4.6 tends to bypass gates more reliably
 - Switch models if gates persist: `set_current_model("anthropic/claude-sonnet-4-20250514")`
 
-### 2. Session State Issues  
+### 2. Session State Issues
 - Previous failed attempts may leave gate state dirty
 - Delete the job first if it exists in broken state
 - Fresh session may clear gate artifacts
@@ -41,18 +41,18 @@ set_current_model("anthropic/claude-sonnet-4-20250514", "bypassing confirm gate 
 
 // Then create job
 schedule_job({
-  "action": "create", 
+  "action": "create",
   "confirm": true,
   // ... rest of config
 })
 ```
 
 ### Strategy 2: Clean Slate Approach
-```javascript  
+```javascript
 // Delete any broken job remnants
 schedule_job({
   "action": "delete",
-  "job_id": "problem_job_name", 
+  "job_id": "problem_job_name",
   "confirm": true
 })
 
@@ -74,9 +74,9 @@ schedule_job({
   "confirm": true
 }
 
-// RIGHT - Main Prometheus assignment (default)  
+// RIGHT - Main Prometheus assignment (default)
 {
-  "action": "create", 
+  "action": "create",
   // No subagent_id = assigns to main
   "confirm": true,
   "delivery": {"channel": "web"}
@@ -85,7 +85,7 @@ schedule_job({
 
 ### Strategy 4: UI Fallback
 When API gates persist:
-1. Note the exact prompt and config 
+1. Note the exact prompt and config
 2. Tell user to create manually in Automations panel
 3. Provide the exact prompt text to paste
 
@@ -98,7 +98,7 @@ When API gates persist:
 
 ### Never Assume
 - That confirm=true alone will work
-- That previous session job assignments are still valid  
+- That previous session job assignments are still valid
 - That all models handle gates identically
 
 ### Test Pattern
@@ -110,7 +110,7 @@ When API gates persist:
 ## Detection
 Watch for this exact error pattern:
 - `"success": false`
-- `"needs_confirmation": true` 
+- `"needs_confirmation": true`
 - `"message": "Action \"create\" requires explicit confirmation"`
 
 When you see this despite having `confirm: true`, it's a gate/session/model issue, not a user permission issue.

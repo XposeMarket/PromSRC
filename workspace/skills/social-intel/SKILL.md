@@ -1,17 +1,19 @@
 ---
 name: "social-intel"
-description: "Use only when the user explicitly requests social-profile, competitor-account, engagement-pattern, content-opportunity, or cross-platform growth analysis and actionable coaching."
+description: "Analyze a named social account's public or connected analytics and suggest evidence-backed growth actions. Use for profile and content-performance analysis; use x-growth-engine for @Raulinvests team drafting and prometheus-x-growth-operator for the separate Prometheus-owned account workflow."
 ---
 
 # Social Media Intelligence
 
-Use this playbook for requested social analysis and actionable growth coaching across one account, a competitor, or several platforms.
+If an analysis includes draft X posts or replies, remove all em dashes from generated X copy.
+
+Ground account analysis in observed public or connected metrics, not generic posting advice.
 
 ---
 
 ## Tool
 
-`social_intel(platform, handle, mode?, competitor?)`
+Load `social_intelligence` with `request_tool_category`, then call `social_intel` if available. Confirm the current schema before passing options; unsupported platforms or private metrics require an authenticated integration. `social_intel(platform, handle, mode?, competitor?)`
 
 - **platform**: `instagram` | `tiktok` | `x` | `twitter` | `linkedin` | `facebook`
 - **handle**: with or without `@`
@@ -50,8 +52,8 @@ Synthesize into a cross-platform report covering:
 
 ## Connecting Official APIs (for full analytics)
 
-Without an API token, Prom uses public scraping (follower count, bio, post grid only).
-With an API token, Prom gets: every post's likes/comments/saves/reach/impressions/watch time.
+Without a connected API, only publicly visible information may be available; report actual tool coverage and missing metrics rather than assume scraping succeeds.
+With an authorized connected API, private per-post metrics may become available subject to granted scopes and platform permissions. Never promise reach, impressions, saves, or watch time without observing them.
 
 ### Instagram
 1. Go to developers.facebook.com → Create App → Instagram Graph API

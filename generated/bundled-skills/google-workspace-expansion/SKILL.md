@@ -9,7 +9,7 @@ Use this skill when adding or extending Google Workspace capabilities in Prometh
 
 ## Prometheus Fit
 
-Build this as connector coverage, not browser automation. Prometheus should authenticate through its Connections panel and vault, then expose typed tools for Gmail, Drive, Calendar, Docs, Sheets, and Contacts.
+Built-in `gmail` and `google_drive` connectors ship; Calendar, Docs, Sheets, and Contacts do not ship in the bundled connector directory. Inspect `connector_list` and `tool_search` for the actual connected account and exposed actions first. Do not claim the missing services are already connected.
 
 ## Connector Scope
 
@@ -34,9 +34,9 @@ Prefer these tool groups:
 
 ## Implementation Route
 
-1. Inspect existing Prometheus Google/Gmail/Drive tools and avoid duplicate names.
-2. Use `connector-builder` to create or extend a data-dir connector.
-3. Put credentials behind Connections/vault access.
+1. Check `connector_list`, then `tool_search` and `tool_describe` for Gmail/Drive and any installed Calendar/Docs/Sheets/Contacts tools. Operate existing tools with `tool_call` and verify a safe read first.
+2. For missing services, use `integration-setup` to discover a supported MCP route. If none exists and the user wants implementation, use `connector-builder` for a separate data-dir connector, not an assumed extension of a bundled tool.
+3. Put credentials behind Connections/vault access and validate the actual granted scopes.
 4. Add pagination handling for list/search tools.
 5. Add smoke tests using mocked API responses first; live tests should be opt-in.
 

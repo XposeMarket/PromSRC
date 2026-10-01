@@ -4,7 +4,7 @@
 // …). Workflows do NOT vendor a copy: they write a neutral `audio_request.json`
 // (a tiny per-workflow adapter maps their storyboard/scenes into it) and call:
 //
-//   node <MEDIA_DIR>/scripts/audio.mjs --request ./audio_request.json --hyperframes . --out ./audio_meta.json
+//   node <MEDIA_DIR>/audio/scripts/audio.mjs --request ./audio_request.json --hyperframes . --out ./audio_meta.json
 //
 // The three capabilities degrade on ONE switch — whether HeyGen is configured
 // (credential present, NOT the CLI). This mirrors the table in ../SKILL.md:

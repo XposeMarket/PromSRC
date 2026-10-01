@@ -1,124 +1,108 @@
 ---
 name: PromSRC PR Worktree Workflow
-description: Raul's mandatory workflow for making any Prometheus source change via an isolated Git linked worktree under C:\Users\rafel\promsrc-pr, opening a PR through the GitHub connector, and only pulling/restarting the live checkout after he approves the merge. Use for every PromSRC code change, bug fix, or feature PR.
+description: Raul's mandatory workflow for any Prometheus source change - isolated linked worktree under C:\Users\rafel\promsrc-pr, validate, PR via GitHub connector, merge only on explicit ask, then pull/build/restart the live PromSRC checkout and verify on the real surface (phone/desktop). Use for every PromSRC code change, bug fix, feature PR, live hotfix, merge, or post-merge restart.
 ---
 
 # PromSRC PR Worktree Workflow
 
-Prometheus source work never happens in the live checkout. This is a hard rule, not a
-preference: the live gateway runs from `C:\Users\rafel\PromSRC`, and editing it directly
-can break the running app mid-session.
+Live gateway runs from `C:\Users\rafel\PromSRC`. Repo: `XposeMarket/PromSRC` (owner `XposeMarket`, NOT raulreyes2). PR work happens in `C:\Users\rafel\promsrc-pr\<slug>`.
 
-## Non-negotiable invariants
+## Invariants
 
-1. **Live gateway + main checkout:** `C:\Users\rafel\PromSRC` — read it, build from it,
-   restart it. Never author PR work in it.
-2. **Every PR gets its own linked worktree:** `C:\Users\rafel\promsrc-pr\<pr-or-task-slug>`.
-3. **Never self-merge.** Stop after opening the PR and wait for Raul's explicit approval.
-   Astra (Codex) reviews and merges Prom-created PRs.
-4. **`gh` CLI does not exist on this machine.** All GitHub API/PR operations go through the
-   GitHub connector tools. Local git (worktree, branch, commit, push) uses normal git.
+1. Default: never author PR work in the live checkout.
+   **Exception, live-hotfix mode:** when Raul says "edit live -> restart -> verify" (he did this repeatedly 9/25), edit PromSRC directly, build, restart, verify, THEN move the diff into a worktree PR. Write a note listing the uncommitted live files so nothing is lost.
+2. **Merge only when Raul explicitly says so in the current conversation** ("merge it", "ship it", "yes merge"). Otherwise stop after opening the PR. Never merge on implied approval.
+3. No `gh` CLI. GitHub = connector via `tool_search` -> `tool_call` (`connector_github_create_pr`, `_get_pr`, `_merge_pr`, `_list_prs`). Use **`pr_number`** (not `pull_number`).
+4. Stage explicit paths. Never `git add -A` (PromSRC has generated/, artifacts/, .cache churn).
 
-## Procedure
+## 1. Inspect real state (one batched call)
 
-### 1. Inspect real state first
+```powershell
+# cwd C:\Users\rafel\PromSRC
+git status --short | Select -First 30; git log --oneline -3; git fetch origin -q; git log origin/main --oneline -1; git worktree list | Measure-Object | % Count
+```
+Uncommitted live edits from another session? Leave them alone and note them. If one of them overlaps your fix, diff it (`git diff -- <file>`) before duplicating work.
 
-Never create or switch a worktree blind. Confirm what actually exists:
+## 2. Worktree
 
-```bash
-git -C C:\Users\rafel\PromSRC status -sb
-git -C C:\Users\rafel\PromSRC worktree list
-git -C C:\Users\rafel\PromSRC branch -a --sort=-committerdate
+```powershell
+git worktree add -b fix/<slug> C:\Users\rafel\promsrc-pr\<slug> origin/main
+# new worktree has no node_modules - junction the live one (seconds, no install):
+cmd /c mklink /J C:\Users\rafel\promsrc-pr\<slug>\node_modules C:\Users\rafel\PromSRC\node_modules
+```
+Before reusing an existing worktree, verify its branch + dirty state first.
+
+## 3. Edit canonical source
+
+`src/` and `web-ui/src/`, never `dist/` or `generated/`. Keep scope tight. Rejected work (Liquid Glass, the "Use your Chrome" approval-card redesign) stays out.
+
+## 4. Validate (in the worktree)
+
+- Add or extend a `*.regression.ts` that reproduces the actual failure (use the exact bad input from `tool_audit.log`). Add an npm script `test:<name>`.
+- `npx tsx src/.../<name>.regression.ts` (no build needed)
+- `npx tsc --noEmit -p tsconfig.json` (use workspace_run start + wait)
+- Web UI touched? `npm run sync:web-ui` is REQUIRED before build or the generated bundle ships stale (missed repeatedly on 9/22-23).
+- Known baseline: ~52 unrelated test scripts already fail on main. Compare against main, don't chase them.
+
+## 5. Commit + push + PR
+
+```powershell
+git add <explicit paths>; git commit -q -m "<imperative summary>"; git push -u origin fix/<slug> 2>&1 | Select -Last 3
+```
+PR body: root cause (with log evidence: timestamps, counts), fix, validation output, blast radius.
+
+## 6. STOP. Report the PR number + URL.
+
+## 7. Merge (only on explicit ask)
+
+`tool_call connector_github_merge_pr {owner:"XposeMarket", repo:"PromSRC", pr_number:N, merge_method:"squash"}`. Then `connector_github_get_pr` and confirm merged + sha.
+
+## 8. Pull, build, restart, VERIFY ON THE REAL SURFACE
+
+```powershell
+# cwd C:\Users\rafel\PromSRC
+git pull --ff-only origin main 2>&1 | Select -Last 3; git log --oneline -1
+npm run sync:web-ui   # if web-ui changed
+npm run build 2>&1 | Select -Last 15
 ```
 
-Preserve unrelated dirty files. If a worktree for this task already exists, verify its
-branch and uncommitted state before reusing it. Do **not** pull into, reset, clean, delete,
-or reuse a PR worktree until that verification is done.
+**Pick the restart scope:**
+| Changed | Needed |
+|---|---|
+| backend `src/**` | gateway restart |
+| `web-ui/**`, mobile JS/CSS | sync:web-ui + build; phone needs a reload (the service worker updates as of #415/#416) |
+| Electron main / preload / packaging | full app relaunch (a gateway restart is NOT enough; #428 was falsely called PASS) |
+| skills / workspace files | nothing |
 
-### 2. Create the linked worktree
+**Prove the live process is new.** The gateway PID's start time must be later than the build's `dist` mtime. On 9/20-21 restart tests ran against a gateway still on the old build twice.
 
-```bash
-git -C C:\Users\rafel\PromSRC fetch origin
-git -C C:\Users\rafel\PromSRC worktree add -b <branch-name> C:\Users\rafel\promsrc-pr\<slug> origin/main
+```powershell
+(Get-Item dist\gateway\server.js).LastWriteTime; Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ? CommandLine -match 'gateway' | Select ProcessId,CreationDate
 ```
 
-Branch off `origin/main`, not off a stale local main.
+**Verify where Raul sees it.** Server-side PASS does not count as PASS for UI/mobile/restart behavior. #389 passed on the server and failed on the phone. Use a screenshot, the phone, or an actual tool call that exercised the fix, and quote the evidence. If you can't verify on the device, say "unverified on device", not PASS.
 
-### 3. Edit canonical source only
+## 9. Cleanup (after a verified merge)
 
-Work inside the worktree. Edit `src/`, never `dist/`. Use native workspace edit tools.
-Keep the change scoped to the task — unrelated or explicitly rejected work (for example
-broken Liquid Glass changes) stays out.
-
-### 4. Validate before committing
-
-Run the real checks in the worktree, not the live checkout:
-
-```bash
-npm run build
-node dist/<path>/<relevant>.regression.js
+```powershell
+git worktree remove C:\Users\rafel\promsrc-pr\<slug>; git branch -d fix/<slug>; git worktree prune
 ```
+Periodic sweep (61 worktrees on 9/25): list them, check each branch with `git branch --merged origin/main`, and remove only the merged ones with a clean status. Never force-remove a dirty worktree.
 
-If the change touches routing/skills/tools, run the matching regression file and paste the
-pass output as evidence.
+## Direct-edit exception
 
-### 5. Commit only task files
+Outside live-hotfix mode, a direct edit in `C:\Users\rafel\PromSRC` is allowed only when Raul explicitly asks for a direct local edit. Still inspect state, preserve dirty work, edit canonical source, validate, and report evidence. The old `request_dev_source_edit` / `prom_apply_dev_changes` proposal ceremony is not part of this workflow.
 
-```bash
-git -C C:\Users\rafel\promsrc-pr\<slug> status -sb
-git -C C:\Users\rafel\promsrc-pr\<slug> add <explicit paths>
-git -C C:\Users\rafel\promsrc-pr\<slug> commit -m "<imperative summary>"
-git -C C:\Users\rafel\promsrc-pr\<slug> push -u origin <branch-name>
-```
+## Worktree safety
 
-Stage explicit paths. Never `git add -A` in a worktree that may contain unrelated churn.
+- Before creating, reusing, or removing a worktree: `git worktree list --porcelain`, `git status --short`, and the branch. Never delete a dirty worktree, reuse an unknown path, or pull/reset/clean a PR worktree to resolve unrelated state.
+- Never `git add .`, `git commit -a`, `git clean`, or `git reset --hard` as a convenience.
+- A worked example of a larger change (runtime tool moved into a tool category) is in `references/example-runtime-to-tool-category-pr.md`.
 
-### 6. Open the PR via connector
+## Completion report
 
-```
-connector_github_create_pr(owner, repo, title, head:"<branch-name>", base:"main", body)
-```
-
-Body should state: root cause, the fix, validation evidence, and blast radius.
-
-### 7. STOP
-
-Report the PR number and URL. Do not merge. Wait for Raul.
-
-### 8. After Raul confirms merge
-
-Only then, and only into the live checkout:
-
-```bash
-git -C C:\Users\rafel\PromSRC pull origin main
-git -C C:\Users\rafel\PromSRC log --oneline -3
-npm run build   # in PromSRC
-```
-
-Restart the gateway from the updated PromSRC, run the exact feature/build checks the PR
-claimed to fix, and report pull + restart + verification results explicitly.
+Separate **Changed** (worktree, branch, files, PR), **Verified** (commands and output, on-device evidence), and **Not verified** (and why). A commit, a PR, or a restart on its own never proves the feature works.
 
 ## Auto-PR rule
 
-When you hit a genuine error or fault in Prometheus tools/runtime during normal work —
-not user error, not transient network — open a fix PR immediately via this workflow
-without waiting to be asked.
-
-## Cleanup
-
-Only after the branch is merged and verified:
-
-```bash
-git -C C:\Users\rafel\PromSRC worktree remove C:\Users\rafel\promsrc-pr\<slug>
-git -C C:\Users\rafel\PromSRC worktree prune
-```
-
-Never remove a worktree with unverified uncommitted state.
-
-## Common failure modes
-
-- **Editing PromSRC directly** — breaks the running gateway. Always use the worktree.
-- **Reaching for `gh`** — not installed. Use the GitHub connector.
-- **Branching off stale local main** — fetch first, branch from `origin/main`.
-- **Self-merging** — Astra merges, not Prom.
-- **Verifying in the wrong checkout** — build/test in the worktree pre-merge, in PromSRC post-merge.
+A genuine Prometheus tool/runtime fault during normal work (not user error, not a transient network blip) means opening a fix PR through this workflow unprompted. Find the failing call in `tool_audit.log` first: `rg -n 'FAIL <tool>' tool_audit.log | Select -Last 10`.
