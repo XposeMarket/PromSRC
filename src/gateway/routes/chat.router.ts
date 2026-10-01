@@ -21,6 +21,7 @@ import { goalReminderForTool } from '../chat/goal-reminder';
 import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
+import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
@@ -7265,6 +7266,30 @@ RULES:
     let responseIncompleteCause: string | undefined;
     let isGrokGeneration = false;
     let grokGreetingLikeTurn = false;
+    let streamedVisibleText = '';
+    let lastPartialText = '';
+    const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
+      const opts = { reason, cause, partialText, userRequest: message };
+      const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
+      if (abortSignal?.aborted || skipModel) return deterministic;
+      const causeLabel = describeTurnCutoffCause(reason, cause);
+      sendSSE('info', { message: `Turn was cut off (${causeLabel}); writing a status summary from saved tool results.` });
+      let route: ReturnType<typeof resolveProviderModelOverride> | TurnRouteSnapshot;
+      try { route = activeGenerationRouteSnapshot || resolveProviderModelOverride(); }
+      catch { return deterministic; }
+      const summary = await attemptModelDigest(allToolResults, {
+        ...opts,
+        abortSignal: abortSignal?.signal,
+        providerCall: (digestMessages, digestOptions) => ollama.chatWithThinking(digestMessages, 'executor', {
+          ...digestOptions,
+          model: route.model,
+          provider: route.provider,
+          temperature: 0.2,
+          think: false,
+        }),
+      });
+      return summary && !abortSignal?.aborted ? `${summary}\n\nTurn cut off: ${causeLabel}.` : deterministic;
+    };
     try {
       // In multi-agent mode, disable thinking for browser ops â€” the secondary AI
       // holds all context and issues exact directives; the primary just executes.
@@ -7299,7 +7324,7 @@ RULES:
 	            : (activeProviderForThinking === 'openai_codex' && !isActiveAutomationOp ? undefined : false));
         isGrokGeneration = isGrokGenerationOverride(generationOverride);
         grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
-        let streamedVisibleText = '';
+        streamedVisibleText = '';
         let suppressRunawayStream = false;
         let providerRequestStartedAt = 0;
         let providerPassFirstEventAt = 0;
@@ -7336,6 +7361,7 @@ RULES:
               providerTtftMs,
             });
           }
+          lastPartialText = (lastPartialText + text).slice(-2_000);
           if (isGrokGeneration) {
             streamedVisibleText += text;
             // Degenerate filler: Grok occasionally keeps emitting spaces/zero-width
@@ -7866,7 +7892,9 @@ RULES:
       if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
         return {
           type: 'chat',
-          text: 'No final response was generated. Please retry.',
+          text: preservedToolResults && !abortSignal?.aborted
+            ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
+            : 'No final response was generated. Please retry.',
           thinking: preservedThinking,
           reasoningSummary: preservedReasoningSummary,
           toolResults: preservedToolResults,
@@ -7874,7 +7902,11 @@ RULES:
       }
       return {
         type: 'chat',
-        text: presentProviderCallFailure(err),
+        text: preservedToolResults && !abortSignal?.aborted
+          ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
+            isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
+            || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
+          : presentProviderCallFailure(err),
         thinking: preservedThinking,
         reasoningSummary: preservedReasoningSummary,
         toolResults: preservedToolResults,
@@ -7900,13 +7932,7 @@ RULES:
     if (recovery.action === 'exhausted') {
       return {
         type: 'execute',
-        text: recovery.reason === 'max_tokens'
-          ? 'The model hit its output token limit repeatedly, possibly while generating a large tool call. The task is unfinished; completed tool results have been saved.'
-          : recovery.reason === 'incomplete_stream'
-            ? (recovery.cause === 'invalid_tool_json' || recovery.cause === 'tool_block_unterminated'
-              ? 'The model repeatedly produced tool calls with broken or truncated arguments, so they were not run. The task is unfinished; completed tool results have been saved.'
-              : `The model response stream ended before completion repeatedly (${recovery.cause || 'connection or idle timeout'}). The task is unfinished; completed tool results have been saved.`)
-            : `The model repeatedly returned an empty response (${recovery.reason}). The task is unfinished; completed tool results have been saved.`,
+        text: await finishDegradedTurn(recovery.reason, recovery.cause, response?.content || lastPartialText),
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length ? allToolResults : undefined,
       };
