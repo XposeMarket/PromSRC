@@ -36,5 +36,10 @@
     "shell": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [
+    {
+      "path": "references/supervised-fresh-review-modes.md",
+      "type": "doc"
+    }
+  ]
 }

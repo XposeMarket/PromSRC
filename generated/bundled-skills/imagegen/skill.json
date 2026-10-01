@@ -47,6 +47,10 @@
       "path": "references/prompting.md",
       "type": "doc",
       "description": "Prompt structures, reference-role guidance, edit invariants, and iteration patterns."
+    },
+    {
+      "path": "references/provider-recovery.md",
+      "type": "doc"
     }
   ]
 }

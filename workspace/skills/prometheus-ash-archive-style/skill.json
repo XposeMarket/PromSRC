@@ -53,6 +53,14 @@
       "path": "templates/hyperframes-brief.md",
       "type": "template",
       "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
+    },
+    {
+      "path": "palettes/prometheus-one.md",
+      "type": "doc"
+    },
+    {
+      "path": "templates/prometheus-one-brief.md",
+      "type": "template"
     }
   ]
 }

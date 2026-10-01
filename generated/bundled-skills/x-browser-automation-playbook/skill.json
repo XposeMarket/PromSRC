@@ -102,6 +102,10 @@
       "path": "references/workflows/x-browser-automation-playbook.md",
       "type": "doc",
       "description": "Add workflow recipe to x-browser-automation-playbook"
+    },
+    {
+      "path": "references/workflows/x-bookmarks-corpus-audit.md",
+      "type": "doc"
     }
   ]
 }

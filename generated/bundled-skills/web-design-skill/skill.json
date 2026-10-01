@@ -53,6 +53,10 @@
     {
       "path": "references/html-template.html",
       "type": "reference"
+    },
+    {
+      "path": "references/section-visual-system-and-restraint.md",
+      "type": "doc"
     }
   ]
 }

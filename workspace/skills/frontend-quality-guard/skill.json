@@ -89,6 +89,10 @@
     {
       "path": "scripts/frontend_static_audit.py",
       "type": "script"
+    },
+    {
+      "path": "references/anti-slop-and-visual-evidence.md",
+      "type": "doc"
     }
   ]
 }
