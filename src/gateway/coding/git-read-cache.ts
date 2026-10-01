@@ -64,19 +64,96 @@ export function cachedGitRead(
   const hit = cache.get(key);
   if (hit && now - hit.at < TTL_MS) return hit.value;
   if (hit && refresh && now - hit.at < STALE_MAX_MS) {
-    if (!refreshing.has(key)) {
-      const gen = generation;
-      const job = refresh()
-        .then((value) => { if (gen === generation) store(key, value, Date.now()); })
-        .catch(() => { /* keep the stale value; the next call retries */ })
-        .finally(() => { refreshing.delete(key); });
-      refreshing.set(key, job);
-    }
+    rememberRefresher(key, root, refresh);
+    void refreshInto(key, refresh);
     return hit.value;
   }
+  if (refresh) rememberRefresher(key, root, refresh);
   const value = run();
   store(key, value, now);
   return value;
+}
+
+/*
+ * Cold-miss avoidance. A cold miss (first read, or an entry older than
+ * STALE_MAX_MS after the panel sat idle) still has to run git synchronously,
+ * which froze the whole gateway for up to 18.7 s on PromSRC (2026-10-01: the
+ * health probe timed out and the relay served 503s to every other request).
+ * Callers with an async refresher are remembered here, so a route can
+ * `await warmGitReads(...)` before its synchronous work: every remembered read
+ * that is missing or past TTL is refreshed with non-blocking child processes
+ * first, and the sync path then hits the cache.
+ */
+const MAX_REFRESHERS = 64;
+const RECENT_USE_MS = 30 * 60_000;
+const WARM_CONCURRENCY = 4;
+interface Refresher { root: string; refresh: () => Promise<string>; usedAt: number }
+const refreshers = new Map<string, Refresher>();
+
+function rememberRefresher(key: string, root: string, refresh: () => Promise<string>): void {
+  refreshers.delete(key);
+  refreshers.set(key, { root: norm(root), refresh, usedAt: Date.now() });
+  while (refreshers.size > MAX_REFRESHERS) {
+    const oldest = refreshers.keys().next().value;
+    if (oldest === undefined) break;
+    refreshers.delete(oldest);
+  }
+}
+
+function refreshInto(key: string, refresh: () => Promise<string>): Promise<void> {
+  const pending = refreshing.get(key);
+  if (pending) return pending;
+  const gen = generation;
+  const job = refresh()
+    .then((value) => { if (gen === generation) store(key, value, Date.now()); })
+    .catch(() => { /* leave the cache as is; the sync path still works */ })
+    .finally(() => { refreshing.delete(key); });
+  refreshing.set(key, job);
+  return job;
+}
+
+/**
+ * Refresh, without blocking the event loop, every remembered git read that is
+ * missing or past TTL. `roots` limits the warm-up to reads under those repo
+ * roots (or the roots themselves); omit it to warm everything used recently.
+ * Resolves when the refreshes settle or after `maxWaitMs`, whichever is first.
+ */
+export async function warmGitReads(roots?: string[], maxWaitMs = 20_000): Promise<number> {
+  const now = Date.now();
+  const wanted = (roots || []).map(norm).filter(Boolean);
+  const due: Array<[string, Refresher]> = [];
+  for (const [key, item] of refreshers) {
+    if (now - item.usedAt > RECENT_USE_MS) continue;
+    if (wanted.length && !wanted.some((root) => item.root === root || item.root.startsWith(`${root}/`) || root.startsWith(`${item.root}/`))) continue;
+    const hit = cache.get(key);
+    if (hit && now - hit.at < TTL_MS) continue;
+    due.push([key, item]);
+  }
+  if (!due.length) return 0;
+  // Bounded fan-out: a cold PromSRC panel needs ~6 reads; never fork 64 gits at once.
+  let next = 0;
+  const lane = async () => {
+    while (next < due.length) {
+      const [key, item] = due[next++];
+      await refreshInto(key, item.refresh);
+    }
+  };
+  const all = Promise.all(Array.from({ length: Math.min(WARM_CONCURRENCY, due.length) }, lane));
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    all,
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(0, maxWaitMs)); timer.unref?.(); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return due.length;
+}
+
+/** Test hook: forget remembered refreshers and cached values. */
+export function resetGitReadCacheForTests(): void {
+  cache.clear();
+  refreshers.clear();
+  refreshing.clear();
+  generation += 1;
 }
 
 /** Test/diagnostic hook: resolves when every in-flight background refresh settles. */

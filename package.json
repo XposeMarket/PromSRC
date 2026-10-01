@@ -49,7 +49,7 @@
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
     "test:web-ui-image-budget": "node scripts/test-web-ui-image-budget.mjs",
-    "test:git-read-cache": "tsx src/gateway/coding/git-read-cache.regression.ts",
+    "test:git-read-cache": "tsx src/gateway/coding/git-read-cache.regression.ts && tsx src/gateway/coding/git-read-cache-warm.regression.ts",
     "bench:git-blocking": "node scripts/benchmark-gateway-git-blocking.mjs",
     "test:gateway-perf-budgets": "node --import tsx scripts/test-gateway-perf-budgets.mjs",
     "test:ws-fanout": "node --import tsx scripts/benchmark-gateway-stream-load.mjs",

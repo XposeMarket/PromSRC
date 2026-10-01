@@ -18113,6 +18113,14 @@ function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
   return [...durable.slice(0, head), ...durable.slice(durable.length - tail)];
 }
 
+export function compactFileChangeFilesForUi(files: any[]): any[] {
+  return files.map((file) => {
+    if (!file || typeof file !== 'object' || !('diffPreview' in file)) return file;
+    const { diffPreview: _omit, ...rest } = file;
+    return { ...rest, diffPreviewOmitted: true };
+  });
+}
+
 function sanitizeHistoryForUiResponse(
   history: any[],
   options: {
@@ -18149,6 +18157,18 @@ function sanitizeHistoryForUiResponse(
       else delete msg.liveTraceTotalCount;
     }
     if (!options.includeToolLog) delete msg.toolLog;
+    // Bounded chat opens: the message file-change card renders path, status and
+    // +/- counts only and fetches the real diff from /api/coding/diff on click,
+    // so per-file diffPreview text (up to 13 KB each, ~1 MB of a 3 MB chat
+    // switch on 2026-10-01) is dropped here. full/fullProcess reads keep it.
+    if (boundedTrace && Array.isArray(msg.fileChanges?.files)) {
+      msg.fileChanges = { ...msg.fileChanges, files: compactFileChangeFilesForUi(msg.fileChanges.files) };
+      if (Array.isArray(msg.fileChanges.groups)) {
+        msg.fileChanges.groups = msg.fileChanges.groups.map((group: any) => (group && Array.isArray(group?.fileChanges?.files)
+          ? { ...group, fileChanges: { ...group.fileChanges, files: compactFileChangeFilesForUi(group.fileChanges.files) } }
+          : group && Array.isArray(group?.files) ? { ...group, files: compactFileChangeFilesForUi(group.files) } : group));
+      }
+    }
     if (Array.isArray(msg.processEntries)) {
       msg.processEntries = msg.processEntries
         .slice(-options.perMessageProcessLimit)

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { warmGitReads } from '../coding/git-read-cache';
 import {
   getCodingWorkspaceSession,
   gitCommit,
@@ -64,7 +65,16 @@ function resolveDiffRoot(rawRoot: string | undefined, sessionId: string | undefi
   return resolved;
 }
 
-router.get('/api/coding/session', (req, res) => {
+// Panel reads (status, branch, log, diff) are cached with async refreshers.
+// Refresh any expired ones with non-blocking child processes before the
+// synchronous assembly below, so an idle-then-switch request does not freeze
+// the gateway on `git status` (measured 18.7 s on PromSRC, 503s for everyone).
+async function warmPanelGitReads(): Promise<void> {
+  try { await warmGitReads(undefined, 20_000); } catch { /* sync path still works */ }
+}
+
+router.get('/api/coding/session', async (req, res) => {
+  await warmPanelGitReads();
   try {
     res.json({
       session: getCodingWorkspaceSession(resolveRequestCodingRoot(
@@ -185,7 +195,8 @@ router.get('/api/coding/diff', (req, res) => {
   }
 });
 
-router.get('/api/coding/context', (req, res) => {
+router.get('/api/coding/context', async (req, res) => {
+  await warmPanelGitReads();
   try {
     const sessionId = req.query.sessionId ? String(req.query.sessionId) : undefined;
     const rawPaths = String(req.query.paths || '').trim();
