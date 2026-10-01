@@ -488,12 +488,19 @@ function installParentWorkspace() {
   document.addEventListener('dragover', handleDragOver, true);
   document.addEventListener('dragleave', handleDragLeave, true);
   document.addEventListener('drop', handleDrop, true);
+  let observerFramePending = false;
   observer = new MutationObserver(() => {
-    syncMainSession();
-    if (!document.getElementById('prom-multi-chat-tabs')) render();
+    if (observerFramePending || document.hidden) return;
+    observerFramePending = true;
+    window.requestAnimationFrame(() => {
+      observerFramePending = false;
+      if (document.hidden) return;
+      syncMainSession();
+      if (!document.getElementById('prom-multi-chat-tabs')) render();
+    });
   });
   observer.observe(document.body, { childList: true, subtree: true });
-  activeSessionPoll = window.setInterval(syncMainSession, 900);
+  activeSessionPoll = window.setInterval(() => { if (!document.hidden) syncMainSession(); }, 900);
   render();
 }
 
