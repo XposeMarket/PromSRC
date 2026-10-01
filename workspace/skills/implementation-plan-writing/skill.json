@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "implementation-plan-writing",
+  "name": "Implementation Plan Writing",
+  "description": "Turn an approved spec or requirements into a saved task-by-task implementation plan: verified-API discovery phase, file map, tasks with exact files, interfaces, failing tests, expected command output, and a self-review. Use when the user asks to write an implementation plan or plan the build before coding a multi-step change. Do not use for requirements interviews (requirements-grilling), spec documents (spec-writing), executing a plan (implementation-plan-execution), or one-file fixes.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create a step by step implementation plan",
+    "turn the spec into a plan",
+    "break this spec into tasks",
+    "plan this feature before coding",
+    "make an implementation plan",
+    "write an implementation plan",
+    "plan the build"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "implementation plan",
+      "plan the build",
+      "turn the spec into a plan",
+      "plan this feature before coding",
+      "task by task plan",
+      "phased plan"
+    ],
+    "allOf": [
+      [
+        "implementation",
+        "plan"
+      ],
+      [
+        "plan",
+        "build"
+      ],
+      [
+        "spec",
+        "plan"
+      ],
+      [
+        "plan",
+        "before",
+        "coding"
+      ],
+      [
+        "phased",
+        "plan"
+      ]
+    ],
+    "anyOf": [
+      "implementation plan",
+      "tasks",
+      "phases",
+      "interfaces",
+      "steps"
+    ],
+    "noneOf": [
+      "execute the plan",
+      "run the plan",
+      "continue the plan",
+      "grill me",
+      "marketing plan",
+      "trading plan",
+      "meal plan",
+      "business plan",
+      "pricing plan"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "planning"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "declare_plan",
+    "background_ops",
+    "ask_prometheus_questions",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

@@ -30,7 +30,7 @@ We believe a solution exists in [general problem space]."
 
 Example:
 "We have observed that SDRs struggle to personalize outreach at scale when managing 100+
-prospects simultaneously. This results in generic emails, low reply rates, and wasted 
+prospects simultaneously. This results in generic emails, low reply rates, and wasted
 pipeline capacity. We believe a solution exists in AI-assisted personalization without
 sacrificing deliverability."
 ```
@@ -53,8 +53,8 @@ Frame every feature as a job the customer is hiring your product to do:
 ```
 JOB STATEMENT: "When [situation], I want to [motivation], so I can [expected outcome]."
 
-Example: 
-"When I'm preparing for a sales call, I want to quickly see the prospect's recent 
+Example:
+"When I'm preparing for a sales call, I want to quickly see the prospect's recent
 activity and company news, so I can open with something relevant and build rapport faster."
 
 Jobs have three layers:

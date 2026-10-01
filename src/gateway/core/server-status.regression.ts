@@ -25,6 +25,11 @@ async function main(): Promise<void> {
     const body = await response.json() as any;
     assert.deepEqual(body.gatewayQueues, expected);
     assert.equal(body.fastPath, true);
+    const healthResponse = await fetch(`http://127.0.0.1:${address.port}/api/health`);
+    assert.equal(healthResponse.status, 200);
+    const health = await healthResponse.json() as any;
+    assert.equal(health.pid, process.pid);
+    assert.equal(health.processStartedAt, Number(process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT || 0));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

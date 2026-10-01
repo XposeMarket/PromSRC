@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "design-critique-audit",
+  "name": "Design Critique and Audit",
+  "description": "Critique or audit an existing web interface from a URL, localhost, screenshot, or HTML file and return a scored, evidence-backed review of hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and generated-template tells, ending in a prioritized fix list. Use for design reviews, critiques, roasts, or audits; do not use for building or redesigning UI, functional bug hunts, or brand strategy.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "review the design of this page",
+    "does this look ai generated",
+    "what's wrong with this ui",
+    "roast my landing page",
+    "audit the visual hierarchy",
+    "critique this design",
+    "score this interface",
+    "ux design review",
+    "design audit"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "critique this design",
+      "design critique",
+      "design audit",
+      "design review",
+      "roast my landing page",
+      "roast my site",
+      "looks ai generated",
+      "visual hierarchy"
+    ],
+    "allOf": [
+      [
+        "critique",
+        "design"
+      ],
+      [
+        "review",
+        "design"
+      ],
+      [
+        "audit",
+        "design"
+      ],
+      [
+        "roast",
+        "page"
+      ],
+      [
+        "roast",
+        "site"
+      ],
+      [
+        "what s",
+        "wrong",
+        "ui"
+      ],
+      [
+        "feedback",
+        "design"
+      ]
+    ],
+    "anyOf": [
+      "critique",
+      "audit",
+      "roast",
+      "feedback",
+      "design",
+      "landing page",
+      "hierarchy",
+      "typography"
+    ],
+    "noneOf": [
+      "build a landing page",
+      "create a website",
+      "redesign",
+      "implement",
+      "code review",
+      "pull request",
+      "brand positioning",
+      "logo",
+      "find bugs",
+      "dogfood"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "design",
+    "frontend",
+    "ux-research",
+    "qa"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

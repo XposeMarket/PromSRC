@@ -1,4 +1,4 @@
-# X/Twitter Media Extraction Pattern — 2026-06-07
+# X/Twitter Media Extraction Pattern - 2026-06-07
 
 ## Issue
 When fetching an X/Twitter status URL with `web_fetch`, media detection and download may not always capture or return all video/media assets, especially for longer or complex thread videos.

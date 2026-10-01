@@ -46,7 +46,6 @@ import {
   fmtLocal,
   resolveThoughtCoverageCursor,
   reconcileStaleThoughtAttemptAfterGatewayRestart,
-  BRAIN_GATEWAY_RESTART_RECOVERY,
   type BrainLatestState,
 } from './brain-state';
 import {
@@ -55,6 +54,7 @@ import {
   updateLiveRuntimeCheckpoint,
   listLiveRuntimes,
 } from '../live-runtime-registry';
+import { isRuntimeHostedByLiveHandoffHost } from '../runtime/gateway-handoff-bridge';
 import { isModelBusy, setModelBusy } from '../comms/broadcaster';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config';
@@ -592,9 +592,7 @@ export class BrainRunner {
     const cadenceDueMs = lastThought
       ? Math.max(lastThought.getTime() + THOUGHT_INTERVAL_MS, now.getTime())
       : now.getTime();
-    const recoveredAfterGatewayRestart = state.lastThoughtRecovery === BRAIN_GATEWAY_RESTART_RECOVERY;
-    const failedRetryDueMs = !recoveredAfterGatewayRestart
-      && (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle')
+    const failedRetryDueMs = (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle')
       && state.lastThoughtAttemptAt
       ? new Date(state.lastThoughtAttemptAt).getTime() + THOUGHT_RETRY_BACKOFF_MS
       : 0;
@@ -692,7 +690,12 @@ export class BrainRunner {
     if (this.ticker) return;
     this.shuttingDown = false;
     ensureBrainDirs();
-    const startupRecovery = reconcileStaleThoughtAttemptAfterGatewayRestart();
+    // A warm handoff leaves the previous gateway's Brain run alive. Its
+    // durable `idle` marker is not a crash, so do not abort and replay it.
+    const carriedThought = this._hasCarriedBrainRun('brain_thought');
+    const startupRecovery = carriedThought
+      ? { thoughtRecovered: false, previousThoughtAttemptAt: null }
+      : reconcileStaleThoughtAttemptAfterGatewayRestart();
     markGatewayStarted();
 
     // Do not run model-backed brain jobs during gateway boot. Startup status and
@@ -707,13 +710,8 @@ export class BrainRunner {
     if (this.ticker && typeof (this.ticker as any).unref === 'function') {
       (this.ticker as any).unref();
     }
-    if (startupRecovery.thoughtRecovered) {
-      const recoveryTimer = setTimeout(() => {
-        this._tick().catch((err) => console.warn('[BrainRunner] Startup Thought recovery failed:', err?.message || err));
-      }, 1000);
-      recoveryTimer.unref?.();
-      console.log(`[BrainRunner] Recovered stale Thought attempt from ${startupRecovery.previousThoughtAttemptAt}; retry scheduled from the last successful coverage cursor.`);
-    }
+    if (carriedThought) console.log('[BrainRunner] Previous gateway still owns a Thought; deferring recovery and new Brain work.');
+    if (startupRecovery.thoughtRecovered) console.log(`[BrainRunner] Recovered stale Thought attempt from ${startupRecovery.previousThoughtAttemptAt}; retrying after the normal backoff.`);
     console.log('[BrainRunner] Started — checking every 15 min for thought/dream eligibility');
   }
 
@@ -827,8 +825,22 @@ export class BrainRunner {
 
   // ─── Tick ─────────────────────────────────────────────────────────────────
 
+  private _hasCarriedBrainRun(kind?: 'brain_thought' | 'brain_dream'): boolean {
+    return listLiveRuntimes().some((runtime) =>
+      (runtime.kind === 'brain_thought' || runtime.kind === 'brain_dream')
+      && (!kind || runtime.kind === kind)
+      && isRuntimeHostedByLiveHandoffHost(runtime),
+    );
+  }
+
   private async _tick(): Promise<void> {
     if (this.shuttingDown) return;
+    if (this._hasCarriedBrainRun()) return;
+    // If a carried host disappears before finalizing, its idle attempt becomes
+    // stale only now. Preserve the ordinary failure backoff before retrying.
+    if (!this.thoughtRunning && loadLatestState().lastThoughtStatus === 'idle') {
+      reconcileStaleThoughtAttemptAfterGatewayRestart();
+    }
     const now      = new Date();
     const today    = getLocalDateStr(now);
     const daily    = loadDailyStatus(today);
@@ -1015,12 +1027,9 @@ export class BrainRunner {
   ): { windowStart: Date; windowEnd: Date } | null {
     // Don't run thoughts if dream is imminent or already ran today
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
-    // `idle` with a recent attempt means the previous gateway disappeared
-    // before its finalizer could run. Treat it as unsettled and wait through
-    // the same backoff used for explicit failures/aborts, except for the
-    // explicit startup-recovery marker, which is retried immediately.
-    const recoveredAfterGatewayRestart = state.lastThoughtRecovery === BRAIN_GATEWAY_RESTART_RECOVERY;
-    if (!recoveredAfterGatewayRestart && (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt) {
+    // A failed or interrupted automatic Thought must not restart immediately:
+    // the same expensive work can stall a recovering gateway again.
+    if ((state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt) {
       const lastAttemptMs = new Date(state.lastThoughtAttemptAt).getTime();
       if (Number.isFinite(lastAttemptMs)) {
         const elapsedSinceAttempt = now.getTime() - lastAttemptMs;

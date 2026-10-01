@@ -114,8 +114,8 @@ async function main(): Promise<void> {
       handleChat: async () => ({ type: 'text', text: '', toolResults: [] }),
     }).getBrainStatus();
     assert.ok(
-      Date.parse(recoveryStatus.thought.nextRun || '') <= Date.now() + 5_000,
-      'recovered Thought must be immediately eligible instead of waiting through the failure backoff',
+      Date.parse(recoveryStatus.thought.nextRun || '') >= Date.now() + 5 * 60 * 60 * 1000,
+      'recovered Thought must observe the failure backoff before retrying expensive work',
     );
 
     const thoughtAbortSignal = { aborted: false, reason: undefined as string | undefined };

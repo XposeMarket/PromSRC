@@ -5,17 +5,17 @@ description: "Guide a feature from discovery through clarification, architecture
 
 # Feature Development
 
-Run a feature as a sequence of evidence-backed phases. The outcome is a working, verified change with a clear decision record—not merely a plausible implementation.
+Run a feature as a sequence of evidence-backed phases. For substantial changes follow `requirements-grilling` -> `spec-writing` -> `implementation-plan-writing` -> `implementation-plan-execution`; use `spike-and-prototype` to validate feasibility unknowns before committing and feed the verdict into the spec. The outcome is a working, verified change with a clear decision record, not merely a plausible implementation.
 
-## Phase 0 — Scope and safety
+## Phase 0 - Scope and safety
 
-Restate the requested behavior, affected surface, constraints, and definition of done. Inspect repository instructions, the current branch and dirty state, package scripts, and nearby implementation before editing. Separate pre-existing changes from the feature. If the request is ambiguous in a way that changes architecture, ask focused questions and wait; if the user says “whatever,” recommend a choice with tradeoffs and obtain confirmation before implementation.
+Restate the requested behavior, affected surface, constraints, and definition of done. Inspect repository instructions, the current branch and dirty state, package scripts, and nearby implementation before editing. Separate pre-existing changes from the feature. If the request is ambiguous in a way that changes architecture, ask through `ask_prometheus_questions` cards with the recommended answer first and wait; if the user says “whatever,” recommend a choice with tradeoffs and obtain confirmation before implementation.
 
 Create a small checklist of discovery, decisions, implementation, review, and verification. Keep the checklist visible in the response as the phase changes.
 
-## Phase 1 — Parallel discovery
+## Phase 1 - Parallel discovery
 
-When `agents_and_teams` is available, dispatch two or three independent explorers in parallel with different scopes:
+When useful, dispatch two or three independent explorers in parallel with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")`, each with a different scope. Never use Anthropic workers:
 
 - repository structure and likely entry points;
 - data flow, state, APIs, and dependencies;
@@ -23,19 +23,19 @@ When `agents_and_teams` is available, dispatch two or three independent explorer
 
 Each explorer must return concrete file paths and line references, current behavior, relevant data flow, risks, and tests to run. If agents are unavailable, perform the same passes sequentially. Read the cited files yourself before accepting a conclusion; agent summaries are leads, not evidence.
 
-## Phase 2 — Clarify the contract
+## Phase 2 - Clarify the contract
 
-Convert discovery into a one-sentence user story and a short acceptance contract. Resolve behavior, UX/API shape, compatibility, error handling, performance, security, and test questions before designing. Do not silently invent requirements.
+Convert discovery into a one-sentence user story and a short acceptance contract. Resolve behavior, UX/API shape, compatibility, error handling, performance, security, and test questions before designing. Route material decisions through `ask_prometheus_questions` cards, recommended answer first. Do not silently invent requirements.
 
-## Phase 3 — Architecture options
+## Phase 3 - Architecture options
 
-For changes with real design choices, ask two or three architecture reviewers to propose distinct approaches. Require each to describe touched files, control/data flow, migration or compatibility impact, failure behavior, test strategy, and tradeoffs. Present the options concisely, recommend one, and wait for the user's selection when the choice is material. For a small change, document why the smallest existing pattern is sufficient.
+For changes with real design choices, ask two or three architecture reviewers on the same openai_codex/gpt-6-sol background spawn route to propose distinct approaches. Require each to describe touched files, control/data flow, migration or compatibility impact, failure behavior, test strategy, and tradeoffs. Present the options concisely, recommend one, and obtain material decisions through `ask_prometheus_questions` cards. For a small change, document why the smallest existing pattern is sufficient.
 
-## Phase 4 — Implement in slices
+## Phase 4 - Implement in slices
 
 Implement the approved approach in coherent slices. Follow existing naming, state ownership, error boundaries, and test conventions. Keep changes scoped; do not opportunistically refactor unrelated code. After each risky slice, run the narrowest relevant test or type check so failures stay attributable. Never claim completion from a clean edit alone.
 
-## Phase 5 — Fresh review
+## Phase 5 - Fresh review
 
 Run three review lenses, in parallel when practical:
 
@@ -45,7 +45,7 @@ Run three review lenses, in parallel when practical:
 
 Require evidence and confidence for each finding. Fix high-confidence issues before verification or present them as explicit follow-up choices. Use `independent-fresh-context-review` when the change is consequential and a fresh context is available.
 
-## Phase 6 — Verify the story
+## Phase 6 - Verify the story
 
 Use `verification` for an end-to-end feature path and `local-file-browser-verification` for local browser artifacts. Verify the user-visible trigger, client/server boundary, API or process call, persistence/external dependency, response, and rendered result. Run focused tests plus one adjacent regression path. If a boundary fails, stop at that boundary, report evidence, and repair only when authorized.
 

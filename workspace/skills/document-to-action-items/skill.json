@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "document-to-action-items",
+  "name": "Document to Action Items",
+  "description": "Turn contracts, reports, policies, RFPs, scanned forms, or attachment bundles into page-cited facts and a reviewable list of proposed actions with owners, due dates, dependencies, and risks, then push approved items to a tracker, calendar, sheet, or memory and read them back. Use for extracting obligations, deadlines, and tasks from documents; do not use for meeting transcripts, plain extraction or summaries, or knowledge-base import.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "what do we have to do from this contract",
+    "extract deadlines and obligations from this contract",
+    "turn these attachments into a todo list",
+    "extract owners and deadlines from this pdf",
+    "action items from this report",
+    "find obligations and due dates",
+    "turn this document into tasks"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "deadlines and obligations",
+      "into tasks",
+      "action items from this",
+      "obligations",
+      "due dates",
+      "to do list from",
+      "todo list from"
+    ],
+    "allOf": [
+      [
+        "document",
+        "tasks"
+      ],
+      [
+        "contract",
+        "deadlines"
+      ],
+      [
+        "contract",
+        "obligations"
+      ],
+      [
+        "pdf",
+        "action",
+        "items"
+      ],
+      [
+        "report",
+        "action",
+        "items"
+      ],
+      [
+        "attachments",
+        "tasks"
+      ],
+      [
+        "extract",
+        "deadlines"
+      ]
+    ],
+    "anyOf": [
+      "contract",
+      "policy",
+      "attachment",
+      "obligation",
+      "deadline",
+      "action items",
+      "tasks"
+    ],
+    "noneOf": [
+      "meeting",
+      "transcript",
+      "standup",
+      "call notes",
+      "summarize this pdf",
+      "convert pdf",
+      "merge pdf",
+      "import into knowledge"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "documents",
+    "productivity",
+    "knowledge-work",
+    "planning"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "test-first-development",
+  "name": "Test-First Development",
+  "description": "Guide feature and bug work through a practical test-first loop: define observable behavior, write a failing test, make the smallest implementation pass, refactor safely, and verify the surrounding contract. Use when tests should drive implementation, not for visual exploration or a review-only request.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "write a failing test before implementation",
+    "regression test before code fix",
+    "red green refactor loop",
+    "test-first development workflow"
+  ],
+  "categories": [
+    "software-development",
+    "testing",
+    "quality"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

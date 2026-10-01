@@ -46,6 +46,8 @@ interface TriggerService {
   endpoints: WebhookEndpointStore;
 }
 
+import { TRANSIENT_RETRY_DELAYS_MS, isProviderErrorText, isTransientProviderFailure } from './transient-failure';
+
 let service: TriggerService | null = null;
 const AGENT_TIMEOUT_MS = 15 * 60 * 1000;
 const activeAgentRuns = new Set<string>();
@@ -120,8 +122,30 @@ export function initTriggerService(deps: TriggerServiceDeps): TriggerService {
         let failed = false;
         try {
           addMessage(sessionId, { role: 'user', content: prompt, timestamp: Date.now() } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
-          const result = await deps.handleChat(prompt, sessionId, () => {}, undefined, abortSignal, callerContext, model || undefined, 'background_task');
-          text = String(result?.text || '').trim() || 'No response generated.';
+          // Provider outages (429/5xx/overloaded) surface either as a throw or as a short
+          // "Error: <provider> API error 503" final text. Retry those with backoff instead of
+          // reporting a dead run; real agent output is never retried.
+          for (let attempt = 1; ; attempt++) {
+            let transient = false;
+            try {
+              const result = await deps.handleChat(prompt, sessionId, () => {}, undefined, abortSignal, callerContext, model || undefined, 'background_task');
+              text = String(result?.text || '').trim() || 'No response generated.';
+              transient = isTransientProviderFailure(text);
+            } catch (error: any) {
+              text = `Trigger agent failed: ${String(error?.message || error).slice(0, 1000)}`;
+              transient = isTransientProviderFailure(String(error?.message || error));
+              if (!transient || attempt >= TRANSIENT_RETRY_DELAYS_MS.length + 1) throw error;
+            }
+            if (!transient || abortSignal.aborted || attempt >= TRANSIENT_RETRY_DELAYS_MS.length + 1) {
+              // A bare provider error (credits, auth, exhausted retries) is a failed run, never a
+              // silent success: only-on-failure rules must still report it.
+              if (transient || isProviderErrorText(text)) failed = true;
+              break;
+            }
+            const delay = TRANSIENT_RETRY_DELAYS_MS[attempt - 1];
+            console.warn(`[Triggers] ${context.rule.id}: transient provider failure (attempt ${attempt}), retrying in ${delay / 1000}s: ${text.slice(0, 160)}`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
           if (abortSignal.aborted) { failed = true; text = `Timed out after ${Math.round(AGENT_TIMEOUT_MS / 60000)} min. Partial: ${text}`; }
           addMessage(sessionId, { role: 'assistant', content: text, timestamp: Date.now() } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
         } catch (error: any) {

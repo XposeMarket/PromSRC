@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "capability-finder",
+  "name": "Capability Finder",
+  "description": "Find the existing Prometheus capability (skill, tool category, connected app or MCP tool, connection, or plugin) that covers a need before building or importing anything. Use when the user asks whether a skill or tool exists for a task, asks what Prometheus can use for X, or a task needs a capability that is not loaded. Do not use for authoring a skill (skill-creator), deep safety review of an external bundle (external-skill-vetting), or tasks whose tools are already loaded.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "what can prometheus use for",
+    "is there a skill for",
+    "is there a tool for",
+    "do we have a skill",
+    "find a skill for",
+    "missing capability"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "is there a skill for",
+      "find a skill for",
+      "do we have a skill",
+      "is there a tool for",
+      "is there a plugin for",
+      "missing capability"
+    ],
+    "allOf": [
+      [
+        "find",
+        "skill"
+      ],
+      [
+        "is",
+        "there",
+        "skill"
+      ],
+      [
+        "do",
+        "we",
+        "have",
+        "skill"
+      ],
+      [
+        "is",
+        "there",
+        "tool"
+      ],
+      [
+        "any",
+        "plugin"
+      ]
+    ],
+    "anyOf": [
+      "capability",
+      "plugin",
+      "connector",
+      "integration",
+      "exists"
+    ],
+    "noneOf": [
+      "create a skill",
+      "write a skill",
+      "new skill called",
+      "vet this skill",
+      "security review",
+      "evaluate this skill",
+      "skill eval"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "skills",
+    "meta",
+    "routing",
+    "integrations"
+  ],
+  "requiredTools": [
+    "skill_list",
+    "skill_read",
+    "tool_search",
+    "request_tool_category",
+    "web_search"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

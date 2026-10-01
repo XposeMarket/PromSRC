@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-creative-director",
+  "name": "prometheus-creative-director",
+  "description": "Orchestrate complete image, motion-graphics, and video production with Prometheus Creative Mode. Use when the user wants a finished video, promo, explainer, social clip, slideshow, captions, talking-head edit, product launch, music video, generated sequence, or multi-stage creative project and the agent must choose among Creative Mode, HyperFrames, generation, media, timeline, audio, and QA workflows.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "make a product launch video",
+    "build a video in creative mode",
+    "make a complete video",
+    "create a finished video",
+    "produce a promo video",
+    "build an explainer video",
+    "create a music video",
+    "assemble a video timeline",
+    "create a social video",
+    "produce motion graphics",
+    "edit this video project",
+    "full video production"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "orchestration"
+  ],
+  "requiredTools": [
+    "creative"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "agents/openai.yaml",
+      "type": "reference"
+    },
+    {
+      "path": "references/creative-routing.md",
+      "type": "reference"
+    }
+  ]
+}

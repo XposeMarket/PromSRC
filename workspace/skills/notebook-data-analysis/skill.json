@@ -1,0 +1,100 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "notebook-data-analysis",
+  "name": "Notebook Data Analysis",
+  "description": "Run iterative Python data analysis with pandas, numpy, and matplotlib on CSV, Excel, JSON, or parquet data using checkpointed steps, and optionally produce a re-runnable Jupyter notebook with saved charts and findings, choosing between local Python and chatgpt_sandbox. Use for exploratory data analysis, building or re-running notebooks; do not use for repeatable ETL or conversion, a single inline chart, or SQL queries.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "make a notebook for this analysis",
+    "dig into this data and find patterns",
+    "build me a jupyter notebook",
+    "analyze this csv with pandas",
+    "analyze this dataset",
+    "rerun this notebook",
+    "exploratory data analysis",
+    "edit this ipynb"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "jupyter",
+      "notebook",
+      "ipynb",
+      "pandas",
+      "exploratory data analysis",
+      "eda",
+      "analyze this dataset",
+      "analyse this dataset"
+    ],
+    "allOf": [
+      [
+        "analyze",
+        "csv"
+      ],
+      [
+        "analyze",
+        "dataset"
+      ],
+      [
+        "analyse",
+        "data"
+      ],
+      [
+        "data",
+        "notebook"
+      ],
+      [
+        "find",
+        "patterns",
+        "data"
+      ],
+      [
+        "python",
+        "analysis"
+      ]
+    ],
+    "anyOf": [
+      "dataset",
+      "excel",
+      "parquet",
+      "pandas",
+      "notebook",
+      "jupyter",
+      "ipynb",
+      "analysis",
+      "matplotlib",
+      "correlation",
+      "trends"
+    ],
+    "noneOf": [
+      "convert csv to json",
+      "etl",
+      "dedupe this file",
+      "sql",
+      "database",
+      "chart these numbers inline",
+      "onenote",
+      "notebooklm"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "data",
+    "analysis",
+    "python",
+    "notebooks"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "chatgpt_sandbox"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

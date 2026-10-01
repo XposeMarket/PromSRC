@@ -15,14 +15,9 @@ Use Prometheus's native image tools. Do not invoke an external CLI merely to gen
 4. Use Creative asset import/analysis after `generate_image` when dimensions, alpha, metadata, or later reuse must be verified.
 5. Use deterministic SVG, HTML/CSS, canvas, or compositing for exact logos, small icon-system extensions, exact typography, diagrams, and pixel-locked brand marks.
 
-## Presentation mode
-
-- Use `presentation_mode="foreground"` only when the user's primary request is the image itself, such as "generate an image of X" or "make me a wallpaper".
-- Use `presentation_mode="background"` when images are intermediate project assets, such as sprites, texture packs, website assets, Creative shots, thumbnails to wire into a page, or any asset that a later tool/code step will consume.
-- Background image generation should continue in the tool stream and emit compact previews; do not let it take over the main chat with the large image-generation loading card.
-- Internal callers may set `partial_images=1` and `stream=true` for background generation when the provider supports partial image previews.
-
 ## Build the prompt
+
+For posters or visual art pieces, optionally choose and state a named design direction before generating: give a movement/name plus 3 to 4 sentences about form, color, scale, and text restraint. Keep text minimal. Prefer editorial, industrial, real UI, or physical-material treatments; avoid the purple-blue-cyan gradient "AI SaaS" look unless brand-required.
 
 Structure only the useful fields:
 
@@ -49,15 +44,12 @@ Keep specific user prompts specific. Add composition or production detail only w
 - Use `count` from 2 to 4 only for variations of one prompt. Make separate calls for distinct assets with different prompts.
 - Use `quality="low"` for drafts and `quality="high"` for final OpenAI assets. Provider support varies.
 - Set `save_to_workspace=true` for anything the project will consume. Use a project-specific `output_dir` when known.
-- Use exact `size`, or `width` plus `height`, when a project requires a fixed asset dimension. Otherwise use `aspect_ratio`.
 - For transparent output, use `provider="openai"`, `background="transparent"`, and `output_format="png"`. Do not rely on prompt wording or `auto` routing for alpha.
 - Do not force a GPT Image 2 model for transparency; Prometheus must select a transparency-capable OpenAI image model.
-- For JPEG/WebP, set `output_compression` only when file size matters and provider support is available.
 
 ## Edit
 
 - Pass edit targets and supporting references through `reference_images`.
-- For selection edits, pass a PNG alpha `mask` that is workspace-contained and exactly matches the first reference image dimensions.
 - Label every reference's role in the prompt.
 - Repeat invariants: change only the requested property; preserve identity, pose, proportions, layout, and unaffected pixels as applicable.
 - Save non-destructively. Prometheus creates a new run folder; never replace the source unless the user explicitly asks.

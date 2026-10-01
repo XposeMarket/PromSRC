@@ -84,6 +84,9 @@ let GATEWAY_URL = `http://127.0.0.1:${gatewayPort || 0}`;
 // private loopback port so it can be replaced without making Tailscale Funnel
 // lose the public listener that paired mobile devices know.
 let gatewayBackendPort = null;
+// Draining warm-handoff hosts may remain alive for hours. Never give a new
+// gateway a backend port used by an earlier generation in this Electron run.
+const usedGatewayBackendPorts = new Set();
 let gatewayRelay = null;
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
@@ -115,7 +118,9 @@ const GATEWAY_RECOVERY_WINDOW_MS = 10 * 60_000;
 const GATEWAY_RECOVERY_MAX_ATTEMPTS = 3;
 const GATEWAY_RECOVERY_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECOVERY_MAX_DELAY_MS = 60_000;
-const GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS = 15_000;
+// The gateway can briefly pause under a scheduled team run. Keep an HTTP
+// request open long enough for it to resume or for the stall handoff to start.
+const GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS = 30_000;
 const GATEWAY_QUIT_GRACE_MS = 12_000;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
@@ -1155,8 +1160,8 @@ function synchronizeTailscaleFunnelTarget() {
   }
 }
 
-async function selectGatewayBackendPort() {
-  if (gatewayBackendPort != null) {
+async function selectGatewayBackendPort({ rotate = false } = {}) {
+  if (gatewayBackendPort != null && !rotate) {
     if (await isGatewayPortAvailable(gatewayBackendPort)) return gatewayBackendPort;
     throw new Error(
       `Prometheus gateway backend port ${gatewayBackendPort} is still in use after the previous worker stopped. ` +
@@ -1170,9 +1175,14 @@ async function selectGatewayBackendPort() {
   const configuredHttpsPort = getConfiguredGatewayHttpsPort();
   for (let offset = 1; offset <= 512; offset += 1) {
     const candidate = gatewayPort + offset;
-    if (candidate > 65_535 || candidate === configuredHttpsPort) continue;
+    if (candidate > 65_535 || candidate === configuredHttpsPort || usedGatewayBackendPorts.has(candidate)) continue;
     if (await isGatewayPortAvailable(candidate)) {
+      const previousPort = gatewayBackendPort;
       gatewayBackendPort = candidate;
+      usedGatewayBackendPorts.add(candidate);
+      if (previousPort != null) {
+        writeGatewayLog(`[main] Rotated gateway backend port ${previousPort} -> ${candidate} for warm handoff\n`);
+      }
       return gatewayBackendPort;
     }
   }
@@ -1422,37 +1432,45 @@ function resolveVaultMasterKey() {
 
 // ─── Gateway ───────────────────────────────────────────────────────────────
 function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
+  return checkGatewayGenerationHealth(gatewayBackendPort, gatewayProcessStartedAt, timeoutMs);
+}
+
+// Readiness must belong to the gateway we just spawned. A draining host can
+// briefly answer on its old port; a plain 200 would mark the relay ready for
+// the wrong generation and allow the actual replacement to fail its bind.
+function checkGatewayGenerationHealth(
+  port = gatewayBackendPort,
+  expectedStartedAt = gatewayProcessStartedAt,
+  timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS,
+) {
   return new Promise((resolve) => {
-    const backendPort = parseGatewayPort(gatewayBackendPort);
-    if (!backendPort) {
-      resolve(false);
-      return;
-    }
+    const backendPort = parseGatewayPort(port);
+    if (!backendPort || !Number.isFinite(expectedStartedAt)) return resolve(false);
     let settled = false;
-    const done = (ok) => {
+    const done = (healthy) => {
       if (settled) return;
       settled = true;
-      resolve(ok);
+      resolve(healthy);
     };
     const req = http.request({
-      hostname: '127.0.0.1',
-      port: backendPort,
-      path: '/api/health',
-      // The gateway has a raw HEAD fast path. Avoid making the watchdog wait
-      // for a JSON body or any downstream middleware while deciding whether
-      // the process is reachable.
-      method: 'HEAD',
+      hostname: '127.0.0.1', port: backendPort, path: '/api/health', method: 'GET',
       headers: { Connection: 'close' },
     }, (res) => {
-      const ok = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
-      res.resume();
-      res.once('end', () => done(ok));
-      res.once('close', () => done(ok));
+      let body = '';
+      res.on('data', (chunk) => {
+        if (body.length < 4096) body += String(chunk).slice(0, 4096 - body.length);
+      });
+      res.once('end', () => {
+        try {
+          const health = JSON.parse(body);
+          done(res.statusCode === 200 && health.ok === true
+            && Number(health.processStartedAt) === expectedStartedAt);
+        } catch { done(false); }
+      });
+      res.once('close', () => done(false));
+      res.once('error', () => done(false));
     });
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      done(false);
-    });
+    req.setTimeout(timeoutMs, () => { req.destroy(); done(false); });
     req.once('error', () => done(false));
     req.end();
   });
@@ -2126,6 +2144,7 @@ async function startGateway() {
     const exitedRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
     forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
     if (!isQuitting && isGatewayRestarting) return;
+    if (gatewayShuttingDown) return;
     if (!isQuitting && code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
       // The gateway already wrote its restart context and shut down; the
       // relaunched app starts a fresh gateway that resumes from it.
@@ -2155,12 +2174,12 @@ async function startGateway() {
     }
     if (!isQuitting) {
       gatewayRelay?.setState('failed');
-      const lastOutput = getLastGatewayOutput();
-      dialog.showErrorBox(
-        'Prometheus — Gateway Crashed',
-        `The Prometheus gateway exited unexpectedly (code=${code}).\n\nLast output:\n${lastOutput || '(none)'}\n\nFull log: ${GATEWAY_LOG_PATH}`
-      );
-      app.quit();
+      void requestAutomaticGatewayRecovery({
+        terminateExisting: false,
+        reason: `gateway exited unexpectedly (code=${code}, signal=${signal})`,
+      }).catch((error) => {
+        writeGatewayLog(`[main] Automatic recovery after gateway exit failed: ${error?.message || error}\n`);
+      });
     }
   });
 }
@@ -2188,9 +2207,10 @@ async function handoffGatewayFromElectron(hostProcess, notice) {
   invalidateGatewayRecoverySchedule();
   gatewayRelay?.beginHandoff(reason);
   try {
-    // The host closes its listener just before sending the notice; the
-    // backend port can take a moment to actually free up.
-    await waitForGatewayPortRelease(10_000);
+    // The host has released its listener but may keep active streams alive.
+    // Give the replacement a fresh port instead of racing another draining
+    // generation for the same one.
+    await selectGatewayBackendPort({ rotate: true });
     await startGateway();
     await waitForGateway();
     gatewayRelay?.setState('ready');
@@ -2201,7 +2221,18 @@ async function handoffGatewayFromElectron(hostProcess, notice) {
     const message = err && err.message ? err.message : String(err);
     writeGatewayLog(`[main] Warm handoff replacement failed: ${message}\n`);
     gatewayRelay?.setState('failed');
-    gatewayProcess = null;
+    const pending = gatewayProcess;
+    if (pending && pending.exitCode == null && pending.signalCode == null) {
+      adoptLateGatewayReady(pending);
+    } else {
+      gatewayProcess = null;
+      setTimeout(() => {
+        void requestAutomaticGatewayRecovery({
+          terminateExisting: false,
+          reason: `warm handoff replacement failed: ${message}`,
+        });
+      }, 0);
+    }
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('gateway-degraded', {
@@ -2243,6 +2274,11 @@ async function restartGatewayFromElectron(options = {}) {
       await waitForGatewayPortRelease();
     }
     gatewayProcess = null;
+    // If a stale listener claimed the previous generation's backend port,
+    // recover on a fresh one instead of repeating the same bind failure.
+    if (gatewayBackendPort && !(await isGatewayPortAvailable(gatewayBackendPort))) {
+      await selectGatewayBackendPort({ rotate: true });
+    }
     const spawnAt = Date.now();
     await startGateway();
     const spawnedAt = Date.now();
@@ -2267,6 +2303,14 @@ async function restartGatewayFromElectron(options = {}) {
       adoptLateGatewayReady(pending);
     } else {
       gatewayProcess = null;
+      if (automaticRecovery && !isQuitting) {
+        setTimeout(() => {
+          void requestAutomaticGatewayRecovery({
+            terminateExisting: false,
+            reason: `retry after gateway restart failure: ${message}`,
+          });
+        }, 0);
+      }
     }
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2294,34 +2338,23 @@ async function restartGatewayFromElectron(options = {}) {
 function adoptLateGatewayReady(child) {
   writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} still starting; will adopt it when it becomes healthy\n`);
   const startedAt = Date.now();
-  const probe = () => {
+  const backendPort = gatewayBackendPort;
+  const expectedStartedAt = gatewayProcessStartedAt;
+  const probe = async () => {
     if (isQuitting || gatewayProcess !== child || child.exitCode != null || child.signalCode != null) return;
     if (Date.now() - startedAt > 10 * 60_000) {
       writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} never became healthy; leaving relay failed\n`);
       return;
     }
-    const request = http.request({
-      hostname: '127.0.0.1',
-      port: parseGatewayPort(gatewayBackendPort),
-      path: '/api/health',
-      method: 'HEAD',
-      timeout: GATEWAY_HEALTH_TIMEOUT_MS,
-      headers: { Connection: 'close' },
-    }, (res) => {
-      res.resume();
-      const code = Number(res.statusCode || 0);
-      if (code >= 200 && code < 300 && gatewayProcess === child) {
-        gatewayRelay?.setState('ready');
-        gatewayRecoveryAttempts.length = 0;
-        writeGatewayLog(`[main] Late gateway pid=${child.pid || 'unknown'} became healthy after ${Math.round((Date.now() - startedAt) / 1000)}s; relay ready\n`);
-        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL); } catch {}
-        return;
-      }
-      setTimeout(probe, 1_000);
-    });
-    request.on('timeout', () => { request.destroy(); });
-    request.on('error', () => setTimeout(probe, 1_000));
-    request.end();
+    const ready = await checkGatewayGenerationHealth(backendPort, expectedStartedAt);
+    if (ready && gatewayProcess === child) {
+      gatewayRelay?.setState('ready');
+      gatewayRecoveryAttempts.length = 0;
+      writeGatewayLog(`[main] Late gateway pid=${child.pid || 'unknown'} became healthy after ${Math.round((Date.now() - startedAt) / 1000)}s; relay ready\n`);
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL); } catch {}
+      return;
+    }
+    setTimeout(probe, 1_000);
   };
   setTimeout(probe, 1_000);
 }
@@ -2333,6 +2366,9 @@ function waitForGateway(retries = MAX_RETRIES) {
   // back to the slow cadence for cold/dev boots.
   const waitStartedAt = Date.now();
   const nextHealthDelay = () => (Date.now() - waitStartedAt < 8_000 ? 50 : RETRY_DELAY);
+  const expectedProcess = gatewayProcess;
+  const expectedPort = gatewayBackendPort;
+  const expectedStartedAt = gatewayProcessStartedAt;
   return new Promise((resolve, reject) => {
     let settled = false;
     const done = (fn) => { if (!settled) { settled = true; fn(); } };
@@ -2344,50 +2380,26 @@ function waitForGateway(retries = MAX_RETRIES) {
         `Check that all dependencies are installed (npm install).`
       )));
     };
-    if (gatewayProcess) {
-      gatewayProcess.once('exit', onProcessExit);
+    if (expectedProcess) {
+      expectedProcess.once('exit', onProcessExit);
     }
 
-    const attempt = () => {
+    const attempt = async () => {
       if (settled) return;
-      const request = http.request({
-        hostname: '127.0.0.1',
-        port: parseGatewayPort(gatewayBackendPort),
-        path: '/api/health',
-        method: 'HEAD',
-        timeout: GATEWAY_HEALTH_TIMEOUT_MS,
-        headers: { Connection: 'close' },
-      }, (res) => {
-        res.resume();
-        const ready = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
-        if (ready) {
-          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
-          gatewayRelay?.setState('ready');
-          done(resolve);
-          return;
-        }
-        if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
-          setTimeout(attempt, nextHealthDelay());
-        } else {
-          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
-          done(() => reject(new Error(
-            `Gateway did not become ready at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
-          )));
-        }
-      });
-      request.on('timeout', () => { request.destroy(); });
-      request.on('error', () => {
-        if (settled) return;
-        if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
-          setTimeout(attempt, nextHealthDelay());
-        } else {
-          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
-          done(() => reject(new Error(
-            `Gateway did not respond at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
-          )));
-        }
-      });
-      request.end();
+      const ready = await checkGatewayGenerationHealth(expectedPort, expectedStartedAt);
+      if (settled) return;
+      if (ready && gatewayProcess === expectedProcess) {
+        expectedProcess?.removeListener('exit', onProcessExit);
+        gatewayRelay?.setState('ready');
+        done(resolve);
+      } else if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
+        setTimeout(attempt, nextHealthDelay());
+      } else {
+        expectedProcess?.removeListener('exit', onProcessExit);
+        done(() => reject(new Error(
+          `Gateway did not become ready at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
+        )));
+      }
     };
     attempt();
   });

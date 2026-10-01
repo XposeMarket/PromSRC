@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "weekly-reset-planning",
+  "name": "Weekly Reset Planning",
+  "description": "Run a practical weekly review that gathers commitments, active projects, stalled work, deadlines, finances, and personal constraints, then turns them into a short prioritized plan with explicit next actions and review gates. Use for recurring weekly planning, not a generic status report.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "plan next week around commitments",
+    "review stalled work and priorities",
+    "weekly reset planning",
+    "weekly project review"
+  ],
+  "categories": [
+    "planning",
+    "productivity",
+    "operations",
+    "personal-workflow"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

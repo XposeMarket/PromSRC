@@ -1,0 +1,109 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "theme-application",
+  "name": "Theme Application",
+  "description": "Choose, preview, and consistently apply a visual theme (palette roles, type pairing, accent and chart rules) to a slide deck, document, report, HTML page, dashboard, or chart set, from a bundled original theme library or a custom theme built from a brand. Use when asked to theme, restyle, or make an artifact match brand colors; do not use for full website design, logo or brand-kit creation, or brand positioning.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "apply a theme to this deck",
+    "make this match our brand colors",
+    "apply our brand fonts and colors",
+    "give this deck a consistent look",
+    "change the color scheme",
+    "pick a color theme",
+    "restyle this report",
+    "theme this document"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "apply a theme",
+      "color theme",
+      "colour theme",
+      "color scheme",
+      "brand colors",
+      "brand colours",
+      "match our brand",
+      "restyle",
+      "theme this"
+    ],
+    "allOf": [
+      [
+        "theme",
+        "deck"
+      ],
+      [
+        "theme",
+        "slides"
+      ],
+      [
+        "theme",
+        "document"
+      ],
+      [
+        "theme",
+        "report"
+      ],
+      [
+        "match",
+        "brand",
+        "colors"
+      ],
+      [
+        "change",
+        "color",
+        "scheme"
+      ],
+      [
+        "fonts",
+        "colors",
+        "apply"
+      ]
+    ],
+    "anyOf": [
+      "theme",
+      "palette",
+      "color scheme",
+      "brand colors",
+      "fonts",
+      "restyle",
+      "consistent look"
+    ],
+    "noneOf": [
+      "dark mode toggle",
+      "vscode theme",
+      "design a logo",
+      "logo",
+      "brand strategy",
+      "positioning",
+      "build a website",
+      "landing page"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "design",
+    "documents",
+    "presentations",
+    "branding"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "browser_automation"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/theme-library.md",
+      "type": "reference",
+      "description": "Ten original Prometheus themes with color roles and Office-safe and web font pairings"
+    }
+  ]
+}

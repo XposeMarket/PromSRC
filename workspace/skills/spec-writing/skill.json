@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "spec-writing",
+  "name": "Spec Writing",
+  "description": "Synthesize an already-discussed feature into a saved spec file: problem, solution, user stories, implementation decisions, confirmed test seams, and out-of-scope, optionally published as a GitHub issue via connector tools. Use after requirements-grilling or a design discussion when the user says write the spec or turn this into a spec. Do not use to interview from scratch (requirements-grilling), for the task-by-task build plan (implementation-plan-writing), or for product briefs (product-discovery).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "turn this into a spec",
+    "write a spec for this feature",
+    "write up the requirements doc",
+    "draft the technical spec",
+    "create a design doc",
+    "spec this out",
+    "write the spec"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "write the spec",
+      "turn this into a spec",
+      "spec this out",
+      "design doc",
+      "technical spec",
+      "requirements doc",
+      "write a spec"
+    ],
+    "allOf": [
+      [
+        "write",
+        "spec"
+      ],
+      [
+        "turn",
+        "into",
+        "spec"
+      ],
+      [
+        "design",
+        "doc"
+      ],
+      [
+        "requirements",
+        "document"
+      ],
+      [
+        "user",
+        "stories",
+        "spec"
+      ]
+    ],
+    "anyOf": [
+      "specification",
+      "design doc",
+      "user stories",
+      "requirements",
+      "acceptance"
+    ],
+    "noneOf": [
+      "grill me",
+      "implementation plan",
+      "task by task",
+      "code review",
+      "pull request review",
+      "openapi spec",
+      "test spec file",
+      "jest"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "planning",
+    "requirements"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "ask_prometheus_questions",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

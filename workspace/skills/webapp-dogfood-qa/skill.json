@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "webapp-dogfood-qa",
+  "name": "Web App Dogfood QA",
+  "description": "Explore a live or local web app like a real user to find bugs, UX friction, console errors, and broken flows, then deliver a severity-ranked report with screenshot repro evidence, with an optional hostile-persona pass and pragmatism filter. Use for dogfooding, bug hunts, exploratory QA, or adversarial UX tests; do not use for verifying one specific feature end to end, post-edit smoke tests of a local file, or writing automated test suites.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "be a grumpy user and test",
+    "find bugs in this web app",
+    "bug hunt this web app",
+    "exploratory test this site",
+    "adversarial ux test",
+    "hostile user test",
+    "dogfood this app",
+    "dogfood the site",
+    "qa this website",
+    "exploratory qa"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "dogfood",
+      "bug hunt",
+      "exploratory qa",
+      "exploratory test",
+      "adversarial ux test",
+      "grumpy user",
+      "hostile user",
+      "mom test"
+    ],
+    "allOf": [
+      [
+        "find",
+        "bugs",
+        "app"
+      ],
+      [
+        "find",
+        "bugs",
+        "site"
+      ],
+      [
+        "qa",
+        "website"
+      ],
+      [
+        "qa",
+        "web",
+        "app"
+      ],
+      [
+        "test",
+        "persona"
+      ],
+      [
+        "ux",
+        "friction"
+      ]
+    ],
+    "anyOf": [
+      "dogfood",
+      "exploratory",
+      "persona",
+      "friction",
+      "staging",
+      "web app",
+      "website"
+    ],
+    "noneOf": [
+      "unit test",
+      "vitest",
+      "jest",
+      "playwright test",
+      "write a test",
+      "scrape",
+      "end to end verification",
+      "just made",
+      "local html file"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "qa",
+    "browser-testing",
+    "ux-research",
+    "verification"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

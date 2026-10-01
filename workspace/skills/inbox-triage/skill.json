@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "inbox-triage",
+  "name": "Inbox Triage",
+  "description": "Review a connected email inbox, prioritize threads, identify commitments and deadlines, group low-value noise, and prepare drafts or a decision queue without sending, deleting, archiving, or changing labels unless explicitly authorized. Use for inbox operations, not drafting one standalone email.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "find messages needing a reply",
+    "extract email commitments and deadlines",
+    "prioritize my email inbox",
+    "inbox triage"
+  ],
+  "categories": [
+    "email",
+    "productivity",
+    "operations",
+    "communication"
+  ],
+  "requiredTools": [
+    "skills",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "skill-evaluator",
+  "name": "Skill Evaluator",
+  "description": "Test whether a Prometheus skill actually changes agent behavior: run with-skill versus baseline A/B evals through background agents, grade outputs against assertions, tune triggers with should-fire and near-miss prompts, and tighten the skill text. Use when the user asks to test, benchmark, evaluate, A/B, or tune triggering for a skill, or before activating a new or rewritten skill. Do not use for first-draft skill design (skill-creator) or safety vetting of an external bundle (external-skill-vetting).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "compare with and without the skill",
+    "run evals on this skill",
+    "is the new skill better",
+    "does this skill trigger",
+    "evaluate this skill",
+    "benchmark the skill",
+    "tune skill triggers",
+    "test this skill",
+    "run skill evals",
+    "skill a/b test"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "test this skill",
+      "evaluate this skill",
+      "benchmark the skill",
+      "run skill evals",
+      "run evals",
+      "evals on my",
+      "with vs without",
+      "with and without the skill",
+      "tune skill triggers",
+      "does this skill trigger",
+      "is the new skill better"
+    ],
+    "allOf": [
+      [
+        "test",
+        "skill"
+      ],
+      [
+        "evaluate",
+        "skill"
+      ],
+      [
+        "benchmark",
+        "skill"
+      ],
+      [
+        "skill",
+        "eval"
+      ],
+      [
+        "skill",
+        "evals"
+      ],
+      [
+        "compare",
+        "skill"
+      ],
+      [
+        "skill",
+        "trigger"
+      ],
+      [
+        "skill",
+        "triggers"
+      ],
+      [
+        "skill",
+        "triggers",
+        "correctly"
+      ],
+      [
+        "skill",
+        "baseline"
+      ],
+      [
+        "with",
+        "without",
+        "skill"
+      ]
+    ],
+    "anyOf": [
+      "evals",
+      "benchmark",
+      "baseline",
+      "a b",
+      "trigger",
+      "triggering",
+      "assertion",
+      "with and without"
+    ],
+    "noneOf": [
+      "find a skill",
+      "is there a skill",
+      "vet this skill",
+      "security review",
+      "unit test",
+      "jest",
+      "vitest"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "skills",
+    "meta",
+    "evaluation",
+    "quality"
+  ],
+  "requiredTools": [
+    "skill_read",
+    "skill_list",
+    "background_ops",
+    "workspace_write",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

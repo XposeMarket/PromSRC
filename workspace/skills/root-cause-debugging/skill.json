@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "root-cause-debugging",
+  "name": "Root Cause Debugging",
+  "description": "Investigate software failures by reproducing the symptom, narrowing hypotheses with evidence, tracing the actual cause, applying the smallest safe repair, and verifying the original and adjacent paths. Use for bugs and regressions, not for ordinary feature design or a generic code review.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "runtime failure root-cause trace",
+    "hypothesis-driven regression analysis",
+    "reproduce-before-fixing investigation",
+    "root-cause-debugging workflow"
+  ],
+  "categories": [
+    "software-development",
+    "debugging",
+    "quality"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

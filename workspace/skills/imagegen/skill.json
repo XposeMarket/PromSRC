@@ -3,22 +3,21 @@
   "id": "imagegen",
   "name": "imagegen",
   "description": "Generate or edit raster images in Prometheus with native image providers and asset-aware output handling. Use for AI photos, illustrations, textures, sprites, mockups, hero images, transparent cutouts, background replacement, concept art, and image variants. Prefer deterministic tools for exact geometry, text, icons, and logos.",
-  "emoji": "🖼️",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "generate an ai image",
-    "create a raster image",
     "make an image from prompt",
     "edit this image with ai",
-    "remove image background",
-    "make transparent png",
-    "generate image variations",
+    "generate an ai image",
+    "create a raster image",
     "create product mockup image",
     "create website hero image",
     "make game sprite image",
+    "make transparent png",
     "replace photo background",
-    "make concept art"
+    "make concept art",
+    "remove image background",
+    "generate image variations"
   ],
   "categories": [
     "image",
@@ -31,6 +30,7 @@
     "generate_image",
     "creative"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -47,13 +47,6 @@
       "path": "references/asset-workflows.md",
       "type": "doc",
       "description": "Project asset storage, Creative registration, provenance, transparency validation, and delivery guidance."
-    },
-    {
-      "path": "references/provider-recovery.md",
-      "type": "reference",
-      "description": "Known provider fallback, workspace reference-path constraints, and validation steps for one-shot image generation failures."
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }
