@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "github-gh-fix-ci",
+  "name": "github-gh-fix-ci",
+  "description": "Diagnose and fix failing GitHub Actions checks on a pull request or branch using the GitHub connector: find the failing check runs, pull the job logs, reproduce locally, fix narrowly, and confirm the rerun goes green. Use when CI, checks, or an Actions workflow is red. Not for reviewing a diff (code-review), answering review comments (receiving-code-review), or general GitHub lookups (connector-github).",
+  "version": "2.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "why did the github actions run fail",
+    "ci is failing on my pr",
+    "the build is red on github",
+    "checks are failing on the pr",
+    "fix the failing checks"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "failing checks",
+      "ci is failing",
+      "ci failed",
+      "checks are failing",
+      "github actions failed",
+      "actions run failed",
+      "build is red",
+      "fix ci",
+      "red ci"
+    ],
+    "allOf": [
+      [
+        "ci",
+        "failing"
+      ],
+      [
+        "checks",
+        "failing"
+      ],
+      [
+        "actions",
+        "failed"
+      ],
+      [
+        "ci",
+        "red"
+      ]
+    ],
+    "anyOf": [
+      "github actions",
+      "check runs",
+      "workflow run",
+      "job log"
+    ],
+    "noneOf": [
+      "review this diff",
+      "review comments",
+      "open a pr"
+    ],
+    "minScore": 4
+  },
+  "categories": [
+    "software-development",
+    "github",
+    "ci"
+  ],
+  "requiredTools": [
+    "connector_github",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "assets/github-small.svg",
+      "type": "asset"
+    },
+    {
+      "path": "LICENSE.txt",
+      "type": "reference"
+    }
+  ]
+}

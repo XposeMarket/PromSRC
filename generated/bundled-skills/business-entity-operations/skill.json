@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "business-entity-operations",
+  "name": "business-entity-operations",
+  "description": "Maintain structured business entity records and business context with provenance. Use for clients, projects, contacts, and dated entity events; not for personal memory governance (memory-governance-playbook).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "append dated business entity event",
+    "update canonical client record"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "business",
+    "memory"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

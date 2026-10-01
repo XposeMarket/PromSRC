@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "composite-tool-authoring",
+  "name": "composite-tool-authoring",
+  "description": "Design, test, and maintain repeatable saved Prometheus composite tools. Use for validated multi-tool sequences; not for a one-off tool chain or a standalone typed connector (connector-builder).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create a saved composite tool",
+    "fix a composite workflow"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "composite_tools"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

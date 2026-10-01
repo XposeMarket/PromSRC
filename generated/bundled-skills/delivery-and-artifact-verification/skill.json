@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "delivery-and-artifact-verification",
+  "name": "delivery-and-artifact-verification",
+  "description": "Deliver and verify an actual generated file, screenshot, report, or attachment through the requested channel. Use for presentation and receipt; not for finding old artifacts (artifact-registry).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "verify the attachment arrived",
+    "send the generated file"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "delivery_send"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

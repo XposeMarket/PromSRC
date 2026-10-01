@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "recovery-and-interruption-playbook",
+  "name": "recovery-and-interruption-playbook",
+  "description": "Recover interrupted Prometheus work from checkpoint evidence and side-effect state. Use for paused or interrupted flows; not for a general gateway outage (runtime-operations-incident-response).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "resume from a paused checkpoint",
+    "recover an interrupted task"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "automation_recovery"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

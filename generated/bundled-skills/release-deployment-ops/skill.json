@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "release-deployment-ops",
+  "name": "release-deployment-ops",
+  "description": "Prepare, execute, and verify a software release across a hosting environment with preflight checks, environment separation, migration safety, rollback planning, deployment evidence, and post-release smoke tests. Use for deployment and release operations, not for ordinary local builds.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "deploy the site to production and verify it",
+    "ship this release and smoke test it",
+    "plan a rollback for this deploy",
+    "release this to vercel",
+    "preflight before deploying"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "deploy to production",
+      "deploy the site",
+      "release this",
+      "smoke test the deploy",
+      "rollback plan",
+      "deploy preflight",
+      "push to production"
+    ],
+    "allOf": [
+      [
+        "deploy",
+        "verify"
+      ],
+      [
+        "deploy",
+        "site"
+      ],
+      [
+        "release",
+        "production"
+      ],
+      [
+        "deploy",
+        "vercel"
+      ]
+    ],
+    "anyOf": [
+      "production deploy",
+      "staging deploy",
+      "release checklist"
+    ],
+    "noneOf": [
+      "prometheus gateway",
+      "restart the gateway"
+    ],
+    "minScore": 4
+  },
+  "categories": [
+    "devops",
+    "release",
+    "deployment",
+    "operations"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "proposal-lifecycle-operations",
+  "name": "proposal-lifecycle-operations",
+  "description": "Manage Prometheus proposals through drafting, review, approval boundaries, and verification. Use for a proposal lifecycle; not for directly editing ordinary workspace files (file-surgery).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "prepare a prometheus proposal",
+    "verify an approved proposal"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "proposal_admin"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

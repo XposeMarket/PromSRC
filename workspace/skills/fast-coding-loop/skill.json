@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "fast-coding-loop",
+  "name": "fast-coding-loop",
+  "description": "Default coding workflow for Prometheus main chat and every coding agent: locate with one multi-pattern search, read big windows in batches, edit in batches, verify once. Use for any bug fix, feature edit, refactor, or read-only code investigation in PromSRC or any repo. Not for UI/desktop automation or non-code research.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "code investigation",
+    "coding workflow"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

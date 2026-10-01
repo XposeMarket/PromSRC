@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "document-coauthoring",
+  "name": "document-coauthoring",
+  "description": "Collaboratively structure, draft, refine, and cold-read a substantial document with decision context. Use for iterative briefs, proposals, specs, or RFCs; use docx, pdf, or report-generator for format-specific production or a finished research report. Not for format-only production (docx or pdf) or a finished research report (report-generator).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "reader test for a proposal",
+    "collaborative rfc drafting",
+    "decision record refinement",
+    "technical document coauthoring"
+  ],
+  "categories": [
+    "writing",
+    "documentation",
+    "product",
+    "architecture"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}
