@@ -51,6 +51,8 @@
     "test:web-ui-image-budget": "node scripts/test-web-ui-image-budget.mjs",
     "test:git-read-cache": "tsx src/gateway/coding/git-read-cache.regression.ts",
     "bench:git-blocking": "node scripts/benchmark-gateway-git-blocking.mjs",
+    "test:gateway-perf-budgets": "node --import tsx scripts/test-gateway-perf-budgets.mjs",
+    "test:ws-fanout": "node --import tsx scripts/benchmark-gateway-stream-load.mjs",
     "test:live-source-state": "tsx src/gateway/diagnostics/live-source-state.regression.ts",
     "test:degraded-turn-finish": "tsx src/gateway/chat/degraded-turn-finish.regression.ts",
     "test:anthropic-continuation": "tsx src/providers/anthropic-adapter.regression.ts && tsx src/gateway/chat/model-response-recovery.regression.ts",
