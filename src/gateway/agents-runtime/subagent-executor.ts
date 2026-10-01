@@ -20361,7 +20361,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               : Number.isFinite(Number(sessionHint?.userId))
                 ? Number(sessionHint?.userId)
                 : undefined;
-            const ctx = {
+            const ctx: import('../lifecycle').RestartContext = {
               reason: (args.proposal_id ? 'proposal' : args.repair_id ? 'repair' : 'manual') as any,
               timestamp: Date.now(),
               proposalId: args.proposal_id || undefined,
@@ -20396,7 +20396,9 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             await gracefulRestart(ctx);
             return {
               name, args,
-              result: `✅ Quick gateway restart initiated. No npm build was run.`,
+              result: ctx.forwardedToPid !== undefined
+                ? `✅ Gateway restart forwarded to the replacement gateway${ctx.forwardedToPid ? ` (pid=${ctx.forwardedToPid})` : ''}. No npm build was run.`
+                : `✅ Quick gateway restart initiated. No npm build was run.`,
               error: false,
             };
           } catch (err: any) {
