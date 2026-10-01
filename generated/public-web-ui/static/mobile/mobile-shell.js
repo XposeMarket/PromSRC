@@ -331,6 +331,8 @@ let _drawerRefreshing = false;
 let _drawerRenderInFlight = 0;
 let _drawerGatewayHeartbeatTimer = null;
 let _drawerGatewayStatusProbeInFlight = false;
+const _drawerKnownGatewayStatus = new Map();
+let _drawerRenderDeferTimer = null;
 let _drawerRenderSeq = 0;
 let _drawerStateCache = null;
 let _drawerPinnedCollapsed = false;
@@ -1653,13 +1655,29 @@ function _renderDrawerGatewayFilterPanel() {
 
 function _mountDrawerGatewayFilterPanel() {
   _drawerGatewayFilterCleanup?.();
+  // Seed with persisted statuses so the first real flip is still detected.
+  try {
+    for (const entry of loadGatewayCatalog()) {
+      if (!_drawerKnownGatewayStatus.has(String(entry.gatewayId || ''))) _drawerKnownGatewayStatus.set(String(entry.gatewayId || ''), String(entry.status || ''));
+    }
+  } catch {}
   _drawerGatewayFilterCleanup = onGatewayCatalogChanged((detail) => {
     const type = String(detail?.type || '');
     if (type === 'status_changed') {
+      // Every successful probe re-persists the gateway (fresh lastContactAt)
+      // and emits status_changed even when nothing changed. Session loads and
+      // the pinned/projects enrichment probe too, so reacting to unchanged
+      // statuses re-rendered the open drawer ~10x/second forever, detaching
+      // any row the user was long-pressing. Only a real status flip matters.
+      const gatewayId = String(detail?.gateway?.gatewayId || '');
+      const nextStatus = String(detail?.gateway?.status || '');
+      const prevStatus = _drawerKnownGatewayStatus.get(gatewayId);
+      _drawerKnownGatewayStatus.set(gatewayId, nextStatus);
+      const statusFlipped = prevStatus !== undefined && prevStatus !== nextStatus;
       // Session visibility itself is refreshed by the in-flight loader. Do
       // not recursively start another probe while that loader is running.
       const pageState = _drawerPageStateFor();
-      if (!_drawerGatewayStatusProbeInFlight && !_drawerRefreshing && !_drawerRenderInFlight && !pageState.loading) {
+      if (statusFlipped && !_drawerGatewayStatusProbeInFlight && !_drawerRefreshing && !_drawerRenderInFlight && !pageState.loading) {
         _resetDrawerPageState();
         if (_drawerEl?.classList?.contains('open') && !_drawerSearch) {
           refreshMobileDrawerSessions({ force: true }).catch(() => {});
@@ -1988,6 +2006,14 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     if (!isCurrent()) return;
     const renderContent = () => {
       if (!isCurrent() || _drawerSearch || _sessLift) return;
+      // Rebuilding the list mid long-press detaches the held row (popover
+      // then anchors to a 0x0 rect at the top and the lift never attaches).
+      // Defer until the press resolves; isCurrent() drops stale retries.
+      if (_sessLongPressTimer || document.documentElement.classList.contains('pm-session-context-open')) {
+        clearTimeout(_drawerRenderDeferTimer);
+        _drawerRenderDeferTimer = setTimeout(renderContent, 350);
+        return;
+      }
       const scrollTop = Math.max(0, Number(scrollEl?.scrollTop) || 0);
       const pageState = _drawerPageStateFor();
       head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
@@ -2144,6 +2170,18 @@ function _wireDrawerLongPress(callbacks) {
       // iOS can otherwise select drawer text and show its native copy menu.
       try { window.getSelection?.()?.removeAllRanges(); } catch {}
       document.documentElement.classList.remove('pm-session-long-press-pending');
+      // If a background refresh swapped the row out, re-find its replacement
+      // (same id, same section) under the finger instead of using a dead node.
+      if (!sessionBtn.isConnected) {
+        var attr = _sessLongTargetType === 'project' ? 'data-project-toggle' : 'data-session-id';
+        var esc = window.CSS && CSS.escape ? CSS.escape(_sessLongTargetId) : String(_sessLongTargetId).replace(/"/g, '\\"');
+        var candidates = Array.from(_drawerEl.querySelectorAll('[' + attr + '="' + esc + '"]'));
+        var under = document.elementFromPoint(_sessLongStartX, _sessLongStartY);
+        sessionBtn = (under && _resolveSessionButton(under)) && candidates.indexOf(_resolveSessionButton(under)) >= 0
+          ? _resolveSessionButton(under)
+          : candidates[0];
+        if (!sessionBtn) { _sessLongFired = false; return; }
+      }
       var rowRect = _sessionRowUnit(sessionBtn).getBoundingClientRect();
       var anchor = { x: _sessLongStartX, y: _sessLongStartY, rect: rowRect };
       // Sessions float above the blur. Projects keep the plain menu.
@@ -4506,8 +4544,10 @@ function _positionSessionSheetAtPoint(sheet, anchor) {
   const gap = 10;
   const w = sheet.offsetWidth || 280;
   const h = sheet.offsetHeight || 260;
-  const rowTop = Number(anchor.rect?.top ?? anchor.y - 24);
-  const rowBottom = Number(anchor.rect?.bottom ?? anchor.y + 24);
+  // A detached row reports a 0x0 rect; fall back to the finger position.
+  const hasRect = !!anchor.rect && Number(anchor.rect.height) > 0;
+  const rowTop = hasRect ? Number(anchor.rect.top) : anchor.y - 24;
+  const rowBottom = hasRect ? Number(anchor.rect.bottom) : anchor.y + 24;
   let top;
   if (rowBottom + gap + h <= vh - margin) top = rowBottom + gap;
   else if (rowTop - gap - h >= margin) top = rowTop - gap - h;

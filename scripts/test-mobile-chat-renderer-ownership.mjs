@@ -105,8 +105,10 @@ const measurements = {
 // Durable thought/summary separation adds the next small measured increment.
 // Live mobile vision previews add eager loading, paired-gateway URL
 // normalization, and stable DOM-node reuse so screenshots remain visible while
-// subsequent tool events patch the same turn. The current main manifest
-// measures 257000 gzip bytes; hold that reviewed ceiling against new growth.
-assert(measurements.gzipBytes <= 257000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// subsequent tool events patch the same turn. The drawer long-press fix (refresh
+// only on a real gateway status flip, defer re-render under an active hold,
+// re-find a detached row) adds 257 measured gzip bytes. The current main
+// manifest measures 257257 gzip bytes; hold that reviewed ceiling against new growth.
+assert(measurements.gzipBytes <= 257300, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
