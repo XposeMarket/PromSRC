@@ -1,7 +1,7 @@
 {
   "name": "prometheus",
   "version": "1.0.17",
-  "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "description": "Prometheus â€” Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "engines": {
     "node": ">=20.20.0 <23"
   },
@@ -47,6 +47,7 @@
     "test:external-import-sidebar": "node scripts/test-external-import-sidebar.mjs",
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
+    "test:live-source-state": "tsx src/gateway/diagnostics/live-source-state.regression.ts",
     "test:degraded-turn-finish": "tsx src/gateway/chat/degraded-turn-finish.regression.ts",
     "test:anthropic-continuation": "tsx src/providers/anthropic-adapter.regression.ts && tsx src/gateway/chat/model-response-recovery.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",

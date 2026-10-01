@@ -55,8 +55,10 @@ assert.match(mobilePageFacade, /if \(questionOnly\)[\s\S]*?thread\.splice\(index
   'answering a question must remove its empty compatibility bubble');
 assert.match(mobilePageRuntime, /function refreshMobileQuestionRecovery\([\s\S]*?loadMobileQuestions\('all', requestedSession\)/,
   'question recovery must run independently of main-chat run status');
-assert.match(mobilePageRuntime, /const runRecoveryOnReturn = \(\) => \{\s*void refreshMobileQuestionRecovery\(\)/,
-  'foreground reconnect must recheck durable question state');
+assert.match(mobilePageRuntime, /const runRecoveryOnReturn = \(\{ bypassCooldown = false \} = \{\}\) => \{\s*void refreshMobileQuestionRecovery\(\);\s*const now = Date\.now\(\);/,
+  'foreground reconnect must recheck durable question state before run-recovery cooldown');
+assert.match(mobilePageRuntime, /const runRecoveryOnWsOpen = \(\) => runRecoveryOnReturn\(\{ bypassCooldown: true \}\)/,
+  'socket reopen must bypass run-recovery cooldown without bypassing question recovery');
 
 assert.match(mobileCss, /\.pm-composer\.has-pending-question \.pm-composer-row[\s\S]*?display: none !important/, 'pending questions must hide the normal mobile composer row');
 assert.match(mobileCss, /\.pm-composer\.has-pending-question \.pm-mobile-question-popover[\s\S]*?position: relative/, 'pending questions must occupy the composer host');

@@ -260,9 +260,10 @@ assert.match(runtimeRecovery,
   /processEntries:\s*processEntries\.length \? processEntries : undefined,\s*liveTraceEntries,/,
   'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
-assert.match(pages, /const keyFor = \(item\) => \{/, 'recovery must define a stable activity merge key');
-assert.match(pages, /return `event:\$\{eventKey\}`/, 'recovery activity merge must prefer stream event identity');
-assert.match(pages, /return `\$\{type\}\|\$\{callId\}\|\$\{action\}\|\$\{text\}\|\$\{preview\}`/, 'recovery activity merge must fall back to normalized content');
+assert.match(pages, /const keysFor = \(item\) => \{/, 'recovery must define stable activity merge identities');
+assert.match(pages, /if \(eventKey\) keys\.push\(`event:\$\{eventKey\}`\)/, 'recovery activity merge must recognize stream event identity');
+assert.match(pages, /if \(callId\) keys\.push\(`call:\$\{type\}\|\$\{callId\}`\)/, 'recovery must match a call across changed stream event keys');
+assert.match(pages, /keys\.push\(`sig:\$\{type\}\|\$\{callId\}\|\$\{action\}\|\$\{text\}\|\$\{preview\}`\)/, 'recovery activity merge must fall back to normalized content');
 assert.match(toolActivityRuntime, /entry\?\.extra\?\.action \|\| entry\?\.extra\?\.toolName/, 'cold recovery rows must load the existing tool activity renderer');
 assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy tool event-shaped rows must be normalized before rich coalescing');
 assert.match(toolActivityRuntime, /const isToolRecord = \['tool', 'skill', 'result', 'error', 'progress'\]/, 'cold recovery must preserve model prose beside structured tools');
@@ -422,10 +423,10 @@ assert.match(
 );
 assert.match(
   pages,
-  /const seenRequests = new Map\(\)[\s\S]{0,1200}const separatedByUser = list\.slice\(requestIndex \+ 1, i\)[\s\S]{0,300}continue;/,
+  /const seenRequests = new Map\(\)[\s\S]{0,1600}const separatedByUser = list\.slice\(requestIndex \+ 1, i\)[\s\S]{0,300}continue;/,
   'assistant recovery dedupe must preserve later responses when a user turn separates a reused request identity',
 );
-assert.match(pages, /if \(requestIndex >= 0 && _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)/, 'request-id dedupe must also verify compatible assistant content');
+assert.match(pages, /if \(requestIndex >= 0 && \(serverFinalPair \|\| _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)\)/, 'request-id dedupe must verify compatible assistant content or an authoritative server-final pair');
 assert.match(pages, /Request ids identify a transport run[\s\S]{0,360}aText\.startsWith\(bText\)/, 'transport request identity must not collapse distinct durable rows');
 assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true, serverAuthoritativeText: true \}\)/, 'painted transcript order must remain the hydration continuity spine while completed server text stays authoritative');
 assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,300}const nextAnchor = incoming\.slice\(incomingIndex \+ 1\)/, 'unmatched hydration rows must be placed next to matching transcript anchors');

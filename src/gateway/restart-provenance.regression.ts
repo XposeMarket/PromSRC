@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
 import {
   describeTurnAbortCause,
   describeRestartProvenance,
@@ -53,7 +54,7 @@ const textShaped = buildPreRestartWorkDigest({
 assert.match(textShaped, /result write_note: Note saved/, 'text-shaped checkpoint entries must be digested');
 
 // 4. Real ledger smoke (skipped when the file is absent, e.g. CI).
-const ledger = 'C:/Users/rafel/AppData/Roaming/Prometheus/.prometheus/runtimes/active-runtimes.json.bak';
+const ledger = path.join(process.env.APPDATA || '', 'Prometheus', '.prometheus', 'runtimes', 'active-runtimes.json.bak');
 if (existsSync(ledger)) {
   const parsed = JSON.parse(readFileSync(ledger, 'utf8'));
   const list: any[] = Array.isArray(parsed.runtimes) ? parsed.runtimes : Object.values(parsed.runtimes || {});
