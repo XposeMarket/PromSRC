@@ -17,6 +17,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
 import { goalReminderForTool } from '../chat/goal-reminder';
 import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
@@ -7595,7 +7596,7 @@ RULES:
           }
           // Heartbeats are intentionally not written to turn-timing logs; they
           // are liveness signals, not user-visible work boundaries.
-          if (stage !== 'provider_heartbeat') {
+          if (stage !== 'provider_heartbeat' && shouldRecordWorkerBatchTiming(stage, fields)) {
             turnTiming.mark(`model_worker_${stage}`, {
               provider: generationOverride.providerId,
               model: generationOverride.model,

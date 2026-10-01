@@ -27,6 +27,7 @@ import { registerGameProjectRoutes } from '../routes/game-project.routes';
 import { initVideoProjectWake } from '../video-project-wake';
 import { getConfig } from '../../config/config';
 import { triggerHookRawBodyMiddleware } from '../routes/triggers.router';
+import { staticCacheControl } from './static-cache';
 
 const startedAt = Date.now();
 // Request timing is intentionally separate from the normal startup profile:
@@ -35,16 +36,7 @@ const startedAt = Date.now();
 const STARTUP_HTTP_PROFILE = process.env.PROMETHEUS_STARTUP_DIAGNOSTICS === '1';
 
 function setStaticCacheHeaders(res: express.Response, filePath: string): void {
-  const normalized = filePath.replace(/\\/g, '/');
-  if (normalized.endsWith('/index.html')) {
-    res.setHeader('Cache-Control', 'no-cache');
-    return;
-  }
-  if (normalized.includes('/static/') || normalized.includes('/vendor/') || normalized.includes('/assets/')) {
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    return;
-  }
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', staticCacheControl(filePath));
 }
 
 // Raw-module (dev) builds ship service-worker.js with the constant sentinel

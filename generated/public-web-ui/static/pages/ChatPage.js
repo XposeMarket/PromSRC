@@ -18,6 +18,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { createSessionPersistenceScheduler, attachSessionPersistenceLifecycle } from '../features/chat/core/session-persistence-scheduler.js';
 import { createDesktopSendChatRuntime } from '../features/chat/runtime/desktop-send-chat-runtime.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
 import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
@@ -7059,10 +7060,17 @@ function sanitizeChatSessionsForStorage(sessions) {
     : [];
 }
 
+let lastSavedChatSessions = null;
+const chatSessionsSaveScheduler = createSessionPersistenceScheduler({ save: saveChatSessions });
+function scheduleSaveChatSessions(options) { chatSessionsSaveScheduler.schedule(options); }
+function flushChatSessionsSave() { chatSessionsSaveScheduler.flush(); }
 function saveChatSessions() {
   const sanitized = sanitizeChatSessionsForStorage(window.chatSessions);
   try {
-    localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(sanitized));
+    const serialized = JSON.stringify(sanitized);
+    if (serialized === lastSavedChatSessions) return;
+    localStorage.setItem(CHAT_SESSIONS_KEY, serialized);
+    lastSavedChatSessions = serialized;
   } catch (err) {
     if (err && (err.name === 'QuotaExceededError' || /quota/i.test(String(err.message || err)))) {
       console.warn('[ChatPage] localStorage quota exceeded; saving compact session index without browser frames.');
@@ -7073,12 +7081,10 @@ function saveChatSessions() {
         creativeCheckpoints: Array.isArray(session.creativeCheckpoints) ? session.creativeCheckpoints.slice(-6) : undefined,
       }));
       try {
-        localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(compact));
-        // The compact payload is a persistence fallback only. Replacing the
-        // live session registry here used to truncate an open conversation to
-        // 24 messages as soon as localStorage hit quota. The durable server
-        // still had the full history, which is why restarting restored it and
-        // the next save made it disappear again.
+        const compactSerialized = JSON.stringify(compact);
+        localStorage.setItem(CHAT_SESSIONS_KEY, compactSerialized);
+        lastSavedChatSessions = compactSerialized;
+        // Fallback is durable only: never truncate the live session registry.
       } catch (fallbackErr) {
         console.warn('[ChatPage] compact session save also exceeded quota; saving minimal recent session index.', fallbackErr);
         const minimal = compact.slice(-8).map((session) => ({
@@ -7093,9 +7099,10 @@ function saveChatSessions() {
           browserCanvasState: null,
         }));
         try {
-          localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(minimal));
-          // Never project the four-message emergency index back into the live
-          // UI. It exists only to make the next cold start recoverable.
+          const minimalSerialized = JSON.stringify(minimal);
+          localStorage.setItem(CHAT_SESSIONS_KEY, minimalSerialized);
+          lastSavedChatSessions = minimalSerialized;
+          // Emergency index is durable only; leave live history intact.
         } catch (minimalErr) {
           console.error('[ChatPage] unable to persist chat sessions after quota compaction; continuing without local persistence.', minimalErr);
         }
@@ -18130,7 +18137,7 @@ function persistSession(id) {
   applyAutoSessionTitleOnce(s, s.history);
   s.updatedAt = Date.now();
   syncDesktopChatRuntime(s, { source: 'desktop-persist' });
-  saveChatSessions();
+  scheduleSaveChatSessions({ background: id !== window.activeChatSessionId });
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   window.scheduleSessionListRefresh?.();
   if (typeof window.updateStats === 'function') window.updateStats([]);
@@ -46934,9 +46941,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
   const activeBeforeStreamEvent = window.activeChatSessionId;
-  // Locally-started desktop turns are already handled by the /api/chat SSE reader.
-  // The websocket bridge is for other live surfaces: Telegram, mobile, CLI, and
-  // any channel turn this desktop tab is observing rather than owning.
+  // Local desktop turns use SSE; websocket handles other surfaces.
   const clientRequestId = String(msg?.data?.clientRequestId || msg?.clientRequestId || '').trim();
   const isRecoveryReplay = options.recovery === true;
   if (!isRecoveryReplay && (isLocalMainChatRequest(sid, clientRequestId) || window._sessionAbortControllers?.[sid])) return;
@@ -47276,13 +47281,10 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   sess.updatedAt = Date.now();
   sess.lastMessageAt = getSessionLastMessageAt(sess);
   if (sid !== window.activeChatSessionId) sess.unread = true;
-  // Per-token events used to re-sort every session, JSON.stringify ALL session
-  // histories into localStorage (synchronously) and rebuild the sidebar for
-  // EVERY token of EVERY observed thread. With several live threads that is
-  // hundreds of full-history serializations per second (renderer spiked to
-  // 4.4 GB / 124% CPU). Coalesce the bookkeeping to ~1/s and flush immediately
-  // on structural/terminal events.
+  // Defer background index saves; terminal events flush synchronously.
+  const terminalEvent = evt.type === 'done' || evt.type === 'error';
   scheduleMainChatStreamSessionBookkeeping(!MAIN_CHAT_STREAM_HOT_EVENT_TYPES.has(evt.type));
+  if (terminalEvent || evt.type === 'session_title' || evt.type === 'user_message') flushChatSessionsSave();
   restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, sid);
 }
 
@@ -47308,7 +47310,7 @@ function runMainChatStreamSessionBookkeeping() {
   _mainChatStreamBookkeepingLastAt = Date.now();
   try {
     window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
-    saveChatSessions();
+    scheduleSaveChatSessions({ background: true });
     if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
     refreshVisibleChannelsList();
   } catch (err) {
@@ -47326,13 +47328,9 @@ function scheduleMainChatStreamSessionBookkeeping(immediate = false) {
   _mainChatStreamBookkeepingTimer = setTimeout(runMainChatStreamSessionBookkeeping, waitMs);
 }
 
-// Never lose a coalesced save when the window is hidden or closed.
-try {
-  window.addEventListener('pagehide', () => { if (_mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping(); });
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && _mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping();
-  });
-} catch {}
+try { attachSessionPersistenceLifecycle(window, document, flushChatSessionsSave, () => {
+  if (_mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping();
+}); } catch {}
 
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
 
