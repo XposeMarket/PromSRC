@@ -1,106 +1,26 @@
 ---
 name: "website-intelligence"
-description: "Use this skill when the user asks to audit, analyze, score, or inspect a website for SEO, content, performance heuristics, tech stack, AI/GEO visibility, backlinks/search signals, conversion clarity, or competitor site intelligence. Triggers on phrases like audit this website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, and website intelligence. Use it to deploy the website analysis team for full audits or choose quick web_fetch/web_fetch_batch checks for narrow questions."
+description: "Audit a business website for SEO, content, conversion clarity, tech stack, and trust signals using the website analysis team for full audits or web_fetch for narrow checks. Use for site-specific intelligence; use competitor-profile for a company dossier and competitive-intelligence for multi-company market comparison."
 ---
 
-# Website Intelligence
+# Website intelligence
 
-Full playbook for deploying the one-shot 5-agent website analysis team and interpreting results.
+Use for a site-specific audit, especially an agency client prospect's website. For market-level comparison use `competitive-intelligence`; for one company rather than its site use `competitor-profile`.
 
----
+## Scope first
 
-## Tool
+1. Identify the exact website URL, business, geography, target customer, and decision (lead qualification, SEO, conversion, technical audit, or competitor site comparison).
+2. For one small question, use `web_fetch` or `web_search` and cite the pages inspected. Use `web_fetch_batch` for multiple known URLs only when exposed, otherwise batch `web_fetch` URLs. A JS-rendered page may require `browser_automation`.
+3. For a full go-to-market audit, load `agents_and_teams` via `request_tool_category` and call `deploy_analysis_team({ url: "https://example.com" })` when available. This tool is a collector-first website analysis, not a persistent team and not a Lighthouse report. It runs specialists for business intelligence, SEO discovery, social reputation, browser funnel, CRO and messaging, technical audit, and competitive positioning. Avoid claiming guaranteed keyword rank, back-link authority, or page-speed scores.
 
-`deploy_analysis_team({ url })`
+## Full-audit output
 
-- **url**: Full URL including https:// (e.g. `https://example.com`)
-- Spawns 5 specialist agents in parallel — runs async, result delivered to main chat via notification event
-- Report saved to `workspace/reports/` after completion
-- Team self-deletes after delivery
+1. Inspect the returned structured GTM bundle, specialist status, source evidence, limitations, strengths, findings, scorecard, marketing and sales playbooks, and priority actions. The tool saves a JSON artifact at a `site-analysis-*-bundle-*.json` path in the workspace, not a prebuilt report.
+2. Follow the current tool result instructions to create one inline dashboard with scorecards, strengths, findings, playbooks, priorities, and download controls. Follow with a written executive rundown and prioritized marketing, sales, and site-improvement plan. Do **not** call `present_file` after `deploy_analysis_team` merely to surface that JSON.
+3. Separate confirmed findings from heuristics or specialist guesses. Tag inaccessible pages, robots restrictions, sparse SERPs, or missing performance/API data as limitations. Any performance estimate is heuristic unless measured with a real tool; do not fabricate Lighthouse, Ahrefs, or Google Search Console data.
+4. Prioritize 3 to 5 fixable issues with expected business impact and verification, e.g. inspect meta tags and live CTA before recommending changes. For agency prospecting work, distinguish a prospecting hypothesis from a confirmed client need.
+5. Verify the dashboard and written recommendations match the same business and dated bundle. Never silently save an entity summary or submit outreach: `save_to_entity` is optional and should be used only when requested.
 
----
+## Recovery
 
-## When to Use
-
-Use `deploy_analysis_team` when the user asks to:
-- Audit their website
-- Check SEO or search rankings
-- Analyze site performance or tech stack
-- Understand their AI/GEO visibility
-- Research a competitor's website
-- Get a site score or full report
-
-For a quick single-question web check (e.g. "does my site have HTTPS?"), use `web_fetch` directly instead. For several known pages or competitor/source URLs, use `web_fetch_batch`.
-
----
-
-## What the 5 Agents Do
-
-| Agent | Checks | Output file |
-|---|---|---|
-| **SEO Scanner** | Title, meta description, H1/H2, image alt text, canonical, robots meta, SERP presence, top keywords | `findings-seo.md` |
-| **Performance & Stack Detective** | Framework detection (Next.js, WP, Shopify), JS bundle size, render-blocking, mobile viewport, lazy loading | `findings-performance.md` |
-| **GEO (AI Visibility) Agent** | Brand presence in AI-generated search results, featured snippets, knowledge panels, AI citation score | `findings-geo.md` |
-| **Backlinks & SERP Intelligence** | Domain authority signals, top referring domains, competitive ranking gaps | `findings-backlinks.md` |
-| **Content Audit Agent** | Page copy quality, readability, value proposition clarity, CTA strength, content gaps | `findings-content.md` |
-
----
-
-## Workflow
-
-### Standard site audit
-```
-1. deploy_analysis_team({ url: "https://example.com" })
-2. Agents run in parallel (async — takes 2-5 minutes)
-3. Result delivered as team_event notification to main chat
-4. Report compiled at workspace/reports/[domain]-analysis.md
-5. Read report and summarize top 3 priority fixes for the user
-```
-
-### Competitive research
-```
-1. deploy_analysis_team({ url: "https://competitor.com" })
-2. When report arrives, compare against user's own site
-3. Identify gaps: keywords they rank for, tech advantages, content angles
-4. Output a gap analysis with 5 actionable items
-```
-
----
-
-## Reading the Report
-
-After the report arrives, structure your response as:
-
-**1. Score summary** — give each area a rating (SEO: X/10, Performance: X/10, GEO: High/Medium/Low/Invisible, Content: X/10)
-
-**2. Top 3 critical issues** — the highest-impact problems to fix first
-
-**3. Quick wins** — things fixable in <1 day that have outsized impact (missing meta description, no alt tags, etc.)
-
-**4. Strategic recommendations** — 2-3 longer-term moves (tech stack upgrade, content strategy, link building)
-
-Keep it direct. Numbers and specifics over adjectives. If data is missing from a section, note it as "scraping limitation" rather than guessing.
-
----
-
-## API Limitations
-
-The team uses `web_fetch`, `web_fetch_batch`, and `web_search` — no Lighthouse API or PageSpeed Insights API. This means:
-- **Performance scores** are heuristic, not Lighthouse numbers
-- **Backlink data** is search-signal based, not Ahrefs/Moz level
-- **GEO visibility** is based on web_search sampling, not exhaustive
-
-When doing manual follow-up research after the team report:
-- Use `web_search({ query, fetch_top_k: 2-5 })` for compact source discovery plus reading.
-- Use `web_fetch_batch` for selected competitor pages, review pages, docs, or SERP evidence URLs.
-- Use browser tools only for live interaction, JS-rendered content, screenshots, or visual QA.
-
-For production-grade audits, recommend the user also run Google PageSpeed Insights and Ahrefs manually and share results for a combined analysis.
-
----
-
-## Changelog
-
-| Date | Change |
-|------|--------|
-| 2026-03-19 | Initial skill created. Tool wired in Block A2. |
+If `deploy_analysis_team` is unavailable, times out, or returns incomplete specialists, do a bounded manual audit via `web_fetch`, `web_search`, and browser inspection where necessary. State coverage, observations, and missing evidence; do not pretend a five-agent report ran. If the user only asked for one fact, answer it directly instead of launching the full audit.

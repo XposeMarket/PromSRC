@@ -37,9 +37,12 @@ Routing needs to know **what the video is about** — its input and subject. If 
 - **Input** — a product (URL / brief), a general website, a GitHub PR, a topic to explain, or an existing talking-head video?
 - **Figma source** — if the input is a figma.com URL, `/figma` extracts assets/tokens/(components/storyboard) first, regardless of which workflow below is chosen for the video's shape; that workflow then builds from `/figma`'s output — never by driving Figma via raw MCP tools directly (skips SVG sanitization, provenance, and brand-token binding).
 
-**Mode** — if the request carries an ongoing autonomous signal ("surprise me", "decide for me", "just build it"), note it and pass it into the workflow: the whole run goes autonomous and no later step re-asks. With no signal, the workflow asks the mode as its first brief question. Default is collaborative. (`/motion-graphics` is autonomous by design.) Semantics: `hyperframes-core` → `references/brief-contract.md`.
+**Mode** — if the request carries an ongoing autonomous signal ("surprise me", "decide for me", "just build it"), note it and pass it into the workflow: the whole run goes autonomous and no later step re-asks. With no signal, the workflow asks the mode as its first brief question. Default is collaborative. (`/motion-graphics` is autonomous by design.) Semantics: `hyperframes-core/references/brief-contract.md`.
 
-**Spec defaults — state, don't ask** (they never change the route): **aspect** derives from the destination — social feed (X / LinkedIn / Instagram) → square **1:1**, TikTok / Reels / Shorts → **9:16**, YouTube / embed / unknown → **16:9**; narration / caption **language** = the user's. The chosen workflow re-confirms its own specifics at its first step (field semantics: `hyperframes-core` → `references/brief-contract.md`).
+**Spec defaults — state, don't ask** (they never change the route): **aspect** derives from the destination — social feed (X / LinkedIn / Instagram) → square **1:1**, TikTok / Reels / Shorts → **9:16**, YouTube / embed / unknown → **16:9**; narration / caption **language** = the user's. The chosen workflow re-confirms its own specifics at its first step (field semantics: `hyperframes-core/references/brief-contract.md`).
+
+For a general promo without a specified destination, stay landscape 16:9. Avoid purple-blue-cyan gradient SaaS visuals unless the brand requires them.
+
 
 ## Workflow cheat-sheet
 

@@ -20,9 +20,9 @@ Inspect first and preserve unrelated work. Existing changes belong to the user u
 
 Never run `git reset --hard`, force-push a shared branch, delete branches, discard worktree changes, or expose tokens without explicit scope and authorization. Prefer `--force-with-lease` only for the user’s own rewritten branch.
 
-## Non-PromSRC linked worktrees
+## Non-Prometheus linked worktrees
 
-For Prometheus source, follow `promsrc-pr-worktree` instead. For other repositories:
+If the repository has its own installed worktree/PR skill (for example the Prometheus source workflow), follow that instead. For other repositories:
 
 1. Inspect `git worktree list`, current branch, `git status --short`, and `git rev-parse --git-dir` versus `git rev-parse --git-common-dir` to detect existing isolation, branch occupancy, and dirty state.
 2. Prefer a linked worktree under `.worktrees/`; check `.worktrees/` is gitignored first. Create a new branch/worktree; never reuse or clean an existing worktree before verifying its branch, owner, dirty state, and intended disposition.

@@ -1,6 +1,6 @@
 ---
 name: "inbox-triage"
-description: "Review a connected inbox, prioritize full conversations, and prepare drafts without sending or changing mailbox state unless explicitly directed."
+description: "Review a connected email inbox, prioritize threads, identify commitments and deadlines, group low-value noise, and prepare drafts or a decision queue without sending, deleting, archiving, or changing labels unless explicitly authorized. Use for inbox operations, not drafting one standalone email."
 ---
 
 # Inbox Triage

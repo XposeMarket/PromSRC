@@ -22,7 +22,7 @@ Render architecture diagrams, system maps, and technical illustrations as live S
 | Data chart (bar, line, pie) | `chart-visualizer` skill |
 | Text-defined flowchart or sequence diagram | `mermaid-diagrams` skill |
 | Architecture with custom layout/spatial positioning | **This skill (SVG)** |
-| Multi-panel interactive dashboard | `html-interactive` skill |
+| Multi-panel interactive dashboard | `interactive-artifacts` skill |
 | Icon or small illustration inline | **This skill (SVG)** |
 
 Use SVG when **you need precise control over position** — exact box placement, specific arrow routing, custom shapes, color-coded regions.

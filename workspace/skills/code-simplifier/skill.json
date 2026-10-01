@@ -77,8 +77,7 @@
     "development"
   ],
   "requiredTools": [
-    "workspace",
-    "shell"
+    "workspace_write"
   ],
   "implicitInvocation": false,
   "permissions": {

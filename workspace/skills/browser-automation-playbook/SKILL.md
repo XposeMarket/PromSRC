@@ -5,7 +5,7 @@ description: "Operate interactive websites with Prometheus browser tools, includ
 
 # Browser automation
 
-Use browser tools for interactive website state. Use `web_search`, `web_fetch_batch`, or `web_fetch` for normal reading and research; use desktop tools for native apps.
+Use browser tools for interactive website state. Use `web_search` or `web_fetch` for normal reading and research; use desktop tools for native apps.
 
 ## Core loop
 

@@ -31,5 +31,10 @@
   ],
   "implicitInvocation": true,
   "permissions": {},
-  "resources": []
+  "resources": [
+    {
+      "path": "references/evaluation-loop.md",
+      "type": "doc"
+    }
+  ]
 }

@@ -1,4 +1,4 @@
-# TinyFish Web Search Test — 2026-05-08
+# TinyFish Web Search Test - 2026-05-08
 
 ## What was tested
 

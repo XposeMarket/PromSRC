@@ -496,7 +496,8 @@ export function rankSkillMatches(
     if (domainConflict && !explicitMention && !hasExactTrigger) score -= 80;
 
     const sourceWorkIntent = /\b(prometheus\s+(?:source|src)|self[ -]?edit|source\s+code|fix(?:ing)?\s+(?:a\s+)?bug|live\s+ui\s+verification)\b/i.test(text);
-    const sourceRigorSkill = /src-edit-proposal-rigor|source.*edit.*rigor/i.test(`${skill.id} ${skill.name}`);
+    // src-edit-proposal-rigor was merged into promsrc-pr-worktree (2026-10-01 skill cleanup).
+    const sourceRigorSkill = /promsrc-pr-worktree|src-edit-proposal-rigor/i.test(skill.id);
     if (sourceWorkIntent && sourceRigorSkill) score += 95;
     if (sourceWorkIntent && /restart|launch|open app/i.test(`${skill.id} ${skill.name} ${skill.description}`) && !sourceRigorSkill) score -= 85;
 

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "parallel-agent-fanout",
+  "name": "Parallel Agent Fanout",
+  "description": "Split work into independent units, dispatch them to parallel background agents with self-contained briefs, synchronize results through files, then verify, judge, and merge, including adversarial attempt-and-refute rounds for findings that must be trusted. Use for 2+ independent investigations, per-file or per-source sweeps, multi-angle research, or N independent attempts at one hard question. Do not use for tightly coupled edits in one dirty tree (background-coding-agent-lanes), choosing an execution mode (execution-mode-routing), or managed recurring teams (agent-team-operations).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "fan out to parallel agents",
+    "spawn agents in parallel",
+    "split this across agents",
+    "run these in parallel",
+    "independent attempts and refute",
+    "parallel sweep"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "fan out",
+      "spawn agents in parallel",
+      "split this across agents",
+      "parallel agents",
+      "parallel sweep",
+      "one agent per"
+    ],
+    "allOf": [
+      [
+        "parallel",
+        "agents"
+      ],
+      [
+        "spawn",
+        "agents"
+      ],
+      [
+        "split",
+        "agents"
+      ],
+      [
+        "each",
+        "agent",
+        "file"
+      ],
+      [
+        "independent",
+        "attempts"
+      ]
+    ],
+    "anyOf": [
+      "parallel",
+      "fan out",
+      "fanout",
+      "concurrently",
+      "sweep",
+      "refute",
+      "background agents",
+      "workers"
+    ],
+    "noneOf": [
+      "managed team",
+      "create a team",
+      "worktree",
+      "merge conflict",
+      "recurring schedule",
+      "cron"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "agents",
+    "orchestration",
+    "workflow"
+  ],
+  "requiredTools": [
+    "background_ops",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

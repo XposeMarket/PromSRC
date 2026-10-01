@@ -3,7 +3,6 @@
   "id": "connector-builder",
   "name": "connector-builder",
   "description": "Use this skill when building, editing, or designing a Prometheus connector/plugin for an external app or service, including tool contracts, auth, polling, webhooks, data mapping, tests, and integration UX.",
-  "emoji": "🧩",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -25,13 +24,15 @@
     "prometheus"
   ],
   "requiredTools": [
-    "connection_ops",
+    "integration_admin",
     "web_search",
     "web_fetch",
-    "web_fetch_batch",
-    "terminal",
-    "connector_list"
+    "workspace_write",
+    "connector_list",
+    "tool_search",
+    "tool_call"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -40,14 +41,19 @@
   },
   "resources": [
     {
-      "path": "references/manifest-schema.md",
+      "path": "references/connector-recipes.md",
       "type": "doc",
-      "description": "Every manifest field for prometheus.extension.json, with a full REST connector example."
+      "description": "Implementation choices for REST, GraphQL, OAuth, API keys, CLI adapters, MCP presets, memory sources, and webhooks."
     },
     {
       "path": "references/index-js-pattern.md",
       "type": "doc",
       "description": "The CommonJS index.js runtime module contract (register/registerTool/execute/ctx.getCredential) with a full worked Airtable example."
+    },
+    {
+      "path": "references/manifest-schema.md",
+      "type": "doc",
+      "description": "Every manifest field for prometheus.extension.json, with a full REST connector example."
     },
     {
       "path": "references/mcp-preset.md",
@@ -59,7 +65,5 @@
       "type": "doc",
       "description": "Add workflow recipe to connector-builder"
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

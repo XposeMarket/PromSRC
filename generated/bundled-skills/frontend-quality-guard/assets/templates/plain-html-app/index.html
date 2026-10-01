@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Frontend Workbench</title>
+    <style>
+      * { box-sizing: border-box; }
+      :root {
+        color: #172026;
+        background: #f6f7f9;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body { margin: 0; min-width: 320px; }
+      button, input, select { font: inherit; }
+      .shell { min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+      aside { border-right: 1px solid #dce3e8; background: #fff; padding: 20px; }
+      main { padding: 24px; min-width: 0; }
+      nav { display: grid; gap: 6px; margin-top: 24px; }
+      nav a { color: #53636d; text-decoration: none; padding: 9px 10px; border-radius: 6px; }
+      nav a.active { background: #e8f3f4; color: #174d55; }
+      header, .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      h1 { margin: 0; font-size: 28px; line-height: 1.15; }
+      .eyebrow { margin: 0 0 4px; color: #64737d; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+      .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0; }
+      .metric, .panel { background: #fff; border: 1px solid #dce3e8; border-radius: 8px; }
+      .metric { padding: 16px; }
+      .metric strong { display: block; font-size: 24px; line-height: 1; }
+      .metric span { display: block; color: #64737d; font-size: 13px; margin-top: 5px; }
+      .panel { overflow: hidden; }
+      .toolbar { padding: 14px; border-bottom: 1px solid #dce3e8; }
+      .field { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; border: 1px solid #cfd9df; border-radius: 6px; padding: 0 10px; }
+      .field input, .field select { border: 0; outline: 0; background: transparent; }
+      .table-wrap { overflow: auto; }
+      table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 14px; }
+      th, td { padding: 12px 14px; border-bottom: 1px solid #edf1f4; text-align: left; white-space: nowrap; }
+      th { color: #64737d; font-size: 12px; text-transform: uppercase; }
+      tbody tr { cursor: pointer; }
+      tbody tr:hover, tbody tr.selected { background: #f1f7f8; }
+      .status { display: inline-flex; min-height: 24px; align-items: center; border-radius: 999px; padding: 0 8px; background: #eef2f5; color: #53636d; font-size: 12px; font-weight: 700; }
+      button { border: 0; border-radius: 6px; min-height: 36px; padding: 0 14px; background: #1f6f78; color: white; cursor: pointer; }
+      @media (max-width: 760px) {
+        .shell, .metrics { grid-template-columns: 1fr; }
+        aside { border-right: 0; border-bottom: 1px solid #dce3e8; }
+        nav { grid-template-columns: repeat(3, 1fr); }
+        main { padding: 16px; }
+        header, .toolbar { flex-direction: column; align-items: stretch; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside>
+        <strong>Workbench</strong>
+        <nav aria-label="Sections">
+          <a class="active" href="#overview">Overview</a>
+          <a href="#items">Items</a>
+          <a href="#settings">Settings</a>
+        </nav>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">Operations</p>
+            <h1>Active work</h1>
+          </div>
+          <button type="button" id="reset">Reset filters</button>
+        </header>
+        <section class="metrics" aria-label="Metrics">
+          <article class="metric"><strong>42</strong><span>Open items</span></article>
+          <article class="metric"><strong>12m</strong><span>Median response</span></article>
+          <article class="metric"><strong>96%</strong><span>Healthy</span></article>
+        </section>
+        <section class="panel">
+          <div class="toolbar">
+            <label class="field">Search <input id="search" type="search" placeholder="Item or owner" /></label>
+            <label class="field">Status
+              <select id="status">
+                <option>All</option>
+                <option>Open</option>
+                <option>Waiting</option>
+                <option>Done</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Item</th><th>Owner</th><th>Status</th><th>Age</th></tr></thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script>
+      const data = [
+        { item: "Onboard Acme", owner: "Mina", status: "Open", age: "14m" },
+        { item: "Review invoice", owner: "Jon", status: "Waiting", age: "41m" },
+        { item: "Ship report", owner: "Ari", status: "Done", age: "8m" }
+      ];
+      const rows = document.getElementById("rows");
+      const search = document.getElementById("search");
+      const status = document.getElementById("status");
+
+      function render() {
+        const query = search.value.toLowerCase();
+        rows.innerHTML = data
+          .filter(row => status.value === "All" || row.status === status.value)
+          .filter(row => `${row.item} ${row.owner}`.toLowerCase().includes(query))
+          .map(row => `<tr><td>${row.item}</td><td>${row.owner}</td><td><span class="status">${row.status}</span></td><td>${row.age}</td></tr>`)
+          .join("");
+      }
+
+      search.addEventListener("input", render);
+      status.addEventListener("change", render);
+      document.getElementById("reset").addEventListener("click", () => {
+        search.value = "";
+        status.value = "All";
+        render();
+      });
+      render();
+    </script>
+  </body>
+</html>

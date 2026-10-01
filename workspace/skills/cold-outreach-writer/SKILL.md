@@ -5,6 +5,8 @@ description: "Write or improve cold emails and prospecting DMs using verified pe
 
 # Cold outreach
 
+For X DMs or public X copy, do not use em dashes.
+
 Write brief, relevant messages that earn a reply without pretending to know more than the evidence supports.
 
 1. Confirm recipient, channel, relationship, verified facts, offer, proof, desired next step, and voice.

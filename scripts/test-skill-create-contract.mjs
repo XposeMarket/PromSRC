@@ -14,7 +14,7 @@ try {
     name: 'Contract Created Skill',
     description: 'A skill created by the manager contract regression.',
     triggers: ['contract created skill'],
-    promptSignals: { phrases: ['contract created skill'], allOf: [['contract', 'created']], anyOf: ['skill'], minScore: 4 },
+    promptSignals: { phrases: ['contract created skill'], allOf: [['contract', 'created']], anyOf: ['manager'], minScore: 4 },
     triggerPositivePrompts: ['Use the contract created skill workflow.'],
     triggerNegativePrompts: ['Draft an unrelated lunch email.'],
     implicitInvocation: false,
@@ -29,7 +29,7 @@ try {
 
   const manifest = JSON.parse(fs.readFileSync(path.join(skill.rootDir, 'skill.json'), 'utf8'));
   assert.deepEqual(manifest.triggers, ['contract created skill']);
-  assert.deepEqual(manifest.promptSignals, { phrases: ['contract created skill'], allOf: [['contract', 'created']], anyOf: ['skill'], noneOf: [], minScore: 4 });
+  assert.deepEqual(manifest.promptSignals, { phrases: ['contract created skill'], allOf: [['contract', 'created']], anyOf: ['manager'], noneOf: [], minScore: 4 });
   assert.equal(manifest.implicitInvocation, false);
   assert.equal(manifest.permissions, undefined, 'createSkill must not invent permission metadata');
   assert.equal(skill.kind, 'bundle');

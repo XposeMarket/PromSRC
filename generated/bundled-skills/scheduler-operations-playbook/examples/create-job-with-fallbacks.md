@@ -25,7 +25,7 @@ Creating scheduled jobs that gracefully handle:
   },
   "instruction_prompt": `Run the X research & replies workflow every time this job fires:
 
-1. Read the skill "prometheus-x-research-replies" first using skill_read("prometheus-x-research-replies").
+1. Read skill_read("prometheus-x-growth-operator") and its references/research-replies.md first.
 2. Read workspace/prometheus-x-posts-memory.md first using read_file to avoid duplicates and understand prior posts.
 
 3. RESEARCH PHASE - Try in order, use first one that succeeds:
@@ -65,7 +65,7 @@ SUCCESS: Real replies posted or high-quality drafts saved with thread URLs.`,
   },
   "instruction_prompt": `Run the X posting workflow every time this job fires:
 
-1. Read skill "prometheus-x-posts-workflow" using skill_read("prometheus-x-posts-workflow").
+1. Read skill_read("prometheus-x-growth-operator") and its references/scheduled-posting.md.
 2. Read workspace/prometheus-x-posts-memory.md using read_file to check prior posts and avoid duplicates.
 3. Generate one original, human-tone post grounded in Prometheus product updates, AI agent memory themes, or dev insights.
 4. CRITICAL: Do NOT use em dashes (—). Use periods, commas, colons, or hyphens instead.

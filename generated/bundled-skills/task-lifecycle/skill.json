@@ -3,38 +3,40 @@
   "id": "task-lifecycle",
   "name": "task-lifecycle",
   "description": "Inspect and manage existing Prometheus tasks, background runs, agents, jobs, and team work through their lifecycle, including status interpretation, pause/resume, retry, cancellation, recovery, deduplication, and completion verification. Use for lifecycle control; use execution-mode-routing when deciding how new work should run.",
-  "emoji": "📋",
   "version": "4.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
+    "long running job status",
+    "cancel long running job",
     "manage an existing task",
+    "inspect stuck background task",
+    "cancel running background task",
+    "what is running",
+    "background task status",
     "cleanup tasks",
     "running tasks",
+    "stalled job",
     "task lifecycle",
-    "summarize task",
-    "inspect task",
-    "stalled task",
-    "task status",
-    "resume task",
-    "cancel task",
-    "task output",
-    "task failed"
+    "summarize task"
   ],
   "categories": [],
   "requiredTools": [],
+  "implicitInvocation": true,
   "permissions": {},
   "resources": [
+    {
+      "path": "references/background/tool-category-activation-vs-smoke-test.md",
+      "type": "doc",
+      "description": "May 10 caveat: tool-category activation is not a smoke test when user asks to confirm tools work."
+    },
     {
       "path": "references/background/tool-cluster-caveats.md",
       "type": "doc",
       "description": "May 9 automation/agent smoke-test caveats for background_join, schedule_job_patch, schedule_job_stuck_control, agent_update, and get_agent_result."
     },
     {
-      "path": "references/background/tool-category-activation-vs-smoke-test.md",
-      "type": "doc",
-      "description": "May 10 caveat: tool-category activation is not a smoke test when user asks to confirm tools work."
+      "path": "references/detailed-guide.md",
+      "type": "reference"
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

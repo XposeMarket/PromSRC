@@ -26,10 +26,11 @@
     "automation"
   ],
   "requiredTools": [
-    "web",
+    "web_search",
     "browser_automation",
     "skills"
   ],
+  "implicitInvocation": false,
   "permissions": {
     "browser": true,
     "workspaceRead": true,
@@ -38,26 +39,28 @@
   },
   "resources": [
     {
-      "path": "references/browse-sh-overview.md",
-      "type": "reference",
-      "description": "Initial Browse.sh and Browserbase Browse CLI overview gathered from browse.sh, Browserbase docs, and browserbase/skills README."
-    },
-    {
       "path": "references/browse-sh-amazon-search-products.md",
       "type": "reference",
       "description": "Amazon product search/extraction playbook from Browse.sh, adapted to Prometheus-native browser_extract_structured/browser tools. Triggers: amazon, amazon product search, search Amazon, Amazon toothbrush, Amazon products, Amazon scraping, product card extraction, shopping search."
     },
     {
-      "path": "references/resource-triggering-design-note.md",
-      "type": "doc",
-      "description": "Design note recommending first-class trigger metadata and auto-injection for skill resources/templates/examples."
+      "path": "references/browse-sh-overview.md",
+      "type": "reference",
+      "description": "Initial Browse.sh and Browserbase Browse CLI overview gathered from browse.sh, Browserbase docs, and browserbase/skills README."
+    },
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
     },
     {
       "path": "references/product-carousel-adaptation.md",
       "type": "reference",
       "description": "How to convert Browse.sh shopping/product extraction knowledge into Prometheus product carousels."
+    },
+    {
+      "path": "references/resource-triggering-design-note.md",
+      "type": "doc",
+      "description": "Design note recommending first-class trigger metadata and auto-injection for skill resources/templates/examples."
     }
-  ],
-  "implicitInvocation": false,
-  "lifecycle": "active"
+  ]
 }

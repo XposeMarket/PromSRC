@@ -4,7 +4,7 @@ Migrated from **MEMORY.md** `project_memory` (2026-06-06, 2026-06-12) on 2026-07
 
 ## Live schedule source of truth
 
-Before assuming stale blockers, read **`audit/cron/jobs/jobs.json`** and Mara schedule memory at  
+Before assuming stale blockers, read **`audit/cron/jobs/jobs.json`** and Mara schedule memory at
 `.prometheus/subagents/x_account_operator_raulinvests_v1/memory/schedule-memory.md`.
 
 ## Known jobs (verify IDs in jobs.json)
@@ -12,7 +12,7 @@ Before assuming stale blockers, read **`audit/cron/jobs/jobs.json`** and Mara sc
 | Job name | Typical cron | Owner |
 |----------|--------------|--------|
 | `prometheus-x-posts` | `0 */3 * * *` (every 3h) | Mara (`x_account_operator_raulinvests_v1`) |
-| `prometheus-x-research-replies` | (per jobs.json) | Mara |
+| `prometheus-x-research-replies` (legacy job name; skill: `prometheus-x-growth-operator` research-replies reference) | (per jobs.json) | Mara |
 
 Historical IDs (may change): `job_1781023720991_vo76d`, `job_1781023570457_uvjbb`.
 

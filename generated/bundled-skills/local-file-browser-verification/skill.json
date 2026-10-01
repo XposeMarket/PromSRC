@@ -3,7 +3,7 @@
   "id": "local-file-browser-verification",
   "name": "local-file-browser-verification",
   "description": "Open and verify a local HTML/web project in a browser, including visual layout, responsive behavior, interaction, console errors, local asset loading, and post-edit smoke testing. Use for browser QA of local files or localhost; do not use for generic coding or live-site automation unrelated to verification.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "click the button and see what happens",
@@ -35,6 +35,7 @@
     "workspace_write",
     "delivery_send_screenshot"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "browser": true,
     "workspaceRead": true,
@@ -44,9 +45,13 @@
   },
   "resources": [
     {
-      "path": "templates/verification-report.md",
-      "type": "template",
-      "description": "Concise report template for local browser/file verification results."
+      "path": "examples/mobile-first-navigation.md",
+      "type": "example",
+      "description": "When to set narrow viewport before first navigation for mobile Safari/local HTML verification."
+    },
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
     },
     {
       "path": "references/hit-testing-debug-snippets.md",
@@ -54,11 +59,14 @@
       "description": "Browser JS snippets for diagnosing covered buttons, intercepted clicks, and touch overlays."
     },
     {
-      "path": "examples/mobile-first-navigation.md",
-      "type": "example",
-      "description": "When to set narrow viewport before first navigation for mobile Safari/local HTML verification."
+      "path": "references/interaction-evidence.md",
+      "type": "doc",
+      "description": "Interaction, accessibility, console, network, and screenshot evidence checklist"
+    },
+    {
+      "path": "templates/verification-report.md",
+      "type": "template",
+      "description": "Concise report template for local browser/file verification results."
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

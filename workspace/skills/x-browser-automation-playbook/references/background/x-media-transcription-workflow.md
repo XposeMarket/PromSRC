@@ -10,12 +10,12 @@ When working with X (Twitter) videos, audio content, or spaces that need transcr
 ### 1. X Video Post → Transcription
 ```
 # For X post URLs with video content:
-1. web_fetch("https://x.com/user/status/id") 
+1. web_fetch("https://x.com/user/status/id")
    # Check if post has media, get context
-   
+
 2. download_media(url, output_dir: "downloads/x-videos")
    # Download the actual video file
-   
+
 3. If no automatic transcription occurred:
    creative_transcribe_audio({
      source: "<downloaded-video-path>",
@@ -27,7 +27,7 @@ When working with X (Twitter) videos, audio content, or spaces that need transcr
 ```
 1. browser_open("x.com/i/spaces/[space_id]")
 2. Use browser_click_and_download for space recording if available
-3. creative_transcribe_audio({ 
+3. creative_transcribe_audio({
      source: "<downloaded-audio>",
      language: "en"  # specify if known
    })
@@ -48,7 +48,7 @@ When working with X (Twitter) videos, audio content, or spaces that need transcr
 ### Thread Research with Video Evidence
 When researching X threads that contain video proof/explanations:
 - Fetch thread with web_fetch_batch
-- Download embedded videos with download_media  
+- Download embedded videos with download_media
 - Transcribe to get full context beyond just text tweets
 - Combine transcript with thread text for comprehensive analysis
 
@@ -59,7 +59,7 @@ For competitors posting demo videos, feature explanations, or announcements:
 - Transcribe to extract feature claims, positioning, demos
 - Analyze competitive intelligence from both video and audio content
 
-### X Engagement Research  
+### X Engagement Research
 When analyzing viral X content with audio/video:
 - Identify trending video posts via X search/collection
 - Download high-engagement video content
@@ -83,7 +83,7 @@ for result in results:
 ### After browser_scroll_collect on X
 ```
 x_content = browser_scroll_collect({
-  scrolls: 10, 
+  scrolls: 10,
   multiplier: 1.75,
   include_structured: true  # Gets video URLs if available
 })
@@ -96,7 +96,7 @@ x_content = browser_scroll_collect({
 
 ### OpenAI (Whisper) - Recommended for:
 - Clear speech/narration in demo videos
-- Professional content (founder updates, product announcements)  
+- Professional content (founder updates, product announcements)
 - English-primary content
 - When accuracy is critical for competitive analysis
 

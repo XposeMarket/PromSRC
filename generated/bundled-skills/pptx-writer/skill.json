@@ -1,8 +1,10 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "pptx-writer",
   "name": "pptx-writer",
-  "entrypoint": "SKILL.md",
   "description": "Create or edit a local PowerPoint (.pptx) only when the user explicitly requests a PowerPoint file and a supported presentation backend passes the bundled preflight. Do not invoke for ordinary outlines, HTML slides, or generic presentation advice.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
   "triggers": [
     "export powerpoint",
     "create pptx",
@@ -17,24 +19,21 @@
   "requiredTools": [
     "workspace_write"
   ],
-  "lifecycle": "active",
-  "id": "pptx-writer",
-  "status": "ready",
   "implicitInvocation": true,
-  "health": {
-    "state": "ready",
-    "reason": "An exact pptxgenjs 4.0.1 backend generated a two-slide editable deck; user-local LibreOffice rendered it to PDF and both 1600x900 slides passed visual and structural validation.",
-    "verifiedCapabilities": [
-      "backend_preflight",
-      "editable_pptx_generation",
-      "isolated_libreoffice_profile",
-      "pdf_roundtrip",
-      "slide_render",
-      "visual_qa",
-      "slides_test",
-      "quick_validate"
-    ],
-    "blockedCapabilities": {},
-    "lastVerified": "2026-07-12"
-  }
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "scripts/test-backends.ps1",
+      "type": "script"
+    },
+    {
+      "path": "scripts/verify-roundtrip.mjs",
+      "type": "script"
+    }
+  ]
 }

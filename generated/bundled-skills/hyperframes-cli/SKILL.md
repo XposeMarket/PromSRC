@@ -24,14 +24,13 @@ Run `doctor --json` before rendering and inspect the individual FFmpeg, FFprobe,
 1. **Scaffold** — `npx hyperframes init my-video`
 2. **Write** — author HTML composition (see the `hyperframes` skill)
 3. **Copy assets** — place real images/video/audio under the project with stable relative paths
-4. **Lint** — `npx hyperframes lint`
-5. **Validate** — `npx hyperframes validate` when available / required by the project
-6. **Visual inspect** — `npx hyperframes inspect`, plus `--at` hero timestamps for important frames
-7. **Preview** — `npx hyperframes preview` when interactive review is useful
-8. **Render** — `npx hyperframes render --output final.mp4`
-9. **Verify exported MP4** — sample frames from the actual final file before presenting
+4. **Lint / validate** — `npx hyperframes lint` (there is no `hyperframes validate` command in v0.6.20)
+5. **Visual inspect** — `npx hyperframes inspect`, plus `--at` hero timestamps for important frames
+6. **Preview** — `npx hyperframes preview` when interactive review is useful
+7. **Render** — `npx hyperframes render --output final.mp4`
+8. **Verify exported MP4** — sample frames from the actual final file before presenting
 
-Lint, validate, and inspect before preview/render. `lint` catches missing `data-composition-id`, overlapping tracks, and unregistered timelines. `inspect` opens the rendered composition in headless Chrome, seeks through the timeline, and reports text spilling out of bubbles/containers or off the canvas. Export verification is a no-ship gate: output-file existence is not proof that the rendered MP4 is good.
+Lint and inspect before preview/render. `lint` catches missing `data-composition-id`, overlapping tracks, and unregistered timelines. `inspect` opens the rendered composition in headless Chrome, seeks through the timeline, and reports text spilling out of bubbles/containers or off the canvas. Export verification is a no-ship gate: output-file existence is not proof that the rendered MP4 is good.
 
 For final delivery or frozen-output recovery, read [references/qa-and-export-verification.md](references/qa-and-export-verification.md).
 

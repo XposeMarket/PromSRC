@@ -75,7 +75,7 @@ Best for:
 
 Always check existing agents first with `agent_list()` before creating or dispatching new ones.
 
-### 6) Multi-agent work: `ask_team_coordinator`
+### 6) Multi-agent work: `team_ops_wrapper`
 Use when the task truly benefits from multiple roles or parallel workstreams.
 
 Best for:
@@ -84,7 +84,14 @@ Best for:
 - ongoing autonomous team efforts
 - status checks on existing teams
 
-Do not manually manage teams from main chat when the coordinator path is available.
+Create and operate managed teams directly from main chat with
+`team_ops_wrapper(action:"manage", team_action:"create"|"start"|"update"|"pause"|"resume"|"delete"|"list", ...)`.
+Drive execution and communication with
+`team_ops_wrapper(action:"dispatch"|"request_member_turn"|"get_agent_result"|"post_chat"|"reply"|...)`
+and `team_collab_ops(...)`.
+
+> There is no meta-coordinator handoff. `ask_team_coordinator` is retired — Prometheus itself
+> chooses roles, creates or reuses the needed subagents, creates the team, and dispatches it.
 
 ---
 
@@ -96,7 +103,7 @@ Do not manually manage teams from main chat when the coordinator path is availab
 | Need sidecar parallel help right now | `background_spawn` |
 | Long durable verified task | `run_task_now` |
 | One focused specialist | `spawn_subagent` |
-| Multi-agent coordination | `ask_team_coordinator` |
+| Multi-agent coordination | `team_ops_wrapper` |
 | User explicitly wants visible step plan | `declare_plan` |
 
 ---
@@ -286,8 +293,8 @@ Important current behavior:
 | Situation | Best path |
 |---|---|
 | One specialist, one focused job | `spawn_subagent` |
-| Multiple roles or parallel streams | `ask_team_coordinator` |
-| Need ongoing managed team behavior | `ask_team_coordinator` |
+| Multiple roles or parallel streams | `team_ops_wrapper` |
+| Need ongoing managed team behavior | `team_ops_wrapper` |
 
 ---
 
@@ -312,7 +319,7 @@ Choose the lightest execution mode that safely fits the job:
 - `background_spawn` for parallel same-turn side work
 - `run_task_now` for durable verified background jobs
 - `spawn_subagent` for one specialist
-- `ask_team_coordinator` for real multi-agent coordination
+- `team_ops_wrapper` for real multi-agent coordination
 - `declare_plan` only when a visible plan is actually needed
 
 And to **report on** Prometheus's own state:

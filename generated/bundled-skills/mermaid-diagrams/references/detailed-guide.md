@@ -12,10 +12,7 @@ Render flowcharts, sequence diagrams, ERDs, Gantt charts, and more directly in c
 - **No file saving.** Inline output only — no file tools
 - **No declare_plan.** Read skill → output mermaid block. Done
 - Mermaid.js is auto-injected — no imports needed
-- The host surface is transparent and the renderer supplies the active Prometheus
-  theme. Do not configure a fixed dark/light canvas or wrap the diagram in a panel.
-- If custom Mermaid styling is needed, prefer semantic theme variables, transparent
-  backgrounds, `currentColor`, and `--prom-*` tokens so theme changes remain safe.
+- Theme auto-switches with dark/light mode — never configure theme manually
 
 ---
 
@@ -268,7 +265,7 @@ timeline
 - Don't use Mermaid for diagrams needing exact component positioning — use `svg-diagrams`
 - Don't use `pie` type in Mermaid — use `chart-visualizer` for all data charts
 - Don't write more than ~20 nodes in a single flowchart — split into sub-diagrams
-- Don't hardcode a manual dark/light theme — let the renderer apply the host theme
+- Don't add manual theme configuration — the renderer auto-applies dark/light theme
 - Don't use special characters (`<`, `>`, `"`) in node labels without quoting — wrap in `"quotes"` if needed
 
 ---

@@ -97,10 +97,7 @@ Validation: `[ -s "$PROJECT_DIR/shot-plan.json" ] && echo ok || echo missing`.
 
 If `shot-plan.json.asset_needs` is non-empty, resolve assets (search / generate / fetch → frozen project-local paths + ledger). See `phases/source/guide.md` (wraps `media-use resolve`; the search-driven categories use the news/web/tweet/image search). If `asset_needs` is empty, **skip to Step 3**.
 
-```bash
-# illustrative — see phases/source/guide.md
-(cd "$PROJECT_DIR" && node <SKILL_DIR>/phases/source/resolve.mjs --plan ./shot-plan.json --out ./assets)
-```
+Read `phases/source/guide.md`; for each `shot-plan.json.asset_need`, run `node <MEDIA_USE_SKILL_DIR>/scripts/resolve.mjs --type <type> --intent "<need>" --project "$PROJECT_DIR"` using supported types from `media-use/SKILL.md`. Freeze selected assets and write the project-local `assets/index.md` provenance ledger.
 
 Degrade gracefully: if a search/provider is unavailable, the category falls back to asset-free (note it in `context.log`).
 

@@ -1,3 +1,8 @@
+---
+name: "supervised-goal-orchestrator"
+description: "Turn a broad objective into bounded parallel lanes with a supervisor and evidence ledger. Use for complex delegate-and-supervise goals; use parallel-agent-fanout for a narrow one-off fanout, not this workflow."
+---
+
 # Supervised Goal Orchestrator
 
 Convert ambiguous objectives into supervised execution that ends in evidence, not activity.
@@ -13,3 +18,5 @@ Convert ambiguous objectives into supervised execution that ends in evidence, no
 9. Produce an evidence ledger mapping criteria to artifacts, verifier, result, and risk.
 
 Success requires verified criteria, resolved conflicts, accessible artifacts, and named residual risks. Delegation never expands authority or bypasses approvals.
+
+For any spawned background agent, set a fully qualified route of `openai_codex/gpt-6-sol` or `openai_codex/gpt-6-luna` only. Review Luna output. Delegation does not bypass model policy.

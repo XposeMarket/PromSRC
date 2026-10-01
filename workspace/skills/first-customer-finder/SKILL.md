@@ -1,6 +1,6 @@
 ---
-name: first-customer-finder
-description: Find and qualify evidence-backed potential first customers, early adopters, design partners, or beta users for a startup using recent public pain and buying signals. Use when Codex needs to analyze a product URL or idea, define an ideal customer profile, research public discussions and business pages, identify first-user prospects, rank lead fit and timing, prepare source-based outreach drafts, or create a shareable early-customer prospecting report without sending messages automatically.
+name: "first-customer-finder"
+description: "Find and qualify evidence-backed first customers or design partners from recent public pain and buying signals. Use for an offer-to-prospect shortlist and shareable report; use local-lead-hunting for Maps-first local business discovery and cold-outreach-writer for message-level drafting."
 ---
 
 # First Customer Finder
@@ -69,16 +69,16 @@ Lead with the most actionable evidence. Use this order:
 3. **Top prospect** — strongest evidence-backed candidate and why now.
 4. **Prospect shortlist** — source, pain signal, fit score, stage, why now, channel, and opener.
 5. **Repeated patterns** — pains and triggers appearing across prospects.
-6. **Seven-day outreach plan** — a manual, low-volume validation sequence.
+6. **Seven-day outreach plan** - a manual, low-volume validation sequence.
 7. **Limits** — missing evidence and what must be confirmed through real conversations.
 
 Create a standalone HTML report unless the user explicitly requests chat-only output:
 
 1. Write structured JSON using `references/report-artifact.md`.
-2. Run `scripts/generate_report.py <analysis.json> <report.html>`.
+2. Run `python <workspace>/skills/first-customer-finder/scripts/generate_report.py <analysis.json> <report.html>` with `workspace_run` from the workspace root. Check `python --version` first; if unavailable, use another local Python installation or deliver the structured JSON without claiming an HTML report.
 3. Save the report in the workspace `outputs/` directory.
 4. Verify prospect cards, source links, scores, patterns, outreach plan, and limitations.
-5. Return a clickable absolute file link in the final response so it opens from Codex.
+5. Return the workspace-relative report path or present the generated file with `delivery_send`. Verify it opens from Prometheus.
 
 ## Modes
 

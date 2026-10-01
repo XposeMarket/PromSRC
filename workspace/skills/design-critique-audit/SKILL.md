@@ -1,6 +1,6 @@
 ---
-name: design-critique-audit
-description: Critique or audit an existing web interface (live URL, localhost, screenshot, or HTML file) and return a scored, evidence-backed review covering hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and "generated template" tells, ending in a prioritized fix list. Use when the user asks to review, critique, roast, audit, or judge the design of a page or app. Do not use for building or redesigning a UI (web-design-skill, frontend-quality-guard), for functional bug hunts (webapp-dogfood-qa), or for brand strategy (brand-strategist).
+name: "design-critique-audit"
+description: "Critique or audit an existing web interface from a URL, localhost, screenshot, or HTML file and return a scored, evidence-backed review of hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and generated-template tells, ending in a prioritized fix list. Use for design reviews, critiques, roasts, or audits; do not use for building or redesigning UI, functional bug hunts, or brand strategy."
 ---
 
 # Design Critique and Audit
@@ -67,7 +67,7 @@ Save `design-reviews/<slug>-<date>/review.md` and reply with:
 2. Score table (area, score, evidence).
 3. Top fixes, at most 8, ordered by impact on the surface's mode. Each fix: what is wrong, why it matters for this user, the concrete change (for example "drop body text from #9AA0A6 to #4A4F55 on #FFFFFF to reach 7:1", "replace the three feature cards with a single annotated product screenshot").
 4. What is working and must be preserved.
-5. 2 to 4 embedded screenshots, for example `![Mobile nav overlaps the logo](design-reviews/acme-20260930/mobile-top.png)`.
+5. 2 to 4 embedded screenshots, as inline markdown images (exclamation mark, caption in square brackets, path in parentheses) using workspace-relative paths such as `design-reviews/acme/mobile-top.png`.
 6. Gaps: viewports, states, or pages not reviewed.
 
 Use `show_ui_card` with type `comparison` for the score table when it helps scanning.

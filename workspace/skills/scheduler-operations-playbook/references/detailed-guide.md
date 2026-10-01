@@ -86,7 +86,7 @@ Before mutating any job, inspect the real current state.
 ## 4) Creating Jobs Safely
 
 1. Convert timing if needed:
-   - `parse_schedule_pattern(text:"weekday at 8:30am", timezone:"America/New_York")`
+   - Use the schedule creation or patch tool's accepted `pattern`/timezone fields; inspect its exposed schema and preview before committing.
 2. Write a fully self-contained `instruction_prompt`.
    - Assume a fresh agent with no chat context.
    - Include exact inputs, outputs, allowed tools/actions, forbidden side effects, fallback behavior, and success criteria.
@@ -423,7 +423,7 @@ For the configured messaging channel/Discord/WhatsApp or other external delivery
 - Watch completion: `internal_watch(action:"create", target:{type:"scheduled_job", job_id:"..."}, condition:{mode:"terminal"|"latest_result"|"ran"}, ttl_ms:..., on_match:"...", on_timeout:"...")`
 - Model routing inspect: `get_agent_models()`
 - Model routing update: `set_agent_model(agent_type:"...", model:"provider/model")`
-- Parse schedule text: `parse_schedule_pattern(text:"weekdays at 9am", timezone:"America/New_York")`
+- Parse schedule text: use `schedule_job`/`schedule_job_patch` with a validated explicit pattern and timezone
 - Heartbeat config: `update_heartbeat(agent_id:"...", ...)`
 
 ---

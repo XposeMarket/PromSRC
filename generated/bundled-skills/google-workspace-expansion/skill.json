@@ -5,16 +5,13 @@
   "description": "Extend Prometheus Google Workspace connectors for Calendar, Docs, Sheets, Drive, Gmail, or Contacts using OAuth-backed typed tools. Use when implementing or broadening Google Workspace integration; do not invoke for ordinary email, document, or spreadsheet content work.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
-  "implicitInvocation": true,
   "triggers": [
     "expand google workspace integration",
     "google workspace connector",
     "google calendar connector",
     "google docs connector",
     "google sheets connector",
-    "gmail connector setup",
-    "google contacts connector",
-    "drive connector extension"
+    "google contacts connector"
   ],
   "categories": [
     "prometheus",
@@ -23,16 +20,17 @@
     "productivity"
   ],
   "requiredTools": [
-    "web_search",
-    "web_fetch",
-    "web_fetch_batch",
     "connector_list",
-    "terminal"
+    "tool_search",
+    "tool_call",
+    "integration_admin",
+    "workspace_write"
   ],
+  "implicitInvocation": true,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "resources": []
 }

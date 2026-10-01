@@ -7,6 +7,7 @@
   "entrypoint": "SKILL.md",
   "triggers": [
     "review the design of this page",
+    "review the design of this webpage",
     "does this look ai generated",
     "what's wrong with this ui",
     "roast my landing page",
@@ -22,6 +23,11 @@
       "design critique",
       "design audit",
       "design review",
+      "critique this landing page",
+      "audit this landing page",
+      "audit our signup page",
+      "audit our signup page s visual hierarchy",
+      "design critique for the homepage",
       "roast my landing page",
       "roast my site",
       "looks ai generated",
@@ -59,14 +65,13 @@
       ]
     ],
     "anyOf": [
-      "critique",
-      "audit",
-      "roast",
-      "feedback",
-      "design",
-      "landing page",
-      "hierarchy",
-      "typography"
+      "design critique",
+      "design audit",
+      "design review",
+      "roast my site",
+      "interface feedback",
+      "visual hierarchy",
+      "generated template"
     ],
     "noneOf": [
       "build a landing page",

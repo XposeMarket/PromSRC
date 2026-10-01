@@ -1,4 +1,4 @@
-# Tested Tool Behavior Snapshot — 2026-05-08 (archived)
+# Tested Tool Behavior Snapshot - 2026-05-08 (archived)
 
 Archived 2026-07-03 from the main SKILL.md, which had absorbed this entire dated investigation log permanently into its core instructions. Durable takeaways were folded into SKILL.md's "Multi-Engine Search Notes" section; this file preserves the full point-in-time detail for reference.
 
@@ -27,7 +27,7 @@ Correct way to check provider behavior:
 - Inspect the returned provider banner/tool metadata, e.g. `[Multi-engine: tavily+brave]`.
 - Result domains are not provider proof. Google Search can return non-Google domains, and non-Google providers can return Google-owned domains.
 
-### TinyFish added to multi-engine search — 2026-05-08
+### TinyFish added to multi-engine search - 2026-05-08
 
 Live tests after TinyFish was added showed the provider banner:
 

@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "project-timeline-report",
+  "name": "Project Timeline Report",
+  "description": "Reconstruct a project's history from Prometheus memory, intraday notes, transcripts, and artifacts, then write either a short status digest (what happened since a date, what is open, what is next) or a long-form journey report with phases, turning points, dead ends, and lessons. Use when the user asks for a project timeline, history, journey report, recap of the last week or month, or progress digest for a named project. Do not use for a single recall question (use memory search directly), writing a handoff (session-handoff), or memory writes and pruning (memory-governance-playbook).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "what happened on this project",
+    "recap the last week",
+    "history of the project",
+    "timeline report",
+    "progress digest",
+    "journey report",
+    "project timeline"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "project timeline",
+      "timeline report",
+      "journey report",
+      "journey into",
+      "history of the project",
+      "recap the last week",
+      "progress digest",
+      "what have we done on"
+    ],
+    "allOf": [
+      [
+        "project",
+        "timeline"
+      ],
+      [
+        "project",
+        "history"
+      ],
+      [
+        "recap",
+        "week"
+      ],
+      [
+        "recap",
+        "month"
+      ],
+      [
+        "what",
+        "happened",
+        "project"
+      ],
+      [
+        "progress",
+        "report",
+        "project"
+      ]
+    ],
+    "anyOf": [
+      "timeline",
+      "history",
+      "journey",
+      "recap",
+      "digest",
+      "so far",
+      "since"
+    ],
+    "noneOf": [
+      "handoff",
+      "remember this",
+      "forget this",
+      "prune memory",
+      "refresh memory index",
+      "git log",
+      "changelog"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "memory",
+    "reporting",
+    "projects"
+  ],
+  "requiredTools": [
+    "memory",
+    "workspace_write",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

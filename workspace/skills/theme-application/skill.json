@@ -17,15 +17,16 @@
   ],
   "promptSignals": {
     "phrases": [
-      "apply a theme",
-      "color theme",
-      "colour theme",
+      "apply a theme to this deck",
+      "pick a color theme for this report",
+      "choose a colour theme for this document",
       "color scheme",
       "brand colors",
       "brand colours",
       "match our brand",
       "restyle",
-      "theme this"
+      "theme this",
+      "cohesive visual theme"
     ],
     "allOf": [
       [
@@ -61,13 +62,13 @@
       ]
     ],
     "anyOf": [
-      "theme",
-      "palette",
+      "theme this",
+      "apply a theme",
       "color scheme",
       "brand colors",
-      "fonts",
-      "restyle",
-      "consistent look"
+      "restyle this",
+      "consistent look",
+      "cohesive visual theme"
     ],
     "noneOf": [
       "dark mode toggle",

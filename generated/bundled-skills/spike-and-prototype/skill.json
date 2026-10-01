@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "spike-and-prototype",
+  "name": "Spike and Prototype",
+  "description": "Build clearly-labelled throwaway experiments (feasibility spikes, A-vs-B comparisons, logic/state-model HTML demos, UI variant prototypes) ordered by risk, each ending in a VALIDATED/PARTIAL/INVALIDATED verdict that is captured into the spec or plan. Use for is this even possible, try X vs Y, quick proof of concept, or see how this feels. Do not use for production implementation, questions answerable from docs or code, or already-validated ideas.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "compare approach a vs b",
+    "try a few ui variations",
+    "what should i spike next",
+    "is this even possible",
+    "quick proof of concept",
+    "build a throwaway prototype",
+    "prototype the state machine",
+    "spike this out"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "spike this",
+      "spike out",
+      "proof of concept",
+      "throwaway prototype",
+      "quick prototype",
+      "is this even possible",
+      "what should i spike next",
+      "ui variations"
+    ],
+    "allOf": [
+      [
+        "spike",
+        "idea"
+      ],
+      [
+        "prototype",
+        "throwaway"
+      ],
+      [
+        "proof",
+        "concept"
+      ],
+      [
+        "compare",
+        "approach"
+      ],
+      [
+        "see",
+        "if",
+        "works",
+        "before"
+      ],
+      [
+        "prototype",
+        "ui"
+      ]
+    ],
+    "anyOf": [
+      "spike",
+      "prototype",
+      "proof of concept",
+      "feasibility",
+      "throwaway",
+      "experiment"
+    ],
+    "noneOf": [
+      "production deploy",
+      "release",
+      "pull request review",
+      "fix the bug",
+      "landing page copy",
+      "pitch deck",
+      "video"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "research",
+    "prototyping"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "workspace_run",
+    "web_search",
+    "web_fetch",
+    "ask_prometheus_questions",
+    "background_ops"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

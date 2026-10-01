@@ -21,14 +21,17 @@
   ],
   "categories": [],
   "requiredTools": [],
+  "implicitInvocation": true,
   "permissions": {},
   "resources": [
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
+    },
     {
       "path": "references/workflows/ghostwriter.md",
       "type": "doc",
       "description": "Add workflow recipe to ghostwriter"
     }
-  ],
-  "implicitInvocation": true,
-  "lifecycle": "active"
+  ]
 }

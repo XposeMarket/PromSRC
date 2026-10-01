@@ -6,7 +6,7 @@ This reference preserves detailed guidance from the former `chart-visualizer` en
 
 - [Chart type decision](#chart-type-decision)
 - [Chart.js config examples](#format-chartjs-config-object)
-- [Color palette](#color-palette-legacy-examples-only)
+- [Color palette](#color-palette)
 - [Labels and titles](#labels--titles)
 - [Rules and anti-patterns](#rules--anti-patterns)
 - [Proactive triggering](#proactive-triggering)
@@ -14,14 +14,6 @@ This reference preserves detailed guidance from the former `chart-visualizer` en
 # Chart Visualizer
 
 Render live Chart.js charts directly in chat using a fenced `chart` block. The frontend auto-injects Chart.js and wraps the config in a canvas — output only the config object, nothing else.
-
-## Prometheus theme note
-
-These examples describe Chart.js structure, not a required color palette. Omit
-`backgroundColor` and `borderColor` unless a supplied semantic color matters;
-Prometheus fills missing dataset colors from the active theme tokens. Never add a
-fixed light/dark canvas or outer panel. When a supplied config contains a legacy
-fixed palette, preserve its data and shape but prefer the host theme for presentation.
 
 ## CRITICAL OUTPUT RULES
 
@@ -211,11 +203,9 @@ Output only the config. No wrapper.
 
 ---
 
-## Color Palette (legacy examples only)
+## Color Palette
 
-The renderer now supplies the active theme palette. If you need to reason about
-series roles, use primary, secondary, success, warning, and danger semantics rather
-than copying fixed hex values into a generated config:
+Use these consistently. They work in both dark and light mode:
 
 | Role | Hex |
 |---|---|
@@ -264,7 +254,7 @@ For background fills (line charts, radar): append `33` to the hex for ~20% opaci
 
 Automatically produce a chart (without being asked) when:
 - User pastes a table of numbers and asks for analysis
-- User asks "how does X compare to Y" with quantifiable data  
+- User asks "how does X compare to Y" with quantifiable data
 - User asks about trends, performance, or metrics over time
 - A data pipeline, integration sync, or report task produces numeric output
 

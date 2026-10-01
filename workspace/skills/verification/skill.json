@@ -11,9 +11,12 @@
     "test the complete user story",
     "run a full flow test",
     "make sure the feature works",
+    "prove that it is fixed",
     "verify the whole flow",
     "does this actually work",
-    "check everything works"
+    "is it actually fixed",
+    "check everything works",
+    "prove it works"
   ],
   "promptSignals": {
     "phrases": [
@@ -23,7 +26,12 @@
       "does this actually work",
       "check everything works",
       "run a full flow test",
-      "make sure the feature works"
+      "make sure the feature works",
+      "actually fixed",
+      "prove it",
+      "prove it works",
+      "is it really fixed",
+      "did it actually work"
     ],
     "allOf": [
       [
@@ -84,10 +92,8 @@
     "development"
   ],
   "requiredTools": [
-    "workspace",
-    "shell",
-    "browser_automation",
-    "processes"
+    "workspace_write",
+    "browser_automation"
   ],
   "implicitInvocation": true,
   "permissions": {

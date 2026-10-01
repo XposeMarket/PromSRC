@@ -2,19 +2,19 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "brand-assets-and-logo-retrieval",
   "name": "Brand Assets and Logo Retrieval",
-  "description": "Find, verify, download, normalize, and provenance-track official brand logos, icons, wordmarks, and related assets from authoritative sources. Use when a site, deck, mockup, or creative workflow needs real brand assets rather than AI-redrawn logos.",
+  "description": "Find, verify, download, normalize, and provenance-track existing official brand logos, icons, and wordmarks. Use when an authoritative asset must be sourced; use exact-logo-brand-kit-workflow to compose a supplied or sourced logo into a board or mockup, not to find the asset.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "find the official logo",
-    "download brand assets",
-    "get company svg",
     "find press kit assets",
-    "retrieve exact logo",
-    "official wordmark",
-    "brand asset provenance",
     "get favicon and logo",
-    "logo api fallback"
+    "download brand assets",
+    "brand asset provenance",
+    "retrieve exact logo",
+    "logo api fallback",
+    "get company svg",
+    "official wordmark"
   ],
   "categories": [
     "brand",
@@ -24,7 +24,8 @@
     "media"
   ],
   "requiredTools": [
-    "web",
+    "web_search",
+    "web_fetch",
     "media_assets",
     "workspace_write",
     "browser_automation"
@@ -38,11 +39,6 @@
   },
   "resources": [
     {
-      "path": "templates/asset-provenance.md",
-      "type": "template",
-      "description": "Provenance manifest"
-    },
-    {
       "path": "references/source-priority.md",
       "type": "doc",
       "description": "Authority rules"
@@ -51,6 +47,11 @@
       "path": "references/trigger-tests.md",
       "type": "test",
       "description": "Routing tests"
+    },
+    {
+      "path": "templates/asset-provenance.md",
+      "type": "template",
+      "description": "Provenance manifest"
     }
   ]
 }

@@ -2,18 +2,18 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "supervised-goal-orchestrator",
   "name": "Supervised Goal Orchestrator",
-  "description": "Turn a loose objective or brain dump into bounded parallel Prometheus work lanes, actively supervise them, reconcile outputs, and finish with verified evidence. Use for master-thread, delegate-and-supervise, parallel-goal, or keep-working-until-verified requests; not for simple linear tasks.",
+  "description": "Turn a broad objective into bounded parallel lanes with a supervisor and evidence ledger. Use for complex delegate-and-supervise goals; use parallel-agent-fanout for a narrow one-off fanout, not this workflow.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "babysit this goal",
-    "run this in parallel",
     "turn this brain dump into threads",
-    "delegate and supervise",
+    "own this end to end",
+    "run this in parallel",
     "keep working until verified",
-    "master thread",
+    "delegate and supervise",
     "parallelize this objective",
-    "own this end to end"
+    "babysit this goal",
+    "master thread"
   ],
   "categories": [
     "agents",
@@ -35,14 +35,9 @@
   },
   "resources": [
     {
-      "path": "templates/normalized-goal.md",
-      "type": "template",
-      "description": "Goal normalization"
-    },
-    {
-      "path": "templates/lane-brief.md",
-      "type": "template",
-      "description": "Lane brief"
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Positive and negative routing tests"
     },
     {
       "path": "templates/evidence-ledger.md",
@@ -50,9 +45,14 @@
       "description": "Evidence ledger"
     },
     {
-      "path": "references/trigger-tests.md",
-      "type": "test",
-      "description": "Positive and negative routing tests"
+      "path": "templates/lane-brief.md",
+      "type": "template",
+      "description": "Lane brief"
+    },
+    {
+      "path": "templates/normalized-goal.md",
+      "type": "template",
+      "description": "Goal normalization"
     }
   ]
 }

@@ -1,0 +1,131 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "change-and-price-watch",
+  "name": "Change and Price Watch",
+  "description": "Set up and run recurring watches on external sources that alert only on new or qualifying changes: product, flight, or listing prices and availability against a target, RSS or Atom feeds, GitHub issues, releases, or commits, JSON endpoints, and web pages. Uses a pinned watch contract, a state file with seen-ID watermark and last-good observation, a foreground baseline before scheduling, and silent no-change ticks. Use for alert me when the price drops, watch this feed, notify me on new releases. Do not use for one-off price lookups or shopping comparisons (product-carousel-builder), competitor strategy digests (competitor-signal-monitor), or internal file and task watches (automation-watches-and-timers).",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "notify me when it's back in stock",
+    "notify me when a new github release",
+    "tell me when a new release drops",
+    "watch a github repo for new releases",
+    "notify me when a new release",
+    "alert me when the price drops",
+    "tell me when this page changes",
+    "notify me on new releases",
+    "alert me on new release",
+    "watch this rss feed",
+    "price drop alert",
+    "watch this price"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "alert me when the price",
+      "notify me when",
+      "releases a new version",
+      "price drop alert",
+      "watch this price",
+      "back in stock",
+      "watch this feed",
+      "rss feed",
+      "notify me on new releases",
+      "tell me when this page changes",
+      "track the price"
+    ],
+    "allOf": [
+      [
+        "alert",
+        "price"
+      ],
+      [
+        "notify",
+        "price"
+      ],
+      [
+        "watch",
+        "price"
+      ],
+      [
+        "watch",
+        "feed"
+      ],
+      [
+        "notify",
+        "release"
+      ],
+      [
+        "notify",
+        "releases"
+      ],
+      [
+        "notify",
+        "new",
+        "version"
+      ],
+      [
+        "tell",
+        "me",
+        "when",
+        "releases"
+      ],
+      [
+        "watch",
+        "repo"
+      ],
+      [
+        "tell",
+        "me",
+        "when",
+        "changes"
+      ],
+      [
+        "track",
+        "price"
+      ]
+    ],
+    "anyOf": [
+      "watch a github repo for new releases",
+      "notify me when a new github release",
+      "alert me on new release",
+      "price drop",
+      "in stock",
+      "new releases",
+      "watch this feed",
+      "track the price"
+    ],
+    "noneOf": [
+      "best laptop",
+      "product recommendations",
+      "compare prices now",
+      "competitor",
+      "file watch",
+      "task watch",
+      "internal watch",
+      "remind me in"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "automation",
+    "monitoring",
+    "shopping",
+    "scheduling"
+  ],
+  "requiredTools": [
+    "schedule_job",
+    "web_fetch",
+    "shopping_search_products",
+    "workspace_write",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

@@ -14,7 +14,7 @@ schedule_job_detail({
 // 2. Preview the change
 schedule_job_patch({
   "action": "preview",
-  "job_id": "prometheus-x-posts", 
+  "job_id": "prometheus-x-posts",
   "instruction_prompt": "NEW PROMPT CONTENT HERE..."
 })
 
@@ -35,7 +35,7 @@ schedule_job({
   "job_id": "prometheus-x-posts",
   "confirm": true,
   "schedule": {
-    "kind": "recurring", 
+    "kind": "recurring",
     "cron": "0 */6 * * *"  // Changed from every 3 hours to every 6
   }
   // Preserve other fields - read detail first!
@@ -51,7 +51,7 @@ schedule_job({
 // 1. List to confirm job exists and get exact ID
 schedule_job({"action": "list"})
 
-// 2. Get detail to understand what you're deleting  
+// 2. Get detail to understand what you're deleting
 schedule_job_detail({"job_id": "target_job_id"})
 
 // 3. Delete with exact ID (not name)
@@ -67,7 +67,7 @@ schedule_job({
 schedule_job({
   "action": "delete",
   "job_id": "prometheus-x-posts", // Name works too
-  "confirm": true  
+  "confirm": true
 })
 ```
 
@@ -79,7 +79,7 @@ const jobs = schedule_job({"action": "list", "limit": 50})
 // Delete multiple with individual calls
 for (const job of problematicJobs) {
   schedule_job({
-    "action": "delete", 
+    "action": "delete",
     "job_id": job.id,
     "confirm": true
   })
@@ -93,7 +93,7 @@ for (const job of problematicJobs) {
 // BAD - Blind update
 schedule_job({
   "action": "update",
-  "job_id": "some_job", 
+  "job_id": "some_job",
   "instruction_prompt": "new prompt"
 })
 
@@ -107,7 +107,7 @@ const detail = schedule_job_detail({"job_id": "some_job"})
 ```javascript
 // When updating, preserve:
 // - schedule (unless changing timing)
-// - delivery settings  
+// - delivery settings
 // - enabled state
 // - expected outputs
 // - timezone
@@ -125,9 +125,9 @@ schedule_job_patch({
   "confirm": true
 })
 
-// AVOID for prompt-only changes  
+// AVOID for prompt-only changes
 schedule_job({
-  "action": "update", 
+  "action": "update",
   // Must specify ALL fields to preserve them
 })
 ```
@@ -143,7 +143,7 @@ schedule_job({
   // Missing: subagent_id, delivery, other fields from original
 }
 
-// RIGHT - Preserve assignment explicitly  
+// RIGHT - Preserve assignment explicitly
 {
   "action": "update",
   "instruction_prompt": "new prompt",
@@ -154,7 +154,7 @@ schedule_job({
 
 ### Mistake 2: Breaking Schedule Format
 ```javascript
-// WRONG - Malformed schedule 
+// WRONG - Malformed schedule
 {
   "schedule": "every 3 hours" // String not object
 }
@@ -162,7 +162,7 @@ schedule_job({
 // RIGHT - Proper schedule object
 {
   "schedule": {
-    "kind": "recurring", 
+    "kind": "recurring",
     "cron": "0 */3 * * *"
   }
 }
@@ -174,7 +174,7 @@ schedule_job({
 // 1. Reopen detail to verify config
 schedule_job_detail({"job_id": "updated_job"})
 
-// 2. Run now to test behavior  
+// 2. Run now to test behavior
 schedule_job({"action": "run_now", "job_id": "updated_job"})
 
 // 3. Check recent run result
@@ -201,7 +201,7 @@ schedule_job({"action": "list"})
 
 ### Handle Delete Failures
 ```javascript
-// Common: "Job not found" 
+// Common: "Job not found"
 // May indicate: already deleted, wrong ID/name, timing race
 
 // Double-check with fresh list before reporting failure

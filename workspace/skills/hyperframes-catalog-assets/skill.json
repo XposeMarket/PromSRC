@@ -3,7 +3,6 @@
   "id": "hyperframes-catalog-assets",
   "name": "hyperframes-catalog-assets",
   "description": "Find, inspect, import, and adapt verified official HyperFrames registry blocks and components into Prometheus Creative Mode. Use for explicit catalog asset, registry source, reusable scene, or HyperFrames component requests; do not invoke for ordinary video creation.",
-  "emoji": "🎞️",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -25,11 +24,13 @@
     "assets"
   ],
   "requiredTools": [
-    "creative_mode",
+    "creative_hyperframes",
     "browser_automation",
-    "web",
+    "web_search",
+    "web_fetch",
     "skills"
   ],
+  "implicitInvocation": false,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -37,6 +38,11 @@
     "externalSideEffects": false
   },
   "resources": [
+    {
+      "path": "resources/background-research-notes.md",
+      "type": "doc",
+      "description": "Deeper findings from background agents for the HyperFrames catalog ingestion."
+    },
     {
       "path": "resources/catalog-manifest.json",
       "type": "data",
@@ -48,26 +54,19 @@
       "description": "Human-readable category index for the HyperFrames catalog inventory."
     },
     {
-      "path": "resources/prometheus-adaptation-guide.md",
-      "type": "doc",
-      "description": "How to turn HyperFrames catalog items into Prometheus reusable Creative Mode assets/templates."
-    },
-    {
-      "path": "resources/background-research-notes.md",
-      "type": "doc",
-      "description": "Deeper findings from background agents for the HyperFrames catalog ingestion."
-    },
-    {
       "path": "resources/compatibility.md",
       "type": "doc",
       "description": "Canonical per-item lint, frame, visual, and export proof requirements plus regression failure shapes."
+    },
+    {
+      "path": "resources/prometheus-adaptation-guide.md",
+      "type": "doc",
+      "description": "How to turn HyperFrames catalog items into Prometheus reusable Creative Mode assets/templates."
     },
     {
       "path": "scripts/refresh-manifest.mjs",
       "type": "script",
       "description": "Refresh the offline manifest and category map from the pinned HyperFrames CLI catalog."
     }
-  ],
-  "implicitInvocation": false,
-  "lifecycle": "active"
+  ]
 }

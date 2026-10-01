@@ -1,15 +1,13 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
-  "version": "1.0.0",
-  "categories": [],
-  "requiredTools": [],
-  "permissions": {},
-  "resources": [],
   "id": "api-integration",
   "name": "api-integration",
   "description": "Build, call, connect, or debug REST/HTTP APIs with secret-safe authentication, response validation, pagination, rate-limit handling, bounded retries, and clear failure reporting.",
+  "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
+    "add retries and backoff to this api client",
+    "the api keeps returning 429s",
     "integrate an external api",
     "debug an api request",
     "test an api endpoint",
@@ -17,6 +15,14 @@
     "implement api authentication",
     "handle api pagination"
   ],
+  "categories": [],
+  "requiredTools": [],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
+    }
+  ]
 }

@@ -18,7 +18,7 @@ const requiredExplicit = new Set([
   'animejs', 'chatgpt-desktop-restart', 'contribute-catalog', 'dev-debugging',
   'gsap', 'hyperframes-catalog-assets', 'hyperframes-cli', 'hyperframes-registry',
   'local-media-utilities', 'lottie', 'prometheus-ash-archive-style',
-  'self-repair-protocol', 'skill-creator', 'windows-shell-playbook',
+  'self-repair-protocol', 'windows-shell-playbook',
 ]);
 const priorityEntrypoints = [
   'browser-automation-playbook', 'file-surgery', 'scheduler-operations-playbook',

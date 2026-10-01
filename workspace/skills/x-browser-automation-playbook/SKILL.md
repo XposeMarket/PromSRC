@@ -5,6 +5,8 @@ description: "Operate X/Twitter interactively in an authenticated browser sessio
 
 # X browser automation
 
+Before any generated X post, reply, quote, or DM is entered, remove all em dashes from the copy.
+
 Use the least invasive X-capable route that completes the request.
 
 ## Route first

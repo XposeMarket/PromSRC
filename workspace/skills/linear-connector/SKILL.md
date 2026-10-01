@@ -1,47 +1,15 @@
 ---
 name: "linear-connector"
-description: "Build or operate a vault-backed Linear GraphQL connector for teams, projects, issues, cycles, comments, statuses, and explicit task synchronization. Use when a request specifically concerns Linear integration or Linear issue operations; do not invoke for generic task planning."
+description: "Connect or operate Linear teams, projects, issues, cycles, and comments when Linear is explicitly requested. Use integration-setup for generic connection setup and connector-builder if implementation is missing; not for arbitrary task tracking."
 ---
 
-# Linear Connector
+# Linear connector
 
-Use this skill when Prometheus needs Linear-backed product, engineering, bug, or roadmap workflows.
+Linear is not a bundled connector, but it is in Prometheus's hosted MCP catalog (`https://mcp.linear.app/mcp`, OAuth with dynamic client registration; see `src/gateway/hosted-mcp-catalog.ts`). Once connected, its tools appear as MCP tools. Do not invoke imaginary `linear_*` tools.
 
-## Prometheus Fit
+1. Check `connector_list`, then `tool_search({query:"Linear list teams projects search issues"})`; inspect any real schema with `tool_describe` and use `tool_call` with exact accepted arguments. Verify organization, team, project and issue identifiers before action.
+2. If absent, connect the hosted Linear MCP server through `integration-setup` (Plugins / Connections, Linear entry; the user completes the OAuth screen). Only if that route fails, follow `connector-builder` for an approved GraphQL user plugin. Keep API tokens in Connections/vault, never in skill files, and only request necessary scopes.
+3. Use GraphQL variables rather than interpolated user text. Respect pagination and preserve issue IDs, human-readable keys, status IDs, cycle IDs and URLs. Read team-specific status/label schemas before updates.
+4. Creating/updating issues, assigning people and posting comments require the applicable side-effect approval. For retries, check the issue state first to avoid duplicates. Read back the issue/comment to confirm the actual result.
 
-Linear should be a GraphQL connector with typed issue/project/cycle tools. It should also map cleanly into Prometheus tasks and background jobs so local planning and Linear state do not drift.
-
-## Tool Scope
-
-Start with:
-
-- `linear_list_teams`
-- `linear_list_projects`
-- `linear_search_issues`
-- `linear_get_issue`
-- `linear_create_issue`
-- `linear_update_issue`
-- `linear_add_comment`
-- `linear_list_cycles`
-- `linear_sync_task`
-
-## Rules
-
-- Use Linear GraphQL and typed variables. Avoid ad hoc query string construction.
-- Store API keys/OAuth tokens only through Connections/vault.
-- Return Linear identifiers, URLs, team/project/cycle names, assignees, priority, labels, and status.
-- Creating, assigning, closing, deleting, or bulk-updating issues requires explicit confirmation.
-- Keep Prometheus task links in issue comments or metadata only when the user asks for sync.
-- Paginate searches and make cursors explicit.
-
-## Implementation Route
-
-1. Inspect Prometheus task/team structures before deciding sync shape.
-2. Build a connector with read tools first.
-3. Add mutation tools with confirmation and dry-run previews.
-4. Add a task sync helper that creates cross-links instead of silently replacing either system.
-5. Add mocked GraphQL tests for search, issue create, and issue update.
-
-## Acceptance Check
-
-Prometheus can turn chat plans into Linear issues and read Linear context back into planning without losing ownership of local task state.
+If no supported integration exists, report that constraint and offer a proposed issue draft rather than claiming a Linear change.

@@ -1,47 +1,23 @@
 ---
 name: "teams-meeting-pipeline"
-description: "Build a Microsoft Graph-backed Teams meeting pipeline for meeting discovery, transcript or recording ingestion, action extraction, follow-up drafting, and explicit task sync. Use when implementing Teams meeting integration or processing Teams meeting data with user intent."
+description: "Design or implement a Microsoft Graph-backed Teams meeting ingestion pipeline, or process a transcript the user already supplied. Use for Teams-specific integration work; use meeting-notes for ordinary meeting summaries and document-to-action-items for extracting tasks from an available transcript."
 ---
 
-# Teams Meeting Pipeline
+# Teams meeting pipeline
 
-Use this skill when Prometheus needs Microsoft Teams meeting context, transcripts, recordings, action items, or follow-up workflows.
+**Availability check first.** No bundled Microsoft Teams connector or `teams_*` tools currently ship in Prometheus. Do not call or promise `teams_list_meetings`, `teams_get_transcript`, `teams_summarize_meeting`, or `teams_sync_actions_to_tasks`. Use `connector_list` or `tool_search` to check whether the user has since connected a Teams/Graph integration. If not, ask for an authorized transcript export or offer to design the connector; do not claim account access.
 
-## Prometheus Fit
+## Process an available transcript
 
-Build this on Microsoft Graph connectors. The pipeline should feed Prometheus memory, tasks, and document/email drafting, while respecting meeting privacy and tenant permissions.
+1. Confirm meeting identity, source, time, attendees when known, privacy constraints, and the requested output.
+2. Extract a source-grounded summary, decisions, open questions, actions with named owners and deadlines only where explicit; mark inferred assignments for confirmation. Use `meeting-notes` and `document-to-action-items` for their respective procedures.
+3. Draft follow-up messages, never send or mutate tasks without authorization and applicable tool approval.
+4. Verify quotes and action references against the supplied transcript, preserve its provenance, and report gaps.
 
-## Tool Scope
+## Build an integration only when requested
 
-Start with:
-
-- `teams_list_meetings`
-- `teams_get_meeting`
-- `teams_get_transcript`
-- `teams_get_recording_metadata`
-- `teams_summarize_meeting`
-- `teams_extract_actions`
-- `teams_draft_followup`
-- `teams_sync_actions_to_tasks`
-
-## Rules
-
-- Use Microsoft Graph OAuth through Connections/vault.
-- Declare required scopes clearly and keep them narrow.
-- Do not ingest private transcripts or recordings without explicit user intent.
-- Preserve meeting IDs, organizer, attendees, timestamps, transcript source, and links.
-- Follow-up emails, chat messages, task creation, and file sharing require confirmation.
-- Store generated summaries/actions as workspace artifacts or memory records according to user intent.
-- Handle tenant policy failures gracefully; Teams transcript access is often admin-restricted.
-
-## Implementation Route
-
-1. Use `connector-builder` for Graph REST calls or extend an existing Microsoft connector.
-2. Add meeting discovery and transcript read tools first.
-3. Add summarization/action extraction as Prometheus-side processing, not provider-side magic.
-4. Add confirmation-gated follow-up and task sync.
-5. Add mocked tests for missing transcript, permission failure, and action extraction.
-
-## Acceptance Check
-
-Prometheus can turn Teams meetings into searchable context, action items, and follow-ups while keeping private meeting data under explicit user control.
+1. Verify connected tools and narrow Microsoft Graph OAuth scopes, tenant licensing, and admin policy for transcript/recording access. Use `connector-builder` for an implementation project; do not invent tool names before registration.
+2. Implement read-only discovery and transcript retrieval first. Summarization and action extraction are Prometheus-side processing, not a Graph API promise.
+3. Add explicit approval boundaries for follow-up email, task sync, sharing, and storing private transcripts.
+4. Test missing transcripts, permission denial, duplicate imports, redaction, attendee mismatch, and confirmed write paths using mocks before live connection.
+5. Acceptance: a real authorized read yields a traceable summary/actions, and denied access fails closed.

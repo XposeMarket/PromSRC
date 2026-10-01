@@ -1,3 +1,8 @@
+---
+name: "ps-vita-vitashell-ftp-deploy"
+description: "Safely deploy a specific VPK or other file from Windows to a PS Vita with VitaShell FTP mode, then reconnect, retrieve it, and prove an exact byte-for-byte match by size and SHA-256."
+---
+
 # PS Vita VitaShell FTP Deploy
 
 Use this skill to transfer a VPK or other file from Windows to a PS Vita while VitaShell FTP mode is open.

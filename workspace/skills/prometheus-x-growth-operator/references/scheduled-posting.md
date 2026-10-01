@@ -20,7 +20,7 @@ Original posts should complement that strategy. They should give the account a c
 
 - Read the primary schedule-owner memory first with `read_file`: `.prometheus/subagents/x_account_operator_raulinvests_v1/memory/schedule-memory.md`.
 - Read `prometheus-x-posts-memory.md` as the shared/legacy X memory when available.
-- Read `skill_read("prometheus-x-research-replies")` when the schedule asks for it so original posts stay aligned with the current reply/quote/repost targets.
+- Read `prometheus-x-growth-operator/references/research-replies.md` when the schedule asks for it so original posts stay aligned with the current reply/quote/repost targets.
 - Never use `memory_read` for either schedule memory file.
 - Generate one distinct, high-quality post that does not repeat prior posted angles, formats, metaphors, or conclusions.
 - Do not default to agent memory, receipts, state reuse, or "next run" themes. Those are only valid when the chosen topic is specifically about memory/state/context.
@@ -76,7 +76,7 @@ Avoid:
 
 1. Read `.prometheus/subagents/x_account_operator_raulinvests_v1/memory/schedule-memory.md`.
 2. Read `prometheus-x-posts-memory.md` if available.
-3. If instructed by the schedule, read `prometheus-x-research-replies` for the current daily engagement targets.
+3. If instructed by the schedule, read `prometheus-x-growth-operator/references/research-replies.md` for the current daily engagement targets.
 4. Identify the last several content lanes and overused angles across originals, replies, quote reposts, and reposts.
 5. Choose a fresh lane from Topic Rotation.
 6. Draft one post under 280 characters, or a readable multi-line post if the idea benefits from spacing. Scan for em dashes.
@@ -94,3 +94,5 @@ Avoid:
 - No em dashes.
 - No repeated agent-memory angle unless directly justified by a fresh source.
 - Original post complements, rather than crowds out, the daily reply/quote/repost engagement strategy.
+
+Historical posts workflow and style from the retired skill are preserved verbatim in [legacy-posts-workflow.md](legacy-posts-workflow.md) and [legacy-posts-style.md](legacy-posts-style.md). These are dated references, not current tool instructions; prefer this canonical file for live work.

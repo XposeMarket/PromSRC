@@ -10,7 +10,7 @@ Act as the single routing entrypoint for substantial creative production. Do not
 ## Route the request
 
 1. Enter Creative Mode with the appropriate mode; use `video` for motion or timeline work.
-2. Inspect project state and supplied assets before generating replacements. For posters or other visual pieces, optionally state a named aesthetic direction in 3 to 4 sentences about form, color, scale, and text restraint, then generate toward it. Favor editorial, industrial, real UI, or physical materials; avoid the purple-blue-cyan gradient "AI SaaS" look unless brand-required.
+2. Inspect project state and supplied assets before generating replacements. For posters or other visual pieces, optionally state a named aesthetic direction in 3 to 4 sentences about form, color, scale, and text restraint, then generate toward it. Favor editorial, industrial, real UI, or physical materials; avoid the purple-blue-cyan gradient "AI SaaS" look unless brand-required. For an unspecified promo destination, default to landscape 16:9; vertical is for explicit Shorts, Reels, TikTok, or a specified portrait target.
 3. Choose one primary lane:
    - **Canvas/image:** still design, compositing, masking, layout, or image generation.
    - **Native timeline:** trimming, stitching, generated shots, audio mixing, captions, overlays, or mixed-source editing.

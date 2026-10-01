@@ -1,6 +1,6 @@
 ---
-name: theme-application
-description: Choose, preview, and consistently apply a visual theme (palette, type pairing, accents, chart colors) to an artifact such as a slide deck, document, report, HTML page, dashboard, or chart set, either from the bundled theme library or a custom theme built from a brand or brief. Use when the user asks to theme, restyle, rebrand, or "make this match our colors" across an artifact. Do not use for designing a full website (web-design-skill), creating logos or brand kits (exact-logo-brand-kit-workflow), or brand positioning (brand-strategist).
+name: "theme-application"
+description: "Choose, preview, and consistently apply a visual theme (palette roles, type pairing, accent and chart rules) to a slide deck, document, report, HTML page, dashboard, or chart set, from a bundled original theme library or a custom theme built from a brand. Use when asked to theme, restyle, or make an artifact match brand colors; do not use for full website design, logo or brand-kit creation, or brand positioning."
 ---
 
 # Theme Application
