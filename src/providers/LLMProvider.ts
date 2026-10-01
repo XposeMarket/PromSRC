@@ -116,7 +116,16 @@ export interface ChatResult {
   usage?: ModelUsage;
   /** Native provider termination reason; do not infer completion from empty content. */
   stopReason?: string;
+  /** Why a streamed response was marked `incomplete_stream`, when the provider knows. */
+  incompleteCause?: IncompleteStreamCause;
 }
+
+/**
+ * invalid_tool_json: a tool_use block finished but its arguments did not parse.
+ * tool_block_unterminated: the stream ended inside a tool_use block.
+ * no_message_stop: the stream ended without the provider's final message_stop event.
+ */
+export type IncompleteStreamCause = 'invalid_tool_json' | 'tool_block_unterminated' | 'no_message_stop';
 
 export interface GenerateResult {
   response: string;

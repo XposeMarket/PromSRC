@@ -9,7 +9,7 @@ export class ModelResponseRecovery {
     return anthropic ? Math.min(32768, 16384 * 2 ** this.tokenLimitHits) : 4096;
   }
 
-  inspect(response: { content?: unknown; tool_calls?: unknown[] }, stopReason?: string, aborted = false) {
+  inspect(response: { content?: unknown; tool_calls?: unknown[] }, stopReason?: string, aborted = false, incompleteCause?: string) {
     if (aborted || stopReason === 'refusal') return { action: 'accept' as const };
     if (response.tool_calls?.length) {
       this.consecutive = 0;
@@ -22,7 +22,7 @@ export class ModelResponseRecovery {
         return { action: 'accept' as const };
       }
     }
-    if (this.consecutive >= 2 || this.total >= 6) return { action: 'exhausted' as const, reason: stopReason || 'empty_response' };
+    if (this.consecutive >= 2 || this.total >= 6) return { action: 'exhausted' as const, reason: stopReason || 'empty_response', ...(incompleteCause ? { cause: incompleteCause } : {}) } as { action: 'exhausted'; reason: string; cause?: string };
     this.consecutive++;
     this.total++;
     if (stopReason === 'max_tokens') this.tokenLimitHits++;
@@ -30,8 +30,11 @@ export class ModelResponseRecovery {
       action: 'retry' as const,
       attempt: this.consecutive,
       reason: stopReason || 'empty_response',
+      cause: incompleteCause,
       prompt: [
-        stopReason === 'max_tokens'
+        stopReason === 'incomplete_stream' && (incompleteCause === 'invalid_tool_json' || incompleteCause === 'tool_block_unterminated')
+          ? 'Your previous tool call arrived with invalid or truncated JSON arguments, so it was NOT executed. Do not resend the same long inline command. Put long or quote/backslash-heavy commands into a small script file (one short write call), then run that file with a short command. Keep each tool call compact.'
+          : stopReason === 'max_tokens'
           ? 'Your previous response hit the output token limit. If you attempted a large tool call or file write, its arguments may have been cut off and the call was NOT executed. Do not repeat that oversized call. Create a small runnable file first, then add content in separate append/insert/patch calls of fewer than 250 lines each; keep each tool call well below the output limit.'
           : stopReason === 'incomplete_stream'
             ? 'Your previous response stream was interrupted before completion. Any unfinished tool call was NOT executed; use a short next action instead of repeating a large output.'
