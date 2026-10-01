@@ -14,11 +14,11 @@ There are two distinct paths:
 1. **Direct user request:** the user explicitly asks to create or edit a skill. Inspect overlap, propose the focused change, then perform the authorized mutation and validate it.
 2. **Learned candidate:** a workflow, Thought, Dream, cleanup, or normal chat suggests a reusable lesson. Submit a structured candidate with `skill_candidate_submit`. Do not create or update skill files.
 
-Brain Curator is the sole automatic writer. Candidate approval for a new skill authorizes design/proposal work only; it does not itself create the skill. Instruction, trigger, resource, and new-skill changes remain pending review unless the user directly requested the edit. Exact non-behavioral metadata repairs may use the Curator's safe path.
+Brain Curator (the `skill_curator` tool: status, run, apply, reject) is the sole automatic writer. Candidate approval for a new skill authorizes design/proposal work only; it does not itself create the skill. Instruction, trigger, resource, and new-skill changes remain pending review unless the user directly requested the edit. Exact non-behavioral metadata repairs may use the Curator's safe path.
 
 ## Evidence gate
 
-Treat only user messages as evidence of user preference or approval. Assistant summaries, praise, completion claims, tool count, and repeated assistant wording are not evidence.
+Treat only user messages as evidence of user preference or approval. Assistant summaries, praise, completion claims, tool count, and repeated assistant wording are not evidence. Do not infer approval from assistant summaries, successful tool calls, or the absence of an objection.
 
 Submit a learned candidate only when supported by either:
 

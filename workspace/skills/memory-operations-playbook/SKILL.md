@@ -1,8 +1,6 @@
 ---
-name: Memory Operations Playbook
-description: Retrieve, inspect, relate, write, consolidate, embed, and refresh Prometheus memory safely. Use for advanced memory search, timeline or graph queries, record provenance, claims review, embedding health, and index recovery.
-version: 1.0.0
-triggers: advanced memory search, debug memory retrieval, memory graph timeline, consolidate memory claims, refresh memory index, memory-operations-playbook
+name: memory-operations-playbook
+description: "Retrieve, inspect, relate, write, consolidate, embed, and refresh Prometheus memory safely. Use for advanced memory search, timeline or graph queries, record provenance, claims review, embedding health, and index recovery."
 ---
 
 # Memory Operations Playbook

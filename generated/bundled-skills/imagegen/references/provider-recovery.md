@@ -19,7 +19,7 @@ Recovery flow:
 
 ## References must be workspace-contained
 
-The OpenAI Codex image route rejects reference images outside the workspace, including live Prometheus source paths such as `C:\...\PromSRC\web-ui\...`, with an `outside workspace` error.
+The OpenAI Codex image route rejects reference images outside the workspace, including live Prometheus source paths such as `<prometheus-source>\web-ui\...`, with an `outside workspace` error.
 
 Preferred flow:
 

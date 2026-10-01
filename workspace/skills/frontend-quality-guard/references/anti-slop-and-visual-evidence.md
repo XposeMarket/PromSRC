@@ -12,5 +12,5 @@ Advanced refraction, 3D, glass, scroll effects, and experimental DOM treatments 
 ## Mandatory evidence
 Capture before and after at desktop and mobile widths. Verify real content, hierarchy, spacing, overflow, interaction, and console state. Do not claim visual improvement from source alone.
 
-## Raul preference
+## Owner preference
 Unless brand-required, prefer editorial, industrial, real UI, and physical-material direction over purple/blue/cyan gradient AI-SaaS aesthetics.

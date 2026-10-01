@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "git-workflow",
+  "name": "git-workflow",
+  "description": "Inspect and operate Git repositories safely: status, diffs, commits, branches, remotes, conflict recovery, submodules, GitHub connector operations, and authenticated publication. Use for concrete Git or GitHub operations, not generic coding.",
+  "version": "1.2.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "preserve dirty work",
+    "revert my change",
+    "create a branch",
+    "check the diff",
+    "push to github",
+    "sync the repo",
+    "make a commit",
+    "push the site",
+    "tag a release",
+    "resolve conflicts",
+    "compare branches",
+    "merge conflict"
+  ],
+  "categories": [
+    "git",
+    "github",
+    "version-control",
+    "repo-operations"
+  ],
+  "requiredTools": [
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
+    "git_commit",
+    "git_push"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
+    },
+    {
+      "path": "references/github-authentication.md",
+      "type": "doc",
+      "description": "Guardrail for safely using GitHub authentication without leaking tokens; use the GitHub connector for API operations."
+    }
+  ]
+}

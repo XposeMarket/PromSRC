@@ -1087,7 +1087,7 @@ layout. Pick a transition duration of 0.5–0.7s with `ease: 'power2.inOut'`.
 **Decorative frames** (`clean` / `hairline` / `polaroid`) sit as a
 **sibling** of `#video-wrap` and follow it through layout transitions.
 See
-[`references/frames/`](references/frames/) for each frame's placement
+`references/frames/` (created per project) for each frame's placement
 HTML, suggested CSS, and which layouts it pairs with. Quick rule:
 `overlay` layout suppresses decorative frames (the full-bleed video
 clashes with chrome); PiP layouts already have their own pill treatment

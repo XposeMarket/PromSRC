@@ -67,7 +67,7 @@ Save `design-reviews/<slug>-<date>/review.md` and reply with:
 2. Score table (area, score, evidence).
 3. Top fixes, at most 8, ordered by impact on the surface's mode. Each fix: what is wrong, why it matters for this user, the concrete change (for example "drop body text from #9AA0A6 to #4A4F55 on #FFFFFF to reach 7:1", "replace the three feature cards with a single annotated product screenshot").
 4. What is working and must be preserved.
-5. 2 to 4 embedded screenshots, for example `![Mobile nav overlaps the logo](design-reviews/acme-20260930/mobile-top.png)`.
+5. 2 to 4 embedded screenshots, as inline markdown images (exclamation mark, caption in square brackets, path in parentheses) using workspace-relative paths such as `design-reviews/acme/mobile-top.png`.
 6. Gaps: viewports, states, or pages not reviewed.
 
 Use `show_ui_card` with type `comparison` for the score table when it helps scanning.

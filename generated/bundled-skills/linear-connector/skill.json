@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "linear-connector",
+  "name": "linear-connector",
+  "description": "Connect or operate Linear teams, projects, issues, cycles, and comments when Linear is explicitly requested. Use integration-setup for generic connection setup and connector-builder if implementation is missing; not for arbitrary task tracking.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create linear issue from prometheus",
+    "linear issue integration",
+    "linear graphql connector",
+    "update linear issue",
+    "linear project sync",
+    "linear connector"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "connectors",
+    "project-management"
+  ],
+  "requiredTools": [
+    "connector_list",
+    "tool_search",
+    "tool_call",
+    "integration_admin"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

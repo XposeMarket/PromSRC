@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "website-intelligence",
+  "name": "website-intelligence",
+  "description": "Audit a business website for SEO, content, conversion clarity, tech stack, and trust signals using the website analysis team for full audits or web_fetch for narrow checks. Use for site-specific intelligence; use competitor-profile for a company dossier and competitive-intelligence for multi-company market comparison.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "audit this website for seo and conversion",
+    "audit my website for seo",
+    "analyze this website",
+    "business website analysis",
+    "website trust signals",
+    "local business website",
+    "competitor website review",
+    "inspect website copy",
+    "landing page review",
+    "find website issues",
+    "site looks outdated",
+    "improve this site"
+  ],
+  "categories": [
+    "website",
+    "seo",
+    "conversion",
+    "research"
+  ],
+  "requiredTools": [
+    "agents_and_teams",
+    "browser_automation",
+    "web_search",
+    "web_fetch",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

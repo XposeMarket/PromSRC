@@ -44,7 +44,7 @@
       "description": "Cache-first source identity, long-video hook selection, clean opening/ending, transcript reuse, Windows path recovery, and actual-export QA evidence from the Kevin Naughton 15-minute run."
     },
     {
-      "path": "references/cyrilxbt-24-minute-fast-path-2026-07-23.md",
+      "path": "references/cyrilxbt-24-minute-fast-path.md",
       "type": "reference",
       "description": "Measured 24-minute fresh-source critical path, stable FFmpeg path, bounded opening transcription, one-script render/QA, and direct-frame geometry verification."
     },
@@ -64,7 +64,7 @@
       "description": "Exact direct-FFmpeg source-video recipe, command templates, Odyssey baseline, and actual-export QA."
     },
     {
-      "path": "references/youtube-fast-path-2026-07-23.md",
+      "path": "references/youtube-fast-path.md",
       "type": "doc",
       "description": "Measured YouTube ingest, separate-stream merge-failure recovery, direct FFmpeg render, and actual-export QA proof."
     }

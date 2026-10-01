@@ -1,6 +1,6 @@
 ---
-name: PromSRC PR Worktree Workflow
-description: Raul's mandatory workflow for any Prometheus source change - isolated linked worktree under C:\Users\rafel\promsrc-pr, validate, PR via GitHub connector, merge only on explicit ask, then pull/build/restart the live PromSRC checkout and verify on the real surface (phone/desktop). Use for every PromSRC code change, bug fix, feature PR, live hotfix, merge, or post-merge restart.
+name: promsrc-pr-worktree
+description: "Raul's mandatory workflow for any Prometheus source change - isolated linked worktree under C:\\Users\\rafel\\promsrc-pr, validate, PR via GitHub connector, merge only on explicit ask, then pull/build/restart the live PromSRC checkout and verify on the real surface (phone/desktop). Use for every PromSRC code change, bug fix, feature PR, live hotfix, merge, or post-merge restart."
 ---
 
 # PromSRC PR Worktree Workflow

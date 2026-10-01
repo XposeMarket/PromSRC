@@ -6,4 +6,4 @@ Negative space is active structure. Do not fill it reflexively. Avoid generic gr
 
 When imagery carries the experience, generate or source a coherent family of section assets before final construction, then crop and grade consistently. Keep exact logos untouched.
 
-Completion requires screenshot comparisons at desktop and mobile widths and checks for hierarchy, spacing, responsive overflow, real interaction, and console errors. Raul's default taste is editorial/industrial/real UI/physical materials, not purple-blue-cyan AI-SaaS gradients unless the brand requires them.
+Completion requires screenshot comparisons at desktop and mobile widths and checks for hierarchy, spacing, responsive overflow, real interaction, and console errors. the user's default taste is editorial/industrial/real UI/physical materials, not purple-blue-cyan AI-SaaS gradients unless the brand requires them.

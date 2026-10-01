@@ -1,8 +1,6 @@
 ---
-name: Automation Watches and Timers
-description: Operate Prometheus internal_watch and timer tools safely. Use for file, task, scheduled-job, and event-queue watches; one-off reminders; TTL, firing-limit, delivery-policy, timeout, duplicate, and matched-condition recovery.
-version: 1.0.0
-triggers: event queue watch, one-off timer, internal_watch tool, timer tool, file watch, task watch
+name: automation-watches-and-timers
+description: "Operate Prometheus internal_watch and timer tools safely. Use for file, task, scheduled-job, and event-queue watches; one-off reminders; TTL, firing-limit, delivery-policy, timeout, duplicate, and matched-condition recovery."
 ---
 
 # Automation Watches and Timers

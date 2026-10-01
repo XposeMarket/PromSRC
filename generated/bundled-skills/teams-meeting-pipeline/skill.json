@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "teams-meeting-pipeline",
+  "name": "teams-meeting-pipeline",
+  "description": "Design or implement a Microsoft Graph-backed Teams meeting ingestion pipeline, or process a transcript the user already supplied. Use for Teams-specific integration work; use meeting-notes for ordinary meeting summaries and document-to-action-items for extracting tasks from an available transcript.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "build a microsoft teams transcript connector",
+    "build a teams meeting transcript connector",
+    "teams meeting integration design",
+    "ingest teams meeting recordings",
+    "teams meeting action sync",
+    "teams follow up workflow",
+    "teams meeting pipeline",
+    "microsoft teams connector"
+  ],
+  "categories": [
+    "prometheus",
+    "integrations",
+    "connectors",
+    "meetings"
+  ],
+  "requiredTools": [
+    "connector_list",
+    "tool_search",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

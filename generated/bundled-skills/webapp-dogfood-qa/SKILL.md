@@ -104,7 +104,7 @@ Flaky / unconfirmed
 Not covered
 ```
 
-In the final chat reply, lead with the counts and the top 3 issues, embed the 2 to 4 most important screenshots as markdown, for example `![ISSUE-001 checkout fails](qa-runs/shop-20260930/screenshots/issue-001-result.png)`, and give the report path.
+In the final chat reply, lead with the counts and the top 3 issues, embed the 2 to 4 most important screenshots as inline markdown images (exclamation mark, caption in square brackets, path in parentheses) with workspace-relative paths such as `qa-runs/shop/screenshots/issue-001-result.png`, and give the report path.
 
 ## Guardrails
 

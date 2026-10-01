@@ -57,7 +57,7 @@ Use a short folder such as `tmp/media-cut/<platform-or-id>/`.
 - Local file: verify the given file directly; do not copy unless short-path processing requires it.
 - Cache reuse: inspect only known identity-specific locations and verify path, bytes, duration, and codecs.
 
-If `download_media` reports a merge/postprocessing failure, inspect the exact output directory before retrying. If it contains a valid video-only stream and valid audio-only stream with matching duration, use them as separate FFmpeg inputs. See `references/youtube-fast-path-2026-07-23.md`.
+If `download_media` reports a merge/postprocessing failure, inspect the exact output directory before retrying. If it contains a valid video-only stream and valid audio-only stream with matching duration, use them as separate FFmpeg inputs. See `references/youtube-fast-path.md`.
 
 ### 2. Probe once
 
