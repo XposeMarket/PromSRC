@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "competitor-signal-monitor",
+  "name": "competitor-signal-monitor",
+  "description": "Monitor named competitors for meaningful changes across dated sources and deliver a cited change digest. Use for ongoing competitor surveillance; use competitor-profile for one-time dossiers, competitive-intelligence for cross-company comparisons, and change-and-price-watch for a single-source alert. Not for one-time competitor dossiers (competitor-profile) or a single-source alert (change-and-price-watch).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "monitor competitor pricing changes over time",
+    "monitor competitor launches and pricing changes",
+    "track competitors pricing changes",
+    "monthly competitor change watch",
+    "recurring competitor change digest",
+    "monitor rival website changes",
+    "competitor signal monitor"
+  ],
+  "categories": [
+    "research",
+    "competitive-intelligence",
+    "monitoring",
+    "marketing"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "web_fetch_batch",
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

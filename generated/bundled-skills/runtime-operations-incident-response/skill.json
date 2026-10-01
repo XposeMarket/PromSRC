@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "runtime-operations-incident-response",
+  "name": "runtime-operations-incident-response",
+  "description": "Diagnose and safely recover Prometheus gateway and runtime incidents. Use for health checks, restart prerequisites, and post-recovery proof; not for deep timestamped root-cause analysis (prometheus-runtime-forensics).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "perform a safe prometheus restart",
+    "diagnose prometheus gateway health"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "runtime_admin"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

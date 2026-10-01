@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "creative-project-export-qa",
+  "name": "creative-project-export-qa",
+  "description": "Verify and recover a Creative project after authoring. Use for native creative timeline QA, blank video render recovery, or project export verification; use the named creation workflow to author footage, scenes, or graphics instead.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "use the creative project export qa workflow"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "creative_basic",
+    "creative_quality"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

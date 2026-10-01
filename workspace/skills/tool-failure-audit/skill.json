@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "tool-failure-audit",
+  "name": "tool-failure-audit",
+  "description": "Audit repeated Prometheus tool failures over a bounded period and classify defects versus misuse. Use for batch audit passes; not for one live failure (prometheus-runtime-forensics).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "tool failure audit",
+    "weekly tool audit"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "tool failures",
+      "tool failure",
+      "every tool failure",
+      "failed tool calls",
+      "what broke this week",
+      "review everything you did",
+      "audit your tools",
+      "tool audit",
+      "weekly audit",
+      "look through our chats"
+    ],
+    "allOf": [],
+    "anyOf": [],
+    "noneOf": [],
+    "minScore": 3
+  },
+  "categories": [
+    "debugging",
+    "self-improvement",
+    "prometheus",
+    "operations"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "github-yeet",
+  "name": "github-yeet",
+  "description": "Publish local changes from a non-Prometheus repository to GitHub: confirm scope, stage explicit paths, commit, push the branch, and open a pull request through the GitHub connector. Use when the user says push this and open a PR, ship these changes, or publish my branch. Not for Prometheus source changes (promsrc-pr-worktree) or for general git inspection (git-workflow).",
+  "version": "2.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "commit and push this and open a pull request",
+    "push these changes and open a pr",
+    "open a draft pr for these changes",
+    "publish my branch to github",
+    "ship these changes to github"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "open a pr",
+      "open a draft pr",
+      "push and open",
+      "commit and push",
+      "publish my branch",
+      "push this branch",
+      "create a pull request for these changes"
+    ],
+    "allOf": [
+      [
+        "push",
+        "pr"
+      ],
+      [
+        "commit",
+        "push"
+      ],
+      [
+        "open",
+        "pr",
+        "push"
+      ]
+    ],
+    "anyOf": [
+      "draft pr",
+      "pull request",
+      "push the branch"
+    ],
+    "noneOf": [
+      "review this diff",
+      "ci is failing"
+    ],
+    "minScore": 4
+  },
+  "categories": [
+    "software-development",
+    "github",
+    "git"
+  ],
+  "requiredTools": [
+    "connector_github",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "assets/yeet-small.svg",
+      "type": "asset"
+    },
+    {
+      "path": "LICENSE.txt",
+      "type": "reference"
+    }
+  ]
+}

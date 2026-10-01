@@ -1,6 +1,7 @@
 import assert from 'assert';
 import {
   buildActiveSkillRoutingContext,
+  isActionableTaskRequest,
   resolveSkillRuntimeRouting,
   type SkillRoutingSkill,
 } from './skill-routing-resolver';
@@ -74,6 +75,27 @@ assert(activeContext.includes('coding-debugger'));
 assert(activeContext.includes('skill_read'));
 assert(!activeContext.includes('COMPLETE-coding-debugger-INSTRUCTIONS'));
 assert(!activeContext.includes('COMPLETE-gmail-replies-INSTRUCTIONS'));
+
+// Multi-skill reads: the active context must ask for every covering skill, never "only one".
+assert(!/single most relevant|Never read every matching|at most one/i.test(activeContext), 'active context must not cap skill reads at one');
+assert(/every skill whose procedure covers/i.test(activeContext));
+assert(/two or three/i.test(activeContext));
+
+// Actionable tasks with no trigger match must trigger catalog discovery instead of "no skill required".
+for (const message of [
+  'investigate why the gateway restart keeps dropping my mobile session',
+  'okay so clean up the old worktrees and test the build',
+  'please review this PR and verify the fix works on my phone',
+  'can you research the best way to profile node memory leaks',
+]) {
+  assert.equal(isActionableTaskRequest(message), true, `actionable: ${message}`);
+  const report = resolveSkillRuntimeRouting({ skills, rankedMatches: [], message });
+  assert.equal(report.discoveryRecommended, true, `discovery: ${message}`);
+  assert(buildActiveSkillRoutingContext({ report, skills: skills as SkillRoutingSkill[] }).includes('[SKILL_DISCOVERY_REQUIRED]'));
+}
+for (const message of ['hey whats up', 'did you already test it', 'what is a worktree', 'do not publish anything yet', 'thanks for the help', 'is the build done']) {
+  assert.equal(isActionableTaskRequest(message), false, `not actionable: ${message}`);
+}
 
 const originalMode = process.env.PROMETHEUS_SKILL_ROUTING_MODE;
 process.env.PROMETHEUS_SKILL_ROUTING_MODE = 'shadow';

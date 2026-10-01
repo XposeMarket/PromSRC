@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "external-apps-operations",
+  "name": "external-apps-operations",
+  "description": "Operate connected external services with read-first checks, side-effect boundaries, and readback. Use for cross-app tool execution; not for onboarding a new connection (integration-setup).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "operate a connected external service",
+    "verify the external app action"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "tool_search",
+    "tool_call"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

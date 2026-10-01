@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "node-runtime-debugging",
+  "name": "node-runtime-debugging",
+  "description": "Diagnose TypeScript and Node.js runtime behavior with reproducible launches, inspector attachment, stack and async-state inspection, source-map checks, memory or event-loop evidence, and bounded verification. Use for runtime debugging, not ordinary TypeScript implementation or generic test failures; not for unrelated general-purpose workflows.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "my node server hangs, attach a debugger",
+    "debug this node process with the inspector",
+    "async stack trace is lost in node",
+    "node event loop is blocked",
+    "node process memory leak"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "attach a debugger",
+      "node inspector",
+      "memory leak",
+      "event loop",
+      "heap snapshot",
+      "open handles",
+      "node process hangs",
+      "source maps"
+    ],
+    "allOf": [
+      [
+        "node",
+        "hangs"
+      ],
+      [
+        "node",
+        "debugger"
+      ],
+      [
+        "node",
+        "leak"
+      ],
+      [
+        "node",
+        "crash"
+      ]
+    ],
+    "anyOf": [
+      "node server",
+      "node process",
+      "typescript runtime"
+    ],
+    "noneOf": [
+      "prometheus gateway"
+    ],
+    "minScore": 4
+  },
+  "categories": [
+    "software-development",
+    "debugging",
+    "node",
+    "typescript"
+  ],
+  "requiredTools": [
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

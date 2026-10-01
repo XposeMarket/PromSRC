@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "thread-and-session-operations",
+  "name": "thread-and-session-operations",
+  "description": "Manage Prometheus peer sessions and supervised threads with exact routing and status verification. Use for session creation, steering, and reopening; not for standalone agent runs (agent-team-operations).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "reopen a settled prometheus session",
+    "steer a supervised peer session"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "automation_sessions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

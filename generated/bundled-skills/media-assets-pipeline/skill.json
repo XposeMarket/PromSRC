@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "media-assets-pipeline",
+  "name": "media-assets-pipeline",
+  "description": "Acquire, validate, persist, organize, and deliver image, video, audio, and transcript assets with provenance and bounded recovery. Use for asset lifecycle beyond one-shot interpretation; use image-analyst to understand a single image and imagegen for one-shot raster creation. Not for interpretation of a single image (image-analyst) or one-shot raster generation (imagegen).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "download and validate media assets",
+    "manage image and video provenance"
+  ],
+  "categories": [],
+  "requiredTools": [
+    "media_assets"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}
