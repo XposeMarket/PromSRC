@@ -15,6 +15,7 @@ import {
 import { getTriggerService } from './trigger-service';
 import { publicEndpointView } from './webhook-endpoints';
 import { manualTriggerEvent, webhookTriggerEvent } from './trigger-adapters';
+import { getAgentById } from '../../config/config';
 
 const ACTION_KINDS: TriggerActionKind[] = ['wake', 'agent', 'task', 'team', 'notify'];
 const SOURCES: TriggerSourceKind[] = ['webhook', 'schedule', 'heartbeat', 'event_queue', 'internal_watch', 'connector', 'manual'];
@@ -77,6 +78,7 @@ export function buildTriggerRuleFromInput(input: Record<string, any>, existing: 
     ...actionIn,
     kind,
     targetId: String(input.target_id ?? actionIn.targetId ?? existing?.action.targetId ?? '').trim() || undefined,
+    agentId: String(input.agent_id ?? actionIn.agentId ?? existing?.action.agentId ?? '').trim() || undefined,
     prompt: String(input.prompt ?? actionIn.prompt ?? existing?.action.prompt ?? '').trim() || undefined,
     model: String(input.model ?? actionIn.model ?? existing?.action.model ?? '').trim() || undefined,
     delivery: Object.values(delivery).some((v) => v !== undefined) ? delivery : undefined,
@@ -133,7 +135,7 @@ export async function executeTriggerOps(args: Record<string, any>, sessionId: st
         return [ok({
           publicBaseUrl: base || null,
           endpoints: svc.endpoints.list().map((ep) => publicEndpointView(ep, { baseUrl: base })),
-          rules: svc.runtime.listRules().map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, matcher: r.matcher, action: { kind: r.action.kind, targetId: r.action.targetId, model: r.action.model, delivery: r.action.delivery, prompt: (r.action.prompt || '').slice(0, 300) }, cooldownMs: r.cooldownMs })),
+          rules: svc.runtime.listRules().map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, matcher: r.matcher, action: { kind: r.action.kind, targetId: r.action.targetId, agentId: r.action.agentId, model: r.action.model, delivery: r.action.delivery, prompt: (r.action.prompt || '').slice(0, 300) }, cooldownMs: r.cooldownMs })),
         }), false];
       }
       case 'create_endpoint': {
@@ -158,8 +160,14 @@ export async function executeTriggerOps(args: Record<string, any>, sessionId: st
         const existing = action === 'update_rule' ? svc.runtime.getRule(String(args.rule_id || args.id || '')) : null;
         if (action === 'update_rule' && !existing) return [`Rule not found: ${args.rule_id || args.id}`, true];
         const input = { ...args };
-        // Default report target for agent/notify rules: the chat that created the rule.
-        if (!existing && input.report_session === undefined && !(input.delivery && input.delivery.target) && ['agent', 'notify', 'wake'].includes(String(input.action_kind || ''))) {
+        const ownerId = String(input.agent_id ?? existing?.action.agentId ?? '').trim();
+        if (ownerId && !getAgentById(ownerId)) return [`agent_id "${ownerId}" is not a configured subagent. Use agent_ops(action:"list") for ids.`, true];
+        // Default report target: the chat that created the rule, but ONLY for unowned work.
+        // Agent-owned rules report into the owner's thread + team chat, never main chat,
+        // unless report_session is passed explicitly.
+        const kind = String(input.action_kind || existing?.action.kind || '');
+        if (!existing && input.report_session === undefined && !(input.delivery && input.delivery.target)
+          && (kind === 'notify' || kind === 'wake' || (kind === 'agent' && !ownerId))) {
           input.report_session = sessionId;
         }
         const rule = svc.runtime.upsertRule(buildTriggerRuleFromInput(input, existing));

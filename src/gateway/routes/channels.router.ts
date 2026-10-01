@@ -1249,6 +1249,7 @@ export async function runSubagentChatTurnFromChannel(params: {
   timeoutMs?: number;
   sessionId?: string;
   seedFromSharedChatStore?: boolean;
+  callerContextExtra?: string;
 }): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
   const agentId = _sanitizeAgentId(params.agentId);
   const agent = getAgentById(agentId);
@@ -1301,6 +1302,7 @@ export async function runSubagentChatTurnFromChannel(params: {
       sessionIdOverride: sessionId,
       source,
       seedFromSharedChatStore: params.seedFromSharedChatStore,
+      callerContextExtra: params.callerContextExtra,
       traceFrames,
     },
   );

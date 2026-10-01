@@ -70,6 +70,12 @@ export interface TriggerDelivery {
 export interface TriggerAction {
   kind: TriggerActionKind;
   targetId?: string;
+  /**
+   * agent rules: the subagent that OWNS this work. The run happens in that agent's own
+   * chat thread (its identity, model, tools, memory) and the result lands in its thread
+   * and its team chat. Main chat only hears about it when delivery.target is set.
+   */
+  agentId?: string;
   prompt?: string;
   model?: string;
   delivery?: TriggerDelivery;

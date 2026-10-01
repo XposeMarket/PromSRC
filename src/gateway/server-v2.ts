@@ -973,6 +973,19 @@ try {
     handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
       handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
     runCronJobNow: (jobId: string) => cronScheduler.runJobNow(jobId, { respectActiveHours: false }),
+    // Agent-owned trigger rules run as a turn in the owner's own subagent chat thread.
+    runAgentTurn: async ({ agentId, message, timeoutMs, callerContextExtra }) => {
+      const out = await runSubagentChatTurnFromChannel({
+        agentId,
+        message,
+        source: 'trigger',
+        userLabel: 'Trigger',
+        timeoutMs,
+        sessionId: `subagent_chat_${agentId}`,
+        callerContextExtra,
+      });
+      return { text: String(out?.result?.text || '') };
+    },
     telegramChannel,
   });
 } catch (err: any) {
