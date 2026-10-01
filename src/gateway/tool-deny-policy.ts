@@ -68,7 +68,7 @@ export function formatHardToolDeny(decision: HardToolDenyDecision): string {
 export function stripQuotedLiterals(command: string): string {
   // Single quotes are literal in both PowerShell and POSIX shells: a backslash
   // does not escape the closing quote. Treating `\'` as an escape misaligned
-  // quote pairing on Windows paths such as 'C:\Users\x\' and exposed quoted
+  // quote pairing on Windows paths such as 'C:\Users\<name>\' and exposed quoted
   // search patterns to the power-state checks. PowerShell's only in-quote
   // escape is a doubled '' which this pattern also consumes.
   return String(command || '')
