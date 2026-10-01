@@ -28,6 +28,16 @@ router.get('/api/processes', async (req, res) => {
   const limit = normalizeLimit(req.query.limit);
   const supervisor = getProcessSupervisor();
   await supervisor.ready();
+  // Optional session filter (source panel): returns that chat's runs instead of
+  // the newest N across every chat (~400 KB per call on a busy install).
+  const sessionId = String(req.query.sessionId || '').trim();
+  if (sessionId) {
+    const runs = supervisor.list(500)
+      .filter((run) => String(run.sessionId || '').trim() === sessionId || String((run as any).codingSessionId || '').trim() === sessionId)
+      .slice(0, limit);
+    res.json({ runs });
+    return;
+  }
   res.json({ runs: supervisor.list(limit) });
 });
 

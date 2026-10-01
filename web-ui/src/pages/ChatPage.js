@@ -20560,7 +20560,8 @@ async function loadSourcePanelProcesses(sessionId = sourcePanelState.activeSessi
   sourcePanelState.processSessionId = sid;
   sourcePanelState.processLoaded = false;
   try {
-    const data = await api('/api/processes?limit=100', { timeoutMs: 8000, dedupe: false });
+    // Server-side session filter: the unfiltered list was ~400 KB per call.
+    const data = await api(`/api/processes?limit=100&sessionId=${encodeURIComponent(sid)}`, { timeoutMs: 8000, dedupe: false });
     if (token !== sourcePanelState.processRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.processRuns = Array.isArray(data?.runs) ? data.runs : [];
   } catch {
@@ -20708,12 +20709,36 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.miniProcessExpanded = false;
   }
   if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
+  scheduleSourcePanelSideLoads(sid);
+}
+
+// Chat-switch priority: the session GET must not queue behind the source
+// panel's git context and process list (measured 2026-10-01: a desktop switch
+// sat 1.5-4.2 s behind /api/coding/context and /api/processes). Side loads
+// wait until the switch settles, collapse rapid A->B->C clicks into one load
+// for the final chat, and still run when the panel is closed because the
+// minimized Sources card shows the same environment/process data.
+const SOURCE_PANEL_SIDE_LOAD_DELAY_MS = 450;
+function runSourcePanelSideLoads(sid) {
+  if (!sid || sid !== sourcePanelState.activeSessionId) return;
+  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
   if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
   else {
     const scopeKey = sourcePanelGitScopeKey(sid);
     if (!sourcePanelState.gitLoaded || sourcePanelState.gitSessionId !== sid || sourcePanelState.gitScopeKey !== scopeKey) loadSourcePanelGit(sid).catch(() => {});
   }
   if (!sourcePanelState.processLoaded || sourcePanelState.processSessionId !== sid) loadSourcePanelProcesses(sid).catch(() => {});
+}
+
+function scheduleSourcePanelSideLoads(sid) {
+  if (sourcePanelState.sideLoadTimer) clearTimeout(sourcePanelState.sideLoadTimer);
+  const panelOpen = Boolean(document.getElementById('right-panel')?.classList.contains('open'));
+  sourcePanelState.sideLoadTimer = setTimeout(() => {
+    sourcePanelState.sideLoadTimer = null;
+    const run = () => runSourcePanelSideLoads(sid);
+    if (!panelOpen && typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 1500 });
+    else run();
+  }, panelOpen ? 150 : SOURCE_PANEL_SIDE_LOAD_DELAY_MS);
 }
 
 function syncSourcePanelData({ sessionId = window.activeChatSessionId, announce = true } = {}) {
