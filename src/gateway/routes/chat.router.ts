@@ -7262,6 +7262,7 @@ RULES:
 
     let response: any;
     let responseStopReason: string | undefined;
+    let responseIncompleteCause: string | undefined;
     let isGrokGeneration = false;
     let grokGreetingLikeTurn = false;
     try {
@@ -7811,9 +7812,11 @@ RULES:
             firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
             stopReason: result.stopReason,
             outputTokens: result.usage?.outputTokens,
+            incompleteCause: result.incompleteCause,
           });
 	        response = result.message;
           responseStopReason = result.stopReason;
+          responseIncompleteCause = result.incompleteCause;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7832,9 +7835,11 @@ RULES:
           firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
           stopReason: result.stopReason,
           outputTokens: result.usage?.outputTokens,
+          incompleteCause: result.incompleteCause,
         });
 	        response = result.message;
           responseStopReason = result.stopReason;
+          responseIncompleteCause = result.incompleteCause;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7878,12 +7883,14 @@ RULES:
 
     let toolCalls = response.tool_calls;
 
-    const recovery = modelResponseRecovery.inspect(response, responseStopReason, abortSignal?.aborted);
+    const recovery = modelResponseRecovery.inspect(response, responseStopReason, abortSignal?.aborted, responseIncompleteCause);
     if (recovery.action === 'retry') {
-      console.log(`[v2] MODEL RESPONSE RECOVERY: reason=${recovery.reason} attempt=${recovery.attempt}; retaining tools`);
+      console.log(`[v2] MODEL RESPONSE RECOVERY: reason=${recovery.reason}${recovery.cause ? ` cause=${recovery.cause}` : ''} attempt=${recovery.attempt}; retaining tools`);
       sendSSE('info', { message: recovery.reason === 'max_tokens'
         ? `The model hit its output limit; retrying with smaller tool calls (${recovery.attempt}/2).`
-        : `The model returned an incomplete response (${recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
+        : recovery.cause === 'invalid_tool_json'
+          ? `A tool call arrived with broken arguments; retrying with a smaller call (${recovery.attempt}/2).`
+          : `The model returned an incomplete response (${recovery.cause || recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
       // Keep partial visible text, but never insert an empty assistant turn or
       // fabricate a tool result for a call that was not executed.
       if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
@@ -7896,7 +7903,9 @@ RULES:
         text: recovery.reason === 'max_tokens'
           ? 'The model hit its output token limit repeatedly, possibly while generating a large tool call. The task is unfinished; completed tool results have been saved.'
           : recovery.reason === 'incomplete_stream'
-            ? 'The model response stream ended before completion repeatedly (connection or idle timeout). The task is unfinished; completed tool results have been saved.'
+            ? (recovery.cause === 'invalid_tool_json' || recovery.cause === 'tool_block_unterminated'
+              ? 'The model repeatedly produced tool calls with broken or truncated arguments, so they were not run. The task is unfinished; completed tool results have been saved.'
+              : `The model response stream ended before completion repeatedly (${recovery.cause || 'connection or idle timeout'}). The task is unfinished; completed tool results have been saved.`)
             : `The model repeatedly returned an empty response (${recovery.reason}). The task is unfinished; completed tool results have been saved.`,
         reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length ? allToolResults : undefined,

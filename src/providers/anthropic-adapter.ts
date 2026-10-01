@@ -16,7 +16,7 @@
  *   - anthropic-version: 2023-06-01
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
 
 /**
@@ -214,7 +214,7 @@ export function isOutOfExtraUsageError(raw: unknown): boolean {
 import { join } from 'node:path';
 import type {
   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
-  GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall,
+  GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall, IncompleteStreamCause,
 } from './LLMProvider';
 import { PROMPT_CACHE_MARKER } from './LLMProvider';
 import {
@@ -257,6 +257,62 @@ export interface AnthropicDirectConfig {
   authHeader?: 'bearer' | 'x-api-key';
   staticModels?: string[];
   defaultHeaders?: Record<string, string>;
+}
+
+// fine-grained-tool-streaming streams tool arguments without server-side JSON
+// validation. Large quote/backslash-heavy arguments (long PowerShell one-liners)
+// can then arrive as invalid JSON, the call is dropped, and the round ends as
+// `incomplete_stream`. Three in a row killed whole turns on 2026-10-01 (HTTP 200,
+// 4-10s, 470-1136 output tokens). After one such failure, send requests without
+// that beta for a while so Anthropic buffers and validates tool input again.
+export const FINE_GRAINED_TOOL_STREAMING_BETA = 'fine-grained-tool-streaming-2025-05-14';
+const FINE_GRAINED_FALLBACK_MS = 30 * 60_000;
+const FINE_GRAINED_FALLBACK_FILE = 'anthropic-fine-grained-fallback.json';
+const FINE_GRAINED_FALLBACK_RECHECK_MS = 5_000;
+// Model calls run in forked worker processes, so the fallback window is shared
+// through a small file under <configDir>/logs; this is a per-process cache of it.
+let fineGrainedToolStreamingDisabledUntil = 0;
+let fineGrainedFallbackCheckedAt = 0;
+
+export function stripFineGrainedToolStreamingBeta(beta: string): string {
+  return beta.split(',').map((part) => part.trim()).filter((part) => part && part !== FINE_GRAINED_TOOL_STREAMING_BETA).join(',');
+}
+
+function fineGrainedFallbackFile(configDir?: string): string | undefined {
+  return configDir ? join(configDir, 'logs', FINE_GRAINED_FALLBACK_FILE) : undefined;
+}
+
+/** Exposed for diagnostics and regression tests. */
+export function fineGrainedToolStreamingFallbackActive(now = Date.now(), configDir?: string): boolean {
+  const file = fineGrainedFallbackFile(configDir);
+  if (file && now - fineGrainedFallbackCheckedAt >= FINE_GRAINED_FALLBACK_RECHECK_MS) {
+    fineGrainedFallbackCheckedAt = now;
+    try {
+      if (existsSync(file)) {
+        const until = Number(JSON.parse(readFileSync(file, 'utf8'))?.until || 0);
+        if (Number.isFinite(until)) fineGrainedToolStreamingDisabledUntil = Math.max(fineGrainedToolStreamingDisabledUntil, until);
+      }
+    } catch { /* a bad marker file never blocks requests */ }
+  }
+  return now < fineGrainedToolStreamingDisabledUntil;
+}
+
+export function noteIncompleteStreamCause(cause: IncompleteStreamCause | undefined, now = Date.now(), configDir?: string): void {
+  if (cause !== 'invalid_tool_json' && cause !== 'tool_block_unterminated') return;
+  fineGrainedToolStreamingDisabledUntil = now + FINE_GRAINED_FALLBACK_MS;
+  const file = fineGrainedFallbackFile(configDir);
+  if (!file) return;
+  try {
+    mkdirSync(join(configDir!, 'logs'), { recursive: true });
+    writeFileSync(file, JSON.stringify({ until: fineGrainedToolStreamingDisabledUntil, cause, at: new Date(now).toISOString() }) + '\n', 'utf8');
+  } catch { /* best-effort; the in-process window still applies */ }
+}
+
+export function resetFineGrainedToolStreamingFallback(configDir?: string): void {
+  fineGrainedToolStreamingDisabledUntil = 0;
+  fineGrainedFallbackCheckedAt = 0;
+  const file = fineGrainedFallbackFile(configDir);
+  if (file) { try { rmSync(file, { force: true }); } catch { /* ignore */ } }
 }
 
 export class AnthropicAdapter implements LLMProvider {
@@ -802,6 +858,10 @@ export class AnthropicAdapter implements LLMProvider {
         headers['anthropic-beta'] = 'interleaved-thinking-2025-05-14';
       }
     }
+    if (headers['anthropic-beta'] && fineGrainedToolStreamingFallbackActive(Date.now(), this.configDir)) {
+      headers['anthropic-beta'] = stripFineGrainedToolStreamingBeta(headers['anthropic-beta']);
+      if (!headers['anthropic-beta']) delete headers['anthropic-beta'];
+    }
     if (fastSpeed) {
       const existing = headers['anthropic-beta'];
       if (!existing?.includes('fast-mode-2026-02-01')) {
@@ -1225,6 +1285,7 @@ export class AnthropicAdapter implements LLMProvider {
     let stopDetails: any;
     let messageStopped = false;
     let invalidToolInput = false;
+    let invalidToolDetail: { name: string; length: number; head: string; tail: string } | undefined;
     // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
@@ -1343,6 +1404,8 @@ export class AnthropicAdapter implements LLMProvider {
                   if (!parsedInput || typeof parsedInput !== 'object' || Array.isArray(parsedInput)) throw new Error('Invalid tool input');
                 } catch {
                   invalidToolInput = true;
+                  const raw = String(block.inputJson || '');
+                  invalidToolDetail = { name: String(block.name || ''), length: raw.length, head: raw.slice(0, 200), tail: raw.slice(-200) };
                   continue;
                 }
                 toolCalls.push({
@@ -1375,13 +1438,31 @@ export class AnthropicAdapter implements LLMProvider {
     if (refusal && !textContent) options.onToken?.(refusal);
 
     // Never execute a partial batch or fabricate {} for truncated arguments.
-    const incomplete = !messageStopped || invalidToolInput
-      || Object.values(blocks).some(block => block.type === 'tool_use' && !block.stopped);
+    const unterminatedTool = Object.values(blocks).find(block => block.type === 'tool_use' && !block.stopped);
+    const incomplete = !messageStopped || invalidToolInput || !!unterminatedTool;
+    const incompleteCause: IncompleteStreamCause | undefined = !incomplete ? undefined
+      : invalidToolInput ? 'invalid_tool_json'
+        : unterminatedTool ? 'tool_block_unterminated'
+          : 'no_message_stop';
     if (incomplete) toolCalls.length = 0;
     const nativeStopReason = typeof stopReason === 'string' ? stopReason : undefined;
     const effectiveStopReason = incomplete && nativeStopReason !== 'max_tokens' && nativeStopReason !== 'refusal'
       ? 'incomplete_stream' : nativeStopReason;
-    console.log(`[anthropic] response stop_reason=${effectiveStopReason || 'unknown'} output_tokens=${outputTokens} tools=${toolCalls.length} incomplete=${incomplete}`);
+    console.log(`[anthropic] response stop_reason=${effectiveStopReason || 'unknown'} output_tokens=${outputTokens} tools=${toolCalls.length} incomplete=${incomplete}${incompleteCause ? ` cause=${incompleteCause}` : ''}`);
+    if (effectiveStopReason === 'incomplete_stream') {
+      noteIncompleteStreamCause(incompleteCause, Date.now(), this.configDir);
+      this.logIncompleteStream(model, {
+        cause: incompleteCause,
+        nativeStopReason,
+        messageStopped,
+        outputTokens,
+        textChars: textContent.length,
+        toolBlocks: Object.values(blocks).filter(block => block.type === 'tool_use').length,
+        unterminatedTool: unterminatedTool ? { name: String(unterminatedTool.name || ''), length: String(unterminatedTool.inputJson || '').length } : undefined,
+        invalidTool: invalidToolDetail,
+        fineGrainedFallbackActive: fineGrainedToolStreamingFallbackActive(Date.now(), this.configDir),
+      });
+    }
 
     const message: ChatMessage = {
       role:       'assistant',
@@ -1393,7 +1474,23 @@ export class AnthropicAdapter implements LLMProvider {
       thinking: thinking || undefined,
       usage: this.mergeStreamingUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
       stopReason: effectiveStopReason,
+      incompleteCause: effectiveStopReason === 'incomplete_stream' ? incompleteCause : undefined,
     };
+  }
+
+  /** Bounded ndjson record of every incomplete stream, so the cause is never a guess again. */
+  private logIncompleteStream(model: string, detail: Record<string, unknown>): void {
+    console.warn(`[anthropic] ${model}: incomplete stream ${JSON.stringify(detail).slice(0, 600)}`);
+    if (!this.configDir) return;
+    try {
+      const logDir = join(this.configDir, 'logs');
+      mkdirSync(logDir, { recursive: true });
+      const file = join(logDir, 'anthropic-incomplete-stream.ndjson');
+      try {
+        if (existsSync(file) && statSync(file).size > 2 * 1024 * 1024) renameSync(file, `${file}.1`);
+      } catch { /* rotation is best-effort */ }
+      appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), model, ...detail }) + '\n', 'utf8');
+    } catch { /* Diagnostics must never change provider handling. */ }
   }
 
   private mergeStreamingUsage(inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): ModelUsage | undefined {
