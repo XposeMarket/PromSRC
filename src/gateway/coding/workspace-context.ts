@@ -1,4 +1,4 @@
-import { cachedGitRead, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
+import { cachedGitRead, findGitRootByWalk, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -225,9 +225,9 @@ function startPathFor(candidate: string): string {
 }
 
 export function findCodingGitRoot(candidate: string): string | null {
-  const start = startPathFor(candidate);
-  const value = runGit(start, ['rev-parse', '--show-toplevel'], 256 * 1024).trim();
-  return value ? path.resolve(value) : null;
+  // Filesystem walk to the nearest .git instead of one `git rev-parse` spawn
+  // per touched file (see findGitRootByWalk).
+  return findGitRootByWalk(startPathFor(candidate));
 }
 
 function fileContent(filePath: string): Buffer | null {
@@ -364,7 +364,7 @@ function readSessionFileChanges(sessionId: string, workspaceRoot: string, target
   const historyHasTarget = Boolean(normalizedTarget && rows.some((row) => comparePath(row.path) === normalizedTarget));
   if (!historyHasTarget) {
     try {
-      for (const run of getProcessSupervisor().list(500)) {
+      for (const run of getProcessSupervisor().listForSession(sessionId, 500)) {
         if (String(run.sessionId || '').trim() !== sessionId) continue;
         const changes = Array.isArray(run.workspaceChanges) ? run.workspaceChanges : [];
         for (const file of changes) {
