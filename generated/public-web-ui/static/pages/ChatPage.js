@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
-import { wsEventBus, wsSend } from '../ws.js';
+import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { createDormantSceneDocument, loadCreativeSceneGraph } from '../features/chat/optional/creative-scene-runtime.js';
@@ -260,6 +260,7 @@ const desktopQuestionTransport = createDesktopQuestionTransport({
   getActiveSessionId: () => window.activeChatSessionId,
   switchSession: (sessionId) => {
     window.activeChatSessionId = String(sessionId || '').trim();
+    syncWsStreamFocus();
     setAgentSessionId(sessionId);
   },
   syncActiveChat: () => syncActiveChat(),
@@ -8595,6 +8596,7 @@ function restoreDesktopComposerAfterFailedSend(sessionId, message) {
 }
 
 function syncActiveChat() {
+  syncWsStreamFocus();
   syncDesktopComposerDraft();
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
   activateDesktopChatRuntime(sess);
@@ -47357,6 +47359,46 @@ try { attachSessionPersistenceLifecycle(window, document, flushChatSessionsSave,
   if (_mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping();
 }); } catch {}
 
+// A focus reply is a replacement cursor, not a replay: install the in-flight
+// answer and tool rows before accepting any subsequent sequence frames.
+wsEventBus.on('session_stream_snapshot', (snapshot = {}) => {
+  const sid = String(snapshot.sessionId || '').trim();
+  const streamId = String(snapshot.turnId || snapshot.streamId || '').trim();
+  if (!sid || !streamId || sid !== window.activeChatSessionId) return;
+  const seq = Math.max(0, Number(snapshot.seq || 0));
+  if (getMainChatStreamLastSeq(sid, streamId) > seq) return;
+  const cursors = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
+  cursors[sid] = { ...(cursors[sid] || {}), [streamId]: seq };
+  (window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {}))[sid] = streamId;
+  const sess = ensureChannelChatSession(sid);
+  if (!sess) return;
+  const state = resetSessionStreamState(sid);
+  state.streamingAIText = String(snapshot.text || '');
+  state.streamingThinkingText = String(snapshot.thinking || '');
+  window._sessionThinking = window._sessionThinking || {};
+  window._sessionThinking[sid] = true;
+  state.finalResponseStarted = !!state.streamingAIText;
+  state.turnStartedAt = Date.now();
+  if (snapshot.summary) setDesktopLiveProgressNarration(state, String(snapshot.summary),
+    (type, text, options) => appendLiveTraceToStreamState(state, type, text, options));
+  sess.activeRun = true;
+  sess.processLog = (sess.processLog || []).filter((entry) => !entry?._pmStreamSnapshot);
+  for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
+    const action = String(item?.data?.action || item?.data?.name || item?.data?.event?.name || item?.type || 'tool');
+    sess.processLog.push({ type: item.type === 'tool_result' ? 'result' : 'tool', content: String(item?.data?.message || item?.data?.result || action).slice(0, 1024), timestamp: Date.now(), _pmStreamSnapshot: true });
+  }
+  applyStreamStateToWindow(sid);
+  syncActiveSessionRunState();
+  renderStreamingChatUpdate(sid);
+});
+wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === window.activeChatSessionId) return;
+  const sess = getChatSessionById(sid);
+  if (!sess) return;
+  sess.activeRun = state !== 'done' && state !== 'error';
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+});
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
 
 wsEventBus.on('restart_continuity', (msg = {}) => {

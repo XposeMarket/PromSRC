@@ -367,7 +367,7 @@ let _wsStreamFocusSent = '';
 function _currentStreamFocusIds() {
   const ids = new Set();
   const add = (value) => { const id = String(value || '').trim(); if (id) ids.add(id); };
-  add(window.activeChatSessionId);
+  if (!document.body?.classList?.contains('pm-mobile-active')) add(window.activeChatSessionId);
   add(window.__pmChat?.activeSessionId);
   add(window.__pmVoice?.targetSessionId);
   try { (window.__promExtraStreamFocusSessionIds || []).forEach(add); } catch {}
@@ -379,7 +379,7 @@ export function syncWsStreamFocus(force = false) {
   const key = ids.join('|');
   if (!force && key === _wsStreamFocusSent) return;
   _wsStreamFocusSent = key;
-  try { window.ws.send(JSON.stringify({ type: 'stream_focus', sessionIds: ids })); } catch {}
+  try { window.ws.send(JSON.stringify({ type: 'focus_sessions', sessionIds: ids })); } catch {}
 }
 wsEventBus.on('ws:open', () => { _wsStreamFocusSent = ''; syncWsStreamFocus(true); });
 setInterval(() => syncWsStreamFocus(false), 400);

@@ -491,6 +491,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     && __pmChat.activeSessionId === requestedSession;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
+  window.syncWsStreamFocus?.();
   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
     _clearMobileDraftSessionState();
   }
@@ -8661,6 +8662,46 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     renderThreadNow,
     onResumed: () => { reconnectStatus.setReconnectPending(false); },
   });
+  const onSessionStreamSnapshot = (snapshot = {}) => {
+    if (String(snapshot.sessionId || '') !== requestedSession || __pmChat.activeSessionId !== requestedSession) return;
+    const streamId = String(snapshot.turnId || snapshot.streamId || '').trim();
+    const seq = Math.max(0, Number(snapshot.seq || 0));
+    const run = __pmChat.activeRuns?.[requestedSession] || {};
+    if (streamId === run.streamId && Number(run.lastSeq || 0) > seq) return;
+    const thread = _activeMobileThread();
+    let aiTurn = _findLatestAssistantTurn(thread);
+    if (!aiTurn || aiTurn.streaming !== true) {
+      aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
+        content: '', processEntries: [], liveTraceEntries: [] };
+      thread.push(aiTurn);
+    }
+    aiTurn.streaming = true;
+    aiTurn._streamId = streamId;
+    aiTurn.body = aiTurn.body || { sender: '', text: '' };
+    aiTurn.body.text = String(snapshot.text || '');
+    aiTurn.content = aiTurn.body.text;
+    aiTurn._pmVisualStreamPending = '';
+    aiTurn._pmVisualStreamFull = aiTurn.body.text;
+    aiTurn._pendingThinkingBurst = String(snapshot.thinking || '');
+    if (snapshot.summary) _setMobileLiveProgressNarration(aiTurn, String(snapshot.summary));
+    aiTurn.processEntries = (aiTurn.processEntries || []).filter((entry) => !entry?._pmStreamSnapshot);
+    for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
+      aiTurn.processEntries.push({ type: item.type === 'tool_result' ? 'result' : 'tool',
+        content: String(item?.data?.message || item?.data?.result || item?.data?.action || item?.type || '').slice(0, 1024),
+        _pmStreamSnapshot: true });
+    }
+    __pmChat.activeRuns = __pmChat.activeRuns || {};
+    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: seq };
+    _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: seq });
+    _markMobileSessionRunning(requestedSession, true);
+    setBusy(true);
+    renderThreadNow();
+  };
+  const onSessionActivity = (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    if (!sid || sid === requestedSession) return;
+    _markMobileSessionRunning(sid, msg.state !== 'done' && msg.state !== 'error');
+  };
   const onMainChatStreamEvent = (msg = {}) => {
     applyMainChatStreamPayload(msg);
   };
@@ -8840,7 +8881,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
   wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
 
+  wsEventBus?.on?.('session_stream_snapshot', onSessionStreamSnapshot);
+  wsEventBus?.on?.('session_activity', onSessionActivity);
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
+  // Mount may happen after ws:open (especially on a cached PWA): request a
+  // fresh in-flight snapshot now that this page's handler is registered.
+  if (window.ws?.readyState === WebSocket.OPEN) window.ws.send(JSON.stringify({
+    type: 'focus_sessions', sessionIds: [requestedSession], requestSnapshot: true,
+  }));
   wsEventBus?.on?.('main_chat_stream_update', onMainChatStreamUpdate);
   wsEventBus?.on?.('restart_continuity', onRestartContinuity);
   wsEventBus?.on?.('internal_watch_sse', onInternalWatchSse);
@@ -8932,6 +8980,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
 
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
+    wsEventBus?.off?.('session_stream_snapshot', onSessionStreamSnapshot);
+    wsEventBus?.off?.('session_activity', onSessionActivity);
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
     wsEventBus?.off?.('main_chat_stream_update', onMainChatStreamUpdate);
     wsEventBus?.off?.('restart_continuity', onRestartContinuity);

@@ -756,10 +756,13 @@ export function createServer(
             }
           });
         };
-        if (msg?.type === 'stream_focus') {
-          setWsClientStreamFocus(ws, msg.sessionIds);
+        if (msg?.type === 'focus_sessions') {
+          setWsClientStreamFocus(ws, msg.sessionIds, msg?.requestSnapshot === true);
           return;
         }
+        // Earlier clients used stream_focus for provider internals only. They
+        // have no snapshot reducer and must continue seeing token deltas.
+        if (msg?.type === 'stream_focus') return;
         if (msg?.type === 'startup_notification_ack' && msg?.notificationId) {
           const notificationId = String(msg.notificationId);
           const item = listPendingStartupNotifications().find((n: any) => String(n?.id || '') === notificationId);
