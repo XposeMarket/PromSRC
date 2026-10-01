@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-gmail",
+  "name": "Gmail (connected account)",
+  "description": "Read, search and send mail through the connected Gmail account via the connector_gmail wrapper: list/search inbox, read messages and threads, draft and send.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "check my email",
+    "search my gmail",
+    "my inbox",
+    "read the email",
+    "reply to the email",
+    "send an email"
+  ],
+  "requiredTools": [
+    "connector_gmail"
+  ]
+}

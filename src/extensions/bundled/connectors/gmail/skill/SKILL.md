@@ -1,11 +1,9 @@
 ---
-name: "Gmail connector"
+name: connector-gmail
 description: "Read, search and send mail through the connected Gmail account via the connector_gmail wrapper: list/search inbox, read messages and threads, draft and send."
-triggers: ["check my email", "gmail", "inbox", "read the email", "reply to the email", "send an email"]
-requiredTools: ["connector_gmail"]
 ---
 
-# Gmail connector
+# Gmail (connected account)
 
 Call `connector_gmail({action, ...args})`. If it is not loaded, use `tool_search({query:"gmail <task>"})` then `tool_call`.
 
