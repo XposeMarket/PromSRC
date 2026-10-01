@@ -7,8 +7,9 @@ import { readProviderStatusEvidence } from '../provider-status';
 import { getBuildStatus } from '../../runtime/build-status';
 import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
 import { getConfig } from '../../config/config';
+import { liveSourceIssues, readLiveSourceState } from './live-source-state';
 
-type DiagnosticDeps = { scheduler: any; workspacePath: string; configDir?: string; now?: () => number };
+type DiagnosticDeps = { scheduler: any; workspacePath: string; configDir?: string; now?: () => number; liveSourceRoot?: string | null };
 
 function readJson(file: string): any | null {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -141,6 +142,21 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
   };
   if (notifications.length) issues.push({ code: 'restart_notification_pending', severity: 'warning', subsystem: 'restart', summary: `${notifications.length} startup notification(s) remain pending.` });
 
+  let liveSource: any = null;
+  try {
+    const state = deps.liveSourceRoot === undefined ? readLiveSourceState() : readLiveSourceState({ root: deps.liveSourceRoot, now });
+    if (state) {
+      issues.push(...liveSourceIssues(state));
+      liveSource = {
+        repoRoot: state.repoRoot, branch: state.branch, head: state.head, originMain: state.originMain,
+        ahead: state.ahead, behind: state.behind,
+        uncommittedSourceFiles: [...state.dirtyFiles, ...state.untrackedSourceFiles].slice(0, limit),
+        uncommittedCount: state.dirtyFiles.length + state.untrackedSourceFiles.length,
+        indexLock: state.indexLock,
+      };
+    }
+  } catch { /* diagnostics must never fail on git probing */ }
+
   const overall = issues.some((issue) => issue.severity === 'error') ? 'degraded' : issues.length ? 'attention' : 'healthy';
   return {
     success: true,
@@ -159,7 +175,7 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
         unverifiedJobs: unverifiedJobs.slice(0, limit), troubledTasks: troubledTasks.slice(0, limit),
       },
       runtimes: { count: runtimeDiagnostics.count, interruptedCount: runtimeDiagnostics.interruptedCount, items: runtimeDiagnostics.items },
-      errors, provider, build: getBuildStatus(), restart, audit, issues: issues.slice(0, limit), historicalIssues: historicalIssues.slice(0, limit),
+      errors, provider, build: getBuildStatus(), liveSource, restart, audit, issues: issues.slice(0, limit), historicalIssues: historicalIssues.slice(0, limit),
     },
   };
 }

@@ -21,7 +21,7 @@ const jobs = [
   { id: 'unverified', name: 'unverified', enabled: true, status: 'scheduled' },
   { id: 'failed', name: 'failed', enabled: true, status: 'scheduled', consecutiveErrors: 1 },
 ];
-const snapshot = (time = now) => systemDiagnosticsTool({ scheduler: { getJobs: () => jobs }, workspacePath: process.env.PROMETHEUS_WORKSPACE_DIR!, configDir, now: () => time }, { limit: 1 }).data;
+const snapshot = (time = now) => systemDiagnosticsTool({ scheduler: { getJobs: () => jobs }, workspacePath: process.env.PROMETHEUS_WORKSPACE_DIR!, configDir, now: () => time, liveSourceRoot: null }, { limit: 1 }).data;
 const result = snapshot();
 assert.equal(result.automation.counts.jobs, 4);
 assert.equal(result.automation.counts.unhealthyJobs, 1);
