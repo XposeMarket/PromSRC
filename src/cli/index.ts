@@ -32,6 +32,7 @@ import {
   type SupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request.js';
 import { isGatewayHandoffLauncherNotice } from '../gateway/runtime/gateway-handoff-protocol.js';
+import { HANDOFF_RESTART_RESULT, handoffRestartTarget, isHandoffRestartRequest, isHandoffRestartResult } from '../gateway/runtime/handoff-restart-forward.js';
 import {
   readCanonicalUpdateStatus,
 } from '../update/canonical-updater';
@@ -660,6 +661,7 @@ async function runSupervisedGateway(): Promise<void> {
   // the turns it owns. It is no longer the supervised child; it exits on its
   // own and must never trigger a relaunch or be killed as "stale".
   const drainingChildren = new Map<number, ChildProcess>();
+  const pendingHandoffRestarts = new Map<string, { source: ChildProcess; target: ChildProcess }>();
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
   // The parent-provided value is only a seed for this supervisor. Each child
@@ -766,6 +768,28 @@ async function runSupervisedGateway(): Promise<void> {
     child = launched;
     activeGatewayProcessStartedAt = launchedGatewayProcessStartedAt;
     launched.on('message', (message) => {
+      if (isHandoffRestartResult(message)) {
+        const pending = pendingHandoffRestarts.get(message.id);
+        if (pending?.target === launched) {
+          pendingHandoffRestarts.delete(message.id);
+          try { pending.source.send(message); } catch {}
+        }
+        return;
+      }
+      if (isHandoffRestartRequest(message)) {
+        const target = handoffRestartTarget(launched, child, drainingChildren.get(launched.pid || 0) === launched && !stopping, message);
+        if (!target || target.exitCode !== null || target.signalCode !== null) {
+          try { launched.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: 'No active replacement gateway is available' }); } catch {}
+          return;
+        }
+        pendingHandoffRestarts.set(message.id, { source: launched, target });
+        target.send(message, (error) => {
+          if (!error) return;
+          pendingHandoffRestarts.delete(message.id);
+          try { launched.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: error.message }); } catch {}
+        });
+        return;
+      }
       if (!isGatewayHandoffLauncherNotice(message) || child !== launched || stopping) return;
       const pid = Number(launched.pid || message.hostPid);
       drainingChildren.set(pid, launched);

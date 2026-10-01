@@ -35,6 +35,10 @@ import {
   waitForGatewayHandoffDrain,
 } from './runtime/gateway-handoff-bridge';
 import { GATEWAY_HANDOFF_IPC_MESSAGE_TYPE, type GatewayHandoffLauncherNotice } from './runtime/gateway-handoff-protocol';
+import {
+  HANDOFF_RESTART_REQUEST, HANDOFF_RESTART_RESULT, acceptHandoffRestart, isHandoffRestartRequest,
+  isHandoffRestartResult, shouldForwardHandoffRestart, type HandoffRestartRequest,
+} from './runtime/handoff-restart-forward';
 import type { DevSourceEditContinuation } from './dev-source-approvals';
 import { listCoordinatedRestartBlockers } from './dev-edit-coordinator';
 import {
@@ -119,6 +123,10 @@ export interface RestartContext {
    * `never` forces the legacy interrupt-and-exit restart.
    */
   handoffPolicy?: 'prefer' | 'never';
+  /** Internal IPC marker: a restart request may cross only one handoff generation. */
+  forwardedFromHandoff?: boolean;
+  /** Filled in when a draining host successfully forwards a restart. */
+  forwardedToPid?: number;
   /** Filled in by gracefulRestart when the restart became a warm handoff. */
   handoff?: {
     hostPid: number;
@@ -739,6 +747,52 @@ function hasLauncherIpcChannel(): boolean {
 
 let _handoffDraining = false;
 
+/** Acknowledged child → launcher → active-child relay; never invoke a second restart on this host. */
+async function forwardDrainingRestart(ctx: RestartContext): Promise<number | undefined> {
+  if (!hasLauncherIpcChannel()) throw new Error('No launcher IPC channel is connected');
+  const id = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const request: HandoffRestartRequest = {
+    type: HANDOFF_RESTART_REQUEST, id, forwarded: true,
+    context: { ...ctx, forwardedFromHandoff: true },
+  };
+  return new Promise<number | undefined>((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error('Replacement did not acknowledge within 5 seconds')), 5_000);
+    const onMessage = (value: unknown) => {
+      if (!isHandoffRestartResult(value) || value.id !== id) return;
+      finish(value.accepted ? undefined : new Error(value.error || 'Replacement refused the request'), value.pid);
+    };
+    const finish = (error?: Error, pid?: number) => {
+      clearTimeout(timeout);
+      process.off('message', onMessage);
+      if (error) reject(error); else resolve(pid);
+    };
+    process.on('message', onMessage);
+    try {
+      process.send!(request, (error: Error | null) => { if (error) finish(error); });
+    } catch (error) { finish(error as Error); }
+  });
+}
+
+// The active child receives exactly one hop. A draining replacement refuses it.
+process.on('message', (value: unknown) => {
+  if (!isHandoffRestartRequest(value)) return;
+  const sendResult = (accepted: boolean, error?: string) => {
+    if (hasLauncherIpcChannel()) process.send!({
+      type: HANDOFF_RESTART_RESULT, id: value.id, accepted,
+      pid: process.pid, ...(error ? { error } : {}),
+    });
+  };
+  if (!acceptHandoffRestart(_handoffDraining, value)) {
+    sendResult(false, 'Replacement is itself draining or the request lacks a single-hop marker');
+    return;
+  }
+  sendResult(true);
+  setImmediate(() => {
+    void gracefulRestart(value.context).catch((error) =>
+      console.error(`[lifecycle] Forwarded restart failed: ${error?.message || error}`));
+  });
+});
+
 export function isGatewayHandoffDraining(): boolean {
   return _handoffDraining;
 }
@@ -982,9 +1036,19 @@ async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise
  */
 export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   if (_handoffDraining) {
+    if (shouldForwardHandoffRestart(_handoffDraining, !!ctx.forwardedFromHandoff)) {
+      try {
+        ctx.forwardedToPid = (await forwardDrainingRestart(ctx)) || 0;
+        console.log(`[lifecycle] Restart forwarded to replacement gateway${ctx.forwardedToPid ? ` (pid=${ctx.forwardedToPid})` : ''}.`);
+        return;
+      } catch (error: any) {
+        console.warn(`[lifecycle] Restart forwarding failed: ${error?.message || error}`);
+      }
+    }
     throw new Error(
       'This gateway is already handing off to a replacement and only finishing the work it owns. '
-      + 'Further restarts must be requested from the replacement gateway once it is online.',
+      + 'Further restarts must be requested from the replacement gateway once it is online. '
+      + 'Open a new chat turn on the active gateway and request gateway_restart there (this draining host cannot restart itself).',
     );
   }
   if (!ctx.devApplyBatch) {

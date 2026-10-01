@@ -418,6 +418,28 @@ let gatewayProcess      = null;
 // exit on their own and must never be treated as a crash or be port-cleaned.
 const drainingGatewayProcesses = new Map();
 
+const HANDOFF_RESTART_REQUEST = 'gateway_handoff_restart_request';
+const HANDOFF_RESTART_RESULT = 'gateway_handoff_restart_result';
+const pendingHandoffRestarts = new Map();
+
+function relayHandoffRestart(source, message) {
+  if (!message || message.type !== HANDOFF_RESTART_REQUEST || message.forwarded !== true || !message.id) return false;
+  const target = gatewayProcess;
+  const accepted = drainingGatewayProcesses.get(source.pid) === source
+    && target && target !== source && target.exitCode == null && target.signalCode == null && !isQuitting;
+  if (!accepted) {
+    try { source.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: 'No active replacement gateway is available' }); } catch {}
+    return true;
+  }
+  pendingHandoffRestarts.set(message.id, { source, target });
+  target.send(message, (error) => {
+    if (!error) return;
+    pendingHandoffRestarts.delete(message.id);
+    try { source.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: error.message }); } catch {}
+  });
+  return true;
+}
+
 function isGatewayHandoffNotice(message) {
   return !!message
     && typeof message === 'object'
@@ -2102,6 +2124,15 @@ async function startGateway() {
   const spawnedGatewayProcess = gatewayProcess;
   writeGatewayLog(`[main] Gateway spawned (pid=${spawnedGatewayProcess.pid}, backend=${gatewayBackendPort})\n`);
   spawnedGatewayProcess.on('message', (message) => {
+    if (message?.type === HANDOFF_RESTART_RESULT) {
+      const pending = pendingHandoffRestarts.get(message.id);
+      if (pending?.target === spawnedGatewayProcess) {
+        pendingHandoffRestarts.delete(message.id);
+        try { pending.source.send(message); } catch {}
+      }
+      return;
+    }
+    if (relayHandoffRestart(spawnedGatewayProcess, message)) return;
     if (!isGatewayHandoffNotice(message)) return;
     handoffGatewayFromElectron(spawnedGatewayProcess, message).catch((error) => {
       writeGatewayLog('[main] Gateway warm handoff failed: ' + (error?.message || error) + '\n');
