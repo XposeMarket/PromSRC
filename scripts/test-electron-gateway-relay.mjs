@@ -196,13 +196,15 @@ async function run() {
     assert.equal(stream.ended, false, 'established stream stays open across the handoff');
     assert.equal(relay.activeStreamCount(), 1);
     // The old backend stops listening (as a draining gateway does) but keeps
-    // its established response alive; the next backend takes the port.
+    // its established response alive; the replacement uses a fresh port.
     const drainingBackend = backend;
     // server.close() only stops the listener; its callback would wait for the
     // stream to end, which is exactly what a draining gateway does not do.
     drainingBackend.backend.close();
     await sleep(50);
-    backend = await startBackend(backendPort, 'third');
+    targetPort = await freePort();
+    assert.notEqual(targetPort, backendPort);
+    backend = await startBackend(targetPort, 'third');
     relay.setState('ready');
     const afterHandoff = await request(publicPort, '/api/status');
     assert.equal(afterHandoff.headers['x-backend'], 'third', 'new requests reach the replacement once ready');

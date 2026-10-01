@@ -71,7 +71,11 @@ function parseNonNegativeIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
-const EVENT_LOOP_STALL_RESTART_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MS', 45_000);
+// A stalled main thread can strand mobile WebSockets and exceed the relay's
+// response-header deadline well before the old 45s recovery threshold. Hand
+// active runtimes to a replacement after the first sustained stall instead of
+// leaving the public gateway unresponsive through the rest of a busy run.
+const EVENT_LOOP_STALL_RESTART_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MS', 8_000);
 const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MIN_UPTIME_MS', 120_000);
 const stallAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART || '').trim().toLowerCase();
 const EVENT_LOOP_STALL_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(stallAutorestartEnv);
@@ -225,6 +229,13 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
       });
     } catch (err: any) {
       console.error('[GatewayRuntime] Event-loop stall recovery restart failed:', err?.message || err);
+      // The lifecycle deliberately defers a restart while coordinated source
+      // edits are crossing their apply barrier. Keep serving and retry on a
+      // later stall; exiting here would bypass that protection entirely.
+      if (String(err?.message || '').startsWith('Gateway restart deferred because')) {
+        _eventLoopStallRestartScheduled = false;
+        return;
+      }
       process.exit(1);
     }
   }, 250);

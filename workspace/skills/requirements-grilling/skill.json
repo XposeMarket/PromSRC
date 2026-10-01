@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "requirements-grilling",
+  "name": "Requirements Grilling",
+  "description": "Interview the user in sequential question cards (recommended answer first) until a vague idea, plan, or design becomes a shared, fully decided understanding; classifies the request as spike, bounded, or architectural first. Use when the user says grill me, stress-test my plan, or wants to think a feature through before building. Do not use to write the spec document (spec-writing), for market or product validation (product-discovery), or when the design is already approved.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "interview me about this idea",
+    "poke holes in my plan",
+    "help me think this through",
+    "stress test my design",
+    "brainstorm this feature",
+    "stress-test my plan",
+    "grill this plan",
+    "grill me"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "grill me",
+      "grill this",
+      "stress test my plan",
+      "stress test my design",
+      "poke holes",
+      "help me think this through",
+      "brainstorm this feature",
+      "interview me"
+    ],
+    "allOf": [
+      [
+        "grill",
+        "plan"
+      ],
+      [
+        "stress",
+        "test",
+        "plan"
+      ],
+      [
+        "stress",
+        "test",
+        "design"
+      ],
+      [
+        "think",
+        "through",
+        "feature"
+      ],
+      [
+        "brainstorm",
+        "feature"
+      ],
+      [
+        "ask",
+        "questions",
+        "until"
+      ]
+    ],
+    "anyOf": [
+      "grill",
+      "grilling",
+      "stress test",
+      "brainstorm",
+      "design tree",
+      "requirements",
+      "clarify",
+      "shared understanding"
+    ],
+    "noneOf": [
+      "pull request",
+      "code review",
+      "failing test",
+      "stack trace",
+      "market size",
+      "cold email",
+      "write the spec",
+      "merge conflict"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "planning",
+    "requirements"
+  ],
+  "requiredTools": [
+    "ask_prometheus_questions",
+    "workspace_read",
+    "background_ops",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

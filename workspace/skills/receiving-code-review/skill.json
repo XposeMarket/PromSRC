@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "receiving-code-review",
+  "name": "Receiving Code Review",
+  "description": "Evaluate and act on code review feedback from the user, a PR reviewer, a bot, or a review agent: collect every item, clarify unclear items before editing (question cards), verify each against the codebase, push back with evidence, YAGNI-check, then fix one at a time with tests and reply in inline threads via GitHub connector tools. Use when addressing review comments or reviewer feedback. Do not use to perform a review yourself (code-review, pr-review-toolkit).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "fix what the reviewer asked",
+    "go through the pr feedback",
+    "respond to the code review",
+    "address the review comments",
+    "handle this review feedback",
+    "apply the review suggestions",
+    "the reviewer said"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "address the review",
+      "review comments",
+      "review feedback",
+      "the reviewer said",
+      "reviewer asked",
+      "pr feedback",
+      "review suggestions",
+      "requested changes"
+    ],
+    "allOf": [
+      [
+        "address",
+        "review"
+      ],
+      [
+        "review",
+        "feedback"
+      ],
+      [
+        "reviewer",
+        "said"
+      ],
+      [
+        "respond",
+        "review"
+      ],
+      [
+        "fix",
+        "review",
+        "comments"
+      ],
+      [
+        "requested",
+        "changes"
+      ]
+    ],
+    "anyOf": [
+      "reviewer",
+      "review feedback",
+      "review comments",
+      "suggestions",
+      "requested changes",
+      "pushback"
+    ],
+    "noneOf": [
+      "review this pr",
+      "review my code",
+      "do a code review",
+      "review the diff",
+      "product review",
+      "write a review",
+      "customer review"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "code-review",
+    "github"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "workspace_run",
+    "workspace_git",
+    "ask_prometheus_questions",
+    "connector_github_api_request",
+    "connector_github_get_pr"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

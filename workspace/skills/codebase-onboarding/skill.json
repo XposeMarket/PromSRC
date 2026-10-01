@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "codebase-onboarding",
+  "name": "Codebase Onboarding",
+  "description": "Get up to speed on an unfamiliar repository: measure size and language mix, map structure and entry points outline-first, trace core flows with file:line anchors (optionally with parallel openai_codex explorers), and save a reusable orientation file. Use for learn this codebase, get up to speed, how big is this repo, or before a first change in a new project. Do not use for one specific code question (fast-coding-loop), debugging (root-cause-debugging), or reviewing a diff (code-review).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "get up to speed on this repo",
+    "give me an overview of this repository",
+    "explain the architecture of this repo",
+    "onboard me to this codebase",
+    "how big is this repo",
+    "lines of code in this repo",
+    "map out this codebase",
+    "learn this codebase"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "learn this codebase",
+      "learn the codebase",
+      "get up to speed",
+      "onboard me",
+      "how big is this repo",
+      "map out this codebase",
+      "overview of this repo",
+      "lines of code"
+    ],
+    "allOf": [
+      [
+        "learn",
+        "codebase"
+      ],
+      [
+        "up",
+        "speed",
+        "repo"
+      ],
+      [
+        "overview",
+        "repository"
+      ],
+      [
+        "map",
+        "codebase"
+      ],
+      [
+        "architecture",
+        "repo"
+      ],
+      [
+        "lines",
+        "code",
+        "repo"
+      ]
+    ],
+    "anyOf": [
+      "codebase",
+      "repository",
+      "onboarding",
+      "architecture overview",
+      "entry points"
+    ],
+    "noneOf": [
+      "fix the bug",
+      "failing test",
+      "review this pr",
+      "pull request",
+      "merge conflict",
+      "improve the architecture",
+      "refactor"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "research",
+    "onboarding"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_code_nav",
+    "workspace_run",
+    "workspace_git",
+    "background_ops",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

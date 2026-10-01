@@ -98,12 +98,11 @@ async function _loadDrawerProjects() {
   try {
     const data = await mobileGatewayFetch('/api/projects');
     const rows = Array.isArray(data) ? data : (Array.isArray(data?.projects) ? data.projects : []);
-    _drawerProjects = rows.filter((project) => project && project.id);
+    return rows.filter((project) => project && project.id);
   } catch (err) {
     console.warn('[mobile drawer] Failed to load projects', err);
-    _drawerProjects = [];
+    return [];
   }
-  return _drawerProjects;
 }
 
 function _isPinned(sessionId) {
@@ -339,6 +338,15 @@ let _drawerProjectsCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
 let _drawerGatewayFilterCleanup = null;
 let _drawerSwipeCleanup = null;
+const PM_DRAWER_PRIORITY_KEY = 'pm_mobile_drawer_priority_v1';
+const PM_PINNED_MANUAL_ORDER_KEY = 'pm_mobile_pinned_manual_order_v1';
+let _drawerPriorityMode = (() => {
+  try { return localStorage.getItem(PM_DRAWER_PRIORITY_KEY) === '1'; } catch { return false; }
+})();
+// Long-press "lift": the held row floats above the blurred scrim; holding and
+// dragging it (instead of tapping the popover) reorders it within its list.
+let _sessLift = null;
+let _sessLiftGlobalInstalled = false;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 const PM_DRAWER_GATEWAY_HEARTBEAT_MS = 15_000;
 const PM_DRAWER_SWIPE_EDGE_PX = 28;
@@ -388,84 +396,142 @@ function _installMobileNoSelectGuard() {
   document.addEventListener('contextmenu', suppress, true);
 }
 
-// Open the drawer with a right swipe from the left edge, and close it with a
-// left swipe on the open drawer. Predominantly vertical gestures remain native
-// so this does not interfere with scrolling through chats or drawer sessions.
+// Interactive drawer swipe. Opening starts from the left edge of the chat;
+// closing starts anywhere on the open drawer. The drawer and the chat shell
+// follow the finger 1:1 and settle open or closed based on distance and
+// release velocity, like a native iOS sidebar. Mostly-vertical gestures stay
+// native so scrolling chats and the drawer list is unaffected.
 function _wireDrawerSwipeGesture() {
   _drawerSwipeCleanup?.();
   _drawerSwipeCleanup = null;
 
-  let tracking = false;
-  let startX = 0;
-  let startY = 0;
-  let direction = '';
-  let triggered = false;
+  const DECIDE_PX = 10;
+  const FLICK_VELOCITY = 0.35; // px per ms
+  let gesture = null;
   let suppressClickUntil = 0;
+  let settleTimer = null;
 
-  const reset = () => {
-    tracking = false;
-    startX = 0;
-    startY = 0;
-    direction = '';
-    triggered = false;
+  const viewportWidth = () => Math.max(1, window.innerWidth || document.documentElement.clientWidth || 390);
+  const appEl = () => document.getElementById('pm-app');
+  const movingEls = () => [_drawerEl, appEl()].filter(Boolean);
+
+  const clearInline = () => {
+    movingEls().forEach((node) => {
+      node.style.transition = '';
+      node.style.transform = '';
+      node.style.opacity = '';
+      node.style.pointerEvents = '';
+    });
+  };
+
+  const applyProgress = (progress) => {
+    const p = Math.max(0, Math.min(1, progress));
+    const app = appEl();
+    if (_drawerEl) {
+      _drawerEl.style.transition = 'none';
+      _drawerEl.style.opacity = '1';
+      _drawerEl.style.pointerEvents = 'auto';
+      _drawerEl.style.transform = `translate3d(${(p - 1) * 100}%, 0, 0)`;
+    }
+    if (app) {
+      app.style.transition = 'none';
+      app.style.transform = `translate3d(${p * viewportWidth()}px, 0, 0)`;
+    }
+  };
+
+  const settle = (open, velocity = 0) => {
+    const remaining = open ? 1 - (gesture?.progress ?? 0) : (gesture?.progress ?? 1);
+    const speed = Math.max(0.9, Math.abs(velocity));
+    const duration = Math.round(Math.max(150, Math.min(300, (remaining * viewportWidth()) / speed)));
+    const ease = 'cubic-bezier(.22,.74,.22,1)';
+    movingEls().forEach((node) => { node.style.transition = `transform ${duration}ms ${ease}, opacity 180ms ease`; });
+    if (_drawerEl) _drawerEl.style.transform = open ? 'translate3d(0, 0, 0)' : 'translate3d(-100%, 0, 0)';
+    const app = appEl();
+    if (app) app.style.transform = open ? `translate3d(${viewportWidth()}px, 0, 0)` : 'translate3d(0, 0, 0)';
+    const wasOpen = document.body.classList.contains('pm-mobile-drawer-open');
+    if (open && !wasOpen) openDrawer();
+    if (!open && wasOpen) closeDrawer();
+    if (open !== wasOpen) pmHaptic(8);
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(clearInline, duration + 40);
   };
 
   const onTouchStart = (event) => {
-    if (event.touches?.length !== 1) {
-      reset();
-      return;
-    }
+    gesture = null;
+    if (event.touches?.length !== 1 || !_drawerEl) return;
+    if (_sessLift || document.documentElement.classList.contains('pm-session-context-open')) return;
+    if (document.getElementById('pm-msheet')?.classList.contains('open')) return;
+    const target = event.target;
+    if (_isEditableTarget(target)) return;
+    if (target?.closest?.('.pm-drawer-gateway-pills, .pm-reasoning-control, input[type="range"]')) return;
     const touch = event.touches[0];
     const drawerOpen = document.body.classList.contains('pm-mobile-drawer-open');
-    const target = event.target;
-    if (_isEditableTarget(target)) {
-      reset();
-      return;
-    }
-    if (!drawerOpen) {
-      if (touch.clientX > PM_DRAWER_SWIPE_EDGE_PX) {
-        reset();
-        return;
-      }
-    } else if (!_drawerEl?.contains(target)) {
-      reset();
-      return;
-    }
-    tracking = true;
-    startX = touch.clientX;
-    startY = touch.clientY;
-    direction = drawerOpen ? 'close' : 'open';
-    triggered = false;
+    const edge = Math.max(24, Math.min(44, viewportWidth() * 0.09));
+    if (!drawerOpen && touch.clientX > edge) return;
+    if (drawerOpen && !_drawerEl.contains(target)) return;
+    const now = performance.now();
+    gesture = {
+      mode: drawerOpen ? 'close' : 'open',
+      startX: touch.clientX,
+      startY: touch.clientY,
+      locked: false,
+      progress: drawerOpen ? 1 : 0,
+      samples: [{ x: touch.clientX, t: now }],
+    };
   };
 
   const onTouchMove = (event) => {
-    if (!tracking || event.touches?.length !== 1) return;
+    if (!gesture || event.touches?.length !== 1) return;
+    if (_sessLift) { gesture = null; return; }
     const touch = event.touches[0];
-    const dx = touch.clientX - startX;
-    const dy = touch.clientY - startY;
-    const horizontalDistance = Math.abs(dx);
-    const verticalDistance = Math.abs(dy);
-    if (verticalDistance > horizontalDistance + 8) {
-      reset();
-      return;
+    const dx = touch.clientX - gesture.startX;
+    const dy = touch.clientY - gesture.startY;
+    if (!gesture.locked) {
+      if (Math.abs(dx) < DECIDE_PX && Math.abs(dy) < DECIDE_PX) return;
+      const wrongWay = gesture.mode === 'open' ? dx <= 0 : dx >= 0;
+      if (Math.abs(dy) > Math.abs(dx) * 0.9 || wrongWay) { gesture = null; return; }
+      gesture.locked = true;
+      gesture.startX = touch.clientX - Math.sign(dx) * DECIDE_PX;
+      clearTimeout(settleTimer);
+      // A drawer drag must never become a row long-press or a text selection.
+      document.documentElement.classList.remove('pm-session-long-press-pending');
+      try { window.getSelection?.()?.removeAllRanges(); } catch {}
     }
-    if ((direction === 'open' && dx <= 0) || (direction === 'close' && dx >= 0)) {
-      reset();
-      return;
-    }
-    if (horizontalDistance < 12 || verticalDistance > horizontalDistance * 0.85) return;
-    event.preventDefault();
-    if (horizontalDistance >= PM_DRAWER_SWIPE_TRIGGER_PX) triggered = true;
+    if (event.cancelable) event.preventDefault();
+    const shift = (touch.clientX - gesture.startX) / viewportWidth();
+    gesture.progress = gesture.mode === 'open' ? shift : 1 + shift;
+    applyProgress(gesture.progress);
+    const now = performance.now();
+    gesture.samples.push({ x: touch.clientX, t: now });
+    while (gesture.samples.length > 2 && now - gesture.samples[0].t > 90) gesture.samples.shift();
+  };
+
+  const releaseVelocity = () => {
+    const samples = gesture?.samples || [];
+    if (samples.length < 2) return 0;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const dt = Math.max(1, last.t - first.t);
+    return (last.x - first.x) / dt;
   };
 
   const onTouchEnd = () => {
-    if (!tracking) return;
-    if (triggered) {
-      suppressClickUntil = Date.now() + 450;
-      if (direction === 'open') openDrawer();
-      else closeDrawer();
+    if (!gesture) return;
+    if (gesture.locked) {
+      const v = releaseVelocity();
+      const p = gesture.progress;
+      const open = v > FLICK_VELOCITY ? true
+        : v < -FLICK_VELOCITY ? false
+        : p >= 0.5;
+      suppressClickUntil = Date.now() + 400;
+      settle(open, v);
     }
-    reset();
+    gesture = null;
+  };
+
+  const onTouchCancel = () => {
+    if (gesture?.locked) settle(gesture.mode === 'close');
+    gesture = null;
   };
 
   const onClick = (event) => {
@@ -478,16 +544,18 @@ function _wireDrawerSwipeGesture() {
   document.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
   document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
   document.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
-  document.addEventListener('touchcancel', reset, { capture: true, passive: true });
+  document.addEventListener('touchcancel', onTouchCancel, { capture: true, passive: true });
   document.addEventListener('click', onClick, true);
 
   _drawerSwipeCleanup = () => {
     document.removeEventListener('touchstart', onTouchStart, true);
     document.removeEventListener('touchmove', onTouchMove, true);
     document.removeEventListener('touchend', onTouchEnd, true);
-    document.removeEventListener('touchcancel', reset, true);
+    document.removeEventListener('touchcancel', onTouchCancel, true);
     document.removeEventListener('click', onClick, true);
-    reset();
+    clearTimeout(settleTimer);
+    clearInline();
+    gesture = null;
   };
 }
 export async function refreshMobileDrawerSessions({ force = false } = {}) {
@@ -629,10 +697,30 @@ function _drawerPageStateFor() {
   return _drawerSessionPaging[_drawerSessionView === 'settled' ? 'settled' : 'all'];
 }
 
+// Refreshes (run-state flips, gateway heartbeats, status events) reset paging
+// while the drawer is open. Remember how deep the user had paged so the reload
+// restores that many chats instead of collapsing back to the first page.
+// The depth is sticky: it is raised the moment Load more is tapped (before the
+// page arrives, so a refresh racing the fetch cannot record the old length) and
+// survives every rebuild. It only resets when the list itself changes identity
+// (gateway filter, drawer view switch) via _clearDrawerKeepDepth().
+let _drawerKeepDepth = { all: 0, settled: 0 };
+function _raiseDrawerKeepDepth(key, depth) {
+  const k = key === 'settled' ? 'settled' : 'all';
+  _drawerKeepDepth[k] = Math.max(Number(_drawerKeepDepth[k] || 0), Number(depth || 0));
+}
+function _clearDrawerKeepDepth() {
+  _drawerKeepDepth = { all: 0, settled: 0 };
+}
 function _resetDrawerPageState() {
+  _raiseDrawerKeepDepth('all', _drawerSessionPaging.all?.sessions?.length || 0);
+  _raiseDrawerKeepDepth('settled', _drawerSessionPaging.settled?.sessions?.length || 0);
   _drawerSessionPaging.all = _newDrawerPageState();
   _drawerSessionPaging.settled = _newDrawerPageState();
-  _drawerPinnedSessions = null;
+  // Keep the last known pinned list across refreshes. Nulling it made every
+  // run-state flip fall back to "pinned chats inside the first page", so older
+  // pinned threads vanished until the (slow, often superseded) pinned fetch
+  // landed. The fresh fetch replaces it; unpins are filtered via _isPinned.
 }
 
 export function invalidateMobileDrawerSessions() {
@@ -1557,6 +1645,7 @@ function _renderDrawerGatewayFilterPanel() {
         currentSelected.add(id);
         setGatewayFilter([...currentSelected]);
       }
+      _clearDrawerKeepDepth();
       invalidateMobileDrawerSessions('gateway-filter');
     });
   });
@@ -1627,6 +1716,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
+      <button class="pm-drawer-priority-toggle" type="button" data-drawer-priority-toggle aria-pressed="false" aria-label="Priority mode">${ICONS.bell}<span class="pm-drawer-priority-dot" aria-hidden="true"></span></button>
       <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Back to chat" title="Back to chat">${ICONS.chev}</button>
       <div class="pm-drawer-scroll">
         <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
@@ -1727,7 +1817,23 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     event.stopPropagation();
     closeDrawer();
   });
-  _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
+  // Theme and priority toggles get the real iOS switch haptic. The overlay
+  // swallows the tap and calls the action directly, so there is no double fire.
+  const _drawerThemeBtn = _drawerEl.querySelector('[data-mobile-theme-toggle]');
+  if (_drawerThemeBtn) {
+    _drawerThemeBtn.addEventListener('click', _toggleMobileTheme);
+    try { attachMobileButtonHaptic(_drawerThemeBtn, _toggleMobileTheme); } catch {}
+  }
+  const _drawerPriorityBtn = _drawerEl.querySelector('[data-drawer-priority-toggle]');
+  if (_drawerPriorityBtn) {
+    _drawerPriorityBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      _toggleDrawerPriorityMode();
+    });
+    try { attachMobileButtonHaptic(_drawerPriorityBtn, _toggleDrawerPriorityMode); } catch {}
+  }
+  _syncDrawerPriorityUi();
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState(_drawerCallbacks);
@@ -1833,6 +1939,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
 }
 
 async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll = false }) {
+  // Never rebuild the list under a lifted/dragged row; the drop re-renders.
+  if (_sessLift) return;
   const renderSeq = ++_drawerRenderSeq;
   const renderDrawer = _drawerEl;
   const head = renderDrawer?.querySelector('#pm-drawer-session-head');
@@ -1851,52 +1959,73 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     apply();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
   };
-  try {
-    const settings = await mobileGatewayFetch('/api/settings/provider');
-    const llm = settings?.llm || {};
-    const provider = String(llm.provider || '').trim();
-    _drawerDefaultModel = {
-      provider,
-      model: String(llm.providers?.[provider]?.model || '').trim(),
-    };
-  } catch (err) {
-    console.warn('[mobile drawer] Could not load the default model logo', err);
-  }
-  if (!isCurrent()) return;
-  if (_drawerSearch) {
-    const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
-    if (pinnedEl) pinnedEl.innerHTML = '';
-    const projectsEl = renderDrawer.querySelector('#pm-drawer-project-list');
-    if (projectsEl) projectsEl.innerHTML = '';
-    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
-    return;
-  }
   _drawerRenderInFlight += 1;
   try {
-    await _migrateLegacyPinnedSessionsToServer();
-    if (!isCurrent()) return;
-    await _loadDrawerProjects();
-    if (!isCurrent()) return;
-    if (!_drawerPageStateFor().initialized) await _loadDrawerSessionPage({ loadSessions });
-    if (_drawerSessionView !== 'settled') {
-      try {
-        const remotePinned = await loadMobileGatewayPinnedSessions({ state: 'active' });
-        if (Array.isArray(remotePinned)) {
-          _drawerPinnedSessions = _hydrateDrawerSessionStates(remotePinned);
-          _syncPinnedCacheFromSessions(_drawerPinnedSessions);
-        }
-      } catch (err) {
-        console.warn('[mobile drawer] Failed to load pinned sessions', err);
+    if (_drawerSearch) {
+      const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
+      if (pinnedEl) pinnedEl.innerHTML = '';
+      const projectsEl = renderDrawer.querySelector('#pm-drawer-project-list');
+      if (projectsEl) projectsEl.innerHTML = '';
+      _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
+      return;
+    }
+    // The selected gateway's session page is the only request needed to show
+    // chats. Model settings, projects, pin migration and the pinned-page probe
+    // may target a different (possibly offline) last-active gateway.
+    if (!_drawerPageStateFor().initialized) {
+      await _loadDrawerSessionPage({ loadSessions });
+      const depthKey = _drawerSessionView === 'settled' ? 'settled' : 'all';
+      const keepDepth = Number(_drawerKeepDepth[depthKey] || 0);
+      let guard = 0;
+      while (isCurrent() && guard++ < 50) {
+        const st = _drawerPageStateFor();
+        if (st.error || !st.hasMore || st.sessions.length >= keepDepth) break;
+        const before = st.sessions.length;
+        await _loadDrawerSessionPage({ loadSessions });
+        if (_drawerPageStateFor().sessions.length <= before) break;
       }
     }
     if (!isCurrent()) return;
-    const pageState = _drawerPageStateFor();
-    head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
-    _renderDrawerProjects();
-    sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
-    _renderDrawerPinnedSessions(_drawerSessionView === 'settled' ? null : pageState, _drawerPinnedSessions);
-    _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat });
-    _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    const renderContent = () => {
+      if (!isCurrent() || _drawerSearch || _sessLift) return;
+      const scrollTop = Math.max(0, Number(scrollEl?.scrollTop) || 0);
+      const pageState = _drawerPageStateFor();
+      head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
+      _renderDrawerProjects();
+      sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
+      _renderDrawerPinnedSessions(_drawerSessionView === 'settled' ? null : pageState, _drawerPinnedSessions);
+      _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat });
+      _syncDrawerPriorityUi();
+      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+      if (scrollEl) scrollEl.scrollTop = scrollTop;
+    };
+    renderContent();
+
+    // Enrich the already-visible list as each optional request completes.
+    // A late response from an old drawer render must not overwrite the new one.
+    mobileGatewayFetch('/api/settings/provider').then((settings) => {
+      if (!isCurrent()) return;
+      const llm = settings?.llm || {};
+      const provider = String(llm.provider || '').trim();
+      _drawerDefaultModel = { provider, model: String(llm.providers?.[provider]?.model || '').trim() };
+      renderContent();
+    }).catch((err) => console.warn('[mobile drawer] Could not load the default model logo', err));
+    _loadDrawerProjects().then((projects) => {
+      if (!isCurrent()) return;
+      _drawerProjects = projects;
+      renderContent();
+    }).catch((err) => console.warn('[mobile drawer] Could not render projects', err));
+    if (_drawerSessionView !== 'settled') {
+      _migrateLegacyPinnedSessionsToServer()
+        .then(() => loadMobileGatewayPinnedSessions({ state: 'active' }))
+        .then((remotePinned) => {
+          if (!isCurrent() || !Array.isArray(remotePinned)) return;
+          _drawerPinnedSessions = _hydrateDrawerSessionStates(remotePinned);
+          _syncPinnedCacheFromSessions(_drawerPinnedSessions);
+          renderContent();
+        })
+        .catch((err) => console.warn('[mobile drawer] Failed to load pinned sessions', err));
+    }
   } catch (err) {
     if (!isCurrent()) return;
     console.warn('[mobile drawer] render failed', err);
@@ -1932,6 +2061,7 @@ function _isActiveDrawerSession(sessionId) {
 
 
 function _sessionPageHtml(pageState, emptyText) {
+  if (_isDrawerPriorityMode()) return _prioritySessionPageHtml(pageState);
   const sessions = Array.isArray(pageState?.sessions) ? pageState.sessions : [];
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
@@ -2014,9 +2144,18 @@ function _wireDrawerLongPress(callbacks) {
       // iOS can otherwise select drawer text and show its native copy menu.
       try { window.getSelection?.()?.removeAllRanges(); } catch {}
       document.documentElement.classList.remove('pm-session-long-press-pending');
-      sessionBtn.classList.add('pm-session-long-pressed');
-      setTimeout(function() { sessionBtn.classList.remove('pm-session-long-pressed'); }, 300);
-      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {}, sessionBtn.getBoundingClientRect(), _sessLongTargetType);
+      var rowRect = _sessionRowUnit(sessionBtn).getBoundingClientRect();
+      var anchor = { x: _sessLongStartX, y: _sessLongStartY, rect: rowRect };
+      // Sessions float above the blur. Projects keep the plain menu.
+      var lift = _sessLongTargetType === 'session' ? _liftDrawerSessionRow(sessionBtn) : null;
+      if (lift) {
+        lift.downX = _sessLongStartX;
+        lift.downY = _sessLongStartY;
+      } else {
+        sessionBtn.classList.add('pm-session-long-pressed');
+        setTimeout(function() { sessionBtn.classList.remove('pm-session-long-pressed'); }, 300);
+      }
+      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {}, anchor, _sessLongTargetType);
       document.documentElement.classList.add('pm-session-context-open');
     }, _SESS_LONG_PRESS_MS);
   };
@@ -2070,9 +2209,15 @@ function _wireDrawerLongPress(callbacks) {
 function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
   var pinnedEl = _drawerEl && _drawerEl.querySelector('#pm-drawer-pinned-list');
   if (!pinnedEl) return;
-  var sourceSessions = Array.isArray(pinnedOverride)
-    ? pinnedOverride
-    : (Array.isArray(pageState && pageState.sessions) ? pageState.sessions : []);
+  // Union the durable pinned list with pinned rows on the current page, so a
+  // chat pinned since the last pinned fetch (or a fresher copy of its run
+  // state) is never dropped.
+  var pageSessions = Array.isArray(pageState && pageState.sessions) ? pageState.sessions : [];
+  var sourceSessions = pageSessions.slice();
+  if (Array.isArray(pinnedOverride)) {
+    var pageIds = new Set(pageSessions.map(function(s) { return String(s && s.id || ''); }));
+    pinnedOverride.forEach(function(s) { if (!pageIds.has(String(s && s.id || ''))) sourceSessions.push(s); });
+  }
   var sessions = _hydrateDrawerSessionStates(sourceSessions);
   var localOrder = _getPinnedSessionIds();
   var pinnedSessions = sessions.filter(function(session) {
@@ -2083,6 +2228,14 @@ function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
     if (timeDelta) return timeDelta;
     return localOrder.indexOf(String(a && a.id)) - localOrder.indexOf(String(b && b.id));
   });
+  // A manual drag order (long-press, then drag) wins over pin time. Chats
+  // pinned after the last drag appear first, above the arranged ones.
+  var manualOrder = _getManualPinnedOrder();
+  if (manualOrder.length) {
+    var arranged = _sortSessionsByIds(pinnedSessions.filter(function(s) { return manualOrder.indexOf(String(s && s.id)) >= 0; }), manualOrder);
+    var fresh = pinnedSessions.filter(function(s) { return manualOrder.indexOf(String(s && s.id)) < 0; });
+    pinnedSessions = fresh.concat(arranged);
+  }
   if (!pinnedSessions.length) { pinnedEl.innerHTML = ''; return; }
   pinnedEl.innerHTML =
     '<div class="pm-drawer-pinned-section">' +
@@ -2124,15 +2277,6 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
   _drawerEl.querySelector('[data-active-session-view]')?.addEventListener('click', () => {
     _drawerSessionView = 'active';
     _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }).catch(() => {});
-  });
-  _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
-    closeDrawer();
-    Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
-      .then(() => {
-        _saveDrawerState({ view: 'sessions' });
-        _resetDrawerPageState();
-      })
-      .catch(() => {});
   });
   _drawerEl.querySelectorAll('[data-project-toggle]').forEach((row) => {
     row.addEventListener('click', (event) => {
@@ -2185,15 +2329,22 @@ async function _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchS
   const pageState = _drawerPageStateFor();
   const showLoadMore = pageState.hasMore === true || Number(pageState.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
   if (pageState.loading || !showLoadMore) return;
+  _raiseDrawerKeepDepth(_drawerSessionView, (pageState.sessions?.length || 0) + PM_DRAWER_SESSION_PAGE_SIZE);
   _renderVisibleDrawerSessionPage();
   await _loadDrawerSessionPage({ loadSessions });
+  // A refresh may have swapped the page state mid-fetch; rebuild to the new depth.
+  if (_drawerPageStateFor() !== pageState && _drawerCallbacks) {
+    await _renderDrawerSessions(_drawerCallbacks);
+    return;
+  }
   _renderVisibleDrawerSessionPage();
   _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
 }
 
 function _renderVisibleDrawerSessionPage() {
   const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
-  if (!sessionList) return;
+  if (!sessionList || _sessLift) return;
+  _syncDrawerPriorityUi();
   const pageState = _drawerPageStateFor();
   _renderDrawerProjects();
   sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
@@ -2318,7 +2469,7 @@ function _sessionStateMeta(session) {
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
     stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
-    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
+    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working" style="animation-delay:-' + (Date.now() % 800) + 'ms"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
@@ -2498,7 +2649,8 @@ function _escapeRegExp(text) {
 }
 
 // ── Session context sheet (long-press menu) ───────────────────────────────────
-function _closeSessionSheet() {
+function _closeSessionSheet({ keepLift = false } = {}) {
+  if (!keepLift) _dropDrawerSessionLift();
   document.documentElement.classList.remove('pm-session-long-press-pending', 'pm-session-context-open');
   const scrim = document.getElementById('pm-sess-sheet-scrim');
   const sheet = document.getElementById('pm-sess-sheet');
@@ -2507,14 +2659,15 @@ function _closeSessionSheet() {
   setTimeout(() => { scrim && scrim.remove(); sheet && sheet.remove(); }, 240);
 }
 
-function _closeSessionSheetImmediate() {
+function _closeSessionSheetImmediate({ keepLift = false } = {}) {
+  if (!keepLift) _dropDrawerSessionLift({ immediate: true });
   document.documentElement.classList.remove('pm-session-long-press-pending', 'pm-session-context-open');
   document.getElementById('pm-sess-sheet-scrim') && document.getElementById('pm-sess-sheet-scrim').remove();
   document.getElementById('pm-sess-sheet') && document.getElementById('pm-sess-sheet').remove();
 }
 
-function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect = null, itemType = 'session') {
-  _closeSessionSheetImmediate();
+function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = null, itemType = 'session') {
+  _closeSessionSheetImmediate({ keepLift: true });
   const isProject = itemType === 'project';
   const project = isProject ? _drawerProjects.find((item) => String(item?.id || '') === String(sessionId)) : null;
   const pinned = isProject ? _isProjectPinned(project) : _isPinned(sessionId);
@@ -2575,6 +2728,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
 
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
+  _positionSessionSheetAtPoint(sheet, anchor);
   requestAnimationFrame(function() {
     scrim.classList.add('open');
     sheet.classList.add('open');
@@ -3978,3 +4132,391 @@ export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewCha
   });
 }
 
+
+// ── Drawer priority mode (bell), long-press lift + reorder, anchored popover ──
+// Priority mode mirrors the desktop sidebar's Priority panel: a flat inbox with
+// working/unread chats first, then the rest grouped by day. Pinned chats keep
+// their own section above it in both modes.
+
+function _isDrawerPriorityMode() {
+  return _drawerPriorityMode === true && _drawerSessionView !== 'settled';
+}
+
+function _drawerSessionTime(session) {
+  return Number(session?.lastMessageAt || session?.lastActiveAt || session?.updatedAt || session?.createdAt || 0) || 0;
+}
+
+function _drawerPriorityDayLabel(timestamp) {
+  const date = new Date(timestamp > 0 ? timestamp : Date.now());
+  const now = new Date();
+  const startOfDay = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const dayDelta = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (dayDelta <= 0) return 'Today';
+  if (dayDelta === 1) return 'Yesterday';
+  if (dayDelta < 7) return new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date);
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+}
+
+function _drawerSessionNeedsAttention(session) {
+  const meta = _sessionStateMeta(session);
+  return meta.activeRun === true || meta.unread === true;
+}
+
+function _drawerPriorityAttentionCount() {
+  const sessions = Array.isArray(_drawerSessionPaging?.all?.sessions) ? _drawerSessionPaging.all.sessions : [];
+  return sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session) && _drawerSessionNeedsAttention(session)).length;
+}
+
+function _prioritySessionPageHtml(pageState) {
+  const sessions = (Array.isArray(pageState?.sessions) ? pageState.sessions : [])
+    .filter((session) => !_isDrawerHiddenRuntimeSession(session) && !_isPinned(session?.id));
+  if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
+  if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
+  const sorted = sessions.slice().sort((a, b) => _drawerSessionTime(b) - _drawerSessionTime(a));
+  const attention = [];
+  const rest = [];
+  sorted.forEach((session) => (_drawerSessionNeedsAttention(session) ? attention : rest).push(session));
+  const groups = new Map();
+  rest.forEach((session) => {
+    const label = _drawerPriorityDayLabel(_drawerSessionTime(session));
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(session);
+  });
+  const section = (key, title, body, { count = 0, attentionSection = false } = {}) =>
+    '<section class="pm-drawer-priority-section' + (attentionSection ? ' is-attention' : '') + '" data-priority-section="' + escapeHtml(key) + '">' +
+      '<div class="pm-drawer-section-title pm-drawer-priority-title"><span>' + escapeHtml(title) + '</span>' +
+        (count > 0 ? '<span class="pm-drawer-priority-count">' + count + '</span>' : '') +
+      '</div>' +
+      '<div class="pm-drawer-priority-list">' + body + '</div>' +
+    '</section>';
+  const priorityBody = attention.length
+    ? attention.map((session) => _sessionButtonHtml(session)).join('')
+    : '<div class="pm-session-empty pm-drawer-priority-empty">Nothing needs you right now.</div>';
+  const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
+  return [
+    section('priority', 'Priority', priorityBody, { count: attention.length, attentionSection: true }),
+    ...Array.from(groups.entries()).map(([label, list]) => section(label, label, list.map((session) => _sessionButtonHtml(session)).join(''))),
+    pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
+    showLoadMore ? '<button class="pm-session-load-more" type="button" data-session-load-more>Load more chats</button>' : '',
+    pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
+    '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>',
+  ].filter(Boolean).join('');
+}
+
+function _syncDrawerPriorityUi() {
+  if (!_drawerEl) return;
+  _drawerEl.classList.toggle('is-priority-mode', _isDrawerPriorityMode());
+  const btn = _drawerEl.querySelector('[data-drawer-priority-toggle]');
+  if (!btn) return;
+  btn.classList.toggle('is-active', _drawerPriorityMode);
+  btn.setAttribute('aria-pressed', String(_drawerPriorityMode));
+  btn.setAttribute('aria-label', _drawerPriorityMode ? 'Priority mode on. Tap for default view' : 'Priority mode off. Tap for priority view');
+  btn.title = _drawerPriorityMode ? 'Priority mode' : 'Default view';
+  btn.classList.toggle('has-attention', _drawerPriorityAttentionCount() > 0);
+}
+
+function _toggleDrawerPriorityMode() {
+  _drawerPriorityMode = !_drawerPriorityMode;
+  try { localStorage.setItem(PM_DRAWER_PRIORITY_KEY, _drawerPriorityMode ? '1' : '0'); } catch {}
+  if (_drawerPriorityMode && _drawerSessionView === 'settled') _drawerSessionView = 'active';
+  _syncDrawerPriorityUi();
+  _renderVisibleDrawerSessionPage();
+  if (_drawerCallbacks) _wireDrawerSessionControls(_drawerCallbacks);
+  const scrollEl = _drawerEl?.querySelector('.pm-drawer-scroll');
+  if (scrollEl) scrollEl.scrollTop = 0;
+}
+
+function _getManualPinnedOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PM_PINNED_MANUAL_ORDER_KEY) || '[]');
+    return Array.isArray(raw) ? raw.map((id) => String(id || '')).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function _sortSessionsByIds(list, ids) {
+  const byId = new Map((Array.isArray(list) ? list : []).map((session) => [String(session?.id || ''), session]));
+  const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
+  const placed = new Set(ids);
+  return [...ordered, ...(Array.isArray(list) ? list : []).filter((session) => !placed.has(String(session?.id || '')))];
+}
+
+function _sessionRowUnit(row) {
+  const parent = row?.parentElement;
+  return parent?.classList?.contains('pm-haptic-host') ? parent : row;
+}
+
+function _liftSiblings(lift) {
+  return Array.from(lift.container?.children || []).filter((el) => (
+    el !== lift.unit && (el.matches?.('[data-session-id]') || !!el.querySelector?.(':scope > [data-session-id]'))
+  ));
+}
+
+function _liftOrderIds(lift) {
+  return Array.from(lift.container?.children || [])
+    .map((el) => (el.matches?.('[data-session-id]') ? el : el.querySelector?.(':scope > [data-session-id]')))
+    .filter(Boolean)
+    .map((el) => String(el.getAttribute('data-session-id') || ''))
+    .filter(Boolean);
+}
+
+// Float a copy of the held row above the blurred scrim. The real row stays in
+// the list (visibility hidden) and doubles as the drop placeholder.
+function _liftDrawerSessionRow(row) {
+  _dropDrawerSessionLift({ immediate: true });
+  if (!row?.isConnected || !_drawerEl) return null;
+  const unit = _sessionRowUnit(row);
+  const container = unit.parentElement;
+  const rect = unit.getBoundingClientRect();
+  if (!container || !rect.height) return null;
+  const layer = document.createElement('div');
+  layer.className = 'pm-drawer pm-sess-lift-layer open';
+  layer.setAttribute('aria-hidden', 'true');
+  const inner = document.createElement('div');
+  inner.className = String(container.className || '') + ' pm-sess-lift-inner';
+  const clone = unit.cloneNode(true);
+  clone.removeAttribute('id');
+  clone.classList.add('pm-sess-lift-clone');
+  clone.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;margin:0;box-sizing:border-box;`;
+  inner.appendChild(clone);
+  layer.appendChild(inner);
+  document.body.appendChild(layer);
+  unit.classList.add('pm-sess-lift-source');
+  const kind = container.closest('.pm-drawer-pinned-content') ? 'pinned'
+    : (container.id === 'pm-mobile-session-list' && !_isDrawerPriorityMode() && _drawerSessionView !== 'settled' ? 'sessions' : '');
+  const lift = {
+    row, unit, container, layer, clone, kind,
+    height: rect.height,
+    cloneTop: rect.top,
+    reorderable: false,
+    reordering: false,
+    pointerDown: true,
+    fromClone: false,
+    downX: 0,
+    downY: 0,
+    lastY: rect.top,
+    grabOffset: 0,
+    holdTimer: null,
+    scrollRaf: 0,
+    initialOrder: [],
+  };
+  lift.initialOrder = _liftOrderIds(lift);
+  lift.reorderable = !!kind && _liftSiblings(lift).length > 0;
+  _sessLift = lift;
+  requestAnimationFrame(() => clone.classList.add('is-lifted'));
+  clone.addEventListener('pointerdown', (event) => {
+    if (_sessLift !== lift) return;
+    event.preventDefault();
+    lift.pointerDown = true;
+    lift.fromClone = true;
+    lift.downX = event.clientX;
+    lift.downY = event.clientY;
+    clearTimeout(lift.holdTimer);
+    // Holding the lifted chat (instead of tapping the menu) dismisses the menu
+    // and unblurs, leaving the chat floating so it can be dragged into place.
+    lift.holdTimer = setTimeout(() => {
+      if (_sessLift === lift && lift.pointerDown && !lift.reordering) _beginDrawerSessionReorder(lift.downY);
+    }, 260);
+  });
+  clone.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); });
+  _installSessLiftGlobalHandlers();
+  return lift;
+}
+
+function _dropDrawerSessionLift({ immediate = false } = {}) {
+  const lift = _sessLift;
+  if (!lift) return;
+  _sessLift = null;
+  clearTimeout(lift.holdTimer);
+  if (lift.scrollRaf) cancelAnimationFrame(lift.scrollRaf);
+  document.documentElement.classList.remove('pm-session-reordering');
+  const finish = () => {
+    lift.unit.classList.remove('pm-sess-lift-source');
+    lift.layer.remove();
+  };
+  if (immediate || !lift.unit.isConnected) { finish(); return; }
+  const rect = lift.unit.getBoundingClientRect();
+  lift.clone.style.transition = 'top .2s cubic-bezier(.22,.74,.22,1), left .2s ease, transform .2s ease, box-shadow .2s ease';
+  lift.clone.style.top = rect.top + 'px';
+  lift.clone.style.left = rect.left + 'px';
+  lift.clone.classList.remove('is-lifted', 'is-reordering');
+  setTimeout(finish, 210);
+}
+
+function _beginDrawerSessionReorder(clientY) {
+  const lift = _sessLift;
+  if (!lift || lift.reordering) return;
+  if (!lift.reorderable) {
+    if (lift.fromClone) _closeSessionSheet();
+    return;
+  }
+  lift.reordering = true;
+  lift.lastY = clientY;
+  lift.grabOffset = clientY - lift.cloneTop;
+  _closeSessionSheet({ keepLift: true });
+  document.documentElement.classList.add('pm-session-reordering');
+  lift.clone.classList.add('is-reordering');
+  pmHaptic(14);
+  const scrollEl = _drawerEl?.querySelector('.pm-drawer-scroll');
+  const tick = () => {
+    if (_sessLift !== lift || !lift.reordering) return;
+    if (scrollEl) {
+      const r = scrollEl.getBoundingClientRect();
+      let delta = 0;
+      if (lift.lastY < r.top + 70) delta = -Math.min(14, (r.top + 70 - lift.lastY) / 4);
+      else if (lift.lastY > r.bottom - 120) delta = Math.min(14, (lift.lastY - (r.bottom - 120)) / 4);
+      if (delta) {
+        const before = scrollEl.scrollTop;
+        scrollEl.scrollTop = before + delta;
+        if (scrollEl.scrollTop !== before) _reflowLiftPlaceholder();
+      }
+    }
+    lift.scrollRaf = requestAnimationFrame(tick);
+  };
+  lift.scrollRaf = requestAnimationFrame(tick);
+}
+
+function _reflowLiftPlaceholder() {
+  const lift = _sessLift;
+  if (!lift?.reordering) return;
+  const center = lift.cloneTop + lift.height / 2;
+  const siblings = _liftSiblings(lift);
+  if (!siblings.length) return;
+  let before = null;
+  for (const sibling of siblings) {
+    const r = sibling.getBoundingClientRect();
+    if (center < r.top + r.height / 2) { before = sibling; break; }
+  }
+  if (before) {
+    if (lift.unit.nextElementSibling !== before) {
+      lift.container.insertBefore(lift.unit, before);
+      pmHaptic(6);
+    }
+  } else {
+    const last = siblings[siblings.length - 1];
+    if (last.nextElementSibling !== lift.unit) {
+      last.after(lift.unit);
+      pmHaptic(6);
+    }
+  }
+}
+
+function _moveDrawerSessionReorder(clientY) {
+  const lift = _sessLift;
+  if (!lift?.reordering) return;
+  lift.lastY = clientY;
+  lift.cloneTop = clientY - lift.grabOffset;
+  lift.clone.style.top = lift.cloneTop + 'px';
+  _reflowLiftPlaceholder();
+}
+
+function _finishDrawerSessionReorder() {
+  const lift = _sessLift;
+  if (!lift) return;
+  const ids = _liftOrderIds(lift);
+  const moved = ids.join('\n') !== lift.initialOrder.join('\n');
+  pmHaptic(10);
+  _dropDrawerSessionLift();
+  if (moved) _persistDrawerSessionOrder(lift.kind, ids).catch((err) => {
+    try { window.pmToast?.(err?.message || 'Could not save chat order', 'error'); } catch {}
+  });
+}
+
+async function _persistDrawerSessionOrder(kind, ids) {
+  if (kind === 'pinned') {
+    try { localStorage.setItem(PM_PINNED_MANUAL_ORDER_KEY, JSON.stringify(ids)); } catch {}
+    if (Array.isArray(_drawerPinnedSessions)) _drawerPinnedSessions = _sortSessionsByIds(_drawerPinnedSessions, ids);
+    return;
+  }
+  if (kind !== 'sessions') return;
+  const state = _drawerPageStateFor();
+  if (Array.isArray(state?.sessions)) {
+    const positions = new Map(ids.map((id, index) => [id, index]));
+    const slots = [];
+    state.sessions.forEach((session, index) => { if (positions.has(String(session?.id || ''))) slots.push(index); });
+    const reordered = _sortSessionsByIds(state.sessions.filter((session) => positions.has(String(session?.id || ''))), ids);
+    slots.forEach((slot, index) => { state.sessions[slot] = reordered[index]; });
+  }
+  const pinnedIds = (Array.isArray(_drawerPinnedSessions) ? _drawerPinnedSessions : []).map((s) => String(s?.id || '')).filter(Boolean);
+  const groups = new Map();
+  [...pinnedIds, ...ids].forEach((id) => {
+    const parsed = parseTargetNamespacedId(id);
+    const key = parsed ? parsed.gatewayId : '';
+    if (!groups.has(key)) groups.set(key, []);
+    const list = groups.get(key);
+    const targetId = parsed?.targetId || id;
+    if (!list.includes(targetId)) list.push(targetId);
+  });
+  for (const [gatewayId, sessionIds] of groups.entries()) {
+    const options = { method: 'POST', body: JSON.stringify({ sessionIds, channel: 'mobile', state: 'all' }) };
+    if (!gatewayId) await mobileGatewayFetch('/api/sessions/reorder', options);
+    else {
+      const target = getGateway(gatewayId);
+      if (target?.execution?.enabled === true) await gatewayFetchJson(target, '/api/sessions/reorder', options);
+    }
+  }
+}
+
+function _installSessLiftGlobalHandlers() {
+  if (_sessLiftGlobalInstalled) return;
+  _sessLiftGlobalInstalled = true;
+  const onMove = (x, y, event) => {
+    const lift = _sessLift;
+    if (!lift?.pointerDown) return;
+    if (event?.cancelable) event.preventDefault();
+    if (lift.reordering) { _moveDrawerSessionReorder(y); return; }
+    if (!lift.downX && !lift.downY) { lift.downX = x; lift.downY = y; return; }
+    if (Math.hypot(x - lift.downX, y - lift.downY) > 8) {
+      clearTimeout(lift.holdTimer);
+      _beginDrawerSessionReorder(y);
+      _moveDrawerSessionReorder(y);
+    }
+  };
+  const onUp = () => {
+    const lift = _sessLift;
+    if (!lift?.pointerDown) return;
+    lift.pointerDown = false;
+    clearTimeout(lift.holdTimer);
+    if (lift.reordering) _finishDrawerSessionReorder();
+    else if (lift.fromClone) _closeSessionSheet();
+    lift.downX = 0;
+    lift.downY = 0;
+  };
+  document.addEventListener('touchmove', (event) => {
+    const t = event.touches?.[0];
+    if (t) onMove(t.clientX, t.clientY, event);
+  }, { capture: true, passive: false });
+  document.addEventListener('touchend', onUp, { capture: true, passive: true });
+  document.addEventListener('touchcancel', onUp, { capture: true, passive: true });
+  document.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'mouse') onMove(event.clientX, event.clientY, event);
+  }, true);
+  document.addEventListener('pointerup', (event) => {
+    if (event.pointerType === 'mouse') onUp();
+  }, true);
+}
+
+// Place the long-press menu next to the finger: horizontally centered on the
+// touch point, below the held row when it fits, otherwise above it.
+function _positionSessionSheetAtPoint(sheet, anchor) {
+  if (!sheet || !anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) return;
+  const vv = window.visualViewport;
+  const vw = vv?.width || window.innerWidth;
+  const vh = vv?.height || window.innerHeight;
+  const margin = 12;
+  const gap = 10;
+  const w = sheet.offsetWidth || 280;
+  const h = sheet.offsetHeight || 260;
+  const rowTop = Number(anchor.rect?.top ?? anchor.y - 24);
+  const rowBottom = Number(anchor.rect?.bottom ?? anchor.y + 24);
+  let top;
+  if (rowBottom + gap + h <= vh - margin) top = rowBottom + gap;
+  else if (rowTop - gap - h >= margin) top = rowTop - gap - h;
+  else top = Math.min(Math.max(margin, anchor.y - h / 2), vh - margin - h);
+  const left = Math.min(Math.max(margin, anchor.x - w / 2), Math.max(margin, vw - margin - w));
+  sheet.classList.add('pm-sess-anchored');
+  sheet.style.setProperty('--pm-sess-left', left + 'px');
+  sheet.style.setProperty('--pm-sess-top', top + 'px');
+  const originX = Math.min(Math.max(0, anchor.x - left), w);
+  const originY = top >= rowBottom ? 0 : h;
+  sheet.style.setProperty('--pm-sess-origin', `${originX}px ${originY}px`);
+}

@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "issue-triage-and-tickets",
+  "name": "Issue Triage and Tickets",
+  "description": "Triage GitHub issues and external PRs through category plus state labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix), verify claims against code, post durable agent briefs, and break a spec or plan into tracer-bullet tickets with blocking edges published via connector_github tools or local ticket files. Use for triage the issues, what needs my attention on GitHub, or make tickets from this spec. Do not use for fixing the issue itself, code review, or email/inbox triage (inbox-triage).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "what is ready for agents to pick up",
+    "create github issues from the spec",
+    "what issues need my attention",
+    "break this spec into tickets",
+    "make tickets from this plan",
+    "write an agent brief for this issue",
+    "triage this github issue",
+    "triage the issues"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "triage the issues",
+      "triage issue",
+      "needs triage",
+      "break into tickets",
+      "make tickets",
+      "create issues from",
+      "agent brief",
+      "ready for agent"
+    ],
+    "allOf": [
+      [
+        "triage",
+        "issues"
+      ],
+      [
+        "triage",
+        "issue"
+      ],
+      [
+        "spec",
+        "tickets"
+      ],
+      [
+        "plan",
+        "tickets"
+      ],
+      [
+        "create",
+        "issues",
+        "spec"
+      ],
+      [
+        "agent",
+        "brief"
+      ]
+    ],
+    "anyOf": [
+      "triage",
+      "tickets",
+      "backlog",
+      "labels",
+      "github"
+    ],
+    "noneOf": [
+      "inbox",
+      "email",
+      "gmail",
+      "support ticket price",
+      "concert tickets",
+      "flight",
+      "fix this issue now"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "github",
+    "planning"
+  ],
+  "requiredTools": [
+    "connector_github_list_issues",
+    "connector_github_update_issue",
+    "connector_github_comment",
+    "connector_github_create_issue",
+    "connector_github_api_request",
+    "workspace_read",
+    "workspace_run",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

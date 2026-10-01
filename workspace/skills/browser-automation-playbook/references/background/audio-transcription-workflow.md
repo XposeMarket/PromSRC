@@ -19,7 +19,7 @@ Use `creative_transcribe_audio` when automatic transcription doesn't happen duri
 ```javascript
 creative_transcribe_audio({
   source: "path/to/audio/or/video/file.mp4",  // workspace path
-  provider: "openai",  // or "xai" 
+  provider: "openai",  // or "xai"
   language: "en"       // optional
 })
 ```
@@ -83,7 +83,7 @@ If using Creative Mode for video work:
 
 Always use workspace-relative or absolute workspace-contained paths:
 - Good: `"downloads/video-analysis/file.mp4"`
-- Good: `"downloads/x-videos/tweet-video.mp4"`  
+- Good: `"downloads/x-videos/tweet-video.mp4"`
 - Bad: External URLs (download first)
 - Bad: Paths outside workspace (copy to workspace first)
 

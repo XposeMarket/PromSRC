@@ -421,6 +421,7 @@ function tryRawGatewayFastPath(
     sendRawJson(res, {
       ok: true,
       pid: process.pid,
+      processStartedAt: Number(process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT || 0),
       timestamp: Date.now(),
       fastPath: true,
       memory: {

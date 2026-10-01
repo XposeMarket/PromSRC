@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "implementation-plan-execution",
+  "name": "Implementation Plan Execution",
+  "description": "Execute a saved implementation plan or ticket graph task by task with a durable progress ledger that survives compaction, test-first steps, Expected-output checks, recorded rulings, optional parallel openai_codex workers per frontier task, a final fresh review, and a user-chosen integration path. Use when the user says execute, continue, or resume a plan. Do not use to write the plan (implementation-plan-writing), for ad hoc single edits (fast-coding-loop), or when no saved plan exists.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "implement the plan task by task",
+    "execute this implementation plan",
+    "implement the spec tickets",
+    "run through the plan",
+    "continue the plan",
+    "execute the plan",
+    "resume the plan"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "execute the plan",
+      "execute this plan",
+      "continue the plan",
+      "resume the plan",
+      "implement the plan",
+      "work through the plan",
+      "implement the tickets"
+    ],
+    "allOf": [
+      [
+        "execute",
+        "plan"
+      ],
+      [
+        "continue",
+        "plan"
+      ],
+      [
+        "resume",
+        "plan"
+      ],
+      [
+        "implement",
+        "plan"
+      ],
+      [
+        "implement",
+        "tickets"
+      ],
+      [
+        "plan",
+        "task",
+        "by"
+      ]
+    ],
+    "anyOf": [
+      "ledger",
+      "tasks",
+      "tickets",
+      "integration branch",
+      "resume"
+    ],
+    "noneOf": [
+      "write a plan",
+      "write an implementation plan",
+      "make a plan",
+      "grill me",
+      "marketing plan",
+      "trading plan",
+      "meal plan",
+      "schedule"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "planning",
+    "execution"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "workspace_run",
+    "workspace_git",
+    "declare_plan",
+    "background_ops",
+    "ask_prometheus_questions",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": true
+  },
+  "resources": []
+}

@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "architecture-deepening",
+  "name": "Architecture Deepening",
+  "description": "Scan a codebase, weighted toward recent hot spots, for shallow modules, leaky seams, and poor locality using the deletion test; present ranked deepening candidates in a visual report; then work the chosen one through question cards while keeping GLOSSARY.md and ADRs current. Use for improve the architecture, where is this codebase hard to change, deepen these modules, or sharpening domain terminology. Do not use for cleaning up a recent diff (code-simplifier), bug fixing (root-cause-debugging), or first orientation (codebase-onboarding).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "where is this codebase hard to change",
+    "architecture review of this repo",
+    "refactor opportunities in the architecture",
+    "improve the codebase architecture",
+    "update the domain glossary",
+    "record an architecture decision",
+    "find shallow modules",
+    "deepen these modules"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "improve the architecture",
+      "codebase architecture",
+      "hard to change",
+      "shallow modules",
+      "deepen",
+      "architecture review",
+      "domain glossary",
+      "architecture decision record"
+    ],
+    "allOf": [
+      [
+        "improve",
+        "architecture"
+      ],
+      [
+        "architecture",
+        "review"
+      ],
+      [
+        "shallow",
+        "modules"
+      ],
+      [
+        "hard",
+        "change",
+        "codebase"
+      ],
+      [
+        "domain",
+        "glossary"
+      ],
+      [
+        "record",
+        "adr"
+      ]
+    ],
+    "anyOf": [
+      "architecture",
+      "modules",
+      "seams",
+      "coupling",
+      "glossary",
+      "deepening",
+      "refactor"
+    ],
+    "noneOf": [
+      "simplify my changes",
+      "clean up this diff",
+      "failing test",
+      "pull request review",
+      "learn this codebase",
+      "get up to speed",
+      "building architecture",
+      "house"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "architecture",
+    "refactoring"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "workspace_run",
+    "workspace_git",
+    "workspace_code_nav",
+    "ask_prometheus_questions",
+    "background_ops",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

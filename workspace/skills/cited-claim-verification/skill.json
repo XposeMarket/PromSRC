@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "cited-claim-verification",
+  "name": "Cited Claim Verification",
+  "description": "Produce or fact-check a written deliverable so every outside claim is traceable: a source ledger with stable [n] ids registered at retrieval time, inline citations, verbatim supporting quotes, [unverified] markers for unsourced claims, and a final citation audit that catches invented ids, retyped URLs, and thin coverage. Use when the user asks to fact-check a draft, verify the claims in a document, add sources to a report, or wants a high-stakes cited deliverable (medical, legal, financial, disputed). Do not use for ordinary research answers (web-researcher), competitor monitoring (competitor-signal-monitor), or reviewing code.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "add citations to this report",
+    "check the sources in this document",
+    "fact check this draft",
+    "verify the claims in",
+    "cite every claim",
+    "fact-check this"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "fact check",
+      "verify the claims",
+      "add citations",
+      "cite every claim",
+      "check the sources",
+      "sourced report",
+      "with citations"
+    ],
+    "allOf": [
+      [
+        "fact",
+        "check"
+      ],
+      [
+        "verify",
+        "claims"
+      ],
+      [
+        "add",
+        "citations"
+      ],
+      [
+        "check",
+        "sources",
+        "document"
+      ],
+      [
+        "cite",
+        "claims"
+      ]
+    ],
+    "anyOf": [
+      "citation",
+      "citations",
+      "sources",
+      "fact check",
+      "claims",
+      "evidence",
+      "verbatim"
+    ],
+    "noneOf": [
+      "competitor",
+      "code review",
+      "pull request",
+      "unit test",
+      "skill eval",
+      "verify this end to end"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "research",
+    "writing",
+    "verification"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "workspace_write",
+    "show_ui_card"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

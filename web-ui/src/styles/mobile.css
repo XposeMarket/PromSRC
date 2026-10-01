@@ -18904,3 +18904,167 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-body.pm-chat
     transparent calc(100% - var(--pm-voice-orb-clear) + 96px),
     transparent 100%) !important;
 }
+
+/* ── 2026-09-30 final authority: reasoning thumb, drawer priority bell,
+   long-press lift/reorder, anchored chat popover ─────────────────────────── */
+
+/* Reasoning slider: the thumb is larger than the 56px track so its edge sits
+   proud of the pill instead of looking tucked inside it (pre-#464 geometry). */
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
+  width: 68px !important;
+  height: 68px !important;
+  top: 50% !important;
+  right: 0 !important;
+  transform: translate(50%, -50%) !important;
+  border-radius: 50% !important;
+}
+
+/* Priority bell: left of the close button in the drawer's top-right. */
+.pm-drawer-priority-toggle {
+  appearance: none;
+  position: absolute;
+  top: calc(max(env(safe-area-inset-top), 18px) + 7px);
+  right: calc(18px + 48px);
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color .18s ease, color .18s ease, transform .12s ease;
+}
+.pm-drawer-priority-toggle svg { width: 19px; height: 19px; }
+.pm-drawer-priority-toggle:active { transform: scale(.94); }
+body.pm-mobile-active .pm-drawer > .pm-haptic-host:has(> .pm-drawer-priority-toggle) {
+  position: absolute;
+  top: calc(max(env(safe-area-inset-top), 18px) + 7px);
+  right: calc(18px + 48px);
+  width: 40px;
+  height: 40px;
+  z-index: 2;
+}
+body.pm-mobile-active .pm-drawer > .pm-haptic-host > .pm-drawer-priority-toggle {
+  position: relative;
+  top: auto;
+  right: auto;
+}
+body.pm-mobile-active .pm-drawer-priority-toggle {
+  background: color-mix(in srgb, var(--pm-text) 8%, transparent) !important;
+  color: var(--pm-text) !important;
+}
+body.pm-mobile-active .pm-drawer-priority-toggle.is-active {
+  background: color-mix(in srgb, var(--pm-accent) 22%, transparent) !important;
+  color: var(--pm-accent) !important;
+}
+.pm-drawer-priority-dot {
+  position: absolute;
+  top: 8px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pm-accent, #ea6a1f);
+  box-shadow: 0 0 0 2px var(--pm-bg, #050506);
+  opacity: 0;
+  transform: scale(.4);
+  transition: opacity .18s ease, transform .18s ease;
+  pointer-events: none;
+}
+.pm-drawer-priority-toggle.has-attention .pm-drawer-priority-dot { opacity: 1; transform: scale(1); }
+body.pm-mobile-active .pm-drawer-brand { margin-right: 142px; }
+
+/* Priority mode layout (mirrors desktop Priority panel). Projects fold into
+   the flat inbox, so their tree is hidden while the mode is on. */
+body.pm-mobile-active .pm-drawer.is-priority-mode #pm-drawer-project-list,
+body.pm-mobile-active .pm-drawer.is-priority-mode #pm-drawer-session-head { display: none !important; }
+.pm-drawer-priority-section { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; }
+.pm-drawer-priority-list { display: flex; flex-direction: column; gap: 8px; }
+.pm-drawer-priority-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pm-drawer-priority-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--pm-accent) 20%, transparent);
+  color: var(--pm-accent);
+}
+.pm-drawer-priority-section.is-attention .pm-drawer-priority-title { color: var(--pm-accent); }
+.pm-drawer-priority-empty { padding: 10px 4px; opacity: .7; }
+
+/* Long-press: the menu is placed next to the finger instead of a fixed spot. */
+body.pm-mobile-active .pm-msheet.pm-msheet-session-context.pm-sess-anchored {
+  left: var(--pm-sess-left) !important;
+  top: var(--pm-sess-top) !important;
+  bottom: auto !important;
+  transform: scale(.86) !important;
+  transform-origin: var(--pm-sess-origin, center top) !important;
+  opacity: 0;
+  transition: transform .2s cubic-bezier(.2,.9,.25,1.15), opacity .14s ease !important;
+}
+body.pm-mobile-active .pm-msheet.pm-msheet-session-context.pm-sess-anchored.open {
+  transform: scale(1) !important;
+  opacity: 1;
+}
+
+/* Lifted chat row floats above the blurred scrim (scrim z 10000, sheet 10001;
+   the layer is inserted before the sheet so an overlapping menu still wins).
+   The layer reuses .pm-drawer so the cloned row keeps its exact styling, so
+   it must out-rank every skin's `.pm-drawer` surface rule. */
+:root body .pm-sess-lift-layer.pm-drawer.open,
+:root body.pm-mobile-active .pm-sess-lift-layer.pm-drawer.open {
+  z-index: 10001 !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+  z-index: 10000 !important;
+}
+.pm-sess-lift-inner { position: static !important; }
+.pm-sess-lift-clone {
+  z-index: 10000;
+  pointer-events: auto;
+  touch-action: none;
+  border-radius: 16px;
+  transition: transform .18s cubic-bezier(.2,.9,.25,1.2), box-shadow .18s ease;
+  will-change: transform, top;
+}
+.pm-sess-lift-clone.is-lifted {
+  transform: scale(1.035);
+  box-shadow: 0 14px 34px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.18);
+}
+.pm-sess-lift-clone.is-reordering {
+  transform: scale(1.05);
+  box-shadow: 0 22px 44px rgba(0,0,0,.42), 0 4px 12px rgba(0,0,0,.2);
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+body.pm-mobile-active .pm-sess-lift-clone,
+body.pm-mobile-active .pm-sess-lift-clone > .pm-session-row {
+  background-color: color-mix(in srgb, var(--pm-text) 7%, var(--pm-bg)) !important;
+}
+.pm-sess-lift-clone > .pm-haptic-switch-overlay { display: none !important; }
+.pm-sess-lift-source { visibility: hidden !important; }
+html.pm-session-reordering .pm-drawer-scroll { scroll-behavior: auto; }
+html.pm-session-reordering .pm-drawer :is([data-session-id], .pm-haptic-host) {
+  transition: transform .16s ease;
+}

@@ -8,13 +8,13 @@ description: "Open and verify a local HTML/web project in a browser, including v
 Test the actual rendered artifact rather than inferring behavior from source.
 
 1. Identify the canonical entrypoint and whether it needs a local server instead of `file://`.
-2. Start only the project’s documented safe server command, when required.
-3. Open the exact local/localhost URL and confirm the expected build.
+2. Start only the project's documented safe server command, when required, using `workspace_run(action:"start")`; record the runId and poll that runId and port with `workspace_run(action:"status")`.
+3. Open the exact local/localhost URL and confirm the expected build. On dynamic apps, inspect a fresh rendered snapshot and screenshot after load before choosing selectors; never choose selectors solely from source HTML.
 4. Exercise primary interactions and representative states.
 5. Inspect desktop and mobile widths, overflow, hit targets, focus, text clipping, images/fonts, and canvas/media.
 6. Check console/network errors and distinguish application bugs from browser/security restrictions.
 7. Re-test the changed behavior plus one adjacent regression path.
-8. Stop temporary processes Prometheus started and report evidence.
+8. Kill each temporary dev server Prometheus started using its recorded runId, confirm it stopped, and report evidence.
 
 Do not silently test a generated/stale copy or a different port. Use browser tools before desktop automation for browser content.
 

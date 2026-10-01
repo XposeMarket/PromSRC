@@ -3,7 +3,7 @@
   "id": "product-discovery",
   "name": "product-discovery",
   "description": "Turn a product opportunity or feature idea into an evidence-backed decision using problem framing, hypotheses, user research, opportunity sizing, prioritization, and a testable product brief. Use when deciding what or whether to build; do not use for implementing an already-approved feature.",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "decide whether to build this",
@@ -20,6 +20,18 @@
     "discovery",
     "strategy"
   ],
+  "requiredTools": [],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/detailed-guide.md",
+      "type": "reference"
+    }
+  ]
 }

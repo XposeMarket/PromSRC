@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "merge-conflict-arbitration",
+  "name": "Merge Conflict Arbitration",
+  "description": "Resolve git merge or rebase conflicts as a neutral arbiter: recover both sides' intents, classify every conflicted hunk as disjoint, same-question-different-answer, or superseded, edit only inside conflict regions, verify both intents survive with build and tests, and hand back a per-hunk decision log. Use for conflicts between parallel agents, branches, or PRs. Do not use for regenerable lockfile conflicts or ordinary git operations (git-workflow).",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "resolve the merge conflicts",
+    "fix these merge conflicts",
+    "reconcile these two branches",
+    "the agents' branches conflict",
+    "merge conflict between prs",
+    "arbitrate this merge conflict",
+    "rebase hit conflicts"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "merge conflict",
+      "merge conflicts",
+      "rebase conflict",
+      "conflict markers",
+      "reconcile these branches",
+      "branches conflict",
+      "resolve conflicts"
+    ],
+    "allOf": [
+      [
+        "merge",
+        "conflict"
+      ],
+      [
+        "rebase",
+        "conflict"
+      ],
+      [
+        "resolve",
+        "conflicts"
+      ],
+      [
+        "reconcile",
+        "branches"
+      ],
+      [
+        "conflict",
+        "markers"
+      ]
+    ],
+    "anyOf": [
+      "conflict",
+      "conflicts",
+      "merge",
+      "rebase",
+      "reconcile",
+      "branches"
+    ],
+    "noneOf": [
+      "scheduling conflict",
+      "calendar",
+      "conflict of interest",
+      "team conflict",
+      "lockfile only",
+      "data merge",
+      "merge csv",
+      "merge pdf"
+    ],
+    "minScore": 6
+  },
+  "categories": [
+    "development",
+    "git",
+    "multi-agent"
+  ],
+  "requiredTools": [
+    "workspace_read",
+    "workspace_edit",
+    "workspace_run",
+    "workspace_git",
+    "ask_prometheus_questions",
+    "background_ops",
+    "write_note"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "browser": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

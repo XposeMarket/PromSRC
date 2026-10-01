@@ -1046,6 +1046,17 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         },
         nativeHapticsOnMove: false,
       });
+      // The sensor is positioned from the control's rect when it is attached,
+      // but the sheet is still translated off-screen then (slide-up entrance)
+      // and the control is scaled. Re-measure once the sheet has settled, or
+      // the invisible switch sits below the viewport and iOS never ticks.
+      const refreshSensor = () => sheet.__pmReasoningGestureDispose?.refresh?.();
+      requestAnimationFrame(() => requestAnimationFrame(refreshSensor));
+      setTimeout(refreshSensor, 180);
+      setTimeout(refreshSensor, 420);
+      sheet.addEventListener('transitionend', (event) => {
+        if (event.target === sheet) refreshSensor();
+      });
     }
     control.addEventListener('keydown', (event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;

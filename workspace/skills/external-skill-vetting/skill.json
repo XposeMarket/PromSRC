@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "external-skill-vetting",
+  "name": "External Skill Vetting",
+  "description": "Inspect a third-party or downloaded agent skill before enabling it. Review the complete bundle for scripts, network access, credential use, prompt injection, permissions, provenance, destructive behavior, and catalog overlap, then issue an evidence-backed trust decision or recommend a local rewrite. Do not use for ordinary skill discovery or for creating a skill without an external source.",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "perform a supply-chain review of a third-party agent skill",
+    "audit a marketplace skill's scripts and permissions",
+    "decide whether to rewrite an external skill locally",
+    "inspect a downloaded skill before enabling it"
+  ],
+  "categories": [
+    "security",
+    "skills",
+    "governance",
+    "workflow"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "skills",
+    "web",
+    "web_fetch_batch"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": []
+}
