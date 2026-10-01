@@ -590,6 +590,18 @@ function mergeSkillIds(primary: string[], fallback: string[], limit = 8): string
   return merged;
 }
 
+// On Windows, Node's fs.mkdirSync(p, { recursive: true }) throws ENOENT when an
+// ancestor of p is a directory junction (e.g. <data>/.prometheus/skills ->
+// <workspace>/skills). Every skill create/import/snapshot mkdir runs under the
+// skills root, so resolve the junction once and work on the real directory.
+export function resolveRealSkillsDir(dir: string): string {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
 export class SkillsManager {
   private skillsDir: string;
   private skillsStore: Map<string, Skill> = new Map();
@@ -612,6 +624,7 @@ export class SkillsManager {
       : path.join(workspaceOrSkillsDir, 'skills');
 
     fs.mkdirSync(this.skillsDir, { recursive: true });
+    this.skillsDir = resolveRealSkillsDir(this.skillsDir);
     ensureSkillSafetyDirs(this.skillsDir);
   }
 
