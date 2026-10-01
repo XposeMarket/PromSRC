@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     // account-only or reasoning-only request makes the inherited route sticky.
     assert.deepEqual(
       threadOps.resolveManagedThreadModelRoute({ provider_id: 'xai' }, {}, inherited),
-      { providerId: 'xai', model: 'grok-4.5' },
+      { providerId: 'xai', model: 'grok-4.5', reasoningEffort: 'high' },
     );
     assert.deepEqual(
       threadOps.resolveManagedThreadModelRoute({ reasoning_effort: 'medium' }, {}, inherited),

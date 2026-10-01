@@ -41,8 +41,8 @@ assert.match(
 );
 assert.match(
   chatMessageRenderer,
-  /m\.source === 'voice_agent_realtime' && m\.voiceRealtimeActive === true[\s\S]{0,360}_renderMobileVoiceLyrics\(b\.text, m\.voiceRealtimeProgress, \{ compact: true \}\)/,
-  'the extracted chat renderer must show synchronized realtime Voice lyrics while audio is playing',
+  /m\.source === 'voice_agent_realtime' && m\.voiceRealtimeActive === true[\s\S]{0,320}const answerHtml = _renderMobileMarkdown\(b\.text, m\);[\s\S]{0,100}highlightMobileVoiceMarkdown\(answerHtml, m\.voiceRealtimeProgress\)/,
+  'the extracted chat renderer must highlight spoken words in rendered Markdown while audio is playing',
 );
 assert.match(
   chatRendererRuntime,
@@ -60,6 +60,7 @@ const rendererContext = new Proxy({
   _collectMessageMedia: () => [],
   _getPendingApprovalsForSession: () => [],
   _mobileWorkflowTraceEntriesForMessage: () => [],
+  _renderMobileMarkdown: (text) => `<p>${text}</p>`,
   _renderMobileVoiceLyrics: (text) => `<voice-lyrics>${text}</voice-lyrics>`,
   chatTimelineRowSignature: () => 'voice-test-row',
   escapeHtml: (value) => String(value ?? ''),
@@ -76,7 +77,8 @@ const realtimeVoiceHtml = executableRenderer({
   voiceRealtimeProgress: 0.4,
   body: { text: 'Streaming voice response' },
 }, 0, 'voice-row', 'voice-signature');
-assert.match(realtimeVoiceHtml, /<voice-lyrics>Streaming voice response<\/voice-lyrics>/, 'the lazy Chat renderer must execute the realtime lyric path without a ReferenceError');
+assert.match(realtimeVoiceHtml, /pm-voice-answer-speaking/, 'realtime voice must mark the playing answer');
+assert.match(realtimeVoiceHtml, /<p>Streaming voice response<\/p>/, 'the lazy Chat renderer must preserve rendered Markdown while highlighting speech');
 const mobileCss = [
   fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8'),
   fs.readFileSync('web-ui/src/styles/mobile-shell.css', 'utf8'),
