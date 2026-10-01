@@ -1,11 +1,9 @@
 ---
-name: "GitHub connector"
+name: connector-github
 description: "Use the connected GitHub account for pull requests, issues, commits, CI checks, files and code search via the connector_github wrapper. Use instead of the gh CLI, which is not installed."
-triggers: ["github pr", "pull request", "open a pr", "merge the pr", "close the pr", "close pr", "comment on pr", "close issue", "github issue", "ci checks", "check runs"]
-requiredTools: ["connector_github"]
 ---
 
-# GitHub connector
+# GitHub (connected account)
 
 Call `connector_github({action, ...args})`. If it is not in your tool list, call `tool_search({query:"github <task>"})` and then `tool_call`, or `request_tool_category({category:"external_apps"})`.
 

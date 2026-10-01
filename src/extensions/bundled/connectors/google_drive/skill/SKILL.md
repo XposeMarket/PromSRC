@@ -1,11 +1,9 @@
 ---
-name: "Google Drive connector"
+name: connector-google-drive
 description: "Find, read and inspect files in the connected Google Drive via the connector_google_drive wrapper, and connect Drive through the in-app browser login card when it is not connected yet."
-triggers: ["google drive", "my drive", "drive file", "google doc", "connect google drive"]
-requiredTools: ["connector_google_drive"]
 ---
 
-# Google Drive connector
+# Google Drive (connected account)
 
 Call `connector_google_drive({action, ...args})`, or `tool_search({query:"drive <task>"})` then `tool_call`.
 

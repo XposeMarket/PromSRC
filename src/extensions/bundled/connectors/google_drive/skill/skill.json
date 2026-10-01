@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-google-drive",
+  "name": "Google Drive (connected account)",
+  "description": "Find, read and inspect files in the connected Google Drive via the connector_google_drive wrapper, and connect Drive through the in-app browser login card when it is not connected yet.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "search my google drive",
+    "my drive files",
+    "open the google doc",
+    "read the drive file",
+    "upload to google drive"
+  ],
+  "requiredTools": [
+    "connector_google_drive"
+  ]
+}

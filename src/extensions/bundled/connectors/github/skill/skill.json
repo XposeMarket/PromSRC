@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "connector-github",
+  "name": "GitHub (connected account)",
+  "description": "Use the connected GitHub account for pull requests, issues, commits, CI checks, files and code search via the connector_github wrapper. Use instead of the gh CLI, which is not installed.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "github pr",
+    "pull request",
+    "open a pr",
+    "merge the pr",
+    "close the pr",
+    "close pr",
+    "comment on pr",
+    "close issue",
+    "github issue",
+    "ci checks",
+    "check runs"
+  ],
+  "requiredTools": [
+    "connector_github"
+  ]
+}
