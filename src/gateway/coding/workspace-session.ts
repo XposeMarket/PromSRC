@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getConfig } from '../../config/config';
-import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead } from './git-read-cache';
+import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
 
 export type PackageManagerKind = 'npm' | 'pnpm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'cargo' | 'go' | 'dotnet' | 'unknown';
 
@@ -58,7 +58,10 @@ export interface CodingRepositoryBranch {
 }
 
 function runGit(root: string, args: string[], timeout = 5000): string {
-  if (isCacheableGitRead(args)) return cachedGitRead(root, args, () => runGitUncached(root, args, timeout), 'trim');
+  if (isCacheableGitRead(args)) {
+    return cachedGitRead(root, args, () => runGitUncached(root, args, timeout), 'trim',
+      () => runGitReadAsync(root, args, { timeout, mode: 'trim' }));
+  }
   return runGitUncached(root, args, timeout);
 }
 

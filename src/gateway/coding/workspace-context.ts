@@ -1,4 +1,4 @@
-import { cachedGitRead, isCacheableGitRead } from './git-read-cache';
+import { cachedGitRead, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -186,7 +186,10 @@ function safeRoot(rawRoot?: string): string {
 }
 
 function runGit(root: string, args: string[], maxBuffer = MAX_DIFF_BYTES): string {
-  if (isCacheableGitRead(args)) return cachedGitRead(root, args, () => runGitUncached(root, args, maxBuffer), 'raw');
+  if (isCacheableGitRead(args)) {
+    return cachedGitRead(root, args, () => runGitUncached(root, args, maxBuffer), 'raw',
+      () => runGitReadAsync(root, args, { timeout: 15_000, maxBuffer, mode: 'raw' }));
+  }
   return runGitUncached(root, args, maxBuffer);
 }
 
