@@ -94,6 +94,10 @@ jobs:
           npm run test:multi-chat-main-tab-cap
       - name: Verify main chat live stream delivery
         run: npm run test:main-chat-stream
+      - name: Verify git read cache and process store ordering
+        run: |
+          npm run test:git-read-cache
+          npm run test:process-store-order
       - name: Verify context window contract
         run: npm run test:context-window
       - name: Verify token-window-native model context

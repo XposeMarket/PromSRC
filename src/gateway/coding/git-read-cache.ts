@@ -16,6 +16,7 @@
  * child process. Concurrent refreshes of the same key share one process. Only
  * a cold miss (or an entry older than STALE_MAX_MS) still runs synchronously.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
@@ -100,16 +101,86 @@ function rememberRefresher(key: string, root: string, refresh: () => Promise<str
   }
 }
 
+/*
+ * Global cap on concurrent background git processes. On Windows, spawn() itself
+ * blocks the event loop for ~25-30 ms per child. A thread panel that kicked
+ * ~130 stale refreshes in one request spent 3.7 s of a 4.8 s "warm" response
+ * inside spawn() (CPU profile, 2026-10-01). Excess refreshes queue and start
+ * as earlier ones finish, so one request costs at most a few spawns.
+ */
+const MAX_BACKGROUND_GIT = 4;
+let activeBackgroundGit = 0;
+const backgroundGitQueue: Array<() => void> = [];
+
+function acquireBackgroundGit(): Promise<void> {
+  if (activeBackgroundGit < MAX_BACKGROUND_GIT) {
+    activeBackgroundGit += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => backgroundGitQueue.push(() => { activeBackgroundGit += 1; resolve(); }));
+}
+
+function releaseBackgroundGit(): void {
+  activeBackgroundGit = Math.max(0, activeBackgroundGit - 1);
+  const next = backgroundGitQueue.shift();
+  if (next) next();
+}
+
+/** Test/diagnostic hook: peak-safe view of the background git limiter. */
+export function backgroundGitStats(): { active: number; queued: number; max: number } {
+  return { active: activeBackgroundGit, queued: backgroundGitQueue.length, max: MAX_BACKGROUND_GIT };
+}
+
 function refreshInto(key: string, refresh: () => Promise<string>): Promise<void> {
   const pending = refreshing.get(key);
   if (pending) return pending;
   const gen = generation;
-  const job = refresh()
-    .then((value) => { if (gen === generation) store(key, value, Date.now()); })
-    .catch(() => { /* leave the cache as is; the sync path still works */ })
+  const job = acquireBackgroundGit()
+    .then(() => refresh()
+      .then((value) => { if (gen === generation) store(key, value, Date.now()); })
+      .catch(() => { /* leave the cache as is; the sync path still works */ })
+      .finally(releaseBackgroundGit))
     .finally(() => { refreshing.delete(key); });
   refreshing.set(key, job);
   return job;
+}
+
+/*
+ * Repository root lookup without spawning git. The thread panel used to run
+ * `git rev-parse --show-toplevel` once per file the chat ever touched (118
+ * blocking spawns, 7 s, for one long chat), and those per-directory keys also
+ * evicted the `git status` refreshers that matter from the 64-slot list.
+ * Walking up to the nearest `.git` entry (directory, or file for worktrees and
+ * submodules) answers the same question with a few stat calls, memoized per
+ * directory.
+ */
+const ROOT_TTL_MS = 60_000;
+const ROOT_MAX_ENTRIES = 2_048;
+const rootCache = new Map<string, { at: number; root: string | null }>();
+
+export function findGitRootByWalk(startDir: string): string | null {
+  const start = path.resolve(String(startDir || '.'));
+  const now = Date.now();
+  const visited: string[] = [];
+  let current = start;
+  let found: string | null = null;
+  while (true) {
+    const key = norm(current);
+    const hit = rootCache.get(key);
+    if (hit && now - hit.at < ROOT_TTL_MS) { found = hit.root; break; }
+    visited.push(key);
+    let marker = false;
+    try { marker = fs.existsSync(path.join(current, '.git')); } catch { marker = false; }
+    if (marker) { found = current; break; }
+    const parent = path.dirname(current);
+    if (parent === current) { found = null; break; }
+    current = parent;
+  }
+  for (const key of visited) rootCache.set(key, { at: now, root: found });
+  if (rootCache.size > ROOT_MAX_ENTRIES) {
+    for (const k of rootCache.keys()) { rootCache.delete(k); if (rootCache.size <= ROOT_MAX_ENTRIES / 2) break; }
+  }
+  return found;
 }
 
 /**
@@ -153,6 +224,7 @@ export function resetGitReadCacheForTests(): void {
   cache.clear();
   refreshers.clear();
   refreshing.clear();
+  rootCache.clear();
   generation += 1;
 }
 

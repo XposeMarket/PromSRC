@@ -244,6 +244,25 @@ export class ProcessSupervisor {
       .slice(0, Math.max(1, Math.min(500, limit)));
   }
 
+  /**
+   * One chat's runs, newest first. Unlike list(500)+filter, this sees the
+   * chat's runs even when 500 newer runs from other chats exist.
+   */
+  listForSession(sessionId: string, limit = 100): ProcessRunRecord[] {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return [];
+    const matches = (record: ProcessRunRecord) => String(record.sessionId || '').trim() === sid
+      || String((record as any).codingSessionId || '').trim() === sid;
+    const activeIds = new Set(this.active.keys());
+    const activeRecords = Array.from(this.active.values()).map((run) => run.record).filter(matches);
+    return [
+      ...activeRecords,
+      ...this.store.listRecordsForSession(sid, limit).filter((record) => !activeIds.has(record.runId)),
+    ]
+      .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+      .slice(0, Math.max(1, Math.min(500, limit)));
+  }
+
   get(runId: string): ProcessRunRecord | null {
     return this.active.get(runId)?.record || this.store.loadRecord(runId);
   }

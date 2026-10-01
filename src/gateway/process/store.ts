@@ -42,6 +42,33 @@ export class ProcessRunStore {
   readonly logsDir: string;
   private readonly recordCache = new Map<string, ProcessRunRecord>();
   private primePromise: Promise<void> | null = null;
+  // Newest-first order of recordCache, rebuilt lazily. Sorting
+  // ~25k records with Date.parse inside the comparator blocked the gateway
+  // ~280 ms on every /api/processes call (measured 2026-10-01).
+  // Holds run ids, so output-driven record rewrites (same startedAt) and new
+  // runs (newest) keep the order without a re-sort.
+  private sortedIds: string[] | null = null;
+
+  private remember(record: ProcessRunRecord): void {
+    const previous = this.recordCache.get(record.runId);
+    this.recordCache.set(record.runId, record);
+    if (!this.sortedIds) return;
+    if (previous) {
+      if (previous.startedAt !== record.startedAt) this.sortedIds = null;
+      return;
+    }
+    const first = this.sortedIds.length ? this.recordCache.get(this.sortedIds[0]) : undefined;
+    if (!first || (Date.parse(record.startedAt) || 0) >= (Date.parse(first.startedAt) || 0)) this.sortedIds.unshift(record.runId);
+    else this.sortedIds = null;
+  }
+
+  private sortedOrder(): string[] {
+    if (this.sortedIds) return this.sortedIds;
+    const keyed = Array.from(this.recordCache.values(), (record) => ({ id: record.runId, at: Date.parse(record.startedAt) || 0 }));
+    keyed.sort((a, b) => b.at - a.at);
+    this.sortedIds = keyed.map((item) => item.id);
+    return this.sortedIds;
+  }
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
@@ -74,7 +101,7 @@ export class ProcessRunStore {
     try {
       fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8');
       renameWithRetries(tmp, target);
-      this.recordCache.set(record.runId, record);
+      this.remember(record);
     } finally {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
     }
@@ -117,7 +144,7 @@ export class ProcessRunStore {
       const p = this.recordPath(runId);
       if (!fs.existsSync(p)) return null;
       const record = JSON.parse(fs.readFileSync(p, 'utf-8')) as ProcessRunRecord;
-      this.recordCache.set(record.runId, record);
+      this.remember(record);
       return record;
     } catch {
       return null;
@@ -140,7 +167,7 @@ export class ProcessRunStore {
           }
         }));
         for (const record of batch) {
-          if (record?.runId && !this.recordCache.has(record.runId)) this.recordCache.set(record.runId, record);
+          if (record?.runId && !this.recordCache.has(record.runId)) this.remember(record);
         }
       }
     })();
@@ -148,8 +175,30 @@ export class ProcessRunStore {
   }
 
   listRecords(limit = 100): ProcessRunRecord[] {
-    return Array.from(this.recordCache.values())
-      .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
-      .slice(0, Math.max(1, Math.min(500, limit)));
+    const max = Math.max(1, Math.min(500, limit));
+    const out: ProcessRunRecord[] = [];
+    for (const id of this.sortedOrder()) {
+      const record = this.recordCache.get(id);
+      if (record) out.push(record);
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+
+  /** Newest-first records for one chat, scanning the sorted view and stopping at `limit`. */
+  listRecordsForSession(sessionId: string, limit = 100): ProcessRunRecord[] {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return [];
+    const max = Math.max(1, Math.min(500, limit));
+    const out: ProcessRunRecord[] = [];
+    for (const id of this.sortedOrder()) {
+      const record = this.recordCache.get(id);
+      if (!record) continue;
+      if (String(record.sessionId || '').trim() === sid || String((record as any).codingSessionId || '').trim() === sid) {
+        out.push(record);
+        if (out.length >= max) break;
+      }
+    }
+    return out;
   }
 }
