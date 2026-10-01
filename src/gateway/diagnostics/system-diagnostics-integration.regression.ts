@@ -10,7 +10,7 @@ process.env.PROMETHEUS_RUNTIME_DIR = path.join(root, 'runtime');
 process.env.PROMETHEUS_WORKSPACE_DIR = path.join(root, 'workspace');
 const { systemDiagnosticsTool } = require('./system-diagnostics') as typeof import('./system-diagnostics');
 const { getConfig } = require('../../config/config') as typeof import('../../config/config');
-const { markProviderStatus, getProviderStatusCacheKey, PROVIDER_STATUS_CACHE_MS } = require('../provider-status') as typeof import('../provider-status');
+const { markProviderStatus, readProviderStatusEvidence, getProviderStatusCacheKey, PROVIDER_STATUS_CACHE_MS } = require('../provider-status') as typeof import('../provider-status');
 const now = Date.now();
 const configDir = getConfig().getConfigDir();
 fs.mkdirSync(configDir, { recursive: true });
@@ -32,8 +32,11 @@ assert.equal(result.automation.intentionalJobs[0].id, 'paused');
 markProviderStatus(false, getProviderStatusCacheKey(), { result: 'timeout', source: 'connection_probe' });
 assert.equal(snapshot().provider.state, 'check_failed');
 assert.equal(snapshot().provider.result, 'timeout');
-assert.equal(snapshot(now + PROVIDER_STATUS_CACHE_MS + 100).provider.state, 'unknown', 'expired failure must not imply current failure');
-assert.equal(snapshot(now + PROVIDER_STATUS_CACHE_MS + 100).provider.freshness, 'stale');
+// The cache records Date.now() when marked; use that actual timestamp, not a
+// clock captured before config initialization (which can take seconds in CI).
+const checkedAt = readProviderStatusEvidence().checkedAt!;
+assert.equal(snapshot(checkedAt + PROVIDER_STATUS_CACHE_MS + 100).provider.state, 'unknown', 'expired failure must not imply current failure');
+assert.equal(snapshot(checkedAt + PROVIDER_STATUS_CACHE_MS + 100).provider.freshness, 'stale');
 markProviderStatus(false);
 assert.equal(snapshot().provider.state, 'unknown', 'a chat failure without route evidence must not declare the configured provider offline');
 console.log('system diagnostics integration: full job classification, intentional state, scoped probes, and freshness passed');

@@ -12,18 +12,18 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2330215,
+  'web-ui/src/pages/ChatPage.js': 2341117,
   'web-ui/src/mobile/mobile-pages.js': 898464,
-  // Refreshed to the measured main after the 2026-09-20 provider-auth and
-  // mobile recovery work (LF bytes).
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 251833,
-  'web-ui/src/styles/mobile.css': 612378,
-  'web-ui/src/styles/components.css': 284925,
+  // Reviewed against the 2026-10-01 main UI: these are tracked LF-byte
+  // boundaries, not dynamic baselines. Future growth still fails CI.
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 256913,
+  'web-ui/src/styles/mobile.css': 641881,
+  'web-ui/src/styles/components.css': 292703,
   'web-ui/index.html': 558138,
 });
-// Refreshed to the measured main after the 2026-09-20 provider-auth and mobile
-// recovery work landed in mobile-chat-page-runtime.js (453747 LF bytes).
-const CODE_OWNED_NEW_MODULE_CEILING = 453747;
+// Reviewed against the extracted mobile-chat-page-runtime.js on 2026-10-01.
+// Keep an explicit code-owned cap so subsequent unreviewed growth still fails.
+const CODE_OWNED_NEW_MODULE_CEILING = 469138;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
 const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 124;
 

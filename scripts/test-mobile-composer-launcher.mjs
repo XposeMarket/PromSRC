@@ -35,13 +35,13 @@ const keyboardGeometry = {
 assert.equal(resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 0 }), 396);
 assert.equal(
   resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 140 }),
-  396,
-  'visual viewport page-panning must not detach the composer from its locked keyboard edge',
+  536,
+  'visual viewport page-panning must follow the live visual keyboard edge',
 );
 assert.equal(
   resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 140, composerHeight: 156 }),
-  336,
-  'attachment and multiline growth must preserve the keyboard edge while moving the composer top',
+  476,
+  'attachment and multiline growth must preserve the live keyboard edge while moving the composer top',
 );
 
 assert.equal(generatedPages, sourcePagesFile, 'generated mobile-pages.js must mirror source');
@@ -78,7 +78,7 @@ assert.doesNotMatch(sourcePages, /_pmKbAnchorComposer\(visualBottom\)/, 'keyboar
 assert.match(sourcePages, /const keyboardHeightOffset = vv[\s\S]*layoutHeight - visualHeight/, 'keyboard height must ignore visualViewport page-pan offsetTop');
 assert.match(sourcePages, /if \(_pmKbFocusActive && _pmKbViewportMode\) \{[\s\S]*_pmKbScheduleComposerPositionRepair\(\);[\s\S]*return;/, 'locked keyboard mode must repair only large scroll displacement without re-running the flicker-prone anchor pass');
 assert.match(sourcePages, /const _pmKbComposerViewportProperties = \[[^\]]*'top'/, 'keyboard-owned composer must clear its explicit top anchor during teardown');
-assert.match(sourcePages, /top: `\$\{top\}px`,[\s\S]*bottom: 'auto'/, 'keyboard-owned composer must use an explicit top anchor instead of static-position bottom anchoring');
+assert.match(sourcePages, /const correctedTop = Math\.max\(0, Math\.round\(top \+ _pmKbTopCorrection\)\)[\s\S]{0,170}top: `\$\{correctedTop\}px`,\s*bottom: 'auto'/, 'keyboard-owned composer must include bounded position correction in its explicit top anchor');
 assert.match(sourcePages, /const jumpToLatest = \(\) => \{[\s\S]*_scrollChat\(body\);[\s\S]*requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => _scrollChat\(body\)\)\)/, 'latest-message control must force the shared bottom anchor after render and layout');
 assert.match(sourcePages, /function _scrollChat\(bodyEl\) \{[\s\S]*forceBottom: true/, 'latest-message control must use the force-bottom scroll path');
 assert.match(sourcePages, /reason: 'voice-close'/, 'exiting voice must restore the launcher mode');

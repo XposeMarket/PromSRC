@@ -31,7 +31,9 @@ const exactCases: Array<{ message: string; expected: string[] }> = [
   { message: 'Run system diagnostics and build a diagnostic packet.', expected: ['runtime_admin'] },
   { message: 'Restart the gateway after checking its health.', expected: ['runtime_admin'] },
   { message: 'Connect Gmail with OAuth and verify the integration.', expected: ['integration_admin'] },
-  { message: 'Configure the webhook endpoint for this service.', expected: ['integration_admin'] },
+  { message: 'Configure the webhook endpoint for this service.', expected: ['automation_tasks', 'integration_admin'] },
+  // Webhook configuration legitimately spans trigger/task administration and
+  // connection setup; neither category should disappear from prompt routing.
   { message: 'Call the connected mcp__github__search tool.', expected: ['mcp_server_tools'] },
   { message: 'Ask an agent to investigate the failing test in parallel.', expected: ['agents_and_teams'] },
   { message: 'Ask the team coordinator to create a research team.', expected: ['agents_and_teams'] },
