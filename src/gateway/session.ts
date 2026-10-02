@@ -33,6 +33,11 @@ import {
   DURABLE_COMMENTARY_CONTEXT_MAX_CHARS,
 } from './context/commentary-context';
 import {
+  planRestartCheckpointTreatment,
+  RESTART_CHECKPOINT_STUB_COMMENTARY_CHARS,
+  stripBackgroundReceipts,
+} from './context/restart-checkpoint-compaction';
+import {
   assertSafeStorageId,
   isSafeStorageId,
   resolveConfinedStoragePath,
@@ -3057,7 +3062,22 @@ export function getHistoryForApiCall(
   }
 
   const includeCommentaryContext = options?.includeCommentaryContext !== false;
-  return messages.map((msg) => {
+  // Restart checkpoints repeat background receipts + commentary on every
+  // restart; only the in-flight turn's newest one is replayed in full.
+  const checkpointPlan = planRestartCheckpointTreatment(messages);
+  return messages.map((msg, index) => {
+    const checkpointTreatment = checkpointPlan.get(index);
+    if (checkpointTreatment === 'stub') {
+      const header = stripBackgroundReceipts(stripInternalToolNotes(msg.content) || String(msg.content || ''))
+        .split('\n').filter((line) => line.trim()).slice(0, 3).join('\n');
+      const stubContent = includeCommentaryContext
+        ? appendDurableCommentaryContext(header, msg, RESTART_CHECKPOINT_STUB_COMMENTARY_CHARS)
+        : header;
+      if (!stubContent.trim()) return null;
+      const stub = { ...msg } as any;
+      for (const key of ['processEntries', 'liveTraceEntries', 'toolLog', 'historicalEvents', 'commentaryContext', 'visibleReasoningSummary']) delete stub[key];
+      return { ...stub, content: stubContent };
+    }
     // These are transport/recovery records, not assistant conversation. The
     // interrupted-turn checkpoint may carry a long prior model summary; replaying
     // it as an assistant utterance can make a harmless follow-up look like a

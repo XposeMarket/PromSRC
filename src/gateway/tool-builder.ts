@@ -39,6 +39,8 @@ import {
   getWorkspaceToolMode,
 } from '../runtime/workspace-tool-mode';
 
+import { compactToolDefinitionsForModel } from './tools/schema-compaction';
+
 export interface BuildToolsDeps {
   getMCPManager: () => any;
   /** Validation-only: keep static wrapper schemas but skip loading live extension modules. */
@@ -1133,7 +1135,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       function: {
         name: 'delivery_send',
         description:
-          'Unified delivery/presentation wrapper. action="send" sends a message, file, or image through an origin-aware delivery channel; action="screenshot" captures/reuses a screenshot and delivers it; action="present_file" presents a local file as an inline assistant artifact and optionally delivers it. Prefer target="origin" unless the user explicitly names a destination. WHEN TO USE: mid-turn updates while work continues, or delivery to another channel (Telegram, Discord, etc.). NOT for proof/previews in your final answer: there, embed workspace images directly in the reply markdown with ![caption](relative/path.png) (videos .mp4/.webm work too); they render inline with a caption and tap-to-expand on desktop and mobile, and consecutive images form a gallery.',
+          'Deliver a message, file or screenshot (action=send|screenshot|present_file). Prefer target="origin". Use for mid-turn updates or another channel (Telegram, Discord, ...). For proof in the final answer, embed workspace images/videos in the reply markdown instead: ![caption](relative/path.png).',
         parameters: {
           type: 'object', required: [],
           properties: {
@@ -1696,11 +1698,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     if (!devToolsVisible && isPrometheusDevToolHidden(name)) return false;
     return true;
   });
-  const visibleToolDefs = filterToolDefinitionsForWorkspaceMode(
+  // Model-facing compaction (alias props, long/trivial property descriptions).
+  // Executors still accept every argument; see tools/schema-compaction.ts.
+  const visibleToolDefs = compactToolDefinitionsForModel(filterToolDefinitionsForWorkspaceMode(
     runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || ''))),
     workspaceToolMode,
     { allowNativeFileTools: allowNativeWorkspaceTools },
-  );
+  ));
 
   // Canonical classification is authoritative by default. Keep the legacy
   // classifier as a rollback/shadow oracle and record drift out of band.
