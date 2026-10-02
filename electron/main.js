@@ -2679,9 +2679,9 @@ function detachNativeBrowserView(view) {
   }
 }
 
-// A real, nonzero compositor surface is retained per tab even when chat hides
-// its panel. Hidden windows are never shown or focused; presentation reparents
-// the same WebContentsView without navigation or session changes.
+// Park tabs in non-focusable, off-screen hosts. On Windows a show:false host
+// does not supply a reliable compositor; showInactive only during a bounded
+// activity lease, then hide again. Presentation reparents the same view.
 function nativeAutomationSize(view) {
   const meta = nativeViewMeta(view);
   const last = meta.automationSize || NATIVE_BROWSER_AUTOMATION_SIZE;
@@ -2696,7 +2696,8 @@ function parkNativeBrowserView(view) {
   if (!host || host.isDestroyed()) {
     meta.automationHostNeedsPaint = true;
     host = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true,
-      focusable: false, skipTaskbar: true, width: size.width, height: size.height,
+      focusable: false, skipTaskbar: true, x: -9000, y: -9000,
+      width: size.width, height: size.height,
       webPreferences: { backgroundThrottling: true } });
     nativeBrowserAutomationHosts.set(key, host);
     host.on('closed', () => { if (nativeBrowserAutomationHosts.get(key) === host) nativeBrowserAutomationHosts.delete(key); });
@@ -2736,6 +2737,7 @@ function releaseNativeBrowserLease(view) {
   nativeBrowserActivityLeases.delete(key);
   nativeBrowserActiveInputs.get(key)?.abort();
   nativeBrowserActiveInputs.delete(key);
+  try { if (meta.automationHost && !meta.automationHost.isDestroyed()) meta.automationHost.hide(); } catch {}
   if (!view.webContents?.isDestroyed?.()) applyNativeBrowserVisibilityPolicy(view, meta.presented);
 }
 function leaseNativeBrowserActivity(view) {
@@ -2750,6 +2752,9 @@ function leaseNativeBrowserActivity(view) {
   const timer = setTimeout(() => releaseNativeBrowserLease(view), NATIVE_BROWSER_LEASE_MS);
   timer.unref?.();
   nativeBrowserActivityLeases.set(key, { timer, expiresAt });
+  // showInactive creates a compositor without focus or an on-screen surface.
+  const host = meta.automationHost;
+  if (host && !host.isDestroyed() && !host.isVisible()) host.showInactive();
   applyNativeBrowserVisibilityPolicy(view, meta.presented);
   return expiresAt;
 }
