@@ -26,7 +26,9 @@ import {
   desktopBackgroundStatus,
 } from './desktop-background.js';
 import os from 'os';
-import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
+import { normalizeScreenshotBuffer, readImageSize, cropImageBuffer } from './screenshot-normalize.js';
+import { isDesktopPowerShellHostEnabled, runPowerShellInHost, PowerShellHostBusyError, warmDesktopPowerShellHosts } from './desktop-powershell-host.js';
+import { pathToFileURL } from 'url';
 import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
 import { getPlatformDesktopBackend, hasDesktopBackend } from './desktop-platform.js';
 import type { DesktopCaptureRequest } from './desktop-backend.js';
@@ -509,8 +511,11 @@ const OCR_CHILD_SCRIPT = `
 (async () => {
   const imagePath = process.argv[1];
   try {
-    const mod = await import('tesseract.js');
-    const createWorker = mod?.createWorker;
+    // The parent passes tesseract.js's resolved entry as a file URL: this
+    // child runs as [eval] with cwd=ocr-cache, where a bare specifier cannot
+    // resolve the package.
+    const mod = await import(process.argv[2] || 'tesseract.js');
+    const createWorker = mod?.createWorker || mod?.default?.createWorker;
     if (typeof createWorker !== 'function') {
       process.stdout.write(JSON.stringify({ ok: false, stage: 'module_api', error: 'createWorker unavailable' }));
       return;
@@ -621,6 +626,58 @@ async function runPowerShell(
   opts?: { timeoutMs?: number; sta?: boolean; signal?: AbortSignal },
 ): Promise<string> {
   ensureWindows();
+  // Persistent hosts remove the 230-440 ms powershell.exe start per call.
+  // Fall back to a fresh process only when the host itself could not run
+  // (spawn failure / crash), never for script errors, timeouts or aborts.
+  if (isDesktopPowerShellHostEnabled()) {
+    scheduleDesktopPowerShellWarmup();
+    try {
+      return await runPowerShellInHost(script, opts || {});
+    } catch (error: any) {
+      // Only "every host is busy" falls back. A script that started in a host
+      // and then failed must not run a second time (input side effects).
+      if (!(error instanceof PowerShellHostBusyError)) throw error;
+    }
+  }
+  return runPowerShellSpawned(script, opts);
+}
+
+let desktopPowerShellWarmupScheduled = false;
+/** Pre-start the hosts and pre-compile the shared Add-Type headers so the
+ *  first real screenshot / window / UIA call does not pay that cost. */
+function scheduleDesktopPowerShellWarmup(): void {
+  if (desktopPowerShellWarmupScheduled) return;
+  desktopPowerShellWarmupScheduled = true;
+  setTimeout(() => {
+    warmDesktopPowerShellHosts([
+      { sta: true, script: `${PS_DPI_AWARE_HEADER}\nAdd-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\n${PS_WINAPI_HEADER}\n'ok'` },
+      // Touching RootElement pays the one-time UIA client/COM connection cost
+      // (~2.5 s cold) here instead of in the first accessibility call.
+      { sta: true, script: `Add-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName UIAutomationClient\nAdd-Type -AssemblyName UIAutomationTypes\n${PS_INPUTAPI_HEADER}\ntry { [void][System.Windows.Automation.AutomationElement]::RootElement.Current.Name; $c = New-Object System.Windows.Automation.CacheRequest; [void]$c } catch { }\n'ok'` },
+      { sta: false, script: `${PS_DPI_AWARE_HEADER}\nAdd-Type -AssemblyName System.Windows.Forms\n${PS_WINAPI_HEADER}\n'ok'` },
+    ]);
+  }, 250).unref?.();
+}
+
+/** The persistent native helper when it speaks at least `version` of the
+ *  protocol (v3: screen capture + window info, v4: process identity +
+ *  desktop_context). Null means: use the PowerShell path. */
+async function win32HelperAtLeast(version: number): Promise<ReturnType<typeof getWin32DesktopHelperClient> | null> {
+  if (DELEGATE_TO_BACKEND || process.platform !== 'win32') return null;
+  if (String(process.env.PROMETHEUS_DESKTOP_HELPER_FASTPATH ?? '1').trim() === '0') return null;
+  const helper = getWin32DesktopHelperClient();
+  if (!helper.available) return null;
+  try {
+    return (await helper.protocolVersion()) >= version ? helper : null;
+  } catch {
+    return null;
+  }
+}
+
+async function runPowerShellSpawned(
+  script: string,
+  opts?: { timeoutMs?: number; sta?: boolean; signal?: AbortSignal },
+): Promise<string> {
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass'];
   if (opts?.sta) args.push('-STA');
   args.push('-Command', script);
@@ -860,6 +917,27 @@ export async function gatherDesktopContextInternal(
       windowCount: gathered.windows.length,
     });
     return gathered;
+  }
+  // Native helper (protocol v4): monitors, virtual screen, foreground and
+  // window list in well under a millisecond instead of ~800 ms of PowerShell.
+  const fastHelper = await win32HelperAtLeast(4);
+  if (fastHelper) {
+    try {
+      const gathered = normalizeDesktopContext(await fastHelper.desktopContext(includeWindows, signal));
+      if (gathered.monitors.length > 0 && gathered.virtualScreen.width > 0) {
+        desktopContextCache = { capturedAt: Date.now(), value: gathered, includeWindows };
+        markDesktopPerformance(observer, 'context_done', {
+          includeWindows,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          monitorCount: gathered.monitors.length,
+          windowCount: gathered.windows.length,
+        });
+        return gathered;
+      }
+    } catch (error: any) {
+      if (isDesktopCancellationError(error) || error?.name === 'AbortError') throw error;
+      // Fall through to the PowerShell probe.
+    }
   }
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -1351,6 +1429,9 @@ export async function captureScreenshotInternal(
     };
   }
 
+  const fastShot = await captureScreenshotViaHelper(mode, midx, modeStr, cropRegion, signal);
+  if (fastShot) return fastShot;
+
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -1468,6 +1549,77 @@ $bmp.Dispose()
     throw new Error('Screenshot capture failed (no output file).');
   }
   return out;
+}
+
+/**
+ * Native-helper screen capture (GDI BitBlt + WIC, ~100 ms for 3440x1440 vs
+ * ~520 ms for the PowerShell CopyFromScreen path). Mirrors the PowerShell
+ * script's bounds, monitor-local crop and clamping exactly. Returns null to
+ * fall back to PowerShell.
+ */
+async function captureScreenshotViaHelper(
+  mode: DesktopCaptureMode,
+  midx: number,
+  modeStr: 'all' | 'primary' | 'monitor',
+  cropRegion: [number, number, number, number] | undefined,
+  signal?: AbortSignal,
+): Promise<{ path: string; width: number; height: number; left: number; top: number; captureMode: 'all' | 'primary' | 'monitor'; captureMonitorIndex?: number } | null> {
+  const helper = await win32HelperAtLeast(4);
+  if (!helper) return null;
+  let raw: any;
+  try {
+    raw = await helper.desktopContext(false, signal);
+  } catch (error: any) {
+    if (isDesktopCancellationError(error) || error?.name === 'AbortError') throw error;
+    return null;
+  }
+  const monitors = normalizeMonitors(raw?.monitors);
+  const vs = normalizeVirtualScreen(raw?.virtualScreen);
+  let bounds: { left: number; top: number; width: number; height: number } | undefined;
+  if (mode.kind === 'all') bounds = vs;
+  else if (mode.kind === 'primary') bounds = monitors.find((m) => m.primary) || monitors[0];
+  else {
+    if (midx < 0 || midx >= monitors.length) {
+      const n = monitors.length;
+      throw new Error(`Invalid monitor_index ${midx} for this machine (${n} display(s); use 0..${Math.max(0, n - 1)}).`);
+    }
+    bounds = monitors[midx];
+  }
+  if (!bounds || bounds.width < 1 || bounds.height < 1) return null;
+  let rect = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+  if (cropRegion) {
+    let [x1, y1, x2, y2] = cropRegion.map((v) => Math.round(Number(v)));
+    if (mode.kind === 'monitor' && x2 > x1 && y2 > y1
+      && x1 >= 0 && y1 >= 0 && x2 <= bounds.width && y2 <= bounds.height) {
+      x1 += bounds.left; x2 += bounds.left; y1 += bounds.top; y2 += bounds.top;
+    }
+    if (x2 > x1 && y2 > y1) {
+      const cx = Math.max(0, x1 - bounds.left);
+      const cy = Math.max(0, y1 - bounds.top);
+      const cw = Math.min(bounds.width - cx, x2 - x1);
+      const ch = Math.min(bounds.height - cy, y2 - y1);
+      if (cw > 0 && ch > 0) rect = { left: bounds.left + cx, top: bounds.top + cy, width: cw, height: ch };
+    }
+  }
+  let png: Buffer;
+  try {
+    png = (await helper.capture({ kind: 'region', ...rect } as DesktopCaptureRequest, signal)).png;
+  } catch (error: any) {
+    if (isDesktopCancellationError(error) || error?.name === 'AbortError') throw error;
+    return null;
+  }
+  const size = await readImageSize(png);
+  const outPath = path.join(os.tmpdir(), `prometheus-desktop-${crypto.randomUUID()}.png`);
+  await fs.promises.writeFile(outPath, png);
+  return {
+    path: outPath,
+    width: size.width,
+    height: size.height,
+    left: rect.left,
+    top: rect.top,
+    captureMode: modeStr,
+    captureMonitorIndex: mode.kind === 'monitor' ? mode.index : undefined,
+  };
 }
 
 function findWindowsByName(allWindows: DesktopWindowInfo[], query: string): DesktopWindowInfo[] {
@@ -1645,6 +1797,31 @@ function getDesktopAdvisorPacketByIdInternal(
 async function getWindowByHandleFast(handle: number): Promise<DesktopWindowInfo | null> {
   const h = Math.floor(Number(handle || 0));
   if (!Number.isFinite(h) || h <= 0 || DELEGATE_TO_BACKEND) return null;
+  const fastHelper = await win32HelperAtLeast(4);
+  if (fastHelper) {
+    try {
+      const w: any = await fastHelper.windowInfo(h);
+      if (!w?.exists || !(Number(w.pid) > 0)) return null;
+      const mi = Number(w.monitorIndex);
+      const name = String(w.processName || '').trim() || 'unknown';
+      return {
+        pid: Number(w.pid) || 0,
+        processStartTime: Number(w.processStartTime || 0) || undefined,
+        processName: name,
+        appDisplayName: name,
+        title: String(w.title || '').trim() || '(untitled)',
+        handle: h,
+        left: Number(w.left || 0) || 0,
+        top: Number(w.top || 0) || 0,
+        width: Number(w.width || 0) || 0,
+        height: Number(w.height || 0) || 0,
+        isActive: w.isActive === true,
+        ...(Number.isFinite(mi) && mi >= 0 ? { monitorIndex: Math.floor(mi) } : {}),
+      };
+    } catch {
+      // Fall through to PowerShell.
+    }
+  }
   const script = `
 ${PS_DPI_AWARE_HEADER}
 Add-Type -AssemblyName System.Windows.Forms
@@ -2960,9 +3137,11 @@ async function runOcr(imagePath: string, timeoutOverrideMs?: number): Promise<{ 
       'ocr-cache'
     );
     fs.mkdirSync(ocrCacheDir, { recursive: true });
+    let tesseractEntry = '';
+    try { tesseractEntry = pathToFileURL(require.resolve('tesseract.js')).href; } catch { /* child reports module_api */ }
     const { stdout } = await execFileAsync(
       process.execPath,
-      ['-e', OCR_CHILD_SCRIPT, imagePath],
+      ['-e', OCR_CHILD_SCRIPT, imagePath, tesseractEntry],
       {
         timeout: timeoutMs,
         maxBuffer: 8 * 1024 * 1024,
@@ -3764,6 +3943,13 @@ export async function desktopPressKey(key: string): Promise<string> {
 /** Raw clipboard text read (empty string if no text). Exported for Win32Backend. */
 export async function getClipboardTextInternal(): Promise<string> {
   if (DELEGATE_TO_BACKEND) return getPlatformDesktopBackend().getClipboard();
+  const fastHelper = await win32HelperAtLeast(5);
+  if (fastHelper) {
+    try {
+      const result = await fastHelper.getClipboardText();
+      return result.hasText ? result.text.trim() : '';
+    } catch { /* PowerShell fallback */ }
+  }
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
 if ([System.Windows.Forms.Clipboard]::ContainsText()) {
@@ -3778,6 +3964,13 @@ export async function setClipboardTextInternal(text: string): Promise<void> {
   if (DELEGATE_TO_BACKEND) {
     await getPlatformDesktopBackend().setClipboard(text);
     return;
+  }
+  const fastHelper = await win32HelperAtLeast(5);
+  if (fastHelper) {
+    try {
+      await fastHelper.setClipboardText(text);
+      return;
+    } catch { /* PowerShell fallback */ }
   }
   const escaped = psSingleQuote(text);
   const script = `
@@ -3860,6 +4053,9 @@ export async function desktopSetClipboard(input: DesktopSetClipboardArgs): Promi
   }
 
   let effectiveMode = mode;
+  // Plain text with the default mode used to fall through to
+  // 'Unsupported clipboard mode "auto"'.
+  if (mode === 'auto' && !filePaths.length) effectiveMode = 'text';
   if (mode === 'auto' && filePaths.length) {
     const allImages = filePaths.every((p) => CLIPBOARD_IMAGE_EXTS.has(path.extname(p).toLowerCase()));
     effectiveMode = allImages && filePaths.length === 1 ? 'image' : 'files';
@@ -4172,21 +4368,24 @@ $maxDepth = ${safeDepth}
 $maxNodes = ${safeMax}
 $nodeCount = 0
 
+# One cross-process round trip per node via CacheRequest.
+$AE = [System.Windows.Automation.AutomationElement]
+$cr = New-Object System.Windows.Automation.CacheRequest
+$cr.TreeFilter = [System.Windows.Automation.Automation]::ControlViewCondition
+foreach ($p in @($AE::NameProperty, $AE::ControlTypeProperty, $AE::IsEnabledProperty, $AE::HasKeyboardFocusProperty, $AE::BoundingRectangleProperty)) { $cr.Add($p) }
+$treeWalker = New-Object System.Windows.Automation.TreeWalker ([System.Windows.Automation.Automation]::ControlViewCondition)
+
 function Get-UiaTree {
   param($element, $depth)
   if ($depth -gt $maxDepth) { return $null }
   if ($script:nodeCount -ge $maxNodes) { return $null }
   $script:nodeCount++
   try {
-    $cp = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
-    $np = [System.Windows.Automation.AutomationElement]::NameProperty
-    $ep = [System.Windows.Automation.AutomationElement]::IsEnabledProperty
-    $fp = [System.Windows.Automation.AutomationElement]::HasKeyboardFocusProperty
-    $name = $element.GetCurrentPropertyValue($np)
-    $ctrl = $element.GetCurrentPropertyValue($cp)
-    $enabled = $element.GetCurrentPropertyValue($ep)
-    $focused = $element.GetCurrentPropertyValue($fp)
-    $rect = $element.Current.BoundingRectangle
+    $name = $element.Cached.Name
+    $ctrl = $element.Cached.ControlType
+    $enabled = $element.Cached.IsEnabled
+    $focused = $element.Cached.HasKeyboardFocus
+    $rect = $element.Cached.BoundingRectangle
     $ctrlName = if ($ctrl) { $ctrl.ProgrammaticName.Replace('ControlType.','') } else { 'Unknown' }
     $node = @{
       role = $ctrlName
@@ -4194,14 +4393,15 @@ function Get-UiaTree {
       enabled = [bool]$enabled
       focused = [bool]$focused
       x = [int]$rect.X; y = [int]$rect.Y; w = [int]$rect.Width; h = [int]$rect.Height
-      children = @()
+      children = (New-Object System.Collections.ArrayList)
     }
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-    $child = $walker.GetFirstChild($element)
-    while ($child -ne $null -and $script:nodeCount -lt $maxNodes) {
-      $childNode = Get-UiaTree $child ($depth + 1)
-      if ($childNode) { $node.children += $childNode }
-      $child = $walker.GetNextSibling($child)
+    if ($depth -lt $maxDepth) {
+      $child = $treeWalker.GetFirstChild($element, $cr)
+      while ($child -ne $null -and $script:nodeCount -lt $maxNodes) {
+        $childNode = Get-UiaTree $child ($depth + 1)
+        if ($childNode) { [void]$node.children.Add($childNode) }
+        $child = $treeWalker.GetNextSibling($child, $cr)
+      }
     }
     return $node
   } catch { return $null }
@@ -4236,6 +4436,7 @@ public class WinFGHelper {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($fgHandle)
   }
   if (-not $root) { Write-Output "ERROR: Could not get window element."; exit }
+  $root = $root.GetUpdatedCache($cr)
   $tree = Get-UiaTree $root 0
   if ($tree) {
     Write-Output "=== Accessibility Tree (depth=${safeDepth}, max=${safeMax} nodes, captured: $script:nodeCount) ==="
@@ -4337,32 +4538,38 @@ function Convert-SafeInt($value, [string]$field, [int]$nodeIndex) {
   }
 }
 
-function Test-Pattern($element, $pattern) {
+# One cross-process round trip per node: every property and pattern-availability
+# flag is fetched through a CacheRequest instead of ~12 separate UIA calls.
+$AE = [System.Windows.Automation.AutomationElement]
+$cr = New-Object System.Windows.Automation.CacheRequest
+$cr.TreeFilter = [System.Windows.Automation.Automation]::ControlViewCondition
+foreach ($p in @($AE::NameProperty, $AE::AutomationIdProperty, $AE::ClassNameProperty, $AE::ControlTypeProperty, $AE::IsEnabledProperty, $AE::HasKeyboardFocusProperty, $AE::IsOffscreenProperty, $AE::BoundingRectangleProperty, $AE::RuntimeIdProperty, $AE::IsInvokePatternAvailableProperty, $AE::IsValuePatternAvailableProperty, $AE::IsSelectionItemPatternAvailableProperty, $AE::IsTogglePatternAvailableProperty, $AE::IsExpandCollapsePatternAvailableProperty, [System.Windows.Automation.ValuePattern]::ValueProperty)) { $cr.Add($p) }
+$walker = New-Object System.Windows.Automation.TreeWalker ([System.Windows.Automation.Automation]::ControlViewCondition)
+
+function Get-Cached($element, $property, $fallback) {
   try {
-    $obj = $null
-    return [bool]$element.TryGetCurrentPattern($pattern, [ref]$obj)
-  } catch { return $false }
+    $v = $element.GetCachedPropertyValue($property, $true)
+    if ($null -eq $v -or [object]::ReferenceEquals($v, $AE::NotSupported)) { return $fallback }
+    return $v
+  } catch { return $fallback }
 }
 
 function Add-UiaNode($element, [int]$parentIndex, [int]$depth) {
   if ($depth -gt $maxDepth -or $nodes.Count -ge $maxNodes) { return }
   try {
     $index = [int]$nodes.Count
-    $current = $element.Current
+    $current = $element.Cached
     $rect = $current.BoundingRectangle
     $runtime = ''
-    try { $runtime = (($element.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { }
+    try { $rid = Get-Cached $element $AE::RuntimeIdProperty $null; if ($rid) { $runtime = (($rid | ForEach-Object { [string]$_ }) -join '.') } } catch { }
     $patterns = New-Object System.Collections.ArrayList
-    if (Test-Pattern $element ([System.Windows.Automation.InvokePattern]::Pattern)) { [void]$patterns.Add('invoke') }
-    if (Test-Pattern $element ([System.Windows.Automation.ValuePattern]::Pattern)) { [void]$patterns.Add('set_value') }
-    if (Test-Pattern $element ([System.Windows.Automation.SelectionItemPattern]::Pattern)) { [void]$patterns.Add('select') }
-    if (Test-Pattern $element ([System.Windows.Automation.TogglePattern]::Pattern)) { [void]$patterns.Add('toggle') }
-    if (Test-Pattern $element ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { [void]$patterns.Add('expand_collapse') }
+    if ([bool](Get-Cached $element $AE::IsInvokePatternAvailableProperty $false)) { [void]$patterns.Add('invoke') }
+    if ([bool](Get-Cached $element $AE::IsValuePatternAvailableProperty $false)) { [void]$patterns.Add('set_value') }
+    if ([bool](Get-Cached $element $AE::IsSelectionItemPatternAvailableProperty $false)) { [void]$patterns.Add('select') }
+    if ([bool](Get-Cached $element $AE::IsTogglePatternAvailableProperty $false)) { [void]$patterns.Add('toggle') }
+    if ([bool](Get-Cached $element $AE::IsExpandCollapsePatternAvailableProperty $false)) { [void]$patterns.Add('expand_collapse') }
     $value = ''
-    try {
-      $vp = $null
-      if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $value = [string]$vp.Current.Value }
-    } catch { }
+    if ($patterns.Contains('set_value')) { $value = [string](Get-Cached $element ([System.Windows.Automation.ValuePattern]::ValueProperty) '') }
     $role = if ($current.ControlType) { $current.ControlType.ProgrammaticName.Replace('ControlType.','') } else { 'Unknown' }
     [void]$nodes.Add([ordered]@{
       index = $index
@@ -4383,11 +4590,11 @@ function Add-UiaNode($element, [int]$parentIndex, [int]$depth) {
       patterns = @($patterns.ToArray())
       value = $value
     })
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-    $child = $walker.GetFirstChild($element)
+    if ($depth -ge $maxDepth) { return }
+    $child = $walker.GetFirstChild($element, $cr)
     while ($child -ne $null -and $nodes.Count -lt $maxNodes) {
       Add-UiaNode $child $index ($depth + 1)
-      $child = $walker.GetNextSibling($child)
+      $child = $walker.GetNextSibling($child, $cr)
     }
   } catch { [void]$errors.Add($_.Exception.Message) }
 }
@@ -4395,6 +4602,7 @@ function Add-UiaNode($element, [int]$parentIndex, [int]$depth) {
 try {
   $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]${Math.floor(target.handle)}))
   if (-not $root) { throw 'Could not resolve the target UI Automation root.' }
+  $root = $root.GetUpdatedCache($cr)
   Add-UiaNode $root -1 0
   [ordered]@{ ok = $true; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
 } catch {
@@ -5327,7 +5535,8 @@ export async function desktopWaitForChange(
   let captureMs = 0;
   try {
     const baselineStarted = Date.now();
-    await desktopScreenshot(sessionId, { signal: deadlineController.signal });
+    // Change detection hashes pixels; OCR would add seconds per poll.
+    await desktopScreenshot(sessionId, { signal: deadlineController.signal, skipOcr: true });
     captureMs += Date.now() - baselineStarted;
     const baselinePacket = getDesktopAdvisorPacket(sessionId);
     const baselineHash = baselinePacket?.contentHash || '';
@@ -5346,7 +5555,7 @@ export async function desktopWaitForChange(
     polls++;
     try {
       const captureStarted = Date.now();
-      await desktopScreenshot(sessionId, { signal: deadlineController.signal });
+      await desktopScreenshot(sessionId, { signal: deadlineController.signal, skipOcr: true });
       captureMs += Date.now() - captureStarted;
       const newPacket = getDesktopAdvisorPacket(sessionId);
       const newHash = newPacket?.contentHash || '';
@@ -5711,7 +5920,7 @@ export async function desktopWindowScreenshot(
           if (oldest) desktopWindowFrameCache.delete(oldest[0]);
         }
       }
-      const decoded = await Jimp.read(capture.png);
+      const decoded = { bitmap: await readImageSize(capture.png) };
       const tempPath = path.join(os.tmpdir(), `prometheus-window-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.png`);
       shotBuffer = capture.png;
       x1 = Math.floor(capture.bounds.left);
@@ -5762,7 +5971,8 @@ export async function desktopWindowScreenshot(
   // their original pixels and the packet still maps clicks to logical coords.
   if (requestedRegion && shot.captureMode === 'window') {
     try {
-      const nativeImage = shotBuffer ? await Jimp.read(shotBuffer) : await Jimp.read(shot.path);
+      const sourceBuffer = shotBuffer || fs.readFileSync(shot.path);
+      const nativeImage = { bitmap: await readImageSize(sourceBuffer) };
       const logicalWidth = Math.max(1, Number(shot.logicalWidth ?? width));
       const logicalHeight = Math.max(1, Number(shot.logicalHeight ?? height));
       const scaleX = nativeImage.bitmap.width / logicalWidth;
@@ -5771,10 +5981,9 @@ export async function desktopWindowScreenshot(
       const pixelY = Math.max(0, Math.min(nativeImage.bitmap.height - 1, Math.floor(requestedRegion[1] * scaleY)));
       const pixelX2 = Math.max(pixelX + 1, Math.min(nativeImage.bitmap.width, Math.ceil(requestedRegion[2] * scaleX)));
       const pixelY2 = Math.max(pixelY + 1, Math.min(nativeImage.bitmap.height, Math.ceil(requestedRegion[3] * scaleY)));
-      nativeImage.crop(pixelX, pixelY, pixelX2 - pixelX, pixelY2 - pixelY);
-      shotBuffer = await nativeImage.getBufferAsync(Jimp.MIME_PNG);
-      shot.width = nativeImage.bitmap.width;
-      shot.height = nativeImage.bitmap.height;
+      shotBuffer = await cropImageBuffer(sourceBuffer, pixelX, pixelY, pixelX2 - pixelX, pixelY2 - pixelY);
+      shot.width = pixelX2 - pixelX;
+      shot.height = pixelY2 - pixelY;
       shot.left = left + requestedRegion[0];
       shot.top = top + requestedRegion[1];
       shot.logicalWidth = requestedRegion[2] - requestedRegion[0];

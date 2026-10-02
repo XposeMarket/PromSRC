@@ -12,6 +12,21 @@ import path from 'path';
 import type { DesktopCaptureRequest, DesktopCaptureResult, HelperResponse } from './desktop-backend.js';
 import { DesktopCancellationError, throwIfDesktopCancelled } from './desktop-cancellation.js';
 
+/** Window record returned by list_windows / window_info / foreground_window (helper protocol v3+). */
+export interface Win32HelperWindowInfo {
+  exists: boolean;
+  handle: number;
+  pid?: number;
+  title?: string;
+  className?: string;
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  isMinimized?: boolean;
+  isActive?: boolean;
+}
+
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -142,6 +157,66 @@ export class Win32DesktopHelperClient {
 
   async ping(signal?: AbortSignal): Promise<Record<string, unknown>> {
     return this.call('ping', {}, signal);
+  }
+
+  private pingInfoPromise: Promise<Record<string, unknown> | null> | null = null;
+
+  /** Cached ping result (null when the helper failed to answer). */
+  private pingInfo(): Promise<Record<string, unknown> | null> {
+    if (!this.pingInfoPromise) {
+      this.pingInfoPromise = this.ping().catch(() => {
+        this.pingInfoPromise = null; // allow a later retry
+        return null;
+      });
+    }
+    return this.pingInfoPromise;
+  }
+
+  /** Protocol version reported by ping (0 when unavailable / not answering). */
+  async protocolVersion(): Promise<number> {
+    if (!this.available) return 0;
+    const info = await this.pingInfo();
+    return Number(info?.protocolVersion) || 0;
+  }
+
+  /** Monitors, virtual screen, foreground window and titled top-level windows
+   *  in one call (protocol v4+). Shape matches gatherDesktopContextInternal. */
+  async desktopContext(includeWindows: boolean = true, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    return this.call('desktop_context', { includeWindows: includeWindows ? 1 : 0 }, signal);
+  }
+
+  /** Clipboard text via Win32 (protocol v5+). */
+  async getClipboardText(signal?: AbortSignal): Promise<{ hasText: boolean; text: string }> {
+    const result = await this.call<{ hasText?: boolean; text?: string }>('get_clipboard_text', {}, signal);
+    return { hasText: result?.hasText === true, text: String(result?.text || '') };
+  }
+
+  async setClipboardText(text: string, signal?: AbortSignal): Promise<void> {
+    await this.call('set_clipboard_text', { textBase64: Buffer.from(String(text || ''), 'utf8').toString('base64') }, signal);
+  }
+
+  /** True when the helper supports capture(kind=primary|all|monitor|region)
+   *  and window enumeration (protocolVersion >= 3). Old helpers return false. */
+  async supportsScreenCapture(): Promise<boolean> {
+    if (!this.available) return false;
+    const info = await this.pingInfo();
+    return Number(info?.protocolVersion) >= 3;
+  }
+
+  /** Visible, uncloaked, non-zero-size top-level windows (protocol v3+). */
+  async listWindows(signal?: AbortSignal): Promise<Win32HelperWindowInfo[]> {
+    const result = await this.call<{ windows?: Win32HelperWindowInfo[] }>('list_windows', {}, signal);
+    return Array.isArray(result?.windows) ? result.windows : [];
+  }
+
+  /** Info for one HWND; `exists:false` when the handle is no longer a window (protocol v3+). */
+  async windowInfo(handle: number, signal?: AbortSignal): Promise<Win32HelperWindowInfo> {
+    return this.call<Win32HelperWindowInfo>('window_info', { handle: Math.floor(handle) }, signal);
+  }
+
+  /** Info for GetForegroundWindow() (protocol v3+). */
+  async foregroundWindow(signal?: AbortSignal): Promise<Win32HelperWindowInfo> {
+    return this.call<Win32HelperWindowInfo>('foreground_window', {}, signal);
   }
 
   async capture(request: DesktopCaptureRequest, signal?: AbortSignal): Promise<DesktopCaptureResult> {

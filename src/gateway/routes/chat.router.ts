@@ -5783,7 +5783,10 @@ Do not produce prose. Use the canonical thread tool now.` });
         turnTiming.mark('runtime.desktop_auto_screenshot_start', {
           toolName: executedToolName,
         });
-        await desktopWait(350);
+        // Short settle before the observation frame. Was a fixed 350 ms when a
+        // screenshot itself cost ~1.9 s; capture is now ~0.2 s, so a shorter
+        // settle keeps the frame post-action without padding every step.
+        await desktopWait(Math.max(0, Math.min(1000, Number(process.env.PROMETHEUS_DESKTOP_AUTO_SCREENSHOT_SETTLE_MS ?? 150) || 0)));
         const autoToolName: 'desktop_screenshot' = 'desktop_screenshot';
         const activeMonitorIndex = await desktopGetActiveMonitorIndex();
         const autoToolArgs = activeMonitorIndex !== null ? { capture: activeMonitorIndex } : {};
