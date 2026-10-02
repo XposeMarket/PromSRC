@@ -3784,29 +3784,58 @@ async function sendNativeMouseClick(wc, x, y, button = 'left', movePointer = tru
   }
 }
 
-// Only a freshly parked hidden host requires a compositor readiness probe.
-// capturePage resolves after a real surface exists; never retry the click itself.
+// A real compositor frame is required before trusted input on a freshly parked
+// WebContentsView. capturePage(rect, opts) needs stayHidden in the SECOND argument;
+// passing it as rect causes "Current display surface not available for capture".
+// If native capture is unavailable, CDP can independently capture the actual
+// compositor frame without showing or focusing the hidden host.
+async function captureNativeBrowserFrame(wc, timeoutMs = 1200) {
+  const within = async (promise, source) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${source} timed out`)), timeoutMs); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  };
+  let captureError;
+  try {
+    const image = await within(wc.capturePage(undefined, { stayHidden: true }), 'Native capture');
+    const size = image?.getSize?.();
+    if (size?.width > 0 && size?.height > 0) return image;
+    captureError = new Error('Native capture returned a zero-size frame.');
+  } catch (error) { captureError = error; }
+  try {
+    const dbg = wc.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    const shot = await within(dbg.sendCommand('Page.captureScreenshot', {
+      format: 'png', fromSurface: true, captureBeyondViewport: false,
+    }), 'Compositor capture');
+    const image = nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64'));
+    const size = image.getSize();
+    if (size.width > 0 && size.height > 0) return image;
+    throw new Error('Compositor capture returned a zero-size frame.');
+  } catch (error) {
+    throw new Error(`surface_not_rendered: ${captureError?.message || captureError}; compositor: ${error?.message || error}`);
+  }
+}
+
+// Only a freshly parked hidden host requires the first-frame readiness gate.
+// Never retry the click or infer readiness from DOM layout alone.
 async function ensureNativeHiddenSurfacePaint(view) {
   const meta = nativeViewMeta(view);
   if (meta.visible || !meta.automationHostNeedsPaint) return;
-  const wc = view.webContents;
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    let timer;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const image = await Promise.race([
-        wc.capturePage({ stayHidden: true }),
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('surface_not_rendered: first hidden paint timed out.')), 400); }),
-      ]);
-      const size = image?.getSize?.();
-      if (!size?.width || !size?.height) throw new Error('surface_not_rendered: first hidden paint has zero dimensions.');
+      await captureNativeBrowserFrame(view.webContents);
       meta.automationHostNeedsPaint = false;
       return;
     } catch (error) { lastError = error; }
-    finally { clearTimeout(timer); }
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 60));
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  throw new Error(`surface_not_rendered: hidden browser click deferred until first paint (${lastError?.message || lastError}).`);
+  throw new Error(`surface_not_rendered: hidden browser input deferred until first paint (${lastError?.message || lastError}).`);
 }
 
 async function clickNativeBrowserSurface(payload = {}) {
@@ -4071,27 +4100,10 @@ async function screenshotNativeBrowserSurface(sessionId = '') {
       }
     } catch {}
   }
-  let image = null;
-  let captureError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let captureTimer;
-    try {
-      // capturePage can hang forever on a background/detached compositor.
-      image = await Promise.race([
-        wc.capturePage({ stayHidden: true }),
-        new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error('surface_not_rendered: capture timed out.')), 1500); }),
-      ]);
-      break;
-    } catch (err) {
-      captureError = err;
-    } finally {
-      clearTimeout(captureTimer);
-    }
-    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 120));
-  }
-  if (!image) throw captureError || new Error('Native browser screenshot returned no image.');
+  // Capture the actual hidden view compositor, not the host's blank webContents.
+  // The same bounded real-frame probe gates cold trusted input above.
+  const image = await captureNativeBrowserFrame(wc, 1500);
   const size = image.getSize();
-  if (size.width < 1 || size.height < 1) throw new Error('surface_not_rendered: browser screenshot has zero dimensions.');
   const meta = nativeViewMeta(view);
   // capturePage returns PHYSICAL pixels (size scaled by devicePixelRatio), but
   // native input events use CSS pixels. Report the CSS viewport so the gateway can
