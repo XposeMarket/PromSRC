@@ -174,7 +174,10 @@ assert.match(mainSource, /event\.senderFrame !== event\.sender\.mainFrame/);
 assert.match(mainSource, /view\.webContents !== event\.sender/);
 assert.match(mainSource, /normalizeEmbeddedBrowserUrl\(url\)/, 'native browser loads must use the embedded URL boundary');
 assert.match(mainSource, /refreshNativeBrowserAvailability\(\)/, 'native browser availability must use the live host capabilities');
-assert.match(mainSource, /detachNativeBrowserView\(v\)/, 'inactive native browser views must be detached from the window');
+// Inactive views are parked in an isolated hidden automation host; parking must
+// first detach them from the main window so they never overlay app UI.
+assert.match(mainSource, /else parkNativeBrowserView\(v\)/, 'inactive native browser views must be parked off the main window');
+assert.match(mainSource, /function parkNativeBrowserView\(view\)[\s\S]{0,1200}?detachNativeBrowserView\(view\);/, 'parking must detach the view from the main window first');
 assert.match(mainSource, /requestPrometheusBrowserNavigation\(url\)/, 'desktop external navigation must dispatch to the Prometheus Browser');
 assert.match(mainSource, /isLocalGatewayUrl\(url, GATEWAY_URL\)/, 'local gateway links must remain internal');
 assert.match(mainSource, /presentNativeView\(partition\)/, 'native browser navigation must present the session-keyed view');

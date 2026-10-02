@@ -5456,10 +5456,41 @@ async function browserSnapshotInHouse(sessionId: string): Promise<string> {
   }
 }
 
+// Only observation modes wait for a paint/DOM quiet signal. This is a bounded
+// best-effort readiness hint, NOT proof that the click reached an event listener.
+async function waitForInHouseClickReadiness(sessionId: string): Promise<string> {
+  const script = `new Promise(resolve => {
+    let finished = false;
+    let timeout;
+    let quiet;
+    let observer;
+    const done = reason => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout); clearTimeout(quiet); observer?.disconnect(); resolve(reason);
+    };
+    timeout = setTimeout(() => done('timeout'), 180);
+    if (document.visibilityState !== 'visible') return done('hidden_unverified');
+    try {
+      observer = new MutationObserver(() => {
+        clearTimeout(quiet);
+        quiet = setTimeout(() => done('dom_quiet'), 45);
+      });
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      requestAnimationFrame(() => { if (!finished) { clearTimeout(quiet); quiet = setTimeout(() => done('frame_quiet'), 45); } });
+    } catch { done('unavailable'); }
+  })`;
+  try {
+    const result: any = await callInHouseBrowser('run-js', { sessionId, code: script });
+    return typeof result === 'string' ? result : String(result?.result || result?.value || 'unavailable');
+  } catch { return 'unavailable'; }
+}
+
+
 async function browserClickInHouse(
   sessionId: string,
   target: number | { ref?: number; element?: string; selector?: string },
-  options?: { observe?: BrowserObserveMode },
+  options?: { observe?: BrowserObserveMode; onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
@@ -5471,22 +5502,42 @@ async function browserClickInHouse(
   if (!requestedSelector && (!Number.isFinite(requestedRef) || requestedRef <= 0)) {
     return 'ERROR: In-house browser click currently requires ref or selector.';
   }
+  const startedAt = performance.now();
+  let nativeRpcMs = 0;
+  let readinessMs = 0;
+  let observationMs = 0;
+  let settledBy = 'not_requested';
+  const observeMode = options?.observe || resolveBrowserObserveMode('browser_click');
+  const record = () => markBrowserPerformance(options?.onPerformanceStage, 'click_timing', {
+    nativeRpcMs: Math.round(nativeRpcMs * 10) / 10,
+    readinessMs: Math.round(readinessMs * 10) / 10,
+    observationMs: Math.round(observationMs * 10) / 10,
+    totalMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    observeMode, settledBy,
+  });
   try {
     const clicked: any = await callInHouseBrowser('click', { sessionId: resolved, ref: requestedRef, selector: requestedSelector });
-    const observeMode = options?.observe || resolveBrowserObserveMode('browser_click');
-    if (!shouldUseFastBrowserAck(observeMode)) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
+    nativeRpcMs = performance.now() - startedAt;
     if (shouldReturnSnapshot(observeMode)) {
+      const readinessStartedAt = performance.now();
+      settledBy = await waitForInHouseClickReadiness(resolved);
+      readinessMs = performance.now() - readinessStartedAt;
+      const observationStartedAt = performance.now();
       const snapshot = await browserSnapshotInHouse(resolved);
+      observationMs = performance.now() - observationStartedAt;
+      record();
       if (snapshot.startsWith('ERROR')) return `ERROR: Click action completed, but its observation failed. Do not repeat the click; retry browser_observe.\n${snapshot}`;
       return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}")\n\n${snapshot}`;
     }
+    // compact/delta/screenshot have no inline observation in this native handler.
+    // Never charge them for readiness or imply they verified the resulting page.
     broadcastInHouseBrowserStatus(resolved, 'browser_click', `Clicked ${requestedSelector || `@${requestedRef}`} in Prometheus in-house browser.`, {
       active: true,
     });
+    record();
     return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}").`;
   } catch (err: any) {
+    markBrowserPerformance(options?.onPerformanceStage, 'click_error_timing', { totalMs: Math.round(performance.now() - startedAt), observeMode });
     return `ERROR: In-house browser click failed: ${err.message}`;
   }
 }
@@ -5524,15 +5575,64 @@ async function browserFillInHouse(
   }
 }
 
-async function browserPressKeyInHouse(sessionId: string, key: string, options?: { observe?: BrowserObserveMode }): Promise<string> {
+export type BrowserKeyOptions = {
+  observe?: BrowserObserveMode;
+  hold_ms?: number;
+  keys?: string[];
+  sequence?: Array<{ key?: string; keys?: string[]; hold_ms?: number; wait_ms?: number }>;
+  tab_id?: string;
+};
+
+function validatedNativeKeyOptions(options?: BrowserKeyOptions): Record<string, unknown> | string {
+  if (!options) return {};
+  const payload: Record<string, unknown> = {};
+  if (options.hold_ms !== undefined) {
+    if (!Number.isInteger(options.hold_ms) || options.hold_ms < 0 || options.hold_ms > 5000) return 'hold_ms must be an integer between 0 and 5000.';
+    payload.holdMs = options.hold_ms;
+  }
+  if (options.keys !== undefined) {
+    if (!Array.isArray(options.keys) || options.keys.length < 1 || options.keys.length > 4 || options.keys.some(k => typeof k !== 'string' || !k.trim())) return 'keys must contain 1–4 nonempty key names.';
+    if (options.keys.some(k => /^(enter|return|space|spacebar|delete|backspace)$/i.test(k.trim()) || /^(key[a-z]|digit[0-9])$/i.test(k.trim()) || /^[a-z0-9]$/i.test(k.trim()))) return 'keys cannot include printable/submit/edit keys until chord final-action approval checking is supported.';
+    payload.keys = options.keys;
+  }
+  if (options.sequence !== undefined) {
+    if (!Array.isArray(options.sequence) || options.sequence.length < 1 || options.sequence.length > 32) return 'sequence must contain 1–32 steps.';
+    let duration = Number(options.hold_ms || 0);
+    const steps: Array<Record<string, unknown>> = [];
+    for (const step of options.sequence) {
+      if (!step || typeof step !== 'object') return 'sequence steps must be objects.';
+      const keys = step.keys;
+      if (keys !== undefined && (!Array.isArray(keys) || keys.length < 1 || keys.length > 4 || keys.some(k => typeof k !== 'string' || !k.trim()))) return 'sequence step keys must contain 1–4 nonempty key names.';
+      if (step.key !== undefined && (typeof step.key !== 'string' || !step.key.trim())) return 'sequence step key must be a nonempty string.';
+      // The final-action approval gate currently inspects the top-level key, not
+      // arbitrary keys nested in a sequence. Reject those until the gate supports them.
+      if ([step.key, ...(keys || [])].some(k => /^(enter|return|space|spacebar|delete|backspace)$/i.test(String(k || '').trim()) || /^(key[a-z]|digit[0-9])$/i.test(String(k || '').trim()) || /^[a-z0-9]$/i.test(String(k || '').trim()))) return 'sequence cannot include submit, printable, or editing keys until nested final-action approval checking is supported.';
+      if (keys === undefined && step.key === undefined && step.wait_ms === undefined) return 'sequence step needs key, keys, or wait_ms.';
+      if (step.hold_ms !== undefined && (!Number.isInteger(step.hold_ms) || step.hold_ms < 0 || step.hold_ms > 5000)) return 'sequence hold_ms must be an integer between 0 and 5000.';
+      if (step.wait_ms !== undefined && (!Number.isInteger(step.wait_ms) || step.wait_ms < 0 || step.wait_ms > 5000)) return 'sequence wait_ms must be an integer between 0 and 5000.';
+      duration += Number(step.hold_ms || 0) + Number(step.wait_ms || 0);
+      steps.push({ ...(step.key === undefined ? {} : { key: step.key }), ...(keys === undefined ? {} : { keys }), ...(step.hold_ms === undefined ? {} : { holdMs: step.hold_ms }), ...(step.wait_ms === undefined ? {} : { waitMs: step.wait_ms }) });
+    }
+    if (duration > 10000) return 'sequence total requested duration must not exceed 10000ms.';
+    payload.sequence = steps;
+  }
+  return payload;
+}
+
+async function browserPressKeyInHouse(sessionId: string, key: string, options?: BrowserKeyOptions): Promise<string> {
   const resolved = resolveSessionId(sessionId);
-  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  const session = getInHouseSession(resolved);
+  if (!session) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  const extra = validatedNativeKeyOptions(options);
+  if (typeof extra === 'string') return `ERROR: ${extra} No input sent.`;
   try {
-    await callInHouseBrowser('input', { sessionId: resolved, action: 'key', key });
+    if (options?.tab_id !== undefined && (!options.tab_id || options.tab_id !== session.activeTabId)) return 'ERROR: tab_id must match the active in-house tab; no input sent.';
+    await callInHouseBrowser('input', { sessionId: resolved, tabId: session.activeTabId, action: 'key', key, ...extra });
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_press_key');
     if (shouldReturnSnapshot(observeMode)) return await browserSnapshotInHouse(resolved);
-    broadcastInHouseBrowserStatus(resolved, 'browser_press_key', `Pressed "${key}" in Prometheus in-house browser.`, { active: true });
-    return `Pressed "${key}" in Prometheus in-house browser.`;
+    const actionLabel = options?.sequence ? 'Input sequence acknowledged' : options?.keys ? 'Key chord acknowledged' : `Key "${key}" acknowledged`;
+    broadcastInHouseBrowserStatus(resolved, 'browser_press_key', `${actionLabel} in Prometheus in-house browser.`, { active: true });
+    return `${actionLabel} in Prometheus in-house browser (delivery not verified).`;
   } catch (err: any) {
     return `ERROR: In-house browser key press failed: ${err.message}`;
   }
@@ -6150,7 +6250,7 @@ export async function browserNavigateControl(
 export async function browserClick(
   sessionId: string,
   target: number | { ref?: number; element?: string; selector?: string },
-  options?: { observe?: BrowserObserveMode },
+  options?: { observe?: BrowserObserveMode; onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
   const recovery = await recoverInHouseSessionMapping(sessionId);
   if (recovery?.error) return recovery.error;
@@ -6636,11 +6736,14 @@ export async function browserClickAndDownload(
 export async function browserPressKey(
   sessionId: string,
   key: string,
-  options?: { observe?: BrowserObserveMode },
+  options?: BrowserKeyOptions,
 ): Promise<string> {
   const recovery = await recoverInHouseSessionMapping(sessionId);
   if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserPressKeyInHouse(sessionId, key, options);
+  if (options?.hold_ms !== undefined || options?.keys !== undefined || options?.sequence !== undefined || options?.tab_id !== undefined) {
+    return 'ERROR: hold_ms, keys, sequence, and tab_id require the in-house browser target; no input sent.';
+  }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
@@ -7970,6 +8073,10 @@ export function getBrowserToolDefinitions(): any[] {
             selector: { type: 'string' },
             text: { type: 'string' },
             key: { type: 'string' },
+            hold_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Native in-house key hold duration.' },
+            keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' }, description: 'Native in-house key chord.' },
+            sequence: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { key: { type: 'string' }, keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' } }, hold_ms: { type: 'integer', minimum: 0, maximum: 5000 }, wait_ms: { type: 'integer', minimum: 0, maximum: 5000 } } }, description: 'Native in-house sequence; max total requested duration 10 seconds.' },
+            tab_id: { type: 'string', description: 'Optional active in-house tab id; rejects a stale or non-active tab.' },
             file_path: { type: 'string' },
             file_paths: { type: 'array', items: { type: 'string' } },
             direction: { type: 'string', enum: ['down', 'up'] },
@@ -8227,6 +8334,10 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space' },
+            hold_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Optional native key hold duration in ms (in-house browser only).' },
+            tab_id: { type: 'string', description: 'Optional active in-house tab id; reject stale/non-active tab.' },
+            keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' }, description: 'Optional native chord (in-house browser only; up to four keys).' },
+            sequence: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { key: { type: 'string' }, keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' } }, hold_ms: { type: 'integer', minimum: 0, maximum: 5000 }, wait_ms: { type: 'integer', minimum: 0, maximum: 5000 } } }, description: 'Bounded native input sequence (in-house browser only; max 10 seconds total).' },
             final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action. Forces a post-action observation that must be inspected before reporting completion.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },
@@ -8242,6 +8353,10 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space, etc.' },
+            tab_id: { type: 'string', description: 'Optional active in-house tab id; reject stale/non-active tab.' },
+            hold_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Optional native key hold duration in ms (in-house browser only).' },
+            keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' }, description: 'Optional native chord (in-house browser only).' },
+            sequence: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'object', properties: { key: { type: 'string' }, keys: { type: 'array', minItems: 1, maxItems: 4, items: { type: 'string' } }, hold_ms: { type: 'integer', minimum: 0, maximum: 5000 }, wait_ms: { type: 'integer', minimum: 0, maximum: 5000 } } }, description: 'Bounded native input sequence (in-house browser only; max 10 seconds total).' },
             final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action. Forces a post-action observation that must be inspected before reporting completion.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },

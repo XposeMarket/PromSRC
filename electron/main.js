@@ -43,6 +43,7 @@ const {
   parseWindowsListeningPids,
 } = require('./security');
 const { getNativeBrowserViewImplementations } = require('./native-browser-view');
+const { normalizeSteps, runSteps } = require('./native-browser-input');
 const {
   getChromeProfileCatalog,
   getImportedChromeProfile,
@@ -133,6 +134,18 @@ const IS_SOURCE_ELECTRON_DEV = !IS_PACKAGED_RUNTIME && process.env.PROMETHEUS_EL
 // look like an older release.
 if (IS_SOURCE_ELECTRON_DEV) {
   app.commandLine.appendSwitch('disable-http-cache');
+}
+
+// Hidden browser automation parks tabs in an off-screen, non-focusable host
+// that is shown inactive only during a bounded activity lease. Windows native
+// occlusion tracking classifies that off-display host as occluded and stops
+// its compositor, so a never-presented tab has no capture surface and drops
+// trusted input ("Current display surface not available for capture").
+// Verified with reviews/browser-perf-2026-10-02/foreground-host-probe.cjs:
+// occlusion on => 0 clicks / no surface; off => 1280x800 frame + trusted input.
+// Idle tabs are still throttled via backgroundThrottling and host.hide().
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 }
 
 function getPackagedAppRoot() {
@@ -892,6 +905,12 @@ const nativeBrowserViews = new Map();      // `${profileKey}::${tabId}` -> WebCo
 const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
 const nativeBrowserSessionTabs = new Map(); // `${sessionId}::${profileKey}` -> { partition, tabIds, activeTabId }
 const nativeBrowserProfileSessions = new Map(); // imported profile id -> Electron Session
+const nativeBrowserAutomationHosts = new Map(); // tab registry key -> hidden, non-focusable host
+const nativeBrowserActivityLeases = new Map(); // tab registry key -> { timer, expiresAt }
+const nativeBrowserActiveInputs = new Map(); // tab key -> AbortController; reject concurrent input
+const NATIVE_BROWSER_AUTOMATION_SIZE = { width: 1280, height: 800 };
+const NATIVE_BROWSER_LEASE_MS = 12000;
+const NATIVE_BROWSER_MAX_LEASES = 2;
 // Diagnostics are kept with the native WebContents rather than in the
 // gateway. That makes screenshots/console/network reads survive a gateway
 // restart or a lost in-memory session mapping.
@@ -2635,6 +2654,7 @@ function attachNativeBrowserView(view) {
   if (!view) throw new Error('Native browser view is missing.');
   const meta = nativeViewMeta(view);
   if (meta.attached === true) return;
+  unparkNativeBrowserView(view);
   const kind = view.__prometheusNativeBrowserViewKind;
   if (kind === 'web-contents') {
     if (!mainWindow?.contentView?.addChildView) throw new Error('Electron WebContentsView attachment is unavailable.');
@@ -2669,6 +2689,91 @@ function detachNativeBrowserView(view) {
   } catch (error) {
     writeGatewayLog(`[main] Failed to detach native browser view: ${error?.message || error}\n`);
   }
+}
+
+// Park tabs in non-focusable, off-screen hosts. On Windows a show:false host
+// does not supply a reliable compositor; showInactive only during a bounded
+// activity lease, then hide again. Presentation reparents the same view.
+function nativeAutomationSize(view) {
+  const meta = nativeViewMeta(view);
+  const last = meta.automationSize || NATIVE_BROWSER_AUTOMATION_SIZE;
+  return { width: Math.max(320, Math.min(1920, last.width || 1280)), height: Math.max(240, Math.min(1080, last.height || 800)) };
+}
+function parkNativeBrowserView(view) {
+  if (!view?.webContents || view.webContents.isDestroyed?.()) return;
+  const meta = nativeViewMeta(view);
+  const key = nativeTabKey(meta.partition, meta.tabId);
+  const size = nativeAutomationSize(view);
+  let host = nativeBrowserAutomationHosts.get(key);
+  if (!host || host.isDestroyed()) {
+    meta.automationHostNeedsPaint = true;
+    host = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true,
+      focusable: false, skipTaskbar: true, x: -9000, y: -9000,
+      width: size.width, height: size.height,
+      webPreferences: { backgroundThrottling: true } });
+    nativeBrowserAutomationHosts.set(key, host);
+    host.on('closed', () => { if (nativeBrowserAutomationHosts.get(key) === host) nativeBrowserAutomationHosts.delete(key); });
+  }
+  if (meta.automationHost === host) {
+    try { view.setBounds({ x: 0, y: 0, ...size }); } catch {}
+    applyNativeBrowserVisibilityPolicy(view, false);
+    return;
+  }
+  detachNativeBrowserView(view);
+  if (view.__prometheusNativeBrowserViewKind === 'web-contents') host.contentView.addChildView(view);
+  else host.addBrowserView(view);
+  meta.automationHost = host;
+  meta.automationHostNeedsPaint = true;
+  try { host.setContentSize(size.width, size.height); view.setBounds({ x: 0, y: 0, ...size }); } catch {}
+  applyNativeBrowserVisibilityPolicy(view, false);
+}
+function unparkNativeBrowserView(view) {
+  const meta = nativeViewMeta(view);
+  const host = meta.automationHost;
+  if (!host || host.isDestroyed?.()) { meta.automationHost = null; return; }
+  try {
+    if (view.__prometheusNativeBrowserViewKind === 'web-contents') host.contentView.removeChildView(view);
+    else host.removeBrowserView(view);
+  } catch {}
+  meta.automationHost = null;
+  meta.automationHostNeedsPaint = false;
+  nativeBrowserAutomationHosts.delete(nativeTabKey(meta.partition, meta.tabId));
+  try { host.destroy(); } catch {}
+  if (!view.webContents?.isDestroyed?.()) applyNativeBrowserVisibilityPolicy(view, meta.presented);
+}
+function releaseNativeBrowserLease(view) {
+  const meta = nativeViewMeta(view);
+  const key = nativeTabKey(meta.partition, meta.tabId);
+  const lease = nativeBrowserActivityLeases.get(key);
+  if (lease) clearTimeout(lease.timer);
+  nativeBrowserActivityLeases.delete(key);
+  nativeBrowserActiveInputs.get(key)?.abort();
+  nativeBrowserActiveInputs.delete(key);
+  try { if (meta.automationHost && !meta.automationHost.isDestroyed()) meta.automationHost.hide(); } catch {}
+  if (!view.webContents?.isDestroyed?.()) applyNativeBrowserVisibilityPolicy(view, meta.presented);
+}
+function leaseNativeBrowserActivity(view) {
+  const meta = nativeViewMeta(view);
+  const key = nativeTabKey(meta.partition, meta.tabId);
+  if (!nativeBrowserActivityLeases.has(key) && nativeBrowserActivityLeases.size >= NATIVE_BROWSER_MAX_LEASES) {
+    throw new Error('Maximum concurrent browser activity leases reached.');
+  }
+  const old = nativeBrowserActivityLeases.get(key);
+  if (old) clearTimeout(old.timer);
+  const expiresAt = Date.now() + NATIVE_BROWSER_LEASE_MS;
+  const timer = setTimeout(() => releaseNativeBrowserLease(view), NATIVE_BROWSER_LEASE_MS);
+  timer.unref?.();
+  nativeBrowserActivityLeases.set(key, { timer, expiresAt });
+  // showInactive creates a compositor without focus or an on-screen surface.
+  const host = meta.automationHost;
+  applyNativeBrowserVisibilityPolicy(view, meta.presented);
+  if (host && !host.isDestroyed()) {
+    // Activate rendering before showing the host, then explicitly expose the
+    // child View. A visible window does not imply a visible child compositor.
+    view.setVisible?.(true);
+    if (!host.isVisible()) host.showInactive();
+  }
+  return expiresAt;
 }
 
 function getNativeViewByPartition(partition, tabId = '') {
@@ -2980,11 +3085,14 @@ function applyNativeBrowserVisibilityPolicy(view, presented = false) {
   const wc = view.webContents;
   if (!wc || wc.isDestroyed?.()) return;
   try {
-    // Keep Chromium's background timer/animation throttling enabled for every
-    // native page. Detached tabs remain alive for automation, but must not run
-    // an unbounded foreground-style requestAnimationFrame loop in the background.
-    wc.setBackgroundThrottling(true);
+    // Idle tabs throttle; bounded activity leases temporarily enable rendering.
+    const lease = nativeBrowserActivityLeases.get(nativeTabKey(meta.partition, meta.tabId));
+    const throttled = !lease || lease.expiresAt <= Date.now();
+    wc.setBackgroundThrottling(throttled);
+    const hostWC = meta.automationHost?.webContents;
+    if (hostWC && !hostWC.isDestroyed()) hostWC.setBackgroundThrottling(throttled);
     meta.backgroundThrottling = wc.backgroundThrottling !== false;
+    meta.activityLeaseExpiresAt = lease?.expiresAt || 0;
   } catch {
     meta.backgroundThrottling = true;
   }
@@ -3125,6 +3233,10 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
     writeGatewayLog(`[main][inhouse-preload-error] ${preloadPath}: ${error && error.message ? error.message : error}\n`);
   });
   wc.once('destroyed', () => {
+    releaseNativeBrowserLease(view);
+    const host = nativeBrowserAutomationHosts.get(nativeTabKey(partition, tabId));
+    nativeBrowserAutomationHosts.delete(nativeTabKey(partition, tabId));
+    try { if (host && !host.isDestroyed()) host.destroy(); } catch {}
     nativeBrowserViews.delete(nativeTabKey(partition, tabId));
     stopNativeBrowserResourceSamplerIfIdle();
   });
@@ -3190,9 +3302,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
-    // Native tabs may remain alive while detached for background automation.
-    // Keep Chromium's Page Visibility/timer/animation throttling explicit so a
-    // hidden game cannot continue at an unbounded foreground cadence.
+    // Idle tabs throttle; only a bounded activity lease disables throttling.
     backgroundThrottling: true,
     preload: path.join(__dirname, 'inhouse-browser-preload.js'),
   };
@@ -3204,7 +3314,8 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
     try {
       candidate = new implementation.Constructor({ webPreferences });
       candidate.__prometheusNativeBrowserViewKind = implementation.kind;
-      attachNativeBrowserView(candidate);
+      // Start in the automation host below. Attaching a never-rendered view to
+      // the main window first couples its initial compositor to UI presentation.
       view = candidate;
       break;
     } catch (error) {
@@ -3218,7 +3329,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   }
   if (!view) throw creationError || new Error('Electron native browser surface could not be created.');
 
-  view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS });
+  view.setBounds({ x: 0, y: 0, ...NATIVE_BROWSER_AUTOMATION_SIZE });
   applyNativeBrowserUserAgent(view);
   const meta = nativeViewMeta(view);
   meta.sessionId = sid;
@@ -3226,6 +3337,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   meta.tabId = tabId;
   wireNativeViewEvents(view, partition, sid, tabId);
   nativeBrowserViews.set(nativeTabKey(partition, tabId), view);
+  parkNativeBrowserView(view);
   ensureNativeBrowserNetworkObserver(view, partition);
   applyNativeBrowserVisibilityPolicy(view, false);
   startNativeBrowserResourceSampler();
@@ -3259,12 +3371,8 @@ function presentNativeView(partition, tabId = '', sessionId = '') {
     const meta = nativeViewMeta(v);
     const isSelected = meta.partition === partition && meta.tabId === selectedTabId;
     applyNativeBrowserVisibilityPolicy(v, isSelected);
-    if (isSelected) {
-      attachNativeBrowserView(v);
-    } else {
-      try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {}
-      detachNativeBrowserView(v);
-    }
+    if (isSelected && nativeBrowserState.attached && nativeBrowserState.visible) attachNativeBrowserView(v);
+    else parkNativeBrowserView(v);
   }
 }
 
@@ -3274,6 +3382,7 @@ function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
   if (!nativeBrowserState.attached) {
     nativeBrowserState.visible = false;
     nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
+    for (const view of nativeBrowserViews.values()) parkNativeBrowserView(view);
     return broadcastNativeBrowserState({ visible: false });
   }
   if (tabId) {
@@ -3286,9 +3395,13 @@ function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
   nativeBrowserState.visible = nativeBrowserState.attached && next.width > 8 && next.height > 8;
   const view = getNativeViewByPartition(partition, presentedNativeTabId);
   if (view) {
+    if (nativeBrowserState.visible) attachNativeBrowserView(view);
     nativeViewMeta(view).visible = nativeBrowserState.visible;
     try {
-      view.setBounds(nativeBrowserState.visible ? next : { ...NATIVE_BROWSER_EMPTY_BOUNDS });
+      if (nativeBrowserState.visible) {
+        nativeViewMeta(view).automationSize = { width: next.width, height: next.height };
+        view.setBounds(next);
+      } else parkNativeBrowserView(view);
     } catch (err) {
       nativeViewMeta(view).lastError = err?.message || String(err);
     }
@@ -3302,8 +3415,7 @@ function hideNativeBrowserSurface(reason = '') {
   nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
   for (const [, view] of nativeBrowserViews) {
     applyNativeBrowserVisibilityPolicy(view, false);
-    try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {}
-    detachNativeBrowserView(view);
+    parkNativeBrowserView(view);
   }
   return broadcastNativeBrowserState({ reason, attached: false, visible: false });
 }
@@ -3432,7 +3544,12 @@ async function newNativeBrowserTab({ sessionId = '', url = '', profile = '' } = 
 
 function destroyNativeBrowserView(partition, tabId, view) {
   const key = nativeTabKey(partition, tabId);
+  releaseNativeBrowserLease(view);
+  unparkNativeBrowserView(view);
   detachNativeBrowserView(view);
+  const host = nativeBrowserAutomationHosts.get(key);
+  nativeBrowserAutomationHosts.delete(key);
+  try { if (host && !host.isDestroyed()) host.destroy(); } catch {}
   try {
     if (view?.webContents && !view.webContents.isDestroyed()) view.webContents.destroy?.();
   } catch {}
@@ -3668,22 +3785,107 @@ async function locateNativeElement(payload = {}, sessionId = '') {
   })()`, sessionId);
 }
 
-function sendNativeMouseClick(wc, x, y, button = 'left') {
-  wc.focus();
-  wc.sendInputEvent({ type: 'mouseMove', x, y });
-  wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: 1 });
-  wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: 1 });
+async function sendNativeMouseClick(wc, x, y, button = 'left', movePointer = true) {
+  const dbg = wc.debugger;
+  if (!dbg.isAttached()) dbg.attach('1.3');
+  await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+  let pressed = false;
+  try {
+    // Hidden hosts may need a pointer update for the first hit test after
+    // parking, but awaiting CDP mouseMoved stalls until their next paint (~1s).
+    // Electron queues mouseMove synchronously ahead of the trusted CDP press.
+    if (movePointer) await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    else wc.sendInputEvent({ type: 'mouseMove', x, y });
+    pressed = true;
+    await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 });
+  } finally {
+    try {
+      if (pressed) await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 });
+    } finally {
+      await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {});
+    }
+  }
+}
+
+// A real compositor frame is required before trusted input on a freshly parked
+// WebContentsView. capturePage(rect, opts) needs stayHidden in the SECOND argument;
+// passing it as rect causes "Current display surface not available for capture".
+// If native capture is unavailable, CDP can independently capture the actual
+// compositor frame without showing or focusing the hidden host.
+async function captureNativeBrowserFrame(wc, timeoutMs = 1200) {
+  const within = async (promise, source) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${source} timed out`)), timeoutMs); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  };
+  let captureError;
+  try {
+    const image = await within(wc.capturePage(undefined, { stayHidden: true }), 'Native capture');
+    const size = image?.getSize?.();
+    if (size?.width > 0 && size?.height > 0) return image;
+    captureError = new Error('Native capture returned a zero-size frame.');
+  } catch (error) { captureError = error; }
+  try {
+    const dbg = wc.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    const shot = await within(dbg.sendCommand('Page.captureScreenshot', {
+      format: 'png', fromSurface: true, captureBeyondViewport: false,
+    }), 'Compositor capture');
+    const image = nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64'));
+    const size = image.getSize();
+    if (size.width > 0 && size.height > 0) return image;
+    throw new Error('Compositor capture returned a zero-size frame.');
+  } catch (error) {
+    throw new Error(`surface_not_rendered: ${captureError?.message || captureError}; compositor: ${error?.message || error}`);
+  }
+}
+
+// Only a freshly parked hidden host requires the first-frame readiness gate.
+// Never retry the click or infer readiness from DOM layout alone.
+async function ensureNativeHiddenSurfacePaint(view) {
+  const meta = nativeViewMeta(view);
+  if (meta.visible || !meta.automationHostNeedsPaint) return;
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await captureNativeBrowserFrame(view.webContents);
+      meta.automationHostNeedsPaint = false;
+      return;
+    } catch (error) { lastError = error; }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  const host = meta.automationHost;
+  const surface = { tabId: meta.tabId, presented: meta.presented, visible: meta.visible,
+    bounds: view.getBounds?.(), viewVisible: view.getVisible?.(), viewKind: view.__prometheusNativeBrowserViewKind,
+    hostContentBounds: host && !host.isDestroyed() ? host.getContentBounds() : null,
+    hostRootBounds: host && !host.isDestroyed() ? host.contentView?.getBounds?.() : null,
+    hostRootVisible: host && !host.isDestroyed() ? host.contentView?.getVisible?.() : null,
+    hostThrottled: host && !host.isDestroyed() ? host.webContents.backgroundThrottling : null,
+    hostMinimized: host && !host.isDestroyed() ? host.isMinimized() : null,
+    hostPresent: !!host, hostDestroyed: host?.isDestroyed?.(),
+    hostVisible: host && !host.isDestroyed() ? host.isVisible() : false,
+    hostBounds: host && !host.isDestroyed() ? host.getBounds() : null,
+    attached: host && !host.isDestroyed() ? (host.contentView?.children?.includes(view) ?? host.getBrowserViews?.().includes(view)) : false,
+    backgroundThrottling: view.webContents.backgroundThrottling, leaseExpiresAt: meta.activityLeaseExpiresAt,
+    now: Date.now() };
+  throw new Error(`surface_not_rendered: hidden browser input deferred until first paint (${lastError?.message || lastError}); surface=${JSON.stringify(surface)}`);
 }
 
 async function clickNativeBrowserSurface(payload = {}) {
   const sessionId = payload.sessionId || '';
   await snapshotNativeBrowserSurface(sessionId).catch(() => null);
-  const { wc } = requireNativeViewForSession(sessionId);
+  const { view, wc } = requireNativeViewForSession(sessionId);
   const located = await locateNativeElement(payload, sessionId);
   if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
+  leaseNativeBrowserActivity(view);
+  await ensureNativeHiddenSurfacePaint(view);
   // Real trusted click at the element's center — matches how Playwright clicks
   // Chrome (coordinate-based, isTrusted=true) so sites like X accept it.
-  sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left');
+  await sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left', nativeViewMeta(view).visible);
   return located;
 }
 
@@ -3691,14 +3893,16 @@ async function fillNativeBrowserSurface(payload = {}) {
   const sessionId = payload.sessionId || '';
   await snapshotNativeBrowserSurface(sessionId).catch(() => null);
   const text = String(payload.text || '');
-  const { wc } = requireNativeViewForSession(sessionId);
+  const { view, wc } = requireNativeViewForSession(sessionId);
   const located = await locateNativeElement(payload, sessionId);
   if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
+  leaseNativeBrowserActivity(view);
+  await ensureNativeHiddenSurfacePaint(view);
   // Focus the field with a real click, select any existing content, then type
   // the value as TRUSTED input. This is required for rich editors like X's
   // Draft.js composer (a contenteditable) that ignore programmatic textContent,
   // and it keeps isTrusted=true so anti-bot checks accept it.
-  sendNativeMouseClick(wc, located.x, located.y, 'left');
+  await sendNativeMouseClick(wc, located.x, located.y, 'left', nativeViewMeta(view).visible);
   await executeNativeBrowserJavaScript(`(() => {
     const el = ${nativeTargetSelector(payload)};
     if (!el) return false;
@@ -3731,33 +3935,74 @@ async function fillNativeBrowserSurface(payload = {}) {
 }
 
 async function inputNativeBrowserSurface(payload = {}) {
-  const { wc } = requireNativeViewForSession(payload.sessionId || '');
+  const sid = String(payload.sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  const requestedTab = String(payload.tabId || '').trim();
+  const registry = getNativeTabRegistry(sid, partition, false);
+  if (requestedTab && !registry?.tabIds.includes(requestedTab)) throw new Error('Browser tab does not belong to this session.');
+  const { view, wc, tabId } = requireNativeViewForSession(sid, '', requestedTab);
   const action = String(payload.action || '').trim().toLowerCase();
   if (action === 'text') {
-    wc.insertText(String(payload.text || ''));
-  } else if (action === 'key') {
-    const keyCode = String(payload.key || 'Enter');
-    wc.sendInputEvent({ type: 'keyDown', keyCode });
-    wc.sendInputEvent({ type: 'keyUp', keyCode });
+    leaseNativeBrowserActivity(view);
+    const dbg = wc.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+    try { await dbg.sendCommand('Input.insertText', { text: String(payload.text || '') }); }
+    finally { await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {}); }
+  } else if (action === 'key' || action === 'sequence' || payload.sequence !== undefined) {
+    const steps = normalizeSteps(payload);
+    const inputKey = nativeTabKey(resolveNativePartition(sid, ''), tabId);
+    if (nativeBrowserActiveInputs.has(inputKey)) throw new Error('Browser tab already has an active input sequence.');
+    const expiresAt = leaseNativeBrowserActivity(view);
+    const controller = new AbortController();
+    nativeBrowserActiveInputs.set(inputKey, controller);
+    const abort = () => controller.abort();
+    wc.once('did-start-navigation', abort);
+    wc.once('destroyed', abort);
+    let timeout;
+    try {
+      // CDP delivers to this specific renderer without activating another OS window.
+      // The same debugger is already used for client-hints; never detach it here.
+      const dbg = wc.debugger;
+      if (!dbg?.isAttached?.()) dbg.attach('1.3');
+      await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
+      timeout = setTimeout(abort, 10500);
+      timeout.unref?.();
+      const count = await runSteps(steps, (type, key) => dbg.sendCommand('Input.dispatchKeyEvent', {
+        type, key: key.key, code: key.code, windowsVirtualKeyCode: key.vk,
+        nativeVirtualKeyCode: key.vk, text: type === 'keyDown' && key.key.length === 1 ? key.key : undefined,
+      }), controller.signal);
+      return { ok: true, acknowledged: true, delivered: null, tabId, steps: count, leaseExpiresAt: expiresAt };
+    } finally {
+      if (nativeBrowserActiveInputs.get(inputKey) === controller) nativeBrowserActiveInputs.delete(inputKey);
+      clearTimeout(timeout);
+      wc.removeListener('did-start-navigation', abort);
+      wc.removeListener('destroyed', abort);
+      try { if (!wc.isDestroyed?.() && wc.debugger?.isAttached?.()) await wc.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }); } catch {}
+    }
   } else if (action === 'wheel') {
+    leaseNativeBrowserActivity(view);
     // Callers pass DOM-convention deltas (positive deltaY = scroll down).
     // Electron's mouseWheel uses wheel-tick convention (negative = down), so
     // negate. Then VERIFY movement and fall back to a DOM scroll of the main
     // scroller, so "Scrolled down" is never reported for a page that did not move.
     const deltaX = Number(payload.deltaX || 0);
     const deltaY = Number(payload.deltaY || 0);
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) throw new Error('Invalid wheel delta.');
     const readScroll = `(() => { const s = document.scrollingElement || document.documentElement; return { y: Math.round(s.scrollTop || window.scrollY || 0), x: Math.round(s.scrollLeft || window.scrollX || 0) }; })()`;
     const before = await wc.executeJavaScript(readScroll, true).catch(() => null);
-    wc.sendInputEvent({
-      type: 'mouseWheel',
-      x: Math.max(0, Math.round(Number(payload.x || 0))),
-      y: Math.max(0, Math.round(Number(payload.y || 0))),
-      deltaX: -deltaX,
-      deltaY: -deltaY,
-      canScroll: true,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    const wheelX = Math.max(0, Math.round(Number(payload.x || 0)));
+    const wheelY = Math.max(0, Math.round(Number(payload.y || 0)));
+    // Hidden CDP mouseWheel ACK can stall behind a 1 Hz compositor frame.
+    // Electron queues the wheel synchronously; movement verification below
+    // retains the existing DOM fallback if the hidden surface ignores it.
+    wc.sendInputEvent({ type: 'mouseWheel', x: wheelX, y: wheelY,
+      deltaX: -deltaX, deltaY: -deltaY, canScroll: true });
     let after = await wc.executeJavaScript(readScroll, true).catch(() => null);
+    if (before && after && before.x === after.x && before.y === after.y) {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      after = await wc.executeJavaScript(readScroll, true).catch(() => after);
+    }
     let method = 'wheel';
     if (before && after && before.y === after.y && before.x === after.x && (deltaY || deltaX)) {
       // Wheel did not move the document: scroll the largest scrollable element
@@ -3784,12 +4029,12 @@ async function inputNativeBrowserSurface(payload = {}) {
     const moved = !!(before && after && (before.y !== after.y || before.x !== after.x));
     return { ok: true, moved, method, before, after };
   } else if (action === 'click') {
+    leaseNativeBrowserActivity(view);
+    await ensureNativeHiddenSurfacePaint(view);
     const x = Math.max(0, Math.round(Number(payload.x || 0)));
     const y = Math.max(0, Math.round(Number(payload.y || 0)));
     const button = payload.button === 'right' ? 'right' : 'left';
-    wc.sendInputEvent({ type: 'mouseMove', x, y });
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: 1 });
+    await sendNativeMouseClick(wc, x, y, button, nativeViewMeta(view).visible);
   } else {
     throw new Error(`Unsupported native browser input action "${action || 'unknown'}".`);
   }
@@ -3872,6 +4117,7 @@ async function importCookiesNativeBrowserSurface({ sessionId = '', cookies = [] 
 
 async function screenshotNativeBrowserSurface(sessionId = '') {
   const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  leaseNativeBrowserActivity(view);
   // Login phone mode: capturePage ignores the emulated 3x device scale and
   // returns CSS-pixel frames (371px wide), which look blurry on a 3x iPhone.
   // CDP's captureScreenshot honours the emulated scale, so frames are sharp.
@@ -3891,18 +4137,9 @@ async function screenshotNativeBrowserSurface(sessionId = '') {
       }
     } catch {}
   }
-  let image = null;
-  let captureError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      image = await wc.capturePage({ stayHidden: true });
-      break;
-    } catch (err) {
-      captureError = err;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 120));
-    }
-  }
-  if (!image) throw captureError || new Error('Native browser screenshot returned no image.');
+  // Capture the actual hidden view compositor, not the host's blank webContents.
+  // The same bounded real-frame probe gates cold trusted input above.
+  const image = await captureNativeBrowserFrame(wc, 1500);
   const size = image.getSize();
   const meta = nativeViewMeta(view);
   // capturePage returns PHYSICAL pixels (size scaled by devicePixelRatio), but
