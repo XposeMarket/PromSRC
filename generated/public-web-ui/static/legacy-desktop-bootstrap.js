@@ -3711,7 +3711,7 @@ function skillKindLabel(s) {
 }
 
 function skillResourceCount(s) {
-  return Array.isArray(s?.resources) ? s.resources.length : 0;
+  return Number(s?.resourceCount || 0) || (Array.isArray(s?.resources) ? s.resources.length : 0);
 }
 
 function renderSkillBadge(s) {

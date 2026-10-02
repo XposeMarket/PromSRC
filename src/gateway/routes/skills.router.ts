@@ -1,5 +1,6 @@
 // Skills API routes
 import { Router } from 'express';
+import { slimSkillList, responseEtag } from './perf-projections';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { recoverSkillsIfEmpty } from '../skills-runtime/skill-windows';
 import { activeTasks as _activeTasks } from '../chat/chat-state';
@@ -22,7 +23,8 @@ router.get('/api/skills', async (req, res) => {
   recoverSkillsIfEmpty();
   if (req.query.refresh === '1' || req.query.refresh === 'true') _sm.scanSkills();
 
-  const skills = _sm.getAll().map(s => ({
+  const full = req.query.full === '1';
+  const skills = _sm.getAll().map(s => full ? ({
     id: s.id,
     name: s.name,
     description: s.description,
@@ -46,8 +48,12 @@ router.get('/api/skills', async (req, res) => {
     recentChanges: _sm.listChangeLedger(s.id, 5),
     eligible: true,
     eligibleReason: undefined as string | undefined,
-  }));
-  res.json({ success: true, skills, skillsDir: _sm.getSkillsDir() });
+  }) : slimSkillList([s])[0]);
+  const payload = { success: true, skills, skillsDir: _sm.getSkillsDir() };
+  const etag = responseEtag(payload);
+  res.setHeader('ETag', etag);
+  if (req.headers['if-none-match'] === etag) res.status(304).end();
+  else res.json(payload);
 });
 
 // Composer skill matcher. Runtime skill matching remains broader; the composer

@@ -22,8 +22,8 @@ const pairs = [
 
 for (const [sourcePath, generatedPath] of pairs) {
   assert.equal(
-    fs.readFileSync(path.join(root, sourcePath), 'utf8'),
-    fs.readFileSync(path.join(root, generatedPath), 'utf8'),
+    fs.readFileSync(path.join(root, sourcePath), 'utf8').replace(/\r\n/g, '\n'),
+    fs.readFileSync(path.join(root, generatedPath), 'utf8').replace(/\r\n/g, '\n'),
     `${sourcePath} must match its public mirror`,
   );
 }

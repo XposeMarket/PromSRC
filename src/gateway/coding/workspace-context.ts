@@ -1,4 +1,4 @@
-import { cachedGitRead, findGitRootByWalk, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
+import { cachedGitRead, findGitRootByWalk, isCacheableGitRead, runGitReadAsync, primeGitReads } from './git-read-cache';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -362,7 +362,7 @@ function readSessionFileChanges(sessionId: string, workspaceRoot: string, target
     ? comparePath(path.resolve(path.isAbsolute(targetValue) ? targetValue : path.join(workspaceRoot, targetValue)))
     : '';
   const historyHasTarget = Boolean(normalizedTarget && rows.some((row) => comparePath(row.path) === normalizedTarget));
-  if (!historyHasTarget) {
+  if (!historyHasTarget && (!rows.length || targetValue)) {
     try {
       for (const run of getProcessSupervisor().listForSession(sessionId, 500)) {
         if (String(run.sessionId || '').trim() !== sessionId) continue;
@@ -589,6 +589,32 @@ function collectRoots(baseRoot: string, historyFiles: ReturnType<typeof readSess
     if (!roots.has(comparePath(selected))) roots.set(comparePath(selected), { root: selected, source: repoRoot ? 'thread' : 'file' });
   }
   return Array.from(roots.values());
+}
+
+export async function getCodingWorkspaceContextAsync(input: { sessionId?: string; scope?: CodingScope; root?: string; paths?: string[] }): Promise<CodingWorkspaceContext> {
+  const scope = input.scope === 'project' ? 'project' : 'thread';
+  const resolved = rootForSession(input.sessionId, scope, input.root);
+  const historyFiles = input.sessionId ? readSessionFileChanges(input.sessionId, resolved.root) : [];
+  const explicitPaths = (input.paths || []).map((value) => path.resolve(path.isAbsolute(value) ? value : path.join(resolved.root, value)));
+  const roots = collectRoots(resolved.root, historyFiles, scope, explicitPaths).slice(0, 12);
+  await Promise.all(roots.map(async ({ root }) => {
+    const gitRoot = findCodingGitRoot(root) || root;
+    await primeGitReads(gitRoot, [{ args: ['rev-parse', '--show-toplevel'] }]);
+    const top = cachedGitRead(gitRoot, ['rev-parse', '--show-toplevel'], () => '', 'trim');
+    const repo = top || gitRoot;
+    await primeGitReads(repo, [{ args: ['remote'] }]);
+    const remote = cachedGitRead(repo, ['remote'], () => '', 'trim').split(/\r?\n/).map((name) => name.trim()).find(Boolean);
+    const reads = [
+      ['rev-parse', '--show-toplevel'], ['status', '--porcelain=v1', '--branch', '--untracked-files=all'],
+      ['branch', '--show-current'], ['remote'], ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
+      ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], ['rev-list', '--count', '--all'],
+      ['log', '-8', '--date=iso-strict', '--pretty=format:%H\t%h\t%an\t%ad\t%s'],
+    ];
+    if (remote) reads.push(['remote', 'get-url', remote]);
+    await primeGitReads(repo, reads.map((args) => ({ args, mode: 'trim' as const })));
+    await primeGitReads(repo, [{ args: ['status', '--porcelain=v1', '--branch', '--untracked-files=all'], mode: 'raw' }]);
+  }));
+  return getCodingWorkspaceContext(input);
 }
 
 export function getCodingWorkspaceContext(input: { sessionId?: string; scope?: CodingScope; root?: string; paths?: string[] }): CodingWorkspaceContext {

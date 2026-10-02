@@ -1,8 +1,10 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { warmGitReads } from '../coding/git-read-cache';
 import {
   getCodingWorkspaceSession,
+  getCodingWorkspaceSessionAsync,
   gitCommit,
   gitCheckoutBranch,
   gitCreateBranch,
@@ -18,6 +20,7 @@ import {
 } from '../coding/workspace-session';
 import {
   getCodingWorkspaceContext,
+  getCodingWorkspaceContextAsync,
   getCodingWorkspaceDiff,
   getCodingWorkspaceTree,
   findCodingGitRoot,
@@ -25,7 +28,7 @@ import {
 } from '../coding/workspace-context';
 import { findProjectBySessionId } from '../projects/project-store';
 import { getConfig } from '../../config/config.js';
-import { getSession, getWorkspace, sessionExists } from '../session';
+import { getSession, getWorkspace, sessionExists, getSessionStorageDirectory } from '../session';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry';
 
 export const router = express.Router();
@@ -42,6 +45,30 @@ function resolveRequestCodingRoot(rawRoot: string | undefined, rawSessionId: str
   }
   return resolveCodingRoot(rawRoot);
 }
+
+/** Cold session files are read without blocking every other gateway request. */
+async function resolveRequestCodingRootAsync(rawRoot: string | undefined, rawSessionId: string | undefined): Promise<string> {
+  const sessionId = String(rawSessionId || '').trim();
+  if (rawRoot || !sessionId) return resolveCodingRoot(rawRoot);
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return resolveCodingRoot();
+  const projectsDir = path.join(getConfig().getConfigDir(), 'projects');
+  for (const entry of await fs.promises.readdir(projectsDir).catch(() => [])) {
+    if (!/^[a-zA-Z0-9_-]+\.json$/.test(entry)) continue;
+    const contents = await fs.promises.readFile(path.join(projectsDir, entry), 'utf8').catch(() => '');
+    if (!contents) continue;
+    try {
+      const project = JSON.parse(contents);
+      if (project.sessions?.some((session: { id?: string }) => session.id === sessionId) && project.workspacePath)
+        return resolveCodingRoot(project.workspacePath);
+    } catch { /* Ignore invalid project records. */ }
+  }
+  const file = path.join(getSessionStorageDirectory(), `${sessionId}.json`);
+  const text = await fs.promises.readFile(file, 'utf8').catch(() => '');
+  if (!text) return resolveCodingRoot();
+  try { return resolveCodingRoot(String(JSON.parse(text)?.workspace || '')); }
+  catch { return resolveCodingRoot(); }
+}
+
 
 function fileIsInsideRoot(root: string, file: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(file));
@@ -74,10 +101,9 @@ async function warmPanelGitReads(): Promise<void> {
 }
 
 router.get('/api/coding/session', async (req, res) => {
-  await warmPanelGitReads();
   try {
     res.json({
-      session: getCodingWorkspaceSession(resolveRequestCodingRoot(
+      session: await getCodingWorkspaceSessionAsync(await resolveRequestCodingRootAsync(
         req.query.root ? String(req.query.root) : undefined,
         req.query.sessionId ? String(req.query.sessionId) : undefined,
       )),
@@ -96,7 +122,7 @@ router.get('/api/coding/session', async (req, res) => {
  * A branch is considered chat-scoped when the session belongs to a project,
  * has a Canvas root, or uses a workspace other than the configured default.
  */
-router.get('/api/coding/session-metadata', (req, res) => {
+router.get('/api/coding/session-metadata', async (req, res) => {
   try {
     const rawSessionIds = Array.isArray(req.query.sessionIds)
       ? req.query.sessionIds.join(',')
@@ -108,8 +134,8 @@ router.get('/api/coding/session-metadata', (req, res) => {
         .filter((value) => value && sessionExists(value)),
     )).slice(0, 80);
     const configuredRoot = resolveCodingRoot(getConfig().getWorkspacePath());
-    const codingByRoot = new Map<string, ReturnType<typeof getCodingWorkspaceSession>>();
-    const sessions = sessionIds.map((sessionId) => {
+    const codingByRoot = new Map<string, Promise<Awaited<ReturnType<typeof getCodingWorkspaceSessionAsync>>>>();
+    const sessions = await Promise.all(sessionIds.map(async (sessionId) => {
       const session = getSession(sessionId);
       const project = findProjectBySessionId(sessionId);
       const projectRoot = String(project?.workspacePath || '').trim();
@@ -124,15 +150,14 @@ router.get('/api/coding/session-metadata', (req, res) => {
       );
       if (!scoped) return { sessionId, connected: false };
       const rootKey = path.resolve(root).toLowerCase();
-      let coding = codingByRoot.get(rootKey);
-      if (!coding) {
-        try {
-          coding = getCodingWorkspaceSession(root);
-          codingByRoot.set(rootKey, coding);
-        } catch {
-          return { sessionId, connected: false };
-        }
+      let pending = codingByRoot.get(rootKey);
+      if (!pending) {
+        pending = getCodingWorkspaceSessionAsync(root);
+        codingByRoot.set(rootKey, pending);
       }
+      let coding;
+      try { coding = await pending; }
+      catch { return { sessionId, connected: false }; }
       const branch = String(coding.branch || '').trim();
       if (!branch) return { sessionId, connected: false };
       return {
@@ -143,7 +168,7 @@ router.get('/api/coding/session-metadata', (req, res) => {
         projectName: String(project?.name || session.canvasProjectLabel || '').trim() || undefined,
         repositoryName: String(session.canvasProjectLink?.github?.repoFullName || coding.name || '').trim() || undefined,
       };
-    });
+    }));
     res.json({ sessions });
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });
@@ -196,13 +221,12 @@ router.get('/api/coding/diff', (req, res) => {
 });
 
 router.get('/api/coding/context', async (req, res) => {
-  await warmPanelGitReads();
   try {
     const sessionId = req.query.sessionId ? String(req.query.sessionId) : undefined;
     const rawPaths = String(req.query.paths || '').trim();
     const paths = rawPaths ? rawPaths.split('|').map((value) => decodeURIComponent(value)).filter(Boolean) : [];
     const scope: CodingScope = req.query.scope === 'project' ? 'project' : 'thread';
-    res.json(getCodingWorkspaceContext({
+    res.json(await getCodingWorkspaceContextAsync({
       sessionId,
       scope,
       root: req.query.root ? String(req.query.root) : undefined,

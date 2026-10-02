@@ -189,6 +189,18 @@ export function findGitRootByWalk(startDir: string): string | null {
  * roots (or the roots themselves); omit it to warm everything used recently.
  * Resolves when the refreshes settle or after `maxWaitMs`, whichever is first.
  */
+export async function primeGitReads(root: string, reads: Array<{ args: string[]; mode?: 'raw' | 'trim' }>): Promise<void> {
+  await Promise.all(reads.map(async ({ args, mode = 'trim' }) => {
+    const key = gitReadCacheKey(root, args, mode);
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < STALE_MAX_MS) {
+      if (Date.now() - hit.at >= TTL_MS) void refreshInto(key, () => runGitReadAsync(root, args, { timeout: 15_000, mode }));
+      return;
+    }
+    await refreshInto(key, () => runGitReadAsync(root, args, { timeout: 15_000, mode }));
+  }));
+}
+
 export async function warmGitReads(roots?: string[], maxWaitMs = 20_000): Promise<number> {
   const now = Date.now();
   const wanted = (roots || []).map(norm).filter(Boolean);

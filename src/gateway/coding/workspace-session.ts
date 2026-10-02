@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getConfig } from '../../config/config';
-import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead, runGitReadAsync } from './git-read-cache';
+import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead, runGitReadAsync, primeGitReads } from './git-read-cache';
 
 export type PackageManagerKind = 'npm' | 'pnpm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'cargo' | 'go' | 'dotnet' | 'unknown';
 
@@ -228,6 +228,38 @@ function packageScriptCommand(pm: PackageManagerKind, script: string): string {
   return `npm run ${script}`;
 }
 
+async function detectPackageManagerAsync(root: string): Promise<PackageManagerKind> {
+  const exists = async (name: string) => !!(await fs.promises.stat(path.join(root, name)).catch(() => null));
+  for (const [name, pm] of [
+    ['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['bun.lockb', 'bun'], ['bun.lock', 'bun'],
+    ['package-lock.json', 'npm'], ['package.json', 'npm'], ['uv.lock', 'uv'],
+    ['requirements.txt', 'pip'], ['pyproject.toml', 'pip'], ['Cargo.toml', 'cargo'], ['go.mod', 'go'],
+  ] as Array<[string, PackageManagerKind]>) if (await exists(name)) return pm;
+  const entries = await fs.promises.readdir(root).catch(() => []);
+  return entries.some((name) => name.endsWith('.csproj') || name.endsWith('.sln')) ? 'dotnet' : 'unknown';
+}
+
+async function detectCommandsAsync(root: string, pm: PackageManagerKind): Promise<Pick<CodingWorkspaceSession, 'testCommand' | 'buildCommand' | 'devCommand'>> {
+  const text = await fs.promises.readFile(path.join(root, 'package.json'), 'utf8').catch(() => '');
+  if (text) {
+    try {
+      const pkg = JSON.parse(text);
+      if (pkg?.scripts && typeof pkg.scripts === 'object') return {
+        testCommand: pkg.scripts.test ? packageScriptCommand(pm, 'test') : undefined,
+        buildCommand: pkg.scripts.build ? packageScriptCommand(pm, 'build') : undefined,
+        devCommand: pkg.scripts.dev ? packageScriptCommand(pm, 'dev') : pkg.scripts.start ? packageScriptCommand(pm, 'start') : undefined,
+      };
+    } catch { /* missing/invalid package metadata */ }
+  }
+  if (pm === 'cargo') return { testCommand: 'cargo test', buildCommand: 'cargo build' };
+  if (pm === 'go') return { testCommand: 'go test ./...', buildCommand: 'go build ./...' };
+  if (pm === 'uv') return { testCommand: 'uv run pytest' };
+  if (pm === 'pip') return { testCommand: 'pytest' };
+  if (pm === 'dotnet') return { testCommand: 'dotnet test', buildCommand: 'dotnet build' };
+  return {};
+}
+
+
 export function detectCommands(root: string, pm: PackageManagerKind): Pick<CodingWorkspaceSession, 'testCommand' | 'buildCommand' | 'devCommand'> {
   const pkg = readJson(path.join(root, 'package.json'));
   if (pkg?.scripts && typeof pkg.scripts === 'object') {
@@ -247,6 +279,24 @@ export function detectCommands(root: string, pm: PackageManagerKind): Pick<Codin
 
 export function getDirtyFiles(root: string): string[] {
   return gitStatusFileLines(root).map((line) => line.slice(3).trim()).filter(Boolean);
+}
+
+export async function getCodingWorkspaceSessionAsync(rawRoot?: string): Promise<CodingWorkspaceSession> {
+  const root = resolveCodingRoot(rawRoot);
+  const pm = await detectPackageManagerAsync(root);
+  const branchArgs = ['branch', '--show-current'];
+  const statusArgs = ['status', '--porcelain=v1', '--branch', '--untracked-files=all'];
+  await primeGitReads(root, [{ args: branchArgs }, { args: statusArgs }]);
+  const [branch, status] = [
+    cachedGitRead(root, branchArgs, () => '', 'trim'),
+    cachedGitRead(root, statusArgs, () => '', 'trim'),
+  ];
+  return {
+    id: Buffer.from(root).toString('base64url'), root, name: path.basename(root),
+    branch: branch || undefined, packageManager: pm,
+    dirtyFiles: status.split(/\r?\n/).filter((line) => line && !line.startsWith('## ')).map((line) => line.slice(3).trim()).filter(Boolean),
+    ...await detectCommandsAsync(root, pm),
+  };
 }
 
 export function getCodingWorkspaceSession(rawRoot?: string): CodingWorkspaceSession {
