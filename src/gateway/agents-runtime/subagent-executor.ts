@@ -17281,7 +17281,11 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           signal: deps.abortSignal?.signal,
           onPerformanceStage: deps.onPerformanceStage,
         });
-        return { name, args, result, error: /\bFAIL\b/.test(result) };
+        // The doctor report is diagnostic output: return it whole. Flagging any
+        // FAIL line as a tool error made wrappers collapse the report to its
+        // first lines and hide which check failed. Only a broken core (platform
+        // unsupported or screenshots impossible) is a tool error.
+        return { name, args, result, error: /^FAIL (Platform|Screenshot)/m.test(result) };
       }
       case 'desktop_screenshot': {
         // Use history-aware wrapper so desktop_diff_screenshot always has a prev packet

@@ -6,6 +6,7 @@
 #include <d3d11.h>
 #include <bcrypt.h>
 #include <wincodec.h>
+#include <dwmapi.h>
 #include <wrl/client.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -628,6 +629,339 @@ std::string capture_window(HWND hwnd) {
   return json.str();
 }
 
+// ── Screen capture (GDI BitBlt -> 24bpp DIB -> WIC PNG) ─────────────────────
+// Coordinates are physical virtual-screen pixels (process is per-monitor-aware V2).
+
+struct ScreenRect { int left; int top; int width; int height; };
+
+// Monitors in EnumDisplayMonitors order. This is the same enumeration that
+// System.Windows.Forms.Screen.AllScreens uses; the primary monitor is NOT
+// guaranteed to be first.
+std::vector<ScreenRect> enum_monitors() {
+  std::vector<ScreenRect> out;
+  EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(monitor, &info)) {
+      const RECT& r = info.rcMonitor;
+      reinterpret_cast<std::vector<ScreenRect>*>(data)->push_back({ r.left, r.top, r.right - r.left, r.bottom - r.top });
+    }
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&out));
+  return out;
+}
+
+ScreenRect primary_monitor_rect() {
+  const POINT origin{0, 0};
+  HMONITOR monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info{};
+  info.cbSize = sizeof(info);
+  if (!monitor || !GetMonitorInfoW(monitor, &info)) {
+    return { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+  }
+  const RECT& r = info.rcMonitor;
+  return { r.left, r.top, r.right - r.left, r.bottom - r.top };
+}
+
+ScreenRect virtual_screen_rect() {
+  return {
+    GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+    GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN),
+  };
+}
+
+void encode_png_bgr24(const BYTE* pixels, UINT width, UINT height, UINT stride, const std::wstring& path, bool filter_none) {
+  static thread_local ComPtr<IWICImagingFactory> factory;
+  if (!factory) {
+    winrt::check_hresult(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
+  }
+  ComPtr<IWICStream> stream;
+  winrt::check_hresult(factory->CreateStream(&stream));
+  winrt::check_hresult(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE));
+  ComPtr<IWICBitmapEncoder> encoder;
+  winrt::check_hresult(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
+  winrt::check_hresult(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache));
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> properties;
+  winrt::check_hresult(encoder->CreateNewFrame(&frame, &properties));
+  if (filter_none && properties) {
+    PROPBAG2 option{};
+    option.pstrName = const_cast<LPOLESTR>(L"FilterOption");
+    VARIANT value;
+    VariantInit(&value);
+    value.vt = VT_UI1;
+    value.bVal = static_cast<BYTE>(WICPngFilterNone);
+    properties->Write(1, &option, &value); // best effort
+  }
+  winrt::check_hresult(frame->Initialize(properties.Get()));
+  winrt::check_hresult(frame->SetSize(width, height));
+  WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+  winrt::check_hresult(frame->SetPixelFormat(&format));
+  if (format != GUID_WICPixelFormat24bppBGR) throw std::runtime_error("WIC PNG encoder rejected 24bpp BGR");
+  winrt::check_hresult(frame->WritePixels(height, stride, stride * height, const_cast<BYTE*>(pixels)));
+  winrt::check_hresult(frame->Commit());
+  winrt::check_hresult(encoder->Commit());
+}
+
+std::string capture_screen_rect(const ScreenRect& rect, bool filter_none) {
+  if (rect.width <= 0 || rect.height <= 0) throw std::runtime_error("Capture rectangle has invalid dimensions");
+  if (rect.width > 32768 || rect.height > 32768) throw std::runtime_error("Capture rectangle is too large");
+  HDC screen = GetDC(nullptr);
+  if (!screen) throw std::runtime_error("GetDC(screen) failed");
+  HDC memory = CreateCompatibleDC(screen);
+  BITMAPINFO bmi{};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = rect.width;
+  bmi.bmiHeader.biHeight = -rect.height; // top-down
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 24;
+  bmi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP dib = memory ? CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+  struct GdiGuard {
+    HDC screen; HDC memory; HBITMAP dib; HGDIOBJ old;
+    ~GdiGuard() {
+      if (memory && old) SelectObject(memory, old);
+      if (dib) DeleteObject(dib);
+      if (memory) DeleteDC(memory);
+      if (screen) ReleaseDC(nullptr, screen);
+    }
+  } guard{screen, memory, dib, nullptr};
+  if (!memory || !dib || !bits) throw std::runtime_error("CreateDIBSection failed");
+  guard.old = SelectObject(memory, dib);
+  if (!BitBlt(memory, 0, 0, rect.width, rect.height, screen, rect.left, rect.top, SRCCOPY | CAPTUREBLT)) {
+    throw std::runtime_error("BitBlt from screen failed");
+  }
+  GdiFlush();
+  const UINT stride = (static_cast<UINT>(rect.width) * 3u + 3u) & ~3u;
+  const std::wstring output = temp_png_path();
+  encode_png_bgr24(static_cast<const BYTE*>(bits), static_cast<UINT>(rect.width), static_cast<UINT>(rect.height), stride, output, filter_none);
+
+  std::ostringstream json;
+  json << "{\"pngPath\":\"" << json_escape(utf8(output))
+       << "\",\"bounds\":{\"left\":" << rect.left
+       << ",\"top\":" << rect.top
+       << ",\"width\":" << rect.width
+       << ",\"height\":" << rect.height
+       << "},\"devicePixelRatio\":1}";
+  return json.str();
+}
+
+// ── Window enumeration ───────────────────────────────────────────────────────
+
+// Process name (image basename without ".exe", like Get-Process.ProcessName) and
+// creation time in Unix ms (same truncation as PowerShell's
+// [DateTimeOffset]::new(StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()).
+struct ProcessIdentity { std::string name; long long start_ms = 0; };
+ProcessIdentity process_identity(DWORD pid) {
+  ProcessIdentity out;
+  if (!pid) return out;
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return out;
+  wchar_t image[MAX_PATH * 2]{};
+  DWORD size = static_cast<DWORD>(std::size(image));
+  if (QueryFullProcessImageNameW(process, 0, image, &size)) {
+    std::wstring full(image, size);
+    const size_t slash = full.find_last_of(L"\\/");
+    std::wstring base = slash == std::wstring::npos ? full : full.substr(slash + 1);
+    if (base.size() > 4) {
+      std::wstring ext = base.substr(base.size() - 4);
+      std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+      if (ext == L".exe") base = base.substr(0, base.size() - 4);
+    }
+    out.name = utf8(base);
+  }
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = created.dwLowDateTime;
+    ticks.HighPart = created.dwHighDateTime;
+    const unsigned long long epoch = 116444736000000000ULL;
+    if (ticks.QuadPart > epoch) out.start_ms = static_cast<long long>((ticks.QuadPart - epoch) / 10000ULL);
+  }
+  CloseHandle(process);
+  return out;
+}
+
+// Index of the window's monitor in EnumDisplayMonitors order (matches
+// System.Windows.Forms.Screen.AllScreens), or -1.
+int window_monitor_index(HWND hwnd) {
+  HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
+  if (!monitor) return -1;
+  struct Search { HMONITOR target; int index; int found; } search{ monitor, 0, -1 };
+  EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR m, HDC, LPRECT, LPARAM data) -> BOOL {
+    auto* s = reinterpret_cast<Search*>(data);
+    if (m == s->target) { s->found = s->index; return FALSE; }
+    s->index += 1;
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&search));
+  return search.found;
+}
+
+std::string window_json(HWND hwnd, HWND foreground) {
+  RECT rect{};
+  GetWindowRect(hwnd, &rect);
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  wchar_t title[512]{};
+  const int title_len = GetWindowTextW(hwnd, title, 512);
+  wchar_t class_name[256]{};
+  const int class_len = GetClassNameW(hwnd, class_name, 256);
+  const ProcessIdentity identity = process_identity(pid);
+  std::ostringstream json;
+  json << "{\"exists\":true,\"handle\":" << static_cast<long long>(reinterpret_cast<intptr_t>(hwnd))
+       << ",\"pid\":" << pid
+       << ",\"processName\":\"" << json_escape(identity.name) << "\""
+       << ",\"processStartTime\":" << identity.start_ms
+       << ",\"monitorIndex\":" << window_monitor_index(hwnd)
+       << ",\"title\":\"" << json_escape(utf8(std::wstring(title, static_cast<size_t>(std::max(0, title_len)))))
+       << "\",\"className\":\"" << json_escape(utf8(std::wstring(class_name, static_cast<size_t>(std::max(0, class_len)))))
+       << "\",\"left\":" << rect.left
+       << ",\"top\":" << rect.top
+       << ",\"width\":" << (rect.right - rect.left)
+       << ",\"height\":" << (rect.bottom - rect.top)
+       << ",\"isMinimized\":" << (IsIconic(hwnd) ? "true" : "false")
+       << ",\"isActive\":" << (hwnd == foreground ? "true" : "false")
+       << "}";
+  return json.str();
+}
+
+bool is_listable_window(HWND hwnd) {
+  if (!IsWindowVisible(hwnd)) return false;
+  DWORD cloaked = 0;
+  if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return false;
+  RECT rect{};
+  if (!GetWindowRect(hwnd, &rect) || rect.right - rect.left <= 0 || rect.bottom - rect.top <= 0) return false;
+  const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  if ((ex_style & WS_EX_TOOLWINDOW) && GetWindowTextLengthW(hwnd) == 0) return false;
+  return true;
+}
+
+std::string list_windows_json() {
+  std::vector<HWND> handles;
+  EnumWindows([](HWND hwnd, LPARAM data) -> BOOL {
+    if (is_listable_window(hwnd)) reinterpret_cast<std::vector<HWND>*>(data)->push_back(hwnd);
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&handles));
+  const HWND foreground = GetForegroundWindow();
+  std::ostringstream json;
+  json << "{\"windows\":[";
+  for (size_t i = 0; i < handles.size(); ++i) {
+    if (i) json << ",";
+    json << window_json(handles[i], foreground);
+  }
+  json << "]}";
+  return json.str();
+}
+
+// Monitors (EnumDisplayMonitors order == Screen.AllScreens), virtual screen,
+// foreground window and, optionally, titled top-level windows: everything
+// gatherDesktopContextInternal needs in one sub-millisecond round trip.
+std::string desktop_context_json(bool include_windows) {
+  struct Mon { RECT rect; bool primary; std::wstring device; };
+  std::vector<Mon> monitors;
+  EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (GetMonitorInfoW(monitor, &info)) {
+      reinterpret_cast<std::vector<Mon>*>(data)->push_back({ info.rcMonitor, (info.dwFlags & MONITORINFOF_PRIMARY) != 0, info.szDevice });
+    }
+    return TRUE;
+  }, reinterpret_cast<LPARAM>(&monitors));
+  const ScreenRect vs = virtual_screen_rect();
+  const HWND foreground = GetForegroundWindow();
+  std::ostringstream json;
+  json << "{\"monitors\":[";
+  for (size_t i = 0; i < monitors.size(); ++i) {
+    const auto& m = monitors[i];
+    if (i) json << ",";
+    json << "{\"index\":" << i << ",\"left\":" << m.rect.left << ",\"top\":" << m.rect.top
+         << ",\"width\":" << (m.rect.right - m.rect.left) << ",\"height\":" << (m.rect.bottom - m.rect.top)
+         << ",\"primary\":" << (m.primary ? "true" : "false")
+         << ",\"deviceName\":\"" << json_escape(utf8(m.device)) << "\"}";
+  }
+  json << "],\"virtualScreen\":{\"left\":" << vs.left << ",\"top\":" << vs.top << ",\"width\":" << vs.width << ",\"height\":" << vs.height << "}";
+  json << ",\"activeWindow\":" << (foreground && IsWindow(foreground) ? window_json(foreground, foreground) : std::string("null"));
+  json << ",\"windows\":[";
+  if (include_windows) {
+    std::vector<HWND> handles;
+    EnumWindows([](HWND hwnd, LPARAM data) -> BOOL {
+      if (GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE; // owned popups are not main windows
+      if (GetWindowTextLengthW(hwnd) <= 0) return TRUE;
+      if (!IsWindowVisible(hwnd)) return TRUE;
+      DWORD cloaked = 0;
+      if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
+      wchar_t cls[64]{};
+      GetClassNameW(hwnd, cls, 64);
+      if (std::wstring(cls) == L"Progman" || std::wstring(cls) == L"WorkerW") return TRUE;
+      reinterpret_cast<std::vector<HWND>*>(data)->push_back(hwnd);
+      return TRUE;
+    }, reinterpret_cast<LPARAM>(&handles));
+    for (size_t i = 0; i < handles.size(); ++i) {
+      if (i) json << ",";
+      json << window_json(handles[i], foreground);
+    }
+  }
+  json << "]}";
+  return json.str();
+}
+
+// Win32 clipboard (no OLE/STA needed). Another process (clipboard history,
+// password managers, monitors) may hold the clipboard open briefly, so retry
+// OpenClipboard for up to ~1 s with short sleeps instead of WinForms' fixed
+// 10 x 100 ms + OleFlushClipboard path.
+bool open_clipboard_with_retry() {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (OpenClipboard(nullptr)) return true;
+    Sleep(attempt < 10 ? 2 : 10);
+  }
+  return false;
+}
+
+std::string get_clipboard_text_json() {
+  if (!open_clipboard_with_retry()) throw std::runtime_error("Clipboard is locked by another process.");
+  std::wstring text;
+  bool has_text = false;
+  if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+    if (const auto* chars = static_cast<const wchar_t*>(GlobalLock(data))) {
+      text = chars;
+      has_text = true;
+      GlobalUnlock(data);
+    }
+  }
+  CloseClipboard();
+  return std::string("{\"hasText\":") + (has_text ? "true" : "false") + ",\"text\":\"" + json_escape(utf8(text)) + "\"}";
+}
+
+std::string set_clipboard_text_json(const std::wstring& text) {
+  const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!memory) throw std::runtime_error("GlobalAlloc failed for clipboard text.");
+  if (void* target = GlobalLock(memory)) {
+    std::memcpy(target, text.c_str(), bytes);
+    GlobalUnlock(memory);
+  }
+  if (!open_clipboard_with_retry()) {
+    GlobalFree(memory);
+    throw std::runtime_error("Clipboard is locked by another process.");
+  }
+  EmptyClipboard();
+  const bool ok = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+  CloseClipboard();
+  if (!ok) {
+    GlobalFree(memory);
+    throw std::runtime_error("SetClipboardData failed.");
+  }
+  return "{\"ok\":true,\"chars\":" + std::to_string(text.size()) + "}";
+}
+
+std::string window_info_json(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd)) {
+    return "{\"exists\":false,\"handle\":" + std::to_string(static_cast<long long>(reinterpret_cast<intptr_t>(hwnd))) + "}";
+  }
+  return window_json(hwnd, GetForegroundWindow());
+}
+
 void write_result(long long id, const std::string& result_json) {
   std::cout << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":" << result_json << "}" << std::endl;
 }
@@ -665,11 +999,61 @@ int wmain(int argc, wchar_t* argv[]) {
     const std::string method = string_field(line, "method");
     try {
       if (method == "ping") {
-        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"inputBackend\":\"SendInput\",\"protocolVersion\":2}");
+        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"screenCaptureBackend\":\"GDI BitBlt\",\"inputBackend\":\"SendInput\",\"protocolVersion\":5,"
+                         "\"captureKinds\":[\"window\",\"primary\",\"all\",\"monitor\",\"region\"],"
+                         "\"methods\":[\"ping\",\"capture\",\"list_windows\",\"window_info\",\"foreground_window\",\"focus_window\",\"click\",\"move_pointer\",\"click_current\",\"scroll\",\"scroll_current\",\"drag\",\"type_text\",\"press_key\",\"desktop_context\",\"get_clipboard_text\",\"set_clipboard_text\"],"
+                         "\"monitorOrder\":\"EnumDisplayMonitors\"}");
+      } else if (method == "list_windows") {
+        write_result(id, list_windows_json());
+      } else if (method == "window_info") {
+        const auto raw_handle = number_field(line, "handle", 0);
+        write_result(id, window_info_json(reinterpret_cast<HWND>(static_cast<intptr_t>(raw_handle))));
+      } else if (method == "get_clipboard_text") {
+        write_result(id, get_clipboard_text_json());
+      } else if (method == "set_clipboard_text") {
+        write_result(id, set_clipboard_text_json(utf16_from_utf8(decode_base64(string_field(line, "textBase64")))));
+      } else if (method == "desktop_context") {
+        write_result(id, desktop_context_json(number_field(line, "includeWindows", 1) != 0));
+      } else if (method == "foreground_window") {
+        write_result(id, window_info_json(GetForegroundWindow()));
       } else if (method == "capture") {
         const std::string kind = string_field(line, "kind");
+        const bool filter_none = string_field(line, "pngFilter") != "default";
+        if (kind == "primary") {
+          write_result(id, capture_screen_rect(primary_monitor_rect(), filter_none));
+          continue;
+        }
+        if (kind == "all") {
+          write_result(id, capture_screen_rect(virtual_screen_rect(), filter_none));
+          continue;
+        }
+        if (kind == "monitor") {
+          const auto monitors = enum_monitors();
+          const auto index = number_field(line, "index", -1);
+          if (index < 0 || index >= static_cast<long long>(monitors.size())) {
+            write_error(id, -32602, "capture(monitor) index " + std::to_string(index) + " out of range; monitorCount="
+              + std::to_string(monitors.size()) + " (EnumDisplayMonitors order, 0-based)");
+            continue;
+          }
+          write_result(id, capture_screen_rect(monitors[static_cast<size_t>(index)], filter_none));
+          continue;
+        }
+        if (kind == "region") {
+          const ScreenRect region{
+            static_cast<int>(number_field(line, "left", 0)),
+            static_cast<int>(number_field(line, "top", 0)),
+            static_cast<int>(number_field(line, "width", 0)),
+            static_cast<int>(number_field(line, "height", 0)),
+          };
+          if (region.width <= 0 || region.height <= 0) {
+            write_error(id, -32602, "capture(region) requires positive width and height.");
+            continue;
+          }
+          write_result(id, capture_screen_rect(region, filter_none));
+          continue;
+        }
         if (kind != "window") {
-          write_error(id, 1, "The Windows helper currently supports capture(kind=window) only.");
+          write_error(id, -32602, "Unsupported capture kind: " + kind + " (supported: window, primary, all, monitor, region)");
           continue;
         }
         const auto raw_handle = number_field(line, "handle", 0);
