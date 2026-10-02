@@ -16978,6 +16978,10 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         const observeMode = resolveBrowserObserveMode(keyToolName, hasFinalActionApproval ? 'snapshot' : args.observe);
         const result = await browserPressKey(sessionId, String(args.key || 'Enter'), {
           observe: observeMode,
+          hold_ms: args.hold_ms,
+          keys: args.keys,
+          sequence: args.sequence,
+          tab_id: args.tab_id,
         });
         await maybeBroadcastBrowserStatus('browser_press_key', observeMode);
         return { name, args, result, error: result.startsWith('ERROR') };
