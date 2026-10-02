@@ -19102,7 +19102,11 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	              type: args.type || 'general',
                 executionMode: ['code_change', 'action', 'general', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
                   ? (String(args.execution_mode || args.executionMode).trim() === 'review' ? 'general' : String(args.execution_mode || args.executionMode).trim()) as any
-                  : undefined,
+                  // Omitted lane + src/ or web-ui/ targets: code_change is the only lane
+                  // the validator accepts, so infer it instead of rejecting the call.
+                  : (Array.isArray(args.affected_files) && args.affected_files.some((f: any) => /^(\.\/)?(src|web-ui)\//.test(String(f?.path || '').replace(/\\/g, '/')))
+                    ? 'code_change'
+                    : undefined),
 	              priority: args.priority || 'medium',
               title: String(args.title || '').slice(0, 120),
               summary: String(args.summary || '').slice(0, 500),
