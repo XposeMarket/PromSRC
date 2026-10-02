@@ -32,6 +32,10 @@ assert(replay.includes('suppressRender: true'), 'replay renders once, not per fr
 assert(replay.includes('sess.processLog.length = logLength'), 'replay rolls back appended process rows');
 assert(replay.includes('sess.history.length = historyLength'), 'replay rolls back appended history rows');
 assert(replay.includes('desktopSessionHasLocalSseTurn(sid)'), 'replay never runs over a local SSE turn');
+assert(/if \(!window\._sessionThinking\?\.\[sid\] \|\| sess\.activeRun !== true\) return false;/.test(replay),
+  'replay never revives a run that finished while the request was in flight');
+assert(replay.indexOf('sess.activeRun !== true') < replay.indexOf('window._sessionStreamState[sid] = fresh'),
+  'finished-run guard runs before the state swap');
 assert(/options\.suppressRender === true\) return;/.test(src), 'stream handler honours suppressRender');
 
 // 4. Behavioural check of the swap semantics on a tiny model of the state map.
