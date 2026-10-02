@@ -3759,13 +3759,16 @@ async function locateNativeElement(payload = {}, sessionId = '') {
   })()`, sessionId);
 }
 
-async function sendNativeMouseClick(wc, x, y, button = 'left') {
+async function sendNativeMouseClick(wc, x, y, button = 'left', movePointer = true) {
   const dbg = wc.debugger;
   if (!dbg.isAttached()) dbg.attach('1.3');
   await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
   let pressed = false;
   try {
-    await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    // Chromium can defer a hidden host's mouseMoved ACK until its next 1 Hz
+    // compositor frame. A coordinate-bearing mousePressed targets the same
+    // pixel without that frame wait; keep hover movement for visible views.
+    if (movePointer) await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
     pressed = true;
     await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 });
   } finally {
@@ -3786,7 +3789,7 @@ async function clickNativeBrowserSurface(payload = {}) {
   leaseNativeBrowserActivity(view);
   // Real trusted click at the element's center — matches how Playwright clicks
   // Chrome (coordinate-based, isTrusted=true) so sites like X accept it.
-  await sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left');
+  await sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left', nativeViewMeta(view).visible);
   return located;
 }
 
@@ -3802,7 +3805,7 @@ async function fillNativeBrowserSurface(payload = {}) {
   // the value as TRUSTED input. This is required for rich editors like X's
   // Draft.js composer (a contenteditable) that ignore programmatic textContent,
   // and it keeps isTrusted=true so anti-bot checks accept it.
-  await sendNativeMouseClick(wc, located.x, located.y, 'left');
+  await sendNativeMouseClick(wc, located.x, located.y, 'left', nativeViewMeta(view).visible);
   await executeNativeBrowserJavaScript(`(() => {
     const el = ${nativeTargetSelector(payload)};
     if (!el) return false;
@@ -3936,7 +3939,7 @@ async function inputNativeBrowserSurface(payload = {}) {
     const x = Math.max(0, Math.round(Number(payload.x || 0)));
     const y = Math.max(0, Math.round(Number(payload.y || 0)));
     const button = payload.button === 'right' ? 'right' : 'left';
-    await sendNativeMouseClick(wc, x, y, button);
+    await sendNativeMouseClick(wc, x, y, button, nativeViewMeta(view).visible);
   } else {
     throw new Error(`Unsupported native browser input action "${action || 'unknown'}".`);
   }
