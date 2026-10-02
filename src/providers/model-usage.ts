@@ -45,6 +45,10 @@ export interface ModelUsageEvent {
   estimatedConversationTokens?: number;
   estimatedToolSchemaTokens?: number;
   estimatedProviderInputTokens?: number;
+  /** Number of tool definitions sent with this call. */
+  toolSchemaCount?: number;
+  /** Largest tool definitions in this call as [name, estimatedTokens]. */
+  toolSchemaTop?: Array<[string, number]>;
   promptManifestId?: string;
   promptManifestHash?: string;
   promptManifestVersion?: number;
@@ -108,6 +112,23 @@ export function estimateMessagesTokens(messages: ChatMessage[] | Array<any> | un
 export function estimateToolSchemaTokens(tools: Array<any> | undefined): number {
   if (!Array.isArray(tools) || tools.length === 0) return 0;
   return estimateTextTokens(JSON.stringify(tools));
+}
+
+/**
+ * Per-call tool-definition footprint: how many tools were sent and which ones
+ * cost the most. Tool definitions were ~20% of all input tokens (p50 ~18k per
+ * call) with no way to see which tools drove it. Recorded on every usage event
+ * so `scripts/tool-schema-report.mjs` can rank tools across sessions.
+ */
+export function summarizeToolSchemaFootprint(tools: Array<any> | undefined, top = 12): { toolSchemaCount: number; toolSchemaTop: Array<[string, number]> } {
+  if (!Array.isArray(tools) || tools.length === 0) return { toolSchemaCount: 0, toolSchemaTop: [] };
+  const sized: Array<[string, number]> = [];
+  for (const tool of tools) {
+    const name = String(tool?.function?.name || tool?.name || 'unknown').slice(0, 80);
+    sized.push([name, estimateTextTokens(JSON.stringify(tool))]);
+  }
+  sized.sort((a, b) => b[1] - a[1]);
+  return { toolSchemaCount: tools.length, toolSchemaTop: sized.slice(0, Math.max(0, top)) };
 }
 
 export interface UsageCalibration {
@@ -277,6 +298,10 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       estimatedConversationTokens: normalizeCount(event.estimatedConversationTokens),
       estimatedToolSchemaTokens: normalizeCount(event.estimatedToolSchemaTokens),
       estimatedProviderInputTokens: normalizeCount(event.estimatedProviderInputTokens),
+      ...(event.toolSchemaCount !== undefined ? { toolSchemaCount: normalizeCount(event.toolSchemaCount) } : {}),
+      ...(Array.isArray(event.toolSchemaTop) && event.toolSchemaTop.length
+        ? { toolSchemaTop: event.toolSchemaTop.slice(0, 12).map(([name, tokens]) => [String(name).slice(0, 80), normalizeCount(tokens) || 0] as [string, number]) }
+        : {}),
     };
     const cost = estimateModelUsageCost(base);
     const full: ModelUsageEvent = {

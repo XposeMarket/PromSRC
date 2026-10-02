@@ -194,7 +194,34 @@ function hashBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
+// Stat-keyed fingerprint cache (the same trick git's index uses). Content hashes
+// are only recomputed when size, mtime or ctime changed. Before this, every
+// tracked command sha256'd up to 5000 workspace files twice (baseline and
+// finalize): ~600 ms of overhead on 98% of run_command calls. The cache lives
+// for the process, so repeated commands in the same tree are stat-only.
+const FINGERPRINT_CACHE_MAX = 60_000;
+const fingerprintCache = new Map<string, { size: number; mtimeMs: number; ctimeMs: number; fingerprint: string }>();
+
+export function __resetTerminalFingerprintCacheForTests(): void {
+  fingerprintCache.clear();
+}
+
 function fileFingerprint(filePath: string, stat: fs.Stats): string {
+  const key = compareKey(filePath);
+  const cached = fingerprintCache.get(key);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs) {
+    return cached.fingerprint;
+  }
+  const fingerprint = computeFileFingerprint(filePath, stat);
+  // Never cache the stat-only fallback: it carries no content evidence.
+  if (!fingerprint.startsWith('stat:')) {
+    if (fingerprintCache.size >= FINGERPRINT_CACHE_MAX) fingerprintCache.clear();
+    fingerprintCache.set(key, { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, fingerprint });
+  }
+  return fingerprint;
+}
+
+function computeFileFingerprint(filePath: string, stat: fs.Stats): string {
   try {
     const fd = fs.openSync(filePath, 'r');
     try {

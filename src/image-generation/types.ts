@@ -102,6 +102,8 @@ export interface ImageGenerationSuccess {
   output_format?: ImageOutputFormat;
   output_compression?: number;
   presentation_mode?: ImageGenerationPresentationMode;
+  /** Set when the requested provider was unavailable/incompatible and another provider was used. */
+  providerFallback?: string;
 }
 
 export interface ImageGenerationFailure {

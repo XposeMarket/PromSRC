@@ -156,7 +156,7 @@ export async function executeSkillList(
   args: { compact?: boolean; query?: string; q?: string; limit?: number; include_descriptions?: boolean; includeDescriptions?: boolean },
   skillsManager: SkillsManager,
 ): Promise<ToolResult> {
-  skillsManager.scanSkills();
+  skillsManager.refreshSkillsIfChanged();
   const all = skillsManager.getAll();
   const available = all.filter((skill: any) =>
     skill.executionEnabled !== false
@@ -208,7 +208,7 @@ export async function executeSkillRead(
   const id = String(args.id || '').trim();
   if (!id) return { success: false, error: 'id is required' };
 
-  skillsManager.scanSkills();
+  skillsManager.refreshSkillsIfChanged();
   const skill = skillsManager.get(id);
   if (!skill) {
     return {
@@ -374,7 +374,7 @@ export const skillResourceListTool = {
     const sm = getDefaultSkillsManager();
     const id = String(args?.id || args?.skill_id || '').trim();
     if (!id) return skillErr('id is required. Call skill_list first.');
-    sm.scanSkills();
+    sm.refreshSkillsIfChanged();
     const skill = sm.get(id);
     if (!skill) return skillErr(`Skill "${id}" not found.`);
     const resources = sm.listResources(id);
@@ -401,7 +401,7 @@ export const skillResourceReadTool = {
     const maxChars = Number(args?.max_chars ?? args?.maxChars);
     if (!id) return skillErr('id is required.');
     if (!resourcePath) return skillErr('path is required.');
-    sm.scanSkills();
+    sm.refreshSkillsIfChanged();
     const result = sm.readResource(id, resourcePath, Number.isFinite(maxChars) ? maxChars : undefined);
     if (!result.ok) return skillErr(result.error);
     return skillOk(`Resource ${id}/${result.path}${result.truncated ? ' (truncated)' : ''}:\n\n${result.content}`);
@@ -430,7 +430,7 @@ export const skillInspectTool = {
     const sm = getDefaultSkillsManager();
     const id = String(args?.id || args?.skill_id || '').trim();
     if (!id) return skillErr('id is required. Call skill_list first.');
-    sm.scanSkills();
+    sm.refreshSkillsIfChanged();
     const inspection = sm.inspect(id);
     if (!inspection) return skillErr(`Skill "${id}" not found.`);
     return skillOk(JSON.stringify(inspection, null, 2), inspection);

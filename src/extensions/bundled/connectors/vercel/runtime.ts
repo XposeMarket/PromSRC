@@ -451,22 +451,46 @@ function buildProjectBody(args: any, includeName = false): JsonRecord {
   return body;
 }
 
-function normalizeGitSource(args: any): { source?: JsonRecord; error?: string } {
-  const raw = pickRecord(args?.gitSource) || {};
+// Project Git link -> gitSource defaults. 5 of 8 create_deployment failures
+// passed only name/projectId + ref and no repository identifier, even though
+// the Vercel project was already linked to a repo.
+function gitSourceDefaultsFromProjectLink(link: any): JsonRecord {
+  if (!link || typeof link !== 'object') return {};
+  const out: JsonRecord = {};
+  const type = pickString(link.type).toLowerCase();
+  if (type) out.type = type;
+  if (pickString(link.org)) out.org = pickString(link.org);
+  if (pickString(link.repo)) out.repo = pickString(link.repo);
+  if (link.repoId !== undefined && link.repoId !== null && String(link.repoId)) out.repoId = String(link.repoId);
+  if (link.projectId !== undefined && link.projectId !== null && String(link.projectId) && type === 'gitlab') out.projectId = String(link.projectId);
+  if (pickString(link.repoUuid)) out.repoUuid = pickString(link.repoUuid);
+  if (pickString(link.productionBranch)) out.ref = pickString(link.productionBranch);
+  return out;
+}
+
+function normalizeGitSource(args: any, linkDefaults: JsonRecord = {}): { source?: JsonRecord; error?: string; usedProjectLink?: boolean } {
+  const explicit = pickRecord(args?.gitSource) || {};
+  const hasExplicitRepo = ['repo', 'repoId', 'projectId', 'repoUuid'].some((key) => pickString(explicit[key] ?? args?.[`git${key[0].toUpperCase()}${key.slice(1)}`]));
+  const raw: JsonRecord = hasExplicitRepo ? explicit : { ...linkDefaults, ...explicit };
+  const usedProjectLink = !hasExplicitRepo && Object.keys(linkDefaults).length > 0;
   const type = pickString(raw.type || args?.gitProvider || 'github').toLowerCase();
   if (!['github', 'gitlab', 'bitbucket'].includes(type)) {
     return { error: 'gitSource.type must be github, gitlab, or bitbucket.' };
   }
   const source: JsonRecord = { type };
   for (const key of ['org', 'repo', 'ref', 'sha', 'repoId', 'projectId', 'repoUuid', 'prId']) {
-    const value = pickString(raw[key] ?? args?.[`git${key[0].toUpperCase()}${key.slice(1)}`]);
+    // Precedence: gitSource.<key>, then the flat git<Key> arg, then the
+    // project-link default. Explicit caller values always beat link defaults.
+    const value = pickString(explicit[key] ?? args?.[`git${key[0].toUpperCase()}${key.slice(1)}`] ?? (hasExplicitRepo ? undefined : linkDefaults[key]));
     if (value) source[key] = value;
   }
+  // A caller-supplied sha alone should not be paired with the link's default branch.
+  if (usedProjectLink && pickString(explicit.sha ?? args?.gitSha) && !pickString(explicit.ref ?? args?.gitRef)) delete source.ref;
   if (!source.repo && !source.repoId && !source.projectId && !source.repoUuid) {
-    return { error: 'A Git deployment requires a repository identifier such as gitSource.repo, repoId, projectId, or repoUuid.' };
+    return { error: 'A Git deployment requires a repository identifier (gitSource.repo with org, repoId, GitLab projectId, or Bitbucket repoUuid). Pass projectId of a Git-linked Vercel project to use its linked repository automatically.' };
   }
   if (!source.ref && !source.sha) return { error: 'A Git deployment requires gitSource.ref or gitSource.sha.' };
-  return { source };
+  return { source, usedProjectLink };
 }
 
 const vercelExtension: PrometheusExtensionDefinition = {
@@ -739,7 +763,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
 
     api.registerTool({
       name: 'connector_vercel_create_deployment',
-      description: '[Vercel] Create a new deployment from a GitHub, GitLab, or Bitbucket repository branch/ref or commit SHA. This is the source-aware deployment operation; external write requires approval.',
+      description: '[Vercel] Create a new deployment from a GitHub, GitLab, or Bitbucket repository branch/ref or commit SHA. Needs a repository (gitRepo+gitOrg, gitRepoId, gitProjectId or gitRepoUuid) and a ref or sha. If projectId names a Git-linked Vercel project, its linked repository and production branch are used for anything omitted. External write requires approval.',
       parameters: {
         type: 'object',
         required: ['name'],
@@ -771,7 +795,15 @@ const vercelExtension: PrometheusExtensionDefinition = {
       execute: async (args: any, context) => withAuth(context, async (auth) => {
         const name = pickString(args?.name);
         if (!name) return fail('name is required.');
-        const git = normalizeGitSource(args);
+        let linkDefaults: JsonRecord = {};
+        const explicitGit = pickRecord(args?.gitSource) || {};
+        const needsLink = !['repo', 'repoId', 'projectId', 'repoUuid'].some((key) => pickString(explicitGit[key] ?? args?.[`git${key[0].toUpperCase()}${key.slice(1)}`]));
+        const linkedProject = pickString(args?.projectId) || pickString(args?.project_id) || pickString(args?.project) || name;
+        if (needsLink && linkedProject) {
+          const projectRes = await vercelFetch(`/v9/projects/${encodeURIComponent(linkedProject)}`, auth, { teamId: resolveTeamId(args, auth) });
+          if (projectRes.ok) linkDefaults = gitSourceDefaultsFromProjectLink(projectRes.data?.link);
+        }
+        const git = normalizeGitSource(args, linkDefaults);
         if (git.error) return fail(git.error);
         const requestedTarget = pickString(args?.target);
         const body: JsonRecord = {

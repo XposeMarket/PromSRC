@@ -97,6 +97,35 @@ function runNonGitWorkspaceCase(): void {
   }
 }
 
+// 2026-10-02 fingerprint cache: unchanged files must hit the stat-keyed cache,
+// and a same-size rewrite must still be detected even when the mtime is forced
+// back to the original value (ctime still moves, and is part of the key).
+function runFingerprintCacheCase(): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-tracker-cache-'));
+  try {
+    write(root, 'same-size.txt', 'aaaa\n');
+    write(root, 'stable.txt', 'stable\n');
+    for (let i = 0; i < 400; i += 1) write(root, `bulk/file-${i}.txt`, `bulk ${i}\n`.repeat(50));
+    const warm = createTerminalWorkspaceTracker({ workspacePath: root, cwd: root, command: 'warm cache' });
+    assert.equal(warm!.finalize().workspaceChanges.length, 0, 'warm run sees no changes');
+
+    const started = Date.now();
+    const tracker = createTerminalWorkspaceTracker({ workspacePath: root, cwd: root, command: 'same size rewrite' });
+    const target = path.join(root, 'same-size.txt');
+    const before = fs.statSync(target);
+    fs.writeFileSync(target, 'bbbb\n');
+    fs.utimesSync(target, before.atime, before.mtime);
+    const result = tracker!.finalize();
+    const elapsed = Date.now() - started;
+    assert.equal(changed(result, 'same-size.txt')?.status, 'modified', 'same-size rewrite with restored mtime is still detected');
+    assert.equal(changed(result, 'stable.txt'), undefined, 'untouched file is not reported');
+    assert.equal(result.workspaceChanges.length, 1, 'only the rewritten file changed');
+    assert.ok(elapsed < 2000, `cached baseline+finalize over 402 files should be fast, took ${elapsed} ms`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function runBoundedCommandHintCase(): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-tracker-bounded-'));
   try {
@@ -253,6 +282,7 @@ async function main(): Promise<void> {
   assert.equal(shouldTrackTerminalWorkspaceChanges('npm run build'), true, 'unknown or potentially mutating commands stay tracked');
   runGitWorkspaceCase();
   runNonGitWorkspaceCase();
+  runFingerprintCacheCase();
   runBoundedCommandHintCase();
   await runProcessSupervisorCase();
   console.log('[terminal-change-tracker] Git, read-only classification, dirty-baseline, failed-edit, revert, rename, ignored, non-Git, bounded command hints, and process lifecycle cases passed');

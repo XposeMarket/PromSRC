@@ -15,6 +15,7 @@ import {
   estimateMessagesTokens,
   estimateTextTokens,
   estimateToolSchemaTokens,
+  summarizeToolSchemaFootprint,
   normalizeUsage,
 } from '../providers/model-usage';
 import type { AgentRole } from '../types';
@@ -149,6 +150,7 @@ export class ProviderReactorClient implements ReactorClient {
     const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
     const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);
     const estimatedToolSchemaTokens = estimateToolSchemaTokens(options?.tools);
+    const toolSchemaFootprint = summarizeToolSchemaFootprint(options?.tools);
     const estimatedProviderInputTokens = estimatedMessageInputTokens + estimatedToolSchemaTokens;
     const usage = normalizeUsage(result.usage, {
       inputTokens: estimatedProviderInputTokens,
@@ -166,6 +168,7 @@ export class ProviderReactorClient implements ReactorClient {
       estimatedConversationTokens,
       estimatedToolSchemaTokens,
       estimatedProviderInputTokens,
+      ...toolSchemaFootprint,
       durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };

@@ -660,7 +660,52 @@ export class SkillsManager {
     });
   }
 
-  scanSkills(): void {
+  // Cheap change detector for the skills tree: one readdir of the skills root
+  // plus a stat of each skill folder, its entrypoint/manifest, and the
+  // .manifests overlay dir. Editing SKILL.md in place does not touch the folder
+  // mtime on Windows/NTFS, so the entrypoint files are stat'ed directly.
+  // ~200 skills: ~5-15 ms, versus ~900 ms for a full reload.
+  private lastTreeSignature = '';
+
+  private computeTreeSignature(): string {
+    const parts: string[] = [];
+    const statSig = (p: string): string => {
+      try { const s = fs.statSync(p); return `${Math.round(s.mtimeMs)}:${s.size}`; } catch { return '-'; }
+    };
+    try {
+      const entries = fs.readdirSync(this.skillsDir, { withFileTypes: true });
+      parts.push(`root:${entries.length}`);
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === '.manifests') { parts.push(`.manifests:${statSig(path.join(this.skillsDir, entry.name))}`); continue; }
+        if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
+        const dir = path.join(this.skillsDir, entry.name);
+        parts.push(`${entry.name}:${statSig(dir)}:${statSig(path.join(dir, 'SKILL.md'))}:${statSig(path.join(dir, 'skill.json'))}`);
+      }
+      try {
+        for (const file of fs.readdirSync(path.join(this.skillsDir, '.manifests'))) parts.push(`m:${file}:${statSig(path.join(this.skillsDir, '.manifests', file))}`);
+      } catch { /* no overlays */ }
+    } catch {
+      return `missing:${Date.now()}`;
+    }
+    return crypto.createHash('sha1').update(parts.join('|')).digest('hex');
+  }
+
+  /**
+   * Reload only when the skills tree actually changed. Read paths (skill_list,
+   * skill_read, inspect, resources) use this; mutation paths keep calling
+   * scanSkills() directly so their own writes are always picked up.
+   */
+  refreshSkillsIfChanged(): boolean {
+    if (!this.scannedOnce) { this.scanSkills(); return true; }
+    const signature = this.computeTreeSignature();
+    if (signature === this.lastTreeSignature) return false;
+    this.scanSkills(signature);
+    return true;
+  }
+
+  scanSkills(knownSignature?: string): void {
+    this.lastTreeSignature = knownSignature || this.computeTreeSignature();
     this.scannedOnce = true;
     this.skillsStore.clear();
     this.lastScanAt = Date.now();
@@ -729,7 +774,7 @@ export class SkillsManager {
 
   scanSkillsIfStale(maxAgeMs = 30_000): void {
     if (Date.now() - this.lastScanAt < maxAgeMs && this.skills.size > 0) return;
-    this.scanSkills();
+    this.refreshSkillsIfChanged();
   }
 
   getAll(): Skill[] {

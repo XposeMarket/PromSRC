@@ -23,6 +23,10 @@ globalThis.fetch = (async (input: any, init?: RequestInit) => {
   lastInit = init;
   const body = lastUrl.pathname === '/v13/deployments'
     ? { uid: 'test-deployment', readyState: 'QUEUED' }
+    : lastUrl.pathname === '/v9/projects/linked-site'
+      ? { id: 'prj_linked', name: 'linked-site', link: { type: 'github', org: 'XposeMarket', repo: 'xpose-site', repoId: 123456, productionBranch: 'main' } }
+    : lastUrl.pathname.startsWith('/v9/projects/')
+      ? { id: 'prj_unlinked', name: 'unlinked' }
     : lastUrl.pathname.endsWith('/events')
       ? [{ payload: { date: 'not-a-timestamp', text: 'build started' } }]
       : { teams: [] };
@@ -46,6 +50,21 @@ async function run() {
       const body = JSON.parse(String(lastInit?.body));
       assert.equal(body.gitSource[identifier], value, `${provider} source identifier must survive normalization`);
     }
+
+    // 2026-10-02: a Git-linked project fills the repo + production branch.
+    const linked = await createDeployment.execute({ name: 'linked-site', projectId: 'linked-site' }, context);
+    assert.equal(linked.error, false, `linked project deployment should be accepted: ${linked.result}`);
+    const linkedBody = JSON.parse(String(lastInit?.body));
+    assert.equal(linkedBody.gitSource.repo, 'xpose-site');
+    assert.equal(linkedBody.gitSource.org, 'XposeMarket');
+    assert.equal(linkedBody.gitSource.ref, 'main');
+    // Explicit ref wins over the production branch default.
+    await createDeployment.execute({ name: 'linked-site', projectId: 'linked-site', gitRef: 'feature/x' }, context);
+    assert.equal(JSON.parse(String(lastInit?.body)).gitSource.ref, 'feature/x');
+    // An unlinked project with no repo still fails with an actionable message.
+    const unlinked = await createDeployment.execute({ name: 'unlinked', projectId: 'unlinked', gitRef: 'main' }, context);
+    assert.equal(unlinked.error, true);
+    assert.match(unlinked.result, /Git-linked Vercel project/);
 
     const events = registeredTools.get('connector_vercel_deployment_events');
     assert(events, 'deployment events tool must register');

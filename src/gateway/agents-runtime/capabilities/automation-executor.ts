@@ -933,10 +933,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             abortSignal: deps.abortSignal,
           });
           const threadLinks = buildPrometheusThreadLinksArtifact(args, out);
+          // Compact JSON: pretty-printing added ~30% tokens to results that
+          // already averaged 6-12k tokens (read/list/find/status).
           return {
             name,
             args,
-            result: JSON.stringify({ success: true, ...out }, null, 2),
+            result: JSON.stringify({ success: true, ...out }),
             error: false,
             extra: threadLinks ? { richArtifacts: [threadLinks] } : undefined,
           };

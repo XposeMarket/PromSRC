@@ -24,6 +24,7 @@ import {
   estimateMessagesTokens,
   estimateTextTokens,
   estimateToolSchemaTokens,
+  summarizeToolSchemaFootprint,
   normalizeUsage,
 } from '../providers/model-usage';
 import { AgentRole } from '../types';
@@ -271,6 +272,7 @@ export class OllamaClient {
     const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
     const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);
     const estimatedToolSchemaTokens = estimateToolSchemaTokens(options?.tools);
+    const toolSchemaFootprint = summarizeToolSchemaFootprint(options?.tools);
     const estimatedProviderInputTokens = estimatedMessageInputTokens + estimatedToolSchemaTokens;
     const usage = normalizeUsage(result.usage, {
       inputTokens: estimatedProviderInputTokens,
@@ -289,6 +291,7 @@ export class OllamaClient {
       estimatedConversationTokens,
       estimatedToolSchemaTokens,
       estimatedProviderInputTokens,
+      ...toolSchemaFootprint,
       promptManifestId: promptManifest.id,
       promptManifestHash: promptManifest.hash,
       promptManifestVersion: promptManifest.version,
