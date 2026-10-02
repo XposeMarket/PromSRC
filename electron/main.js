@@ -2694,6 +2694,7 @@ function parkNativeBrowserView(view) {
   const size = nativeAutomationSize(view);
   let host = nativeBrowserAutomationHosts.get(key);
   if (!host || host.isDestroyed()) {
+    meta.automationHostNeedsPaint = true;
     host = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true,
       focusable: false, skipTaskbar: true, width: size.width, height: size.height,
       webPreferences: { backgroundThrottling: true } });
@@ -2709,6 +2710,7 @@ function parkNativeBrowserView(view) {
   if (view.__prometheusNativeBrowserViewKind === 'web-contents') host.contentView.addChildView(view);
   else host.addBrowserView(view);
   meta.automationHost = host;
+  meta.automationHostNeedsPaint = true;
   try { host.setContentSize(size.width, size.height); view.setBounds({ x: 0, y: 0, ...size }); } catch {}
   applyNativeBrowserVisibilityPolicy(view, false);
 }
@@ -2721,6 +2723,7 @@ function unparkNativeBrowserView(view) {
     else host.removeBrowserView(view);
   } catch {}
   meta.automationHost = null;
+  meta.automationHostNeedsPaint = false;
   nativeBrowserAutomationHosts.delete(nativeTabKey(meta.partition, meta.tabId));
   try { host.destroy(); } catch {}
   if (!view.webContents?.isDestroyed?.()) applyNativeBrowserVisibilityPolicy(view, meta.presented);
@@ -3765,10 +3768,11 @@ async function sendNativeMouseClick(wc, x, y, button = 'left', movePointer = tru
   await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
   let pressed = false;
   try {
-    // Chromium can defer a hidden host's mouseMoved ACK until its next 1 Hz
-    // compositor frame. A coordinate-bearing mousePressed targets the same
-    // pixel without that frame wait; keep hover movement for visible views.
+    // Hidden hosts may need a pointer update for the first hit test after
+    // parking, but awaiting CDP mouseMoved stalls until their next paint (~1s).
+    // Electron queues mouseMove synchronously ahead of the trusted CDP press.
     if (movePointer) await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    else wc.sendInputEvent({ type: 'mouseMove', x, y });
     pressed = true;
     await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 });
   } finally {
@@ -3780,6 +3784,31 @@ async function sendNativeMouseClick(wc, x, y, button = 'left', movePointer = tru
   }
 }
 
+// Only a freshly parked hidden host requires a compositor readiness probe.
+// capturePage resolves after a real surface exists; never retry the click itself.
+async function ensureNativeHiddenSurfacePaint(view) {
+  const meta = nativeViewMeta(view);
+  if (meta.visible || !meta.automationHostNeedsPaint) return;
+  const wc = view.webContents;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let timer;
+    try {
+      const image = await Promise.race([
+        wc.capturePage({ stayHidden: true }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('surface_not_rendered: first hidden paint timed out.')), 400); }),
+      ]);
+      const size = image?.getSize?.();
+      if (!size?.width || !size?.height) throw new Error('surface_not_rendered: first hidden paint has zero dimensions.');
+      meta.automationHostNeedsPaint = false;
+      return;
+    } catch (error) { lastError = error; }
+    finally { clearTimeout(timer); }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  throw new Error(`surface_not_rendered: hidden browser click deferred until first paint (${lastError?.message || lastError}).`);
+}
+
 async function clickNativeBrowserSurface(payload = {}) {
   const sessionId = payload.sessionId || '';
   await snapshotNativeBrowserSurface(sessionId).catch(() => null);
@@ -3787,6 +3816,7 @@ async function clickNativeBrowserSurface(payload = {}) {
   const located = await locateNativeElement(payload, sessionId);
   if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
   leaseNativeBrowserActivity(view);
+  await ensureNativeHiddenSurfacePaint(view);
   // Real trusted click at the element's center — matches how Playwright clicks
   // Chrome (coordinate-based, isTrusted=true) so sites like X accept it.
   await sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left', nativeViewMeta(view).visible);
@@ -3801,6 +3831,7 @@ async function fillNativeBrowserSurface(payload = {}) {
   const located = await locateNativeElement(payload, sessionId);
   if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
   leaseNativeBrowserActivity(view);
+  await ensureNativeHiddenSurfacePaint(view);
   // Focus the field with a real click, select any existing content, then type
   // the value as TRUSTED input. This is required for rich editors like X's
   // Draft.js composer (a contenteditable) that ignore programmatic textContent,
@@ -3896,13 +3927,10 @@ async function inputNativeBrowserSurface(payload = {}) {
     const before = await wc.executeJavaScript(readScroll, true).catch(() => null);
     const wheelX = Math.max(0, Math.round(Number(payload.x || 0)));
     const wheelY = Math.max(0, Math.round(Number(payload.y || 0)));
-    if (!nativeViewMeta(view).visible) {
-      const dbg = wc.debugger;
-      if (!dbg.isAttached()) dbg.attach('1.3');
-      await dbg.sendCommand('Input.dispatchMouseEvent', {
-        type: 'mouseWheel', x: wheelX, y: wheelY, deltaX: -deltaX, deltaY: -deltaY,
-      });
-    } else wc.sendInputEvent({ type: 'mouseWheel', x: wheelX, y: wheelY,
+    // Hidden CDP mouseWheel ACK can stall behind a 1 Hz compositor frame.
+    // Electron queues the wheel synchronously; movement verification below
+    // retains the existing DOM fallback if the hidden surface ignores it.
+    wc.sendInputEvent({ type: 'mouseWheel', x: wheelX, y: wheelY,
       deltaX: -deltaX, deltaY: -deltaY, canScroll: true });
     let after = await wc.executeJavaScript(readScroll, true).catch(() => null);
     if (before && after && before.x === after.x && before.y === after.y) {
@@ -3936,6 +3964,7 @@ async function inputNativeBrowserSurface(payload = {}) {
     return { ok: true, moved, method, before, after };
   } else if (action === 'click') {
     leaseNativeBrowserActivity(view);
+    await ensureNativeHiddenSurfacePaint(view);
     const x = Math.max(0, Math.round(Number(payload.x || 0)));
     const y = Math.max(0, Math.round(Number(payload.y || 0)));
     const button = payload.button === 'right' ? 'right' : 'left';
