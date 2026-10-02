@@ -47400,6 +47400,11 @@ async function rebuildDesktopStreamFromReplay(sid, streamId) {
     if (events.some((frame) => ['done', 'error'].includes(String(frame?.type || frame?.event || '')))) return false;
     const sess = getChatSessionById(sid);
     if (!sess || desktopSessionHasLocalSseTurn(sid)) return false;
+    // The done frame can reach this tab over WS while the replay request is in
+    // flight but after the server built the replay body. Normal done handling
+    // already cleared the run; re-marking it here would leave a stuck spinner.
+    if (!window._sessionThinking?.[sid] || sess.activeRun !== true) return false;
+    if (String(window._mainChatStreamActiveIdBySession?.[sid] || '') !== streamId) return false;
     const prev = window._sessionStreamState?.[sid] || makeEmptyStreamState();
     const fresh = makeEmptyStreamState();
     for (const key of ['currentTurnStartIndex', 'turnStartedAt', 'pendingApprovals', 'activeModelBadge', 'agentExecutionMode']) {
