@@ -1,11 +1,11 @@
 {
   "version": 3,
   "capturedFrom": "7e1a22dc4",
-  "maxNewModuleBytes": 469138,
+  "maxNewModuleBytes": 472009,
   "maxChatFeatureModuleBytes": 150000,
   "maxMobileRendererContextDependencies": 124,
   "legacySurfaces": {
-    "web-ui/src/pages/ChatPage.js": 2342489,
+    "web-ui/src/pages/ChatPage.js": 2344980,
     "web-ui/src/mobile/mobile-pages.js": 898464,
     "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 256913,
     "web-ui/src/styles/mobile.css": 641881,
