@@ -136,6 +136,18 @@ if (IS_SOURCE_ELECTRON_DEV) {
   app.commandLine.appendSwitch('disable-http-cache');
 }
 
+// Hidden browser automation parks tabs in an off-screen, non-focusable host
+// that is shown inactive only during a bounded activity lease. Windows native
+// occlusion tracking classifies that off-display host as occluded and stops
+// its compositor, so a never-presented tab has no capture surface and drops
+// trusted input ("Current display surface not available for capture").
+// Verified with reviews/browser-perf-2026-10-02/foreground-host-probe.cjs:
+// occlusion on => 0 clicks / no surface; off => 1280x800 frame + trusted input.
+// Idle tabs are still throttled via backgroundThrottling and host.hide().
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+}
+
 function getPackagedAppRoot() {
   // Public builds use app.asar, while the unsigned tester build intentionally
   // uses an unpacked Resources/app directory. Resolve the actual layout so
@@ -2754,8 +2766,13 @@ function leaseNativeBrowserActivity(view) {
   nativeBrowserActivityLeases.set(key, { timer, expiresAt });
   // showInactive creates a compositor without focus or an on-screen surface.
   const host = meta.automationHost;
-  if (host && !host.isDestroyed() && !host.isVisible()) host.showInactive();
   applyNativeBrowserVisibilityPolicy(view, meta.presented);
+  if (host && !host.isDestroyed()) {
+    // Activate rendering before showing the host, then explicitly expose the
+    // child View. A visible window does not imply a visible child compositor.
+    view.setVisible?.(true);
+    if (!host.isVisible()) host.showInactive();
+  }
   return expiresAt;
 }
 
@@ -3297,7 +3314,8 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
     try {
       candidate = new implementation.Constructor({ webPreferences });
       candidate.__prometheusNativeBrowserViewKind = implementation.kind;
-      attachNativeBrowserView(candidate);
+      // Start in the automation host below. Attaching a never-rendered view to
+      // the main window first couples its initial compositor to UI presentation.
       view = candidate;
       break;
     } catch (error) {
@@ -3842,7 +3860,13 @@ async function ensureNativeHiddenSurfacePaint(view) {
   }
   const host = meta.automationHost;
   const surface = { tabId: meta.tabId, presented: meta.presented, visible: meta.visible,
-    bounds: view.getBounds?.(), hostPresent: !!host, hostDestroyed: host?.isDestroyed?.(),
+    bounds: view.getBounds?.(), viewVisible: view.getVisible?.(), viewKind: view.__prometheusNativeBrowserViewKind,
+    hostContentBounds: host && !host.isDestroyed() ? host.getContentBounds() : null,
+    hostRootBounds: host && !host.isDestroyed() ? host.contentView?.getBounds?.() : null,
+    hostRootVisible: host && !host.isDestroyed() ? host.contentView?.getVisible?.() : null,
+    hostThrottled: host && !host.isDestroyed() ? host.webContents.backgroundThrottling : null,
+    hostMinimized: host && !host.isDestroyed() ? host.isMinimized() : null,
+    hostPresent: !!host, hostDestroyed: host?.isDestroyed?.(),
     hostVisible: host && !host.isDestroyed() ? host.isVisible() : false,
     hostBounds: host && !host.isDestroyed() ? host.getBounds() : null,
     attached: host && !host.isDestroyed() ? (host.contentView?.children?.includes(view) ?? host.getBrowserViews?.().includes(view)) : false,
