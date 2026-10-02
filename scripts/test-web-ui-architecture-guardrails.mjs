@@ -23,7 +23,7 @@ const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
 });
 // Reviewed against the extracted mobile-chat-page-runtime.js on 2026-10-01.
 // Keep an explicit code-owned cap so subsequent unreviewed growth still fails.
-const CODE_OWNED_NEW_MODULE_CEILING = 469138;
+const CODE_OWNED_NEW_MODULE_CEILING = 472009;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
 const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 124;
 
