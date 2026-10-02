@@ -112,7 +112,12 @@ assert.equal(normalizedMemoryPressure.processId, 4242);
 assert.equal(normalizedMemoryPressure.processBreakdown.gpu.cpuPercent, 35);
 
 assert.match(mainSource, /backgroundThrottling:\s*true/);
-assert.match(mainSource, /setBackgroundThrottling\(true\)/);
+assert.match(mainSource, /wc\.setBackgroundThrottling\(throttled\)/);
+assert.match(mainSource, /hostWC\.setBackgroundThrottling\(throttled\)/);
+assert.match(mainSource, /NATIVE_BROWSER_MAX_LEASES = 2/);
+assert.match(mainSource, /setTimeout\(\(\) => releaseNativeBrowserLease\(view\), NATIVE_BROWSER_LEASE_MS\)/);
+assert.match(mainSource, /parkNativeBrowserView\(view\)/);
+assert.match(mainSource, /surface_not_rendered: browser screenshot has zero dimensions/);
 assert.match(mainSource, /pathName === '\/metrics'/);
 assert.match(mainSource, /sampleNativeBrowserResources/);
 assert.match(mainSource, /applyNativeBrowserVisibilityPolicy\(v, isSelected\)/);
