@@ -46980,7 +46980,8 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   const streamState = getSessionStreamState(sid) || resetSessionStreamState(sid);
   const isViewing = sid === window.activeChatSessionId;
   const renderIfViewing = () => {
-    if (!isViewing) return;
+    // Snapshot replays rebuild hundreds of frames in one tick and render once at the end.
+    if (!isViewing || options.suppressRender === true) return;
     applyStreamStateToWindow(sid);
     syncActiveSessionRunState();
     renderProgressPanel();
@@ -47359,37 +47360,148 @@ try { attachSessionPersistenceLifecycle(window, document, flushChatSessionsSave,
   if (_mainChatStreamBookkeepingTimer) runMainChatStreamSessionBookkeeping();
 }); } catch {}
 
-// A focus reply is a replacement cursor, not a replay: install the in-flight
-// answer and tool rows before accepting any subsequent sequence frames.
+// A focus reply arrives every time this tab switches back into a running chat.
+// It must never destroy the tool trace the tab already built: unfocused tabs
+// still receive tool_call/tool_result frames, only token-level frames are
+// filtered. The snapshot is a fast first paint; the authoritative rebuild is a
+// replay of the gateway's retained stream into a fresh state, swapped in one
+// tick so the trace never flashes empty.
+const _desktopSnapshotReplayInFlight = Object.create(null);
+
+// A turn this tab started streams over its own SSE request, and that runtime
+// holds a direct reference to window._sessionStreamState[sid]. Replacing the
+// object detaches it: the SSE keeps writing to the orphan and the visible
+// trace freezes. Such turns never need a snapshot, the SSE is authoritative.
+function desktopSessionHasLocalSseTurn(sid) {
+  return !!window._sessionAbortControllers?.[sid];
+}
+
+function desktopStreamStateHasLocalTurn(sid, streamId) {
+  if (desktopSessionHasLocalSseTurn(sid)) return true;
+  const knownStream = String(window._mainChatStreamActiveIdBySession?.[sid] || '') === streamId;
+  const st = window._sessionStreamState?.[sid];
+  if (!knownStream || !st) return false;
+  return (Array.isArray(st.liveTraceEntries) && st.liveTraceEntries.length > 0)
+    || !!st.streamingAIText || !!st.toolActivityStarted;
+}
+
+async function rebuildDesktopStreamFromReplay(sid, streamId) {
+  if (!sid || !streamId || _desktopSnapshotReplayInFlight[sid] || desktopSessionHasLocalSseTurn(sid)) return false;
+  _desktopSnapshotReplayInFlight[sid] = true;
+  try {
+    const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=0`, 6000);
+    if (!data || data.active !== true || sid !== window.activeChatSessionId) return false;
+    const events = Array.isArray(data.events) ? data.events : [];
+    const replayStreamId = String(data?.stream?.streamId || events[0]?.streamId || '').trim();
+    if (!events.length || replayStreamId !== streamId) return false;
+    // The turn start fell out of the retained window: keep the merged state.
+    if (Number(data?.stream?.firstSeq || 0) > 1) return false;
+    // A terminal frame means the turn finished meanwhile; normal done handling owns it.
+    if (events.some((frame) => ['done', 'error'].includes(String(frame?.type || frame?.event || '')))) return false;
+    const sess = getChatSessionById(sid);
+    if (!sess || desktopSessionHasLocalSseTurn(sid)) return false;
+    // The done frame can reach this tab over WS while the replay request is in
+    // flight but after the server built the replay body. Normal done handling
+    // already cleared the run; re-marking it here would leave a stuck spinner.
+    if (!window._sessionThinking?.[sid] || sess.activeRun !== true) return false;
+    if (String(window._mainChatStreamActiveIdBySession?.[sid] || '') !== streamId) return false;
+    const prev = window._sessionStreamState?.[sid] || makeEmptyStreamState();
+    const fresh = makeEmptyStreamState();
+    for (const key of ['currentTurnStartIndex', 'turnStartedAt', 'pendingApprovals', 'activeModelBadge', 'agentExecutionMode']) {
+      if (prev[key] !== undefined) fresh[key] = prev[key];
+    }
+    if (!Number.isInteger(fresh.currentTurnStartIndex) || fresh.currentTurnStartIndex < 0) {
+      fresh.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess);
+    }
+    fresh.turnStartedAt = Number(fresh.turnStartedAt || getSessionLastMessageAt(sess) || Date.now());
+    // The session already holds these process/history rows; the replay only
+    // rebuilds the live trace, so roll back anything it appends to them.
+    if (!Array.isArray(sess.processLog)) sess.processLog = [];
+    if (!Array.isArray(sess.history)) sess.history = [];
+    const logLength = sess.processLog.length;
+    const historyLength = sess.history.length;
+    const priorCursor = getMainChatStreamLastSeq(sid, streamId);
+    window._sessionStreamState[sid] = fresh;
+    resetMainChatStreamCursor(sid, streamId);
+    (window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {}))[sid] = streamId;
+    try {
+      events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: true, suppressRender: true }));
+    } finally {
+      if (sess.processLog.length > logLength) sess.processLog.length = logLength;
+      if (sess.history.length > historyLength) sess.history.length = historyLength;
+    }
+    window._sessionThinking = window._sessionThinking || {};
+    window._sessionThinking[sid] = true;
+    sess.activeRun = true;
+    if (sid === window.activeChatSessionId) {
+      applyStreamStateToWindow(sid);
+      syncActiveSessionRunState();
+      renderProgressPanel();
+      renderStreamingChatUpdate(sid);
+    }
+    // Frames that arrived while the replay request was in flight.
+    const replayedTo = getMainChatStreamLastSeq(sid, streamId);
+    if (priorCursor > replayedTo || Number(data?.stream?.lastSeq || 0) > replayedTo) {
+      catchUpMainChatStream(sid).catch(() => {});
+    }
+    return true;
+  } catch (err) {
+    console.warn('[ChatPage] snapshot replay rebuild failed', err);
+    return false;
+  } finally {
+    delete _desktopSnapshotReplayInFlight[sid];
+  }
+}
+
 wsEventBus.on('session_stream_snapshot', (snapshot = {}) => {
   const sid = String(snapshot.sessionId || '').trim();
   const streamId = String(snapshot.turnId || snapshot.streamId || '').trim();
   if (!sid || !streamId || sid !== window.activeChatSessionId) return;
   const seq = Math.max(0, Number(snapshot.seq || 0));
   if (getMainChatStreamLastSeq(sid, streamId) > seq) return;
-  const cursors = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
-  cursors[sid] = { ...(cursors[sid] || {}), [streamId]: seq };
-  (window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {}))[sid] = streamId;
   const sess = ensureChannelChatSession(sid);
   if (!sess) return;
-  const state = resetSessionStreamState(sid);
-  state.streamingAIText = String(snapshot.text || '');
-  state.streamingThinkingText = String(snapshot.thinking || '');
+  // Older builds injected flat placeholder rows; drop any that persisted.
+  if (Array.isArray(sess.processLog) && sess.processLog.some((entry) => entry?._pmStreamSnapshot)) {
+    sess.processLog = sess.processLog.filter((entry) => !entry?._pmStreamSnapshot);
+  }
   window._sessionThinking = window._sessionThinking || {};
   window._sessionThinking[sid] = true;
-  state.finalResponseStarted = !!state.streamingAIText;
-  state.turnStartedAt = Date.now();
-  if (snapshot.summary) setDesktopLiveProgressNarration(state, String(snapshot.summary),
-    (type, text, options) => appendLiveTraceToStreamState(state, type, text, options));
   sess.activeRun = true;
-  sess.processLog = (sess.processLog || []).filter((entry) => !entry?._pmStreamSnapshot);
-  for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
-    const action = String(item?.data?.action || item?.data?.name || item?.data?.event?.name || item?.type || 'tool');
-    sess.processLog.push({ type: item.type === 'tool_result' ? 'result' : 'tool', content: String(item?.data?.message || item?.data?.result || action).slice(0, 1024), timestamp: Date.now(), _pmStreamSnapshot: true });
+  if (!desktopStreamStateHasLocalTurn(sid, streamId)) {
+    // Fresh tab for this turn: paint the snapshot as real tool rows.
+    const prev = window._sessionStreamState?.[sid];
+    const state = resetSessionStreamState(sid);
+    state.currentTurnStartIndex = Number.isInteger(prev?.currentTurnStartIndex) && prev.currentTurnStartIndex >= 0
+      ? prev.currentTurnStartIndex
+      : inferCurrentTurnProcessStartIndex(sess);
+    state.turnStartedAt = Number(prev?.turnStartedAt || getSessionLastMessageAt(sess) || Date.now());
+    state.streamingAIText = String(snapshot.text || '');
+    state.streamingThinkingText = String(snapshot.thinking || '');
+    state.finalResponseStarted = !!state.streamingAIText;
+    for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
+      const data = item?.data || {};
+      const action = String(data.action || data.name || data.event?.name || '').trim();
+      if (!action) continue;
+      const payload = { ...data, action, ...(data.callId ? { callId: data.callId } : {}) };
+      if (item.type === 'tool_call' || data.event?.type === 'tool_call_start') {
+        state.toolActivityStarted = true;
+        applyToolActivityToStreamState(state, 'call', payload);
+      } else if (item.type === 'tool_result') {
+        state.toolActivityStarted = true;
+        applyToolActivityToStreamState(state, 'result', { ...payload, ok: data.status !== 'error' });
+      }
+    }
+    if (snapshot.summary) setDesktopLiveProgressNarration(state, String(snapshot.summary),
+      (type, text, options) => appendLiveTraceToStreamState(state, type, text, options));
+    const cursors = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
+    cursors[sid] = { ...(cursors[sid] || {}), [streamId]: seq };
+    (window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {}))[sid] = streamId;
   }
   applyStreamStateToWindow(sid);
   syncActiveSessionRunState();
   renderStreamingChatUpdate(sid);
+  if (!desktopSessionHasLocalSseTurn(sid)) rebuildDesktopStreamFromReplay(sid, streamId);
 });
 wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
   const sid = String(sessionId || '').trim();

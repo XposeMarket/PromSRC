@@ -12,7 +12,7 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2344987, // #512 focus/snapshot handler + #513 seven-byte skill detail query flag
+  'web-ui/src/pages/ChatPage.js': 2351195, // #512 focus/snapshot handler + #513 skill detail flag + desktop snapshot replay fix + finished-run replay guard
   'web-ui/src/mobile/mobile-pages.js': 898464,
   // Reviewed against the 2026-10-01 main UI: these are tracked LF-byte
   // boundaries, not dynamic baselines. Future growth still fails CI.

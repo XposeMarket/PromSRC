@@ -5,7 +5,7 @@
   "maxChatFeatureModuleBytes": 150000,
   "maxMobileRendererContextDependencies": 124,
   "legacySurfaces": {
-    "web-ui/src/pages/ChatPage.js": 2344987,
+    "web-ui/src/pages/ChatPage.js": 2351195,
     "web-ui/src/mobile/mobile-pages.js": 898464,
     "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 256913,
     "web-ui/src/styles/mobile.css": 641881,

@@ -35,6 +35,18 @@ assert(unfocusedCount <= 1, '3,000 tokens in under a second produce at most one 
 assert(parsed(unfocused).every((frame) => frame.type === 'session_activity'));
 assert(unfocusedCount <= legacyCount / 10 && unfocusedBytes <= legacyBytes / 10,
   'unfocused frame count AND bytes must fall by at least 90%');
+{
+  // Snapshot tool rows carry the call id so a fresh client can pair results with calls.
+  const fresh = client();
+  setWsClientStreamFocus(fresh, ['other']);
+  send('tools', 1, 'tool_call', { action: 'workspace_run', toolCallId: 'call-1', stepNum: 1 });
+  send('tools', 2, 'tool_result', { action: 'workspace_run', toolCallId: 'call-1', stepNum: 1, result: 'ok' });
+  setWsClientStreamFocus(fresh, ['tools'], true);
+  const snap = parsed(fresh).find((frame) => frame.type === 'session_stream_snapshot' && frame.sessionId === 'tools');
+  assert(snap, 'focus switch delivers a snapshot');
+  assert.deepEqual(snap.tools.map((tool: any) => [tool.type, tool.data.callId]),
+    [['tool_call', 'call-1'], ['tool_result', 'call-1']], 'snapshot tools keep their call ids');
+}
 console.log(`fanout 3000 tokens: legacy ${legacyCount} frames / ${legacyBytes} bytes; unfocused ${unfocusedCount} frames / ${unfocusedBytes} bytes`);
 
 send('other', 1, 'token', { text: 'their own stream' });

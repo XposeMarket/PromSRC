@@ -524,6 +524,9 @@ function rememberStreamFrame(data: any): void {
               status: String(item?.status || '').slice(0, 32),
             })) : [] }
         : { action: String(payload.action || '').slice(0, 120), name: String(payload.name || '').slice(0, 120),
+            // Lets a fresh client pair each result with its call row.
+            callId: String(payload.toolCallId || payload.tool_call_id || payload.callId || '').slice(0, 160),
+            stepNum: Number.isFinite(Number(payload.stepNum)) ? Number(payload.stepNum) : undefined,
             message: String(payload.message || '').slice(0, 1024), result: String(payload.result || '').slice(0, 1024),
             status: String(payload.status || '').slice(0, 120),
             event: event === 'model_stream_event' ? {
