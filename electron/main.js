@@ -3840,7 +3840,15 @@ async function ensureNativeHiddenSurfacePaint(view) {
     } catch (error) { lastError = error; }
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  throw new Error(`surface_not_rendered: hidden browser input deferred until first paint (${lastError?.message || lastError}).`);
+  const host = meta.automationHost;
+  const surface = { tabId: meta.tabId, presented: meta.presented, visible: meta.visible,
+    bounds: view.getBounds?.(), hostPresent: !!host, hostDestroyed: host?.isDestroyed?.(),
+    hostVisible: host && !host.isDestroyed() ? host.isVisible() : false,
+    hostBounds: host && !host.isDestroyed() ? host.getBounds() : null,
+    attached: host && !host.isDestroyed() ? (host.contentView?.children?.includes(view) ?? host.getBrowserViews?.().includes(view)) : false,
+    backgroundThrottling: view.webContents.backgroundThrottling, leaseExpiresAt: meta.activityLeaseExpiresAt,
+    now: Date.now() };
+  throw new Error(`surface_not_rendered: hidden browser input deferred until first paint (${lastError?.message || lastError}); surface=${JSON.stringify(surface)}`);
 }
 
 async function clickNativeBrowserSurface(payload = {}) {
