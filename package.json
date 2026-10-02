@@ -48,6 +48,7 @@
     "test:external-import-sidebar": "node scripts/test-external-import-sidebar.mjs",
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
+    "test:stream-fanout": "tsx src/gateway/comms/stream-fanout.regression.ts",
     "test:process-store-order": "tsx src/gateway/process/store-order.regression.ts",
     "test:handoff-restart-forward": "tsx src/gateway/runtime/handoff-restart-forward.regression.ts",
     "test:web-ui-image-budget": "node scripts/test-web-ui-image-budget.mjs",

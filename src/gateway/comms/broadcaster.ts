@@ -477,59 +477,120 @@ export function getWebSocketClientCount(): number {
   return count;
 }
 
-// High-frequency main-chat frames that only matter to a client currently
-// viewing that session. token/thinking_delta are deliberately NOT filtered:
-// they are not retained for replay, so a window that switches into a thread
-// mid-reply needs the text it accumulated in the background. The frames below
-// are either raw provider internals, live process output, or keepalives that
-// an unfocused window never renders. Clients opt in with
-// {type:'stream_focus', sessionIds:[...]}; clients that never declared focus
-// keep receiving everything (old builds, mobile-v2).
-// (process_run_output / heartbeat / background_wait stay broadcast: terminal
-// cards and stall detection for background threads read them.)
+// A missing focus declaration is intentionally legacy: those connections see
+// every frame, including raw provider internals. New clients opt in explicitly.
 const FOCUS_FILTERED_STREAM_EVENTS: ReadonlySet<string> = new Set([
-  'reasoning_summary_delta',
-  'model_stream_event',
+  'token', 'thinking_delta', 'reasoning_summary_delta', 'model_stream_event',
+  'process_run_output', 'background_wait', 'heartbeat', 'tool_progress',
 ]);
+const SNAPSHOT_TEXT_LIMIT = 512 * 1024;
+type InFlightStream = {
+  sessionId: string; turnId: string; seq: number; text: string; thinking: string;
+  tools: Array<{ type: string; data: any }>; summary: string; lastEventAt: number;
+};
+const inFlightStreams = new Map<string, InFlightStream>();
 
-export function setWsClientStreamFocus(client: any, sessionIds: unknown): void {
+function rememberStreamFrame(data: any): void {
+  if (data?.type !== 'main_chat_stream_event') return;
+  const sessionId = String(data.sessionId || '').trim();
+  const turnId = String(data.streamId || '').trim();
+  if (!sessionId || !turnId) return;
+  const event = String(data.event || '');
+  if (event === 'done' || event === 'error') {
+    inFlightStreams.delete(sessionId);
+    return;
+  }
+  let stream = inFlightStreams.get(sessionId);
+  if (!stream || stream.turnId !== turnId) {
+    stream = { sessionId, turnId, seq: 0, text: '', thinking: '', tools: [], summary: '', lastEventAt: 0 };
+    inFlightStreams.set(sessionId, stream);
+  }
+  stream.seq = Math.max(stream.seq, Number(data.seq || 0));
+  stream.lastEventAt = Number(data.at || Date.now());
+  const payload = data.data || {};
+  if (event === 'token' && stream.text.length < SNAPSHOT_TEXT_LIMIT)
+    stream.text += String(payload.text || '').slice(0, SNAPSHOT_TEXT_LIMIT - stream.text.length);
+  if (event === 'thinking_delta' && stream.thinking.length < SNAPSHOT_TEXT_LIMIT)
+    stream.thinking += String(payload.thinking || payload.text || '').slice(0, SNAPSHOT_TEXT_LIMIT - stream.thinking.length);
+  if (event === 'reasoning_summary_delta') stream.summary = (stream.summary + String(payload.text || payload.summary || '')).slice(-8192);
+  if (['tool_call', 'tool_result', 'tool_progress', 'progress_state', 'process_run_output', 'model_stream_event', 'info', 'ui_preflight'].includes(event)) {
+    const tool = event === 'model_stream_event' ? String(payload.event?.type || '') : event;
+    if (event !== 'model_stream_event' || tool === 'tool_call_start' || tool === 'tool_call_done') {
+      // Keep current process/tool rows without retaining unbounded tool output.
+      const bounded = event === 'progress_state'
+        ? { source: payload.source, activeIndex: payload.activeIndex,
+            items: Array.isArray(payload.items) ? payload.items.slice(0, 32).map((item: any) => ({
+              id: String(item?.id || '').slice(0, 80), text: String(item?.text || '').slice(0, 120),
+              status: String(item?.status || '').slice(0, 32),
+            })) : [] }
+        : { action: String(payload.action || '').slice(0, 120), name: String(payload.name || '').slice(0, 120),
+            message: String(payload.message || '').slice(0, 1024), result: String(payload.result || '').slice(0, 1024),
+            status: String(payload.status || '').slice(0, 120),
+            event: event === 'model_stream_event' ? {
+              type: tool, name: String(payload.event?.name || '').slice(0, 120),
+            } : undefined };
+      stream.tools.push({ type: event, data: bounded });
+      if (stream.tools.length > 64) stream.tools.shift();
+    }
+  }
+}
+
+export function setWsClientStreamFocus(client: any, sessionIds: unknown, requestSnapshot = false): void {
   if (!client) return;
   const ids = Array.isArray(sessionIds)
     ? sessionIds.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 32)
     : [];
+  const previous: Set<string> | undefined = client.__pmStreamFocus;
   client.__pmStreamFocus = new Set(ids);
-}
-
-function wsClientWantsFrame(client: any, data: any): boolean {
-  const focus: Set<string> | undefined = client?.__pmStreamFocus;
-  if (!focus) return true;
-  if (data?.type !== 'main_chat_stream_event') return true;
-  if (!FOCUS_FILTERED_STREAM_EVENTS.has(String(data?.event || ''))) return true;
-  // Tool boundaries ride model_stream_event and are replayable; always send.
-  const modelType = String(data?.data?.event?.type || '').toLowerCase();
-  if (modelType === 'tool_call_start' || modelType === 'tool_call_done') return true;
-  return focus.has(String(data?.sessionId || ''));
+  for (const sessionId of ids) {
+    if (previous?.has(sessionId) && !requestSnapshot) continue;
+    const stream = inFlightStreams.get(sessionId);
+    if (!stream || client.readyState !== 1) continue;
+    try { client.send(JSON.stringify({
+      type: 'session_stream_snapshot', sessionId, turnId: stream.turnId,
+      streamId: stream.turnId, seq: stream.seq, text: stream.text,
+      thinking: stream.thinking, summary: stream.summary, tools: stream.tools, lastEventAt: stream.lastEventAt,
+    })); } catch {}
+  }
 }
 
 export function broadcastWS(data: object): void {
   if (_drainBroadcastRelay) {
     try { _drainBroadcastRelay(data); } catch {}
   }
+  const frame: any = data;
+  rememberStreamFrame(frame);
   const msg = JSON.stringify(data);
   wssInstances.forEach((server) => {
     server.clients.forEach((client: any) => {
-      if (client.readyState === 1) {
-        if (!wsClientWantsFrame(client, data)) return;
-        try {
-          const buffered = Number(client.bufferedAmount || 0);
-          if (buffered > 5 * 1024 * 1024) {
-            try { client.terminate?.(); } catch {}
-            return;
-          }
-          if (buffered > 1024 * 1024) return;
-          client.send(msg);
-        } catch {}
+      if (client.readyState !== 1) return;
+      const focus: Set<string> | undefined = client.__pmStreamFocus;
+      const sid = String(frame?.sessionId || '');
+      const filtered = focus && !focus.has(sid)
+        && frame?.type === 'main_chat_stream_event'
+        && FOCUS_FILTERED_STREAM_EVENTS.has(String(frame.event || ''))
+        && !['tool_call_start', 'tool_call_done'].includes(String(frame?.data?.event?.type || ''));
+      if (filtered) {
+        const now = Date.now();
+        const activity: Map<string, number> = client.__pmSessionActivityAt || (client.__pmSessionActivityAt = new Map());
+        if (now - (activity.get(sid) || 0) < 1000) return;
+        activity.set(sid, now);
+        if (activity.size > 256) activity.delete(activity.keys().next().value);
+        const summary = JSON.stringify({ type: 'session_activity', sessionId: sid,
+          state: ['tool_progress', 'process_run_output', 'model_stream_event'].includes(String(frame.event)) ? 'tool' : 'streaming',
+          lastEventAt: now, preview: String(frame?.data?.text || frame?.data?.message || '').slice(0, 120) });
+        try { if (Number(client.bufferedAmount || 0) < 1024 * 1024) client.send(summary); } catch {}
+        return;
       }
+      try {
+        const buffered = Number(client.bufferedAmount || 0);
+        if (buffered > 5 * 1024 * 1024) {
+          try { client.terminate?.(); } catch {}
+          return;
+        }
+        if (buffered > 1024 * 1024) return;
+        client.send(msg);
+      } catch {}
     });
   });
 }
