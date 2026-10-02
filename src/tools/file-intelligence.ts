@@ -971,22 +971,33 @@ export function compareGrepMatches(query: string): (a: GrepMatchRecord, b: GrepM
   return (a, b) => score(b) - score(a) || a.path.localeCompare(b.path) || a.line - b.line;
 }
 
+// Cached by .gitignore mtime+size: search_files/grep call this on every search.
+const simpleGitignoreCache = new Map<string, { sig: string; rules: string[] }>();
+
 export function readSimpleGitignore(rootAbs: string): string[] {
   try {
     const file = path.join(rootAbs, '.gitignore');
-    if (!fs.existsSync(file)) return [];
-    return fs.readFileSync(file, 'utf-8')
-      .split('\n')
+    let stat: fs.Stats;
+    try { stat = fs.statSync(file); } catch { return []; }
+    const sig = `${stat.mtimeMs}:${stat.size}`;
+    const cached = simpleGitignoreCache.get(file);
+    if (cached && cached.sig === sig) return cached.rules;
+    // No line cap: the old .slice(0, 120) silently dropped every rule after the
+    // 120th (PromSRC's .gitignore has 154), including bulky workspace folders.
+    const rules = fs.readFileSync(file, 'utf-8')
+      .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith('#') && !line.startsWith('!'))
-      .slice(0, 120);
+      .slice(0, 2000);
+    simpleGitignoreCache.set(file, { sig, rules });
+    return rules;
   } catch {
     return [];
   }
 }
 
 export function isIgnoredBySimpleGitignore(relPath: string, rules: string[]): boolean {
-  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   const base = path.basename(rel);
   const parts = rel.split('/').filter(Boolean);
   for (const rule of rules) {
@@ -994,7 +1005,16 @@ export function isIgnoredBySimpleGitignore(relPath: string, rules: string[]): bo
     if (!clean) continue;
     if (clean.endsWith('/')) {
       const dir = clean.replace(/\/+$/, '');
-      if (parts.includes(dir) || rel.startsWith(`${dir}/`)) return true;
+      // A dir rule must also match the directory itself (rel === dir), not
+      // just paths below it. Walkers test the directory entry before descending,
+      // so "workspace/oss agents/" never matched "workspace/oss agents" and the
+      // walk entered 47k ignored files (search_files hit its 10s limit).
+      if (dir.includes('*')) {
+        const re = new RegExp(`(^|/)${escapeRegExp(dir).replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*')}($|/)`);
+        if (re.test(rel)) return true;
+        continue;
+      }
+      if (parts.includes(dir) || rel === dir || rel.startsWith(`${dir}/`)) return true;
       continue;
     }
     if (!clean.includes('/')) {

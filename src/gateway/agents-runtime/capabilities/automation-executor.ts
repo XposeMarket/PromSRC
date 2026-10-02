@@ -1,5 +1,5 @@
 import path from 'path';
-import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait } from '../../tasks/task-runner';
+import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait, listBackgroundStatuses } from '../../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from '../../tasks/spawn-tool-categories-arg';
 import {
   automationDashboardTool,
@@ -110,8 +110,15 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
 
       case 'background_status':
       case 'background_progress': {
-        const bgId = String(args.background_id || '').trim();
-        if (!bgId) return { name, args, result: 'background_id is required', error: true };
+        const bgId = String(args.background_id || args.id || '').trim();
+        if (!bgId) {
+          // No id: list this session's background agents instead of failing.
+          const mine = listBackgroundStatuses()
+            .filter((s) => !s.spawnerSessionId || s.spawnerSessionId === sessionId)
+            .slice(0, 20)
+            .map((s) => ({ id: s.id, state: s.state, tags: s.tags, model: s.model, startedAt: s.startedAt, promptPreview: s.promptPreview }));
+          return { name, args, result: JSON.stringify({ note: 'No background_id given; listing background agents for this session (newest first).', agents: mine }), error: false };
+        }
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(status), error: false };
@@ -933,10 +940,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             abortSignal: deps.abortSignal,
           });
           const threadLinks = buildPrometheusThreadLinksArtifact(args, out);
+          // Compact JSON: pretty-printing added ~30% tokens to results that
+          // already averaged 6-12k tokens (read/list/find/status).
           return {
             name,
             args,
-            result: JSON.stringify({ success: true, ...out }, null, 2),
+            result: JSON.stringify({ success: true, ...out }),
             error: false,
             extra: threadLinks ? { richArtifacts: [threadLinks] } : undefined,
           };

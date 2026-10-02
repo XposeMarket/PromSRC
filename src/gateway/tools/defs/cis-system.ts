@@ -951,7 +951,7 @@ export function getCisSystemTools(): any[] {
             details: {
               type: 'string',
               description:
-                'Full implementation details, markdown. Include execution_steps separately for the executor checklist. When affected_files includes any src/ path, you MUST include these exact headings and content: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Otherwise the proposal will be rejected.',
+                'Full implementation details, markdown. Include execution_steps separately for the executor checklist. When affected_files includes any src/ path, you MUST include these exact headings and content: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility"; mention every affected src/ path; and cite the tool you used to read the current source (for example "Source-read evidence: workspace_read src/x.ts lines 10-80"). src/ proposals also require execution_mode=code_change, risk_tier, and executor_prompt. Otherwise the proposal will be rejected.',
             },
             affected_files: {
               type: 'array',
@@ -986,7 +986,7 @@ export function getCisSystemTools(): any[] {
             estimated_impact: { type: 'string', description: 'e.g. "adds browser caching, reduces API calls by ~40%"' },
             requires_build: { type: 'boolean', description: 'True if src/ TypeScript changes need npm run build' },
 	            executor_agent_id: { type: 'string', description: 'Which agent should execute this when approved. Required for team manager proposals and must be a member of that team.' },
-            executor_prompt: { type: 'string', description: 'Exact prompt to send the executor agent when approved' },
+            executor_prompt: { type: 'string', description: 'Exact prompt to send the executor agent when approved. Required when affected_files includes src/ paths.' },
             risk_tier: {
               type: 'string',
               enum: ['low', 'high'],

@@ -76,7 +76,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
   const imageCount = Math.max(1, Number(result.image_count || result.images.length || 1));
   return {
     success: true,
-    stdout: `Generated ${imageCount} image${imageCount === 1 ? '' : 's'} with ${result.provider}/${result.model}. First image saved to ${location}.`,
+    stdout: `Generated ${imageCount} image${imageCount === 1 ? '' : 's'} with ${result.provider}/${result.model}. First image saved to ${location}.${result.providerFallback ? ` Note: ${result.providerFallback}` : ''}`,
     data: {
       provider: result.provider,
       model: result.model,

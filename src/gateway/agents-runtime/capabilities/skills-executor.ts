@@ -533,7 +533,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
 
     switch (name) {
       case 'skill_list': {
-        deps.skillsManager.scanSkills();
+        deps.skillsManager.refreshSkillsIfChanged();
         const all = deps.skillsManager.getAll();
         if (all.length === 0) {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };

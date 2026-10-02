@@ -251,7 +251,9 @@ export function readBrainThoughtActivity(sessionId: string, args: any): string {
     const text = `${event.type} ${event.summary} ${JSON.stringify(event.entity || {})} ${JSON.stringify(event.details || {})}`.toLowerCase();
     return terms.some((term) => text.includes(term));
   });
-  const limit = Math.max(1, Math.min(80, Number(args?.limit || 30)));
+  // Default 20 (was 30): calls averaged ~9k result tokens, and most drill-ins
+  // pass event_ids or a query anyway. Callers can still ask for up to 80.
+  const limit = Math.max(1, Math.min(80, Number(args?.limit || 20)));
   const selected = events.sort((a, b) => a.timestampMs - b.timestampMs).slice(0, limit);
   const returned: ActivityEvent[] = [];
   let truncated = selected.length < events.length;
@@ -271,28 +273,138 @@ export function readBrainThoughtActivity(sessionId: string, args: any): string {
     truncated,
     events: returned,
   };
-  const rendered = JSON.stringify(payload, null, 2);
+  // Compact JSON (no indentation): same data, roughly 30% fewer tokens.
+  const rendered = JSON.stringify(payload);
   if (rendered.length <= MAX_ACTIVITY_RESULT_CHARS) return rendered;
   // Coverage/unresolved metadata can itself be large. Preserve valid JSON and the exact events first.
-  return JSON.stringify({ packageId: run.activityPackage.packageId, matchedTotal: events.length, returned: returned.length, truncated: true, events: returned }, null, 2);
+  return JSON.stringify({ packageId: run.activityPackage.packageId, matchedTotal: events.length, returned: returned.length, truncated: true, events: returned });
 }
 
-const CAPSULE_KIND = new Set(['active_work','decision','correction','blocker','time_sensitive','opportunity']);
-const CAPSULE_PRIORITY = new Set(['critical','high','normal','low']);
-const CAPSULE_STATUS = new Set(['active','in_progress','blocked','dormant','resolved']);
-const CAPSULE_SURFACE = new Set(['main_chat','coding','business','other']);
+// Enum lists are exported so the tool schema and the validator can never drift
+// apart again. Before 2026-10-02 the schema advertised `capsules: object[]`
+// while this validator required 7 strings, 3 enums, 3 arrays, a nested object
+// and a boolean: 343 of 366 submissions (94%) were rejected.
+export const CAPSULE_KINDS = ['active_work','decision','correction','blocker','time_sensitive','opportunity'] as const;
+export const CAPSULE_PRIORITIES = ['critical','high','normal','low'] as const;
+export const CAPSULE_STATUSES = ['active','in_progress','blocked','dormant','resolved'] as const;
+export const CAPSULE_SURFACES = ['main_chat','coding','business','other'] as const;
+export const ACTIVE_WORK_STATUSES = ['idea','drafted','in_progress','stalled','resolved'] as const;
+const CAPSULE_KIND = new Set<string>(CAPSULE_KINDS);
+const CAPSULE_PRIORITY = new Set<string>(CAPSULE_PRIORITIES);
+const CAPSULE_STATUS = new Set<string>(CAPSULE_STATUSES);
+const CAPSULE_SURFACE = new Set<string>(CAPSULE_SURFACES);
+const PULSE_TITLE_MAX = 52;
+const PULSE_BODY_MAX = 90;
+const CAPSULE_DEFAULT_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+
+// Common model spellings mapped onto the canonical enum value. Anything not
+// listed here (and not already canonical) is still rejected with the allowed list.
+const ENUM_ALIASES: Record<string, Record<string, string>> = {
+  kind: { active: 'active_work', work: 'active_work', task: 'active_work', project: 'active_work', in_progress: 'active_work', 'active-work': 'active_work', fix: 'correction', bug: 'blocker', risk: 'blocker', deadline: 'time_sensitive', 'time-sensitive': 'time_sensitive', urgent: 'time_sensitive', idea: 'opportunity' },
+  priority: { medium: 'normal', med: 'normal', moderate: 'normal', default: 'normal', urgent: 'critical', p0: 'critical', p1: 'high', p2: 'normal', p3: 'low' },
+  status: { open: 'active', ongoing: 'in_progress', 'in-progress': 'in_progress', started: 'in_progress', pending: 'active', waiting: 'blocked', stalled: 'blocked', paused: 'dormant', done: 'resolved', complete: 'resolved', completed: 'resolved', closed: 'resolved' },
+  activeWork: { open: 'in_progress', active: 'in_progress', ongoing: 'in_progress', 'in-progress': 'in_progress', started: 'in_progress', blocked: 'stalled', paused: 'stalled', waiting: 'stalled', draft: 'drafted', planned: 'idea', proposed: 'idea', done: 'resolved', complete: 'resolved', completed: 'resolved', closed: 'resolved' },
+  surface: { main: 'main_chat', chat: 'main_chat', mobile: 'main_chat', desktop: 'main_chat', code: 'coding', dev: 'coding', biz: 'business' },
+};
+
+function normalizeEnum(value: unknown, allowed: Set<string>, aliases: Record<string, string>): string | null {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  if (allowed.has(raw)) return raw;
+  const snake = raw.replace(/[\s-]+/g, '_');
+  if (allowed.has(snake)) return snake;
+  return aliases[raw] || aliases[snake] || null;
+}
+
+function slugify(value: unknown, max = 48): string {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max) || 'item';
+}
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
+}
+
+function clip(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(1, max - 3)).trimEnd()}...`;
+}
+
+/**
+ * Fill derivable fields and canonicalize enums in place. Only genuinely
+ * ambiguous input is left for validation to reject (with the allowed values).
+ */
+export function normalizeBrainThoughtSubmission(args: any, nowIso = new Date().toISOString()): any {
+  if (!args || typeof args !== 'object') return args;
+  const nowMs = Date.parse(nowIso);
+  if (Array.isArray(args.pulse_cards)) {
+    args.pulse_cards = args.pulse_cards.map((card: any) => {
+      if (!card || typeof card !== 'object') return card;
+      const title = String(card.title ?? '').replace(/\s+/g, ' ').trim();
+      const body = String(card.body ?? '').replace(/\s+/g, ' ').trim();
+      const prompt = String(card.prompt ?? '').trim();
+      return { title: clip(title, PULSE_TITLE_MAX), body: clip(body, PULSE_BODY_MAX), prompt: prompt || body || title };
+    });
+  }
+  if (Array.isArray(args.capsules)) {
+    args.capsules = args.capsules.map((item: any, index: number) => {
+      if (!item || typeof item !== 'object') return item;
+      const out: any = { ...item };
+      const summary = String(out.summary ?? out.title ?? '').trim();
+      out.summary = summary;
+      out.threadKey = String(out.threadKey ?? out.thread_key ?? out.thread ?? '').trim() || slugify(summary);
+      out.id = String(out.id ?? '').trim() || `cap_${slugify(out.threadKey, 32)}_${index + 1}`;
+      out.createdAt = Number.isFinite(Date.parse(String(out.createdAt ?? ''))) ? out.createdAt : nowIso;
+      out.lastValidatedAt = Number.isFinite(Date.parse(String(out.lastValidatedAt ?? ''))) ? out.lastValidatedAt : nowIso;
+      out.expiresAt = Number.isFinite(Date.parse(String(out.expiresAt ?? ''))) ? out.expiresAt : new Date(nowMs + CAPSULE_DEFAULT_TTL_MS).toISOString();
+      out.nextUsefulAction = String(out.nextUsefulAction ?? out.next_useful_action ?? out.nextAction ?? out.next ?? '').trim() || summary;
+      const kind = normalizeEnum(out.kind ?? out.type, CAPSULE_KIND, ENUM_ALIASES.kind);
+      if (kind) out.kind = kind;
+      const priority = normalizeEnum(out.priority ?? 'normal', CAPSULE_PRIORITY, ENUM_ALIASES.priority);
+      if (priority) out.priority = priority;
+      const status = normalizeEnum(out.status ?? 'active', CAPSULE_STATUS, ENUM_ALIASES.status);
+      if (status) out.status = status;
+      out.facts = stringArray(out.facts);
+      out.evidence = stringArray(out.evidence);
+      out.supersedes = stringArray(out.supersedes);
+      const rel = out.relevance && typeof out.relevance === 'object' && !Array.isArray(out.relevance) ? out.relevance : {};
+      const surfaces = stringArray(rel.surfaces).map((surface) => normalizeEnum(surface, CAPSULE_SURFACE, ENUM_ALIASES.surface) || surface);
+      out.relevance = { ...rel, projects: stringArray(rel.projects), triggers: stringArray(rel.triggers), surfaces: surfaces.length ? surfaces : ['main_chat'] };
+      if (typeof out.verificationRequired !== 'boolean') out.verificationRequired = out.verificationRequired === 'true' ? true : out.verificationRequired === 'false' ? false : true;
+      return out;
+    });
+  }
+  if (Array.isArray(args.active_work)) {
+    args.active_work = args.active_work.map((item: any) => {
+      if (!item || typeof item !== 'object') return item;
+      const out: any = { ...item };
+      out.title = String(out.title ?? out.name ?? '').trim();
+      out.id = String(out.id ?? '').trim() || slugify(out.title);
+      const status = normalizeEnum(out.status ?? 'in_progress', ACTIVE_WORK, ENUM_ALIASES.activeWork);
+      if (status) out.status = status;
+      out.currentState = String(out.currentState ?? out.current_state ?? out.state ?? out.summary ?? '').trim() || out.title;
+      out.evidence = stringArray(out.evidence);
+      if (out.research !== undefined) out.research = stringArray(out.research);
+      return out;
+    });
+  }
+  return args;
+}
+
+function allowed(values: readonly string[]): string {
+  return values.join(', ');
+}
 
 function validatePulseCards(cards: any[]): void {
   if (!Array.isArray(cards) || cards.length !== 3) throw new Error('brain_thought_submit requires exactly 3 pulse_cards.');
   for (const [index, card] of cards.entries()) {
     if (!card || typeof card !== 'object') throw new Error(`pulse_cards[${index}] must be an object.`);
-    const keys = Object.keys(card).sort();
-    if (keys.join(',') !== 'body,prompt,title') throw new Error(`pulse_cards[${index}] may contain only title, body, and prompt.`);
     const title = String(card.title || '').trim();
     const body = String(card.body || '').trim();
     const prompt = String(card.prompt || '').trim();
-    if (!title || title.length > 52) throw new Error(`pulse_cards[${index}].title must be 1-52 characters.`);
-    if (!body || body.length > 90) throw new Error(`pulse_cards[${index}].body must be 1-90 characters.`);
+    if (!title || title.length > PULSE_TITLE_MAX) throw new Error(`pulse_cards[${index}].title must be 1-${PULSE_TITLE_MAX} characters.`);
+    if (!body || body.length > PULSE_BODY_MAX) throw new Error(`pulse_cards[${index}].body must be 1-${PULSE_BODY_MAX} characters.`);
     if (!prompt) throw new Error(`pulse_cards[${index}].prompt is required.`);
   }
 }
@@ -304,27 +416,28 @@ function validateCapsules(capsules: any[]): void {
     for (const field of ['id','threadKey','createdAt','expiresAt','summary','nextUsefulAction','lastValidatedAt']) {
       if (!String(item[field] || '').trim()) throw new Error(`capsules[${index}].${field} is required.`);
     }
-    if (!CAPSULE_KIND.has(String(item.kind))) throw new Error(`capsules[${index}].kind is invalid.`);
-    if (!CAPSULE_PRIORITY.has(String(item.priority))) throw new Error(`capsules[${index}].priority is invalid.`);
-    if (!CAPSULE_STATUS.has(String(item.status))) throw new Error(`capsules[${index}].status is invalid.`);
+    if (!CAPSULE_KIND.has(String(item.kind))) throw new Error(`capsules[${index}].kind "${item.kind ?? ''}" is invalid; use one of: ${allowed(CAPSULE_KINDS)}.`);
+    if (!CAPSULE_PRIORITY.has(String(item.priority))) throw new Error(`capsules[${index}].priority "${item.priority ?? ''}" is invalid; use one of: ${allowed(CAPSULE_PRIORITIES)}.`);
+    if (!CAPSULE_STATUS.has(String(item.status))) throw new Error(`capsules[${index}].status "${item.status ?? ''}" is invalid; use one of: ${allowed(CAPSULE_STATUSES)}.`);
     if (!Array.isArray(item.facts) || !Array.isArray(item.evidence) || !Array.isArray(item.supersedes)) throw new Error(`capsules[${index}] facts/evidence/supersedes must be arrays.`);
     if (!item.relevance || typeof item.relevance !== 'object') throw new Error(`capsules[${index}].relevance is required.`);
     for (const key of ['projects','triggers','surfaces']) if (!Array.isArray(item.relevance[key])) throw new Error(`capsules[${index}].relevance.${key} must be an array.`);
-    if (item.relevance.surfaces.some((surface: unknown) => !CAPSULE_SURFACE.has(String(surface)))) throw new Error(`capsules[${index}].relevance.surfaces contains an invalid value.`);
+    if (item.relevance.surfaces.some((surface: unknown) => !CAPSULE_SURFACE.has(String(surface)))) throw new Error(`capsules[${index}].relevance.surfaces contains an invalid value; use: ${allowed(CAPSULE_SURFACES)}.`);
     if (typeof item.verificationRequired !== 'boolean') throw new Error(`capsules[${index}].verificationRequired must be boolean.`);
     if (!Number.isFinite(Date.parse(String(item.createdAt))) || !Number.isFinite(Date.parse(String(item.expiresAt))) || !Number.isFinite(Date.parse(String(item.lastValidatedAt)))) throw new Error(`capsules[${index}] contains an invalid timestamp.`);
   }
 }
 
 
-const ACTIVE_WORK_STATUS = new Set(['idea','drafted','in_progress','stalled','resolved']);
+const ACTIVE_WORK = new Set<string>(ACTIVE_WORK_STATUSES);
+const ACTIVE_WORK_STATUS = ACTIVE_WORK;
 
 function validateActiveWork(items: any[]): void {
   if (!Array.isArray(items)) throw new Error('active_work must be an array.');
   for (const [index, item] of items.entries()) {
     if (!item || typeof item !== 'object') throw new Error(`active_work[${index}] must be an object.`);
     if (!String(item.id || '').trim() || !String(item.title || '').trim()) throw new Error(`active_work[${index}] requires id and title.`);
-    if (!ACTIVE_WORK_STATUS.has(String(item.status || ''))) throw new Error(`active_work[${index}].status is invalid.`);
+    if (!ACTIVE_WORK_STATUS.has(String(item.status || ''))) throw new Error(`active_work[${index}].status "${item.status ?? ''}" is invalid; use one of: ${allowed(ACTIVE_WORK_STATUSES)}.`);
     if (!String(item.currentState || '').trim()) throw new Error(`active_work[${index}].currentState is required.`);
     if (!Array.isArray(item.evidence) || !item.evidence.every((v: unknown) => typeof v === 'string')) throw new Error(`active_work[${index}].evidence must be a string array.`);
     if (item.research !== undefined && (!Array.isArray(item.research) || !item.research.every((v: unknown) => typeof v === 'string'))) throw new Error(`active_work[${index}].research must be a string array when provided.`);
@@ -358,6 +471,7 @@ function upsertJsonl(filePath: string, items: any[], keyField = 'id'): void {
 export function submitBrainThought(sessionId: string, args: any): string {
   const run = requireRun(sessionId);
   if (run.submitted) throw new Error('brain_thought_submit may be called only once per Thought run.');
+  args = normalizeBrainThoughtSubmission(args);
   const pulseCards = Array.isArray(args?.pulse_cards) ? args.pulse_cards : [];
   const capsules = Array.isArray(args?.capsules) ? args.capsules : [];
   validatePulseCards(pulseCards);
@@ -484,8 +598,30 @@ export function getBrainThoughtToolDefinitions(): any[] {
         description: 'Submit the final structured Thought exactly once. The runtime validates the payload and writes the Thought markdown, capsule sidecar, business candidates, and Active Work updates. Do not use generic write tools for Thought artifacts.',
         parameters: { type: 'object', required: ['summary','pulse_cards','capsules','activity_summary','behavior_quality','verdict'], properties: {
           summary: { type: 'string' },
-          pulse_cards: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'object', additionalProperties: false, required: ['title','body','prompt'], properties: { title: { type: 'string', maxLength: 52 }, body: { type: 'string', maxLength: 90 }, prompt: { type: 'string' } } } },
-          capsules: { type: 'array', items: { type: 'object' } },
+          pulse_cards: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'object', additionalProperties: false, required: ['title','body','prompt'], properties: { title: { type: 'string', maxLength: PULSE_TITLE_MAX, description: `<= ${PULSE_TITLE_MAX} chars` }, body: { type: 'string', maxLength: PULSE_BODY_MAX, description: `<= ${PULSE_BODY_MAX} chars; longer text is clipped` }, prompt: { type: 'string', description: 'Message sent when the card is tapped.' } } } },
+          capsules: {
+            type: 'array',
+            description: 'Short-lived continuity capsules. Only summary and kind are needed; id, threadKey, timestamps (createdAt/lastValidatedAt now, expiresAt +3 days), nextUsefulAction, arrays and relevance are filled in when omitted.',
+            items: {
+              type: 'object',
+              required: ['summary','kind'],
+              properties: {
+                summary: { type: 'string' },
+                kind: { type: 'string', enum: [...CAPSULE_KINDS] },
+                priority: { type: 'string', enum: [...CAPSULE_PRIORITIES], description: 'Default normal.' },
+                status: { type: 'string', enum: [...CAPSULE_STATUSES], description: 'Default active.' },
+                threadKey: { type: 'string', description: 'Stable key such as project:last-ward. Defaults to a slug of summary.' },
+                nextUsefulAction: { type: 'string' },
+                facts: { type: 'array', items: { type: 'string' } },
+                evidence: { type: 'array', items: { type: 'string' } },
+                supersedes: { type: 'array', items: { type: 'string' }, description: 'Capsule ids this replaces.' },
+                relevance: { type: 'object', properties: { projects: { type: 'array', items: { type: 'string' } }, triggers: { type: 'array', items: { type: 'string' } }, surfaces: { type: 'array', items: { type: 'string', enum: [...CAPSULE_SURFACES] } } } },
+                verificationRequired: { type: 'boolean', description: 'Default true.' },
+                expiresAt: { type: 'string', description: 'ISO timestamp.' },
+                id: { type: 'string' },
+              },
+            },
+          },
           activity_summary: { type: 'array', items: { type: 'string' } },
           behavior_quality: { type: 'object', properties: { went_well: { type: 'array', items: { type: 'string' } }, stalled: { type: 'array', items: { type: 'string' } }, tool_usage: { type: 'array', items: { type: 'string' } }, user_corrections: { type: 'array', items: { type: 'string' } } } },
           skill_workflow_signals: { type: 'array', items: { type: 'object' } },
@@ -494,7 +630,23 @@ export function getBrainThoughtToolDefinitions(): any[] {
           memory_candidates: { type: 'array', items: { type: 'object' } },
           opportunity_seeds: { type: 'array', items: { type: 'object' } },
           improvement_candidates: { type: 'array', items: { type: 'object' } },
-          active_work: { type: 'array', items: { type: 'object' } },
+          active_work: {
+            type: 'array',
+            description: 'Upserts into Brain/active-work.jsonl by id (defaults to a slug of title).',
+            items: {
+              type: 'object',
+              required: ['title','status','currentState'],
+              properties: {
+                title: { type: 'string' },
+                status: { type: 'string', enum: [...ACTIVE_WORK_STATUSES] },
+                currentState: { type: 'string', description: 'One or two sentences on where it stands now.' },
+                evidence: { type: 'array', items: { type: 'string' } },
+                research: { type: 'array', items: { type: 'string' } },
+                lastVerified: { type: 'string', description: 'ISO date/timestamp.' },
+                id: { type: 'string' },
+              },
+            },
+          },
           verdict: { type: 'object', required: ['active','signal_quality','summary'], properties: { active: { type: 'boolean' }, signal_quality: { type: 'string', enum: ['high','medium','low','none'] }, summary: { type: 'string' }, wonderings: { type: 'array', maxItems: 3, items: { type: 'string' } } } },
         } },
       },

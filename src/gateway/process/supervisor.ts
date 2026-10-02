@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { execSync } from 'child_process';
@@ -124,6 +125,69 @@ export function resolveCommandEnv(): NodeJS.ProcessEnv {
     .filter((entry) => entry && !seen.has(entry.toLowerCase()) && (seen.add(entry.toLowerCase()), true));
   if (!extra.length) return process.env;
   return { ...process.env, [pathKey]: [current, ...extra].filter(Boolean).join(';') };
+}
+
+// ---------------------------------------------------------------------------
+// Direct-exec fast path (Windows, shell:"auto" only).
+// Every run_command used to start powershell.exe (~250-300 ms) even for a
+// plain `git status --short` or `node script.mjs`. For a small allowlist of
+// real executables with plainly-tokenized arguments, the shell adds nothing:
+// PowerShell does not glob or expand anything in such argv for native
+// commands. Anything with a variable, quote escape, operator, redirection,
+// pipeline, subexpression, comment, array comma, or splat stays on PowerShell.
+// Set PROMETHEUS_DISABLE_DIRECT_EXEC=1 to turn this off.
+const DIRECT_EXEC_ALLOWLIST = new Set(['git', 'node', 'rg']);
+// No ~ (home expansion differs between shells), no @ (splat), no , (array),
+// no $ ` ' ; | & < > ( ) { } # (variables, quoting, operators, comments).
+// * and ? are fine: PowerShell never globs arguments to native executables.
+const DIRECT_BARE_TOKEN = /^[A-Za-z0-9_.:\/\\=+%*?-]+$/;
+const DIRECT_QUOTED_TOKEN = /^"[^"$`]*"$/;
+const directExeCache = new Map<string, { at: number; path: string | null }>();
+
+/** Split a command into argv if (and only if) it is safe to run without a shell. */
+export function parseDirectExecCommand(command: string): string[] | null {
+  const text = String(command || '').trim();
+  if (!text || /[\r\n]/.test(text)) return null;
+  const tokens = text.match(/"[^"]*"|[^\s"]+/g);
+  if (!tokens || tokens.join(' ').length !== text.replace(/\s+/g, ' ').length) return null;
+  const argv: string[] = [];
+  for (const token of tokens) {
+    if (DIRECT_QUOTED_TOKEN.test(token)) { argv.push(token.slice(1, -1)); continue; }
+    if (!DIRECT_BARE_TOKEN.test(token)) return null;
+    if (token === '--%') return null;
+    argv.push(token);
+  }
+  const exe = argv[0].toLowerCase().replace(/\.exe$/, '');
+  if (!DIRECT_EXEC_ALLOWLIST.has(exe)) return null;
+  argv[0] = exe;
+  return argv;
+}
+
+function resolveExecutableOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
+  const now = Date.now();
+  const cached = directExeCache.get(name);
+  if (cached && now - cached.at < 60_000) return cached.path;
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'Path';
+  let found: string | null = null;
+  for (const dir of String(env[pathKey] || '').split(';')) {
+    const trimmed = dir.trim().replace(/^"|"$/g, '');
+    if (!trimmed) continue;
+    const candidate = path.join(trimmed, `${name}.exe`);
+    try { if (fs.statSync(candidate).isFile()) { found = candidate; break; } } catch { /* next */ }
+  }
+  directExeCache.set(name, { at: now, path: found });
+  return found;
+}
+
+function getDirectInvocation(command: string, requestedShell: ProcessShell | undefined, env: NodeJS.ProcessEnv): { requestedShell: ProcessShell; shellKind: Exclude<ProcessShell, 'auto'>; shell: string; args: string[]; direct: true } | null {
+  if (process.platform !== 'win32') return null;
+  if (process.env.PROMETHEUS_DISABLE_DIRECT_EXEC === '1') return null;
+  if (normalizeShell(requestedShell) !== 'auto') return null;
+  const argv = parseDirectExecCommand(command);
+  if (!argv) return null;
+  const exePath = resolveExecutableOnPath(argv[0], env);
+  if (!exePath) return null;
+  return { requestedShell: 'auto', shellKind: 'powershell', shell: exePath, args: argv.slice(1), direct: true };
 }
 
 function getShellInvocation(command: string, requestedShell?: ProcessShell): { requestedShell: ProcessShell; shellKind: Exclude<ProcessShell, 'auto'>; shell: string; args: string[] } {
@@ -289,7 +353,9 @@ export class ProcessSupervisor {
     const cwd = path.resolve(String(input.cwd || getConfig().getWorkspacePath() || process.cwd()));
     const runId = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const startedAt = nowIso();
-    const invocation = getShellInvocation(command, input.shell);
+    const commandEnv = resolveCommandEnv();
+    const directInvocation = input.pty === true ? null : getDirectInvocation(command, input.shell, commandEnv);
+    const invocation = directInvocation || getShellInvocation(command, input.shell);
     const record: ProcessRunRecord = {
       runId,
       sessionId: input.sessionId,
@@ -302,7 +368,9 @@ export class ProcessSupervisor {
       cwd,
       mode: input.mode || 'foreground',
       shell: invocation.shellKind,
-      shellCommand: [invocation.shell, ...invocation.args].join(' '),
+      shellCommand: directInvocation
+        ? `${[invocation.shell, ...invocation.args].join(' ')} [direct exec, no shell]`
+        : [invocation.shell, ...invocation.args].join(' '),
       pty: input.pty === true,
       title: input.title,
       state: 'starting',
@@ -333,7 +401,7 @@ export class ProcessSupervisor {
 
     const child = spawn(invocation.shell, invocation.args, {
       cwd,
-      env: resolveCommandEnv(),
+      env: commandEnv,
       windowsHide: true,
       stdio: [input.stdinMode === 'pipe' || input.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;

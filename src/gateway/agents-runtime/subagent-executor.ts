@@ -338,7 +338,7 @@ import {
 } from '../memory-index/index';
 import { searchMemoryInWorker } from '../memory-index/search-worker-client';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
-import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait } from '../tasks/task-runner';
+import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait, listBackgroundStatuses } from '../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from '../tasks/spawn-tool-categories-arg';
 import { saveSiteShortcut } from '../site-shortcuts';
 import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
@@ -8382,12 +8382,38 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         }
         let resolvedFile: { absPath: string; normalizedRel: string; displayPath: string };
         try {
-          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true, readOnlyDiagnostics: true });
+          resolvedFile = resolveAllowedWorkspacePath(String(filename), { readOnlyDiagnostics: true });
+          if (!fs.existsSync(resolvedFile.absPath)) throw new Error(`File "${filename}" not found`);
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         const filePath = resolvedFile.absPath;
         const stat = fs.statSync(filePath);
+        // 24% of file_stats calls failed with "is not a file" because a folder
+        // was passed. Answer with a compact directory summary instead.
+        if (stat.isDirectory()) {
+          let entries: fs.Dirent[] = [];
+          try { entries = fs.readdirSync(filePath, { withFileTypes: true }); } catch { /* unreadable */ }
+          const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+          const files = entries.filter((e) => e.isFile()).map((e) => {
+            let size = 0;
+            try { size = fs.statSync(path.join(filePath, e.name)).size; } catch { /* raced */ }
+            return { name: e.name, bytes: size };
+          }).sort((a, b) => b.bytes - a.bytes);
+          const payload = {
+            path: resolvedFile.displayPath,
+            kind: 'directory',
+            modified: stat.mtime.toISOString(),
+            directories: dirs.length,
+            files: files.length,
+            total_file_bytes: files.reduce((sum, f) => sum + f.bytes, 0),
+            subdirectories: dirs.slice(0, 60),
+            largest_files: files.slice(0, 25),
+            note: 'This path is a directory. Use list_directory/file_tree for structure or pass a file path for file stats.',
+          };
+          return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+        }
+        if (!stat.isFile()) return { name, args, result: `"${resolvedFile.displayPath}" is not a regular file`, error: true };
         const content = fs.readFileSync(filePath, 'utf-8');
         const payload = buildFileIntelligence(resolvedFile.displayPath, content, stat, {
           readCap: FILE_TOOL_DEFAULT_READ_LINES,
@@ -14960,8 +14986,17 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       case 'process_kill': {
         const runId = String(args.runId || args.run_id || '').trim();
         if (!runId) return { name, args, result: 'runId is required', error: true };
-        const killed = getProcessSupervisor().cancel(runId);
-        return { name, args, result: killed ? `Killed ${runId}` : `No active process found for ${runId}`, error: !killed };
+        const supervisor = getProcessSupervisor();
+        const killed = supervisor.cancel(runId);
+        if (killed) return { name, args, result: `Killed ${runId}`, error: false };
+        // Killing a process that already finished is the desired end state, not
+        // a failure (20% of process_kill calls were this case).
+        const record = supervisor.get(runId);
+        if (record) {
+          const exit = record.exitCode !== undefined && record.exitCode !== null ? ` (exit ${record.exitCode})` : '';
+          return { name, args, result: `${runId} is not running; it already ${record.state === 'exited' ? 'exited' : record.state}${exit}. Nothing to kill.`, error: false };
+        }
+        return { name, args, result: `No process found for ${runId}`, error: true };
       }
 
       case 'process_submit': {
@@ -15260,8 +15295,15 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 
       case 'background_status':
       case 'background_progress': {
-        const bgId = String(args.background_id || '').trim();
-        if (!bgId) return { name, args, result: 'background_id is required', error: true };
+        const bgId = String(args.background_id || args.id || '').trim();
+        if (!bgId) {
+          // No id: list this session's background agents instead of failing.
+          const mine = listBackgroundStatuses()
+            .filter((s) => !s.spawnerSessionId || s.spawnerSessionId === sessionId)
+            .slice(0, 20)
+            .map((s) => ({ id: s.id, state: s.state, tags: s.tags, model: s.model, startedAt: s.startedAt, promptPreview: s.promptPreview }));
+          return { name, args, result: JSON.stringify({ note: 'No background_id given; listing background agents for this session (newest first).', agents: mine }), error: false };
+        }
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(status), error: false };
@@ -18428,7 +18470,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       // Flow: skill_list() -> skill_read("<id>"). Pinned skills auto-injected by buildTurnContext.
 
       case 'skill_list': {
-        deps.skillsManager.scanSkills();
+        deps.skillsManager.refreshSkillsIfChanged();
         const all = deps.skillsManager.getAll();
         if (all.length === 0) {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
@@ -19060,7 +19102,11 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	              type: args.type || 'general',
                 executionMode: ['code_change', 'action', 'general', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
                   ? (String(args.execution_mode || args.executionMode).trim() === 'review' ? 'general' : String(args.execution_mode || args.executionMode).trim()) as any
-                  : undefined,
+                  // Omitted lane + src/ or web-ui/ targets: code_change is the only lane
+                  // the validator accepts, so infer it instead of rejecting the call.
+                  : (Array.isArray(args.affected_files) && args.affected_files.some((f: any) => /^(\.\/)?(src|web-ui)\//.test(String(f?.path || '').replace(/\\/g, '/')))
+                    ? 'code_change'
+                    : undefined),
 	              priority: args.priority || 'medium',
               title: String(args.title || '').slice(0, 120),
               summary: String(args.summary || '').slice(0, 500),

@@ -1587,12 +1587,11 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'background_status',
-        description: 'Check whether a background agent is still running, completed, or failed. Only use this if you explicitly need to poll mid-turn — the system auto-merges results at turn end.',
+        description: 'Check whether a background agent is still running, completed, or failed. Omit background_id to list this session\'s background agents. Only poll mid-turn when needed; results auto-merge at turn end.',
         parameters: {
           type: 'object',
-          required: ['background_id'],
           properties: {
-            background_id: { type: 'string', description: 'ID returned by background_spawn.' },
+            background_id: { type: 'string', description: 'ID returned by background_spawn. Omit to list all of this session\'s agents.' },
           },
         },
       },
@@ -1601,10 +1600,9 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'background_progress',
-        description: 'Alias of background_status. Check running/completed/failed state of a background agent.',
+        description: 'Alias of background_status. Omit background_id to list this session\'s background agents.',
         parameters: {
           type: 'object',
-          required: ['background_id'],
           properties: {
             background_id: { type: 'string', description: 'ID returned by background_spawn.' },
           },

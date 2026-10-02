@@ -16608,7 +16608,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       });
     }
     if (name === 'skill_list' || name === 'voice_skill_lookup') {
-      _skillsManager.scanSkills();
+      _skillsManager.refreshSkillsIfChanged();
       const all = _skillsManager.getAll();
       const id = String(args.id || '').trim();
       const query = String(args.query || '').trim().toLowerCase();

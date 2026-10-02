@@ -182,6 +182,13 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     });
   }
 
+  // When the model asked for a specific provider that is not configured (7 of
+  // 10 generate_image failures were provider "xai" unavailable) or that cannot
+  // do the request (e.g. transparency), fall through to auto-selection instead
+  // of failing, and say so in the result. Only an explicit model pin keeps the
+  // strict behavior, since the caller then needs that exact model.
+  const strictProvider = Boolean(String(request.model || '').trim()) && !requestedProviderId;
+  let providerFallbackNote = '';
   if (requestedProviderIds.length) {
     let sawKnownProvider = false;
     for (const candidateId of requestedProviderIds) {
@@ -189,6 +196,10 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       if (!provider) continue;
       sawKnownProvider = true;
       const incompatibility = providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages, exactSizeRequested });
+      if (incompatibility && !strictProvider) {
+        providerFallbackNote = `Requested provider "${provider.id}" cannot do this request (${incompatibility}); used another provider.`;
+        continue;
+      }
       if (incompatibility) {
         return buildImageGenerationError({
           provider: provider.id,
@@ -231,34 +242,38 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       }
     }
     const primaryProviderId = requestedProviderIds[0];
-    return buildImageGenerationError({
-      provider: primaryProviderId,
-      model: request.model,
-      prompt,
-      aspectRatio,
-      background,
-      outputFormat,
-      presentationMode,
-      error: sawKnownProvider
-        ? `Image generation provider "${primaryProviderId}" is not available.`
-        : `Unknown image generation provider "${primaryProviderId}".`,
-      errorType: sawKnownProvider ? 'provider_unavailable' : 'invalid_provider',
-    });
+    if (strictProvider || !sawKnownProvider) {
+      return buildImageGenerationError({
+        provider: primaryProviderId,
+        model: request.model,
+        prompt,
+        aspectRatio,
+        background,
+        outputFormat,
+        presentationMode,
+        error: sawKnownProvider
+          ? `Image generation provider "${primaryProviderId}" is not available.`
+          : `Unknown image generation provider "${primaryProviderId}".`,
+        errorType: sawKnownProvider ? 'provider_unavailable' : 'invalid_provider',
+      });
+    }
+    if (!providerFallbackNote) providerFallbackNote = `Requested provider "${primaryProviderId}" is not available; used another provider.`;
   }
 
-  for (const candidateId of buildAutoCandidateIds(request.provider)) {
+  for (const candidateId of buildAutoCandidateIds(providerFallbackNote ? undefined : request.provider)) {
+    if (providerFallbackNote && requestedProviderIds.includes(candidateId)) continue;
     const provider = PROVIDERS_BY_ID.get(candidateId);
     if (!provider) continue;
     if (providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages, exactSizeRequested })) continue;
     if (await provider.isAvailable()) {
       const providerRequest = normalizeRequestForProvider(provider, partialImages, stream, sizeInfo);
       const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
-      return provider.generate({
+      const generated = await provider.generate({
         prompt,
         aspect_ratio: aspectRatio,
         reference_images: referenceImages,
         count,
-        model: request.model,
+        model: providerFallbackNote ? undefined : request.model,
         background,
         output_format: outputFormat,
         output_compression: outputCompression,
@@ -276,6 +291,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         on_image_persisted: request.on_image_persisted,
         on_partial_image: request.on_partial_image,
       });
+      if (providerFallbackNote && generated.success) generated.providerFallback = providerFallbackNote;
+      return generated;
     }
   }
 

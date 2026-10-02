@@ -6,7 +6,9 @@ import {
   buildBrainThoughtActivityIndex,
   clearBrainThoughtRun,
   executeBrainThoughtTool,
+  getBrainThoughtToolDefinitions,
   isBrainThoughtRunActive,
+  normalizeBrainThoughtSubmission,
   registerBrainThoughtRun,
 } from './brain-thought-runtime.js';
 import type { ActivityPackage } from './activity-package.js';
@@ -58,8 +60,45 @@ const submitArgs = {
   active_work: [{ id: 'creative-mode', title: 'Creative Mode', origin: 'evt_1', status: 'in_progress', lastVerified: '2026-08-22', currentState: 'Active', research: [], evidence: ['evt_1'] }],
   verdict: { active: true, signal_quality: 'high', summary: 'Active window.', wonderings: ['the next editor pass should prioritize current-state verification.'] },
 };
-assert.throws(() => executeBrainThoughtTool(sessionId, 'brain_thought_submit', { ...submitArgs, pulse_cards: [{ ...submitArgs.pulse_cards[0], extra: true }, submitArgs.pulse_cards[1], submitArgs.pulse_cards[2]] }));
-assert.throws(() => executeBrainThoughtTool(sessionId, 'brain_thought_submit', { ...submitArgs, active_work: [{ id: 'bad', title: 'Bad', status: 'unknown', currentState: 'x', evidence: [] }] }));
+assert.throws(() => executeBrainThoughtTool(sessionId, 'brain_thought_submit', { ...submitArgs, pulse_cards: submitArgs.pulse_cards.slice(0, 2) }), /exactly 3 pulse_cards/);
+assert.throws(() => executeBrainThoughtTool(sessionId, 'brain_thought_submit', { ...submitArgs, active_work: [{ id: 'bad', title: 'Bad', status: 'unknown', currentState: 'x', evidence: [] }] }), /use one of: idea, drafted, in_progress, stalled, resolved/);
+assert.throws(() => executeBrainThoughtTool(sessionId, 'brain_thought_submit', { ...submitArgs, capsules: [{ summary: 'x', kind: 'nonsense' }] }), /kind "nonsense" is invalid; use one of:/);
+
+// 2026-10-02: the schema now matches the validator, and derivable fields are
+// filled. These are the exact shapes that produced 343/366 rejections.
+{
+  const fixed = new Date('2026-08-22T15:00:00.000Z').toISOString();
+  const minimal = normalizeBrainThoughtSubmission({
+    pulse_cards: [{ title: 'T', body: 'x'.repeat(140), prompt: '' }, { title: 'T2', body: 'b', prompt: 'p', extra: 1 }, { title: 'T3', body: 'b', prompt: 'p' }],
+    capsules: [{ summary: 'Last Ward texture pass is mid-flight', kind: 'Active Work', priority: 'medium', status: 'ongoing', facts: 'one fact', relevance: { surfaces: ['chat'] } }],
+    active_work: [{ title: 'Desktop perf pass', status: 'done', summary: 'Merged as #516' }],
+  }, fixed);
+  const c = minimal.capsules[0];
+  assert.equal(c.kind, 'active_work');
+  assert.equal(c.priority, 'normal');
+  assert.equal(c.status, 'in_progress');
+  assert.equal(c.createdAt, fixed);
+  assert.equal(c.lastValidatedAt, fixed);
+  assert(Date.parse(c.expiresAt) > Date.parse(fixed));
+  assert(c.id.startsWith('cap_'));
+  assert.equal(c.threadKey, 'last-ward-texture-pass-is-mid-flight');
+  assert.equal(c.nextUsefulAction, c.summary);
+  assert.deepEqual(c.facts, ['one fact']);
+  assert.deepEqual(c.evidence, []);
+  assert.deepEqual(c.relevance.surfaces, ['main_chat']);
+  assert.equal(c.verificationRequired, true);
+  assert.equal(minimal.pulse_cards[0].body.length, 90);
+  assert.equal(minimal.pulse_cards[0].prompt, 'x'.repeat(140)); // empty prompt falls back to the full, unclipped body
+  assert.deepEqual(Object.keys(minimal.pulse_cards[1]).sort(), ['body', 'prompt', 'title']);
+  assert.equal(minimal.active_work[0].status, 'resolved');
+  assert.equal(minimal.active_work[0].id, 'desktop-perf-pass');
+  assert.equal(minimal.active_work[0].currentState, 'Merged as #516');
+
+  const schema = getBrainThoughtToolDefinitions().find((t: any) => t.function.name === 'brain_thought_submit').function.parameters;
+  assert.deepEqual(schema.properties.capsules.items.properties.kind.enum, ['active_work','decision','correction','blocker','time_sensitive','opportunity']);
+  assert.deepEqual(schema.properties.capsules.items.required, ['summary','kind']);
+  assert.deepEqual(schema.properties.active_work.items.properties.status.enum, ['idea','drafted','in_progress','stalled','resolved']);
+}
 const submit = executeBrainThoughtTool(sessionId, 'brain_thought_submit', submitArgs);
 assert(submit.includes('submission accepted'));
 assert(fs.existsSync(path.join(workspace, 'Brain/thoughts/2026-08-22/test-thought.md')));
