@@ -17483,7 +17483,7 @@ function isSkillTriggerExcluded(skill) {
 function ensureSkillTriggerCacheLoaded() {
   if (skillTriggerCacheReady) return Promise.resolve(getInstalledSkillCache());
   if (skillTriggerCacheLoadPromise) return skillTriggerCacheLoadPromise;
-  skillTriggerCacheLoadPromise = api('/api/skills')
+  skillTriggerCacheLoadPromise = api('/api/skills?full=1')
     .then((data) => {
       const skills = Array.isArray(data?.skills) ? data.skills : [];
       window.prometheusSkillsCache = skills;

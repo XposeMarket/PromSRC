@@ -9440,7 +9440,7 @@ function _pmEnsureSkillTriggerCacheLoaded() {
   // Always use the mobile-authenticated fetch. The desktop loadInstalledSkills()
   // uses the desktop api() helper + #skills-list DOM and fails silently on mobile,
   // leaving window.prometheusSkillsCache empty so the trigger pill never renders.
-  _pmSkillCacheLoadPromise = mobileGatewayFetch('/api/skills')
+  _pmSkillCacheLoadPromise = mobileGatewayFetch('/api/skills?full=1')
     .then((data) => {
       window.prometheusSkillsCache = Array.isArray(data?.skills) ? data.skills : [];
       _pmSkillCacheReady = true;

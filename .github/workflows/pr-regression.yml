@@ -92,6 +92,8 @@ jobs:
           node scripts/test-desktop-chat-layout-contract.mjs
           node scripts/test-desktop-subagent-chat-ui.mjs
           npm run test:multi-chat-main-tab-cap
+      - name: Enforce generated UI and gateway performance budgets
+        run: npm run test:perf-budgets
       - name: Verify main chat live stream delivery
         run: npm run test:main-chat-stream
       - name: Verify git read cache and process store ordering

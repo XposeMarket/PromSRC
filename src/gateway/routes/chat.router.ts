@@ -10,6 +10,7 @@
 
 
 import express from 'express';
+import { slimSessionList, responseEtag } from './perf-projections';
 import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../media-analysis-preview';
 // cors and http moved to core/app.ts + core/server.ts (B3)
 import path from 'path';
@@ -23279,7 +23280,11 @@ router.get('/api/sessions', async (req, res) => {
       const withActiveRuns = markActiveRunsOnSessionList(withProjects);
       profileSessions('active-runs', activeStartedAt);
       const responseStartedAt = Date.now();
-      res.json(withActiveRuns);
+      const payload = req.query.full === '1' ? withActiveRuns : slimSessionList(withActiveRuns);
+      const etag = responseEtag(payload);
+      res.setHeader('ETag', etag);
+      if (req.headers['if-none-match'] === etag) res.status(304).end();
+      else res.json(payload);
       profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
       return;
     }
@@ -23294,7 +23299,11 @@ router.get('/api/sessions', async (req, res) => {
     const withActiveRuns = markActiveRunsOnSessionList(withProjects);
     profileSessions('active-runs', activeStartedAt);
     const responseStartedAt = Date.now();
-    res.json({ sessions: withActiveRuns });
+    const payload = req.query.full === '1' ? { sessions: withActiveRuns } : slimSessionList({ sessions: withActiveRuns });
+    const etag = responseEtag(payload);
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) res.status(304).end();
+    else res.json(payload);
     profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
