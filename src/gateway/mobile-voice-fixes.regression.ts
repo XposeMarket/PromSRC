@@ -35,6 +35,17 @@ async function main() {
 
   const router = fs.readFileSync(path.join(__dirname, 'routes', 'realtime.router.ts'), 'utf8');
   assert.match(router, /CODEX_BRIDGE_PRIORITY_TOOLS = \['prometheus_tools'/, 'prometheus_tools is first priority under the Codex cap');
+  // 4. Codex camera vision: the ChatGPT backend's `{ detail }` errors surface, and
+  //    a rejected API-only model falls through to the account's own model.
+  const { codexHttpErrorDetail } = await import('../providers/openai-codex-adapter');
+  assert.equal(codexHttpErrorDetail(JSON.stringify({ detail: 'model not supported' })), 'model not supported');
+  assert.equal(codexHttpErrorDetail(JSON.stringify({ error: { message: 'bad' } })), 'bad');
+  const { codexVisionModelCandidates } = await import('./tools/handlers/xai-handlers');
+  const candidates = codexVisionModelCandidates('gpt-6-astra');
+  assert.equal(candidates[0], process.env.XAI_VISION_FALLBACK_MODEL || process.env.OPENAI_VISION_FALLBACK_MODEL || 'gpt-6-astra');
+  assert.ok(candidates.includes('gpt-6-astra') && candidates.includes('gpt-5.4-mini'), 'configured model and mini are both tried');
+  assert.ok(!codexVisionModelCandidates('chatgpt-web').includes('chatgpt-web'), 'chatgpt-web is not a vision model');
+
   try { fs.rmSync(configDir, { recursive: true, force: true }); } catch { /* temp */ }
   console.log('mobile voice fixes regression passed');
 }
