@@ -8670,32 +8670,36 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (streamId === run.streamId && Number(run.lastSeq || 0) > seq) return;
     const thread = _activeMobileThread();
     let aiTurn = _findLatestAssistantTurn(thread);
-    if (!aiTurn || aiTurn.streaming !== true) {
-      aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
-        content: '', processEntries: [], liveTraceEntries: [] };
-      thread.push(aiTurn);
+    // The snapshot is only a "this session is mid-turn" signal. It carries a
+    // bounded, argument-less tool list and one concatenated reasoning summary,
+    // so painting it directly produced raw "TOOL progress_state" / "TOOL RESULT"
+    // blocks and glued every commentary segment into one paragraph at the
+    // bottom. The durable replay owns the timeline: mark the run active and
+    // let recovery rebuild (or incrementally catch up) from the stream log.
+    if (aiTurn && Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.some((entry) => entry?._pmStreamSnapshot)) {
+      aiTurn.processEntries = aiTurn.processEntries.filter((entry) => !entry?._pmStreamSnapshot);
+    }
+    const sameLocalStream = !!aiTurn && aiTurn.streaming === true
+      && String(aiTurn._streamId || run.streamId || '').trim() === streamId;
+    if (!sameLocalStream) {
+      if (!aiTurn || aiTurn.streaming !== true) {
+        aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
+          content: '', processEntries: [], liveTraceEntries: [] };
+        thread.push(aiTurn);
+      }
+      aiTurn._streamId = streamId;
     }
     aiTurn.streaming = true;
-    aiTurn._streamId = streamId;
-    aiTurn.body = aiTurn.body || { sender: '', text: '' };
-    aiTurn.body.text = String(snapshot.text || '');
-    aiTurn.content = aiTurn.body.text;
-    aiTurn._pmVisualStreamPending = '';
-    aiTurn._pmVisualStreamFull = aiTurn.body.text;
-    aiTurn._pendingThinkingBurst = String(snapshot.thinking || '');
-    if (snapshot.summary) _setMobileLiveProgressNarration(aiTurn, String(snapshot.summary));
-    aiTurn.processEntries = (aiTurn.processEntries || []).filter((entry) => !entry?._pmStreamSnapshot);
-    for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
-      aiTurn.processEntries.push({ type: item.type === 'tool_result' ? 'result' : 'tool',
-        content: String(item?.data?.message || item?.data?.result || item?.data?.action || item?.type || '').slice(0, 1024),
-        _pmStreamSnapshot: true });
-    }
     __pmChat.activeRuns = __pmChat.activeRuns || {};
-    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: seq };
-    _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: seq });
+    // Never advance the replay cursor from a snapshot: frames filtered while
+    // this session was unfocused sit between the local cursor and snapshot.seq.
+    const cursor = sameLocalStream ? Math.max(0, Number(run.lastSeq || 0) || 0) : 0;
+    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: cursor };
+    _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: cursor });
     _markMobileSessionRunning(requestedSession, true);
     setBusy(true);
     renderThreadNow();
+    scheduleMobileRunRecovery(0, { force: true, fullRefresh: false });
   };
   const onSessionActivity = (msg = {}) => {
     const sid = String(msg.sessionId || '').trim();

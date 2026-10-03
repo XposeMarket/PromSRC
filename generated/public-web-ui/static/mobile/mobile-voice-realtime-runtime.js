@@ -2974,8 +2974,24 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     if (!sid) return null;
     if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
     const key = role === 'user' ? 'mobileUserTurn' : 'mobileAssistantTurn';
-    const existing = __pmRealtimeAgent.turn?.[key];
-    if (existing && __pmChat.threads[sid].includes(existing)) return existing;
+    const exchangeState = __pmRealtimeAgent.turn || (__pmRealtimeAgent.turn = {});
+    const existing = exchangeState[key];
+    const existingGroup = String(existing?.workflowGroupId || '').trim();
+    // Once this exchange's reply is finalized, the next user speech is a NEW
+    // exchange. Providers that never emit speech_started (Codex voice) and
+    // barge-in paths skipped the forceNew reset, so every later transcript
+    // and reply rewrote the same two rows instead of appending to the thread.
+    const replyFinalized = !!existingGroup
+      && String(exchangeState.currentVoiceExchangeAssistantFinalized || '') === existingGroup;
+    if (role === 'user' && existing && existing.streaming !== true && replyFinalized) {
+      _ensureMobileRealtimeExchangeId({ forceNew: true });
+    } else if (role !== 'user' && existing && existingGroup
+      && existingGroup !== String(exchangeState.currentVoiceExchangeId || '').trim()) {
+      // A reply row from an earlier exchange is never reused for a new one.
+      exchangeState.mobileAssistantTurn = null;
+    } else if (existing && __pmChat.threads[sid].includes(existing)) {
+      return existing;
+    }
     const exchangeId = _ensureMobileRealtimeExchangeId();
     const turn = role === 'user'
       ? {
@@ -3111,6 +3127,12 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       turn.voiceRealtimeHighlight = '';
       turn.voiceRealtimeProgress = Math.max(Number(turn.voiceRealtimeProgress || 0) || 0, 0.01);
       turn.voiceRealtimeFinalizedAt = Date.now();
+      const exchangeState = __pmRealtimeAgent.turn || (__pmRealtimeAgent.turn = {});
+      const group = String(turn.workflowGroupId || '').trim();
+      if (group) {
+        exchangeState.currentVoiceExchangeAssistantFinalized = group;
+        if (group === String(exchangeState.currentVoiceExchangeId || '').trim()) exchangeState.currentVoiceExchangeResponseStarted = true;
+      }
     }
     turn.time = _nowTime();
     turn.timestamp = Number(turn.timestamp || Date.now()) || Date.now();
@@ -6460,7 +6482,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           label: 'The user sent this camera snapshot and is asking about it.',
           toast: true,
         });
-        if (!sent) throw new Error('Codex realtime did not accept the camera context.');
+        if (!sent) throw new Error('Could not describe the camera frame for Codex voice (vision summary failed).');
         __pmRealtimeAgent.enqueuePreviews?.([{ kind: 'image', name, dataUrl, mimeType: fileLike?.mimeType || 'image/jpeg' }], { transient: true });
         _voiceDebug('codex-realtime-agent-camera-summary-sent', { name });
         return true;
