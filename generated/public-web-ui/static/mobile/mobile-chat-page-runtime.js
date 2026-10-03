@@ -8670,15 +8670,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (streamId === run.streamId && Number(run.lastSeq || 0) > seq) return;
     const thread = _activeMobileThread();
     let aiTurn = _findLatestAssistantTurn(thread);
-    // The snapshot is only a "this session is mid-turn" signal. It carries a
-    // bounded, argument-less tool list and one concatenated reasoning summary,
-    // so painting it directly produced raw "TOOL progress_state" / "TOOL RESULT"
-    // blocks and glued every commentary segment into one paragraph at the
-    // bottom. The durable replay owns the timeline: mark the run active and
-    // let recovery rebuild (or incrementally catch up) from the stream log.
-    if (aiTurn && Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.some((entry) => entry?._pmStreamSnapshot)) {
-      aiTurn.processEntries = aiTurn.processEntries.filter((entry) => !entry?._pmStreamSnapshot);
-    }
+    // Snapshot = "mid-turn" signal only; painting it caused raw TOOL rows + glued commentary. Replay owns the timeline.
+    if (aiTurn?.processEntries) aiTurn.processEntries = aiTurn.processEntries.filter((e) => !e?._pmStreamSnapshot);
     const sameLocalStream = !!aiTurn && aiTurn.streaming === true
       && String(aiTurn._streamId || run.streamId || '').trim() === streamId;
     if (!sameLocalStream) {
@@ -8691,8 +8684,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     aiTurn.streaming = true;
     __pmChat.activeRuns = __pmChat.activeRuns || {};
-    // Never advance the replay cursor from a snapshot: frames filtered while
-    // this session was unfocused sit between the local cursor and snapshot.seq.
+    // Never advance the cursor from a snapshot (unfocused frames sit before snapshot.seq).
     const cursor = sameLocalStream ? Math.max(0, Number(run.lastSeq || 0) || 0) : 0;
     __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: cursor };
     _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: cursor });

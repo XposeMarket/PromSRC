@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
+import { applyRealtimeToolRefresh } from '../voice/realtime-tool-refresh.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { createDormantSceneDocument, loadCreativeSceneGraph } from '../features/chat/optional/creative-scene-runtime.js';
 import { loadCodingDiffRenderer, loadProcessRunCards, loadSourcePanelEnvironment } from '../features/chat/optional/chat-detail-runtime.js';
@@ -27628,25 +27629,9 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
       if (packet) sendVoiceAgentRealtimeContextUpdate(packet, { reason: 'voice_worker_status_tool' });
     }
 
-    // Apply any runtime directive (tool refresh / wake phrase / quiet mode) to the live session.
+    // Runtime directives: tool refresh, wake phrase, quiet mode.
     const directive = data.runtimeDirective;
-    if (directive?.action === 'refresh_tools' && Array.isArray(directive.tools) && directive.tools.length) {
-      // Hot-swap newly activated Prometheus categories into the live session.
-      // Codex bridge tools are fixed per call; prometheus_tools covers them.
-      const conn = voiceAgentRealtimeConnection;
-      if (conn?.dc && conn.dc.readyState === 'open' && conn.transport !== 'codex_app_server') {
-        try {
-          conn.dc.send(JSON.stringify({
-            type: 'session.update',
-            session: conn.provider === 'xai'
-              ? { tools: directive.tools, tool_choice: 'auto' }
-              : { type: 'realtime', tools: directive.tools, tool_choice: 'auto' },
-          }));
-        } catch (err) {
-          console.warn('[voice] realtime tool refresh failed:', err);
-        }
-      }
-    } else if (directive?.action) {
+    if (!applyRealtimeToolRefresh(voiceAgentRealtimeConnection, directive) && directive?.action) {
       const phrase = String(directive.wakePhrase || '').trim();
       if (directive.action === 'set_wake_phrase' && phrase) {
         setRealtimeAgentWakePhrase(phrase);
@@ -27667,8 +27652,7 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
     if (Array.isArray(data?.processEntries) && data.processEntries.length) {
       attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, data.processEntries);
     }
-    // A voice show_* tool produced a rich-artifact card — render it into the chat
-    // thread now, and send the model only a lean confirmation (not the full card JSON).
+    // show_* card: render into the thread; send the model a lean confirmation only.
     const voiceArtifacts = data?.result && Array.isArray(data.result.richArtifacts) ? data.result.richArtifacts : null;
     if (voiceArtifacts && voiceArtifacts.length) {
       try {
@@ -27709,9 +27693,7 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
   }
 }
 
-// Downscale/recompress a data URL so a full-res screenshot reliably fits in ONE
-// realtime data-channel (SCTP) message. Without this a 1-3MB PNG send can fail
-// silently and the voice agent gets only the text metadata.
+// Downscale a data URL to fit ONE realtime data-channel (SCTP) message; 1-3MB PNGs fail silently.
 async function downscaleDataUrlForRealtime(dataUrl, maxDim = 1280, quality = 0.82) {
   const src = String(dataUrl || '');
   if (!src.startsWith('data:image')) return src;
