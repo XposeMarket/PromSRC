@@ -513,6 +513,10 @@ function rememberStreamFrame(data: any): void {
   if (event === 'thinking_delta' && stream.thinking.length < SNAPSHOT_TEXT_LIMIT)
     stream.thinking += String(payload.thinking || payload.text || '').slice(0, SNAPSHOT_TEXT_LIMIT - stream.thinking.length);
   if (event === 'reasoning_summary_delta') stream.summary = (stream.summary + String(payload.text || payload.summary || '')).slice(-8192);
+  // The snapshot summary is the CURRENT live narration segment only. Letting it
+  // accumulate across tool boundaries made a focus switch paint every
+  // commentary segment of the turn as one merged paragraph under the trace.
+  if (event === 'tool_call' || event === 'tool_result' || event === 'token') stream.summary = '';
   if (['tool_call', 'tool_result', 'tool_progress', 'progress_state', 'process_run_output', 'model_stream_event', 'info', 'ui_preflight'].includes(event)) {
     const tool = event === 'model_stream_event' ? String(payload.event?.type || '') : event;
     if (event !== 'model_stream_event' || tool === 'tool_call_start' || tool === 'tool_call_done') {

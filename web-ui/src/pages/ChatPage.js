@@ -27628,9 +27628,25 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
       if (packet) sendVoiceAgentRealtimeContextUpdate(packet, { reason: 'voice_worker_status_tool' });
     }
 
-    // Apply any runtime directive (wake phrase / quiet mode) to the live session.
+    // Apply any runtime directive (tool refresh / wake phrase / quiet mode) to the live session.
     const directive = data.runtimeDirective;
-    if (directive?.action) {
+    if (directive?.action === 'refresh_tools' && Array.isArray(directive.tools) && directive.tools.length) {
+      // Hot-swap newly activated Prometheus categories into the live session.
+      // Codex bridge tools are fixed per call; prometheus_tools covers them.
+      const conn = voiceAgentRealtimeConnection;
+      if (conn?.dc && conn.dc.readyState === 'open' && conn.transport !== 'codex_app_server') {
+        try {
+          conn.dc.send(JSON.stringify({
+            type: 'session.update',
+            session: conn.provider === 'xai'
+              ? { tools: directive.tools, tool_choice: 'auto' }
+              : { type: 'realtime', tools: directive.tools, tool_choice: 'auto' },
+          }));
+        } catch (err) {
+          console.warn('[voice] realtime tool refresh failed:', err);
+        }
+      }
+    } else if (directive?.action) {
       const phrase = String(directive.wakePhrase || '').trim();
       if (directive.action === 'set_wake_phrase' && phrase) {
         setRealtimeAgentWakePhrase(phrase);

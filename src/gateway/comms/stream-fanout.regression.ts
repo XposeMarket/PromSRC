@@ -47,6 +47,19 @@ assert(unfocusedCount <= legacyCount / 10 && unfocusedBytes <= legacyBytes / 10,
   assert.deepEqual(snap.tools.map((tool: any) => [tool.type, tool.data.callId]),
     [['tool_call', 'call-1'], ['tool_result', 'call-1']], 'snapshot tools keep their call ids');
 }
+{
+  // The snapshot summary is the live narration segment only; a tool boundary
+  // starts a new segment instead of gluing all commentary into one paragraph.
+  const viewer = client();
+  setWsClientStreamFocus(viewer, ['other']);
+  send('narr', 1, 'reasoning_summary_delta', { text: 'First segment.' });
+  send('narr', 2, 'tool_call', { action: 'workspace_run', toolCallId: 'c1' });
+  send('narr', 3, 'tool_result', { action: 'workspace_run', toolCallId: 'c1', result: 'ok' });
+  send('narr', 4, 'reasoning_summary_delta', { text: 'Second segment.' });
+  setWsClientStreamFocus(viewer, ['narr'], true);
+  const snap = parsed(viewer).find((frame) => frame.type === 'session_stream_snapshot' && frame.sessionId === 'narr');
+  assert.equal(snap.summary, 'Second segment.', 'snapshot summary must not merge commentary across tool boundaries');
+}
 console.log(`fanout 3000 tokens: legacy ${legacyCount} frames / ${legacyBytes} bytes; unfocused ${unfocusedCount} frames / ${unfocusedBytes} bytes`);
 
 send('other', 1, 'token', { text: 'their own stream' });
