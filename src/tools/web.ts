@@ -155,6 +155,42 @@ function resolveSearchProviderTimeoutMs(value?: number): number {
   return Math.max(1000, Math.min(15_000, Math.floor(n)));
 }
 
+// Multi-engine search used to wait for the slowest engine (p50 5.5 s vs 1.6 s
+// single). Once one engine has results, give the rest a short grace window and
+// report stragglers as timed out instead of holding the whole call.
+const MULTI_SEARCH_GRACE_MS = Math.max(0, Math.min(5_000,
+  Number(process.env.PROMETHEUS_MULTI_SEARCH_GRACE_MS ?? 700) || 0));
+
+export async function settleSearchProvidersEarly(
+  promises: Promise<ToolResult>[],
+  graceMs = MULTI_SEARCH_GRACE_MS,
+): Promise<PromiseSettledResult<ToolResult>[]> {
+  const settled: Array<PromiseSettledResult<ToolResult> | undefined> = new Array(promises.length);
+  await new Promise<void>((resolve) => {
+    let remaining = promises.length;
+    let graceTimer: NodeJS.Timeout | undefined;
+    if (!remaining) return resolve();
+    const finish = () => { if (graceTimer) clearTimeout(graceTimer); resolve(); };
+    promises.forEach((promise, index) => {
+      promise.then(
+        (value) => { settled[index] = { status: 'fulfilled', value }; },
+        (reason) => { settled[index] = { status: 'rejected', reason }; },
+      ).finally(() => {
+        remaining -= 1;
+        if (remaining === 0) return finish();
+        const entry = settled[index];
+        const hasResults = entry?.status === 'fulfilled' && entry.value?.success && Array.isArray(entry.value.data?.results) && entry.value.data.results.length > 0;
+        if (hasResults && !graceTimer) {
+          graceTimer = setTimeout(finish, graceMs);
+          graceTimer.unref?.();
+        }
+      });
+    });
+  });
+  // Array.from, not .map: .map skips the holes left by engines still pending.
+  return Array.from(settled, (entry) => entry || { status: 'rejected' as const, reason: new Error(`skipped: another engine answered first (+${graceMs}ms grace)`) });
+}
+
 async function withSearchProviderTimeout<T>(provider: SearchProvider, promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -996,6 +1032,39 @@ async function searchDDGHtml(query: string, limit: number, timeoutMs = DEFAULT_S
 }
 
 // ── Main web_search tool ──────────────────────────────────────────────────────
+function normalizeSearchQueries(value: unknown): string[] {
+  const list = Array.isArray(value) ? value : (typeof value === 'string' && value.trim() ? [value] : []);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const q = String(raw || '').trim();
+    if (!q || seen.has(q.toLowerCase())) continue;
+    seen.add(q.toLowerCase());
+    out.push(q);
+  }
+  return out.slice(0, 6);
+}
+
+// One call, several query angles, run concurrently: the research pattern that
+// used to cost one model round trip per web_search call.
+async function executeWebSearchQueries(base: Parameters<typeof executeWebSearch>[0], extraQueries: string[]): Promise<ToolResult> {
+  const all = normalizeSearchQueries([String(base.query || '').trim(), ...extraQueries]);
+  if (!all.length) return { success: false, error: 'query is required' };
+  const results = await Promise.all(all.map((query) => executeWebSearch({ ...base, query }).catch((err: any): ToolResult => ({ success: false, error: err?.message || String(err) }))));
+  const sections = results.map((res, i) => `## Query ${i + 1}: ${all[i]}\n${res.success ? (res.stdout || '(no results)') : `ERROR: ${res.error || 'search failed'}`}`);
+  const ok = results.filter((r) => r.success).length;
+  return {
+    success: ok > 0,
+    error: ok > 0 ? undefined : results.map((r) => r.error).filter(Boolean).join(' | ') || 'all queries failed',
+    data: {
+      queries: all,
+      results: results.flatMap((r) => (Array.isArray(r.data?.results) ? r.data.results : [])),
+      per_query: results.map((r, i) => ({ query: all[i], success: r.success, provider: r.data?.provider, results: r.data?.results || [], error: r.error })),
+    },
+    stdout: `[${all.length} queries searched in parallel, ${ok} succeeded]\n\n${sections.join('\n\n')}`,
+  };
+}
+
 export async function executeWebSearch(args: {
   query: string;
   max_results?: number;
@@ -1004,7 +1073,10 @@ export async function executeWebSearch(args: {
   fetch_top_k?: number;
   fetch_max_chars?: number;
   provider_timeout_ms?: number;
+  queries?: string[];
 }): Promise<ToolResult> {
+  const extraQueries = normalizeSearchQueries(args.queries).filter((q) => q !== String(args.query || '').trim());
+  if (extraQueries.length) return executeWebSearchQueries({ ...args, queries: undefined }, extraQueries);
   if (!args.query?.trim()) return { success: false, error: 'query is required' };
   let limit = Math.min(args.max_results ?? 5, 10);
   if (isPriceQuery(args.query)) limit = Math.max(limit, 5);
@@ -1038,7 +1110,7 @@ export async function executeWebSearch(args: {
         attempted: [],
         selected_provider: 'multi' as SearchProvider,
       };
-      const settled = await Promise.allSettled(tasks.map(t => t.promise));
+      const settled = await settleSearchProvidersEarly(tasks.map(t => t.promise));
       const merged: SearchResultItem[] = [];
       const resultIndexByUrl = new Map<string, number>();
       const attemptedProviders = tasks.map(t => t.provider);
@@ -1925,16 +1997,56 @@ export async function executeWebFetch(
   }
 
   const searchCfg = getSearchConfig();
-  if (searchCfg.tinyfishKey && isTinyFishFetchEligible(url)) {
-    try {
-      const tinyFishResult = await fetchTinyFishContent(url, maxChars, searchCfg.tinyfishKey);
-      if (tinyFishResult.success) return tinyFishResult;
-      console.error(`[web_fetch] ${tinyFishResult.error || 'TinyFish Fetch returned no content'}; falling back to direct fetch.`);
-    } catch (err: any) {
-      console.error(`[web_fetch] TinyFish Fetch failed for ${url}; falling back to direct fetch:`, err?.message || String(err));
-    }
-  }
+  if (!searchCfg.tinyfishKey || !isTinyFishFetchEligible(url)) return fetchDirectContent(url, maxChars);
+  return fetchWithDirectHeadStart(url, maxChars, searchCfg.tinyfishKey as string);
+}
 
+// Direct fetch of an ordinary page is ~50-400 ms; TinyFish Fetch is ~1.5-2 s.
+// Give the direct fetch a short head start, and start TinyFish only when the
+// direct result is slow, blocked, or too thin to be the real page.
+const WEB_FETCH_DIRECT_HEAD_START_MS = Math.max(0, Math.min(5_000,
+  Number(process.env.PROMETHEUS_WEB_FETCH_DIRECT_HEAD_START_MS ?? 900) || 0));
+const DIRECT_FETCH_BLOCKED_PATTERN = /enable javascript|just a moment\.\.\.|checking your browser|cf-browser-verification|captcha|access denied|are you a robot|please verify you are a human/i;
+
+export function isUsableDirectFetchResult(result: ToolResult | null | undefined): boolean {
+  if (!result?.success) return false;
+  const text = String(result.stdout || '').trim();
+  if (text.length < 600) return false;
+  return !DIRECT_FETCH_BLOCKED_PATTERN.test(text.slice(0, 4000));
+}
+
+async function fetchWithDirectHeadStart(url: string, maxChars: number, tinyfishKey: string): Promise<ToolResult> {
+  const direct = fetchDirectContent(url, maxChars)
+    .catch((err: any): ToolResult => ({ success: false, error: `Fetch failed: ${err?.message || err}` }));
+  let tinyfish: Promise<ToolResult> | null = null;
+  const startTinyFish = () => (tinyfish ??= fetchTinyFishContent(url, maxChars, tinyfishKey)
+    .catch((err: any): ToolResult => ({ success: false, error: `TinyFish Fetch failed: ${err?.message || err}` })));
+  const best = (d: ToolResult, t: ToolResult): ToolResult => (t.success ? t : d.success ? d : { ...d, error: `${d.error || 'direct fetch failed'}; ${t.error || 'TinyFish failed'}` });
+
+  let headStartTimer: NodeJS.Timeout | undefined;
+  const headStart = new Promise<'slow'>((resolve) => {
+    headStartTimer = setTimeout(() => resolve('slow'), WEB_FETCH_DIRECT_HEAD_START_MS);
+    headStartTimer.unref?.();
+  });
+  const first = await Promise.race([direct, headStart]);
+  if (headStartTimer) clearTimeout(headStartTimer);
+  if (first !== 'slow') {
+    if (isUsableDirectFetchResult(first)) return first;
+    return best(first, await startTinyFish());
+  }
+  // Direct is slow: race both, take the first usable answer.
+  const tf = startTinyFish();
+  const winner = await new Promise<ToolResult | null>((resolve) => {
+    let pending = 2;
+    const settle = (r: ToolResult, usable: boolean) => { if (usable) resolve(r); else if (--pending === 0) resolve(null); };
+    direct.then((r) => settle(r, isUsableDirectFetchResult(r)));
+    tf.then((r) => settle(r, !!r.success));
+  });
+  if (winner) return winner;
+  return best(await direct, await tf);
+}
+
+async function fetchDirectContent(url: string, maxChars: number): Promise<ToolResult> {
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
@@ -1952,7 +2064,10 @@ export async function executeWebFetch(
     const preview = /html/i.test(contentType)
       ? extractPagePreviewMetadataFromHtml(html.slice(0, 1_500_000), res.url || url)
       : { url } as PagePreviewMetadata;
-    let text = html
+    // Prefer the page's own content region when it is substantial.
+    const contentRegion = /<(article|main)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(html);
+    const body = contentRegion && contentRegion[2].length > 2000 ? contentRegion[2] : html;
+    let text = body
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
       .replace(/<nav[\s\S]*?<\/nav>/gi, '')
@@ -1980,6 +2095,7 @@ export async function executeWebFetch(
         image_url: preview.imageUrl,
         icon_url: preview.iconUrl,
         preview,
+        provider: 'direct',
       },
       stdout: text,
     };
@@ -2163,6 +2279,7 @@ export const webSearchTool = {
     required: ['query'],
     properties: {
       query: { type: 'string', description: 'Search query' },
+      queries: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'Optional extra query angles searched in parallel in this one call (max 6 total with query). Prefer this over several web_search calls.' },
       max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
       multi_engine: { type: 'boolean', description: 'Default false. Set true for wide research across all configured search providers.' },
       provider: {
@@ -3353,6 +3470,7 @@ export async function webSearch(query: string, options: {
   fetch_top_k?: number;
   fetch_max_chars?: number;
   provider_timeout_ms?: number;
+  queries?: string[];
 } = {}): Promise<string> {
   const result = await executeWebSearch({ query, ...options });
   if (!result.success) return result.error || `Search failed for "${query}".`;

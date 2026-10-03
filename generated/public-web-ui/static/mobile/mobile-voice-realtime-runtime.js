@@ -1286,7 +1286,19 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         || requestedSessionId === MOBILE_CHAT_SESSION_ID
         || String(__pmRealtimeAgent.conn.sessionId || '').trim() === requestedSessionId);
     if (!currentConnectionIsOpen) _notifyMobileVoiceAgentConnection('starting', { sessionId: requestedSessionId });
-    if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
+    // xAI out of credits used to fail the tap with a toast and leave the user to
+    // retry by hand; fall through to Codex voice and skip xAI for 30 min instead.
+    const xaiDownUntil = Number(localStorage.getItem('pm_xai_voice_unavailable_until') || 0);
+    if (_wantsMobileXaiRealtime() && options.skipXai !== true && !(xaiDownUntil > Date.now())) {
+      return _startMobileXaiRealtimeSession(sessionId, options).catch((err) => {
+        const msg = String(err?.message || err || '');
+        if (!/out of credits|spending-limit|grok subscription|insufficient\s+(credits?|quota)|quota exceeded/i.test(msg)) throw err;
+        try { localStorage.setItem('pm_xai_voice_unavailable_until', String(Date.now() + 30 * 60_000)); } catch {}
+        _voiceDebug('xai-realtime-unavailable-fallback-codex', { message: msg.slice(0, 160) });
+        try { pmToast('Grok voice is out of credits. Using Codex voice.', 'info'); } catch {}
+        return _startMobileRealtimeAgentSession(sessionId, { ...options, skipXai: true });
+      });
+    }
     let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
     if (sid === MOBILE_CHAT_SESSION_ID) {
       sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_agent_bootstrap' });
