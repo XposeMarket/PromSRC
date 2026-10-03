@@ -72,8 +72,11 @@ export function formatBackgroundSpawnContinuity(sessionId: string, since = 0): s
       const status = item.state === 'queued' || item.state === 'in_progress'
         ? 'started; completion not yet verified (check current live status after a restart)'
         : item.state;
-      const outcome = String(item.result || item.error || '').replace(/\s+/g, ' ').slice(0, 1100);
-      return `- ${item.id}: ${status}${item.promptPreview ? `; task: ${item.promptPreview.slice(0, 160)}` : ''}${outcome ? `; outcome: ${outcome}` : ''}`;
+      // Receipts prove launch/outcome; the full result lives in the receipt
+      // store. Keep each line short: this block is repeated on every restart.
+      const rawOutcome = String(item.result || item.error || '').replace(/\s+/g, ' ').trim();
+      const outcome = rawOutcome.length > 420 ? `${rawOutcome.slice(0, 417)}...` : rawOutcome;
+      return `- ${item.id}: ${status}${item.promptPreview ? `; task: ${item.promptPreview.slice(0, 120)}` : ''}${outcome ? `; outcome: ${outcome}` : ''}`;
     }),
   ].join('\n');
 }

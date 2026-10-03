@@ -1529,7 +1529,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Search the web for current information. Provider thumbnails/publisher/date fields are preserved when available. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, provider:"multi" to force all configured engines, or multi_engine:false for preferred-provider-only search. fetch_top_k also fetches pages and merges preview metadata/images back into results.',
+        description: 'Search the web for current information. Multi-engine by default; provider forces one engine, multi_engine:false uses only the preferred provider. fetch_top_k also fetches the top pages and merges their preview metadata.',
         parameters: {
           type: 'object', required: ['query'],
           properties: {
@@ -1587,7 +1587,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Fetch the full text content and structured page preview metadata (title, description, publisher, date, hero image, icon) for one webpage URL, or multiple URLs in parallel when urls is provided. Use this AFTER web_search to read actual page content instead of snippets. Exact X/Twitter statuses use official X oEmbed; thread expansion is opt-in with include_thread=true and attached-media analysis is opt-in with include_media=true.',
+        description: 'Fetch full page text plus preview metadata for url (or urls, in parallel). Use after web_search to read real content instead of snippets. X statuses use oEmbed; include_thread / include_media opt into thread expansion and media analysis.',
         parameters: {
           type: 'object',
           properties: {
@@ -2035,7 +2035,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'clone_repo',
-        description: 'Clone a git repository into the workspace, or pull only specific files/dirs from it. Use this FIRST whenever the user gives you a git/GitHub repo (URL or owner/repo) and wants you to download, inspect, or analyze it — do NOT fall back to fetching individual web URLs and re-typing file contents. Defaults to a shallow clone (depth 1) into repos/<name> inside the workspace. Pass paths:[...] to sparse-checkout just those files/dirs (e.g. ["src/index.ts","README.md"]). After cloning, use list_directory/read_file/search_files on the cloned path to analyze it.',
+        description: 'Clone a git repo (URL or owner/repo) into repos/<name> (shallow by default), or sparse-checkout only paths:[...]. Use this first whenever the user wants a repo downloaded or analyzed, instead of fetching files from the web; then inspect the clone with workspace tools.',
         parameters: {
           type: 'object', required: ['repo'],
           properties: {
@@ -2225,7 +2225,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory',
-        description: 'Unified lightweight memory wrapper. Set action="write" to add a durable fact, action="update" to replace one exact existing durable bullet, action="read" to read USER.md/SOUL.md/MEMORY.md, action="search" to recall anything from the past (searches ALL chat transcripts, intraday notes, MEMORY/USER bullets and captured ideas via the full-text recall index, plus the structured memory index; the current chat is excluded; each hit is labeled strong/partial/weak and the header says NO STRONG MATCH when nothing fits), action="recall" for the fast transcript/notes/ideas index only, or action="ideas" to list "we should build X" ideas auto-captured from past user messages. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
+        description: 'Durable memory. write adds a fact; update replaces one exact bullet; read reads USER/SOUL/MEMORY.md; search recalls across all past transcripts, notes, memory bullets and ideas (current chat excluded; hits labeled strong/partial/weak, NO STRONG MATCH when nothing fits); recall is the fast transcript/notes/ideas index only; ideas lists captured "we should build X" ideas. Manager/agent runtimes may only use file="memory" (their private MEMORY.md).',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -2480,13 +2480,9 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'write_note',
         description:
-          'Write a timestamped note to today\'s intraday notes file. ' +
-          'Use this to preserve context between sessions: things discussed, decisions made, data gathered, tasks completed, or anything the agent should remember later. ' +
-          'Call during main chat, background tasks, plans, or any session — this is a general-purpose session memory tool. ' +
-          'Good triggers: file edited, task completed, significant decision, data gathered from browser/desktop, user shared project context, plan step completed. ' +
-          'Skip for casual chat, greetings, simple questions, or turns where nothing actionable occurred. ' +
-          'Mark bugs/backlog as status:"open" and, when fixing them, write a status:"done" note with resolves:[ids] so open lists never rot. ' +
-          'When write_note is the only action in a turn, call switch_model("low") first to keep it fast.',
+          'Append a timestamped note to today\'s intraday notes (between-session scratchpad, any session type). ' +
+          'Use for real progress: files edited, tasks done, decisions, gathered data, blockers. Skip casual chat and turns with nothing actionable. ' +
+          'Use status:"open" for unfinished bugs/backlog and a later status:"done" note with resolves:[ids] to close them.',
         parameters: {
           type: 'object', required: ['content'],
           properties: {

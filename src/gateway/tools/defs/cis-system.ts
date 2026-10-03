@@ -56,11 +56,10 @@ export function getCisSystemTools(): any[] {
   ]);
   const categoryEnum = getRuntimeAllowedCategories(TOOL_CATEGORY_IDS);
   const requestToolCategoryDescription =
-    'Load one on-demand tool category. Default scope=turn; use scope=next_turn or scope=ttl with turns for a bounded follow-up, and scope=session only for an explicit ongoing workflow. Keep request_tool_category as the fallback when automatic routing is uncertain. IDs:\n' +
-    categoryDocs
-      .filter(([category]) => categoryEnum.includes(category as any))
-      .map(([, line]) => `  ${line}`)
-      .join('\n');
+    'Load one on-demand tool category (IDs in the enum; the system prompt tool menu describes each). Default scope=turn; next_turn or ttl+turns for a bounded follow-up; session only for an explicit ongoing workflow. Fallback when automatic routing is uncertain.';
+  // Category labels already appear in the system-prompt tool menu; repeating
+  // them here cost ~290 tokens on every model call.
+  void categoryDocs;
 
   const tools = [
     // ── ask_team_coordinator: delegate team creation/queries to the meta-coordinator ──
@@ -461,12 +460,9 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'switch_model',
         description:
-          'Switch the active LLM for the remainder of this turn only. Auto-reverts to the session\'s primary model after turn end — never switch back manually. ' +
-          'Call when the available evidence shows the remaining work is suitable for a lower tier; there is no first-or-second-call deadline, so you may inspect or read first. Switching later in the same turn is valid. If the task is still uncertain, stay on the primary model. ' +
-          'LOW (speed): single command, file read/summary, quick lookup, write_note only, simple one-tool tasks. ' +
-          'MEDIUM (careful): multi-step work that doesn\'t need the full primary model — analysis, moderate reasoning, structured writes. ' +
-          'STAY ON PRIMARY: src/ edits, proposals, deep reasoning, auth/security/build system, anything that could go wrong expensively. ' +
-          'BLOCKED in background/task execution sessions — only in interactive and Telegram turns.',
+          'Switch to a lower-tier model for the rest of this turn only (auto-reverts; never switch back). Any point in the turn is fine. ' +
+          'low: single command, read/summary, quick lookup, write_note-only. medium: multi-step analysis or structured writes. ' +
+          'Stay on primary for src/ edits, proposals, deep reasoning, auth/security/build, or anything costly if wrong. Interactive and Telegram turns only.',
         parameters: {
           type: 'object',
           required: ['tier', 'reason'],
@@ -791,9 +787,8 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'request_final_action_approval',
         description:
-          'Ask the user for one-shot approval before triggering a high-impact final UI action such as Post, Send, Publish, Submit, Purchase, Transfer, Delete, or Checkout. ' +
-          'Use after preparing the UI with browser/desktop tools and before the final click or Enter key. If approved, pass the returned final_action_approval_id to the exact next browser_click/browser_press_key/desktop_click/desktop_press_key call. ' +
-          'That approved final action automatically returns post-action visual evidence; inspect it and confirm the approved action succeeded before reporting completion.',
+          'Ask for one-shot approval right before a high-impact final UI action (Post, Send, Publish, Submit, Purchase, Transfer, Delete, Checkout), after the UI is prepared. ' +
+          'If approved, pass final_action_approval_id to the exact next browser_click/browser_press_key/desktop_click/desktop_press_key call, then check its returned post-action evidence before reporting success.',
         parameters: {
           type: 'object',
           required: ['action_kind', 'target_label', 'summary'],

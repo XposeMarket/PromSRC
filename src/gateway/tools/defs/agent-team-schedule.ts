@@ -819,7 +819,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'timer',
-	        description: 'Create, list, update/reschedule, or cancel one-off main-chat timers. A timer fires later as a regular user-like message in its original chat session. Use for requests like "check this in 5 minutes", "remind/follow up in 30 minutes", "show my timers", "change that timer prompt", "move the timer to 8pm", or "cancel that timer". Main chat only; do not use for recurring automation.',
+	        description: 'Create, list, update/reschedule or cancel one-off main-chat timers; a timer fires later as a user-like message in its chat ("check this in 5 minutes", "move it to 8pm", "cancel that timer"). Main chat only; not for recurring automation.',
 	        parameters: {
 	          type: 'object',
 	          required: ['action'],
@@ -1449,7 +1449,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'background_ops',
         description:
-          'Unified background agent wrapper. action="spawn" starts an ephemeral parallel agent. Once spawned, this foreground turn cannot finalize until every same-turn worker has completed or failed and its result is injected into the live context for synthesis. action="steer" sends live guidance to any active worker through the same queued steer path used by an active chat. action="wait" briefly pauses this foreground turn; action="status"/"progress" checks state; action="join" is system-use only and normally unnecessary.',
+          'Background agents. spawn starts a parallel agent (this turn cannot finalize until same-turn workers finish and their results are injected); steer sends live guidance to an active worker; wait briefly pauses this turn; status/progress check state; join is system-only.',
         parameters: {
           type: 'object',
           required: ['action'],
