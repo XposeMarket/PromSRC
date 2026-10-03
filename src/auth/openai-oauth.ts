@@ -155,8 +155,30 @@ function migrateLegacyCredentials(configDir: string): void {
   }
 }
 
+/**
+ * Callers that do not name an account (vision fallbacks, realtime auth, layer
+ * extraction) predate provider accounts. Since accounts were added the token
+ * lives at `openai.oauth_tokens.<id>`, so an unscoped lookup found nothing and
+ * reported "OpenAI Codex OAuth is not connected" while Codex was connected.
+ * Resolve them to the real account so refresh/save stay on the same key.
+ */
+export function resolveCodexAccountId(configDir: string, accountId?: string): string | undefined {
+  const explicit = String(accountId || '').trim();
+  if (explicit) return explicit;
+  try {
+    const vault = getVault(configDir);
+    if (vault.has(VAULT_KEY)) return undefined;
+    if (vault.has(`${VAULT_KEY}.default`)) return 'default';
+    const scoped = vault.keys().filter((key) => key.startsWith(`${VAULT_KEY}.`)).sort();
+    return scoped.length ? scoped[0].slice(VAULT_KEY.length + 1) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadTokens(configDir: string, accountId?: string): OAuthTokens | null {
   migrateLegacyCredentials(configDir);
+  accountId = resolveCodexAccountId(configDir, accountId);
   const vault = getVault(configDir);
   const normalizedAccountId = String(accountId || '').trim();
   const requestedKey = accountVaultKey(normalizedAccountId);
@@ -219,6 +241,7 @@ function generateChallenge(verifier: string): string {
 // ─── Token refresh ──────────────────────────────────────────────────────────────
 
 export async function refreshTokens(configDir: string, accountId?: string): Promise<OAuthTokens> {
+  accountId = resolveCodexAccountId(configDir, accountId);
   const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
   const existingRefresh = refreshInFlight.get(key);
   if (existingRefresh) return existingRefresh;
@@ -280,6 +303,7 @@ export async function refreshTokens(configDir: string, accountId?: string): Prom
 // ─── Get valid token (auto-refresh) ────────────────────────────────────────────
 
 export async function getValidToken(configDir: string, accountId?: string): Promise<string> {
+  accountId = resolveCodexAccountId(configDir, accountId);
   let tokens = loadTokens(configDir, accountId);
   if (!tokens) throw new Error('Not connected to OpenAI. Go to Settings → Models → OpenAI Codex and click Connect.');
 

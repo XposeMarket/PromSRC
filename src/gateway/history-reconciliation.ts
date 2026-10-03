@@ -1,6 +1,13 @@
 /** Pure server-history reconciliation used by reconnecting/mobile clients. */
 export function historyMessageMergeKey(msg: any): string {
   const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
+  // Realtime Voice rows: the exchange id is the identity and must win over any
+  // message/request id a client attaches, or every exchange collapses into one.
+  const earlyVoiceGroup = String(msg?.workflowGroupId || '').trim();
+  const earlyVoicePart = String(msg?.workflowPart || '').trim();
+  if (role && /^voice_exchange_/.test(earlyVoiceGroup) && /^voice_(?:user|assistant)$/.test(earlyVoicePart)) {
+    return `${role}|voice:${earlyVoiceGroup}|${earlyVoicePart}`;
+  }
   const messageId = String(msg?.messageId || msg?.id || '').trim();
   const syntheticRequest = /^mobile-request:(.+):(user|assistant|ai)$/.exec(messageId);
   if (role === 'user' && syntheticRequest?.[2] === 'user') return `user|client:${syntheticRequest[1]}`;

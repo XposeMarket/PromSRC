@@ -16348,6 +16348,13 @@ function voiceCoreSurfaceSignature(sessionId: string): string {
 
 async function executeVoiceCoreTool(sessionId: string, name: string, rawArgs: Record<string, any>): Promise<string> {
   const { voiceTarget: _vt, contextPacket: _cp, ...args } = rawArgs || {};
+  // Voice has no turn boundary of its own, while main-chat turns on the same
+  // session clear turn-scoped categories. Keep voice activations alive for a
+  // bounded number of turns unless the model explicitly asked for session.
+  if (name === 'request_tool_category' && String((args as any).scope || 'turn') === 'turn') {
+    (args as any).scope = 'ttl';
+    (args as any).turns = Math.max(6, Number((args as any).turns || 0) || 0);
+  }
   const before = voiceCoreSurfaceSignature(sessionId);
   const raw = await executeVoicePrometheusTools(sessionId, { action: 'call', tool: name, args, bypassSurfaceCheck: true });
   const after = voiceCoreSurfaceSignature(sessionId);
@@ -16359,7 +16366,11 @@ async function executeVoiceCoreTool(sessionId: string, name: string, rawArgs: Re
     const parsed = JSON.parse(raw);
     parsed.runtimeAction = 'refresh_tools';
     parsed.realtimeTools = buildRealtimeVoiceAgentTools(undefined, null, sessionId);
-    parsed.note = 'New tools are active and appear in your function list on your next step. Call them directly (prometheus_tools call also works right now).';
+    parsed.newTools = parsed.realtimeTools
+      .map((tool: any) => String(tool?.name || ''))
+      .filter((toolName: string) => toolName && !before.split(',').includes(toolName) && voiceCoreToolSurface(sessionId).some((t) => voicePrometheusToolName(t) === toolName))
+      .slice(0, 60);
+    parsed.note = 'New tools are active now. If they appear in your function list, call them directly. If they do not (Codex voice keeps a fixed list for the call), call them right away with prometheus_tools action=call, tool=<name>, args={...}; use action=describe first if unsure of arguments.';
     return JSON.stringify(parsed);
   } catch {
     return raw;
@@ -20960,7 +20971,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
       ? ''
-      : '- You are Prometheus with a voice: your function list IS the Prometheus core tool set (web_search, web_fetch, memory, write_note, delivery_send, background_ops, chatgpt_sandbox, request_tool_category, tool_search/tool_call for connected apps, etc.), plus voice extras (voice_thread_ops, voice_ops, voice_browser, voice_desktop, show_ui, quiet mode). Call them directly, exactly like main chat. When you need a category (workspace_write for files/shell/git, browser_automation, desktop_automation, agents_and_teams, media_generation...), call request_tool_category; the new tools appear in your function list on your next step. Categories also auto-activate from what the user says. prometheus_tools call works as a fallback for any tool not yet in your list. Keep long multi-step coding or research in voice_thread_ops so voice stays responsive.',
+      : '- You are Prometheus with a voice: your function list IS the Prometheus core tool set (web_search, web_fetch, memory, write_note, delivery_send, background_ops, chatgpt_sandbox, request_tool_category, tool_search/tool_call for connected apps, etc.), plus voice extras (voice_thread_ops, voice_ops, voice_browser, voice_desktop, show_ui, quiet mode). Call them directly, exactly like main chat. When you need a category (workspace_write for files/shell/git, browser_automation, desktop_automation, agents_and_teams, media_generation...), call request_tool_category; on OpenAI and xAI voice the new tools appear in your function list on your next step. Categories also auto-activate from what the user says. If a tool you need is not in your function list (Codex voice keeps a fixed list for the whole call), call it immediately with prometheus_tools action=call, tool=<name>, args={...} (action=describe first if unsure of its arguments). Never tell the user a tool is unavailable without trying prometheus_tools. Keep long multi-step coding or research in voice_thread_ops so voice stays responsive.',
     identity.isSubagent
       ? `- For work needing files, shell, coding, long research, or a durable artifact, call voice_ops action agent_control with agent_action chat so ${identity.label}'s own worker performs it. Wait for the returned reply and summarize it in this same voice. Use agent_action dispatch only when the user explicitly requests background execution and does not expect an immediate result.`
       : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately with an explicit launch_mode. Use supervise when the user expects ongoing verification/steering, ping for a one-shot completion notification, and forget when they do not want a notification. For several independent work items, call create_many with a route on each item. Keep user choices, approvals, and interactive judgment here in Voice.',
@@ -21931,6 +21942,11 @@ router.post('/api/voice-agent/realtime-tool-surface', async (req, res) => {
     }
     const before = voiceCoreSurfaceSignature(sessionId);
     const activated = autoActivateToolCategories(sessionId, transcript, 0).map((entry: any) => entry.category);
+    // Auto-activation is turn-scoped for main chat; a voice call spans many
+    // spoken turns and would otherwise advertise tools that silently expire.
+    for (const category of activated) {
+      try { activateToolCategory(sessionId, category, { scope: 'ttl', turns: 6 }); } catch { /* unknown category */ }
+    }
     const changed = voiceCoreSurfaceSignature(sessionId) !== before;
     res.json({
       ok: true,

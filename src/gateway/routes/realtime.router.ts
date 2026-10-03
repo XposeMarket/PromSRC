@@ -46,11 +46,26 @@ function getRealtimeApiKey(): string {
   ).trim();
 }
 
+// Codex dynamic tools are fixed for the life of the call and capped at 96.
+// The gateway (prometheus_tools) and category tools must survive the cap or
+// Codex voice loses its path to every other Prometheus tool.
+const CODEX_BRIDGE_PRIORITY_TOOLS = ['prometheus_tools', 'request_tool_category', 'tool_search', 'tool_call', 'voice_thread_ops'];
+const CODEX_BRIDGE_MAX_TOOLS = 96;
+
 function sanitizeCodexBridgeDynamicTools(value: unknown): any[] {
   if (!Array.isArray(value)) return [];
   const tools: any[] = [];
   const seen = new Set<string>();
-  for (const raw of value.slice(0, 96)) {
+  const rawName = (raw: any) => String(raw?.name || raw?.function?.name || '').trim();
+  const priority = (raw: any) => {
+    const index = CODEX_BRIDGE_PRIORITY_TOOLS.indexOf(rawName(raw));
+    return index < 0 ? CODEX_BRIDGE_PRIORITY_TOOLS.length : index;
+  };
+  const ordered = value.map((raw, index) => ({ raw, index }))
+    .sort((a, b) => priority(a.raw) - priority(b.raw) || a.index - b.index)
+    .map((entry) => entry.raw);
+  for (const raw of ordered) {
+    if (tools.length >= CODEX_BRIDGE_MAX_TOOLS) break;
     if (!raw || typeof raw !== 'object') continue;
     const name = String((raw as any).name || (raw as any).function?.name || '').trim();
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(name) || seen.has(name)) continue;

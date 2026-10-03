@@ -111,8 +111,16 @@ function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string)
 export function codexHttpErrorDetail(bodyText: string): string {
   try {
     const parsed = JSON.parse(bodyText);
-    const message = parsed?.error?.message;
-    if (typeof message !== 'string') return '';
+    // The ChatGPT Codex backend answers rejected requests with `{ detail }`
+    // rather than the platform `{ error: { message } }` shape.
+    const message = typeof parsed?.error?.message === 'string'
+      ? parsed.error.message
+      : typeof parsed?.detail === 'string'
+        ? parsed.detail
+        : typeof parsed?.error === 'string'
+          ? parsed.error
+          : '';
+    if (!message) return '';
     return message
       .replace(/[\r\n\t]+/g, ' ')
       .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')

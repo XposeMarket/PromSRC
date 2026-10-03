@@ -303,6 +303,59 @@ const DEFAULT_XAI_VISION_MODEL = process.env.XAI_VISION_MODEL || 'grok-4.3';
 const DEFAULT_XAI_VISION_FALLBACK_MODEL = process.env.XAI_VISION_FALLBACK_MODEL
   || process.env.OPENAI_VISION_FALLBACK_MODEL
   || 'gpt-5.4-mini';
+
+/**
+ * Codex OAuth runs on a ChatGPT account, which rejects some API-only model ids
+ * (the 2026-10-03 camera failure was a bare `openai_codex API error 400` on
+ * gpt-5.4-mini). Try the explicit override, then the user's configured Codex
+ * model, then broadly available account models, stopping at the first success.
+ */
+export function codexVisionModelCandidates(configuredCodexModel?: string): string[] {
+  const out: string[] = [];
+  const add = (m: unknown) => {
+    const id = String(m || '').trim();
+    if (id && id !== 'chatgpt-web' && !out.includes(id)) out.push(id);
+  };
+  add(process.env.XAI_VISION_FALLBACK_MODEL || process.env.OPENAI_VISION_FALLBACK_MODEL);
+  add(configuredCodexModel);
+  add('gpt-5.5');
+  add('gpt-5.4-mini');
+  return out;
+}
+
+function configuredCodexModelId(): string {
+  try {
+    const { getConfig } = require('../../../config/config') as typeof import('../../../config/config');
+    const data = getConfig().getConfig() as any;
+    const providers = data?.llm?.providers || {};
+    return String((providers.openai_codex || providers['openai-codex'] || {}).model || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function chatCodexVisionWithFallback(
+  adapter: InstanceType<typeof OpenAICodexAdapter>,
+  messages: any[],
+  opts: { max_tokens: number },
+): Promise<{ text: string; model: string; errors: string[] }> {
+  const errors: string[] = [];
+  for (const model of codexVisionModelCandidates(configuredCodexModelId())) {
+    try {
+      const result = await adapter.chat(messages, model, { temperature: 0.1, max_tokens: opts.max_tokens, think: 'low' });
+      const text = extractCodexChatResultText(result);
+      if (text) return { text, model, errors };
+      errors.push(`${model}: empty`);
+    } catch (err: any) {
+      const message = String(err?.message || err);
+      errors.push(`${model}: ${message}`);
+      // Only a model/request rejection is worth retrying with another model.
+      if (!/\b(400|404)\b/.test(message)) break;
+    }
+  }
+  return { text: '', model: '', errors };
+}
+
 const OPENAI_VISION_FALLBACK_TIMEOUT_MS = Math.max(
   5_000,
   Math.min(60_000, Number(process.env.XAI_VISION_FALLBACK_TIMEOUT_MS || 25_000) || 25_000),
@@ -392,20 +445,15 @@ async function executeOpenAiCodexVisionFallback(
     for (const url of images.slice(0, 12)) {
       content.push({ type: 'image_url', image_url: { url, detail: 'low' } });
     }
-    const result = await adapter.chat([
+    const attempt = await chatCodexVisionWithFallback(adapter, [
       {
         role: 'system',
         content: 'You describe mobile camera images for a live voice assistant. Return only the concise visual summary text.',
       },
       { role: 'user', content },
-    ], model, {
-      temperature: 0.1,
-      max_tokens: 260,
-      think: 'low',
-    });
-    const summary = extractCodexChatResultText(result);
-    if (summary) return { success: true, summary, model, credential_source: 'openai-codex-oauth' };
-    return { success: false, model, credential_source: 'openai-codex-oauth', error: 'OpenAI Codex vision fallback returned an empty summary.' };
+    ], { max_tokens: 260 });
+    if (attempt.text) return { success: true, summary: attempt.text, model: attempt.model, credential_source: 'openai-codex-oauth' };
+    return { success: false, model, credential_source: 'openai-codex-oauth', error: attempt.errors.join(' | ') || 'OpenAI Codex vision fallback returned an empty summary.' };
   } catch (err: any) {
     return { success: false, model, credential_source: 'openai-codex-oauth', error: String(err?.message || err || 'OpenAI Codex vision fallback failed.') };
   }
@@ -488,9 +536,9 @@ export async function executeVisionJudge(promptText: string, images: string[], o
     if (loadOpenAiCodexTokens(configDir)) {
       const adapter = new OpenAICodexAdapter(configDir);
       const content: any[] = [{ type: 'text', text: promptText }, ...imgs.map((url) => ({ type: 'image_url', image_url: { url, detail: 'low' } }))];
-      const result = await adapter.chat([{ role: 'system', content: system }, { role: 'user', content }], DEFAULT_XAI_VISION_FALLBACK_MODEL, { temperature: 0.1, max_tokens: opts.maxTokens || 400, think: 'low' });
-      const text = extractCodexChatResultText(result);
-      if (text) return { success: true, text, model: DEFAULT_XAI_VISION_FALLBACK_MODEL };
+      const attempt = await chatCodexVisionWithFallback(adapter, [{ role: 'system', content: system }, { role: 'user', content }], { max_tokens: opts.maxTokens || 400 });
+      if (attempt.text) return { success: true, text: attempt.text, model: attempt.model };
+      if (attempt.errors.length) errors.push(`codex: ${attempt.errors.join(' | ')}`);
     }
   } catch (err: any) { errors.push(`codex: ${String(err?.message || err)}`); }
   const fb = await executeOpenAiVisionFallback(`${system}\n\n${promptText}`, imgs);

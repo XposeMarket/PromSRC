@@ -8670,32 +8670,28 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (streamId === run.streamId && Number(run.lastSeq || 0) > seq) return;
     const thread = _activeMobileThread();
     let aiTurn = _findLatestAssistantTurn(thread);
-    if (!aiTurn || aiTurn.streaming !== true) {
-      aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
-        content: '', processEntries: [], liveTraceEntries: [] };
-      thread.push(aiTurn);
+    // Snapshot = "mid-turn" signal only; painting it caused raw TOOL rows + glued commentary. Replay owns the timeline.
+    if (aiTurn?.processEntries) aiTurn.processEntries = aiTurn.processEntries.filter((e) => !e?._pmStreamSnapshot);
+    const sameLocalStream = !!aiTurn && aiTurn.streaming === true
+      && String(aiTurn._streamId || run.streamId || '').trim() === streamId;
+    if (!sameLocalStream) {
+      if (!aiTurn || aiTurn.streaming !== true) {
+        aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
+          content: '', processEntries: [], liveTraceEntries: [] };
+        thread.push(aiTurn);
+      }
+      aiTurn._streamId = streamId;
     }
     aiTurn.streaming = true;
-    aiTurn._streamId = streamId;
-    aiTurn.body = aiTurn.body || { sender: '', text: '' };
-    aiTurn.body.text = String(snapshot.text || '');
-    aiTurn.content = aiTurn.body.text;
-    aiTurn._pmVisualStreamPending = '';
-    aiTurn._pmVisualStreamFull = aiTurn.body.text;
-    aiTurn._pendingThinkingBurst = String(snapshot.thinking || '');
-    if (snapshot.summary) _setMobileLiveProgressNarration(aiTurn, String(snapshot.summary));
-    aiTurn.processEntries = (aiTurn.processEntries || []).filter((entry) => !entry?._pmStreamSnapshot);
-    for (const item of Array.isArray(snapshot.tools) ? snapshot.tools : []) {
-      aiTurn.processEntries.push({ type: item.type === 'tool_result' ? 'result' : 'tool',
-        content: String(item?.data?.message || item?.data?.result || item?.data?.action || item?.type || '').slice(0, 1024),
-        _pmStreamSnapshot: true });
-    }
     __pmChat.activeRuns = __pmChat.activeRuns || {};
-    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: seq };
-    _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: seq });
+    // Never advance the cursor from a snapshot (unfocused frames sit before snapshot.seq).
+    const cursor = sameLocalStream ? Math.max(0, Number(run.lastSeq || 0) || 0) : 0;
+    __pmChat.activeRuns[requestedSession] = { ...run, busy: true, streamId, lastSeq: cursor };
+    _rememberMobileActiveRun(requestedSession, { streamId, lastSeq: cursor });
     _markMobileSessionRunning(requestedSession, true);
     setBusy(true);
     renderThreadNow();
+    scheduleMobileRunRecovery(0, { force: true, fullRefresh: false });
   };
   const onSessionActivity = (msg = {}) => {
     const sid = String(msg.sessionId || '').trim();
