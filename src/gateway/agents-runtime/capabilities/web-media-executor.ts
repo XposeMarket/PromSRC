@@ -148,7 +148,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
       }
 
       case 'web_search': {
-        const result = await webSearch(args.query || '', {
+        const result = await webSearch(args.query || (Array.isArray(args.queries) ? String(args.queries[0] || '') : ''), {
+          queries: Array.isArray(args.queries) ? args.queries.map((q: unknown) => String(q || '')) : undefined,
           max_results: args.max_results != null ? Number(args.max_results) : undefined,
           multi_engine: typeof args.multi_engine === 'boolean' ? args.multi_engine : undefined,
           provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,

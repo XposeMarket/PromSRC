@@ -511,7 +511,12 @@ export class CodexAppServerBridge {
     const resolvedVoice = activeVoices.includes(requestedVoice)
       ? requestedVoice
       : (String(bridgeStatus.defaultVoice || '').trim() || activeVoices[0] || 'cove');
-    const account = await this.request('account/read', { refreshToken: true });
+    // A token refresh round-trips to OpenAI (~350-450 ms per connect). status()
+    // already confirmed a ChatGPT account within STATUS_CACHE_TTL_MS, and the
+    // app-server refreshes an expired token on demand, so only force a refresh
+    // when the cached status is older than a minute.
+    const statusAgeMs = this.cachedStatus ? Date.now() - this.cachedStatus.at : Infinity;
+    const account = await this.request('account/read', { refreshToken: statusAgeMs > 60_000 });
     if (account?.account?.type !== 'chatgpt') {
       throw new Error('The Codex OAuth bridge requires Codex to be signed in with ChatGPT.');
     }
