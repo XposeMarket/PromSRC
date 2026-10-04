@@ -141,7 +141,8 @@ export function renderSpecialChatArtifact(artifact, message, index, gateway, opt
   if (type === 'chart') return renderChart(artifact, gateway, index);
   if (type === 'map') return renderMap(artifact, index);
   if (type === 'weather') return renderWeather(artifact, message, index, options.weatherSelections);
-  return null;
+  const card = typeof window !== 'undefined' ? window.renderPromDataCard?.(artifact) : '';
+  return card || null;
 }
 
 function writeEmailNotice(card, message, kind = 'info') {

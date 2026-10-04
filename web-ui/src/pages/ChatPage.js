@@ -11872,7 +11872,7 @@ function renderRichArtifacts(msg) {
       case 'map': return renderMapArtifact(a);
       case 'email_composer': return renderEmailComposerArtifact(a);
       case 'prediction_market': return renderPredictionMarketArtifact(a);
-      default: return '';
+      default: return window.renderPromDataCard?.(a) || '';
     }
   }).join('');
 }

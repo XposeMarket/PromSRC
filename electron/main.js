@@ -3744,9 +3744,59 @@ function buildNativeSnapshotScript() {
   })()`;
 }
 
+// Resolves once no scroll event has fired for 120 ms (capture phase, so inner
+// scrollers count too), or after maxMs. Cheap: no layout walks per tick.
+async function waitForNativeScrollSettle(wc, maxMs = 900) {
+  try {
+    await wc.executeJavaScript(`new Promise((resolve) => {
+      let last = Date.now(); const start = last;
+      const on = () => { last = Date.now(); };
+      document.addEventListener('scroll', on, true);
+      const tick = () => {
+        if (Date.now() - last > 120 || Date.now() - start > ${Number(maxMs) || 900}) { document.removeEventListener('scroll', on, true); resolve(true); }
+        else setTimeout(tick, 40);
+      };
+      setTimeout(tick, 60);
+    })`, true);
+  } catch {}
+}
+
 async function executeNativeBrowserJavaScript(code, sessionId = '') {
   const { wc } = requireNativeViewForSession(sessionId);
-  return wc.executeJavaScript(code, true);
+  const result = await wc.executeJavaScript(code, true);
+  // Pages whose CSP forbids 'unsafe-eval' (chatgpt.com, GitHub, banks) reject
+  // the run_js envelope's new Function(). CDP Runtime.evaluate is not subject
+  // to page CSP, so re-run the user's code there and wrap it the same way.
+  const blocked = result && typeof result === 'object' && result.ok === false
+    && /unsafe-eval|Content Security Policy|EvalError/i.test(String(result.error || ''));
+  const userCode = blocked ? extractRunJsUserSource(code) : null;
+  if (userCode == null) return result;
+  try {
+    const dbg = wc.debugger;
+    if (!dbg.isAttached()) dbg.attach('1.3');
+    const evaluate = (expression) => dbg.sendCommand('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true, timeout: 15000 });
+    let r = await evaluate(`(async () => (${userCode.replace(/;\s*$/, '')}))()`);
+    let mode = 'cdp-expression';
+    if (r?.exceptionDetails && /SyntaxError/.test(String(r.exceptionDetails?.exception?.description || r.exceptionDetails.text || ''))) {
+      r = await evaluate(`(async () => {\n${userCode}\n})()`);
+      mode = 'cdp-function-body';
+    }
+    if (r?.exceptionDetails) {
+      return { ok: false, mode, error: String(r.exceptionDetails?.exception?.description || r.exceptionDetails.text || 'JS execution failed') };
+    }
+    const value = r?.result?.value;
+    if (value === undefined) return { ok: true, mode, valueType: r?.result?.type || 'undefined', isUndefined: true, text: 'undefined' };
+    return { ok: true, mode, valueType: Array.isArray(value) ? 'array' : typeof value, isUndefined: false, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) };
+  } catch (error) {
+    return { ...result, error: `${result.error} (CDP fallback failed: ${error?.message || error})` };
+  }
+}
+
+// The gateway wraps user code as `const source = "<json string>";` in its envelope.
+function extractRunJsUserSource(envelope) {
+  const m = String(envelope || '').match(/const source = ("(?:[^"\\]|\\.)*");/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
 }
 
 async function snapshotNativeBrowserSurface(sessionId = '') {
@@ -3972,6 +4022,11 @@ async function inputNativeBrowserSurface(payload = {}) {
         type, key: key.key, code: key.code, windowsVirtualKeyCode: key.vk,
         nativeVirtualKeyCode: key.vk, text: type === 'keyDown' && key.key.length === 1 ? key.key : undefined,
       }), controller.signal);
+      // Page/Home/End keys start a smooth scroll; wait for it to settle so the
+      // next screenshot shows the final position instead of a mid-animation frame.
+      if (steps.some((s) => !s.holdMs && s.keys.some((k) => ['PageUp', 'PageDown', 'Home', 'End'].includes(k.key)))) {
+        await waitForNativeScrollSettle(wc);
+      }
       return { ok: true, acknowledged: true, delivered: null, tabId, steps: count, leaseExpiresAt: expiresAt };
     } finally {
       if (nativeBrowserActiveInputs.get(inputKey) === controller) nativeBrowserActiveInputs.delete(inputKey);
@@ -3989,10 +4044,12 @@ async function inputNativeBrowserSurface(payload = {}) {
     const deltaX = Number(payload.deltaX || 0);
     const deltaY = Number(payload.deltaY || 0);
     if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) throw new Error('Invalid wheel delta.');
-    const readScroll = `(() => { const s = document.scrollingElement || document.documentElement; return { y: Math.round(s.scrollTop || window.scrollY || 0), x: Math.round(s.scrollLeft || window.scrollX || 0) }; })()`;
-    const before = await wc.executeJavaScript(readScroll, true).catch(() => null);
-    const wheelX = Math.max(0, Math.round(Number(payload.x || 0)));
-    const wheelY = Math.max(0, Math.round(Number(payload.y || 0)));
+    const readScroll = `(() => { const s = document.scrollingElement || document.documentElement; return { y: Math.round(s.scrollTop || window.scrollY || 0), x: Math.round(s.scrollLeft || window.scrollX || 0), w: innerWidth, h: innerHeight }; })()`;
+    let before = await wc.executeJavaScript(readScroll, true).catch(() => null);
+    // Default to the viewport centre: a fixed (60,180) point lands on sidebars
+    // and nav rails (e.g. chatgpt.com) and scrolls the wrong element.
+    const wheelX = Math.max(0, Math.round(payload.x == null ? (Number(before?.w) || 800) / 2 : Number(payload.x)));
+    const wheelY = Math.max(0, Math.round(payload.y == null ? (Number(before?.h) || 600) / 2 : Number(payload.y)));
     // Hidden CDP mouseWheel ACK can stall behind a 1 Hz compositor frame.
     // Electron queues the wheel synchronously; movement verification below
     // retains the existing DOM fallback if the hidden surface ignores it.
@@ -4007,11 +4064,16 @@ async function inputNativeBrowserSurface(payload = {}) {
     if (before && after && before.y === after.y && before.x === after.x && (deltaY || deltaX)) {
       // Wheel did not move the document: scroll the largest scrollable element
       // (feeds/apps often scroll an inner container), else the window.
-      after = await wc.executeJavaScript(`(() => {
+      const fallback = await wc.executeJavaScript(`(() => {
         const dy = ${JSON.stringify(deltaY)}, dx = ${JSON.stringify(deltaX)};
         const root = document.scrollingElement || document.documentElement;
         let target = root;
-        if (root.scrollHeight <= root.clientHeight + 2) {
+        const hit = document.elementFromPoint(${wheelX}, ${wheelY});
+        for (let el = hit; el && el !== document.body && el !== root; el = el.parentElement) {
+          const cs = getComputedStyle(el);
+          if (/(auto|scroll|overlay)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) { target = el; break; }
+        }
+        if (target === root && root.scrollHeight <= root.clientHeight + 2) {
           let best = null, bestArea = 0;
           for (const el of document.querySelectorAll('*')) {
             const cs = getComputedStyle(el);
@@ -4021,9 +4083,16 @@ async function inputNativeBrowserSurface(payload = {}) {
           }
           if (best) target = best;
         }
+        const beforeY = Math.round(target.scrollTop || 0), beforeX = Math.round(target.scrollLeft || 0);
         target.scrollBy({ top: dy, left: dx, behavior: 'instant' });
-        return { y: Math.round(target.scrollTop || 0), x: Math.round(target.scrollLeft || 0), container: target !== root };
-      })()`, true).catch(() => after);
+        return { beforeY, beforeX, y: Math.round(target.scrollTop || 0), x: Math.round(target.scrollLeft || 0), container: target !== root };
+      })()`, true).catch(() => null);
+      if (fallback) {
+        // Report the container's own before/after so column-reverse chat
+        // scrollers (negative scrollTop) do not read as "0 -> -3200".
+        before = { y: fallback.beforeY, x: fallback.beforeX };
+        after = { y: fallback.y, x: fallback.x, container: fallback.container };
+      }
       method = 'dom_fallback';
     }
     const moved = !!(before && after && (before.y !== after.y || before.x !== after.x));

@@ -1786,21 +1786,21 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'show_ui_card',
         description:
-          'Render a native Prometheus UI card. Use this instead of plain text when the response benefits from a structured visual card. Choose type, then put the card-specific fields in payload. Existing card renderers handle validation.',
+          'Render a native Prometheus UI card with live data the gateway fetches (keyless sources). Use it for anything live, numeric, geographic, visual, or comparative instead of prose. Batch several cards in one round. For model-authored cards (quiz, flashcards, poll, writing, followups, reminder) do NOT call this; write a fenced block instead.',
         parameters: {
           type: 'object',
           required: ['type', 'payload'],
           properties: {
             type: {
               type: 'string',
-              enum: ['sources', 'product_carousel', 'agent_work', 'market', 'stocks', 'weather', 'comparison', 'chart', 'run_result', 'prediction_market', 'map'],
+              enum: ['sources', 'product_carousel', 'product', 'agent_work', 'market', 'stocks', 'weather', 'comparison', 'chart', 'run_result', 'prediction_market', 'map', 'places', 'currency', 'clock', 'news', 'gallery', 'video', 'sports'],
               description: 'Which card renderer to use.',
             },
             title: { type: 'string', description: 'Optional title copied into payload.title when the target card supports it.' },
             payload: {
               type: 'object',
               description:
-                'Card-specific payload (exact shapes): sources={items:[{url,title?,snippet?}]}; product_carousel={title,items:[{title,productUrl,price?,imageUrl?}]}; market={coins:["bitcoin"]}; stocks={symbols:["AAPL"]}; weather={location:"City"}; chart={chartType?:"line"|"bar"|"area"|"pie",series:[{label,points:[{x,y:number}]}],unit?,source?} (labels[]+data[] also accepted); comparison={columns:[{key,label}],rows:[{<key>:value}]}; map={markers:[{label,lat?,lng?,address?}]}; run_result={title,summary?}; prediction_market={title}; agent_work={title?,summaryRows?:[{title}]}.',
+                'Card-specific payload (exact shapes): sources={items:[{url,title?,snippet?}]}; product_carousel={title,items:[{title,productUrl,price?,imageUrl?}]}; market={coins:["bitcoin"]}; stocks={symbols:["AAPL"]}; weather={location:"City"}; chart={chartType?:"line"|"bar"|"area"|"pie",series:[{label,points:[{x,y:number}]}],unit?,source?} (labels[]+data[] also accepted); comparison={columns:[{key,label}],rows:[{<key>:value}]}; map={markers:[{label,lat?,lng?,address?}]}; run_result={title,summary?}; prediction_market={query}; agent_work={title?,summaryRows?:[{title}]}; product={item:{title,productUrl,price?,imageUrl?,merchant?,rating?,pros?:[]},variant?:"hero"|"single"} (one product, hero=top pick); places={query:"pizza",near:"Frederick, MD"} OR {places:[{name,address?,rating?,price?,hours?,phone?,website?}]}; currency={from:"USD",to:"EUR",amount?}; clock={locations:["Tokyo","London"]}; news={query}; gallery={query} (image search); video={query} or {url}; sports={league:"nba"|"nfl"|"mlb"|"nhl"|"wnba"|"epl"|..., view?:"scores"|"standings", team?} or {view:"player",player:"Nikola Jokic"}.',
               additionalProperties: true,
             },
           },

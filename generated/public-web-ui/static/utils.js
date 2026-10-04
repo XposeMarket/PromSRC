@@ -10,6 +10,7 @@
 
 import { installVideoProjectCards } from './components/video-project-card.js';
 import { installGameProjectCards } from './components/game-project-card.js';
+import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips } from './cards/index.js';
 
 // ─── HTML Escaping ─────────────────────────────────────────────
 // NOTE: The original index.html had TWO escape functions:
@@ -1090,6 +1091,7 @@ export function renderMd(text, options = {}) {
   const source = String(text);
   const cacheable = source.length <= RENDER_MD_CACHEABLE_MAX_CHARS
     && !/```(chart|svg|html|mermaid)\n/.test(source)
+    && !hasCardFence(source)
     && !(Array.isArray(options.visualArtifacts) && options.visualArtifacts.length);
   if (cacheable) {
     const hit = renderMdCache.get(source);
@@ -1150,6 +1152,10 @@ function renderMdUncached(text, options = {}) {
         return `\n\n${vpPrefix}${vpCards.length - 1}END\n\n`;
       })
       .replace(GAME_PROJECT_OPEN_RE, '');
+    // ```quiz / flashcards / poll / writing / followups / reminder -> native cards (cards/).
+    const extracted = extractCardFences(text, vpPrefix + 'C');
+    text = extracted.text;
+    extracted.cards.forEach((html, i) => { vpCards.push(html); text = text.replace(`${vpPrefix}C${i}END`, `${vpPrefix}${vpCards.length - 1}END`); });
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
@@ -1174,9 +1180,9 @@ function renderMdUncached(text, options = {}) {
       withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `${placeholderPrefix}${idx}END`;
     }
 
-    let html = resolveWorkspaceImageSources(
+    let html = citeChips(resolveWorkspaceImageSources(
       sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false })),
-    );
+    ));
 
     if (visuals.length) {
       const placeholderRe = new RegExp(`${placeholderPrefix}(\\d+)END`, 'g');
@@ -1206,6 +1212,8 @@ window.sanitizeHtml = sanitizeHtml;
 window.renderMd = renderMd;
 installVideoProjectCards();
 installGameProjectCards();
+installPromCards();
+window.renderPromDataCard = renderDataCard;
 window.timeAgo = timeAgo;
 window.fmtPercent = fmtPercent;
 window.fmtMemoryGb = fmtMemoryGb;

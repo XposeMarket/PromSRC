@@ -7745,7 +7745,7 @@ function _renderMobileRichArtifacts(message) {
       case 'map': return _renderMobileMap(a);
       case 'prediction_market': return _renderMobilePredictionMarket(a);
       case 'email_composer': return _renderMobileEmailComposerArtifact(a);
-      default: return '';
+      default: return window.renderPromDataCard?.(a) || '';
     }
   }).join('');
 }

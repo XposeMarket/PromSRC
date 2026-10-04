@@ -3767,18 +3767,26 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       map: 'show_map',
     };
     const targetTool = cardToolByType[cardType];
-    if (!targetTool) {
-      return {
-        name,
-        args,
-        result: `Unknown UI card type "${cardType}". Valid: ${Object.keys(cardToolByType).join(', ')}`,
-        error: true,
-      };
-    }
     const payload = args?.payload && typeof args.payload === 'object' && !Array.isArray(args.payload)
       ? { ...args.payload }
       : {};
     if (args?.title != null && payload.title == null) payload.title = String(args.title);
+    const { UI_CARD_BUILDERS, buildProductCard } = await import('../../tools/ui-cards.js');
+    const builder = cardType === 'product'
+      ? (p: any) => buildProductCard(p, (items) => enrichProductArtifactItems(items as any, { downloadImages: true, metadataTimeoutMs: 3000 }))
+      : UI_CARD_BUILDERS[cardType];
+    if (builder) {
+      const tr = await builder(payload);
+      return { name, args, result: tr.stdout || tr.error || 'Card unavailable.', error: !tr.success, data: tr.data, extra: tr.extra };
+    }
+    if (!targetTool) {
+      return {
+        name,
+        args,
+        result: `Unknown UI card type "${cardType}". Valid: ${[...Object.keys(cardToolByType), 'product', ...Object.keys(UI_CARD_BUILDERS)].join(', ')}`,
+        error: true,
+      };
+    }
     return executeTool(targetTool, payload, workspacePath, deps, sessionId);
   }
   // Filename inference: if the model forgot to pass filename, use the last one

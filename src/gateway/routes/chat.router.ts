@@ -5088,6 +5088,7 @@ async function handleChat(
     'Freeform interactive HTML is deliberately capable: it may be a rich self-contained fractal explorer, simulator, dashboard, lesson, configurable tracker, or mini-game. Do not reduce it to a tiny card or refuse complexity merely because it is generated UI. Keep it reasonably contained in the conversation, responsive from 320px upward, and update local state in place.',
     'Generated visuals run in a sandbox. They may use HTML, CSS, vanilla JavaScript, local state, and the Prometheus visual state bridge, but must never receive credentials or directly access Electron/Node, the filesystem, cookies, browser permissions, external accounts, arbitrary iframes, or unrestricted networking. External actions must go through an explicitly registered Prometheus tool and policy check.',
     'Theme contract: visual roots and controls must be transparent unless the visual itself intentionally creates an internal surface. Never hardcode a light/dark canvas or a fixed outer panel. Use Prometheus tokens such as --prom-bg, --prom-surface, --prom-surface-secondary, --prom-border, --prom-text, --prom-muted, --prom-accent, --prom-success, --prom-warning, and --prom-danger; charts and diagrams should inherit the host theme.',
+    'Native interactive cards are fenced JSON blocks you write yourself (no tool call): ```quiz {"title","questions":[{"question","options":[..],"answer":<index>,"hint"?,"explanation"?}]}```; ```flashcards {"title","cards":[{"front","back"}]}```; ```poll {"question","options":[..],"multiple"?}```; ```writing {"kind":"Email"|"Post"|"Draft","subject"?,"text"}``` for any draft the user will copy; ```followups ["next question 1","next question 2"]``` (2-4 short items, last thing in a reply, only when genuinely useful); ```reminder {"title","when"}``` to offer a reminder. Live data (currency, clocks, sports, news, images, video, places, single products) comes from show_ui_card instead.',
     'Inline visuals may sit between prose and should be one complete fenced chart, mermaid, svg, or html block when emitted. Keep surrounding explanation short. Use a larger artifact surface only when the experience is genuinely long-lived, multi-view, editing-heavy, or the deliverable itself should live independently of the message. Never generate a visual merely for decoration.',
   ].join('\n');
 const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';
@@ -13945,6 +13946,8 @@ function voiceToolResult(ok: boolean, summary: string, data: Record<string, any>
 const VOICE_SHOW_ARTIFACT_TOOLS = new Set([
   'show_weather', 'show_market', 'show_stocks', 'show_prediction_market', 'show_map',
   'show_sources', 'show_comparison', 'show_chart', 'show_product_carousel', 'show_agent_work', 'show_run_result',
+  'show_card_currency', 'show_card_clock', 'show_card_news', 'show_card_gallery', 'show_card_video', 'show_card_sports',
+  'show_card_places', 'show_card_product',
 ]);
 
 // Build a rich-artifact + spoken summary for a voice show_* tool call. The artifact
@@ -13957,6 +13960,13 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
     summary: String(tr?.stdout || tr?.error || fallback),
     artifact: tr?.extra?.richArtifacts?.[0] || null,
   });
+  if (name.startsWith('show_card_')) {
+    const { UI_CARD_BUILDERS, buildProductCard } = await import('../../tools/ui-cards.js');
+    const type = name.slice('show_card_'.length);
+    const builder = type === 'product' ? buildProductCard : UI_CARD_BUILDERS[type];
+    if (!builder) return { ok: false, summary: 'Unknown card.', artifact: null };
+    return fromLookup(await builder(args), 'Card unavailable.');
+  }
   switch (name) {
     case 'show_weather':
       return fromLookup(await executeWeatherLookup({ location: args.location, latitude: args.latitude, longitude: args.longitude, unit: args.unit, days: args.days }), 'Weather unavailable.');
@@ -14520,6 +14530,8 @@ const VOICE_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'show_product_carousel',
   'show_agent_work',
   'show_run_result',
+  'show_card_currency', 'show_card_clock', 'show_card_news', 'show_card_gallery', 'show_card_video', 'show_card_sports',
+  'show_card_places', 'show_card_product',
 ]);
 
 function stripVoiceWrapperArgs(args: Record<string, any>): Record<string, any> {
@@ -14544,6 +14556,8 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       products: 'show_product_carousel',
       agent_work: 'show_agent_work',
       run_result: 'show_run_result',
+      currency: 'show_card_currency', clock: 'show_card_clock', news: 'show_card_news', gallery: 'show_card_gallery', images: 'show_card_gallery',
+      video: 'show_card_video', sports: 'show_card_sports', places: 'show_card_places', product: 'show_card_product',
     } as Record<string, string>)[action.replace(/^show_/, '')];
     return target ? { name: target, args: innerArgs } : { name, args };
   }
@@ -15567,12 +15581,13 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'show_ui',
-        description: 'Unified visual-card wrapper. Render a native card in the app while speaking only the gist. Use action weather, market, stocks, prediction_market, map, sources, comparison, chart, product_carousel, agent_work, or run_result. For sources/news and product_carousel, pass query and this wrapper performs search, assembly, metadata enrichment, and image caching itself; items are optional when query is present.',
+        description: 'Unified visual-card wrapper. Render a native card in the app while speaking only the gist. Use action weather, market, stocks, prediction_market, map, sources, comparison, chart, product_carousel, agent_work, run_result, or the live cards currency {from,to,amount}, clock {locations[]}, news {query}, gallery {query}, video {query|url}, sports {league,view?:scores|standings,team?} or {view:player,player}, places {query,near}, product {item,variant?}. For sources/news and product_carousel, pass query and this wrapper performs search, assembly, metadata enrichment, and image caching itself; items are optional when query is present.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['weather', 'market', 'stocks', 'prediction_market', 'map', 'sources', 'comparison', 'chart', 'product_carousel', 'agent_work', 'run_result'] },
+            action: { type: 'string', enum: ['weather', 'market', 'stocks', 'prediction_market', 'map', 'sources', 'comparison', 'chart', 'product_carousel', 'agent_work', 'run_result', 'currency', 'clock', 'news', 'gallery', 'video', 'sports', 'places', 'product'] },
+            from: { type: 'string' }, to: { type: 'string' }, amount: { type: 'number' }, locations: { type: 'array', items: { type: 'string' } }, league: { type: 'string' }, view: { type: 'string' }, team: { type: 'string' }, player: { type: 'string' }, near: { type: 'string' }, url: { type: 'string' }, item: { type: 'object' }, variant: { type: 'string' }, places: { type: 'array', items: { type: 'object' } },
             title: { type: 'string' }, source: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] },
             location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string' }, days: { type: 'number' },
             coins: { type: 'array', items: { type: 'string' } }, symbols: { type: 'array', items: { type: 'string' } }, vs_currency: { type: 'string' }, sparkline: { type: 'boolean' }, range: { type: 'string' },
@@ -16365,6 +16380,8 @@ const VOICE_TOOLS_SUPERSEDED_BY_CORE = new Set([
   'voice_desktop_window_type', 'voice_desktop_window_press_key', 'voice_desktop_window_scroll',
   'show_weather', 'show_market', 'show_stocks', 'show_prediction_market', 'show_map', 'show_sources', 'show_comparison',
   'show_chart', 'show_product_carousel', 'show_agent_work', 'show_run_result',
+  'show_card_currency', 'show_card_clock', 'show_card_news', 'show_card_gallery', 'show_card_video', 'show_card_sports',
+  'show_card_places', 'show_card_product',
 ]);
 // Core tools voice already covers with a voice-aware version.
 const VOICE_CORE_TOOLS_SHADOWED = new Set(['skill_list', 'skill_read', 'timer', 'show_ui_card']);
