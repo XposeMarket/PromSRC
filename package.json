@@ -49,6 +49,7 @@
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
     "test:stream-fanout": "tsx src/gateway/comms/stream-fanout.regression.ts",
+    "bench:gateway-fanout": "tsx src/gateway/comms/stream-fanout.regression.ts",
     "test:desktop-stream-snapshot": "node scripts/test-desktop-stream-snapshot.mjs",
     "test:perf-budgets": "tsx scripts/test-perf-budgets.mjs && node scripts/test-stream-persistence-budget.mjs && tsx src/gateway/routes/perf-projections.regression.ts",
     "test:process-store-order": "tsx src/gateway/process/store-order.regression.ts",

@@ -47,14 +47,22 @@ import { handleCreativeCommandAck, handleCreativeCommandResult, markCreativeBrid
 import { isProviderStatusChecking, readProviderStatusCache } from '../provider-status';
 import { readCachedGpuInfo } from '../gpu-detector';
 
+let modelRuntimeStatusCache: any | null = null;
+let modelRuntimeStatusCheckedAt = 0;
+let modelRuntimeStatusReading = false;
 function readModelRuntimeStatus(): any | null {
-  try {
+  // A status poll must not synchronously hit disk (or parse JSON) on the HTTP event loop.
+  // The last-known snapshot is sufficient for diagnostics; refresh at most once a second.
+  if (!modelRuntimeStatusReading && Date.now() - modelRuntimeStatusCheckedAt >= 1_000) {
+    modelRuntimeStatusReading = true;
+    modelRuntimeStatusCheckedAt = Date.now();
     const filePath = path.join(getConfig().getConfigDir(), 'model-runtime-status.json');
-    if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return null;
+    void fs.promises.readFile(filePath, 'utf-8')
+      .then((content) => { modelRuntimeStatusCache = JSON.parse(content); })
+      .catch(() => { modelRuntimeStatusCache = null; })
+      .finally(() => { modelRuntimeStatusReading = false; });
   }
+  return modelRuntimeStatusCache;
 }
 
 export interface ServerBundle {
@@ -399,6 +407,18 @@ function tryHttpsRedirect(
   return true;
 }
 
+let lastGatewayQueuesSnapshot: unknown;
+let lastGatewayQueuesSnapshotAt = 0;
+function statusGatewayQueues(getGatewayQueues?: () => unknown): unknown {
+  if (!getGatewayQueues) return undefined;
+  const now = Date.now();
+  if (now - lastGatewayQueuesSnapshotAt >= 500 || !lastGatewayQueuesSnapshotAt) {
+    lastGatewayQueuesSnapshot = getGatewayQueues();
+    lastGatewayQueuesSnapshotAt = now;
+  }
+  return lastGatewayQueuesSnapshot;
+}
+
 function tryRawGatewayFastPath(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -463,7 +483,7 @@ function tryRawGatewayFastPath(
       workspace: rawCfg.workspace?.path || '',
       search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
       fastPath: true,
-      gatewayQueues: getGatewayQueues?.(),
+      gatewayQueues: statusGatewayQueues(getGatewayQueues),
     });
     return true;
   }
@@ -750,9 +770,10 @@ export function createServer(
       try {
         const msg = JSON.parse(d.toString());
         const broadcastPayload = (payload: any) => {
+          const serialized = JSON.stringify(payload);
           wss.clients.forEach((client: any) => {
             if (client.readyState === 1) {
-              try { client.send(JSON.stringify(payload)); } catch {}
+              try { client.send(serialized); } catch {}
             }
           });
         };

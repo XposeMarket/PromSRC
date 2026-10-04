@@ -98,3 +98,39 @@ for (const event of ['done', 'error', 'session_title']) {
 assert.equal(parsed(switcher).filter((frame) => frame.type === 'session_stream_snapshot').length, 1,
   'terminal events remove in-flight snapshots');
 console.log('stream fanout regression passed');
+
+// Multiple concurrent threads: raw output and background narration are
+// compacted only for opted-in clients not watching that parent session.
+{
+  const observers = Array.from({ length: 8 }, () => client());
+  const busyServer = { clients: new Set(observers), on() {} } as unknown as WebSocketServer;
+  setWss(busyServer);
+  observers.forEach((observer, index) => setWsClientStreamFocus(observer, [`thread-${index}`]));
+  const chunk = 'x'.repeat(8_192);
+  const types = ['process_run_output', 'bg_agent_event'];
+  const frames = 12 * 60 * types.length;
+  for (let session = 0; session < 12; session++) {
+    for (let event = 0; event < 60; event++) {
+      broadcastWS({ type: types[0], sessionId: `thread-${session}`,
+        run: { runId: `run-${session}`, sessionId: `thread-${session}` }, chunk, sequence: event });
+      broadcastWS({ type: types[1], sessionId: `thread-${session}`,
+        event: 'thinking_delta', eventType: 'thinking_delta', bgId: `bg-${session}`, text: chunk });
+    }
+  }
+  const delivered = observers.reduce((sum, observer) => sum + observer.frames.length, 0);
+  const deliveredBytes = observers.reduce((sum, observer) => sum + bytes(observer), 0);
+  const baselineBytes = frames * 8 * (Buffer.byteLength(chunk) + 120); // conservative per-frame baseline
+  assert(delivered < frames * 2, '12 sessions x 8 focused clients coalesce unfocused chatter');
+  assert(deliveredBytes < baselineBytes / 4, 'background fanout bytes fall by at least 75%');
+  broadcastWS({ type: 'process_run_exited', sessionId: 'thread-11', run: { runId: 'last', state: 'exited' } });
+  broadcastWS({ type: 'bg_agent_event', sessionId: 'thread-11', bgId: 'last', eventType: 'error', message: 'failed' });
+  broadcastWS({ type: 'bg_agent_done', sessionId: 'thread-11', bgId: 'last', state: 'failed' });
+  for (const observer of observers) {
+    for (const type of ['process_run_exited', 'bg_agent_event', 'bg_agent_done']) {
+      assert(parsed(observer).some((frame) => frame.type === type && frame.sessionId === 'thread-11'),
+        `${type} always reaches even unfocused clients`);
+    }
+  }
+  console.log(JSON.stringify({ scenario: '8 clients x 12 sessions x 60 pairs',
+    baselineFrames: frames * 8, afterFrames: delivered, baselineBytes, afterBytes: deliveredBytes }));
+}
