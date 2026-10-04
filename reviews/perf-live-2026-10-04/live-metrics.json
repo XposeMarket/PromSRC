@@ -1,0 +1,1879 @@
+{
+  "startedAt": "2026-10-04T05:04:28.949Z",
+  "endpoint": "127.0.0.1:32470",
+  "seconds": 60,
+  "frames": {
+    "gateway_heartbeat": {
+      "count": 6,
+      "bytes": 324,
+      "max": 54,
+      "largest": [
+        {
+          "bytes": 54,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 17
+            },
+            "timestamp": 1791090268962
+          }
+        },
+        {
+          "bytes": 54,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 17
+            },
+            "timestamp": 1791090278976
+          }
+        },
+        {
+          "bytes": 54,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 17
+            },
+            "timestamp": 1791090288978
+          }
+        }
+      ]
+    },
+    "main_chat_stream_event": {
+      "count": 360,
+      "bytes": 166265,
+      "max": 6225,
+      "largest": [
+        {
+          "bytes": 6225,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 10988,
+            "event": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "at": 1791090285544,
+            "data": {
+              "action": {
+                "kind": "string",
+                "bytes": 13
+              },
+              "args": {
+                "action": "string",
+                "command": "string",
+                "timeout_ms": "number"
+              },
+              "result": {
+                "kind": "string",
+                "bytes": 4000
+              },
+              "error": false,
+              "stepNum": 95,
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "tool_call_id": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "durationMs": 4269,
+              "elapsedMs": 4269,
+              "elapsed_ms": 4269,
+              "telemetry": {
+                "startedAt": "number",
+                "finishedAt": "number",
+                "durationMs": "number",
+                "argsChars": "number",
+                "resultChars": "number",
+                "resultBytes": "number",
+                "argsTokens": "number",
+                "resultTokens": "number",
+                "totalTokens": "number",
+                "contextCostMicros": "number",
+                "directCostMicros": "number",
+                "totalCostMicros": "number",
+                "pricingProvider": "string",
+                "pricingModel": "string",
+                "pricingSource": "string",
+                "pricingVersion": "string",
+                "telemetryId": "string",
+                "toolCallId": "string",
+                "toolFamily": "string",
+                "toolName": "string",
+                "eventCount": "number",
+                "dispatchMs": "number",
+                "executorMs": "number",
+                "toolWallMs": "number",
+                "state": "string",
+                "error": "boolean"
+              },
+              "extra": {
+                "runId": "string",
+                "terminationReason": "string",
+                "executionTiming": "object",
+                "telemetry": "object"
+              },
+              "traceId": {
+                "kind": "string",
+                "bytes": 36
+              },
+              "telemetryId": {
+                "kind": "string",
+                "bytes": 21
+              },
+              "clientRequestId": {
+                "kind": "string",
+                "bytes": 54
+              }
+            }
+          }
+        },
+        {
+          "bytes": 5704,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 11175,
+            "event": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "at": 1791090324635,
+            "data": {
+              "action": {
+                "kind": "string",
+                "bytes": 14
+              },
+              "args": {
+                "action": "string",
+                "path": "string",
+                "find": "string",
+                "replace": "string"
+              },
+              "result": {
+                "kind": "string",
+                "bytes": 1075
+              },
+              "error": false,
+              "stepNum": 97,
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "tool_call_id": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "durationMs": 21,
+              "elapsedMs": 21,
+              "elapsed_ms": 21,
+              "telemetry": {
+                "startedAt": "number",
+                "finishedAt": "number",
+                "durationMs": "number",
+                "argsChars": "number",
+                "resultChars": "number",
+                "resultBytes": "number",
+                "argsTokens": "number",
+                "resultTokens": "number",
+                "totalTokens": "number",
+                "contextCostMicros": "number",
+                "directCostMicros": "number",
+                "totalCostMicros": "number",
+                "pricingProvider": "string",
+                "pricingModel": "string",
+                "pricingSource": "string",
+                "pricingVersion": "string",
+                "telemetryId": "string",
+                "toolCallId": "string",
+                "toolFamily": "string",
+                "toolName": "string",
+                "eventCount": "number",
+                "dispatchMs": "number",
+                "executorMs": "number",
+                "toolWallMs": "number",
+                "state": "string",
+                "error": "boolean"
+              },
+              "extra": {
+                "workspaceSnapshots": "object",
+                "codeEvidence": "object",
+                "executionTiming": "object",
+                "telemetry": "object"
+              },
+              "traceId": {
+                "kind": "string",
+                "bytes": 36
+              },
+              "telemetryId": {
+                "kind": "string",
+                "bytes": 21
+              },
+              "clientRequestId": {
+                "kind": "string",
+                "bytes": 54
+              }
+            }
+          }
+        },
+        {
+          "bytes": 5632,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 10977,
+            "event": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "at": 1791090281273,
+            "data": {
+              "action": {
+                "kind": "string",
+                "bytes": 14
+              },
+              "args": {
+                "action": "string",
+                "path": "string",
+                "content": "string"
+              },
+              "result": {
+                "kind": "string",
+                "bytes": 44
+              },
+              "error": false,
+              "stepNum": 94,
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "tool_call_id": {
+                "kind": "string",
+                "bytes": 30
+              },
+              "durationMs": 13,
+              "elapsedMs": 13,
+              "elapsed_ms": 13,
+              "telemetry": {
+                "startedAt": "number",
+                "finishedAt": "number",
+                "durationMs": "number",
+                "argsChars": "number",
+                "resultChars": "number",
+                "resultBytes": "number",
+                "argsTokens": "number",
+                "resultTokens": "number",
+                "totalTokens": "number",
+                "contextCostMicros": "number",
+                "directCostMicros": "number",
+                "totalCostMicros": "number",
+                "pricingProvider": "string",
+                "pricingModel": "string",
+                "pricingSource": "string",
+                "pricingVersion": "string",
+                "telemetryId": "string",
+                "toolCallId": "string",
+                "toolFamily": "string",
+                "toolName": "string",
+                "eventCount": "number",
+                "dispatchMs": "number",
+                "executorMs": "number",
+                "toolWallMs": "number",
+                "state": "string",
+                "error": "boolean"
+              },
+              "extra": {
+                "workspaceSnapshots": "object",
+                "codeEvidence": "object",
+                "executionTiming": "object",
+                "telemetry": "object"
+              },
+              "traceId": {
+                "kind": "string",
+                "bytes": 36
+              },
+              "telemetryId": {
+                "kind": "string",
+                "bytes": 21
+              },
+              "clientRequestId": {
+                "kind": "string",
+                "bytes": 54
+              }
+            }
+          }
+        }
+      ]
+    },
+    "session_history_changed": {
+      "count": 26,
+      "bytes": 4394,
+      "max": 169,
+      "largest": [
+        {
+          "bytes": 169,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "timestamp": 1791090270772,
+            "historyCount": 2,
+            "source": {
+              "kind": "string",
+              "bytes": 15
+            }
+          }
+        },
+        {
+          "bytes": 169,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "timestamp": 1791090270774,
+            "historyCount": 2,
+            "source": {
+              "kind": "string",
+              "bytes": 15
+            }
+          }
+        },
+        {
+          "bytes": 169,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "timestamp": 1791090272055,
+            "historyCount": 2,
+            "source": {
+              "kind": "string",
+              "bytes": 15
+            }
+          }
+        }
+      ]
+    },
+    "bg_agent_event": {
+      "count": 111,
+      "bytes": 1919895,
+      "max": 45083,
+      "largest": [
+        {
+          "bytes": 45083,
+          "shape": {
+            "runId": {
+              "kind": "string",
+              "bytes": 20
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 6
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 12463
+            },
+            "sequence": 144,
+            "action": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "toolCallId": {
+              "kind": "string",
+              "bytes": 29
+            },
+            "tags": {
+              "kind": "array",
+              "length": 1,
+              "first": {
+                "kind": "string",
+                "bytes": 16
+              }
+            },
+            "type": {
+              "kind": "string",
+              "bytes": 14
+            },
+            "spawnerSessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "bgSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "backgroundSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "bgId": {
+              "kind": "string",
+              "bytes": 39
+            },
+            "eventType": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "actor": {
+              "kind": "string",
+              "bytes": 16
+            },
+            "providerId": {
+              "kind": "string",
+              "bytes": 12
+            },
+            "model": {
+              "kind": "string",
+              "bytes": 9
+            },
+            "reasoningEffort": {
+              "kind": "string",
+              "bytes": 4
+            },
+            "task": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "prompt": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "taskPrompt": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 207,
+            "at": 1791090286558,
+            "data": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "stream": {
+                "kind": "string",
+                "bytes": 6
+              },
+              "chunk": {
+                "kind": "string",
+                "bytes": 12463
+              },
+              "sequence": 144,
+              "action": {
+                "kind": "string",
+                "bytes": 11
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              }
+            }
+          }
+        },
+        {
+          "bytes": 42372,
+          "shape": {
+            "runId": {
+              "kind": "string",
+              "bytes": 20
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 8
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 10619
+            },
+            "sequence": 154,
+            "action": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "toolCallId": {
+              "kind": "string",
+              "bytes": 29
+            },
+            "tags": {
+              "kind": "array",
+              "length": 1,
+              "first": {
+                "kind": "string",
+                "bytes": 17
+              }
+            },
+            "type": {
+              "kind": "string",
+              "bytes": 14
+            },
+            "spawnerSessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "bgSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "backgroundSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "bgId": {
+              "kind": "string",
+              "bytes": 39
+            },
+            "eventType": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "actor": {
+              "kind": "string",
+              "bytes": 16
+            },
+            "providerId": {
+              "kind": "string",
+              "bytes": 12
+            },
+            "model": {
+              "kind": "string",
+              "bytes": 9
+            },
+            "reasoningEffort": {
+              "kind": "string",
+              "bytes": 4
+            },
+            "task": {
+              "kind": "string",
+              "bytes": 6296
+            },
+            "prompt": {
+              "kind": "string",
+              "bytes": 6296
+            },
+            "taskPrompt": {
+              "kind": "string",
+              "bytes": 6296
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 207,
+            "at": 1791090297695,
+            "data": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "stream": {
+                "kind": "string",
+                "bytes": 8
+              },
+              "chunk": {
+                "kind": "string",
+                "bytes": 10619
+              },
+              "sequence": 154,
+              "action": {
+                "kind": "string",
+                "bytes": 11
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              }
+            }
+          }
+        },
+        {
+          "bytes": 39427,
+          "shape": {
+            "runId": {
+              "kind": "string",
+              "bytes": 20
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 6
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 9829
+            },
+            "sequence": 287,
+            "action": {
+              "kind": "string",
+              "bytes": 11
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "toolCallId": {
+              "kind": "string",
+              "bytes": 29
+            },
+            "tags": {
+              "kind": "array",
+              "length": 1,
+              "first": {
+                "kind": "string",
+                "bytes": 16
+              }
+            },
+            "type": {
+              "kind": "string",
+              "bytes": 14
+            },
+            "spawnerSessionId": {
+              "kind": "string",
+              "bytes": 22
+            },
+            "bgSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "backgroundSessionId": {
+              "kind": "string",
+              "bytes": 50
+            },
+            "bgId": {
+              "kind": "string",
+              "bytes": 39
+            },
+            "eventType": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "actor": {
+              "kind": "string",
+              "bytes": 16
+            },
+            "providerId": {
+              "kind": "string",
+              "bytes": 12
+            },
+            "model": {
+              "kind": "string",
+              "bytes": 9
+            },
+            "reasoningEffort": {
+              "kind": "string",
+              "bytes": 4
+            },
+            "task": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "prompt": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "taskPrompt": {
+              "kind": "string",
+              "bytes": 5850
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "seq": 208,
+            "at": 1791090286640,
+            "data": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "stream": {
+                "kind": "string",
+                "bytes": 6
+              },
+              "chunk": {
+                "kind": "string",
+                "bytes": 9829
+              },
+              "sequence": 287,
+              "action": {
+                "kind": "string",
+                "bytes": 11
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              }
+            }
+          }
+        }
+      ]
+    },
+    "process_run_started": {
+      "count": 10,
+      "bytes": 20987,
+      "max": 3635,
+      "largest": [
+        {
+          "bytes": 3635,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 19
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 1177
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1850
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 8
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 0,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 0
+              },
+              "outputSeq": 0
+            },
+            "timestamp": 1791090300625
+          }
+        },
+        {
+          "bytes": 2384,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 19
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 587
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 42
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1260
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 8
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 0,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 0
+              },
+              "outputSeq": 0
+            },
+            "timestamp": 1791090285946
+          }
+        },
+        {
+          "bytes": 2259,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 19
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 522
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 43
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1195
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 8
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 0,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 0
+              },
+              "outputSeq": 0
+            },
+            "timestamp": 1791090297179
+          }
+        }
+      ]
+    },
+    "process_run_update": {
+      "count": 20,
+      "bytes": 75257,
+      "max": 6835,
+      "largest": [
+        {
+          "bytes": 6835,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 522
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 43
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1195
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 10416,
+              "stderrBytes": 203,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4199
+              },
+              "outputSeq": 154,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 42980,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "timestamp": 1791090297702
+          }
+        },
+        {
+          "bytes": 6729,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 587
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 42
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1260
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 31104,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4002
+              },
+              "outputSeq": 357,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 29272,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "timestamp": 1791090286727
+          }
+        },
+        {
+          "bytes": 6426,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 431
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 42
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1104
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 14216,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4000
+              },
+              "outputSeq": 230,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 25236,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "timestamp": 1791090316494
+          }
+        }
+      ]
+    },
+    "process_run_output": {
+      "count": 28,
+      "bytes": 230667,
+      "max": 20005,
+      "largest": [
+        {
+          "bytes": 20005,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 587
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 42
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1260
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 12523,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4000
+              },
+              "outputSeq": 144,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 29272,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 6
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 12463
+            },
+            "sequence": 144,
+            "timestamp": 1791090286558
+          }
+        },
+        {
+          "bytes": 18066,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 522
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 43
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1195
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 10416,
+              "stderrBytes": 203,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4199
+              },
+              "outputSeq": 154,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 42980,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 8
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 10619
+            },
+            "sequence": 154,
+            "timestamp": 1791090297695
+          }
+        },
+        {
+          "bytes": 17223,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 587
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 42
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1260
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 7
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 22352,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4058
+              },
+              "outputSeq": 287,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 29272,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              }
+            },
+            "stream": {
+              "kind": "string",
+              "bytes": 6
+            },
+            "chunk": {
+              "kind": "string",
+              "bytes": 9829
+            },
+            "sequence": 287,
+            "timestamp": 1791090286640
+          }
+        }
+      ]
+    },
+    "process_run_exited": {
+      "count": 10,
+      "bytes": 59176,
+      "max": 7381,
+      "largest": [
+        {
+          "bytes": 7381,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 395
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1068
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 6
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 7733,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4000
+              },
+              "outputSeq": 1,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 46972,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "completedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "durationMs": 480,
+              "exitCode": 0,
+              "exitSignal": null,
+              "terminationReason": {
+                "kind": "string",
+                "bytes": 4
+              },
+              "timedOut": false,
+              "noOutputTimedOut": false,
+              "waitingForInputHint": false,
+              "completionSummary": {
+                "kind": "string",
+                "bytes": 1000
+              }
+            },
+            "timestamp": 1791090271348
+          }
+        },
+        {
+          "bytes": 7357,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 372
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1045
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 6
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 10833,
+              "stderrBytes": 0,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4000
+              },
+              "outputSeq": 24,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 22700,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "completedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "durationMs": 509,
+              "exitCode": 0,
+              "exitSignal": null,
+              "terminationReason": {
+                "kind": "string",
+                "bytes": 4
+              },
+              "timedOut": false,
+              "noOutputTimedOut": false,
+              "waitingForInputHint": false,
+              "completionSummary": {
+                "kind": "string",
+                "bytes": 1000
+              }
+            },
+            "timestamp": 1791090295779
+          }
+        },
+        {
+          "bytes": 7179,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "run": {
+              "runId": {
+                "kind": "string",
+                "bytes": 20
+              },
+              "sessionId": {
+                "kind": "string",
+                "bytes": 50
+              },
+              "toolCallId": {
+                "kind": "string",
+                "bytes": 29
+              },
+              "command": {
+                "kind": "string",
+                "bytes": 522
+              },
+              "cwd": {
+                "kind": "string",
+                "bytes": 43
+              },
+              "mode": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shell": {
+                "kind": "string",
+                "bytes": 10
+              },
+              "shellCommand": {
+                "kind": "string",
+                "bytes": 1195
+              },
+              "pty": false,
+              "state": {
+                "kind": "string",
+                "bytes": 6
+              },
+              "startedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "updatedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "stdinOpen": false,
+              "stdoutBytes": 10416,
+              "stderrBytes": 203,
+              "outputPreview": {
+                "kind": "string",
+                "bytes": 4199
+              },
+              "outputSeq": 154,
+              "workspacePath": {
+                "kind": "string",
+                "bytes": 51
+              },
+              "pid": 42980,
+              "lastOutputAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "completedAt": {
+                "kind": "string",
+                "bytes": 24
+              },
+              "durationMs": 555,
+              "exitCode": 2,
+              "exitSignal": null,
+              "terminationReason": {
+                "kind": "string",
+                "bytes": 4
+              },
+              "timedOut": false,
+              "noOutputTimedOut": false,
+              "waitingForInputHint": false,
+              "failureSummary": {
+                "kind": "string",
+                "bytes": 136
+              }
+            },
+            "timestamp": 1791090297734
+          }
+        }
+      ]
+    },
+    "main_chat_stream_update": {
+      "count": 7,
+      "bytes": 1461,
+      "max": 213,
+      "largest": [
+        {
+          "bytes": 213,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "lastSeq": 10971,
+            "event": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "at": 1791090278095,
+            "active": true
+          }
+        },
+        {
+          "bytes": 213,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "lastSeq": 11166,
+            "event": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "at": 1791090321373,
+            "active": true
+          }
+        },
+        {
+          "bytes": 213,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 23
+            },
+            "sessionId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "streamId": {
+              "kind": "string",
+              "bytes": 36
+            },
+            "lastSeq": 11169,
+            "event": {
+              "kind": "string",
+              "bytes": 18
+            },
+            "at": 1791090323524,
+            "active": true
+          }
+        }
+      ]
+    },
+    "provider_status": {
+      "count": 2,
+      "bytes": 148,
+      "max": 74,
+      "largest": [
+        {
+          "bytes": 74,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 15
+            },
+            "providerOnline": true,
+            "source": {
+              "kind": "string",
+              "bytes": 14
+            }
+          }
+        },
+        {
+          "bytes": 74,
+          "shape": {
+            "type": {
+              "kind": "string",
+              "bytes": 15
+            },
+            "providerOnline": true,
+            "source": {
+              "kind": "string",
+              "bytes": 14
+            }
+          }
+        }
+      ]
+    }
+  },
+  "status": {
+    "errors": 0,
+    "summary": {
+      "count": 237,
+      "p50": 2.8,
+      "p95": 53.2,
+      "max": 578.5,
+      "over250": 2
+    }
+  },
+  "errors": [],
+  "finishedAt": "2026-10-04T05:05:28.960Z"
+}

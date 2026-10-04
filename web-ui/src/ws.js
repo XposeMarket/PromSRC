@@ -382,7 +382,10 @@ export function syncWsStreamFocus(force = false) {
   try { window.ws.send(JSON.stringify({ type: 'focus_sessions', sessionIds: ids })); } catch {}
 }
 wsEventBus.on('ws:open', () => { _wsStreamFocusSent = ''; syncWsStreamFocus(true); });
-setInterval(() => syncWsStreamFocus(false), 400);
+// Chat routes signal focus immediately. Keep a slower fallback for voice and
+// legacy callers, but never wake a hidden phone just to compare static ids.
+setInterval(() => { if (!document.hidden) syncWsStreamFocus(false); }, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) syncWsStreamFocus(false); });
 window.syncWsStreamFocus = syncWsStreamFocus;
 
 // Expose on window

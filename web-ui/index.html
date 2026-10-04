@@ -5700,7 +5700,18 @@
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
 
-  let W, H, embers = [], raf;
+  let W, H, embers = [], raf = null;
+  const canDraw = () => !document.hidden && embersEnabled() && isOnChatPage();
+  function stop() {
+    if (raf === null) return;
+    cancelAnimationFrame(raf);
+    raf = null;
+    ctx.clearRect(0, 0, W || 0, H || 0);
+  }
+  function resume() {
+    if (!canDraw()) { stop(); return; }
+    if (raf === null) raf = requestAnimationFrame(draw);
+  }
 
   // Per-theme ember palettes (outer glow RGB) + bright core color.
   // Keyed by data-skin so new themes can recolor the embers.
@@ -5801,18 +5812,11 @@
   }
 
   function draw(ts) {
-    ctx.clearRect(0, 0, W, H);
-
-    if (!embersEnabled() || !isOnChatPage()) {
-      raf = requestAnimationFrame(draw);
-      return;
-    }
-
+    raf = null;
+    if (!canDraw()) { ctx.clearRect(0, 0, W, H); return; }
     const colRect = getColRect();
-    if (!colRect || colRect.width < 10) {
-      raf = requestAnimationFrame(draw);
-      return;
-    }
+    if (!colRect || colRect.width < 10) { ctx.clearRect(0, 0, W, H); return; }
+    ctx.clearRect(0, 0, W, H);
 
     const t = ts * 0.001;
 
@@ -5863,15 +5867,14 @@
 
     ctx.restore(); // end clip
 
-    raf = requestAnimationFrame(draw);
+    resume();
   }
 
   function start() {
     resize();
     const colRect = getColRect();
     initEmbers(colRect);
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(draw);
+    resume();
   }
 
   window.addEventListener('resize', () => {
@@ -5881,15 +5884,24 @@
     const target = Math.round(Math.max(30, Math.min(65, (colRect.width * colRect.height) / 14000)));
     while (embers.length < target) { const e = mkEmber(colRect); e.life = Math.random() * e.maxLife; embers.push(e); }
     while (embers.length > target + 10) embers.pop();
+    resume();
   });
 
-  // Recolor embers instantly when the theme changes.
+  // Stop entirely outside chat or while hidden; resume on appearance, theme,
+  // navigation and visibility changes rather than polling 60 times per second.
   const refreshEmbers = () => {
+    if (!canDraw()) { stop(); return; }
     const colRect = getColRect();
     if (colRect && colRect.width >= 10) initEmbers(colRect);
+    resume();
   };
   document.addEventListener('prom-theme-change', refreshEmbers);
   document.addEventListener('prom-appearance-change', refreshEmbers);
+  document.addEventListener('visibilitychange', resume);
+  document.addEventListener('prom-mode-change', resume);
+  if (typeof MutationObserver !== 'undefined') {
+    new MutationObserver(resume).observe(document.documentElement, { attributes: true, attributeFilter: ['data-background-visuals'] });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
