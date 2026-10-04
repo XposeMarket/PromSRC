@@ -36,6 +36,9 @@ export interface ConnectorTokens {
   token_type?: string;
   account_email?: string;
   account_id?: string;
+  /** Set when the provider rejected the refresh token (revoked/expired grant). Cleared by a fresh OAuth connect. */
+  reauth_required_at?: number;
+  reauth_reason?: string;
   resource_id?: string;
   resource_name?: string;
   resource_kind?: string;
@@ -133,9 +136,19 @@ export abstract class OAuthConnector {
     }
   }
 
+  /** connected | reauth_required (grant revoked/expired, user must reconnect) | not_connected. */
+  authStatus(): { state: 'connected' | 'reauth_required' | 'not_connected'; reason?: string } {
+    const tokens = this.loadTokens();
+    if (tokens?.reauth_required_at) return { state: 'reauth_required', reason: tokens.reauth_reason || 'authorization expired or was revoked' };
+    return this.isConnected() ? { state: 'connected' } : { state: 'not_connected' };
+  }
+
   isConnected(): boolean {
     const tokens = this.loadTokens();
     if (!tokens?.access_token || typeof tokens.expires_at !== 'number') return false;
+    // A rejected refresh grant can never succeed again: report it honestly so
+    // the tool surface hides the connector instead of failing every call.
+    if (tokens.reauth_required_at) return false;
     if (Date.now() <= tokens.expires_at - 5 * 60 * 1000) return true;
     return !!tokens.refresh_token && this.hasCredentials();
   }
@@ -187,8 +200,18 @@ export abstract class OAuthConnector {
       body: body.toString(),
     });
     if (!res.ok) {
-      await res.text().catch(() => '');
-      throw new Error(`Token refresh failed (${res.status}).`);
+      const text = await res.text().catch(() => '');
+      let code = '';
+      try { code = String(JSON.parse(text)?.error || ''); } catch { /* non-JSON body */ }
+      // 400/401 from a token endpoint means the grant itself is dead
+      // (invalid_grant: revoked, expired, password change, app in testing mode).
+      // Retrying cannot fix it, so persist the state and say what to do.
+      if (res.status === 400 || res.status === 401 || /invalid_grant|invalid_client|unauthorized_client/.test(code)) {
+        const reason = `${code || `HTTP ${res.status}`}: authorization expired or was revoked`;
+        try { getVault(this.configDir).set(this.vaultKey(), JSON.stringify({ ...existing, reauth_required_at: Date.now(), reauth_reason: reason }), `oauth:reauth:${this.cfg.id}`); } catch { /* best effort */ }
+        throw new Error(`${this.cfg.name} needs to be reconnected: the saved login was rejected (${reason}). Reconnect ${this.cfg.name} in the Connections panel.`);
+      }
+      throw new Error(`${this.cfg.name} token refresh failed (HTTP ${res.status}${code ? `, ${code}` : ''}). This may be temporary; retry shortly.`);
     }
     const data = await res.json() as any;
     const tokens: ConnectorTokens = {

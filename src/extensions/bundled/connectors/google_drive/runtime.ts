@@ -1,7 +1,7 @@
 // Native Google Drive connector runtime. See §23B. Auth stays in GoogleDriveConnector.
 import type { GoogleDriveConnector } from '../../../../integrations/connectors/google-drive.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
-import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { validateGoogleDriveGetRequest } from '../../../../gateway/tools/google-drive-request-policy.js';
 
 const ID = 'google_drive';
@@ -21,7 +21,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerConnector({
       id: ID, name: NAME, authType: 'oauth', capabilities: ['drive'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
-      describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+      describeStatus: () => connectorStatusLabel(ID),
     });
 
     api.registerTool({

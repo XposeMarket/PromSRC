@@ -325,7 +325,19 @@ export class PrometheusExtensionRuntimeRegistry {
     const connectorId = this.connectorIdForTool(tool);
     if (!connectorId) return true;
     const exposure = getConnectionToolExposure(connectorId, tool.name);
-    return exposure.managed ? exposure.available : this.isConnectorConnected(connectorId);
+    return exposure.managed ? exposure.available && this.liveRuntimeAllows(connectorId) : this.isConnectorConnected(connectorId);
+  }
+
+  /**
+   * A canonical connection record can say "healthy" long after the stored
+   * login died (Gmail invalid_grant, Drive tokens gone). When the connector
+   * runtime can answer isConnected itself, it must agree before tools are
+   * exposed. Managed MCP targets without a runtime keep record-only behavior.
+   */
+  private liveRuntimeAllows(connectorId: string, now = Date.now()): boolean {
+    const runtime = this.connectors.get(connectorId);
+    if (!runtime || typeof runtime.isConnected !== 'function') return true;
+    return this.isConnectorConnected(connectorId, now);
   }
 
   listConnectedConnectorToolDefinitions(): any[] {
@@ -339,7 +351,7 @@ export class PrometheusExtensionRuntimeRegistry {
         // Canonical connection records are authoritative for native and
         // managed MCP-backed connectors. Legacy connectors keep their old
         // runtime status path until they are migrated.
-        if (canonical.managed) return canonical.available;
+        if (canonical.managed) return canonical.available && this.liveRuntimeAllows(connectorId, now);
         if (!connectedById.has(connectorId)) {
           connectedById.set(connectorId, this.isConnectorConnected(connectorId, now));
         }

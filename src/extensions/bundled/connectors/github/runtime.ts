@@ -1,7 +1,7 @@
 // Native GitHub connector runtime. See §23B. Auth stays in GitHubConnector.
 import type { GitHubConnector } from '../../../../integrations/connectors/github.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition } from '../../../runtime-api.js';
-import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 
 /**
  * Agents frequently send GitHub's REST name `pull_number` (or `number`) instead of
@@ -82,7 +82,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerConnector({
       id: ID, name: NAME, authType: 'oauth', capabilities: ['code-hosting'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
-      describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+      describeStatus: () => connectorStatusLabel(ID),
     });
 
     api.registerTool({

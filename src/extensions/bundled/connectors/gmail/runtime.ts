@@ -3,7 +3,7 @@
 // here now since Gmail is their only consumer.
 import type { GmailConnector } from '../../../../integrations/connectors/gmail.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
-import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'gmail';
@@ -87,7 +87,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerConnector({
       id: ID, name: NAME, authType: 'oauth', capabilities: ['email'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
-      describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+      describeStatus: () => connectorStatusLabel(ID),
     });
 
     registerConnectorApiRequestTool<GmailConnector>(api, {

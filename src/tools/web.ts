@@ -1090,7 +1090,9 @@ export async function executeWebSearch(args: {
   const providerOrder = providerOverride && providerOverride !== 'multi'
     ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai']
     : !useMultiEngine
-      ? [cfg.preferred]
+      // Preferred first; other keyed engines only run if it fails (the loop
+      // returns on first success), so one slow/dead provider never fails the call.
+      ? [cfg.preferred, ...(['brave', 'tinyfish', 'tavily', 'google'] as const).filter(p => p !== cfg.preferred)]
       : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
 
   // ── Multi-engine mode: query all configured providers in parallel, merge results ──
@@ -2566,12 +2568,20 @@ function extractRating(text: string): number | undefined {
   return Number.isFinite(n) && n >= 0 && n <= 5 ? n : undefined;
 }
 
-function extractReviewCount(text: string): number | undefined {
-  const m = String(text || '').match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i)
-    || String(text || '').match(/\((?:\s*)?([0-9][0-9,]*)\s*\)\s*(?:reviews?|ratings?)?/i);
+// Largest plausible review count for one listing; anything bigger is an ID,
+// SKU, or timestamp that happened to sit in parentheses.
+const MAX_PLAUSIBLE_REVIEWS = 10_000_000;
+
+export function extractReviewCount(text: string): number | undefined {
+  const value = String(text || '');
+  // A bare "(1234)" only counts as a review count when it follows a star rating
+  // or is followed by the word reviews/ratings; otherwise it is usually an ID.
+  const m = value.match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i)
+    || value.match(/\(\s*([0-9][0-9,]*)\s*\)\s*(?:reviews?|ratings?)\b/i)
+    || value.match(/(?:\b[0-5](?:\.[0-9])?\s*(?:out of 5|stars?|\u2605)?)\s*\(\s*([0-9][0-9,]*)\s*\)/i);
   if (!m) return undefined;
   const n = Number(m[1].replace(/,/g, ''));
-  return Number.isFinite(n) ? n : undefined;
+  return Number.isFinite(n) && n > 0 && n <= MAX_PLAUSIBLE_REVIEWS ? n : undefined;
 }
 
 function extractBadge(text: string): string | undefined {
@@ -2633,8 +2643,25 @@ function isWeakProductCandidate(item: SearchResultItem, title: string, price?: s
   const url = String(item.url || '').toLowerCase();
   const text = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
   if (!title || title.length < 8) return true;
-  if (/\/(?:search|s|b)\?/.test(url) && !price && !/\b(?:out of 5|stars?|reviews?|ratings?)\b/i.test(text)) return true;
   if (/\b(?:customer service|help|returns policy|gift cards|sell on)\b/i.test(text)) return true;
+  if (isNonProductPage(item.url, item.title || '', price)) return true;
+  return false;
+}
+
+// Reviews, roundups, videos, and forums answer "which one" but are not products
+// you can buy; they belong in web_search, not the product carousel.
+const NON_PRODUCT_HOSTS = /(?:^|\.)(?:youtube\.com|youtu\.be|tiktok\.com|reddit\.com|quora\.com|wikipedia\.org|nytimes\.com|rtings\.com|tomsguide\.com|tomshardware\.com|cnet\.com|theverge\.com|pcmag\.com|wired\.com|engadget\.com|techradar\.com|zdnet\.com|gizmodo\.com|businessinsider\.com|forbes\.com|medium\.com|consumerreports\.org|goodhousekeeping\.com|reviewed\.com|androidauthority\.com|9to5mac\.com|macrumors\.com)$/i;
+
+export function isNonProductPage(url: string, title: string, price?: string): boolean {
+  let host = '';
+  let pathname = '';
+  try { const u = new URL(String(url || '')); host = u.hostname.replace(/^www\./, ''); pathname = u.pathname.toLowerCase(); } catch { return false; }
+  if (NON_PRODUCT_HOSTS.test(host)) return true;
+  // Search/listing pages (amazon.com/foo/s?k=..., /search?q=, /b?node=) are never
+  // a single buyable product, even when the snippet carries star ratings.
+  if (/\/(?:search|s|b)\?|[?&](?:k|q|query|keywords|_nkw|searchterm)=/i.test(String(url || ''))) return true;
+  if (/\/(?:reviews?\/best|best-|blog|articles?|news|guides?|watch|video)s?(?:\/|-|$)/.test(pathname) && !/\/(?:dp|gp\/product|product|products|p|ip|itm|sku)\//.test(pathname)) return true;
+  if (!price && /^(?:the\s+)?\d*\s*best\b|\b(?:review|reviews|vs\.?|versus|tested|buying guide|top \d+)\b/i.test(String(title || ''))) return true;
   return false;
 }
 
@@ -2946,7 +2973,7 @@ function parseJsonLdProductMetadata(html: string): Partial<ShoppingProductResult
           const ratingValue = Number(asFirstString(aggregate.ratingValue));
           const reviewCount = Number(String(asFirstString(aggregate.reviewCount) || asFirstString(aggregate.ratingCount) || '').replace(/,/g, ''));
           if (Number.isFinite(ratingValue) && ratingValue >= 0 && ratingValue <= 5) meta.rating ||= ratingValue;
-          if (Number.isFinite(reviewCount) && reviewCount > 0) {
+          if (Number.isFinite(reviewCount) && reviewCount > 0 && reviewCount <= MAX_PLAUSIBLE_REVIEWS) {
             meta.reviews ||= reviewCount;
             meta.reviewCount ||= reviewCount;
           }

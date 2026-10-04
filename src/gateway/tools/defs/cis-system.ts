@@ -1800,7 +1800,7 @@ export function getCisSystemTools(): any[] {
             payload: {
               type: 'object',
               description:
-                'Card-specific payload. Examples: sources={items:[...]}; product_carousel={items:[...]}; market={coins:[...]}; stocks={symbols:[...]}; weather={location:"City"}; chart={series:[...]}; comparison={columns:[...],rows:[...]}; map={markers:[...]}.',
+                'Card-specific payload (exact shapes): sources={items:[{url,title?,snippet?}]}; product_carousel={title,items:[{title,productUrl,price?,imageUrl?}]}; market={coins:["bitcoin"]}; stocks={symbols:["AAPL"]}; weather={location:"City"}; chart={chartType?:"line"|"bar"|"area"|"pie",series:[{label,points:[{x,y:number}]}],unit?,source?} (labels[]+data[] also accepted); comparison={columns:[{key,label}],rows:[{<key>:value}]}; map={markers:[{label,lat?,lng?,address?}]}; run_result={title,summary?}; prediction_market={title}; agent_work={title?,summaryRows?:[{title}]}.',
               additionalProperties: true,
             },
           },
