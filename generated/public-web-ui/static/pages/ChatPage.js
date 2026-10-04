@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { applyRealtimeToolRefresh } from '../voice/realtime-tool-refresh.js';
@@ -6688,7 +6688,8 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
   const entries = sess.processLog.slice(startIndex);
   const liveTraceEntries = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
-  const groupId = `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  // Use the server's durable group/ids so a reload shows the same split.
+  const groupId = String(data?.workflowGroupId || '').trim() || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const text = String(steerText || '').trim();
   const workStartedAt = Number(st?.turnStartedAt || Date.now()) || Date.now();
   const timerAnchor = st?.steerTimerAnchored !== true;
@@ -6716,10 +6717,12 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
       workflowGroupId: groupId,
       workflowPart: 'before_interruption',
       workflowLabel: 'Tool stream before steer',
+      ...(data?.beforeMessageId ? { messageId: data.beforeMessageId } : {}),
     });
   }
   sess.history.push({
     role: 'user',
+    ...(data?.messageId ? { messageId: data.messageId } : {}),
     content: text,
     attachmentPreviews: Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length ? data.attachmentPreviews : undefined,
     timestamp: Date.now(),
@@ -9393,7 +9396,7 @@ function toggleSteps(id) {
 
 function renderAssistantContent(content, message = null) {
   const text = String(content || '');
-  const markdownOptions = { visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [] };
+  const markdownOptions = { visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [], renderArtifact: (a) => renderRichArtifacts({ richArtifacts: [a] }) };
   const bgHeaderMatch = text.match(/\nBackground agent response:\s*\n?/i) || text.match(/^Background agent response:\s*\n?/i);
   if (bgHeaderMatch && typeof bgHeaderMatch.index === 'number') {
     const splitAt = bgHeaderMatch.index;
@@ -11857,7 +11860,7 @@ function pcRenderCarousel(carousel) {
 // ─── Rich artifacts (additive lane: products + agent_work) ───────────────────
 
 function renderRichArtifacts(msg) {
-  const artifacts = Array.isArray(msg?.richArtifacts) ? msg.richArtifacts : [];
+  const artifacts = withoutInlineCards(msg);
   if (!artifacts.length) return '';
   return artifacts.map((a) => {
     switch (a?.type) {

@@ -85,7 +85,7 @@ import {
   setPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { getAccount } from '../auth/account.js';
-import { renderMd, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { renderMd, setInnerHTMLPreservingVisuals, withoutInlineCards } from '../utils.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import './mobile-login-handoff.js';
@@ -260,6 +260,16 @@ if (!window.__pmMobileCompletionToastBridgeInstalled) {
       summary: msg.result || msg.error || msg.taskPrompt || msg.task || 'A background agent completed its work.',
       route: _mobileCompletionRoute(msg),
     });
+  });
+  // Every device (and a WS frame that beats the POST response) splits the
+  // turn at the server's steer boundary; _appendMobileQueuedSteerTurn dedupes
+  // by the durable messageId so the originating phone never splits twice.
+  wsEventBus.on('chat_steer', (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    const text = String(msg.displayMessage || msg.message || '').trim();
+    if (!sid || !text || !msg.messageId || !Array.isArray(__pmChat.threads?.[sid])) return;
+    if (!__pmChat.activeRuns?.[sid]?.busy && !_readMobileActiveRun(sid)) return;
+    try { _appendMobileQueuedSteerTurn(sid, text, msg); } catch (err) { console.warn('[mobile chat] steer split failed:', err); }
   });
   wsEventBus.on('main_chat_stream_event', (msg = {}) => {
     if (String(msg.event || '') !== 'final') return;
@@ -2635,7 +2645,12 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     latestAi.workflowLabel = 'Tool stream before steer';
     latestAi.workflowBoundarySeq = workflowBoundarySeq;
     latestAi.workflowStreamId = workflowStreamId;
-    if (!String(latestAi.messageId || '').trim()) latestAi.messageId = `${workflowGroupId}:before`;
+    // Same identity as the server's durable before-steer row, so history merges
+    // dedupe instead of showing the pre-steer stream twice.
+    const beforeId = String(data?.beforeMessageId || '').trim();
+    if (beforeId) latestAi.messageId = beforeId;
+    else if (!String(latestAi.messageId || '').trim()) latestAi.messageId = `${workflowGroupId}:before`;
+    latestAi.steerContinuationMessageId = `${workflowGroupId}:continuation`;
     if (latestAi.streaming) {
       latestAi.streaming = false;
       latestAi.workEndedAt = Number(latestAi.workEndedAt || Date.now()) || Date.now();
@@ -2739,7 +2754,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     });
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
-    _appendMobileQueuedSteerTurn(sid, message, { ...(result || {}), workflowBoundarySeq, workflowStreamId });
+    // Server boundary (stream position at acceptance) wins over the client guess.
+    _appendMobileQueuedSteerTurn(sid, message, { workflowBoundarySeq, workflowStreamId, ...(result || {}) });
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     const errorText = String(err?.message || err || '');
@@ -3537,6 +3553,7 @@ function _renderMobileMarkdown(text, message = null) {
   try {
     return _wrapMobileMarkdownTables(renderMd(raw, {
       visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [],
+      renderArtifact: (a) => _renderMobileRichArtifacts({ richArtifacts: [a] }),
     }));
   } catch {
     return escapeHtml(raw).replace(/\n/g, '<br>');
@@ -7730,7 +7747,7 @@ function _handleMobileEmailComposerAction(button) {
 }
 
 function _renderMobileRichArtifacts(message) {
-  const artifacts = Array.isArray(message?.richArtifacts) ? message.richArtifacts : [];
+  const artifacts = withoutInlineCards(message);
   if (!artifacts.length) return '';
   return artifacts.map((a) => {
     switch (a?.type) {
@@ -11001,7 +11018,29 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
           return relink(row);
         }
       }
-      return linked || turn;
+      if (linked) return linked;
+      // Never deliver live events into a frozen pre-steer row (its trace is
+      // hidden, so tools "stop"). Follow durable continuation ids instead.
+      if (turn._steerFrozenTrace === true || String(turn.workflowPart || '') === 'before_interruption') {
+        let wantId = String(turn.steerContinuationMessageId || (turn.workflowGroupId ? `${turn.workflowGroupId}:continuation` : '')).trim();
+        let found = null;
+        for (let hop = 0; wantId && hop < 16; hop += 1) {
+          let next = null;
+          for (const sid of ordered) {
+            const thread = threads[sid];
+            if (!Array.isArray(thread)) continue;
+            next = thread.find((row) => row?.role === 'ai' && String(row.messageId || '') === wantId) || null;
+            if (next) break;
+          }
+          if (!next) break;
+          found = next;
+          if (next._steerFrozenTrace !== true && String(next.workflowPart || '') !== 'before_interruption') break;
+          wantId = String(next.steerContinuationMessageId || (next.workflowGroupId ? `${next.workflowGroupId}:continuation` : '')).trim();
+          if (wantId === String(next.messageId || '')) break;
+        }
+        if (found) return relink(found);
+      }
+      return turn;
     }
     case '_findMobileRecoverableAssistantTurn': {
       const thread = args[0];

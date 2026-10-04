@@ -1,4 +1,4 @@
-import { renderMd } from '../../../utils.js';
+import { renderMd, withoutInlineCards } from '../../../utils.js';
 import { ensureMobileV2Markdown } from '../../core/markdown.js';
 import { ICONS } from '../../ui/icons.js';
 import {
@@ -22,8 +22,13 @@ function renderPlainText(text) {
   return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
-function renderAssistantText(text) {
-  try { return renderMd(String(text || '')); }
+function renderAssistantText(text, message = null) {
+  try {
+    return renderMd(String(text || ''), message ? {
+      visualArtifacts: Array.isArray(message.richArtifacts) ? message.richArtifacts : [],
+      renderArtifact: (a) => renderSpecialChatArtifact(a, message, 0, null) || '',
+    } : {});
+  }
   catch { return renderPlainText(text); }
 }
 
@@ -89,7 +94,7 @@ function renderTrace(message) {
 }
 
 function renderArtifacts(message, gateway, weatherSelections) {
-  const richArtifacts = Array.isArray(message?.richArtifacts) ? message.richArtifacts : [];
+  const richArtifacts = withoutInlineCards({ ...message, content: messageText(message) });
   const artifacts = richArtifacts.length ? [...richArtifacts] : (Array.isArray(message?.artifacts) ? [...message.artifacts] : []);
   const body = message?.body && typeof message.body === 'object' ? message.body : {};
   if (message?.productCarousel && Array.isArray(message.productCarousel.items)) artifacts.push({ type: 'products', ...message.productCarousel });
@@ -160,7 +165,7 @@ function messageMarkup(message, index, gateway, shell, weatherSelections) {
   const text = messageText(message);
   const attachments = user ? messageMedia(message, gateway, { attachmentsOnly: true }) : '';
   const attachmentOnlyPrompt = !!attachments && /^(attached file\(s\)|please review the attached file\(s\)\.?|please inspect the attached file\(s\)\.)$/i.test(text.trim());
-  const body = text && !attachmentOnlyPrompt ? (user ? renderPlainText(text) : renderAssistantText(text)) : '';
+  const body = text && !attachmentOnlyPrompt ? (user ? renderPlainText(text) : renderAssistantText(text, message)) : '';
   const media = !user ? messageMedia(message, gateway) : '';
   const trace = !user ? renderTrace(message) : '';
   const interactions = !user ? renderChatInteractions(message) : '';

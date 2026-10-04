@@ -8,7 +8,7 @@ import { renderInteractiveCard, reduceInteractiveCard, normalizeQuiz } from '../
 // @ts-ignore web-ui JS module
 import { renderDataCard, youTubeId } from '../../web-ui/src/cards/cards-data.js';
 // @ts-ignore web-ui JS module
-import { extractCardFences, citeChips } from '../../web-ui/src/cards/index.js';
+import { extractCardFences, citeChips, extractInlineCards, withoutInlineCards } from '../../web-ui/src/cards/index.js';
 
 // inline citation chips: [1]-style and hostname links become pills, prose links untouched
 const cited = citeChips('<p>Score <a href="https://www.nba.com/game/1">[1]</a> and <a href="https://espn.com/x">read the recap</a> via <a href="https://www.wnba.com/s">wnba.com</a></p>');
@@ -111,6 +111,16 @@ const pl = await timed('sports_player', () => buildSportsCard({ view: 'player', 
 assert.ok(pl.success, pl.error); assert.equal(pl.extra!.richArtifacts[0].player.team, 'Denver Nuggets');
 const places = await timed('places_given', () => buildPlacesCard({ places: [{ name: 'Lincoln Memorial', address: '2 Lincoln Memorial Cir NW, Washington, DC', lat: 38.8893, lng: -77.0502 }] }));
 assert.ok(places.success, places.error); assert.ok(places.extra!.richArtifacts[0].center);
+
+// Inline placement: {{card:REF}} renders the artifact in place; placed cards are
+// not repeated after the reply; unknown refs vanish instead of leaking.
+const arts = [{ type: 'clock', ref: 'clk1', zones: [{ timeZone: 'UTC', label: 'UTC' }] }, { type: 'clock', ref: 'clk2', zones: [{ timeZone: 'UTC' }] }];
+const inl = extractInlineCards('Before\n{{card:clk1}}\nAfter {{card:nope}}', 'IP', arts);
+assert.equal(inl.cards.length, 1); assert.ok(inl.cards[0].includes('pc-clock') && inl.cards[0].includes('data-card-ref="clk1"'));
+assert.ok(inl.text.includes('IP0END') && !inl.text.includes('{{card'));
+const rest = withoutInlineCards({ content: 'x {{card:clk1}}', richArtifacts: arts });
+assert.deepEqual(rest.map((a: any) => a.ref), ['clk2']);
+assert.equal(withoutInlineCards({ content: 'none', richArtifacts: arts }).length, 2);
 
 console.log('ui-cards regression passed', JSON.stringify(timings));
 }

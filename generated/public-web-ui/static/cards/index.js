@@ -39,6 +39,49 @@ export function extractCardFences(text, placeholder) {
   return { text: out, cards };
 }
 
+/**
+ * Inline card placement: a reply line `{{card:REF}}` puts the show_ui_card
+ * artifact with that ref right there (like an inline image) instead of after
+ * the reply. Unplaced artifacts keep rendering after the reply as before.
+ */
+export const INLINE_CARD_RE = /\{\{\s*card\s*:\s*([A-Za-z0-9_-]{2,48})\s*\}\}/g;
+
+function messageText(m) {
+  if (!m || typeof m !== 'object') return '';
+  for (const v of [m.content, m.text, m.body?.text, m.message]) if (typeof v === 'string' && v) return v;
+  return '';
+}
+
+export function inlineCardRefs(text) {
+  const refs = new Set();
+  String(text || '').replace(INLINE_CARD_RE, (_, ref) => { refs.add(ref); return ''; });
+  return refs;
+}
+
+/** Artifacts of `m` that are not already placed inline in its own text. */
+export function withoutInlineCards(m) {
+  const list = Array.isArray(m?.richArtifacts) ? m.richArtifacts : [];
+  if (!list.length) return list;
+  const placed = inlineCardRefs(messageText(m));
+  return placed.size ? list.filter((a) => !(a?.ref && placed.has(a.ref))) : list;
+}
+
+/** Replace inline card tokens with placeholders; returns { text, cards }. */
+export function extractInlineCards(text, placeholder, artifacts, renderArtifact) {
+  const cards = [];
+  const list = Array.isArray(artifacts) ? artifacts : [];
+  const out = String(text || '').replace(INLINE_CARD_RE, (_, ref) => {
+    const art = list.find((a) => a && (a.ref === ref || a.id === ref));
+    if (!art) return '';
+    let html = '';
+    try { html = (typeof renderArtifact === 'function' ? renderArtifact(art) : '') || renderDataCard(art) || ''; } catch {}
+    if (!html) return '';
+    cards.push(`<div class="pc-inline-card" data-card-ref="${ref}">${html}</div>`);
+    return `\n\n${placeholder}${cards.length - 1}END\n\n`;
+  });
+  return { text: out, cards };
+}
+
 export function hasCardFence(text) {
   return /```(quiz|flashcards|poll|writing|followups|reminder)[ \t]*\n/.test(String(text || ''));
 }

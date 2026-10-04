@@ -1786,7 +1786,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'show_ui_card',
         description:
-          'Render a native Prometheus UI card with live data the gateway fetches (keyless sources). Use it for anything live, numeric, geographic, visual, or comparative instead of prose. Batch several cards in one round. For model-authored cards (quiz, flashcards, poll, writing, followups, reminder) do NOT call this; write a fenced block instead.',
+          'Render a native Prometheus UI card with live data the gateway fetches (keyless sources). Use it for anything live, numeric, geographic, visual, or comparative instead of prose. Batch several cards in one round. The result returns a ref: write {{card:REF}} on its own line in your reply to place that card inline. For model-authored cards (quiz, flashcards, poll, writing, followups, reminder) do NOT call this; write a fenced block instead.',
         parameters: {
           type: 'object',
           required: ['type', 'payload'],

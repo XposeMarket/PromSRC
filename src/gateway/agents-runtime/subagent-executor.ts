@@ -3782,9 +3782,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         },
       )
       : UI_CARD_BUILDERS[cardType];
+    // Every card gets a short ref the model can drop into its reply as
+    // {{card:REF}} so the card renders inline instead of after the text.
+    const withCardRef = (r: any) => {
+      const arts = Array.isArray(r?.extra?.richArtifacts) ? r.extra.richArtifacts : [];
+      if (r?.error || !arts.length) return r;
+      const refs = arts.map((a: any) => {
+        if (!a.ref) a.ref = `${String(a.type || 'card').replace(/[^a-z]/gi, '').slice(0, 10) || 'card'}${Math.random().toString(36).slice(2, 6)}`;
+        return a.ref;
+      });
+      return { ...r, result: `${String(r.result || '')}\nPlace inline: put {{card:${refs[0]}}} on its own line in your reply where the card belongs (omit it to show the card after the reply).` };
+    };
     if (builder) {
       const tr = await builder(payload);
-      return { name, args, result: tr.stdout || tr.error || 'Card unavailable.', error: !tr.success, data: tr.data, extra: tr.extra };
+      return withCardRef({ name, args, result: tr.stdout || tr.error || 'Card unavailable.', error: !tr.success, data: tr.data, extra: tr.extra });
     }
     if (!targetTool) {
       return {
@@ -3794,7 +3805,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         error: true,
       };
     }
-    return executeTool(targetTool, payload, workspacePath, deps, sessionId);
+    return withCardRef(await executeTool(targetTool, payload, workspacePath, deps, sessionId));
   }
   // Filename inference: if the model forgot to pass filename, use the last one
   const needsFilename = ['read_file', 'validate_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];

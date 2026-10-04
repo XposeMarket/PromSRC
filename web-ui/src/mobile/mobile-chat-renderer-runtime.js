@@ -3347,10 +3347,10 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     }
     const hasPendingImageGeneration = _hasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
-      ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>`
+      ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText, turnPresentation)}</div>`
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
     inner += attachmentHtml;
-    inner += _renderMobileRichArtifacts(turnPresentation);
+    inner += _renderMobileRichArtifacts({ ...turnPresentation, content: markdownText });
     if (!(Array.isArray(turnPresentation.richArtifacts) && turnPresentation.richArtifacts.some((artifact) => artifact?.type === 'products'))) {
       inner += _renderMobileProductCarousel(turnPresentation);
     }

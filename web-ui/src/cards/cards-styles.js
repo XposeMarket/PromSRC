@@ -2,7 +2,7 @@
 // --pm-*, visual bridge --prom-*). No hardcoded light/dark canvas.
 export const CARD_CSS = `
 .pc-card,.pc-followups{--pc-text:var(--prom-text,var(--pm-text,var(--text,currentColor)));--pc-muted:var(--prom-muted,var(--pm-muted,var(--muted,#8a8a8a)));--pc-line:var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));--pc-surface:var(--prom-surface,var(--pm-surface,var(--panel,rgba(127,127,127,.06))));--pc-soft:var(--prom-surface-secondary,var(--pm-bg-soft,var(--panel-2,rgba(127,127,127,.11))));--pc-accent:var(--prom-accent,var(--pm-orange,var(--brand,#ff7a1a)));--pc-ok:var(--prom-success,#22a06b);--pc-bad:var(--prom-danger,#e5484d)}
-.pc-card{display:block;margin:10px 0;max-width:100%;border:1px solid var(--pc-line);border-radius:16px;background:var(--pc-surface);color:var(--pc-text);padding:14px;font-size:14px;line-height:1.45;overflow:hidden;box-sizing:border-box}
+.pc-inline-card{margin:12px 0}.pc-inline-card>.pc-card,.pc-inline-card>*:first-child{margin-top:0}.pc-card{display:block;margin:10px 0;max-width:100%;border:1px solid var(--pc-line);border-radius:16px;background:var(--pc-surface);color:var(--pc-text);padding:14px;font-size:14px;line-height:1.45;overflow:hidden;box-sizing:border-box}
 .pc-card *{box-sizing:border-box}
 .pc-card svg{width:16px;height:16px;flex:none;vertical-align:-3px}
 .pc-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}

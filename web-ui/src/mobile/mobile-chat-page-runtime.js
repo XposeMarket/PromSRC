@@ -3537,7 +3537,9 @@ void main() {
           && String(turn.workflowPart || '') === 'interruption_response');
         const hasCompletedReply = activeThread.slice(latestSteerIndex + 1).some((turn) => turn?.role === 'ai'
           && turn.streaming !== true && _mobileAssistantHasVisibleAnswer(turn));
-        if (source && !continuation && !hasCompletedReply) {
+        // The steer row alone carries the boundary; a missing before-row (lost
+        // snapshot) must not collapse the whole stream into one row.
+        if (!continuation && !hasCompletedReply) {
           continuation = {
             role: 'ai', messageId: `${groupId}:continuation`, streaming: true,
             timestamp: Number(steerUser.timestamp || Date.now()) || Date.now(),
@@ -3548,14 +3550,14 @@ void main() {
             workflowLabel: 'Response after steer',
             workflowBoundarySeq: steerUser.workflowBoundarySeq,
             workflowStreamId: steerUser.workflowStreamId,
-            _clientRequestId: source._clientRequestId || recoveryClientRequestId,
+            _clientRequestId: source?._clientRequestId || recoveryClientRequestId,
           };
           activeThread.splice(latestSteerIndex + 1, 0, continuation);
         }
         const steerRequestId = String(source?._clientRequestId || continuation?._clientRequestId || '').trim();
-        if (source && continuation && (!recoveryClientRequestId
+        if (continuation && (!recoveryClientRequestId
           || !steerRequestId || steerRequestId === recoveryClientRequestId)) {
-          _setMobileChatSteerContinuationTurn(source, continuation);
+          if (source) _setMobileChatSteerContinuationTurn(source, continuation);
           aiTurn = continuation;
           recoverySteerBoundary = steerUser;
         }
@@ -3873,7 +3875,9 @@ void main() {
           events = Array.isArray(replay?.events) ? replay.events : [];
           if (!isCurrentRecoveryTarget()) return;
         }
-        if (shouldResetForReplay && events.length) {
+        // A frozen pre-steer row is final history: never wipe and refill it with
+        // the whole stream (that produced merged/duplicated tools on return).
+        if (shouldResetForReplay && events.length && String(aiTurn.workflowPart || '') !== 'before_interruption') {
           _resetMobileLiveAiTurnForReplay(aiTurn, {
             startedAt: Number(replay?.stream?.startedAt || status?.run?.startedAt || remembered?.startedAt || aiTurn.workStartedAt || aiTurn.timestamp || 0),
             clientRequestId: aiTurn._clientRequestId,

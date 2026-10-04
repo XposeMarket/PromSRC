@@ -10,7 +10,8 @@
 
 import { installVideoProjectCards } from './components/video-project-card.js';
 import { installGameProjectCards } from './components/game-project-card.js';
-import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips } from './cards/index.js';
+import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
+export { withoutInlineCards };
 
 // ─── HTML Escaping ─────────────────────────────────────────────
 // NOTE: The original index.html had TWO escape functions:
@@ -1092,6 +1093,7 @@ export function renderMd(text, options = {}) {
   const cacheable = source.length <= RENDER_MD_CACHEABLE_MAX_CHARS
     && !/```(chart|svg|html|mermaid)\n/.test(source)
     && !hasCardFence(source)
+    && !(INLINE_CARD_RE.lastIndex = 0, INLINE_CARD_RE.test(source))
     && !(Array.isArray(options.visualArtifacts) && options.visualArtifacts.length);
   if (cacheable) {
     const hit = renderMdCache.get(source);
@@ -1156,6 +1158,10 @@ function renderMdUncached(text, options = {}) {
     const extracted = extractCardFences(text, vpPrefix + 'C');
     text = extracted.text;
     extracted.cards.forEach((html, i) => { vpCards.push(html); text = text.replace(`${vpPrefix}C${i}END`, `${vpPrefix}${vpCards.length - 1}END`); });
+    // {{card:REF}} -> the show_ui_card artifact placed inline (unknown refs vanish).
+    const inline = extractInlineCards(text, vpPrefix + 'I', options.visualArtifacts, options.renderArtifact);
+    text = inline.text;
+    inline.cards.forEach((html, i) => { vpCards.push(html); text = text.replace(`${vpPrefix}I${i}END`, `${vpPrefix}${vpCards.length - 1}END`); });
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
