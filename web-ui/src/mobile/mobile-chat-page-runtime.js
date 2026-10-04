@@ -1,10 +1,11 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { formatModelWithReasoning } from '../model-display.js';
-import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml } from './mobile-runtime-chrome.js';
+import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans } from './mobile-restart-continuity.js';
+import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 
 export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
   if (!steer) return true;
@@ -4331,6 +4332,7 @@ void main() {
     // measured composer top instead of guessing from those offsets.
     const bottom = pinnedBottom ?? Math.max(0, Math.round(viewportHeight - composerTop + 8));
     backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
+    alignAbove(backgroundSpawnDock, Number(rect?.top) - Math.max(0, bottom - Math.round(viewportHeight - composerTop + 8)));
 
     // The resting composer uses a responsive chrome inset, while a focused
     // composer expands to the 10px edge inset. Lock the expanded background
@@ -5723,8 +5725,12 @@ void main() {
     const vv = window.visualViewport;
     const vh = Number(vv?.height || 0);
     if (!vv || vh < 120) return null;
-    return Math.round(Math.max(0, Number(vv.offsetTop || 0)) + vh - 4 - height);
+    return Math.round(_pmKbBandTop(vv) + vh - 4 - height);
   }
+  function _pmKbBandTop(vv) {
+    return resolveKeyboardBandTop({ offsetTop: vv?.offsetTop, pageTop: vv?.pageTop, rootTop: document.documentElement?.getBoundingClientRect?.().top });
+  }
+  const _pmKbSettleComposer = settleLoop(() => _pmKbFocusActive && _pmKbViewportMode && (_pmKbRunComposerRepair(), true));
   let _pmKbComposerRepairRaf = 0;
   // `immediate`: repair before paint so the composer never rides a panning viewport.
   function _pmKbScheduleComposerPositionRepair(immediate = false) {
@@ -5767,6 +5773,7 @@ void main() {
         const top2 = Number.parseFloat(composer.style.getPropertyValue('top'));
         if (Number.isFinite(top2)) composer.style.setProperty('top', `${Math.max(0, Math.round(top2 + target2 - after.top))}px`, 'important');
       }
+      syncMobileBackgroundSpawnDockToComposer();
     }
   }
   // Verify the composer actually rendered inside the visible area above the
@@ -5785,7 +5792,7 @@ void main() {
       const rect = composer?.getBoundingClientRect?.();
       const vv = window.visualViewport;
       if (!composer || !rect || !rect.height || !vv) return;
-      const vTop = Math.max(0, Number(vv.offsetTop || 0));
+      const vTop = _pmKbBandTop(vv);
       const vHeight = Math.max(0, Number(vv.height || 0));
       if (vHeight < 120) return;
       const vBottom = vTop + vHeight;
@@ -5945,13 +5952,14 @@ void main() {
   const _onVvScroll = () => {
     if (_pmKbFocusActive && _pmKbViewportMode) {
       _pmKbScheduleComposerPositionRepair(true);
+      _pmKbSettleComposer();
       return;
     }
     _scheduleKeyboardOffset();
   };
   const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
   const _onWindowKeyboardScroll = () => {
-    if (_pmKbFocusActive && _pmKbViewportMode) _pmKbScheduleComposerPositionRepair(true);
+    if (_pmKbFocusActive && _pmKbViewportMode) { _pmKbScheduleComposerPositionRepair(true); _pmKbSettleComposer(); }
   };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
@@ -5961,6 +5969,7 @@ void main() {
   window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
   window.addEventListener('scroll', _onWindowKeyboardScroll, { passive: true });
   body?.addEventListener('scroll', _onWindowKeyboardScroll, { passive: true });
+  body?.addEventListener('touchend', _onWindowKeyboardScroll, { passive: true });
   const _onComposerFocusKb = () => {
     _pmKbFocusActive = true;
     _pmKbFocusGraceUntil = performance.now() + 1600;
@@ -6109,6 +6118,7 @@ void main() {
     window.removeEventListener('resize', _onWindowKeyboardResize);
     window.removeEventListener('scroll', _onWindowKeyboardScroll);
     body?.removeEventListener('scroll', _onWindowKeyboardScroll);
+    body?.removeEventListener('touchend', _onWindowKeyboardScroll);
     window.removeEventListener('pm:viewport-settle', _onViewportSettleKb);
     if (_pmKbComposerRepairRaf) { cancelAnimationFrame(_pmKbComposerRepairRaf); _pmKbComposerRepairRaf = 0; }
     window.removeEventListener('pagehide', _onPageHideKb);

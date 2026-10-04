@@ -38,6 +38,22 @@ export function agentTitleHtml(record = {}) {
   return providerLogoKey(record.providerId, record.model) ? `${renderProviderLogo(record.providerId, record.model)}${name}` : name;
 }
 
+/**
+ * Fixed `bottom` is anchored to the layout viewport on some iOS builds and to
+ * the visual viewport on others; with the keyboard up those differ by the
+ * keyboard height, which hid the docks behind it. Measure the rendered edge and
+ * shift `bottom` by the error so the element sits `gap` px above `targetTop`.
+ */
+export function alignBottomAbove(el, targetTop, gap = 8) {
+  if (!el || el.hidden || !Number.isFinite(targetTop)) return;
+  const r = el.getBoundingClientRect?.();
+  if (!r?.height) return;
+  const drift = Math.round(r.bottom - (targetTop - gap));
+  if (Math.abs(drift) < 2) return;
+  const cur = Number.parseFloat(el.style.getPropertyValue('bottom'));
+  if (Number.isFinite(cur)) el.style.setProperty('bottom', `${Math.round(cur + drift)}px`);
+}
+
 /** Pin plan pill + jump button above the composer. Returns the bottom used. */
 export function pinRuntimeChrome({ rect, form, page, goalStrip, planDock, agentDock, jumpButton } = {}) {
   const visible = form && !form.classList.contains('pm-composer-mode-hidden');
@@ -49,8 +65,12 @@ export function pinRuntimeChrome({ rect, form, page, goalStrip, planDock, agentD
   }
   if (bottom == null) return null;
   planDock?.style.setProperty('bottom', `${bottom}px`);
+  const composerTop = Number((rect || form.getBoundingClientRect?.())?.top);
+  const stack = bottom - Math.max(0, Math.round(Number(window.visualViewport?.height || window.innerHeight || 0) - composerTop + 8));
+  alignBottomAbove(planDock, composerTop - Math.max(0, stack));
   const height = (el) => (el && !el.hidden ? Math.ceil(el.getBoundingClientRect?.().height || 0) : 0);
   const pills = Math.max(height(planDock), agentDock?.classList.contains('is-collapsed') ? height(agentDock) : 0);
   jumpButton?.style.setProperty('bottom', `${bottom + (pills ? pills + 10 : 10)}px`);
+  alignBottomAbove(jumpButton, composerTop - Math.max(0, stack) - (pills ? pills + 2 : 2));
   return bottom;
 }
