@@ -15,11 +15,19 @@ const STATE_PREFIX = 'prom-card-state:';
 const STYLE_ID = 'prom-cards-style';
 let installed = false;
 
+// Memory is the source of truth for this page; localStorage is best-effort
+// persistence. On mobile the thread cache can fill the storage quota, and a
+// failed write used to make the next chat re-render (stream tick, recovery)
+// rebuild the card from empty state, so quiz/flashcard taps snapped back.
+const memoryState = (globalThis.__promCardState ||= new Map());
+
 export function readCardState(id) {
+  if (memoryState.has(id)) return memoryState.get(id);
   try { return JSON.parse(localStorage.getItem(STATE_PREFIX + id) || '{}') || {}; } catch { return {}; }
 }
 
 function writeCardState(id, state) {
+  memoryState.set(id, state || {});
   try { localStorage.setItem(STATE_PREFIX + id, JSON.stringify(state || {})); } catch {}
 }
 
@@ -91,8 +99,12 @@ async function copyText(text) {
 }
 
 function onClick(event) {
+  // Two module copies (bundle + /src) both install a listener; a doubled
+  // toggle (flip, next) cancels itself out. Handle each click exactly once.
+  if (event.__pcHandled) return;
   const btn = event.target.closest?.('[data-pc-act]');
-  if (!btn) return;
+  if (!btn || !btn.isConnected) return;
+  event.__pcHandled = true;
   const card = btn.closest('[data-pc-id]');
   const act = btn.getAttribute('data-pc-act');
   if (act === 'send') { event.preventDefault(); sendCardFollowUp(btn.getAttribute('data-prompt')); btn.classList.add('sent'); return; }
@@ -169,8 +181,9 @@ export function hydrateCards(root = document) {
 }
 
 export function installPromCards() {
-  if (installed || typeof document === 'undefined') return;
+  if (installed || typeof document === 'undefined' || window.__promCardsInstalled) return;
   installed = true;
+  window.__promCardsInstalled = true;
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;

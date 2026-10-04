@@ -2632,14 +2632,10 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!message) return false;
     const messageIndex = messageRow.index;
     const timeline = mobileTimelineController.peek(`mobile:main:${sid}`);
-    // Rows older than the painted window are virtualized away on purpose. A row
-    // newer than it (a steer continuation pushed after the last paint) means the
-    // window is stale: full-render instead of claiming the patch landed, which
-    // froze the visible stream after a steer.
+    // A row newer than the painted window (steer continuation) needs a full render.
     if (!threadEl.querySelector(`[data-msg-index="${messageIndex}"]`)
       && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) {
-      const newestPainted = timeline.paintEntries.reduce((max, entry) => Math.max(max, Number(entry.originalIndex) || 0), -1);
-      return messageIndex < newestPainted;
+      return messageIndex < Math.max(-1, ...timeline.paintEntries.map((e) => Number(e.originalIndex) || 0));
     }
     const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
     const patched = _patchMobileThreadMessage(threadEl, message, messageIndex);
@@ -3175,12 +3171,8 @@ function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
   const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
   if (!clientRequestId && !streamId) return null;
   const sid = String(sessionId || evt?.sessionId || '').trim();
-  // A gateway restart resumes the SAME request (same clientRequestId) on a NEW
-  // stream. The pre-restart stream can end with an abort/done frame that pins
-  // or freezes the turn, and matching on clientRequestId alone then discarded
-  // every post-restart frame as a duplicate: the live view froze until the app
-  // was reopened. A request-id match on a different, known stream is a
-  // continuation unless that turn already received its real final answer.
+  // A restart resumes the same clientRequestId on a new stream; a request-id
+  // match on a different known stream is a continuation unless already final.
   const requestMatchIsCompleted = (turn) => {
     if (!clientRequestId || String(turn?._clientRequestId || '').trim() !== clientRequestId) return false;
     const turnStreamId = String(turn?._streamId || turn?._pmLastStreamId || '').trim();

@@ -8,11 +8,11 @@ import { esc, encodeCardData, parseCardBody, cardError, ICON } from './card-util
 import { TOOL_FENCES, renderToolCard } from './cards-tools.js';
 
 function shell(kind, id, spec, inner, extraClass = '') {
-  return `<div class="pc-card pc-${kind} ${extraClass}" data-pc-kind="${kind}" data-pc-id="${esc(id)}" data-card-json="${encodeCardData(spec)}">${inner}</div>`;
+  return `<div class="pcx pc-${kind} ${extraClass}" data-pc-kind="${kind}" data-pc-id="${esc(id)}" data-card-json="${encodeCardData(spec)}">${inner}</div>`;
 }
 
 function head(label, title) {
-  return `<div class="pc-head"><span class="pc-kicker">${esc(label)}</span>${title ? `<span class="pc-title">${esc(title)}</span>` : ''}</div>`;
+  return `<div class="pc-head"><span class="pc-kicker">${esc(label)}</span>${title ? `<span class="pcx-title">${esc(title)}</span>` : ''}</div>`;
 }
 
 // ── normalizers (accept the shapes models actually emit) ──────────────────
@@ -101,7 +101,7 @@ function renderWriting(id, spec, st) {
   const words = text.trim().split(/\s+/).length;
   const label = String(spec?.kind || 'Draft');
   const subject = spec?.subject ? `<div class="pc-writing-subject"><span>Subject</span>${esc(spec.subject)}</div>` : '';
-  return shell('writing', id, spec, `<div class="pc-head"><span class="pc-kicker">${esc(label)}</span>${spec?.title ? `<span class="pc-title">${esc(spec.title)}</span>` : ''}<button type="button" class="pc-icon-btn" data-pc-act="copy" title="Copy">${ICON.copy}<span>${st.copied ? 'Copied' : 'Copy'}</span></button></div>${subject}<div class="pc-writing-body">${esc(text)}</div><div class="pc-writing-foot"><span class="pc-muted">${words} words · ${text.length} characters</span><span class="pc-chips"><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} shorter.">Shorter</button><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} more casual.">More casual</button><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} more formal.">More formal</button></span></div>`);
+  return shell('writing', id, spec, `<div class="pc-head"><span class="pc-kicker">${esc(label)}</span>${spec?.title ? `<span class="pcx-title">${esc(spec.title)}</span>` : ''}<button type="button" class="pc-icon-btn" data-pc-act="copy" title="Copy">${ICON.copy}<span>${st.copied ? 'Copied' : 'Copy'}</span></button></div>${subject}<div class="pc-writing-body">${esc(text)}</div><div class="pc-writing-foot"><span class="pc-muted">${words} words · ${text.length} characters</span><span class="pc-chips"><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} shorter.">Shorter</button><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} more casual.">More casual</button><button type="button" class="pc-chip" data-pc-act="send" data-prompt="Make that ${esc(label.toLowerCase())} more formal.">More formal</button></span></div>`);
 }
 
 function renderFollowups(id, spec) {
@@ -116,7 +116,7 @@ function renderReminder(id, spec, st) {
   if (!title) return cardError('reminder', 'A reminder needs a title.');
   const status = st.status === 'set' ? '<div class="pc-feedback ok"><strong>Asked Prom to set it.</strong></div>' : st.status === 'dismissed' ? '<div class="pc-muted">Dismissed.</div>' : '';
   const actions = st.status ? '' : '<div class="pc-actions"><button type="button" class="pc-btn" data-pc-act="rem-dismiss">Not now</button><button type="button" class="pc-btn primary" data-pc-act="rem-set">Set reminder</button></div>';
-  return shell('reminder', id, spec, `<div class="pc-rem"><span class="pc-rem-icon">${ICON.bell}</span><div><div class="pc-title">${esc(title)}</div>${when ? `<div class="pc-muted">${esc(when)}</div>` : ''}${spec?.details ? `<div class="pc-muted">${esc(spec.details)}</div>` : ''}</div></div>${status}${actions}`);
+  return shell('reminder', id, spec, `<div class="pc-rem"><span class="pc-rem-icon">${ICON.bell}</span><div><div class="pcx-title">${esc(title)}</div>${when ? `<div class="pc-muted">${esc(when)}</div>` : ''}${spec?.details ? `<div class="pc-muted">${esc(spec.details)}</div>` : ''}</div></div>${status}${actions}`);
 }
 
 export const INTERACTIVE_FENCES = ['quiz', 'flashcards', 'poll', 'writing', 'followups', 'reminder', ...TOOL_FENCES];

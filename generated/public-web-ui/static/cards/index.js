@@ -36,7 +36,7 @@ export function extractCardFences(text, placeholder) {
     return `\n\n${placeholder}${cards.length - 1}END\n\n`;
   });
   const open = out.match(CARD_OPEN_RE);
-  if (open) out = out.slice(0, open.index) + `\n\n<div class="pc-card pc-pending"><span class="pc-muted">Building ${open[1]}…</span></div>\n\n`;
+  if (open) out = out.slice(0, open.index) + `\n\n<div class="pcx pc-pending"><span class="pc-muted">Building ${open[1]}…</span></div>\n\n`;
   return { text: out, cards };
 }
 

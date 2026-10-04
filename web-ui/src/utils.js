@@ -326,23 +326,26 @@ function visualThemeCss(theme) {
 
 export function buildVisualSrcdoc(lang, code, themeInput) {
   const theme = normalizeVisualTheme(themeInput);
+  // Mermaid parses colors itself and throws on currentColor/transparent/var().
+  const mc = (v, dark, light) => (!v || /^(currentColor|transparent|inherit)$/i.test(String(v).trim()) || /var\(/.test(String(v)) ? (theme.isDark ? dark : light) : v);
+  const fg = mc(theme.text, '#e6edf3', '#1f2328');
   const mermaidThemeVariables = visualScriptJson({
     background: 'transparent',
-    primaryColor: theme.surface,
-    primaryTextColor: theme.text,
-    primaryBorderColor: theme.borderStrong,
-    lineColor: theme.muted,
-    secondaryColor: theme.surfaceSecondary,
-    secondaryTextColor: theme.text,
-    secondaryBorderColor: theme.border,
-    tertiaryColor: theme.bgSoft,
-    tertiaryTextColor: theme.text,
-    tertiaryBorderColor: theme.border,
-    textColor: theme.text,
-    mainBkg: theme.surface,
-    nodeBorder: theme.borderStrong,
-    clusterBkg: theme.surfaceSecondary,
-    clusterBorder: theme.border,
+    primaryColor: mc(theme.surface, '#1b2733', '#f3f5f8'),
+    primaryTextColor: fg,
+    primaryBorderColor: mc(theme.borderStrong, '#4a5a6b', '#9aa7b4'),
+    lineColor: mc(theme.muted, '#8b98a5', '#57606a'),
+    secondaryColor: mc(theme.surfaceSecondary, '#22303d', '#e9edf2'),
+    secondaryTextColor: fg,
+    secondaryBorderColor: mc(theme.border, '#33424f', '#c9d1d9'),
+    tertiaryColor: mc(theme.bgSoft, '#15202a', '#f6f8fa'),
+    tertiaryTextColor: fg,
+    tertiaryBorderColor: mc(theme.border, '#33424f', '#c9d1d9'),
+    textColor: fg,
+    mainBkg: mc(theme.surface, '#1b2733', '#f3f5f8'),
+    nodeBorder: mc(theme.borderStrong, '#4a5a6b', '#9aa7b4'),
+    clusterBkg: mc(theme.surfaceSecondary, '#22303d', '#e9edf2'),
+    clusterBorder: mc(theme.border, '#33424f', '#c9d1d9'),
     edgeLabelBackground: 'transparent',
   });
   const chartTheme = visualScriptJson({ text: theme.text, muted: theme.muted, border: theme.border, series: theme.series });

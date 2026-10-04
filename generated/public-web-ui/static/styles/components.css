@@ -8402,8 +8402,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 
 /* ── Product Carousel ─────────────────────────────────────────── */
 .product-carousel { margin: 14px 0 6px; position: relative; max-width: min(100%, 980px); }
-.product-carousel .pc-heading { font-size: 11px; font-weight: 800; letter-spacing: 0.02em; opacity: 0.62; margin-bottom: 10px; text-transform: uppercase; }
-.product-carousel .pc-track {
+.pc-heading { font-size: 11px; font-weight: 800; letter-spacing: 0.02em; opacity: 0.62; margin-bottom: 10px; text-transform: uppercase; }
+.pc-track {
   display: flex;
   gap: 12px;
   overflow-x: auto;
@@ -8412,8 +8412,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   position: relative;
   scrollbar-width: none;
 }
-.product-carousel .pc-track::-webkit-scrollbar { display: none; }
-.product-carousel .pc-card {
+.pc-track::-webkit-scrollbar { display: none; }
+.pc-card {
   flex: 0 0 206px;
   min-height: 318px;
   scroll-snap-align: start;
@@ -8427,18 +8427,13 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   transition: box-shadow 0.15s, transform 0.15s;
   background: var(--surface, #fff);
 }
-/* The chat-card runtime (web-ui/src/cards) also styles bare .pc-card/.pc-title;
-   undo its block layout so carousel tiles keep their original shape. */
-.product-carousel .pc-card { padding: 0; margin: 0; max-width: none; font-size: inherit; line-height: inherit; }
-.product-carousel .pc-title { white-space: normal; text-overflow: clip; min-width: 0; }
-.product-carousel .pc-stats { grid-template-columns: none; }
-.product-carousel .pc-card:hover { box-shadow: 0 4px 18px rgba(0,0,0,0.13); transform: translateY(-1px); }
-[data-theme="dark"] .product-carousel .pc-card { background: #1c1c1c; border-color: #2e2e2e; }
-.product-carousel .pc-img-wrap { position: relative; height: 124px; background: #f0f0f0; overflow: hidden; flex: 0 0 124px; }
-[data-theme="dark"] .product-carousel .pc-img-wrap { background: #252525; }
-.product-carousel .pc-img { width: 100%; height: 100%; object-fit: contain; display: block; background: #fff; position: relative; z-index: 1; }
-[data-theme="dark"] .product-carousel .pc-img { background: #181818; }
-.product-carousel .pc-img-placeholder {
+.pc-card:hover { box-shadow: 0 4px 18px rgba(0,0,0,0.13); transform: translateY(-1px); }
+[data-theme="dark"] .pc-card { background: #1c1c1c; border-color: #2e2e2e; }
+.pc-img-wrap { position: relative; height: 124px; background: #f0f0f0; overflow: hidden; flex: 0 0 124px; }
+[data-theme="dark"] .pc-img-wrap { background: #252525; }
+.pc-img { width: 100%; height: 100%; object-fit: contain; display: block; background: #fff; position: relative; z-index: 1; }
+[data-theme="dark"] .pc-img { background: #181818; }
+.pc-img-placeholder {
   position: absolute;
   inset: 0;
   display: none;
@@ -8455,9 +8450,9 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   text-align: center;
   text-transform: uppercase;
 }
-.product-carousel .pc-img-missing .pc-img-placeholder { display: flex; }
-[data-theme="dark"] .product-carousel .pc-img-placeholder { background: linear-gradient(135deg, rgba(249,115,22,0.18), rgba(96,165,250,0.10)), #222; }
-.product-carousel .pc-tag {
+.pc-img-missing .pc-img-placeholder { display: flex; }
+[data-theme="dark"] .pc-img-placeholder { background: linear-gradient(135deg, rgba(249,115,22,0.18), rgba(96,165,250,0.10)), #222; }
+.pc-tag {
   position: absolute;
   top: 8px;
   left: 8px;
@@ -8475,9 +8470,9 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.product-carousel .pc-card-body { display: flex; flex: 1; flex-direction: column; gap: 7px; padding: 11px 12px 12px; min-height: 0; }
-.product-carousel .pc-merchant { color: var(--muted, #64748b); font-size: 10px; font-weight: 800; letter-spacing: 0.04em; line-height: 1; text-transform: uppercase; }
-.product-carousel .pc-title {
+.pc-card-body { display: flex; flex: 1; flex-direction: column; gap: 7px; padding: 11px 12px 12px; min-height: 0; }
+.pc-merchant { color: var(--muted, #64748b); font-size: 10px; font-weight: 800; letter-spacing: 0.04em; line-height: 1; text-transform: uppercase; }
+.pc-title {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -8487,8 +8482,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   line-height: 1.28;
   min-height: 50px;
 }
-.product-carousel .pc-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 18px; }
-.product-carousel .pc-meta {
+.pc-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 18px; }
+.pc-meta {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -8497,10 +8492,10 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   font-size: 12px;
   line-height: 1.35;
 }
-.product-carousel .pc-price { font-weight: 800; color: var(--text, #0f172a); }
-.product-carousel .pc-rating { display: block; font-size: 12px; color: #f59e0b; }
-.product-carousel .pc-reviews { color: var(--muted, #64748b); font-size: 11px; font-weight: 650; }
-.product-carousel .pc-badge-inline {
+.pc-price { font-weight: 800; color: var(--text, #0f172a); }
+.pc-rating { display: block; font-size: 12px; color: #f59e0b; }
+.pc-reviews { color: var(--muted, #64748b); font-size: 11px; font-weight: 650; }
+.pc-badge-inline {
   border: 1px solid rgba(245,158,11,0.36);
   border-radius: 999px;
   color: #92400e;
@@ -8508,10 +8503,10 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   font-weight: 800;
   padding: 1px 6px;
 }
-[data-theme="dark"] .product-carousel .pc-rating { color: #fbbf24; }
-[data-theme="dark"] .product-carousel .pc-price { color: #f8fafc; }
-[data-theme="dark"] .product-carousel .pc-badge-inline { background: rgba(245,158,11,0.12); color: #fbbf24; }
-.product-carousel .pc-arrow {
+[data-theme="dark"] .pc-rating { color: #fbbf24; }
+[data-theme="dark"] .pc-price { color: #f8fafc; }
+[data-theme="dark"] .pc-badge-inline { background: rgba(245,158,11,0.12); color: #fbbf24; }
+.pc-arrow {
   position: absolute;
   right: 4px;
   top: 50%;
@@ -8533,15 +8528,15 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   padding: 0;
   transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s, background 0.15s;
 }
-.product-carousel .pc-arrow.pc-prev { left: 4px; right: auto; }
-.product-carousel .pc-arrow.is-hidden {
+.pc-arrow.pc-prev { left: 4px; right: auto; }
+.pc-arrow.is-hidden {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) scale(0.92);
 }
-.product-carousel .pc-arrow:hover { background: #f9fafb; box-shadow: 0 4px 14px rgba(0,0,0,0.22); }
-[data-theme="dark"] .product-carousel .pc-arrow { background: #2a2a2a; border-color: #3a3a3a; color: #e5e7eb; }
-[data-theme="dark"] .product-carousel .pc-arrow:hover { background: #333; }
+.pc-arrow:hover { background: #f9fafb; box-shadow: 0 4px 14px rgba(0,0,0,0.22); }
+[data-theme="dark"] .pc-arrow { background: #2a2a2a; border-color: #3a3a3a; color: #e5e7eb; }
+[data-theme="dark"] .pc-arrow:hover { background: #333; }
 
 /* ── Command palette (Ctrl+K) & shortcuts help (Ctrl+/) ──────────────────── */
 .cmdk-overlay {

@@ -80,7 +80,7 @@ function renderConvert(id, raw) {
   const value = Number.isFinite(Number(raw?.value)) ? Number(raw.value) : 1;
   const sel = (name, cur) => `<select class="pc-select" data-pc-unit="${name}">${units.map((u) => `<option value="${esc(u)}" ${u === cur ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>`;
   const out = formatQuantity(convertUnit(value, from, to, category));
-  return `<div class="pc-card pc-convert" data-pc-kind="convert" data-pc-id="${esc(id)}" data-card-json="${encodeCardData({ category })}"><div class="pc-head"><span class="pc-kicker">Convert</span><span class="pc-title">${esc(category[0].toUpperCase() + category.slice(1))}</span></div>
+  return `<div class="pcx pc-convert" data-pc-kind="convert" data-pc-id="${esc(id)}" data-card-json="${encodeCardData({ category })}"><div class="pc-head"><span class="pc-kicker">Convert</span><span class="pcx-title">${esc(category[0].toUpperCase() + category.slice(1))}</span></div>
   <div class="pc-fx-row"><input class="pc-input" type="number" inputmode="decimal" step="any" value="${esc(value)}" data-pc-unit="value" aria-label="Value">${sel('from', from)}</div>
   <button type="button" class="pc-icon-btn pc-fx-swap" data-pc-act="unit-swap" title="Swap"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h12l-3-3M17 17H5l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   <div class="pc-fx-row"><output class="pc-fx-out" data-pc-unit="out">${esc(out)}</output>${sel('to', to)}</div></div>`;
@@ -151,7 +151,7 @@ function renderCalculator(id, raw) {
   const expression = String(raw?.expression ?? raw?.expr ?? raw?.input ?? (typeof raw === 'string' ? raw : '') ?? '');
   const r = calcResult(expression);
   const keys = KEYS.map((k) => `<button type="button" class="pc-key ${/[÷×−+^]/.test(k) ? 'op' : ''}" data-pc-act="calc-key" data-k="${esc(k)}">${esc(k)}</button>`).join('');
-  return `<div class="pc-card pc-calc" data-pc-kind="calculator" data-pc-id="${esc(id)}"><div class="pc-head"><span class="pc-kicker">Calculator</span>${raw?.title ? `<span class="pc-title">${esc(raw.title)}</span>` : ''}</div>
+  return `<div class="pcx pc-calc" data-pc-kind="calculator" data-pc-id="${esc(id)}"><div class="pc-head"><span class="pc-kicker">Calculator</span>${raw?.title ? `<span class="pcx-title">${esc(raw.title)}</span>` : ''}</div>
   <input class="pc-input pc-calc-expr" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" value="${esc(expression)}" data-pc-calc="expr" aria-label="Expression">
   <output class="pc-calc-out ${r.ok ? '' : 'pending'}" data-pc-calc="out">${r.ok ? `= ${esc(r.text)}` : esc(r.text)}</output>
   <div class="pc-keypad">${keys}<button type="button" class="pc-key eq" data-pc-act="calc-key" data-k="=">=</button></div></div>`;

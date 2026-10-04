@@ -3537,8 +3537,6 @@ void main() {
           && String(turn.workflowPart || '') === 'interruption_response');
         const hasCompletedReply = activeThread.slice(latestSteerIndex + 1).some((turn) => turn?.role === 'ai'
           && turn.streaming !== true && _mobileAssistantHasVisibleAnswer(turn));
-        // The steer row alone carries the boundary; a missing before-row (lost
-        // snapshot) must not collapse the whole stream into one row.
         if (!continuation && !hasCompletedReply) {
           continuation = {
             role: 'ai', messageId: `${groupId}:continuation`, streaming: true,
@@ -3875,8 +3873,6 @@ void main() {
           events = Array.isArray(replay?.events) ? replay.events : [];
           if (!isCurrentRecoveryTarget()) return;
         }
-        // A frozen pre-steer row is final history: never wipe and refill it with
-        // the whole stream (that produced merged/duplicated tools on return).
         if (shouldResetForReplay && events.length && String(aiTurn.workflowPart || '') !== 'before_interruption') {
           _resetMobileLiveAiTurnForReplay(aiTurn, {
             startedAt: Number(replay?.stream?.startedAt || status?.run?.startedAt || remembered?.startedAt || aiTurn.workStartedAt || aiTurn.timestamp || 0),
@@ -5873,18 +5869,9 @@ void main() {
       || document.activeElement?.matches?.('#pm-new-project-name')
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
     const keyboardViewportSettled = keyboardHeightOffset > 90 || baselineOffset > 90;
-    // Ignore small deltas from Safari's collapsing URL bar; only treat a
-    // sizeable gap as a real keyboard. Some installed iOS PWAs shrink both
-    // innerHeight and visualViewport.height, so their difference stays zero;
-    // the pre-focus baseline catches that mode.
-    // Treat a focused composer as keyboard-active during the opening
-    // transition.  On iOS, the resize/visualViewport event can arrive after
-    // the focus frame, especially when the document is already at its bottom;
-    // waiting for a measurable delta leaves the composer behind the keyboard
-    // until a manual scroll produces the next viewport event.
-    // A stale/shrinking visual viewport can outlive the field that opened the
-    // keyboard. Do not let that closing-frame measurement re-hide the tab bar;
-    // only an actively focused composer or project-name field owns this state.
+    // Ignore small Safari URL-bar deltas; a focused composer counts as keyboard-
+    // active during the opening transition (iOS resize can lag the focus frame).
+    // A stale viewport must not re-hide the tab bar once the field blurred.
     if (_pmKbFocusActive
       && !composerFocused
       && !keyboardViewportSettled
@@ -9076,9 +9063,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     try { input?.blur?.(); } catch {}
     const text = _pmGetComposerValue(input);
     const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
-    // Every send (new turn, queued prompt, steer) arms the Stop soft-lock: the
-    // composer empties and the button flips to Stop under the same thumb. The
-    // lock used to arm only on idle->busy, so a queued send mid-turn aborted.
+    // Every send/steer arms the Stop soft-lock (not just idle->busy).
     if (text.trim() || getPendingAttachments().length) {
       __pmChat.stopSoftLockUntil = Date.now() + 2500;
       setTimeout(() => updateComposerSubmitState(), 2600);

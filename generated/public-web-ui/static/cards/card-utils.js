@@ -87,7 +87,7 @@ export function sendCardFollowUp(prompt) {
 export function cardError(kind, message) {
   const reason = String(message || 'The card data was malformed.');
   const fix = `The ${kind} card you sent failed to render (${reason}). Please resend it with a valid ${kind} body.`;
-  return `<div class="pc-card pc-error" role="note"><div class="pc-error-title">Couldn't render ${esc(kind)} card</div><div class="pc-muted">${esc(reason)}</div><div class="pc-actions"><button type="button" class="pc-chip" data-pc-act="send" data-prompt="${esc(fix)}">Ask Prom to fix it</button></div></div>`;
+  return `<div class="pcx pc-error" role="note"><div class="pc-error-title">Couldn't render ${esc(kind)} card</div><div class="pc-muted">${esc(reason)}</div><div class="pc-actions"><button type="button" class="pc-chip" data-pc-act="send" data-prompt="${esc(fix)}">Ask Prom to fix it</button></div></div>`;
 }
 
 export const ICON = {

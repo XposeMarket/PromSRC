@@ -1,14 +1,14 @@
 // Theme: host tokens with fallbacks (desktop --text/--line/--brand, mobile
 // --pm-*, visual bridge --prom-*). No hardcoded light/dark canvas.
 export const CARD_CSS = `
-.pc-card,.pc-followups{--pc-text:var(--prom-text,var(--pm-text,var(--text,currentColor)));--pc-muted:var(--prom-muted,var(--pm-muted,var(--muted,#8a8a8a)));--pc-line:var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));--pc-surface:var(--prom-surface,var(--pm-surface,var(--panel,rgba(127,127,127,.06))));--pc-soft:var(--prom-surface-secondary,var(--pm-bg-soft,var(--panel-2,rgba(127,127,127,.11))));--pc-accent:var(--prom-accent,var(--pm-orange,var(--brand,#ff7a1a)));--pc-ok:var(--prom-success,#22a06b);--pc-bad:var(--prom-danger,#e5484d)}
-.pc-inline-card{margin:12px 0}.pc-inline-card>.pc-card,.pc-inline-card>*:first-child{margin-top:0}.pc-card{display:block;margin:10px 0;max-width:100%;border:1px solid var(--pc-line);border-radius:16px;background:var(--pc-surface);color:var(--pc-text);padding:14px;font-size:14px;line-height:1.45;overflow:hidden;box-sizing:border-box}
-.pc-card *{box-sizing:border-box}
-.pc-card svg{width:16px;height:16px;flex:none;vertical-align:-3px}
+.pcx,.pc-followups{--pc-text:var(--prom-text,var(--pm-text,var(--text,currentColor)));--pc-muted:var(--prom-muted,var(--pm-muted,var(--muted,#8a8a8a)));--pc-line:var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));--pc-surface:var(--prom-surface,var(--pm-surface,var(--panel,rgba(127,127,127,.06))));--pc-soft:var(--prom-surface-secondary,var(--pm-bg-soft,var(--panel-2,rgba(127,127,127,.11))));--pc-accent:var(--prom-accent,var(--pm-orange,var(--brand,#ff7a1a)));--pc-ok:var(--prom-success,#22a06b);--pc-bad:var(--prom-danger,#e5484d)}
+.pc-inline-card{margin:12px 0}.pc-inline-card>.pcx,.pc-inline-card>*:first-child{margin-top:0}.pcx{display:block;margin:10px 0;max-width:100%;border:1px solid var(--pc-line);border-radius:16px;background:var(--pc-surface);color:var(--pc-text);padding:14px;font-size:14px;line-height:1.45;overflow:hidden;box-sizing:border-box}
+.pcx *{box-sizing:border-box}
+.pcx svg{width:16px;height:16px;flex:none;vertical-align:-3px}
 .pc-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
 .pc-kicker{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--pc-muted)}
-.pc-title{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pc-title.big{font-size:18px;white-space:normal}
+.pcx-title{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcx-title.big{font-size:18px;white-space:normal}
 .pc-head .pc-icon-btn,.pc-head .pc-count{margin-left:auto}
 .pc-count{font-size:12px;color:var(--pc-muted)}
 .pc-muted{color:var(--pc-muted);font-size:12.5px}
@@ -123,7 +123,7 @@ export const CARD_CSS = `
 .pc-player{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
 .pc-headshot{width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--pc-soft)}
 .pc-subhead{margin:12px 0 6px;font-size:12px;color:var(--pc-muted);text-transform:uppercase;letter-spacing:.05em}
-.pc-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px}
+.pcx-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px}
 .pc-stat{background:var(--pc-soft);border-radius:10px;padding:8px;text-align:center}.pc-stat-v{font-size:20px;font-weight:700}.pc-stat-k{font-size:11px;color:var(--pc-muted);font-weight:600}
 .pc-more{display:inline-block;margin-top:10px;font-size:13px;color:var(--pc-accent);text-decoration:none}
 /* places */
@@ -144,7 +144,7 @@ export const CARD_CSS = `
 .pc-pros{margin:2px 0;padding-left:18px;font-size:13px}
 .pc-offers{display:grid;gap:4px}.pc-offer{display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--pc-line);border-radius:8px;color:var(--pc-text);text-decoration:none;font-size:13px}
 .pc-buy{justify-self:start;margin-top:4px}
-@media (max-width:520px){.pc-product,.pc-product.hero{grid-template-columns:1fr}.pc-product-img{max-height:240px;aspect-ratio:auto;height:220px}.pc-card{padding:12px;border-radius:14px}.pc-game-score{font-size:24px}.pc-logo{width:38px;height:38px}}
+@media (max-width:520px){.pc-product,.pc-product.hero{grid-template-columns:1fr}.pc-product-img{max-height:240px;aspect-ratio:auto;height:220px}.pcx{padding:12px;border-radius:14px}.pc-game-score{font-size:24px}.pc-logo{width:38px;height:38px}}
 /* product comparison: products as columns */
 .pc-cmp-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px;-webkit-overflow-scrolling:touch}
 .pc-cmp{border-collapse:collapse;width:100%;min-width:max-content;font-size:13px}
