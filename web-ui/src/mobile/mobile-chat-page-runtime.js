@@ -4300,9 +4300,12 @@ void main() {
   }
 
   function syncMobileBackgroundSpawnDockToComposer(composerRect = null) {
-    const pinnedBottom = pinChrome({ rect: composerRect, form, page, goalStrip, planDock: mainPlanDock, agentDock: backgroundSpawnDock, jumpButton: scrollLatestBtn });
+    const pinned = pinChrome({ rect: composerRect, form, page, goalStrip, planDock: mainPlanDock, agentDock: backgroundSpawnDock, jumpButton: scrollLatestBtn });
     if (!backgroundSpawnDock) return;
+    const keyboardPinned = pinned && typeof pinned === 'object';
+    const pinnedBottom = keyboardPinned ? null : pinned;
     if (backgroundSpawnDock.hidden || !form) {
+      backgroundSpawnDock.style.removeProperty('top');
       backgroundSpawnDock.style.removeProperty('bottom');
       backgroundSpawnDock.style.removeProperty('left');
       backgroundSpawnDock.style.removeProperty('right');
@@ -4326,13 +4329,12 @@ void main() {
     const viewportTop = Number(visualViewport?.offsetTop || 0) || 0;
     const composerTop = Number(rect?.top || 0) - viewportTop;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0 || !Number.isFinite(composerTop)) return;
-    // The dock is a separate fixed surface, so derived tab-bar/composer
-    // variables can drift when the document-scrolled mobile path or the iOS
-    // keyboard changes the composer geometry. Anchor its bottom edge to the
-    // measured composer top instead of guessing from those offsets.
-    const bottom = pinnedBottom ?? Math.max(0, Math.round(viewportHeight - composerTop + 8));
-    backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
-    alignAbove(backgroundSpawnDock, Number(rect?.top) - Math.max(0, bottom - Math.round(viewportHeight - composerTop + 8)));
+    // Keyboard up: pinChrome placed it in the composer's own fixed-top space.
+    if (!keyboardPinned) {
+      const bottom = pinnedBottom ?? Math.max(0, Math.round(viewportHeight - composerTop + 8));
+      backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
+      alignAbove(backgroundSpawnDock, Number(rect?.top) - Math.max(0, bottom - Math.round(viewportHeight - composerTop + 8)));
+    }
 
     // The resting composer uses a responsive chrome inset, while a focused
     // composer expands to the 10px edge inset. Lock the expanded background
@@ -5761,7 +5763,7 @@ void main() {
       const target = _pmKbVisibleComposerTop(rect.height);
       if (target == null) return;
       const drift = target - Math.round(rect.top);
-      if (Math.abs(drift) < 2) return;
+      if (Math.abs(drift) < 2) { syncMobileBackgroundSpawnDockToComposer(); return; }
       const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
       if (!Number.isFinite(currentTop)) return;
       composer.style.setProperty('top', `${Math.max(0, Math.round(currentTop + drift))}px`, 'important');

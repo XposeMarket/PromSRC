@@ -40,4 +40,25 @@ const visual = mkEl(78, 400); alignBottomAbove(visual, 330); assert.equal(visual
 // Layout-anchored: the same bottom:78 would sit at 722, behind the keyboard; must be corrected.
 const layout = mkEl(78, 800); alignBottomAbove(layout, 330); assert.equal(layout.getBoundingClientRect().bottom, 322);
 assert.match(src, /alignAbove\(backgroundSpawnDock,/, 'agent dock must be measured-aligned');
+
+// Keyboard up: docks share the composer's fixed `top` space (no viewport math),
+// so they cannot float 400px high (IMG_0217) or slide under it (IMG_0218).
+const { pinRuntimeChrome, keyboardComposerTop } = await import('../web-ui/src/mobile/mobile-runtime-chrome.js');
+const mkDock = (h) => {
+  const s = new Map();
+  return { hidden: false, classList: { contains: () => false }, style: { getPropertyValue: (k) => s.get(k) || '', setProperty: (k, v) => s.set(k, v), removeProperty: (k) => s.delete(k) }, getBoundingClientRect: () => ({ height: h }), s };
+};
+const composer = mkDock(120); composer.style.setProperty('position', 'fixed'); composer.style.setProperty('top', '450px');
+composer.classList = { contains: () => false };
+assert.equal(keyboardComposerTop(composer), 450);
+const agent = mkDock(34), plan = mkDock(30), jump = mkDock(36); plan.hidden = true;
+const page = { classList: { contains: () => false }, style: { getPropertyValue: () => '' }, querySelector: () => null };
+const out = pinRuntimeChrome({ form: composer, page, planDock: plan, agentDock: agent, jumpButton: jump });
+assert.deepEqual(out, { keyboardTop: 450 });
+assert.equal(agent.s.get('top'), '408px', 'agent pill bottom edge sits 8px above the composer top');
+assert.equal(agent.s.get('bottom'), 'auto');
+assert.equal(jump.s.get('top'), '362px', 'jump button stacks 10px above the pill (bottom 398 < pill top 408)');
+// Keyboard down (no fixed top on the composer): keyboard pins are dropped.
+composer.style.removeProperty('top');
+assert.equal(keyboardComposerTop(composer), null);
 console.log('[mobile keyboard band top] layout + visual rect spaces, settle loop, dock alignment: ok');
