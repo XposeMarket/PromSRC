@@ -300,6 +300,29 @@ export async function buildAttachmentRuntimeContext(
   };
 }
 
+// Anthropic rejects the whole request when one image's base64 exceeds 10 MB
+// (a full-size phone screenshot is ~16 MB). Every image bound for a provider
+// goes through the shared normalizer; anything still over the hard cap is dropped.
+export const PROVIDER_IMAGE_HARD_LIMIT_BASE64_CHARS = 9_500_000;
+
+export async function normalizeVisionAttachmentsForProvider<T extends { base64: string; mimeType: string }>(
+  attachments: T[] | null | undefined,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const raw = String(attachment?.base64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (!raw) continue;
+    try {
+      const normalized = await normalizeVisionImageBuffer(Buffer.from(raw, 'base64'), String(attachment.mimeType || 'image/png'), { maxBytes: VISION_TARGET_MAX_BYTES });
+      if (normalized.base64.length > PROVIDER_IMAGE_HARD_LIMIT_BASE64_CHARS) continue;
+      out.push({ ...attachment, base64: normalized.base64, mimeType: normalized.mimeType });
+    } catch {
+      if (raw.length <= PROVIDER_IMAGE_HARD_LIMIT_BASE64_CHARS) out.push({ ...attachment, base64: raw });
+    }
+  }
+  return out;
+}
+
 export function appendAttachmentContextToMessage(message: string, contextBlock: string): string {
   const base = String(message || '').trim();
   const block = String(contextBlock || '').trim();

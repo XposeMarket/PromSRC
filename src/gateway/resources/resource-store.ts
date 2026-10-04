@@ -531,6 +531,14 @@ export class ResourceStore {
   // paths keep using readState() (fresh copy) so a cached object can never be
   // edited in place and then persisted.
   private readCache: { key: string; state: ResourceState } | null = null;
+  // Batch mode: one registry read + one write for many mutations. Each
+  // attach() used to parse and rewrite the whole registry (35 MB in real
+  // installs, ~1.7 s per call), so registering 21 reply cards blocked the event
+  // loop for 35 s and the stall watchdog restarted the gateway before the
+  // finished reply was persisted.
+  private batchDepth = 0;
+  private batchState: ResourceState | null = null;
+  private batchDirty = false;
 
   constructor(options: { configDir?: string; rootDir?: string; workspacePath?: string; telemetry?: ResourceTelemetrySink } = {}) {
     const configDir = options.configDir || getConfig().getConfigDir();
@@ -548,7 +556,28 @@ export class ResourceStore {
     fs.mkdirSync(this.migrationDir, { recursive: true });
   }
 
+  batch<T>(fn: () => T): T {
+    if (this.batchDepth === 0) {
+      this.batchState = this.readState();
+      this.batchDirty = false;
+    }
+    this.batchDepth += 1;
+    try {
+      return fn();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0) {
+        const state = this.batchState;
+        const dirty = this.batchDirty;
+        this.batchState = null;
+        this.batchDirty = false;
+        if (dirty && state) this.writeState(state);
+      }
+    }
+  }
+
   private readState(): ResourceState {
+    if (this.batchState) return this.batchState;
     try {
       const raw = JSON.parse(fs.readFileSync(this.registryPath, 'utf8')) as Partial<ResourceState>;
       return sanitizeResourceState({
@@ -578,6 +607,7 @@ export class ResourceStore {
       this.readCache = null;
       return emptyState();
     }
+    if (this.batchState) return this.batchState;
     if (this.readCache && this.readCache.key === key) return this.readCache.state;
     const state = this.readState();
     this.readCache = { key, state };
@@ -586,10 +616,17 @@ export class ResourceStore {
 
   private writeState(state: ResourceState): void {
     this.readCache = null;
+    if (this.batchDepth > 0) {
+      this.batchState = state;
+      this.batchDirty = true;
+      return;
+    }
     this.ensureStorageDirs();
     state = sanitizeResourceState(state);
     const tempPath = `${this.registryPath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
+    // Compact JSON: the registry is machine-read only, and pretty-printing a
+    // 35 MB file roughly doubles serialize + write time on the event loop.
+    fs.writeFileSync(tempPath, JSON.stringify(state), 'utf8');
     fs.renameSync(tempPath, this.registryPath);
   }
 
@@ -1029,7 +1066,27 @@ export class ResourceStore {
     });
   }
 
+  /** Register many turn outputs with a single registry read/write. */
+  registerArtifacts(threadId: string, artifacts: Array<Record<string, unknown>>, actor = 'assistant'): number {
+    let count = 0;
+    this.batch(() => {
+      for (const artifact of Array.isArray(artifacts) ? artifacts : []) {
+        if (!artifact || typeof artifact !== 'object') continue;
+        try {
+          if (this.registerArtifactUnbatched(threadId, artifact, actor)) count += 1;
+        } catch {
+          // One malformed artifact must not drop the rest of the batch.
+        }
+      }
+    });
+    return count;
+  }
+
   registerArtifact(threadId: string, artifact: Record<string, unknown>, actor = 'assistant'): AttachResourceResult | undefined {
+    return this.batch(() => this.registerArtifactUnbatched(threadId, artifact, actor));
+  }
+
+  private registerArtifactUnbatched(threadId: string, artifact: Record<string, unknown>, actor = 'assistant'): AttachResourceResult | undefined {
     const artifactType = String(artifact.type || '').toLowerCase();
     const sourceItems: Array<Record<string, unknown>> = [];
     const addSourceCollection = (value: unknown) => {
@@ -1101,6 +1158,14 @@ export class ResourceStore {
   }
 
   registerSourceItems(
+    threadId: string,
+    items: Array<Record<string, unknown>>,
+    options: { actor?: string; origin?: ResourceOrigin; fetched?: boolean } = {},
+  ): AttachResourceResult[] {
+    return this.batch(() => this.registerSourceItemsUnbatched(threadId, items, options));
+  }
+
+  private registerSourceItemsUnbatched(
     threadId: string,
     items: Array<Record<string, unknown>>,
     options: { actor?: string; origin?: ResourceOrigin; fetched?: boolean } = {},

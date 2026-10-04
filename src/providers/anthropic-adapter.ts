@@ -652,7 +652,12 @@ export class AnthropicAdapter implements LLMProvider {
               return text ? { type: 'text', text } : null;
             }
             if (part.type === 'image') {
-              // Already in Anthropic native format (from buildVisionImagePart for Anthropic provider)
+              // Already in Anthropic native format (from buildVisionImagePart for Anthropic provider).
+              // One image over the 10 MB cap fails the whole request (and every
+              // later turn while it stays in history), so drop it with a note.
+              if (String(part?.source?.data || '').length > 9_900_000) {
+                return { type: 'text', text: '[Image omitted: larger than the provider 10 MB image limit.]' };
+              }
               return part;
             }
             if (part.type === 'image_url') {

@@ -132,7 +132,7 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
-import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
+import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeVisionAttachmentsForProvider, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
 import {
@@ -5304,6 +5304,12 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     sendSSE('vision_injected', { source: 'creative_references', frames: Array.isArray(creativeReferenceVisionMessage.content) ? creativeReferenceVisionMessage.content.length - 1 : 0 });
     sendSSE('info', { message: 'Creative reference frame vision injected for this turn.' });
   }
+  if (attachments && attachments.length > 0) {
+    // Shrink phone photos/screenshots before any provider sees them: one image
+    // over Anthropic's 10 MB cap fails the request with a 400 and no reply.
+    attachments = await normalizeVisionAttachmentsForProvider(attachments);
+  }
+  attachments = attachments || [];
   const shouldUseXaiVisionSidecar =
     attachments && attachments.length > 0
     && !currentModelCapabilities.hasVision
@@ -6942,7 +6948,7 @@ RULES:
       : { block: '', visionAttachments: [], attachmentCount: 0 };
     const steerBlock = buildChatSteerContextBlock(steer);
     const steerText = appendAttachmentContextToMessage(steerBlock, previewContext.block);
-    const steerVisionAttachments = [
+    const steerVisionAttachments = await normalizeVisionAttachmentsForProvider([
       ...(Array.isArray(steer.attachments) ? steer.attachments : []),
       ...(Array.isArray(previewContext.visionAttachments) ? previewContext.visionAttachments : []),
     ]
@@ -6952,7 +6958,7 @@ RULES:
         name: String(attachment?.name || attachment?.mimeType || 'attachment').trim() || 'attachment',
       }))
       .filter((attachment) => attachment.base64 && attachment.mimeType.startsWith('image/'))
-      .slice(0, 4);
+      .slice(0, 4));
 
     const shouldUseSteerXaiVisionSidecar =
       steerVisionAttachments.length > 0
@@ -8741,13 +8747,20 @@ RULES:
           ...(finalGeneratedVideos as any[]),
           ...(finalCanvasFiles as any[]),
         ];
-        for (const output of outputResources.slice(0, 80)) {
-          if (output && typeof output === 'object') resourceStore.registerArtifact(sessionId, output, 'assistant');
-        }
-        turnTiming.mark('chat_resources_outputs_registered', {
-          durationMs: Date.now() - resourceOutputStartedAt,
-          count: Math.min(outputResources.length, 80),
-        });
+        // One registry read/write for the whole turn, deferred past the reply
+        // commit: per-artifact writes of a 35 MB registry blocked the event loop
+        // for 35 s on a 21-card reply, and the stall watchdog restarted the
+        // gateway before the finished reply was saved (push sent, row missing).
+        const turnOutputs = outputResources.slice(0, 80).filter((output) => output && typeof output === 'object');
+        setTimeout(() => {
+          const registerStartedAt = Date.now();
+          try {
+            const count = resourceStore.registerArtifacts(sessionId, turnOutputs as any[], 'assistant');
+            turnTiming.mark('chat_resources_outputs_registered', { durationMs: Date.now() - registerStartedAt, count, deferred: true });
+          } catch (error: any) {
+            console.warn('[Resources] Turn output registration skipped:', redactResourceText(error?.message || error));
+          }
+        }, 250);
       } catch (error: any) {
         turnTiming.mark('chat_resources_outputs_failed', { durationMs: Date.now() - resourceOutputStartedAt });
         console.warn('[Resources] Turn output registration skipped:', redactResourceText(error?.message || error));

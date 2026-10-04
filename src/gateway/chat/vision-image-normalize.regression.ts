@@ -32,6 +32,17 @@ async function main() {
   const junkOut = await normalizeVisionImageBuffer(junk, 'image/png');
   assert.equal(junkOut.base64, junk.toString('base64'));
 
+  // Provider-bound attachments: a 16 MB phone screenshot (the exact failing
+  // case: Anthropic 400 "image exceeds 10 MB maximum: 15958112 bytes") must come
+  // back under the provider cap.
+  const { normalizeVisionAttachmentsForProvider, PROVIDER_IMAGE_HARD_LIMIT_BASE64_CHARS } = await import('./attachment-context');
+  const noisy = await sharp({ create: { width: 1290, height: 2796, channels: 3, noise: { type: 'gaussian', mean: 128, sigma: 60 } } }).png({ compressionLevel: 0 }).toBuffer();
+  assert.ok(noisy.toString('base64').length > 10_485_760, `fixture must exceed the 10 MB cap (${noisy.length})`);
+  const [fixed] = await normalizeVisionAttachmentsForProvider([{ base64: noisy.toString('base64'), mimeType: 'image/png', name: 'IMG_0189.png' }]);
+  assert.ok(fixed, 'oversized screenshot must be kept, not dropped');
+  assert.ok(fixed.base64.length < PROVIDER_IMAGE_HARD_LIMIT_BASE64_CHARS, `normalized ${fixed.base64.length}`);
+  assert.equal(fixed.mimeType, 'image/jpeg');
+
   console.log('vision-image-normalize regression: ok');
 }
 
