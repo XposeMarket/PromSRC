@@ -2635,7 +2635,6 @@ function isWeakProductCandidate(item: SearchResultItem, title: string, price?: s
   const url = String(item.url || '').toLowerCase();
   const text = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
   if (!title || title.length < 8) return true;
-  if (/\/(?:search|s|b)\?/.test(url) && !price && !/\b(?:out of 5|stars?|reviews?|ratings?)\b/i.test(text)) return true;
   if (/\b(?:customer service|help|returns policy|gift cards|sell on)\b/i.test(text)) return true;
   if (isNonProductPage(item.url, item.title || '', price)) return true;
   return false;
@@ -2650,6 +2649,9 @@ export function isNonProductPage(url: string, title: string, price?: string): bo
   let pathname = '';
   try { const u = new URL(String(url || '')); host = u.hostname.replace(/^www\./, ''); pathname = u.pathname.toLowerCase(); } catch { return false; }
   if (NON_PRODUCT_HOSTS.test(host)) return true;
+  // Search/listing pages (amazon.com/foo/s?k=..., /search?q=, /b?node=) are never
+  // a single buyable product, even when the snippet carries star ratings.
+  if (/\/(?:search|s|b)\?|[?&](?:k|q|query|keywords|_nkw|searchterm)=/i.test(String(url || ''))) return true;
   if (/\/(?:reviews?\/best|best-|blog|articles?|news|guides?|watch|video)s?(?:\/|-|$)/.test(pathname) && !/\/(?:dp|gp\/product|product|products|p|ip|itm|sku)\//.test(pathname)) return true;
   if (!price && /^(?:the\s+)?\d*\s*best\b|\b(?:review|reviews|vs\.?|versus|tested|buying guide|top \d+)\b/i.test(String(title || ''))) return true;
   return false;

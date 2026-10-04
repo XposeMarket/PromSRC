@@ -15,6 +15,12 @@ import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
 import './startup-async-diagnostics.js';
 
+// Background git reads (build-status, workspace session, coding context) run
+// `git status` with short timeouts. Without this, status takes .git/index.lock
+// to refresh stat data, and a timeout kill leaves a stale empty lock that blocks
+// the next pull/commit. Optional locks only affect read commands; writes still lock.
+if (!process.env.GIT_OPTIONAL_LOCKS) process.env.GIT_OPTIONAL_LOCKS = '0';
+
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';

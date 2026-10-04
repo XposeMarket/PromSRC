@@ -20,6 +20,8 @@ assert.deepEqual(normalizeChartSeriesArgs({}), []);
 // 2. Shopping: reviews/videos out, real product pages in.
 assert.equal(isNonProductPage('https://www.nytimes.com/wirecutter/reviews/best-usb-c-cables/', 'The Best USB-C Cables'), true);
 assert.equal(isNonProductPage('https://www.youtube.com/watch?v=abc', 'Anker 240W cable test'), true);
+assert.equal(isNonProductPage('https://www.amazon.com/240-watt-usb-c-cable/s?k=240+watt+usb+c+cable', '240 watt usb c cable'), true, 'search listing pages are not products');
+assert.equal(isNonProductPage('https://www.walmart.com/search?q=usb+c+cable', 'usb c cable'), true);
 assert.equal(isNonProductPage('https://www.amazon.com/dp/B0C1234567', 'Anker USB-C to USB-C Cable 240W', '$12.99'), false);
 assert.equal(isNonProductPage('https://www.bestbuy.com/site/anker-cable/6512345.p', 'Anker 240W USB-C Cable', '$19.99'), false);
 
