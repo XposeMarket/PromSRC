@@ -2568,12 +2568,20 @@ function extractRating(text: string): number | undefined {
   return Number.isFinite(n) && n >= 0 && n <= 5 ? n : undefined;
 }
 
-function extractReviewCount(text: string): number | undefined {
-  const m = String(text || '').match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i)
-    || String(text || '').match(/\((?:\s*)?([0-9][0-9,]*)\s*\)\s*(?:reviews?|ratings?)?/i);
+// Largest plausible review count for one listing; anything bigger is an ID,
+// SKU, or timestamp that happened to sit in parentheses.
+const MAX_PLAUSIBLE_REVIEWS = 10_000_000;
+
+export function extractReviewCount(text: string): number | undefined {
+  const value = String(text || '');
+  // A bare "(1234)" only counts as a review count when it follows a star rating
+  // or is followed by the word reviews/ratings; otherwise it is usually an ID.
+  const m = value.match(/\b([0-9][0-9,]*)\s+(?:reviews?|ratings?)\b/i)
+    || value.match(/\(\s*([0-9][0-9,]*)\s*\)\s*(?:reviews?|ratings?)\b/i)
+    || value.match(/(?:\b[0-5](?:\.[0-9])?\s*(?:out of 5|stars?|\u2605)?)\s*\(\s*([0-9][0-9,]*)\s*\)/i);
   if (!m) return undefined;
   const n = Number(m[1].replace(/,/g, ''));
-  return Number.isFinite(n) ? n : undefined;
+  return Number.isFinite(n) && n > 0 && n <= MAX_PLAUSIBLE_REVIEWS ? n : undefined;
 }
 
 function extractBadge(text: string): string | undefined {
@@ -2965,7 +2973,7 @@ function parseJsonLdProductMetadata(html: string): Partial<ShoppingProductResult
           const ratingValue = Number(asFirstString(aggregate.ratingValue));
           const reviewCount = Number(String(asFirstString(aggregate.reviewCount) || asFirstString(aggregate.ratingCount) || '').replace(/,/g, ''));
           if (Number.isFinite(ratingValue) && ratingValue >= 0 && ratingValue <= 5) meta.rating ||= ratingValue;
-          if (Number.isFinite(reviewCount) && reviewCount > 0) {
+          if (Number.isFinite(reviewCount) && reviewCount > 0 && reviewCount <= MAX_PLAUSIBLE_REVIEWS) {
             meta.reviews ||= reviewCount;
             meta.reviewCount ||= reviewCount;
           }

@@ -3,7 +3,14 @@
 // connectors whose stale "healthy" record outlived a dead login.
 import assert from 'node:assert/strict';
 import { normalizeChartSeriesArgs, formatStructuredMemoryHits } from './core-tool-normalizers.js';
-import { isNonProductPage } from '../../tools/web.js';
+import { isNonProductPage, extractReviewCount } from '../../tools/web.js';
+
+// Review counts: IDs in parentheses are not review counts.
+assert.equal(extractReviewCount('TrueSpec cable (7466614980711) Sale $26.99'), undefined, 'bare ID in parens is not a review count');
+assert.equal(extractReviewCount('4.6 out of 5 stars (12,345)'), 12345);
+assert.equal(extractReviewCount('Rated 4.8 (69)'), 69);
+assert.equal(extractReviewCount('1,204 ratings'), 1204);
+assert.equal(extractReviewCount('99999999999 reviews'), undefined, 'implausible counts dropped');
 import { describeXApiError } from '../../extensions/bundled/connectors/x/x-api-client.js';
 import { PrometheusExtensionRuntimeRegistry } from '../../extensions/runtime-registry.js';
 
