@@ -179,7 +179,8 @@ function renderProductComparison(a) {
     return `<th><div class="pc-cmp-prod">${p.badge ? `<span class="pc-badge-pick">${esc(p.badge)}</span>` : ''}${p.imageUrl ? `<div class="pc-cmp-img">${img(p.imageUrl, p.title)}</div>` : ''}${name}${p.price ? `<span class="pc-cmp-price">${esc(p.price)}</span>` : ''}${stars(p.rating)}</div></th>`;
   }).join('');
   const rows = specs.map((k) => `<tr><th scope="row">${esc(k)}</th>${products.map((p) => `<td>${cell(p.specs?.[k])}</td>`).join('')}</tr>`).join('');
-  return wrap('cmp', a, `${head('Compare', a.title || '')}<div class="pc-cmp-scroll"><table class="pc-cmp"><thead><tr><th></th>${headCells}</tr></thead><tbody>${rows}</tbody></table></div>`);
+  // Wrapper kind must not be 'cmp': .pc-cmp is the table class (min-width:max-content).
+  return wrap('compare', a, `${head('Compare', a.title || '')}<div class="pc-cmp-scroll"><table class="pc-cmp"><thead><tr><th></th>${headCells}</tr></thead><tbody>${rows}</tbody></table></div>`);
 }
 
 export const DATA_CARD_TYPES = ['currency', 'clock', 'video', 'gallery', 'news', 'sports_game', 'sports_player', 'sports_standings', 'places', 'product', 'product_comparison'];
