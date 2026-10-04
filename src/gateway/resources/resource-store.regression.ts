@@ -115,6 +115,7 @@ try {
   const privacyContent = store.getThreadResourceContent('thread_privacy', secretResource.resource.id, { maxChars: 2_000 });
   const privacySummary = store.listThreadResources('thread_privacy')[0];
   const privacyContext = store.getContext('thread_privacy', 'private page', { explicitResourceIds: [secretResource.resource.id] });
+  store.flushSync();
   const registryText = fs.readFileSync(path.join(root, 'resources', 'registry.json'), 'utf8');
   const telemetryText = JSON.stringify(store.getTelemetry());
   assert.ok(!registryText.includes(secret));

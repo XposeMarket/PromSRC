@@ -32,13 +32,46 @@ async function main() {
   // Repeated reads with no file change must still be correct.
   assert.equal(store.getContext(thread, 'alpha').resourceIds.length, 1);
 
-  // Simulate another process rewriting the registry: drop all links.
+  // Writes are coalesced: nothing hits disk until the debounce or an explicit
+  // flush, and the in-memory state is already authoritative.
   const registryPath = path.join(rootDir, 'registry.json');
+  const t0 = Date.now();
+  for (let i = 0; i < 40; i += 1) {
+    store.attach({
+      threadId: thread, kind: 'link', title: `burst ${i}`, origin: 'tool_observation' as any,
+      locator: { type: 'url', url: `https://example.com/burst/${i}` } as any, actor: 'assistant' as any,
+    } as any);
+  }
+  assert.ok(Date.now() - t0 < 2000, 'a burst of attaches must not rewrite the registry each time');
+  assert.equal(store.listThreadResources(thread).length, 41, 'burst attaches visible before flush');
+  store.flushSync();
+  const flushed = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  assert.equal(flushed.links.filter((link: any) => link.threadId === thread).length, 41, 'flush persists every coalesced write');
+
+  // Simulate another process rewriting the registry: drop all links.
   const raw = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
   raw.links = [];
   await new Promise((r) => setTimeout(r, 20));
   fs.writeFileSync(registryPath, JSON.stringify(raw), 'utf8');
   assert.equal(store.getContext(thread, 'alpha').resourceIds.length, 0, 'external rewrite must invalidate the read cache');
+
+  // Growth is bounded: repeated refreshes of one resource keep only the newest
+  // versions (plus the current one) and prune their snapshot files.
+  let last: any;
+  for (let i = 0; i < 30; i += 1) {
+    last = store.attach({
+      threadId: 'cache_thread_2', kind: 'task', title: 'journal', mimeType: 'text/plain', origin: 'task_journal' as any,
+      locator: { type: 'task', taskId: 'task_1', canonical: 'task:task_1' } as any, content: `journal v${i}`, snapshotKind: 'text', actor: 'task-runner' as any,
+    } as any);
+  }
+  store.flushSync();
+  const pruned = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  const versions = pruned.versions.filter((v: any) => v.resourceId === last.resource.id);
+  assert.ok(versions.length <= 20, `versions bounded, got ${versions.length}`);
+  assert.ok(versions.some((v: any) => v.id === last.resource.currentVersionId), 'current version kept');
+  await new Promise((r) => setTimeout(r, 100));
+  const snapshots = fs.readdirSync(path.join(rootDir, 'content')).filter((f) => versions.every((v: any) => !String(v.snapshotPath || '').includes(f)));
+  assert.ok(snapshots.length <= 2, `pruned snapshot files removed, ${snapshots.length} orphan(s) left`);
 
   console.log('resource-store-read-cache regression: ok');
 }
