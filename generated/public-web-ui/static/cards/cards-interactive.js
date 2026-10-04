@@ -5,6 +5,7 @@
  * loses progress: state lives in the shared card-state store keyed by card id.
  */
 import { esc, encodeCardData, parseCardBody, cardError, ICON } from './card-utils.js';
+import { TOOL_FENCES, renderToolCard } from './cards-tools.js';
 
 function shell(kind, id, spec, inner, extraClass = '') {
   return `<div class="pc-card pc-${kind} ${extraClass}" data-pc-kind="${kind}" data-pc-id="${esc(id)}" data-card-json="${encodeCardData(spec)}">${inner}</div>`;
@@ -118,13 +119,22 @@ function renderReminder(id, spec, st) {
   return shell('reminder', id, spec, `<div class="pc-rem"><span class="pc-rem-icon">${ICON.bell}</span><div><div class="pc-title">${esc(title)}</div>${when ? `<div class="pc-muted">${esc(when)}</div>` : ''}${spec?.details ? `<div class="pc-muted">${esc(spec.details)}</div>` : ''}</div></div>${status}${actions}`);
 }
 
-export const INTERACTIVE_FENCES = ['quiz', 'flashcards', 'poll', 'writing', 'followups', 'reminder'];
+export const INTERACTIVE_FENCES = ['quiz', 'flashcards', 'poll', 'writing', 'followups', 'reminder', ...TOOL_FENCES];
+
+// "5 mi to km" / "72 F in C" plain-text bodies for ```convert.
+function parseConvertText(body) {
+  const m = String(body || '').trim().match(/^(-?[\d.,]+)\s*([^\d\s][^]*?)\s+(?:to|in|->|=)\s+(.+)$/i);
+  return m ? { value: Number(m[1].replace(/,/g, '')), from: m[2].trim(), to: m[3].trim() } : null;
+}
 
 /** Render one fenced card. `state` is the persisted per-card state object. */
 export function renderInteractiveCard(kind, id, body, state = {}) {
   let raw = parseCardBody(body);
   if (kind === 'followups' && !raw) raw = { items: lines(body) };
   if (kind === 'writing' && !raw) raw = { text: String(body || '').trim() };
+  if (kind === 'calculator' && (raw == null || typeof raw !== 'object')) raw = { expression: String(body || '').trim() };
+  if (kind === 'convert' && (raw == null || typeof raw !== 'object')) raw = parseConvertText(body);
+  if (TOOL_FENCES.includes(kind)) return raw ? renderToolCard(kind, id, raw) : cardError(kind, 'Use {"value":5,"from":"mi","to":"km"}.');
   if (!raw) return cardError(kind, 'The card body is not valid JSON.');
   switch (kind) {
     case 'quiz': return renderQuiz(id, normalizeQuiz(raw), state);

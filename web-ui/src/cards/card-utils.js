@@ -85,7 +85,9 @@ export function sendCardFollowUp(prompt) {
 
 /** Visible, non-crashing error card used whenever a body cannot be rendered. */
 export function cardError(kind, message) {
-  return `<div class="pc-card pc-error" role="note"><div class="pc-error-title">Couldn't render ${esc(kind)} card</div><div class="pc-muted">${esc(message || 'The card data was malformed.')}</div></div>`;
+  const reason = String(message || 'The card data was malformed.');
+  const fix = `The ${kind} card you sent failed to render (${reason}). Please resend it with a valid ${kind} body.`;
+  return `<div class="pc-card pc-error" role="note"><div class="pc-error-title">Couldn't render ${esc(kind)} card</div><div class="pc-muted">${esc(reason)}</div><div class="pc-actions"><button type="button" class="pc-chip" data-pc-act="send" data-prompt="${esc(fix)}">Ask Prom to fix it</button></div></div>`;
 }
 
 export const ICON = {

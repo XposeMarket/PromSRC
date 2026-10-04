@@ -5688,6 +5688,25 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
     };
   }
 
+  if (name === 'show_comparison' && Array.isArray(args?.products) && args.products.length >= 2) {
+    // Product-column mode: each product is a column (image, price, link), each
+    // spec is a row. Rendered by the shared cards/ runtime on every surface.
+    const products = args.products.filter((p: any) => p && typeof p === 'object').slice(0, 5).map((p: any) => ({
+      title: String(p.title || p.name || '').trim(),
+      imageUrl: p.imageUrl ? String(p.imageUrl) : (p.image ? String(p.image) : ''),
+      url: String(p.url || p.productUrl || ''),
+      price: p.price != null ? String(p.price) : '',
+      rating: Number.isFinite(Number(p.rating)) ? Number(p.rating) : undefined,
+      badge: p.badge ? String(p.badge) : '',
+      specs: p.specs && typeof p.specs === 'object' && !Array.isArray(p.specs) ? p.specs : {},
+    })).filter((p: any) => p.title);
+    if (products.length < 2) return { name, args, result: 'show_comparison products mode needs at least 2 products with a title.', error: true };
+    const specKeys = Array.isArray(args?.specs) && args.specs.length
+      ? args.specs.map(String)
+      : [...new Set(products.flatMap((p: any) => Object.keys(p.specs)))];
+    const artifact = { id: `product-comparison-${Date.now()}`, type: 'product_comparison' as const, title: args?.title ? String(args.title) : undefined, products, specs: specKeys.slice(0, 20) };
+    return { name, args, result: `Product comparison ready: ${products.length} products x ${artifact.specs.length} specs.`, error: false, extra: { richArtifacts: [artifact] } };
+  }
   if (name === 'show_comparison') {
     const columns = (Array.isArray(args?.columns) ? args.columns : [])
       .map((c: any) => (typeof c === 'string' ? { key: c, label: c } : { key: String(c?.key || c?.label || ''), label: String(c?.label || c?.key || '') }))

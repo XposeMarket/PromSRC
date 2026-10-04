@@ -8,6 +8,8 @@ import { renderInteractiveCard, reduceInteractiveCard, normalizeQuiz } from '../
 // @ts-ignore web-ui JS module
 import { renderDataCard, youTubeId } from '../../web-ui/src/cards/cards-data.js';
 // @ts-ignore web-ui JS module
+import * as tools from '../../web-ui/src/cards/cards-tools.js';
+// @ts-ignore web-ui JS module
 import { extractCardFences, citeChips, extractInlineCards, withoutInlineCards } from '../../web-ui/src/cards/index.js';
 
 // inline citation chips: [1]-style and hostname links become pills, prose links untouched
@@ -34,6 +36,34 @@ const ev = mapEspnEvent({ id: '1', name: 'A at B', status: { type: { state: 'in'
   { homeAway: 'home', score: '80', team: { abbreviation: 'B', shortDisplayName: 'Bees' }, linescores: [{ value: 20 }, { value: 30 }] },
   { homeAway: 'away', score: '69', team: { abbreviation: 'A', shortDisplayName: 'Ants' }, linescores: [{ value: 23 }] }] }] }, 'basketball');
 assert.equal(ev.home.score, '80'); assert.equal(ev.away.abbr, 'A'); assert.deepEqual(ev.home.linescores, [20, 30]);
+
+// calculator: safe parser (no eval), precedence, unicode ops, functions, rejects code
+assert.equal(tools.evaluateExpression('(12.5*4)+3^2'), 59);
+assert.equal(tools.evaluateExpression('2 + 3 * 4'), 14);
+assert.equal(tools.evaluateExpression('-2^2'), -4);
+assert.equal(tools.evaluateExpression('10 ÷ 4 − 1'), 1.5);
+assert.equal(tools.evaluateExpression('1,250 * 2'), 2500);
+assert.equal(tools.evaluateExpression('sqrt(16) + 2pi') > 10.28, true);
+assert.equal(tools.evaluateExpression('50%'), 0.5);
+assert.throws(() => tools.evaluateExpression('alert(1)'));
+assert.throws(() => tools.evaluateExpression('constructor'));
+assert.throws(() => tools.evaluateExpression('1/0'));
+assert.ok(renderInteractiveCard('calculator', 'c1', '{"expression":"6*7"}', {}).includes('= 42'));
+assert.ok(renderInteractiveCard('calculator', 'c2', '3+4', {}).includes('= 7'), 'plain-text calculator body');
+// unit converter: aliases, affine temperature, plain-text body, unknown units
+assert.equal(Math.round(tools.convertUnit(5, 'mi', 'km', 'length') * 1000) / 1000, 8.047);
+assert.equal(Math.round(tools.convertUnit(212, 'F', 'C', 'temperature')), 100);
+assert.deepEqual(tools.resolveUnit('pounds'), { category: 'mass', unit: 'lb' });
+assert.deepEqual(tools.resolveUnit('MB'), { category: 'data', unit: 'MB' });
+const conv = renderInteractiveCard('convert', 'u1', '{"value":5,"from":"miles","to":"km"}', {});
+assert.ok(conv.includes('8.04672') && conv.includes('value="mi" selected'), 'converter renders result');
+assert.ok(renderInteractiveCard('convert', 'u2', '72 F to C', {}).includes('22.2'), 'plain-text converter body');
+assert.ok(renderInteractiveCard('convert', 'u3', '{"value":1,"from":"zorks","to":"blips"}', {}).includes("Couldn't render convert"));
+assert.ok(renderInteractiveCard('quiz', 'x', '{not json', {}).includes('Ask Prom to fix it'), 'error cards offer a fix');
+// product comparison: products as columns, escaped
+const pcmp = renderDataCard({ type: 'product_comparison', products: [{ title: 'A <x>', price: '$1', specs: { Weight: '1 lb' } }, { title: 'B', specs: { Weight: '2 lb', ANC: true } }], specs: ['Weight', 'ANC'] });
+assert.ok(pcmp.includes('pc-cmp') && pcmp.includes('A &lt;x&gt;') && pcmp.includes('✓'), 'product comparison renders');
+assert.ok(renderDataCard({ type: 'product_comparison', products: [{ title: 'only' }] }).includes("Couldn't render"));
 
 // interactive cards: quiz flow, answer letter normalization, escaping
 const quizSpec = { title: 'T', questions: [{ question: 'Q <b>1</b>', options: ['a', 'b'], answer: 'B', hint: 'h' }, { question: 'Q2', options: ['x', 'y', 'z'], answer: 0 }] };

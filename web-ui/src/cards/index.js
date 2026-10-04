@@ -10,6 +10,7 @@ export { INTERACTIVE_FENCES, DATA_CARD_TYPES, renderDataCard, installPromCards }
 
 const CARD_FENCE_RE = new RegExp('```(' + INTERACTIVE_FENCES.join('|') + ')[ \\t]*\\n([\\s\\S]*?)```', 'g');
 const CARD_OPEN_RE = new RegExp('```(' + INTERACTIVE_FENCES.join('|') + ')[ \\t]*\\n[\\s\\S]*$');
+const CARD_FENCE_TEST_RE = new RegExp('```(' + INTERACTIVE_FENCES.join('|') + ')[ \\t]*\\n');
 
 function hashId(kind, body, ordinal) {
   const input = `${kind}\0${ordinal}\0${body}`;
@@ -83,7 +84,7 @@ export function extractInlineCards(text, placeholder, artifacts, renderArtifact)
 }
 
 export function hasCardFence(text) {
-  return /```(quiz|flashcards|poll|writing|followups|reminder)[ \t]*\n/.test(String(text || ''));
+  return CARD_FENCE_TEST_RE.test(String(text || ''));
 }
 
 /**

@@ -9,6 +9,7 @@
 import { decodeCardData, sendCardFollowUp, esc } from './card-utils.js';
 import { renderInteractiveCard, reduceInteractiveCard } from './cards-interactive.js';
 import { CARD_CSS } from './cards-styles.js';
+import { updateConvert, updateCalculator, pressCalculatorKey } from './cards-tools.js';
 
 const STATE_PREFIX = 'prom-card-state:';
 const STYLE_ID = 'prom-cards-style';
@@ -119,6 +120,12 @@ function onClick(event) {
     btn.replaceWith(frame);
     return;
   }
+  if (act === 'calc-key' && card) { pressCalculatorKey(card, btn.getAttribute('data-k')); return; }
+  if (act === 'unit-swap' && card) {
+    const from = card.querySelector('[data-pc-unit="from"]'); const to = card.querySelector('[data-pc-unit="to"]');
+    if (from && to) { const v = from.value; from.value = to.value; to.value = v; updateConvert(card); }
+    return;
+  }
   if (act === 'lightbox' && card) { const items = decodeCardData(card) || []; if (items.length) openLightbox(items, Number(btn.getAttribute('data-i')) || 0); return; }
   if (act === 'fx-swap' && card) {
     const from = card.querySelector('[data-pc-fx="from"]'); const to = card.querySelector('[data-pc-fx="to"]');
@@ -150,7 +157,9 @@ function onClick(event) {
 
 function onInput(event) {
   const field = event.target.closest?.('[data-pc-fx]');
-  if (field) updateCurrency(field.closest('.pc-currency'));
+  if (field) { updateCurrency(field.closest('.pc-currency')); return; }
+  if (event.target.closest?.('[data-pc-unit]')) { updateConvert(event.target.closest('.pc-convert')); return; }
+  if (event.target.closest?.('[data-pc-calc]')) updateCalculator(event.target.closest('.pc-calc'));
 }
 
 /** Hydrate anything that needs a first paint (currency results, clocks). */

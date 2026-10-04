@@ -145,6 +145,22 @@ export const CARD_CSS = `
 .pc-offers{display:grid;gap:4px}.pc-offer{display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--pc-line);border-radius:8px;color:var(--pc-text);text-decoration:none;font-size:13px}
 .pc-buy{justify-self:start;margin-top:4px}
 @media (max-width:520px){.pc-product,.pc-product.hero{grid-template-columns:1fr}.pc-product-img{max-height:240px;aspect-ratio:auto;height:220px}.pc-card{padding:12px;border-radius:14px}.pc-game-score{font-size:24px}.pc-logo{width:38px;height:38px}}
+/* product comparison: products as columns */
+.pc-cmp-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px;-webkit-overflow-scrolling:touch}
+.pc-cmp{border-collapse:collapse;width:100%;min-width:max-content;font-size:13px}
+.pc-cmp th,.pc-cmp td{padding:8px 10px;border-bottom:1px solid var(--pc-line);text-align:left;vertical-align:top;min-width:140px;max-width:220px}
+.pc-cmp tbody th{color:var(--pc-muted);font-weight:600;min-width:96px;position:sticky;left:0;background:var(--pc-surface)}
+.pc-cmp thead th{border-bottom:2px solid var(--pc-line)}
+.pc-cmp-prod{display:grid;gap:4px}.pc-cmp-img{height:96px;border-radius:10px;background:#fff;overflow:hidden}.pc-cmp-img img{width:100%;height:100%;object-fit:contain}
+.pc-cmp-price{font-weight:700;font-size:15px}
+/* calculator + unit converter */
+.pc-calc-expr{width:100%;font-size:18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.pc-calc-out{display:block;text-align:right;font-size:26px;font-weight:700;margin:8px 2px 10px;min-height:34px;font-variant-numeric:tabular-nums}.pc-calc-out.pending{color:var(--pc-muted)}
+.pc-keypad{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.pc-key{appearance:none;font:inherit;font-size:16px;font-weight:600;padding:10px 0;border-radius:10px;border:1px solid var(--pc-line);background:var(--pc-soft);color:var(--pc-text);cursor:pointer;touch-action:manipulation}
+.pc-key:active{transform:scale(.97)}.pc-key.op{color:var(--pc-accent)}.pc-key.eq{grid-column:1/-1;background:var(--pc-accent);border-color:transparent;color:#fff}
+.pc-error .pc-actions{margin-top:8px}
+.pc-visual-error{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 10px;padding:8px 10px;border:1px dashed var(--prom-danger,#e5484d);border-radius:12px;font-size:13px;color:var(--prom-muted,var(--pm-muted,var(--muted,#8a8a8a)))}
 /* inline citation chips */
 .pc-cite{display:inline-flex;align-items:center;gap:3px;vertical-align:1px;margin:0 2px;padding:1px 7px;border-radius:999px;background:var(--pc-soft,rgba(127,127,127,.12));color:var(--pc-muted,inherit);font-size:11.5px;font-weight:600;text-decoration:none;white-space:nowrap}
 .pc-cite:hover{color:var(--pc-accent,inherit)}.pc-cite img{width:12px;height:12px;border-radius:3px}

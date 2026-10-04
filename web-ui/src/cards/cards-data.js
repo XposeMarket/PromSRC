@@ -167,7 +167,22 @@ function renderProduct(a) {
   return wrap('product', a, `${hero ? `<div class="pc-head"><span class="pc-kicker pc-badge-pick">${esc(a.badge || 'Top pick')}</span></div>` : ''}<div class="pc-product ${hero ? 'hero' : ''}"><a class="pc-product-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${img(p.imageUrl, p.title)}</a><div class="pc-product-body"><a class="pc-link-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a><div class="pc-product-price"><strong>${esc(p.price || '')}</strong>${p.merchant || url ? `<span class="pc-muted">${esc(p.merchant || hostOf(url))}</span>` : ''}</div><div class="pc-muted">${[stars(p.rating), p.reviewCount ? `${esc(fmtNumber(p.reviewCount, 0))} reviews` : ''].filter(Boolean).join(' · ')}</div>${p.description ? `<div class="pc-muted pc-clamp3">${esc(p.description)}</div>` : ''}${pros ? `<ul class="pc-pros">${pros}</ul>` : ''}${offers ? `<div class="pc-offers">${offers}</div>` : ''}${url ? `<a class="pc-btn primary pc-buy" href="${esc(url)}" target="_blank" rel="noopener noreferrer">View at ${esc(p.merchant || hostOf(url))}</a>` : ''}</div></div>`);
 }
 
-export const DATA_CARD_TYPES = ['currency', 'clock', 'video', 'gallery', 'news', 'sports_game', 'sports_player', 'sports_standings', 'places', 'product'];
+// ── product comparison (products as columns) ──────────────────────────────
+function renderProductComparison(a) {
+  const products = (a.products || []).filter((p) => p?.title).slice(0, 5);
+  if (products.length < 2) return cardError('comparison', 'Need at least two products.');
+  const specs = (a.specs || []).slice(0, 20);
+  const cell = (v) => (v === true ? '✓' : v === false ? '—' : v == null || v === '' ? '<span class="pc-muted">—</span>' : esc(v));
+  const headCells = products.map((p) => {
+    const url = safeUrl(p.url);
+    const name = url ? `<a class="pc-link-title" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>` : `<strong>${esc(p.title)}</strong>`;
+    return `<th><div class="pc-cmp-prod">${p.badge ? `<span class="pc-badge-pick">${esc(p.badge)}</span>` : ''}${p.imageUrl ? `<div class="pc-cmp-img">${img(p.imageUrl, p.title)}</div>` : ''}${name}${p.price ? `<span class="pc-cmp-price">${esc(p.price)}</span>` : ''}${stars(p.rating)}</div></th>`;
+  }).join('');
+  const rows = specs.map((k) => `<tr><th scope="row">${esc(k)}</th>${products.map((p) => `<td>${cell(p.specs?.[k])}</td>`).join('')}</tr>`).join('');
+  return wrap('cmp', a, `${head('Compare', a.title || '')}<div class="pc-cmp-scroll"><table class="pc-cmp"><thead><tr><th></th>${headCells}</tr></thead><tbody>${rows}</tbody></table></div>`);
+}
+
+export const DATA_CARD_TYPES = ['currency', 'clock', 'video', 'gallery', 'news', 'sports_game', 'sports_player', 'sports_standings', 'places', 'product', 'product_comparison'];
 
 export function renderDataCard(a, options = {}) {
   try {
@@ -182,6 +197,7 @@ export function renderDataCard(a, options = {}) {
       case 'sports_standings': return renderSportsStandings(a);
       case 'places': return renderPlaces(a, typeof options.mapHtml === 'function' ? options.mapHtml(a) : placesMap(a));
       case 'product': return renderProduct(a);
+      case 'product_comparison': return renderProductComparison(a);
       default: return '';
     }
   } catch (error) {

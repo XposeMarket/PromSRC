@@ -707,7 +707,7 @@ window.addEventListener('message',function(event){var data=event&&event.data;if(
 window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})}};
 window.openai=window.openai||{};window.openai.widgetState=state;window.openai.setWidgetState=function(next){window.prometheusVisual.setState(next)};window.openai.sendFollowUpMessage=function(input){window.prometheusVisual.sendFollowUpMessage(input);return Promise.resolve()};
 restoreControls();document.addEventListener('input',captureControls,true);document.addEventListener('change',captureControls,true);document.addEventListener('toggle',captureControls,true);
-if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
+if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});var errs=0;addEventListener('error',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.message||'Script error').slice(0,240)})});addEventListener('unhandledrejection',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.reason&&e.reason.message||e&&e.reason||'Unhandled promise rejection').slice(0,240)})});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
   const html = String(srcdoc || '');
   return /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => `${head}${bridge}`) : `${bridge}${html}`;
 }
@@ -751,6 +751,26 @@ function installVisualMessageBridge() {
     }
     if (data.type === 'prometheus:visual-state' && data.state && typeof data.state === 'object') {
       window.dispatchEvent(new CustomEvent('prometheus:visual-state-change', { detail: { visualId, state: data.state } }));
+      return;
+    }
+    if (data.type === 'prometheus:visual-error') {
+      // A crashed mini-app gets one "Ask Prom to fix it" pill under it (handled
+      // by the cards runtime's delegated data-pc-act="send" listener).
+      const host = frame.closest('.visual-block') || frame;
+      if (host.nextElementSibling?.classList?.contains('pc-visual-error')) return;
+      const message = String(data.message || 'Script error').slice(0, 240);
+      const pill = document.createElement('div');
+      pill.className = 'pc-visual-error';
+      const label = document.createElement('span');
+      label.textContent = `This visual hit an error: ${message}`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pc-chip';
+      btn.setAttribute('data-pc-act', 'send');
+      btn.setAttribute('data-prompt', `The interactive visual you made crashed with: ${message}. Please fix it and resend the whole visual.`);
+      btn.textContent = 'Ask Prom to fix it';
+      pill.append(label, btn);
+      host.insertAdjacentElement('afterend', pill);
       return;
     }
     if (data.type === 'prometheus:visual-followup' && data.prompt) {
