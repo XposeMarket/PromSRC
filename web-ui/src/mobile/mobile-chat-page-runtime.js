@@ -3,7 +3,7 @@ import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../featu
 import { formatModelWithReasoning } from '../model-display.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz } from './mobile-restart-continuity.js';
 
 export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
   if (!steer) return true;
@@ -3518,10 +3518,10 @@ void main() {
       ).trim();
       const recoveryFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestAssistantTurn, recoveryClientRequestId);
       let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, recoveryClientRequestId)
-        || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null);
-      // The source/continuation link is deliberately non-enumerable and is
-      // lost by cache serialization. Restore it from durable workflow rows
-      // before any checkpoint or replay frame can target the frozen source.
+        || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null)
+        || revivable(status, activeThread, latestAssistantTurn, recoveryClientRequestId);
+      // Restore the non-enumerable source/continuation link (lost by cache
+      // serialization) before any frame can target the frozen source.
       const latestSteerIndex = [...activeThread].findLastIndex((turn) => turn?.role === 'user'
         && String(turn.workflowPart || '') === 'interruption'
         && /^chat_steer_/i.test(String(turn.workflowGroupId || '')));
@@ -3560,8 +3560,7 @@ void main() {
           recoverySteerBoundary = steerUser;
         }
       }
-      // A successful status request proves that the mobile client is connected
-      // again, whether the run is still active or has already completed.
+      // A status reply proves the client reconnected.
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
       const runStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0) || 0;
       const activeRunKind = String(status?.run?.kind || '').trim();
@@ -3750,6 +3749,7 @@ void main() {
           fallback: remembered,
         });
         delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
+        reviveFz(activeThread, aiTurn, recoveryClientRequestId);
         let hasLocalLiveHistory = !!(aiTurn?.streaming && (
           String(aiTurn.body?.text || aiTurn.content || '').trim()
           || (Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)
@@ -8669,6 +8669,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (aiTurn?.processEntries) aiTurn.processEntries = aiTurn.processEntries.filter((e) => !e?._pmStreamSnapshot);
     const sameLocalStream = !!aiTurn && aiTurn.streaming === true
       && String(aiTurn._streamId || run.streamId || '').trim() === streamId;
+    reviveFz(thread, aiTurn, run.clientRequestId);
     if (!sameLocalStream) {
       if (!aiTurn || aiTurn.streaming !== true) {
         aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },

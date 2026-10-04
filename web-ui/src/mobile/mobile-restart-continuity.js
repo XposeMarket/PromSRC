@@ -11,6 +11,54 @@
 export const RESTART_CONTINUITY_FLAG = '_pmRestartContinuity';
 export const RESTART_CONTINUITY_LABEL = 'Gateway restarting — turn will continue';
 
+/**
+ * True when a reconnect (snapshot or run recovery) must keep using `turn` as the
+ * live row instead of allocating a new one. A connection gap can freeze the
+ * owned row (streaming=false, workEndedAt set). Pushing a new row there and
+ * replaying from seq 0 painted the whole tool stream a second time on every
+ * reconnect. Revive only the trailing, unfinished row of the same request.
+ */
+export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
+  if (!turn || turn.role !== 'ai') return false;
+  if (turn.streaming === true) return true;
+  if (turn._pmFinalReceived === true || turn._pmServerAuthoredFinal === true || turn._pmAbortAcknowledged === true) return false;
+  if (String(turn.workflowPart || '') === 'before_interruption') return false;
+  const expected = String(clientRequestId || '').trim();
+  const owned = String(turn._clientRequestId || '').trim();
+  if (expected && owned && expected !== owned) return false;
+  const sameRequest = !!expected && expected === owned;
+  const answered = !!String(turn.body?.text || turn.content || '').trim() && Number(turn.workEndedAt || 0) > 0;
+  if (answered && !sameRequest && !turn.errorPresentation) return false;
+  const list = Array.isArray(thread) ? thread : [];
+  const index = list.lastIndexOf(turn);
+  if (index < 0) return false;
+  for (let i = index + 1; i < list.length; i += 1) {
+    if (list[i]?.role === 'user' || list[i]?.role === 'ai') return false;
+  }
+  return true;
+}
+
+
+/** `turn` when the run is active and the row is revivable for this request. */
+export function revivableTurn(status, thread, turn, clientRequestId = '') {
+  return status?.active && canReviveRecoveryTurn(thread, turn, clientRequestId) ? turn : null;
+}
+
+/** Revive `turn` in place when it is a frozen, revivable row of this request. */
+export function reviveIfFrozen(thread, turn, clientRequestId = '') {
+  if (turn && turn.streaming !== true && canReviveRecoveryTurn(thread, turn, clientRequestId)) reviveRecoveryTurn(turn);
+  return turn;
+}
+
+/** Revive a frozen live row in place (see canReviveRecoveryTurn). */
+export function reviveRecoveryTurn(turn) {
+  if (!turn) return turn;
+  turn.streaming = true;
+  delete turn.workEndedAt;
+  delete turn.workDurationMs;
+  return turn;
+}
+
 /** Drop any previously painted restart notice from an assistant turn. */
 export function clearRestartContinuityStatus(turn) {
   if (!turn || !Array.isArray(turn.processEntries)) return;
