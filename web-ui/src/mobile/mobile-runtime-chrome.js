@@ -7,6 +7,7 @@
  * composer grew. Here they are viewport-fixed and pinned to the measured
  * composer top on every layout pass, like the slash/skill popovers.
  */
+import { providerLogoKey, renderProviderLogo } from '../components/provider-logo.js';
 
 const FINISHED = /^(completed|failed|timed_out|cancell?ed)$/;
 
@@ -29,6 +30,12 @@ export function runtimeChromeBottom({ rect, page, goalStrip } = {}) {
   const paired = page?.classList?.contains('pm-runtime-goal-agent-pills-paired') === true;
   const goal = paired || !goalStrip || goalStrip.hidden ? 0 : Math.ceil(goalStrip.getBoundingClientRect?.().height || 0);
   return Math.max(0, Math.round(vh - top + 8 + css('--pm-queued-live-height') + css('--pm-tool-progress-live-height') + goal));
+}
+
+/** (logo) Name for the background-agent side chat header; the subtitle keeps model · reasoning. */
+export function agentTitleHtml(record = {}) {
+  const name = String(record.agentName || 'Background work').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return providerLogoKey(record.providerId, record.model) ? `${renderProviderLogo(record.providerId, record.model)}${name}` : name;
 }
 
 /** Pin plan pill + jump button above the composer. Returns the bottom used. */

@@ -1,7 +1,7 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { formatModelWithReasoning } from '../model-display.js';
-import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg } from './mobile-runtime-chrome.js';
+import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans } from './mobile-restart-continuity.js';
@@ -5028,7 +5028,7 @@ void main() {
     sideState.thread = [];
     sideState.sideThreadRendered = false;
     setMobileSideBusy(false);
-    if (sideTitleEl) sideTitleEl.textContent = record.agentName || 'Background work';
+    if (sideTitleEl) sideTitleEl.innerHTML = agentTitleHtml(record);
     if (sideSubtitleEl) {
       const status = String(record.status || 'running').toLowerCase();
       const statusLabel = status === 'in_progress' ? 'running' : status === 'timed_out' ? 'timed out' : status;
@@ -5708,11 +5708,22 @@ void main() {
       'z-index': '10020',
     };
     Object.entries(values).forEach(([property, value]) => {
+      if (property === 'top' && composer.style.getPropertyValue('top') && _pmKbFocusActive && _pmKbViewportMode) return;
       if (composer.style.getPropertyValue(property) !== value
         || composer.style.getPropertyPriority(property) !== 'important') {
         composer.style.setProperty(property, value, 'important');
       }
     });
+    // Re-applying the formula top on a line break / height change made the
+    // composer jump; once placed, only the measured relative repair moves it.
+    if (_pmKbFocusActive && _pmKbViewportMode) _pmKbRunComposerRepair();
+  }
+  // Layout-space top that puts the composer 4px above the keyboard edge.
+  function _pmKbVisibleComposerTop(height) {
+    const vv = window.visualViewport;
+    const vh = Number(vv?.height || 0);
+    if (!vv || vh < 120) return null;
+    return Math.round(Math.max(0, Number(vv.offsetTop || 0)) + vh - 4 - height);
   }
   let _pmKbComposerRepairRaf = 0;
   // `immediate`: repair before paint so the composer never rides a panning viewport.
@@ -5735,48 +5746,27 @@ void main() {
       if (!composer) return;
       const rect = composer.getBoundingClientRect?.();
       if (!rect || !rect.height) return;
-      _pmKbVerifyPlacement();
-      const layoutHeight = Math.max(
-        Number(window.innerHeight || 0),
-        Number(document.documentElement?.clientHeight || 0),
-      );
-      const vv = window.visualViewport;
-      const visualHeight = Math.max(0, Number(vv?.height || layoutHeight || 0));
-      const visualBottom = Math.round(Math.max(0, Number(vv?.offsetTop || 0)) + visualHeight);
-      const keyboardHeightOffset = vv ? Math.max(0, Math.round(layoutHeight - visualHeight)) : 0;
-      const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 4 : 4;
-      // Include the measured correction so this repair pass never fights it.
-      const desiredTop = Math.round(_pmKbTopCorrection) + resolveMobileKeyboardComposerTop({
-        layoutHeight,
-        visualHeight,
-        visualTop: Math.max(0, Number(vv?.offsetTop || 0)),
-        viewportMode: _pmKbViewportMode,
-        visualBottomAnchor: _pmKbVisualBottomAnchor,
-        bottom,
-        composerHeight: rect.height,
-      });
-      const drift = desiredTop - Math.round(rect.top);
+      // Purely relative: the composer's rendered rect and visualViewport share
+      // layout-viewport coordinates, but the style `top` may be anchored to
+      // either viewport depending on the iOS build. Never write an absolute
+      // layout-space value into `top` (that pushed the composer behind the
+      // keyboard once the page was scrolled down); shift the current top by the
+      // measured error so it lands just above the keyboard in both anchorings.
+      const target = _pmKbVisibleComposerTop(rect.height);
+      if (target == null) return;
+      const drift = target - Math.round(rect.top);
       if (Math.abs(drift) < 2) return;
       const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
-      let nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
-      // Relative correction; out of band means a transient rect, so use absolute.
-      const visibleTop = Math.max(0, Number(vv?.offsetTop || 0));
-      const floor = Math.round(visibleTop + visualHeight * 0.3);
-      const ceiling = Math.round(visibleTop + visualHeight - rect.height);
-      if ((nextTop < floor || nextTop > ceiling) && desiredTop >= floor && desiredTop <= ceiling + 24) nextTop = desiredTop;
-      composer.style.setProperty('top', `${nextTop}px`, 'important');
-      requestAnimationFrame(() => {
-        if (!_pmKbFocusActive || !composer.isConnected) return;
-        const after = composer.getBoundingClientRect?.();
-        const vvNow = window.visualViewport;
-        const vTop = Math.max(0, Number(vvNow?.offsetTop || 0));
-        const vHeight = Math.max(0, Number(vvNow?.height || window.innerHeight || 0));
-        const offTop = after && after.top < vTop + vHeight * 0.3;
-        const offBottom = after && after.bottom > vTop + vHeight + 4;
-        if (after && after.height && (offTop || offBottom) && desiredTop >= floor) {
-          composer.style.setProperty('top', `${desiredTop}px`, 'important');
-        }
-      });
+      if (!Number.isFinite(currentTop)) return;
+      composer.style.setProperty('top', `${Math.max(0, Math.round(currentTop + drift))}px`, 'important');
+      // One synchronous re-measure catches a non-linear anchor (e.g. the first
+      // frame after a mode flip) without waiting a frame and visibly sliding.
+      const after = composer.getBoundingClientRect?.();
+      const target2 = after?.height ? _pmKbVisibleComposerTop(after.height) : null;
+      if (target2 != null && Math.abs(target2 - Math.round(after.top)) >= 2) {
+        const top2 = Number.parseFloat(composer.style.getPropertyValue('top'));
+        if (Number.isFinite(top2)) composer.style.setProperty('top', `${Math.max(0, Math.round(top2 + target2 - after.top))}px`, 'important');
+      }
     }
   }
   // Verify the composer actually rendered inside the visible area above the

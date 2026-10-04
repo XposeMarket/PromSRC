@@ -18605,20 +18605,7 @@ body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-pane
 .pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :first-child { margin-top: 0; }
 .pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :last-child { margin-bottom: 0; }
 
-/* Matching-skills / slash suggestions float above the composer. Give them the
-   same liquid-glass material as the open composer and question cards so the
-   chat underneath doesn't show straight through. */
-/* #414 only styled the slash popover; the "Related Skills" pill is
-   .pm-skill-trigger-pill (rgba(255,255,255,.03), no blur) and stayed see-through. */
-body.pm-mobile-active .pm-composer .pm-skill-trigger-pill,
-body.pm-mobile-active .pm-chat-slash-popover {
-  background:
-    linear-gradient(to bottom, rgba(255,255,255,.022), transparent 34%, rgba(255,255,255,.006)),
-    var(--pm-lg-glass-fill-strong, var(--pm-surface-strong)) !important;
-  backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) brightness(var(--pm-lg-glass-brightness, 1)) !important;
-  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) brightness(var(--pm-lg-glass-brightness, 1)) !important;
-  border-radius: 18px;
-}
+
 
 /* Login handoff: card button + full-screen live browser viewer. */
 .pm-q-login { display: flex; flex-direction: column; gap: 6px; }
