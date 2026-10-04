@@ -232,6 +232,10 @@ import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 // size, but to avoid emitting pointless cache writes we only mark the system
 // prefix when it is comfortably large. ~1024 tokens ≈ 3500 chars at 3.5 ch/tok.
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
+// Anthropic rejects the entire request when any image exceeds its size cap.
+// Images are normally resized well under this upstream; this only catches
+// stragglers (e.g. a raw phone screenshot replayed from history).
+const ANTHROPIC_MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024;
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
@@ -652,7 +656,12 @@ export class AnthropicAdapter implements LLMProvider {
               return text ? { type: 'text', text } : null;
             }
             if (part.type === 'image') {
-              // Already in Anthropic native format (from buildVisionImagePart for Anthropic provider)
+              // Already in Anthropic native format (from buildVisionImagePart for Anthropic provider).
+              // Last-line guard: one oversized image rejects the whole request
+              // (400 "image exceeds 10 MB maximum"), so drop it with a note instead.
+              if (String(part?.source?.data || '').length > ANTHROPIC_MAX_IMAGE_BASE64_CHARS) {
+                return { type: 'text', text: '[Image omitted: too large for the model. Ask the user to resend it.]' };
+              }
               return part;
             }
             if (part.type === 'image_url') {
@@ -661,6 +670,9 @@ export class AnthropicAdapter implements LLMProvider {
               if (url.startsWith('data:')) {
                 // Base64 data URI
                 const match = url.match(/^data:(image\/\w+);base64,(.+)$/);
+                if (match && match[2].length > ANTHROPIC_MAX_IMAGE_BASE64_CHARS) {
+                  return { type: 'text', text: '[Image omitted: too large for the model. Ask the user to resend it.]' };
+                }
                 if (match) {
                   return {
                     type: 'image',

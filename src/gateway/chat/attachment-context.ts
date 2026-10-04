@@ -159,6 +159,28 @@ async function extractTextPreview(absPath: string, mimeType: string, ext: string
 // downscaled/re-encoded to fit provider limits before it is attached.
 const MAX_RAW_VISION_INPUT_BYTES = 40 * 1024 * 1024;
 
+/**
+ * Resize/re-encode raw image attachments (inline base64 from mobile/desktop,
+ * steer images) to provider limits. Phone screenshots can be 10+ MB PNGs;
+ * sending them raw makes Anthropic reject the whole request with a 400.
+ */
+export async function normalizeRuntimeVisionAttachments<T extends { base64: string; mimeType: string }>(items: T[]): Promise<T[]> {
+  const out: T[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const raw = String(item?.base64 || '').trim().replace(/^data:[^;]+;base64,/, '');
+    if (!raw) continue;
+    try {
+      const buffer = Buffer.from(raw, 'base64');
+      if (buffer.length > MAX_RAW_VISION_INPUT_BYTES) continue;
+      const normalized = await normalizeVisionImageBuffer(buffer, String(item.mimeType || 'image/png'));
+      out.push({ ...item, base64: normalized.base64, mimeType: normalized.mimeType });
+    } catch {
+      out.push({ ...item, base64: raw });
+    }
+  }
+  return out;
+}
+
 async function normalizeForVision(
   buffer: Buffer,
   mimeType: string,

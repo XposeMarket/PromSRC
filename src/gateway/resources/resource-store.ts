@@ -269,7 +269,29 @@ const MAX_TEXT_SNAPSHOT_CHARS = 600_000;
 const MAX_BINARY_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_CONTEXT_CHARS = 32_000;
 const MAX_MANIFEST_RESOURCES = 60;
-const MAX_PROVENANCE_PER_RESOURCE = 250;
+const MAX_PROVENANCE_PER_RESOURCE = 60;
+const MAX_VERSIONS_PER_RESOURCE = 20;
+const REGISTRY_FLUSH_DELAY_MS = 400;
+
+// One pending writer per registry file; a second store instance (or a reload)
+// flushes it first so nothing reads stale data. Flushed on exit too.
+const pendingRegistryWriters = new Map<string, { flushSync(): void }>();
+function flushPendingRegistryWrites(registryPath: string, except?: unknown): void {
+  const writer = pendingRegistryWriters.get(registryPath);
+  if (writer && writer !== except) {
+    try { writer.flushSync(); } catch (error: any) { console.warn('[Resources] Registry flush failed:', String(error?.message || error)); }
+  }
+}
+async function removeFilesInBatches(files: string[]): Promise<void> {
+  for (let index = 0; index < files.length; index += 64) {
+    await Promise.all(files.slice(index, index + 64).map((file) => fs.promises.rm(file, { force: true }).catch(() => undefined)));
+  }
+}
+process.once('exit', () => {
+  for (const writer of Array.from(pendingRegistryWriters.values())) {
+    try { writer.flushSync(); } catch { /* best effort on exit */ }
+  }
+});
 const RESOURCE_ID_RE = /^res_[A-Za-z0-9_-]{10,}$/;
 const MAX_TELEMETRY_EVENTS = 500;
 const MAX_CACHED_TEXT_CHARS = 64_000;
@@ -530,7 +552,14 @@ export class ResourceStore {
   // and re-sanitizing it cost ~0.5s of time-to-first-token per turn. Mutating
   // paths keep using readState() (fresh copy) so a cached object can never be
   // edited in place and then persisted.
-  private readCache: { key: string; state: ResourceState } | null = null;
+  // Live registry owned by this process. Mutations edit it in place and
+  // schedule one coalesced, compact write instead of reparsing and rewriting
+  // the whole (tens of MB) registry synchronously on every attach: a card-heavy
+  // turn used to block the event loop for 60s+, trip the stall watchdog and
+  // lose the finished reply.
+  private live: { key: string; state: ResourceState } | null = null;
+  private dirty = false;
+  private flushTimer: NodeJS.Timeout | null = null;
 
   constructor(options: { configDir?: string; rootDir?: string; workspacePath?: string; telemetry?: ResourceTelemetrySink } = {}) {
     const configDir = options.configDir || getConfig().getConfigDir();
@@ -548,7 +577,30 @@ export class ResourceStore {
     fs.mkdirSync(this.migrationDir, { recursive: true });
   }
 
+  private fileKey(): string {
+    try {
+      const stat = fs.statSync(this.registryPath);
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return 'missing';
+    }
+  }
+
+  /**
+   * Authoritative registry for this process. Returns the shared live object;
+   * reloads only when another writer changed the file and nothing is pending.
+   */
   private readState(): ResourceState {
+    if (this.live && this.dirty) return this.live.state;
+    const key = this.fileKey();
+    if (this.live && this.live.key === key) return this.live.state;
+    flushPendingRegistryWrites(this.registryPath, this);
+    const state = this.loadStateFromDisk();
+    this.live = { key, state };
+    return state;
+  }
+
+  private loadStateFromDisk(): ResourceState {
     try {
       const raw = JSON.parse(fs.readFileSync(this.registryPath, 'utf8')) as Partial<ResourceState>;
       return sanitizeResourceState({
@@ -570,27 +622,81 @@ export class ResourceStore {
    * registry file's mtime/size (e.g. another process writing it).
    */
   private readStateForRead(): ResourceState {
-    let key = '';
-    try {
-      const stat = fs.statSync(this.registryPath);
-      key = `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      this.readCache = null;
-      return emptyState();
-    }
-    if (this.readCache && this.readCache.key === key) return this.readCache.state;
-    const state = this.readState();
-    this.readCache = { key, state };
-    return state;
+    return this.readState();
   }
 
   private writeState(state: ResourceState): void {
-    this.readCache = null;
+    this.live = { key: this.live?.key || '', state };
+    this.dirty = true;
+    pendingRegistryWriters.set(this.registryPath, this);
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => this.flushSync(), REGISTRY_FLUSH_DELAY_MS);
+      this.flushTimer.unref?.();
+    }
+  }
+
+  /** Persist pending registry changes now (also runs on process exit). */
+  flushSync(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    if (pendingRegistryWriters.get(this.registryPath) === this) pendingRegistryWriters.delete(this.registryPath);
+    if (!this.dirty || !this.live) return;
+    this.dirty = false;
     this.ensureStorageDirs();
-    state = sanitizeResourceState(state);
+    const pruned = this.pruneState(this.live.state);
+    const state = sanitizeResourceState(this.live.state);
     const tempPath = `${this.registryPath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
-    fs.renameSync(tempPath, this.registryPath);
+    try {
+      fs.writeFileSync(tempPath, JSON.stringify(state), 'utf8');
+      fs.renameSync(tempPath, this.registryPath);
+    } catch (error: any) {
+      try { fs.rmSync(tempPath, { force: true }); } catch { /* ignore */ }
+      this.dirty = true;
+      throw error;
+    }
+    this.live = { key: this.fileKey(), state };
+    if (pruned.length) void removeFilesInBatches(pruned);
+  }
+
+  /**
+   * Bounds registry growth. Keeps the newest versions per resource plus any
+   * version a resource or thread link still points at, and the newest
+   * provenance events per resource. Returns snapshot files to delete.
+   */
+  private pruneState(state: ResourceState): string[] {
+    const pinned = new Set<string>();
+    for (const resource of state.resources) if (resource.currentVersionId) pinned.add(resource.currentVersionId);
+    for (const link of state.links) if (link.versionId) pinned.add(link.versionId);
+    const versionCounts = new Map<string, number>();
+    const keptVersions: ResourceVersion[] = [];
+    const removedFiles: string[] = [];
+    const contentRoot = path.resolve(this.contentDir) + path.sep;
+    for (let index = state.versions.length - 1; index >= 0; index -= 1) {
+      const version = state.versions[index];
+      const count = versionCounts.get(version.resourceId) || 0;
+      if (count < MAX_VERSIONS_PER_RESOURCE || pinned.has(version.id)) {
+        keptVersions.push(version);
+        versionCounts.set(version.resourceId, count + 1);
+      } else if (version.snapshotPath) {
+        // Cheap lexical containment (no realpath syscalls): pruning can touch
+        // tens of thousands of versions on the first flush of an old registry.
+        const candidate = path.resolve(this.rootDir, version.snapshotPath);
+        if (candidate.startsWith(contentRoot) && /\.(txt|bin)$/.test(candidate)) removedFiles.push(candidate);
+      }
+    }
+    if (keptVersions.length !== state.versions.length) state.versions = keptVersions.reverse();
+    const provenanceCounts = new Map<string, number>();
+    const keptProvenance: ResourceProvenanceEvent[] = [];
+    for (let index = state.provenance.length - 1; index >= 0; index -= 1) {
+      const item = state.provenance[index];
+      const count = provenanceCounts.get(item.resourceId) || 0;
+      if (count < MAX_PROVENANCE_PER_RESOURCE) {
+        keptProvenance.push(item);
+        provenanceCounts.set(item.resourceId, count + 1);
+      }
+    }
+    if (keptProvenance.length !== state.provenance.length) state.provenance = keptProvenance.reverse();
+    return removedFiles;
   }
 
   private emitTelemetry(event: ResourceTelemetryEventName, fields: Omit<ResourceTelemetryEvent, 'event' | 'at'> = {}): void {
@@ -611,6 +717,7 @@ export class ResourceStore {
    * metadata and provenance, preserving immutable snapshot identities.
    */
   sanitizePersistedState(): { changed: boolean } {
+    this.flushSync();
     if (!fs.existsSync(this.registryPath)) return { changed: false };
     try {
       const raw = JSON.parse(fs.readFileSync(this.registryPath, 'utf8')) as Partial<ResourceState>;
@@ -623,6 +730,7 @@ export class ResourceStore {
       });
       if (JSON.stringify(raw) === JSON.stringify(sanitized)) return { changed: false };
       this.writeState(sanitized);
+      this.flushSync();
       return { changed: true };
     } catch (error: any) {
       console.warn('[Resources] Registry sanitization skipped:', redactResourceText(error?.message || error));
@@ -682,18 +790,9 @@ export class ResourceStore {
   }
 
   private appendProvenance(state: ResourceState, event: Omit<ResourceProvenanceEvent, 'id' | 'at'> & { at?: string }): void {
+    // Trimmed per resource in pruneState() at flush time (O(n) once per
+    // write instead of once per event).
     state.provenance.push({ id: newId('prov'), at: event.at || nowIso(), ...event });
-    const counts = new Map<string, number>();
-    const kept: ResourceProvenanceEvent[] = [];
-    for (let index = state.provenance.length - 1; index >= 0; index -= 1) {
-      const item = state.provenance[index];
-      const count = counts.get(item.resourceId) || 0;
-      if (count < MAX_PROVENANCE_PER_RESOURCE) {
-        kept.push(item);
-        counts.set(item.resourceId, count + 1);
-      }
-    }
-    state.provenance = kept.reverse();
   }
 
   private getResource(state: ResourceState, resourceId: string, options: { allowDeleted?: boolean } = {}): ResourceRecord {

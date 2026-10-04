@@ -132,7 +132,7 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
-import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
+import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
 import {
@@ -5304,15 +5304,18 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     sendSSE('vision_injected', { source: 'creative_references', frames: Array.isArray(creativeReferenceVisionMessage.content) ? creativeReferenceVisionMessage.content.length - 1 : 0 });
     sendSSE('info', { message: 'Creative reference frame vision injected for this turn.' });
   }
+  if (attachments && attachments.length > 0) {
+    attachments = await normalizeRuntimeVisionAttachments(attachments);
+  }
   const shouldUseXaiVisionSidecar =
-    attachments && attachments.length > 0
+    !!attachments && attachments.length > 0
     && !currentModelCapabilities.hasVision
     && String(currentModelCapabilities.provider || '').toLowerCase() === 'xai'
     && /^grok-composer/i.test(String(currentModelCapabilities.model || ''));
   let attachmentVisionSidecarBlock = '';
   if (shouldUseXaiVisionSidecar) {
     const summaries: string[] = [];
-    for (const attachment of attachments.slice(0, 3)) {
+    for (const attachment of (attachments || []).slice(0, 3)) {
       const mimeType = String(attachment?.mimeType || 'image/png').trim() || 'image/png';
       const base64 = String(attachment?.base64 || '').trim();
       if (!base64 || !mimeType.startsWith('image/')) continue;
@@ -6942,7 +6945,7 @@ RULES:
       : { block: '', visionAttachments: [], attachmentCount: 0 };
     const steerBlock = buildChatSteerContextBlock(steer);
     const steerText = appendAttachmentContextToMessage(steerBlock, previewContext.block);
-    const steerVisionAttachments = [
+    const steerVisionAttachmentsRaw = [
       ...(Array.isArray(steer.attachments) ? steer.attachments : []),
       ...(Array.isArray(previewContext.visionAttachments) ? previewContext.visionAttachments : []),
     ]
@@ -6953,6 +6956,7 @@ RULES:
       }))
       .filter((attachment) => attachment.base64 && attachment.mimeType.startsWith('image/'))
       .slice(0, 4);
+    const steerVisionAttachments = await normalizeRuntimeVisionAttachments(steerVisionAttachmentsRaw);
 
     const shouldUseSteerXaiVisionSidecar =
       steerVisionAttachments.length > 0
@@ -8727,6 +8731,10 @@ RULES:
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
       finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalTextWithSkillOffer) ? 'failed' : 'complete', finalTextWithSkillOffer);
+      // Registering turn outputs (cards, images, files) is bookkeeping: run it
+      // after the reply is returned and persisted so it can never delay or
+      // (via an event-loop stall restart) lose a finished reply.
+      const registerTurnOutputs = () => {
       const resourceOutputStartedAt = Date.now();
       try {
         const resourceStore = getResourceStore(workspacePath);
@@ -8752,6 +8760,8 @@ RULES:
         turnTiming.mark('chat_resources_outputs_failed', { durationMs: Date.now() - resourceOutputStartedAt });
         console.warn('[Resources] Turn output registration skipped:', redactResourceText(error?.message || error));
       }
+      };
+      setImmediate(registerTurnOutputs);
       return {
         type: allToolResults.length > 0 ? 'execute' : 'chat',
         text: finalTextWithSkillOffer,
