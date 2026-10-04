@@ -3,7 +3,7 @@ import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../featu
 import { formatModelWithReasoning } from '../model-display.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, canReviveRecoveryTurn as canRevive, reviveIfFrozen as reviveFz } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz } from './mobile-restart-continuity.js';
 
 export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
   if (!steer) return true;
@@ -3519,7 +3519,7 @@ void main() {
       const recoveryFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestAssistantTurn, recoveryClientRequestId);
       let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, recoveryClientRequestId)
         || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null)
-        || (status?.active && canRevive(activeThread, latestAssistantTurn, recoveryClientRequestId) ? latestAssistantTurn : null);
+        || revivable(status, activeThread, latestAssistantTurn, recoveryClientRequestId);
       // Restore the non-enumerable source/continuation link (lost by cache
       // serialization) before any frame can target the frozen source.
       const latestSteerIndex = [...activeThread].findLastIndex((turn) => turn?.role === 'user'
@@ -3560,8 +3560,7 @@ void main() {
           recoverySteerBoundary = steerUser;
         }
       }
-      // A successful status request proves that the mobile client is connected
-      // again, whether the run is still active or has already completed.
+      // A successful status request proves the client reconnected.
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
       const runStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0) || 0;
       const activeRunKind = String(status?.run?.kind || '').trim();

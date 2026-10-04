@@ -39,6 +39,11 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
 }
 
 
+/** `turn` when the run is active and the row is revivable for this request. */
+export function revivableTurn(status, thread, turn, clientRequestId = '') {
+  return status?.active && canReviveRecoveryTurn(thread, turn, clientRequestId) ? turn : null;
+}
+
 /** Revive `turn` in place when it is a frozen, revivable row of this request. */
 export function reviveIfFrozen(thread, turn, clientRequestId = '') {
   if (turn && turn.streaming !== true && canReviveRecoveryTurn(thread, turn, clientRequestId)) reviveRecoveryTurn(turn);
