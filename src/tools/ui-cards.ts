@@ -292,22 +292,60 @@ const OSM_AMENITY: Record<string, string> = {
   pharmacy: 'amenity="pharmacy"', gas: 'amenity="fuel"', museum: 'tourism="museum"', grocery: 'shop~"supermarket|grocery"',
 };
 
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+
+function osmPlace(t: any, lat: any, lng: any, fallbackAddr = ''): any {
+  const addr = [[t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '), t['addr:city']].filter(Boolean).join(', ') || fallbackAddr;
+  return { name: t.name, category: str(t.cuisine || t.amenity || t.tourism || t.shop || t.leisure).replace(/_/g, ' ').replace(/;/g, ', '), address: addr, phone: t.phone || t['contact:phone'], website: t.website || t['contact:website'], hours: t.opening_hours, lat: Number(lat), lng: Number(lng) };
+}
+
+// Fast path (~200 ms): Nominatim free-text search bounded to a box around `near`.
+async function nominatimPlaces(query: string, center: { lat: number; lng: number }, limit: number): Promise<any[]> {
+  const d = 0.08;
+  const box = [center.lng - d, center.lat + d, center.lng + d, center.lat - d].join(',');
+  const rows = await cached(`nomp:${query.toLowerCase()}:${box}`, 30 * 60_000, () => getJson(
+    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&viewbox=${box}&bounded=1&format=jsonv2&extratags=1&addressdetails=1&limit=${Math.min(20, limit * 2)}`, {}, 5000));
+  return (Array.isArray(rows) ? rows : []).map((r: any) => {
+    const a = r.address || {};
+    const street = [[a.house_number, a.road].filter(Boolean).join(' '), a.city || a.town || a.village].filter(Boolean).join(', ');
+    return osmPlace({ ...(r.extratags || {}), name: r.name, amenity: r.type }, r.lat, r.lon, street);
+  }).filter((p: any) => p.name);
+}
+
 async function discoverPlaces(query: string, near: string, limit: number): Promise<any[]> {
   const center = await geocodeOnce(near);
   if (!center) return [];
   const word = query.toLowerCase().split(/\s+/).find((w) => OSM_AMENITY[w]);
-  const filter = word ? OSM_AMENITY[word] : `name~"${query.replace(/["\\]/g, '')}",i`;
-  const q = `[out:json][timeout:8];nwr[${filter}]["name"](around:5000,${center.lat},${center.lng});out center tags ${limit * 2};`;
-  const data = await cached(`ovp:${q}`, 30 * 60_000, () => getJson('https://overpass-api.de/api/interpreter', {
-    method: 'POST', body: `data=${encodeURIComponent(q)}`, headers: { 'content-type': 'application/x-www-form-urlencoded' } as any,
-  }, 9000));
-  return (data?.elements || []).map((e: any) => {
-    const t = e.tags || {};
-    const addr = [[t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' '), t['addr:city']].filter(Boolean).join(', ');
-    return { name: t.name, category: str(t.cuisine || t.amenity || t.tourism || t.shop || t.leisure).replace(/_/g, ' '), address: addr, phone: t.phone || t['contact:phone'], website: t.website || t['contact:website'], hours: t.opening_hours, lat: e.lat ?? e.center?.lat, lng: e.lon ?? e.center?.lon };
-  }).filter((p: any) => p.name)
+  // Nominatim special phrases understand OSM nouns ("cafe", "restaurant"), not "coffee".
+  const phrase = NOMINATIM_PHRASE[word || ''] || query;
+  const fastPromise = nominatimPlaces(phrase, center, limit).catch(() => [] as any[]);
+  // Start Overpass in parallel so a thin Nominatim answer does not cost a second round trip.
+  const slowPromise = overpassPlaces(query, word, center, limit);
+  const fast = await fastPromise;
+  if (fast.length >= Math.min(3, limit)) {
+    slowPromise.catch(() => {});
+    return fast.sort((a: any, b: any) => Number(!!b.website) + Number(!!b.hours) - Number(!!a.website) - Number(!!a.hours)).slice(0, limit);
+  }
+  const slow = await slowPromise.catch(() => [] as any[]);
+  const seen = new Set(fast.map((p: any) => p.name.toLowerCase()));
+  return [...fast, ...slow.filter((p: any) => !seen.has(p.name.toLowerCase()))]
     .sort((a: any, b: any) => Number(!!b.website) + Number(!!b.hours) - Number(!!a.website) - Number(!!a.hours))
     .slice(0, limit);
+}
+
+const NOMINATIM_PHRASE: Record<string, string> = {
+  coffee: 'cafe', cafe: 'cafe', restaurant: 'restaurant', restaurants: 'restaurant', food: 'restaurant', bar: 'bar', bars: 'bar',
+  hotel: 'hotel', hotels: 'hotel', gym: 'fitness centre', park: 'park', pharmacy: 'pharmacy', gas: 'fuel', museum: 'museum', grocery: 'supermarket', pizza: 'pizza',
+};
+
+async function overpassPlaces(query: string, word: string | undefined, center: { lat: number; lng: number }, limit: number): Promise<any[]> {
+  const filter = word ? OSM_AMENITY[word] : `name~"${query.replace(/["\\]/g, '')}",i`;
+  const q = `[out:json][timeout:8];nwr[${filter}]["name"](around:5000,${center.lat},${center.lng});out center tags ${limit * 2};`;
+  // Overpass: richer category matching, slower and rate-limited per IP.
+  const data = await cached(`ovp:${q}`, 30 * 60_000, () => getJson(OVERPASS_URL, {
+    method: 'POST', body: `data=${encodeURIComponent(q)}`, headers: { 'content-type': 'application/x-www-form-urlencoded' } as any,
+  }, 9000));
+  return (data?.elements || []).map((e: any) => osmPlace(e.tags || {}, e.lat ?? e.center?.lat, e.lon ?? e.center?.lon)).filter((p: any) => p.name);
 }
 
 export async function buildPlacesCard(args: any): Promise<CardResult> {
