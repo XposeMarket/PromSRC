@@ -76,7 +76,27 @@ export const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'web_fetch',
   'web_fetch_batch',
   'shopping_search_products',
+  // Read-only lookups that 7-day telemetry showed serializing whole batches.
+  'skill_list',
+  'skill_read',
+  'tool_search',
+  'tool_describe',
+  'tool_result_read',
+  'workspace_code_nav',
+  'analyze_image',
+  'x_search',
+  'connector_google_drive',
 ]);
+
+// Wrappers that are read-only only for some actions.
+const READ_ONLY_ACTIONS_BY_TOOL: Record<string, ReadonlySet<string>> = {
+  memory: new Set(['read', 'search', 'recall', 'ideas']),
+  connector_github: new Set(['get_file', 'get_pr', 'list_check_runs', 'list_commits', 'list_issues', 'list_prs', 'list_repos', 'search']),
+  connector_gmail: new Set(['get_email', 'get_profile', 'get_thread', 'list_emails', 'list_labels']),
+  background_ops: new Set(['status', 'progress']),
+  x_search_ops: new Set(['x_search', 'search_recent', 'search_all', 'search_spaces', 'get_trends', 'get_space']),
+  vercel_ops: new Set(['status', 'list_teams', 'list_projects', 'get_project', 'list_deployments', 'get_deployment', 'deployment_events', 'list_aliases', 'get_project_domain']),
+};
 
 function normalizeConcurrency(value: unknown): number {
   const parsed = Number(value);
@@ -128,6 +148,15 @@ export function isParallelSafeToolCall(call: ParallelToolCall): boolean {
   }
   if (name === 'workspace_git') {
     return new Set(['status', 'diff', 'log', 'branch']).has(String(args.action || '').toLowerCase());
+  }
+  const readOnlyActions = READ_ONLY_ACTIONS_BY_TOOL[name];
+  if (readOnlyActions) {
+    const action = String(args.action || '').toLowerCase();
+    // connector_* api_request is read-only only for GET/HEAD.
+    if (action === 'api_request' && name.startsWith('connector_')) {
+      return ['', 'GET', 'HEAD'].includes(String(args.method || '').toUpperCase());
+    }
+    return readOnlyActions.has(action);
   }
   return PARALLEL_SAFE_TOOL_NAMES.has(name);
 }

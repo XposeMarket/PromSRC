@@ -1831,6 +1831,7 @@ import { webSearch, webFetch } from '../../tools/web';
 import {
   canExecuteToolCallsInParallel,
   executeToolCallsInParallel,
+  partitionToolCallsForParallelExecution,
   type ParallelToolCall,
 } from '../../tools/parallel-tool-calls.js';
 import {
@@ -8803,8 +8804,57 @@ RULES:
       && !isSupervisionLoop
       && !isBrainThoughtRuntime
       && canExecuteToolCallsInParallel(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall));
+    // Calls whose tool_call SSE + telemetry start were already emitted up front.
+    const preDispatchedCalls = new Set<any>();
+    // Mixed batches: run each contiguous run of independent reads together when
+    // the ordered loop reaches its first member, so a later write still waits for
+    // earlier reads and a read after a write still sees the write. Telemetry showed
+    // only 168 of 1,057 multi-call batches overlapping under all-or-nothing.
+    const lazyParallelGroupByCall = new Map<any, ParallelCallEntry[]>();
+    const lazyParallelGroupsRun = new Set<ParallelCallEntry[]>();
+    const lazyParallelAllowed = !canRunParallelBatch
+      && parallelCallEntries.length > 1
+      && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
+      && !isBootStartupTurn
+      && !isHotRestartTurn
+      && !isSupervisionLoop
+      && !isBrainThoughtRuntime;
+    if (lazyParallelAllowed) {
+      const entryByParallelCall = new Map<ParallelToolCall, ParallelCallEntry>(
+        parallelCallEntries.map((entry: ParallelCallEntry) => [entry.parallelCall, entry]),
+      );
+      for (const group of partitionToolCallsForParallelExecution(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall))) {
+        if (!group.parallel || group.calls.length < 2) continue;
+        const entries = group.calls.map((parallelCall) => entryByParallelCall.get(parallelCall)!).filter(Boolean);
+        for (const entry of entries) lazyParallelGroupByCall.set(entry.sourceCall, entries);
+      }
+    }
+    const runLazyParallelGroupFor = async (call: any): Promise<void> => {
+      const entries = lazyParallelGroupByCall.get(call);
+      if (!entries || lazyParallelGroupsRun.has(entries)) return;
+      lazyParallelGroupsRun.add(entries);
+      console.log(`[v2] TOOL[${round + 1}] parallel group: ${entries.map((entry) => entry.toolName).join(', ')}`);
+      const outcomes = await executeToolCallsInParallel(
+        entries.map((entry) => entry.parallelCall),
+        async (parallelCall) => {
+          const entry = entries.find((candidate) => candidate.parallelCall === parallelCall)!;
+          return executeToolWithTelemetry(entry.toolName, entry.toolArgs, entry.toolCallId);
+        },
+        { signal: abortSignal?.signal },
+      );
+      for (const outcome of outcomes) {
+        const entry = entries.find((candidate) => candidate.parallelCall === outcome.call)!;
+        parallelToolResults.set(entry.sourceCall, outcome.result || makeInstrumentedToolResult(
+          entry.toolName,
+          entry.toolArgs,
+          `Parallel tool execution failed: ${String(outcome.error || 'unknown error')}`,
+          true,
+        ));
+      }
+    };
     if (canRunParallelBatch) {
       for (const entry of parallelCallEntries) {
+        preDispatchedCalls.add(entry.sourceCall);
         toolPerformance.start(entry.toolName, entry.toolCallId, round);
         console.log(`[v2] TOOL[${round + 1}] parallel dispatch: ${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 150)})`);
         markProgressStepStart(entry.toolName);
@@ -8845,7 +8895,7 @@ RULES:
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
-      if (!parallelToolResults.has(call)) {
+      if (!preDispatchedCalls.has(call)) {
         toolPerformance.start(toolName, toolCallId, round);
       }
 
@@ -9308,7 +9358,7 @@ RULES:
         }
       }
 
-      if (!parallelToolResults.has(call)) {
+      if (!preDispatchedCalls.has(call)) {
         console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
         if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
           markProgressStepStart(toolName);
@@ -9810,6 +9860,7 @@ RULES:
 
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
+	      if (!parallelToolResults.has(call)) await runLazyParallelGroupFor(call);
 	      const toolResult = parallelToolResults.get(call) || await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
