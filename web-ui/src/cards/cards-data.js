@@ -25,7 +25,9 @@ function head(label, title, right = '') {
 function renderCurrency(a) {
   const rates = a.rates && typeof a.rates === 'object' ? a.rates : null;
   if (!rates || !a.base) return cardError('currency', 'Exchange rates were unavailable.');
-  const codes = Object.keys(rates).sort();
+  // Frankfurter omits the base currency from its own rate table; add it back so
+  // the "from" select can actually show it (otherwise it silently falls to AUD).
+  const codes = [...new Set([a.base, ...Object.keys(rates)])].sort();
   const from = a.from || a.base; const to = a.to || codes.find((c) => c !== from) || from;
   const amount = Number(a.amount) || 1;
   const sel = (name, cur) => `<select class="pc-select" data-pc-fx="${name}">${codes.map((c) => `<option value="${esc(c)}" ${c === cur ? 'selected' : ''}>${esc(c)}${a.names?.[c] ? ` · ${esc(a.names[c])}` : ''}</option>`).join('')}</select>`;

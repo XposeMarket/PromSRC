@@ -1136,11 +1136,11 @@ function gameProjectCardHtml(body) {
 }
 
 function renderMdUncached(text, options = {}) {
+  const vpCards = [];
+  const vpPrefix = `PROMVPCARD${Math.random().toString(36).slice(2)}X`;
   try {
     const visuals = [];
     const placeholderPrefix = `PROMVISUAL${Math.random().toString(36).slice(2)}X`;
-    const vpCards = [];
-    const vpPrefix = `PROMVPCARD${Math.random().toString(36).slice(2)}X`;
     text = String(text)
       .replace(VIDEO_PROJECT_FENCE_RE, (_, body) => {
         vpCards.push(videoProjectCardHtml(body));
@@ -1201,7 +1201,8 @@ function renderMdUncached(text, options = {}) {
 
     return html;
   } catch (e) {
-    return escHtml(text);
+    // Never leak card placeholder tokens: cards still render when markdown fails.
+    return escHtml(text).replace(new RegExp(`${vpPrefix}(\\d+)END`, 'g'), (_, i) => vpCards[+i] || '');
   }
 }
 
