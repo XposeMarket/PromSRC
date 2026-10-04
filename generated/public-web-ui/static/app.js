@@ -1052,6 +1052,7 @@ export function setMode(mode) {
     document.body.classList.toggle('right-collapsed', !rightPanel.classList.contains('open'));
     _syncPageViewPositions();
   }
+  document.dispatchEvent(new CustomEvent('prom-mode-change', { detail: { mode } }));
 
   return ensurePageModule(mode).then(() => activateLoadedPageMode(mode)).catch(() => {});
 }

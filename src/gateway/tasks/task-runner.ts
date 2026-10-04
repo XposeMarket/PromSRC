@@ -677,9 +677,24 @@ function emitBackgroundAgentEvent(
   const frame = existingFrame || appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
   const spawnerSessionId = String(record.spawnerSessionId || '').trim();
   if (!spawnerSessionId) return frame;
-  const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
+  const eventData = data && typeof data === 'object' && !Array.isArray(data) ? data : { message: String(data ?? '') };
+  // The stream replay endpoint owns full frames; the live frame carries a single
+  // bounded copy, not three task prompts plus duplicate data/chunk buffers.
+  const { data: _nestedData, event: _nestedEvent, ...payload } = eventData;
+  const livePayload = Object.fromEntries(Object.entries(payload).map(([key, value]) => {
+    if (typeof value === 'string' && ['chunk', 'text', 'thinking', 'result', 'output', 'message'].includes(key))
+      return [key, value.slice(0, key === 'chunk' ? 16_384 : 4_096)];
+    if (value && typeof value === 'object' && ['args', 'params', 'input', 'preview'].includes(key)) {
+      try {
+        const serialized = JSON.stringify(value);
+        return [key, serialized.length > 4_096 ? { truncated: true, preview: serialized.slice(0, 4_096) } : value];
+      } catch { return [key, { truncated: true }]; }
+    }
+    return [key, value];
+  }));
   broadcastBackgroundAgentMessage(record, {
-    ...eventData,
+    ...livePayload,
+    event,
     ...backgroundVoiceDispatchMetadata(record),
     type: 'bg_agent_event',
     sessionId: spawnerSessionId,
@@ -692,13 +707,10 @@ function emitBackgroundAgentEvent(
     providerId: record.providerId,
     model: record.model,
     reasoningEffort: record.reasoningEffort,
-    task: record.prompt,
-    prompt: record.prompt,
-    taskPrompt: record.prompt,
+    ...(event === 'status' && payload.phase === 'queued' ? { task: String(record.prompt || '').slice(0, 1_024) } : {}),
     streamId: frame.streamId,
     seq: frame.seq,
     at: frame.at,
-    data: frame.data,
   });
   return frame;
 }
@@ -1347,6 +1359,7 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
         backgroundSessionId: `background_${rec.id}`,
         bgId: rec.id,
         eventType: 'user_message',
+        event: 'user_message',
         actor: 'User',
         streamId: frame.streamId,
         seq: frame.seq,
