@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const { createRequire } = require('node:module');
-const WebSocket = createRequire('C:/Users/rafel/PromSRC/package.json')('ws');
+const WebSocket = createRequire(require('path').resolve(__dirname, '../../package.json'))('ws');
 const endpoint = '127.0.0.1:32470';
 const seconds = 60;
 const duration = seconds * 1000;

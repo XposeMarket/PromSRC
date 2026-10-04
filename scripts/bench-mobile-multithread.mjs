@@ -10,7 +10,7 @@ const OUT = path.join(ROOT, 'reviews/perf-live-2026-10-04');
 fs.mkdirSync(OUT, { recursive: true });
 const mode = process.argv[2] || 'replay';
 if (mode === 'capture') {
-  const require = createRequire('C:/Users/rafel/PromSRC/package.json');
+  const require = createRequire(process.env.PROMSRC_ROOT ? process.env.PROMSRC_ROOT + '/package.json' : new URL('../package.json', import.meta.url));
   const { chromium } = require('playwright');
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });

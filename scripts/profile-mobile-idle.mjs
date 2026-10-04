@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
-const require = createRequire('C:/Users/rafel/PromSRC/package.json');
+const require = createRequire(process.env.PROMSRC_ROOT ? process.env.PROMSRC_ROOT + '/package.json' : new URL('../package.json', import.meta.url));
 const { chromium } = require('playwright');
 const out = path.resolve('reviews/perf-live-2026-10-04');
 const browser = await chromium.launch();

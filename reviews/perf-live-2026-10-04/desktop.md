@@ -2,7 +2,7 @@
 
 ## Scope and conditions
 
-Isolated worktree `C:\Users\rafel\promsrc-pr\perf-live-desktop`, branch `perf/live-desktop-multithread` from `origin/main`. The live gateway and `C:\Users\rafel\PromSRC` were never edited, pulled, restarted, or reset. Headless Chromium at `http://127.0.0.1:32466/?desktop=1`; 1440x900; service workers blocked. Source-overriding Playwright routes serve **original** `PromSRC/web-ui` versus **worktree** `web-ui` while all APIs remain on the same live gateway. Harness and raw WS capture under untracked `temp/perf-live-multithread/`; raw `live-frames.json` is 2,003,843 bytes, intentionally not committed. Captured 295 frames over 66.5 s; 97 background-agent events; 64 main chat events. The gateway sessions endpoint is `GET /api/sessions?scope=all&includeAutomated=1&limit=160&offset=0`.
+Isolated worktree `<promsrc-pr>\perf-live-desktop`, branch `perf/live-desktop-multithread` from `origin/main`. The live gateway and the live `PromSRC` checkout were never edited, pulled, restarted, or reset. Headless Chromium at `http://127.0.0.1:32466/?desktop=1`; 1440x900; service workers blocked. Source-overriding Playwright routes serve **original** `PromSRC/web-ui` versus **worktree** `web-ui` while all APIs remain on the same live gateway. Harness and raw WS capture under untracked `temp/perf-live-multithread/`; raw `live-frames.json` is 2,003,843 bytes, intentionally not committed. Captured 295 frames over 66.5 s; 97 background-agent events; 64 main chat events. The gateway sessions endpoint is `GET /api/sessions?scope=all&includeAutomated=1&limit=160&offset=0`.
 
 ## Live workload / attribution
 

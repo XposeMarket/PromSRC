@@ -1,6 +1,6 @@
 # Gateway concurrent-thread latency and fanout (2026-10-04)
 
-Worktree: `C:\Users\rafel\promsrc-pr\perf-live-gateway`, branch `perf/live-gateway-fanout`, starting at origin/main `f58ed9c0b` (#524 ResourceStore fix present). Live checkout and gateway remained untouched. Probe: read-only `measure-live.cjs` to live backend `127.0.0.1:32470`, 60 seconds; captures **shapes and string byte lengths only** (no task/chat text), in `live-metrics.json`.
+Worktree: `<promsrc-pr>\perf-live-gateway`, branch `perf/live-gateway-fanout`, starting at origin/main `f58ed9c0b` (#524 ResourceStore fix present). Live checkout and gateway remained untouched. Probe: read-only `measure-live.cjs` to live backend `127.0.0.1:32470`, 60 seconds; captures **shapes and string byte lengths only** (no task/chat text), in `live-metrics.json`.
 
 ## Observed baseline
 
@@ -26,7 +26,7 @@ All WS frames over the live minute included 360 main-chat stream events / 166,26
 
 ## Diagnostics and verification
 
-Stall log: `C:\Users\rafel\AppData\Roaming\Prometheus\.prometheus\gateway-event-loop-stalls.ndjson` has older heartbeat delays of 5,889–19,201ms for pid 9684 and 7,573–13,496ms for pid 14592, plus an 11,890ms pid 14784 entry; no 60s stall or direct attribution to the current 60s sample. Gateway log: `C:\Users\rafel\AppData\Roaming\Prometheus\gateway.log`. Queue diagnostics, history checkpointing, and concurrent CPU contention can still contribute to observed 578.5ms status outlier; do not claim post-fix live latency.
+Stall log: `%APPDATA%\Prometheus\.prometheus\gateway-event-loop-stalls.ndjson` has older heartbeat delays of 5,889–19,201ms for pid 9684 and 7,573–13,496ms for pid 14592, plus an 11,890ms pid 14784 entry; no 60s stall or direct attribution to the current 60s sample. Gateway log: `%APPDATA%\Prometheus\gateway.log`. Queue diagnostics, history checkpointing, and concurrent CPU contention can still contribute to observed 578.5ms status outlier; do not claim post-fix live latency.
 
 Verified from this worktree: `npx tsc --noEmit`, `npm run build:backend`, `npm run bench:gateway-fanout` (also asserts terminal structural events), `npm run test:background-spawn-tool-surface`, `src/gateway/tasks/background-poll-payload.regression.ts`, `src/gateway/process/store.regression.ts`, `store-order.regression.ts`. Existing dependencies exposed via a worktree-local ignored junction to live checkout `node_modules`; no dependencies were installed in or files edited in the live checkout. Web UI unchanged, so no `sync:web-ui` or manifest/service-worker update. Build artifacts ignored.
 
