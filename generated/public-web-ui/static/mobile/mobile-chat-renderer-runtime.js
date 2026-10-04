@@ -2632,8 +2632,15 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!message) return false;
     const messageIndex = messageRow.index;
     const timeline = mobileTimelineController.peek(`mobile:main:${sid}`);
+    // Rows older than the painted window are virtualized away on purpose. A row
+    // newer than it (a steer continuation pushed after the last paint) means the
+    // window is stale: full-render instead of claiming the patch landed, which
+    // froze the visible stream after a steer.
     if (!threadEl.querySelector(`[data-msg-index="${messageIndex}"]`)
-      && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) return true;
+      && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) {
+      const newestPainted = timeline.paintEntries.reduce((max, entry) => Math.max(max, Number(entry.originalIndex) || 0), -1);
+      return messageIndex < newestPainted;
+    }
     const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
     const patched = _patchMobileThreadMessage(threadEl, message, messageIndex);
     if (!patched) return false;

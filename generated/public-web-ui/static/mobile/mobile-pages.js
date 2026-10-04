@@ -1822,7 +1822,10 @@ function _mapServerMessageToMobile(m, index = -1) {
   const rawContent = isLegacyGoalRuntimePrompt
     ? (legacyGoalRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.')
     : storedContent;
-  const content = role === 'user' ? _stripMobileInternalUploadContext(rawContent) : rawContent;
+  const content = role === 'user'
+    ? _stripMobileInternalUploadContext(rawContent)
+    // Trace-only rows (steer before-rows) were stored with this placeholder.
+    : (/^\[Internal tool observation omitted\.\]$/.test(rawContent.trim()) ? '' : rawContent);
   const attachmentPreviews = Array.isArray(m?.attachmentPreviews) ? m.attachmentPreviews : [];
   return {
     role,
@@ -2698,7 +2701,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
   }
   _saveMobileThreadCache(sid, thread);
-  void _persistMobileChatSteerSnapshot(sid);
+  // The steer endpoint already persists the before-row and steer row. A client
+  // snapshot here wrote an empty streaming continuation into durable history,
+  // which later duplicated the final continuation on reload/recovery.
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
   if (threadEl && String(__pmChat.activeSessionId || '') === sid) {
@@ -2754,6 +2759,9 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     });
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
+    // The steer just emptied the queue under the user's thumb; don't let the
+    // next tap land on Stop.
+    __pmChat.stopSoftLockUntil = Date.now() + 2500;
     // Server boundary (stream position at acceptance) wins over the client guess.
     _appendMobileQueuedSteerTurn(sid, message, { workflowBoundarySeq, workflowStreamId, ...(result || {}) });
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');

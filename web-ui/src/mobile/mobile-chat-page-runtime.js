@@ -4139,6 +4139,9 @@ void main() {
     const shouldSubmitQuestion = questionPending;
     sendBtn.disabled = false;
     sendBtn.classList.toggle('is-abort', shouldAbort);
+    const stopLocked = shouldAbort && Date.now() < Number(__pmChat.stopSoftLockUntil || 0);
+    sendBtn.classList.toggle('is-stop-locked', stopLocked);
+    sendBtn.style.opacity = stopLocked ? '0.45' : '';
     sendBtn.classList.toggle('is-voice', shouldVoice);
     sendBtn.title = shouldSubmitQuestion ? 'Submit answer' : shouldAbort ? 'Stop Prometheus' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send';
     sendBtn.innerHTML = shouldSubmitQuestion
@@ -4173,6 +4176,7 @@ void main() {
     if (busy && !wasBusy) {
       // Stop soft-lock: ignore composer Stop taps briefly after sending.
       __pmChat.stopSoftLockUntil = Date.now() + 2500;
+      setTimeout(() => updateComposerSubmitState(sid), 2600);
     }
     if (busy) {
       __pmChat.activeRuns[sid] = {
@@ -9072,6 +9076,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     try { input?.blur?.(); } catch {}
     const text = _pmGetComposerValue(input);
     const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
+    // Every send (new turn, queued prompt, steer) arms the Stop soft-lock: the
+    // composer empties and the button flips to Stop under the same thumb. The
+    // lock used to arm only on idle->busy, so a queued send mid-turn aborted.
+    if (text.trim() || getPendingAttachments().length) {
+      __pmChat.stopSoftLockUntil = Date.now() + 2500;
+      setTimeout(() => updateComposerSubmitState(), 2600);
+    }
     if (_getPendingQuestionForSession(activeSid)) {
       const submitted = await _submitMobileQuestionFromComposer(text, activeSid);
       if (submitted) {
