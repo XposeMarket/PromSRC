@@ -13682,6 +13682,8 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         : previews}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
+    // Lazily hydrate old groups, even during an active stream.
+    const lazyClosedGroup = !streaming || !isLiveCurrent;
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
@@ -13705,7 +13707,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
-      ${!streaming && !openAttr && toolBodyEntries.length
+      ${lazyClosedGroup && !openAttr && toolBodyEntries.length
         ? `<div class="live-turn-tool-body" data-lazy-trace="${escHtml(rememberLazyTraceBody(toolBodyEntries))}"></div>`
         : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>`}
     </details>`;
@@ -15654,8 +15656,8 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
   if (currentBody && nextBody?.hasAttribute('data-lazy-trace')) {
-    // Settled turn: keep an already-rendered body; otherwise adopt the lazy key.
-    if (currentBody.hasAttribute('data-lazy-trace') || !currentBody.firstElementChild) {
+    // Preserve closed bodies; refresh open groups with latest entries.
+    if (currentBody.hasAttribute('data-lazy-trace') || !currentBody.firstElementChild || wasOpen) {
       currentBody.setAttribute('data-lazy-trace', nextBody.getAttribute('data-lazy-trace'));
       currentBody.innerHTML = '';
       if (wasOpen) hydrateLazyTraceBody(currentBody);
@@ -15739,7 +15741,6 @@ function patchStreamingChatBubble(sessionId) {
   if (content.querySelector('.chat-question-card, .chat-approval-card')) return false;
 
   const container = document.getElementById('chat-messages');
-  const scrollTop = Number(container?.scrollTop || 0);
   const shouldFollow = !!container && (container.scrollHeight - (container.scrollTop + container.clientHeight)) <= 60;
   const nextContent = document.createElement('div');
   nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
@@ -15756,16 +15757,20 @@ function patchStreamingChatBubble(sessionId) {
 
   // Only follow the stream when the reader was already at the bottom. Opening
   // a tool summary or reading its metadata must never pull the chat away.
-  if (container) {
-    if (shouldFollow) container.scrollTop = container.scrollHeight;
-    else container.scrollTop = scrollTop;
-  }
+  if (container && shouldFollow) container.scrollTop = container.scrollHeight;
+  // Scrolled-up readers retain their scrollTop without another layout write.
   return true;
 }
 
 function renderStreamingChatUpdate(sessionId) {
+  if (document.hidden) return; // Latest stream state is painted when the tab becomes visible.
   if (!patchStreamingChatBubble(sessionId)) renderChatMessages();
 }
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && window.activeChatSessionId && isSessionThinking(window.activeChatSessionId)) {
+    renderStreamingChatUpdate(window.activeChatSessionId);
+  }
+});
 
 function syncAssistantWorkTimer() {
   const active = isSessionThinking(window.activeChatSessionId);
@@ -18863,6 +18868,8 @@ function renderBackgroundSpawnPlan(lane) {
 }
 
 function renderBackgroundAgentUi() {
+  // Persist matching frames, but never paint hidden panes.
+  if (document.hidden || String(window.currentMode || 'chat') !== 'chat') return;
   const detailId = String(window.backgroundAgentDetailId || '').trim();
   if (detailId) renderBackgroundAgentDetail();
   else renderBackgroundSpawnDock();
@@ -18898,8 +18905,17 @@ function pushBackgroundSpawnEvent(msg = {}) {
   }
   if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  scheduleBackgroundAgentUiUpdate();
+  if (!document.hidden && String(window.currentMode || 'chat') === 'chat'
+    && (lane.sessionId === String(window.activeChatSessionId || '').trim()
+      || lane.id === String(window.backgroundAgentDetailId || '').trim())) {
+    scheduleBackgroundAgentUiUpdate();
+  }
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) scheduleBackgroundAgentUiUpdate({ immediate: true });
+});
+document.addEventListener('prom-mode-change', () => scheduleBackgroundAgentUiUpdate({ immediate: true }));
 
 function completeBackgroundSpawnLane(msg = {}) {
   const clearedId = backgroundSpawnLaneId(msg);
@@ -19045,10 +19061,11 @@ function renderBackgroundSpawnDock() {
     .sort((a, b) => a.startedAt - b.startedAt);
   const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
   const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
+  // A collapsed pill only displays count; skip per-token signatures.
   const signature = [
     String(window.activeChatSessionId || '').trim(),
     dockOpen ? 'open' : 'collapsed',
-    lanes.map((lane) => [
+    dockOpen ? lanes.map((lane) => [
       lane.id,
       lane.status,
       lane.updatedAt,
@@ -19057,7 +19074,7 @@ function renderBackgroundSpawnDock() {
       lane.result,
       lane.error,
       lane.expanded === true ? 'expanded' : '',
-    ].join(':')).join('|'),
+    ].join(':')).join('|') : lanes.length,
   ].join('::');
   if (signature === backgroundSpawnDockRenderSignature && dock.dataset.backgroundRenderSignature === signature) return;
   backgroundSpawnDockRenderSignature = signature;
@@ -19115,12 +19132,15 @@ function renderBackgroundSpawnDock() {
   updateBackgroundSpawnDockOffset();
 }
 
+let backgroundSpawnDockOffsetFrame = null;
 function updateBackgroundSpawnDockOffset() {
-  const chatView = document.getElementById('chat-view');
-  const inputArea = document.querySelector('#chat-view > .chat-input-area');
-  const queuedPanel = document.getElementById('queued-prompts-panel');
-  if (!chatView || !inputArea) return;
-  requestAnimationFrame(() => {
+  if (backgroundSpawnDockOffsetFrame !== null || document.hidden) return;
+  backgroundSpawnDockOffsetFrame = requestAnimationFrame(() => {
+    backgroundSpawnDockOffsetFrame = null;
+    const chatView = document.getElementById('chat-view');
+    const inputArea = document.querySelector('#chat-view > .chat-input-area');
+    const queuedPanel = document.getElementById('queued-prompts-panel');
+    if (!chatView || !inputArea || document.hidden) return;
     const chatRect = chatView.getBoundingClientRect?.();
     const inputRect = inputArea.getBoundingClientRect?.();
     const height = Math.ceil(inputRect?.height || 0);
@@ -19131,7 +19151,10 @@ function updateBackgroundSpawnDockOffset() {
     // needs docking room; the overlap is intentionally occupied by composer.
     const queueLift = queuedHeight ? Math.max(0, queuedHeight - 34) + 10 : 16;
     const bottom = Math.max(128, composerBottomGutter + height + queueLift);
-    chatView.style.setProperty('--background-spawn-dock-bottom', `${bottom}px`);
+    const value = `${bottom}px`;
+    if (chatView.style.getPropertyValue('--background-spawn-dock-bottom') !== value) {
+      chatView.style.setProperty('--background-spawn-dock-bottom', value);
+    }
   });
 }
 
@@ -47506,7 +47529,9 @@ wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
   if (!sid || sid === window.activeChatSessionId) return;
   const sess = getChatSessionById(sid);
   if (!sess) return;
-  sess.activeRun = state !== 'done' && state !== 'error';
+  const nextActiveRun = state !== 'done' && state !== 'error';
+  if (sess.activeRun === nextActiveRun) return;
+  sess.activeRun = nextActiveRun;
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
 });
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
