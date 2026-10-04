@@ -288,3 +288,73 @@ export function createRestartContinuityHandler(context = {}) {
     renderThreadNow?.();
   };
 }
+
+const isChatSteerUser = (row) => row?.role === 'user'
+  && String(row.workflowPart || '') === 'interruption'
+  && /^chat_steer_/i.test(String(row.workflowGroupId || ''));
+const rowText = (row) => String(row?.body?.text || row?.content || '').trim();
+
+/**
+ * The live "Response after steer" row of the current request, or null.
+ * Cache/server merges strip `_clientRequestId` and `streaming` from that row,
+ * so request-id lookups miss it and a new "Working..." row was allocated
+ * above the frozen pre-steer stream while the real continuation sat on "...".
+ * Walks back from the end inside the current request only. With `create`, a
+ * trailing steer row that has no continuation yet gets one.
+ */
+export function findLiveSteerContinuation(thread, clientRequestId = '', { create = false } = {}) {
+  const list = Array.isArray(thread) ? thread : [];
+  const cid = String(clientRequestId || '').trim();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const row = list[i];
+    if (!row) continue;
+    if (row.role === 'user') {
+      if (!isChatSteerUser(row)) return null;
+      if (!create) return null;
+      const before = list.slice(0, i).reverse().find((r) => r?.role === 'ai'
+        && String(r.workflowGroupId || '') === String(row.workflowGroupId || ''));
+      const at = Number(row.timestamp || Date.now()) || Date.now();
+      const continuation = {
+        role: 'ai', messageId: `${row.workflowGroupId}:continuation`, streaming: true,
+        timestamp: at, workStartedAt: at, body: { sender: 'Prometheus', text: '' }, content: '',
+        processEntries: [], liveTraceEntries: [], suppressWorkTimer: true,
+        workflowGroupId: row.workflowGroupId, workflowPart: 'interruption_response',
+        workflowLabel: 'Response after steer', workflowBoundarySeq: row.workflowBoundarySeq,
+        workflowStreamId: row.workflowStreamId,
+        _clientRequestId: cid || String(before?._clientRequestId || ''),
+      };
+      list.splice(i + 1, 0, continuation);
+      return continuation;
+    }
+    if (row.role !== 'ai') continue;
+    const part = String(row.workflowPart || '');
+    if (part === 'before_interruption') continue;
+    if (part !== 'interruption_response') {
+      // An empty stray live row (the old duplicate) does not own the request.
+      if (row.streaming === true && !rowText(row)) continue;
+      return null;
+    }
+    if (row._pmFinalReceived === true || row._pmAbortAcknowledged === true) return null;
+    const own = String(row._clientRequestId || '').trim();
+    if (cid && own && cid !== own) return null;
+    if (cid && !own) row._clientRequestId = cid;
+    return row;
+  }
+  return null;
+}
+
+/** Drop empty duplicate live rows of the current request that are not `keep`. */
+export function dropOrphanLiveRows(thread, keep) {
+  if (!Array.isArray(thread) || String(keep?.workflowPart || '') !== 'interruption_response') return 0;
+  let removed = 0;
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const row = thread[i];
+    if (row?.role === 'user' && !isChatSteerUser(row)) break;
+    if (row && row !== keep && row.role === 'ai' && row.streaming === true
+      && !String(row.workflowPart || '') && !rowText(row)) {
+      thread.splice(i, 1);
+      removed += 1;
+    }
+  }
+  return removed;
+}

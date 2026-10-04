@@ -586,10 +586,11 @@ export function normalizeProductArtifactItems(rawItems: unknown[]): ProductArtif
 
 export function isUsableProductArtifactItem(item: ProductArtifactItem): boolean {
   const hasIdentity = !!item.title?.trim() && /^https?:\/\//i.test(String(item.productUrl || ''));
-  const hasVisual = !!String(item.imagePath || item.imageUrl || '').trim();
-  const hasProductMetadata = !!String(item.price || item.description || item.sku || item.asin || '').trim()
+  // Image is optional: the tile has a placeholder. Requiring one silently
+  // dropped real products whose page had no og:image (2 of 3 cables).
+  const hasProductMetadata = !!String(item.price || item.description || item.sku || item.asin || item.imagePath || item.imageUrl || '').trim()
     || item.rating != null || item.reviews != null || item.reviewCount != null;
-  return hasIdentity && hasVisual && hasProductMetadata;
+  return hasIdentity && hasProductMetadata;
 }
 
 /** Build a `products` rich artifact from the legacy productCarousel shape. */

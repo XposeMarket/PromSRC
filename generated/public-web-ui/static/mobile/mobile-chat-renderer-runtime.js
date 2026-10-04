@@ -3323,14 +3323,14 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       ? _mobileBackgroundDisplayTraceEntries(traceMessage.liveTraceEntries)
       : traceMessage.liveTraceEntries;
     const liveTraceHtml = streaming && Array.isArray(liveTraceEntries)
-      ? _renderMobileGroupedTrace(liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn, expandTools: !!options.backgroundAgentId })
+      ? _renderMobileGroupedTrace(liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
     const completedTraceEntries = !streaming
       ? _mobileBackgroundDisplayTraceEntries(_mobileWorkflowTraceEntriesForMessage(traceMessage))
       : [];
     const completedTraceHtml = !streaming
-      ? _renderMobileGroupedTrace(completedTraceEntries, { streaming: false, expandTools: !!options.backgroundAgentId })
+      ? _renderMobileGroupedTrace(completedTraceEntries, { streaming: false })
       : '';
     if (hasLiveTrace) {
       // Keep activity mounted through final-answer streaming. The work timer
@@ -4632,7 +4632,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       : _mobileBackgroundText(finalText, errorText, traceSummary, lane.task) || 'Working in parallel...';
     const isRunning = !['completed', 'failed', 'timed_out'].includes(status);
     const processHtml = entries.length
-      ? `<div class="pm-trace-drawer pm-background-spawn-trace" data-trace-live="1">${_renderMobileGroupedTrace(entries, { streaming: isRunning, openLiveCurrent: isRunning })}</div>`
+      ? `<div class="pm-trace-drawer pm-background-spawn-trace" data-trace-live="1">${_renderMobileGroupedTrace(entries, { streaming: isRunning })}</div>`
       : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
     const planHtml = _renderMobileBackgroundSpawnPlan(lane);
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);

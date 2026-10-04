@@ -1,9 +1,10 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { formatModelWithReasoning } from '../model-display.js';
+import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans } from './mobile-restart-continuity.js';
 
 export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
   if (!steer) return true;
@@ -3452,6 +3453,12 @@ void main() {
       ]);
       const recoveredBackgroundStatuses = Array.isArray(backgroundStatusResponse?.statuses) ? backgroundStatusResponse.statuses : [];
       if (!isCurrentRecoveryTarget()) return;
+      // Lanes are client memory; restore before the idle early-return below.
+      const liveBackground = restorableBg(recoveredBackgroundStatuses);
+      if (liveBackground.length && __pmChat.activeSessionId === requestedSession) {
+        void _recoverMobileBackgroundSpawnDock({ sessionId: requestedSession, statuses: liveBackground, dock: backgroundSpawnDock })
+          .then((changed) => { if (changed) updateChatComposerSpace(); }).catch(() => {});
+      }
       if (!force && !remembered && !status?.active) return;
       // Draft new-chat session has no server-side history — skip even when force=true
       if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
@@ -3873,6 +3880,11 @@ void main() {
           events = Array.isArray(replay?.events) ? replay.events : [];
           if (!isCurrentRecoveryTarget()) return;
         }
+        // Plan frames can sit before the cursor; the server keeps the latest.
+        if (replay?.stream?.progressState) {
+          _applyMobileMainPlanProgress(replay.stream.progressState, requestedSession);
+          _renderMobileMainPlanDock(mainPlanDock, requestedSession);
+        }
         if (shouldResetForReplay && events.length && String(aiTurn.workflowPart || '') !== 'before_interruption') {
           _resetMobileLiveAiTurnForReplay(aiTurn, {
             startedAt: Number(replay?.stream?.startedAt || status?.run?.startedAt || remembered?.startedAt || aiTurn.workStartedAt || aiTurn.timestamp || 0),
@@ -4287,6 +4299,7 @@ void main() {
   }
 
   function syncMobileBackgroundSpawnDockToComposer(composerRect = null) {
+    const pinnedBottom = pinChrome({ rect: composerRect, form, page, goalStrip, planDock: mainPlanDock, agentDock: backgroundSpawnDock, jumpButton: scrollLatestBtn });
     if (!backgroundSpawnDock) return;
     if (backgroundSpawnDock.hidden || !form) {
       backgroundSpawnDock.style.removeProperty('bottom');
@@ -4316,7 +4329,7 @@ void main() {
     // variables can drift when the document-scrolled mobile path or the iOS
     // keyboard changes the composer geometry. Anchor its bottom edge to the
     // measured composer top instead of guessing from those offsets.
-    const bottom = Math.max(0, Math.round(viewportHeight - composerTop + 8));
+    const bottom = pinnedBottom ?? Math.max(0, Math.round(viewportHeight - composerTop + 8));
     backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
 
     // The resting composer uses a responsive chrome inset, while a focused
@@ -4375,9 +4388,6 @@ void main() {
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
       syncMobileBackgroundSpawnDockToComposer(composerRect);
-      // The background-agent dock is a viewport-anchored chrome surface in
-      // both nested and document-scroll modes. Reserve its measured height so
-      // the composer and the latest-message affordance stay above the glass.
       const overlayDockHeight = dockHeight;
       const planDockHeight = mainPlanDock && !mainPlanDock.hidden
         ? Math.ceil(mainPlanDock.getBoundingClientRect?.().height || 0)
@@ -4393,8 +4403,6 @@ void main() {
       const hasExpandedSurface = goalStrip?.dataset?.expanded === 'true'
         || mainPlanDock?.classList?.contains('is-open')
         || backgroundSpawnDock?.classList?.contains('is-open');
-      // Open cards get a larger reading gutter than their collapsed pills. The
-      // extra 32px keeps the final chat/tool line visibly above the glass edge.
       const clearance = hasExpandedSurface || connectionHeight || queuedHeight ? 78 : (runtimeDockHeight ? 46 : 34);
       const space = Math.max(170, height + queuedHeight + stackedGoalHeight + toolProgressHeight + runtimeSurfaceHeight + connectionHeight + clearance);
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
@@ -4406,15 +4414,9 @@ void main() {
       } else {
         body.style.removeProperty('--pm-chat-voice-occlusion-top');
       }
-      // Reading scrollHeight forces the new inset to settle before restoring the
-      // bottom anchor. This avoids restoring against the old padding and leaving
-      // the newest chat line underneath an opening card.
+      // Settle the new inset before restoring the bottom anchor.
       void body.scrollHeight;
-      // Focusing the composer is a special case on iOS.  The document can
-      // still report the old bottom anchor while Safari is opening the
-      // keyboard; restoring that anchor here makes the fixed composer get
-      // covered until the user manually scrolls.  Leave the current document
-      // position alone while the composer owns the keyboard transition.
+      // While the composer owns the iOS keyboard, leave document scroll alone.
       const composerOwnsKeyboard = document.body?.classList?.contains('pm-keyboard-open')
         || document.activeElement === input
         || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
@@ -4432,14 +4434,8 @@ void main() {
       } else if (!composerOwnsKeyboard) _restoreMobileChatScroll(body, scrollSnapshot);
       const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
       const shift = Math.max(-64, Math.min(64, space - previousSpace));
-      // Once the composer owns the keyboard, the visual-viewport controller is
-      // already repositioning the fixed composer. A second WAAPI translation
-      // on the transcript makes the keyboard hand-off visibly flicker on iOS,
-      // especially while ResizeObserver reports the intermediate heights.
+      // No transcript WAAPI shift during the keyboard hand-off (iOS flicker).
       if (!reduceMotion && !composerOwnsKeyboard && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
-        // ResizeObserver can fire on several consecutive frames while the
-        // composer or a runtime card grows. Continue from the current visual
-        // offset instead of restarting from zero on every measurement.
         let currentOffset = 0;
         try {
           const matrix = new DOMMatrixReadOnly(getComputedStyle(threadEl).transform);
@@ -4471,7 +4467,7 @@ void main() {
   // than relying on each feature to remember to request a remeasurement.
   const chatSurfaceResizeObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => {
-      if (_pmKbFocusActive) _scheduleKeyboardOffset();
+      if (_pmKbFocusActive) { _pmKbScheduleComposerPositionRepair(true); _scheduleKeyboardOffset(); }
       updateChatComposerSpace();
     })
     : null;
@@ -5719,10 +5715,20 @@ void main() {
     });
   }
   let _pmKbComposerRepairRaf = 0;
-  function _pmKbScheduleComposerPositionRepair() {
+  // `immediate`: repair before paint so the composer never rides a panning viewport.
+  function _pmKbScheduleComposerPositionRepair(immediate = false) {
     if (sideSheet?.classList.contains('open')) { syncMobileSideSheetViewport(); return; }
-    if (_pmKbComposerRepairRaf || !_pmKbFocusActive || !_pmKbViewportMode) return;
-    _pmKbComposerRepairRaf = requestAnimationFrame(() => {
+    if (!_pmKbFocusActive || !_pmKbViewportMode) return;
+    if (immediate) {
+      if (_pmKbComposerRepairRaf) cancelAnimationFrame(_pmKbComposerRepairRaf);
+      _pmKbRunComposerRepair();
+      return;
+    }
+    if (_pmKbComposerRepairRaf) return;
+    _pmKbComposerRepairRaf = requestAnimationFrame(_pmKbRunComposerRepair);
+  }
+  function _pmKbRunComposerRepair() {
+    {
       _pmKbComposerRepairRaf = 0;
       if (!_pmKbFocusActive || !_pmKbViewportMode) return;
       const composer = _pmKbActiveComposer();
@@ -5750,29 +5756,15 @@ void main() {
         composerHeight: rect.height,
       });
       const drift = desiredTop - Math.round(rect.top);
-      // desiredTop now follows the live keyboard edge, so any visible drift is
-      // real (panning or a stale layout). Snap it; sub-2px is rounding noise.
       if (Math.abs(drift) < 2) return;
       const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
       let nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
-      // The correction is relative (currentTop + drift) because in the iOS
-      // fixed/static failure mode the rendered rect and style.top differ. If
-      // Safari reports a transient rect mid-animation, repeated relative
-      // corrections can walk style.top down to 0, which parks the composer at
-      // the top of the screen. With the keyboard open the composer can never
-      // legitimately sit in the top portion of the visible area, so fall back
-      // to the absolute keyboard-edge position instead.
+      // Relative correction; out of band means a transient rect, so use absolute.
       const visibleTop = Math.max(0, Number(vv?.offsetTop || 0));
       const floor = Math.round(visibleTop + visualHeight * 0.3);
-      // Symmetric guard: the composer must also never sit below the keyboard
-      // edge (bottom of the visual viewport), where it is hidden behind the
-      // keyboard. Out-of-band on either side means the relative correction
-      // used a transient rect, so use the absolute keyboard-edge position.
       const ceiling = Math.round(visibleTop + visualHeight - rect.height);
       if ((nextTop < floor || nextTop > ceiling) && desiredTop >= floor && desiredTop <= ceiling + 24) nextTop = desiredTop;
       composer.style.setProperty('top', `${nextTop}px`, 'important');
-      // Verify on the next frame; if it still rendered near the top, pin it to
-      // the absolute position rather than leaving it stuck up there.
       requestAnimationFrame(() => {
         if (!_pmKbFocusActive || !composer.isConnected) return;
         const after = composer.getBoundingClientRect?.();
@@ -5785,7 +5777,7 @@ void main() {
           composer.style.setProperty('top', `${desiredTop}px`, 'important');
         }
       });
-    });
+    }
   }
   // Verify the composer actually rendered inside the visible area above the
   // keyboard. getBoundingClientRect and visualViewport.offsetTop share the
@@ -5962,14 +5954,14 @@ void main() {
   // composer chase offsetTop and visibly flicker while chat scrolls.
   const _onVvScroll = () => {
     if (_pmKbFocusActive && _pmKbViewportMode) {
-      _pmKbScheduleComposerPositionRepair();
+      _pmKbScheduleComposerPositionRepair(true);
       return;
     }
     _scheduleKeyboardOffset();
   };
   const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
   const _onWindowKeyboardScroll = () => {
-    if (_pmKbFocusActive && _pmKbViewportMode) _pmKbScheduleComposerPositionRepair();
+    if (_pmKbFocusActive && _pmKbViewportMode) _pmKbScheduleComposerPositionRepair(true);
   };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
@@ -8549,7 +8541,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (_findMobileCompletedTurn(activeThread, evt, requestedSession)) return 'duplicate';
     _markMobileSessionRunning(requestedSession, true);
-    let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
+    // Steer continuation first: merges strip its request id (IMG_0211).
+    const steerRow = liveSteer(activeThread, incomingClientRequestId, { create: true });
+    let aiTurn = steerRow || _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
+    if (steerRow) dropOrphans(activeThread, steerRow);
     const foundRequestOwnedTurn = !!aiTurn;
     if (!aiTurn) {
       const latestAssistant = _findLatestAssistantTurn(activeThread);
@@ -8664,7 +8659,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const run = __pmChat.activeRuns?.[requestedSession] || {};
     if (streamId === run.streamId && Number(run.lastSeq || 0) > seq) return;
     const thread = _activeMobileThread();
-    let aiTurn = _findLatestAssistantTurn(thread);
+    let aiTurn = liveSteer(thread, run.clientRequestId, { create: true }) || _findLatestAssistantTurn(thread);
     // Snapshot = "mid-turn" signal only; painting it caused raw TOOL rows + glued commentary. Replay owns the timeline.
     if (aiTurn?.processEntries) aiTurn.processEntries = aiTurn.processEntries.filter((e) => !e?._pmStreamSnapshot);
     const sameLocalStream = !!aiTurn && aiTurn.streaming === true

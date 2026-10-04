@@ -942,6 +942,8 @@ type MainChatStreamState = {
   completedAt?: number;
   terminalReason?: string;
   abortExecution?: (reason: string) => void;
+  /** Latest declared plan; replay cursors can skip its frames. */
+  progressState?: any;
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
@@ -1080,6 +1082,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     at: Date.now(),
     data: cleanData,
   };
+  if (frame.type === 'progress_state') stream.progressState = frame.data;
   const delivery = classifyMainChatStreamEvent(frame.type, frame.data);
   const retain = delivery.retain;
   if (retain) {
@@ -19930,6 +19933,7 @@ router.get('/api/mobile/chat/stream/:sessionId', requireSafeSessionParam, (req, 
         nextSeq: stream.nextSeq,
         firstSeq: stream.events[0]?.seq || 0,
         lastSeq: stream.events[stream.events.length - 1]?.seq || 0,
+        progressState: stream.progressState || null,
       } : null,
       events: frames,
     });
