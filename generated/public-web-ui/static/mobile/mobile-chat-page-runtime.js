@@ -3560,7 +3560,7 @@ void main() {
           recoverySteerBoundary = steerUser;
         }
       }
-      // A successful status request proves the client reconnected.
+      // A status reply proves the client reconnected.
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
       const runStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0) || 0;
       const activeRunKind = String(status?.run?.kind || '').trim();
