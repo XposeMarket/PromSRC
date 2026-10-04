@@ -4420,9 +4420,9 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   if (evt.type === 'error') lane.status = 'failed';
   else if (evt.type === 'final' || evt.type === 'done') lane.status = 'completed';
   _queueMobileBackgroundWorkPersistence(lane);
-  if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
-  const statusChanged = previousStatus !== String(lane.status || '').trim().toLowerCase();
-  return changed || laneChanged || !previousLane || statusChanged;
+  const statusChanged=previousStatus!==lane.status;
+  if ((!previousLane||statusChanged)&&mobileSourceState.sessionId===lane.sessionId&&!mobileSourceState.history)_renderMobileSourceList(document);
+  return changed||laneChanged||!previousLane||statusChanged;
 }
 
 function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {

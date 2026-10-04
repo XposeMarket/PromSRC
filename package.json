@@ -150,6 +150,7 @@
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs && node scripts/test-mobile-restart-hold-policy.mjs",
     "test:mobile-stream-receipts": "node scripts/test-mobile-stream-receipts.mjs",
+    "bench:mobile-multithread": "node scripts/bench-mobile-multithread.mjs replay",
     "test:mobile-agent-activity": "node scripts/test-mobile-agent-activity-ui.mjs",
     "test:mobile-reasoning-summary": "node scripts/test-mobile-reasoning-summary-lifecycle.mjs",
     "test:tool-activity-stream": "node scripts/test-tool-activity-stream.mjs",

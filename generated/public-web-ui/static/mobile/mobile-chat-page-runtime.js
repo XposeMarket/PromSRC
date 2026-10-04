@@ -8838,6 +8838,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   };
   const onBackgroundSpawnEvent = (msg = {}) => {
     if (__pmChat.activeSessionId !== requestedSession) return;
+    const parent = msg.spawnerSessionId || msg.parentSessionId || msg.mainSessionId;
+    if (parent && parent !== requestedSession) return;
     if (!_pushMobileBackgroundSpawnEvent(msg, requestedSession)) return;
     scheduleMobileBackgroundAgentUiUpdate();
   };
