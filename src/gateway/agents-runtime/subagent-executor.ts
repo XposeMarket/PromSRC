@@ -5625,7 +5625,12 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 
   if (name === 'show_sources') {
     const normalizedItems = normalizeSourceArtifactItems(Array.isArray(args?.items) ? args.items : []);
-    const items = await enrichSourceArtifactItems(normalizedItems);
+    // Items the model already wrote out need no page fetch (was 1.7 s for 3
+    // links); only bare URLs are enriched, with a short budget.
+    const complete = (i: any) => !!String(i?.title || '').trim() && !!String(i?.url || '').trim();
+    const items = normalizedItems.every(complete)
+      ? normalizedItems
+      : await enrichSourceArtifactItems(normalizedItems, { metadataTimeoutMs: 1200, imageTimeoutMs: 1000 });
     if (!items.length) return { name, args, result: 'show_sources requires at least one item with a title or url.', error: true };
     args = { ...args, items };
     try {
