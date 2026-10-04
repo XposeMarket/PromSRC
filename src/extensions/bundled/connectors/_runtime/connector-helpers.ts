@@ -37,6 +37,16 @@ export function connectorConnected(connectorId: string): boolean {
   }
 }
 
+/** Honest status line for connector_list: distinguishes a dead login from never-connected. */
+export function connectorStatusLabel(connectorId: string): string {
+  try {
+    const status = (getConnector(connectorId) as { authStatus?: () => { state: string; reason?: string } } | undefined)?.authStatus?.();
+    if (status?.state === 'reauth_required') return `reconnect required (${status.reason || 'login rejected'})`;
+    if (status?.state === 'connected') return 'connected';
+  } catch { /* fall through */ }
+  return connectorConnected(connectorId) ? 'connected' : 'not connected';
+}
+
 export function connectorHasCredentials(connectorId: string): boolean {
   try {
     return Boolean((getConnector(connectorId) as { hasCredentials?: () => boolean } | undefined)?.hasCredentials?.());

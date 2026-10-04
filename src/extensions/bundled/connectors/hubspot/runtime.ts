@@ -1,7 +1,7 @@
 // Native HubSpot connector runtime. See §23B. Auth stays in HubSpotConnector.
 import type { HubSpotConnector } from '../../../../integrations/connectors/hubspot.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
-import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'hubspot';
@@ -21,7 +21,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerConnector({
       id: ID, name: NAME, authType: 'oauth', capabilities: ['crm'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
-      describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+      describeStatus: () => connectorStatusLabel(ID),
     });
 
     registerConnectorApiRequestTool<HubSpotConnector>(api, {

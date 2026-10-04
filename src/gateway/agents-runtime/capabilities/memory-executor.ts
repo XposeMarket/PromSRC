@@ -194,7 +194,10 @@ async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boo
         }, { signal: ctx.deps?.abortSignal?.signal }),
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error(`structured memory index busy (>${timeoutMs}ms, likely maintenance); skipped`)), timeoutMs)),
       ]);
-      sections.push(`STRUCTURED MEMORY INDEX (decisions/tasks/proposals; scores are relative, not confidence):\n${compactMemorySearchResult(structured)}`);
+      const { formatStructuredMemoryHits } = require('../../tools/core-tool-normalizers');
+      sections.push(args?.debug === true
+        ? `STRUCTURED MEMORY INDEX (raw):\n${compactMemorySearchResult(structured)}`
+        : `STRUCTURED MEMORY INDEX (decisions/tasks/proposals; use memory_read_record with id for detail):\n${formatStructuredMemoryHits(structured)}`);
     } catch (err: any) {
       sections.push(`STRUCTURED MEMORY INDEX: ${String(err?.message || err)}`);
     }

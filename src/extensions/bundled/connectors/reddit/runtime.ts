@@ -1,7 +1,7 @@
 // Native Reddit connector runtime. See §23B. Auth stays in RedditConnector.
 import type { RedditConnector } from '../../../../integrations/connectors/reddit.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
-import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'reddit';
@@ -21,7 +21,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerConnector({
       id: ID, name: NAME, authType: 'oauth', capabilities: ['social'], toolNames: tools,
       isConnected: () => connectorConnected(ID), hasCredentials: () => connectorHasCredentials(ID),
-      describeStatus: () => (connectorConnected(ID) ? 'connected' : 'not connected'),
+      describeStatus: () => connectorStatusLabel(ID),
     });
 
     registerConnectorApiRequestTool<RedditConnector>(api, {

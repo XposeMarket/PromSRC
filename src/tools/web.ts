@@ -1090,7 +1090,9 @@ export async function executeWebSearch(args: {
   const providerOrder = providerOverride && providerOverride !== 'multi'
     ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai']
     : !useMultiEngine
-      ? [cfg.preferred]
+      // Preferred first; other keyed engines only run if it fails (the loop
+      // returns on first success), so one slow/dead provider never fails the call.
+      ? [cfg.preferred, ...(['brave', 'tinyfish', 'tavily', 'google'] as const).filter(p => p !== cfg.preferred)]
       : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
 
   // ── Multi-engine mode: query all configured providers in parallel, merge results ──
@@ -2635,6 +2637,21 @@ function isWeakProductCandidate(item: SearchResultItem, title: string, price?: s
   if (!title || title.length < 8) return true;
   if (/\/(?:search|s|b)\?/.test(url) && !price && !/\b(?:out of 5|stars?|reviews?|ratings?)\b/i.test(text)) return true;
   if (/\b(?:customer service|help|returns policy|gift cards|sell on)\b/i.test(text)) return true;
+  if (isNonProductPage(item.url, item.title || '', price)) return true;
+  return false;
+}
+
+// Reviews, roundups, videos, and forums answer "which one" but are not products
+// you can buy; they belong in web_search, not the product carousel.
+const NON_PRODUCT_HOSTS = /(?:^|\.)(?:youtube\.com|youtu\.be|tiktok\.com|reddit\.com|quora\.com|wikipedia\.org|nytimes\.com|rtings\.com|tomsguide\.com|tomshardware\.com|cnet\.com|theverge\.com|pcmag\.com|wired\.com|engadget\.com|techradar\.com|zdnet\.com|gizmodo\.com|businessinsider\.com|forbes\.com|medium\.com|consumerreports\.org|goodhousekeeping\.com|reviewed\.com|androidauthority\.com|9to5mac\.com|macrumors\.com)$/i;
+
+export function isNonProductPage(url: string, title: string, price?: string): boolean {
+  let host = '';
+  let pathname = '';
+  try { const u = new URL(String(url || '')); host = u.hostname.replace(/^www\./, ''); pathname = u.pathname.toLowerCase(); } catch { return false; }
+  if (NON_PRODUCT_HOSTS.test(host)) return true;
+  if (/\/(?:reviews?\/best|best-|blog|articles?|news|guides?|watch|video)s?(?:\/|-|$)/.test(pathname) && !/\/(?:dp|gp\/product|product|products|p|ip|itm|sku)\//.test(pathname)) return true;
+  if (!price && /^(?:the\s+)?\d*\s*best\b|\b(?:review|reviews|vs\.?|versus|tested|buying guide|top \d+)\b/i.test(String(title || ''))) return true;
   return false;
 }
 

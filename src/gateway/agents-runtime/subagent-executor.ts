@@ -463,6 +463,7 @@ import {
   claimBrainDreamProposalSlot,
   releaseBrainDreamProposalSlot,
 } from '../brain/brain-proposal-policy.js';
+import { normalizeChartSeriesArgs } from '../tools/core-tool-normalizers.js';
 
 const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
 let cachedSourceAccessRoot: { workspace: string; sessionId: string; taskRevision: number; root: string } | null = null;
@@ -5680,7 +5681,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
   }
 
   if (name === 'show_chart') {
-    const series = (Array.isArray(args?.series) ? args.series : [])
+    const series = normalizeChartSeriesArgs(args)
       .map((s: any) => ({
         label: s?.label ? String(s.label) : undefined,
         color: s?.color ? String(s.color) : undefined,

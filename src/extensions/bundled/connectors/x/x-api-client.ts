@@ -1,6 +1,7 @@
 // X API v2 client + tool executor for the native X connector. Moved out of
 // gateway/tools/handlers/xai-handlers.ts (which now only handles xAI x_search).
 import { getValidXApiToken } from '../../../../auth/x-api-oauth.js';
+import { getVault } from '../../../../security/vault.js';
 import { validateXApiRequest } from '../../../../gateway/tools/x-api-request-policy.js';
 import {
   X_API_ADD_LIST_MEMBER_TOOL_NAME,
@@ -119,6 +120,39 @@ function clampMaxResults(value: any, fallback?: number): number | undefined {
   return Math.max(1, Math.min(100, Math.floor(n)));
 }
 
+/** Turn X API failures the user must act on into plain instructions. */
+export function describeXApiError(status: number, text: string): string {
+  const body = String(text || '');
+  if (status === 402 || /credits-depleted|credits depleted/i.test(body)) {
+    return `X API 402: the X developer account is out of API credits, so every X API call fails until credits are added at https://console.x.com (billing). Raw: ${body.slice(0, 200)}`;
+  }
+  if (status === 403 && /unsupported-authentication|Application-Only/i.test(body)) {
+    return `X API 403: this endpoint only accepts an app-only Bearer token, not the user OAuth login. Save the app's Bearer token as vault key "integration.x.app_bearer_token" (or env PROMETHEUS_X_APP_BEARER_TOKEN) to enable it. Raw: ${body.slice(0, 200)}`;
+  }
+  return `X API ${status}: ${body.slice(0, 500)}`;
+}
+
+function loadXAppBearerToken(): string {
+  const fromEnv = String(process.env.PROMETHEUS_X_APP_BEARER_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const secret = getVault(getConfigDir()).get('integration.x.app_bearer_token', 'x-api:app-bearer:load');
+    return secret ? String(secret.expose()).trim() : '';
+  } catch { return ''; }
+}
+
+/** Application-only request (usage endpoints reject user-context OAuth). */
+async function fetchXApiAppOnly(path: string): Promise<any> {
+  const bearer = loadXAppBearerToken();
+  if (!bearer) throw new Error(describeXApiError(403, 'unsupported-authentication: Application-Only token required and none is configured'));
+  const res = await fetch(`${X_API_BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${bearer}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(describeXApiError(res.status, await res.text().catch(() => '')));
+  return res.json();
+}
+
 async function fetchXApi(path: string, init: RequestInit & { query?: Record<string, any> } = {}): Promise<any> {
   const token = await getValidXApiToken(getConfigDir());
   const requestPath = buildXApiPath(path, init.query);
@@ -134,7 +168,7 @@ async function fetchXApi(path: string, init: RequestInit & { query?: Record<stri
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`X API ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error(describeXApiError(res.status, text));
   }
   if (res.status === 204) return {};
   const text = await res.text().catch(() => '');
@@ -508,7 +542,7 @@ export async function executeXApiTool(name: string, args: any): Promise<{ succes
     }
 
     if (name === X_API_GET_USAGE_TOOL_NAME) {
-      const data = await fetchXApi('/usage/tweets');
+      const data = await fetchXApiAppOnly('/usage/tweets');
       return { success: true, tool: name, data };
     }
 
