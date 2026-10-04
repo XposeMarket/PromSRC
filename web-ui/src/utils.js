@@ -10,6 +10,8 @@
 
 import { installVideoProjectCards } from './components/video-project-card.js';
 import { installGameProjectCards } from './components/game-project-card.js';
+import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
+export { withoutInlineCards };
 
 // ─── HTML Escaping ─────────────────────────────────────────────
 // NOTE: The original index.html had TWO escape functions:
@@ -324,23 +326,26 @@ function visualThemeCss(theme) {
 
 export function buildVisualSrcdoc(lang, code, themeInput) {
   const theme = normalizeVisualTheme(themeInput);
+  // Mermaid parses colors itself and throws on currentColor/transparent/var().
+  const mc = (v, dark, light) => (!v || /^(currentColor|transparent|inherit)$/i.test(String(v).trim()) || /var\(/.test(String(v)) ? (theme.isDark ? dark : light) : v);
+  const fg = mc(theme.text, '#e6edf3', '#1f2328');
   const mermaidThemeVariables = visualScriptJson({
     background: 'transparent',
-    primaryColor: theme.surface,
-    primaryTextColor: theme.text,
-    primaryBorderColor: theme.borderStrong,
-    lineColor: theme.muted,
-    secondaryColor: theme.surfaceSecondary,
-    secondaryTextColor: theme.text,
-    secondaryBorderColor: theme.border,
-    tertiaryColor: theme.bgSoft,
-    tertiaryTextColor: theme.text,
-    tertiaryBorderColor: theme.border,
-    textColor: theme.text,
-    mainBkg: theme.surface,
-    nodeBorder: theme.borderStrong,
-    clusterBkg: theme.surfaceSecondary,
-    clusterBorder: theme.border,
+    primaryColor: mc(theme.surface, '#1b2733', '#f3f5f8'),
+    primaryTextColor: fg,
+    primaryBorderColor: mc(theme.borderStrong, '#4a5a6b', '#9aa7b4'),
+    lineColor: mc(theme.muted, '#8b98a5', '#57606a'),
+    secondaryColor: mc(theme.surfaceSecondary, '#22303d', '#e9edf2'),
+    secondaryTextColor: fg,
+    secondaryBorderColor: mc(theme.border, '#33424f', '#c9d1d9'),
+    tertiaryColor: mc(theme.bgSoft, '#15202a', '#f6f8fa'),
+    tertiaryTextColor: fg,
+    tertiaryBorderColor: mc(theme.border, '#33424f', '#c9d1d9'),
+    textColor: fg,
+    mainBkg: mc(theme.surface, '#1b2733', '#f3f5f8'),
+    nodeBorder: mc(theme.borderStrong, '#4a5a6b', '#9aa7b4'),
+    clusterBkg: mc(theme.surfaceSecondary, '#22303d', '#e9edf2'),
+    clusterBorder: mc(theme.border, '#33424f', '#c9d1d9'),
     edgeLabelBackground: 'transparent',
   });
   const chartTheme = visualScriptJson({ text: theme.text, muted: theme.muted, border: theme.border, series: theme.series });
@@ -705,7 +710,7 @@ window.addEventListener('message',function(event){var data=event&&event.data;if(
 window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})}};
 window.openai=window.openai||{};window.openai.widgetState=state;window.openai.setWidgetState=function(next){window.prometheusVisual.setState(next)};window.openai.sendFollowUpMessage=function(input){window.prometheusVisual.sendFollowUpMessage(input);return Promise.resolve()};
 restoreControls();document.addEventListener('input',captureControls,true);document.addEventListener('change',captureControls,true);document.addEventListener('toggle',captureControls,true);
-if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
+if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});var errs=0;addEventListener('error',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.message||'Script error').slice(0,240)})});addEventListener('unhandledrejection',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.reason&&e.reason.message||e&&e.reason||'Unhandled promise rejection').slice(0,240)})});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
   const html = String(srcdoc || '');
   return /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => `${head}${bridge}`) : `${bridge}${html}`;
 }
@@ -749,6 +754,26 @@ function installVisualMessageBridge() {
     }
     if (data.type === 'prometheus:visual-state' && data.state && typeof data.state === 'object') {
       window.dispatchEvent(new CustomEvent('prometheus:visual-state-change', { detail: { visualId, state: data.state } }));
+      return;
+    }
+    if (data.type === 'prometheus:visual-error') {
+      // A crashed mini-app gets one "Ask Prom to fix it" pill under it (handled
+      // by the cards runtime's delegated data-pc-act="send" listener).
+      const host = frame.closest('.visual-block') || frame;
+      if (host.nextElementSibling?.classList?.contains('pc-visual-error')) return;
+      const message = String(data.message || 'Script error').slice(0, 240);
+      const pill = document.createElement('div');
+      pill.className = 'pc-visual-error';
+      const label = document.createElement('span');
+      label.textContent = `This visual hit an error: ${message}`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pc-chip';
+      btn.setAttribute('data-pc-act', 'send');
+      btn.setAttribute('data-prompt', `The interactive visual you made crashed with: ${message}. Please fix it and resend the whole visual.`);
+      btn.textContent = 'Ask Prom to fix it';
+      pill.append(label, btn);
+      host.insertAdjacentElement('afterend', pill);
       return;
     }
     if (data.type === 'prometheus:visual-followup' && data.prompt) {
@@ -1090,6 +1115,8 @@ export function renderMd(text, options = {}) {
   const source = String(text);
   const cacheable = source.length <= RENDER_MD_CACHEABLE_MAX_CHARS
     && !/```(chart|svg|html|mermaid)\n/.test(source)
+    && !hasCardFence(source)
+    && !(INLINE_CARD_RE.lastIndex = 0, INLINE_CARD_RE.test(source))
     && !(Array.isArray(options.visualArtifacts) && options.visualArtifacts.length);
   if (cacheable) {
     const hit = renderMdCache.get(source);
@@ -1134,11 +1161,11 @@ function gameProjectCardHtml(body) {
 }
 
 function renderMdUncached(text, options = {}) {
+  const vpCards = [];
+  const vpPrefix = `PROMVPCARD${Math.random().toString(36).slice(2)}X`;
   try {
     const visuals = [];
     const placeholderPrefix = `PROMVISUAL${Math.random().toString(36).slice(2)}X`;
-    const vpCards = [];
-    const vpPrefix = `PROMVPCARD${Math.random().toString(36).slice(2)}X`;
     text = String(text)
       .replace(VIDEO_PROJECT_FENCE_RE, (_, body) => {
         vpCards.push(videoProjectCardHtml(body));
@@ -1150,6 +1177,14 @@ function renderMdUncached(text, options = {}) {
         return `\n\n${vpPrefix}${vpCards.length - 1}END\n\n`;
       })
       .replace(GAME_PROJECT_OPEN_RE, '');
+    // ```quiz / flashcards / poll / writing / followups / reminder -> native cards (cards/).
+    const extracted = extractCardFences(text, vpPrefix + 'C');
+    text = extracted.text;
+    extracted.cards.forEach((html, i) => { vpCards.push(html); text = text.replace(`${vpPrefix}C${i}END`, `${vpPrefix}${vpCards.length - 1}END`); });
+    // {{card:REF}} -> the show_ui_card artifact placed inline (unknown refs vanish).
+    const inline = extractInlineCards(text, vpPrefix + 'I', options.visualArtifacts, options.renderArtifact);
+    text = inline.text;
+    inline.cards.forEach((html, i) => { vpCards.push(html); text = text.replace(`${vpPrefix}I${i}END`, `${vpPrefix}${vpCards.length - 1}END`); });
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
@@ -1174,9 +1209,9 @@ function renderMdUncached(text, options = {}) {
       withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `${placeholderPrefix}${idx}END`;
     }
 
-    let html = resolveWorkspaceImageSources(
+    let html = citeChips(resolveWorkspaceImageSources(
       sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false })),
-    );
+    ));
 
     if (visuals.length) {
       const placeholderRe = new RegExp(`${placeholderPrefix}(\\d+)END`, 'g');
@@ -1195,7 +1230,8 @@ function renderMdUncached(text, options = {}) {
 
     return html;
   } catch (e) {
-    return escHtml(text);
+    // Never leak card placeholder tokens: cards still render when markdown fails.
+    return escHtml(text).replace(new RegExp(`${vpPrefix}(\\d+)END`, 'g'), (_, i) => vpCards[+i] || '');
   }
 }
 
@@ -1206,6 +1242,8 @@ window.sanitizeHtml = sanitizeHtml;
 window.renderMd = renderMd;
 installVideoProjectCards();
 installGameProjectCards();
+installPromCards();
+window.renderPromDataCard = renderDataCard;
 window.timeAgo = timeAgo;
 window.fmtPercent = fmtPercent;
 window.fmtMemoryGb = fmtMemoryGb;

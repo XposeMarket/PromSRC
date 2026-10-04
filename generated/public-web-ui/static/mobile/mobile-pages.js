@@ -85,7 +85,7 @@ import {
   setPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { getAccount } from '../auth/account.js';
-import { renderMd, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { renderMd, setInnerHTMLPreservingVisuals, withoutInlineCards } from '../utils.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import './mobile-login-handoff.js';
@@ -260,6 +260,16 @@ if (!window.__pmMobileCompletionToastBridgeInstalled) {
       summary: msg.result || msg.error || msg.taskPrompt || msg.task || 'A background agent completed its work.',
       route: _mobileCompletionRoute(msg),
     });
+  });
+  // Every device (and a WS frame that beats the POST response) splits the
+  // turn at the server's steer boundary; _appendMobileQueuedSteerTurn dedupes
+  // by the durable messageId so the originating phone never splits twice.
+  wsEventBus.on('chat_steer', (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    const text = String(msg.displayMessage || msg.message || '').trim();
+    if (!sid || !text || !msg.messageId || !Array.isArray(__pmChat.threads?.[sid])) return;
+    if (!__pmChat.activeRuns?.[sid]?.busy && !_readMobileActiveRun(sid)) return;
+    try { _appendMobileQueuedSteerTurn(sid, text, msg); } catch (err) { console.warn('[mobile chat] steer split failed:', err); }
   });
   wsEventBus.on('main_chat_stream_event', (msg = {}) => {
     if (String(msg.event || '') !== 'final') return;
@@ -1812,7 +1822,10 @@ function _mapServerMessageToMobile(m, index = -1) {
   const rawContent = isLegacyGoalRuntimePrompt
     ? (legacyGoalRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.')
     : storedContent;
-  const content = role === 'user' ? _stripMobileInternalUploadContext(rawContent) : rawContent;
+  const content = role === 'user'
+    ? _stripMobileInternalUploadContext(rawContent)
+    // Trace-only rows (steer before-rows) were stored with this placeholder.
+    : (/^\[Internal tool observation omitted\.\]$/.test(rawContent.trim()) ? '' : rawContent);
   const attachmentPreviews = Array.isArray(m?.attachmentPreviews) ? m.attachmentPreviews : [];
   return {
     role,
@@ -2635,7 +2648,12 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     latestAi.workflowLabel = 'Tool stream before steer';
     latestAi.workflowBoundarySeq = workflowBoundarySeq;
     latestAi.workflowStreamId = workflowStreamId;
-    if (!String(latestAi.messageId || '').trim()) latestAi.messageId = `${workflowGroupId}:before`;
+    // Same identity as the server's durable before-steer row, so history merges
+    // dedupe instead of showing the pre-steer stream twice.
+    const beforeId = String(data?.beforeMessageId || '').trim();
+    if (beforeId) latestAi.messageId = beforeId;
+    else if (!String(latestAi.messageId || '').trim()) latestAi.messageId = `${workflowGroupId}:before`;
+    latestAi.steerContinuationMessageId = `${workflowGroupId}:continuation`;
     if (latestAi.streaming) {
       latestAi.streaming = false;
       latestAi.workEndedAt = Number(latestAi.workEndedAt || Date.now()) || Date.now();
@@ -2683,7 +2701,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
   }
   _saveMobileThreadCache(sid, thread);
-  void _persistMobileChatSteerSnapshot(sid);
+  // The steer endpoint already persists the before-row and steer row. A client
+  // snapshot here wrote an empty streaming continuation into durable history,
+  // which later duplicated the final continuation on reload/recovery.
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
   if (threadEl && String(__pmChat.activeSessionId || '') === sid) {
@@ -2739,7 +2759,11 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     });
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
-    _appendMobileQueuedSteerTurn(sid, message, { ...(result || {}), workflowBoundarySeq, workflowStreamId });
+    // The steer just emptied the queue under the user's thumb; don't let the
+    // next tap land on Stop.
+    __pmChat.stopSoftLockUntil = Date.now() + 2500;
+    // Server boundary (stream position at acceptance) wins over the client guess.
+    _appendMobileQueuedSteerTurn(sid, message, { workflowBoundarySeq, workflowStreamId, ...(result || {}) });
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     const errorText = String(err?.message || err || '');
@@ -3537,6 +3561,7 @@ function _renderMobileMarkdown(text, message = null) {
   try {
     return _wrapMobileMarkdownTables(renderMd(raw, {
       visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [],
+      renderArtifact: (a) => _renderMobileRichArtifacts({ richArtifacts: [a] }),
     }));
   } catch {
     return escapeHtml(raw).replace(/\n/g, '<br>');
@@ -7730,7 +7755,7 @@ function _handleMobileEmailComposerAction(button) {
 }
 
 function _renderMobileRichArtifacts(message) {
-  const artifacts = Array.isArray(message?.richArtifacts) ? message.richArtifacts : [];
+  const artifacts = withoutInlineCards(message);
   if (!artifacts.length) return '';
   return artifacts.map((a) => {
     switch (a?.type) {
@@ -7745,7 +7770,7 @@ function _renderMobileRichArtifacts(message) {
       case 'map': return _renderMobileMap(a);
       case 'prediction_market': return _renderMobilePredictionMarket(a);
       case 'email_composer': return _renderMobileEmailComposerArtifact(a);
-      default: return '';
+      default: return window.renderPromDataCard?.(a) || '';
     }
   }).join('');
 }
@@ -7906,7 +7931,7 @@ function _pmRichMapSrcdoc(center, markers, zoom) {
   const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng))).map((m) => ({ ...m, lat: Number(m.lat), lng: Number(m.lng) }));
   const fallback = located[0] || { lat: 0, lng: 0 };
   const payload = JSON.stringify({ center: { lat: Number(center?.lat) || fallback.lat, lng: Number(center?.lng) || fallback.lng }, zoom: Math.max(2, Math.min(18, Number(zoom) || 12)), markers: located }).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css"><style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden;background:#09151d}.maplibregl-canvas{filter:brightness(.72) saturate(.82) contrast(1.06)}.maplibregl-ctrl-group{overflow:hidden!important;border:1px solid rgba(164,205,219,.22)!important;border-radius:10px!important;background:rgba(10,25,34,.86)!important;box-shadow:0 8px 22px rgba(0,0,0,.3)!important}.maplibregl-ctrl-group button{width:30px!important;height:30px!important}.maplibregl-ctrl-group button span{filter:invert(1) hue-rotate(145deg) saturate(.55)}.maplibregl-ctrl-attrib{padding:2px 6px!important;border-radius:8px 0 0 0!important;background:rgba(8,20,28,.74)!important;color:#9eb4bd!important;font:9px/1.25 system-ui!important}.maplibregl-ctrl-attrib a{color:#c2d6da!important}.pm-pin{width:17px;height:17px;border:3px solid #f5fbfc;border-radius:50% 50% 50% 0;background:#31b6cf;box-shadow:0 0 0 4px rgba(49,182,207,.2),0 5px 14px rgba(0,0,0,.45);transform:rotate(-45deg)}.pm-pin:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#073745}.maplibregl-popup-content{padding:8px 10px!important;border:1px solid rgba(166,221,230,.2)!important;border-radius:10px!important;background:#0d202a!important;color:#e9f5f7!important;font:11px/1.3 system-ui!important}.maplibregl-popup-tip{border-top-color:#0d202a!important;border-bottom-color:#0d202a!important}</style></head><body><div id="map"></div><script src="/vendor/maplibre/maplibre-gl.js"><\/script><script>const payload=${payload};const map=new maplibregl.Map({container:'map',style:{version:8,sources:{carto:{type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],tileSize:256,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'}},layers:[{id:'background',type:'background',paint:{'background-color':'#09151d'}},{id:'carto',type:'raster',source:'carto',paint:{'raster-saturation':-.18,'raster-contrast':.08}}]},center:[payload.center.lng,payload.center.lat],zoom:payload.zoom,attributionControl:false});map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');map.addControl(new maplibregl.AttributionControl({compact:true}));const popup=(m)=>{const node=document.createElement('div');const title=document.createElement('strong');title.textContent=m.label||'Location';node.append(title);if(m.address){const sub=document.createElement('div');sub.style.opacity='.72';sub.style.marginTop='2px';sub.textContent=m.address;node.append(sub)}return node};map.on('load',()=>{const bounds=new maplibregl.LngLatBounds();payload.markers.forEach((m)=>{bounds.extend([m.lng,m.lat]);const pin=document.createElement('div');pin.className='pm-pin';new maplibregl.Marker({element:pin,anchor:'bottom'}).setLngLat([m.lng,m.lat]).setPopup(new maplibregl.Popup({offset:17,closeButton:false}).setDOMContent(popup(m))).addTo(map)});if(payload.markers.length>1)map.fitBounds(bounds,{padding:36,maxZoom:14,duration:0})});<\/script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css"><style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden;background:#09151d}.maplibregl-canvas{filter:brightness(.72) saturate(.82) contrast(1.06)}.maplibregl-ctrl-group{overflow:hidden!important;border:1px solid rgba(164,205,219,.22)!important;border-radius:10px!important;background:rgba(10,25,34,.86)!important;box-shadow:0 8px 22px rgba(0,0,0,.3)!important}.maplibregl-ctrl-group button{width:30px!important;height:30px!important}.maplibregl-ctrl-group button span{filter:invert(1) hue-rotate(145deg) saturate(.55)}.maplibregl-ctrl-attrib{padding:2px 6px!important;border-radius:8px 0 0 0!important;background:rgba(8,20,28,.74)!important;color:#9eb4bd!important;font:9px/1.25 system-ui!important}.maplibregl-ctrl-attrib a{color:#c2d6da!important}.pm-pin{width:17px;height:17px;border:3px solid #f5fbfc;border-radius:50% 50% 50% 0;background:#31b6cf;box-shadow:0 0 0 4px rgba(49,182,207,.2),0 5px 14px rgba(0,0,0,.45);transform:rotate(-45deg)}.pm-pin:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#073745}.maplibregl-popup-content{padding:8px 10px!important;border:1px solid rgba(166,221,230,.2)!important;border-radius:10px!important;background:#0d202a!important;color:#e9f5f7!important;font:11px/1.3 system-ui!important}.maplibregl-popup-tip{border-top-color:#0d202a!important;border-bottom-color:#0d202a!important}</style></head><body><div id="map"></div><script src="/vendor/maplibre/maplibre-gl.js"><\/script><script>const payload=${payload};const map=new maplibregl.Map({container:'map',style:{version:8,sources:{carto:{type:'raster',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'}},layers:[{id:'background',type:'background',paint:{'background-color':'#09151d'}},{id:'carto',type:'raster',source:'carto',paint:{'raster-saturation':-.18,'raster-contrast':.08}}]},center:[payload.center.lng,payload.center.lat],zoom:payload.zoom,attributionControl:false});map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');map.addControl(new maplibregl.AttributionControl({compact:true}));const popup=(m)=>{const node=document.createElement('div');const title=document.createElement('strong');title.textContent=m.label||'Location';node.append(title);if(m.address){const sub=document.createElement('div');sub.style.opacity='.72';sub.style.marginTop='2px';sub.textContent=m.address;node.append(sub)}return node};map.on('load',()=>{const bounds=new maplibregl.LngLatBounds();payload.markers.forEach((m)=>{bounds.extend([m.lng,m.lat]);const pin=document.createElement('div');pin.className='pm-pin';new maplibregl.Marker({element:pin,anchor:'bottom'}).setLngLat([m.lng,m.lat]).setPopup(new maplibregl.Popup({offset:17,closeButton:false}).setDOMContent(popup(m))).addTo(map)});if(payload.markers.length>1)map.fitBounds(bounds,{padding:36,maxZoom:14,duration:0})});<\/script></body></html>`;
 }
 
 function _renderMobileMap(a) {
@@ -11001,7 +11026,29 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
           return relink(row);
         }
       }
-      return linked || turn;
+      if (linked) return linked;
+      // Never deliver live events into a frozen pre-steer row (its trace is
+      // hidden, so tools "stop"). Follow durable continuation ids instead.
+      if (turn._steerFrozenTrace === true || String(turn.workflowPart || '') === 'before_interruption') {
+        let wantId = String(turn.steerContinuationMessageId || (turn.workflowGroupId ? `${turn.workflowGroupId}:continuation` : '')).trim();
+        let found = null;
+        for (let hop = 0; wantId && hop < 16; hop += 1) {
+          let next = null;
+          for (const sid of ordered) {
+            const thread = threads[sid];
+            if (!Array.isArray(thread)) continue;
+            next = thread.find((row) => row?.role === 'ai' && String(row.messageId || '') === wantId) || null;
+            if (next) break;
+          }
+          if (!next) break;
+          found = next;
+          if (next._steerFrozenTrace !== true && String(next.workflowPart || '') !== 'before_interruption') break;
+          wantId = String(next.steerContinuationMessageId || (next.workflowGroupId ? `${next.workflowGroupId}:continuation` : '')).trim();
+          if (wantId === String(next.messageId || '')) break;
+        }
+        if (found) return relink(found);
+      }
+      return turn;
     }
     case '_findMobileRecoverableAssistantTurn': {
       const thread = args[0];

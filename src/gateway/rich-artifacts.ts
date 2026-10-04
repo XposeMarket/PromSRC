@@ -601,6 +601,7 @@ export function productCarouselToArtifact(
   return {
     id: `products-${Date.now()}`,
     type: 'products',
+    ...((carousel as any)?.ref ? { ref: String((carousel as any).ref) } : {}),
     title: carousel?.title || undefined,
     source: carousel?.source || undefined,
     items,

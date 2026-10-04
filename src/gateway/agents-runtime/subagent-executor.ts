@@ -3767,19 +3767,48 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       map: 'show_map',
     };
     const targetTool = cardToolByType[cardType];
-    if (!targetTool) {
-      return {
-        name,
-        args,
-        result: `Unknown UI card type "${cardType}". Valid: ${Object.keys(cardToolByType).join(', ')}`,
-        error: true,
-      };
-    }
     const payload = args?.payload && typeof args.payload === 'object' && !Array.isArray(args.payload)
       ? { ...args.payload }
       : {};
     if (args?.title != null && payload.title == null) payload.title = String(args.title);
-    return executeTool(targetTool, payload, workspacePath, deps, sessionId);
+    const { UI_CARD_BUILDERS, buildProductCard } = await import('../../tools/ui-cards.js');
+    const builder = cardType === 'product'
+      ? (p: any) => buildProductCard(
+        p,
+        (items) => enrichProductArtifactItems(items as any, { downloadImages: true, metadataTimeoutMs: 3000 }),
+        async (query) => {
+          const tr: any = await executeShoppingSearchProducts({ query, max_results: 4, merchant: p?.merchant ? String(p.merchant) : undefined });
+          return tr?.extra?.richArtifacts?.[0]?.items || tr?.data?.items || [];
+        },
+      )
+      : UI_CARD_BUILDERS[cardType];
+    // Every card gets a short ref the model can drop into its reply as
+    // {{card:REF}} so the card renders inline instead of after the text.
+    const withCardRef = (r: any) => {
+      const arts = [
+        ...(Array.isArray(r?.extra?.richArtifacts) ? r.extra.richArtifacts : []),
+        ...(r?.extra?.productCarousel && typeof r.extra.productCarousel === 'object' ? [r.extra.productCarousel] : []),
+      ];
+      if (r?.error || !arts.length) return r;
+      const refs = arts.map((a: any) => {
+        if (!a.ref) a.ref = `${String(cardType || a.type || 'card').replace(/[^a-z]/gi, '').slice(0, 10) || 'card'}${Math.random().toString(36).slice(2, 6)}`;
+        return a.ref;
+      });
+      return { ...r, result: `${String(r.result || '')}\nPlace inline: put {{card:${refs[0]}}} on its own line in your reply where the card belongs (omit it to show the card after the reply).` };
+    };
+    if (builder) {
+      const tr = await builder(payload);
+      return withCardRef({ name, args, result: tr.stdout || tr.error || 'Card unavailable.', error: !tr.success, data: tr.data, extra: tr.extra });
+    }
+    if (!targetTool) {
+      return {
+        name,
+        args,
+        result: `Unknown UI card type "${cardType}". Valid: ${[...Object.keys(cardToolByType), 'product', ...Object.keys(UI_CARD_BUILDERS)].join(', ')}`,
+        error: true,
+      };
+    }
+    return withCardRef(await executeTool(targetTool, payload, workspacePath, deps, sessionId));
   }
   // Filename inference: if the model forgot to pass filename, use the last one
   const needsFilename = ['read_file', 'validate_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];
@@ -5557,6 +5586,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
   }
 
   if (name === 'show_agent_work') {
+    // Models often send a flat items[]/prs[]/tasks[] list; without this the card
+    // rendered only its title.
+    const flat = [args?.items, args?.rows, args?.prs, args?.tasks].find((v) => Array.isArray(v) && v.length);
+    if (flat && !args?.summaryRows && !args?.priorities && !args?.activeWork && !args?.teams) {
+      args = { ...args, priorities: flat.filter((it: any) => it).map((it: any) => (typeof it === 'string' ? { title: it } : {
+        ...it,
+        title: String(it.title || it.name || it.label || it.id || ''),
+        subtitle: String(it.subtitle || it.status || it.detail || it.description || it.summary || ''),
+      })) };
+    }
     const artifact = {
       id: `agent_work-${Date.now()}`,
       type: 'agent_work' as const,
@@ -5662,11 +5701,54 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
     };
   }
 
+  if (name === 'show_comparison' && Array.isArray(args?.products) && args.products.length >= 2) {
+    // Product-column mode: each product is a column (image, price, link), each
+    // spec is a row. Rendered by the shared cards/ runtime on every surface.
+    const products = args.products.filter((p: any) => p && typeof p === 'object').slice(0, 5).map((p: any) => ({
+      title: String(p.title || p.name || '').trim(),
+      imageUrl: p.imageUrl ? String(p.imageUrl) : (p.image ? String(p.image) : ''),
+      url: String(p.url || p.productUrl || ''),
+      price: p.price != null ? String(p.price) : '',
+      rating: Number.isFinite(Number(p.rating)) ? Number(p.rating) : undefined,
+      badge: p.badge ? String(p.badge) : '',
+      specs: p.specs && typeof p.specs === 'object' && !Array.isArray(p.specs) ? p.specs : {},
+    })).filter((p: any) => p.title);
+    if (products.length < 2) return { name, args, result: 'show_comparison products mode needs at least 2 products with a title.', error: true };
+    const specKeys = Array.isArray(args?.specs) && args.specs.length
+      ? args.specs.map(String)
+      : [...new Set(products.flatMap((p: any) => Object.keys(p.specs)))];
+    const artifact = { id: `product-comparison-${Date.now()}`, type: 'product_comparison' as const, title: args?.title ? String(args.title) : undefined, products, specs: specKeys.slice(0, 20) };
+    return { name, args, result: `Product comparison ready: ${products.length} products x ${artifact.specs.length} specs.`, error: false, extra: { richArtifacts: [artifact] } };
+  }
   if (name === 'show_comparison') {
     const columns = (Array.isArray(args?.columns) ? args.columns : [])
       .map((c: any) => (typeof c === 'string' ? { key: c, label: c } : { key: String(c?.key || c?.label || ''), label: String(c?.label || c?.key || '') }))
       .filter((c: any) => c.key);
-    const rows = Array.isArray(args?.rows) ? args.rows.filter((r: any) => r && typeof r === 'object') : [];
+    // Accept rows as objects keyed by column (any case), arrays of cells, or
+    // {label, values[]}; a row label becomes the first column.
+    let labelKey = args?.labelKey ? String(args.labelKey) : '';
+    let hasRowLabel = false;
+    const rows = (Array.isArray(args?.rows) ? args.rows : []).filter((r: any) => r && typeof r === 'object').map((r: any) => {
+      const cells = Array.isArray(r) ? r : (Array.isArray(r.values) ? r.values : Array.isArray(r.cells) ? r.cells : null);
+      const out: Record<string, any> = Array.isArray(r) ? {} : { ...r };
+      let label = Array.isArray(r) ? '' : String(r.label ?? r.name ?? r.title ?? r.metric ?? '');
+      if (cells) {
+        let vals = cells;
+        if (!label && vals.length === columns.length + 1) { label = String(vals[0] ?? ''); vals = vals.slice(1); }
+        columns.forEach((c: any, i: number) => { if (out[c.key] === undefined) out[c.key] = vals[i]; });
+      }
+      for (const c of columns) {
+        if (out[c.key] !== undefined) continue;
+        const k = Object.keys(out).find((key) => key.toLowerCase() === c.key.toLowerCase() || key.toLowerCase() === String(c.label).toLowerCase());
+        if (k) out[c.key] = out[k];
+      }
+      if (label && !columns.some((c: any) => out[c.key] === label)) { out.__label = label; hasRowLabel = true; }
+      return out;
+    });
+    if (hasRowLabel && !columns.some((c: any) => c.key === labelKey)) {
+      columns.unshift({ key: '__label', label: String(args?.labelHeader || '') });
+      labelKey = '__label';
+    }
     if (!columns.length || !rows.length) return { name, args, result: 'show_comparison requires columns[] and rows[].', error: true };
     const artifact = {
       id: `comparison-${Date.now()}`,
@@ -5674,7 +5756,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       title: args?.title ? String(args.title) : undefined,
       columns,
       rows,
-      labelKey: args?.labelKey ? String(args.labelKey) : undefined,
+      labelKey: labelKey || undefined,
       highlightColumn: args?.highlightColumn ? String(args.highlightColumn) : undefined,
     };
     return { name, args, result: `Comparison table ready — ${rows.length} row(s) × ${columns.length} column(s).`, error: false, extra: { richArtifacts: [artifact] } };
@@ -5683,7 +5765,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
   if (name === 'show_chart') {
     const series = normalizeChartSeriesArgs(args)
       .map((s: any) => ({
-        label: s?.label ? String(s.label) : undefined,
+        label: (s?.label ?? s?.name) ? String(s.label ?? s.name) : undefined,
         color: s?.color ? String(s.color) : undefined,
         // `points` is the canonical contract. Accept `data` from older model
         // responses so an otherwise valid visual never fails to render.
@@ -5697,7 +5779,11 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       id: `chart-${Date.now()}`,
       type: 'chart' as const,
       title: args?.title ? String(args.title) : undefined,
-      chartType: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'].includes(String(args?.chartType)) ? String(args.chartType) : 'line',
+      chartType: (() => {
+        const kinds = ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'];
+        const want = [args?.chartType, args?.kind, args?.type].map((v) => String(v || '').toLowerCase()).find((v) => kinds.includes(v));
+        return want || 'line';
+      })(),
       series,
       xLabel: args?.xLabel ? String(args.xLabel) : undefined,
       yLabel: args?.yLabel ? String(args.yLabel) : undefined,

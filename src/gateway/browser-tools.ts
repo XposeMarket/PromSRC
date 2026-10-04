@@ -740,7 +740,7 @@ function shouldUseFastBrowserAck(mode: BrowserObserveMode): boolean {
   return mode === 'none';
 }
 
-// ─── Session Management ────────────────────────────────────────────────────────
+// --- Session Management --------------------------------------------------------
 
 const sessions: Map<string, BrowserSession> = new Map();
 const browserSessionInitInFlight: Map<string, Promise<BrowserSession>> = new Map();
@@ -2291,7 +2291,7 @@ export async function browserDoctor(sessionId: string): Promise<string> {
             ok('CDP attach', 'Playwright connected successfully');
           }
         } catch (err: any) {
-          fail('CDP attach', `${String(err?.message || err).split('\n')[0]} — restart the existing Chrome process for this profile/port`);
+          fail('CDP attach', `${String(err?.message || err).split('\n')[0]} � restart the existing Chrome process for this profile/port`);
         }
       }
       const profileExists = fs.existsSync(profileDir);
@@ -2380,7 +2380,7 @@ export async function stopBrowserLiveStream(
   });
 }
 
-// ─── Browser Vision Screenshot Cache ─────────────────────────────────────────
+// --- Browser Vision Screenshot Cache -----------------------------------------
 // Stores the last browser_vision_screenshot result per session so chat.router.ts
 // can inject it as a role:'user' vision message (OpenAI doesn't support images in tool messages).
 export interface BrowserVisionScreenshotCacheEntry {
@@ -2406,7 +2406,7 @@ export function setLastBrowserScreenshot(sessionId: string, data: BrowserVisionS
 export function getLastBrowserScreenshot(sessionId: string): BrowserVisionScreenshotCacheEntry | null {
   const entry = _lastBrowserScreenshot.get(sessionId);
   if (!entry) return null;
-  // Expire after 60 seconds — stale screenshots are useless
+  // Expire after 60 seconds � stale screenshots are useless
   if (Date.now() - entry.ts > 60_000) {
     _lastBrowserScreenshot.delete(sessionId);
     return null;
@@ -2440,7 +2440,7 @@ export function getLastBrowserDownload(sessionId: string): BrowserDownloadRecord
   return entry;
 }
 
-// ─── Network Intercept Store ───────────────────────────────────────────────────
+// --- Network Intercept Store ---------------------------------------------------
 interface NetworkLogEntry {
   url: string;
   method: string;
@@ -2452,7 +2452,7 @@ interface NetworkLogEntry {
 const _networkInterceptLog: Map<string, NetworkLogEntry[]> = new Map();
 const _networkInterceptHandlers: Map<string, (response: any) => void> = new Map();
 
-// ─── Macro Recording Store (browser-side: element watch state) ────────────────
+// --- Macro Recording Store (browser-side: element watch state) ----------------
 // Per-session snapshot hash stored for delta computation
 const _snapshotHashCache: Map<string, string> = new Map();
 
@@ -3279,7 +3279,7 @@ async function getOrCreateSessionUncoalesced(
   const startedAt = Date.now();
   if (sessions.has(sessionId)) {
     const existing = sessions.get(sessionId)!;
-    // Verify the session is still usable — if Chrome was closed externally the
+    // Verify the session is still usable � if Chrome was closed externally the
     // page/browser objects are dead and every tool call will fail with
     // "Target page, context or browser has been closed". Evict and recreate.
     const aliveStartedAt = Date.now();
@@ -3490,14 +3490,14 @@ async function replaceDetachedBrowserSession(parentSessionId: string, suffix: st
   return { sessionId: detachedSessionId, session: detached };
 }
 
-// ─── DOM-Based Snapshot (works on ALL Playwright versions) ─────────────────────
+// --- DOM-Based Snapshot (works on ALL Playwright versions) ---------------------
 
 async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<string> {
   try {
     const title = await page.title();
     const url = page.url();
 
-    // Scrape the DOM directly — no dependency on accessibility APIs
+    // Scrape the DOM directly � no dependency on accessibility APIs
     const snapshotData: {
       elements: SnapElement[];
       diagnostics: {
@@ -3511,7 +3511,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
       modalLabel: string;
     } = await page.evaluate((max: number) => {
       const doc = (globalThis as any).document;
-      // Expanded selector set — includes data-testid (React apps), explicit search inputs
+      // Expanded selector set � includes data-testid (React apps), explicit search inputs
       const selector = [
         'a[href]', 'button', 'input', 'select', 'textarea',
         'input[type="search"]', 'input[type="text"]',
@@ -3522,7 +3522,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
         'h1', 'h2', 'h3',
       ].join(', ');
 
-      // ── Modal / dialog detection ───────────────────────────────────────────
+      // -- Modal / dialog detection -------------------------------------------
       // If a modal or dialog is open, ONLY elements inside it are interactable.
       // Scanning the full DOM would expose background elements the AI cannot
       // actually click (they are aria-hidden or covered by the overlay).
@@ -3570,10 +3570,10 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
         unnamed_input_included: 0,
       };
 
-      // ── Stable ref assignment using data-sc-ref attributes ─────────────────
+      // -- Stable ref assignment using data-sc-ref attributes -----------------
       // Pre-scan all existing data-sc-ref values so we never reassign a taken ref.
       // Elements that already have data-sc-ref keep the SAME ref across DOM mutations
-      // (React re-renders, SPA route changes) — this eliminates ref-drift entirely.
+      // (React re-renders, SPA route changes) � this eliminates ref-drift entirely.
       const usedRefs = new Set<number>();
       for (const anyEl of Array.from(doc.querySelectorAll('[data-sc-ref]'))) {
         const n = parseInt((anyEl as any).getAttribute('data-sc-ref') || '', 10);
@@ -3606,7 +3606,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
         const isContentEditable = el.getAttribute('contenteditable') === 'true';
         const inputLikeTag = ['input', 'textarea', 'select'].includes(tag) || isContentEditable;
 
-        // Determine visible name — prefer aria-label, then text, then placeholder, then data-testid
+        // Determine visible name � prefer aria-label, then text, then placeholder, then data-testid
         let name = ariaLabel || text || placeholder || testId || '';
         if (!name && tag === 'input') name = placeholder || inputType || 'input';
         if (!name && isContentEditable) name = 'editable';
@@ -3724,7 +3724,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
     ];
     for (const el of elements) {
       let line = `[@${el.ref}] ${el.role}`;
-      // Always show a name — fall back to placeholder so inputs are never shown as [@N] textbox ""
+      // Always show a name � fall back to placeholder so inputs are never shown as [@N] textbox ""
       const displayName = el.name || (el as any).placeholder || '';
       if (displayName) line += ` "${displayName}"`;
       if (el.isInput) line += ' [INPUT]';
@@ -3733,14 +3733,14 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
     }
     const snapshotText = lines.join('\n');
 
-    // Modal / dialog open — warn the AI so it doesn't try to interact with background elements.
+    // Modal / dialog open � warn the AI so it doesn't try to interact with background elements.
     if (snapshotData?.modalOpen) {
       const label = snapshotData.modalLabel ? ` ("${snapshotData.modalLabel}")` : '';
       return snapshotText
         + `\n\n[MODAL OPEN]${label} A dialog/modal is blocking the page. The ${elements.length} elements above are ONLY the controls inside this modal. Background page elements are NOT accessible until the modal is closed. To dismiss: look for a Close button or press Escape with browser_press_key({"key":"Escape"}).`;
     }
 
-    // Login wall detection — append an explicit action hint so the agent doesn't loop.
+    // Login wall detection � append an explicit action hint so the agent doesn't loop.
     // If the page looks like a login wall and there's a one-click sign-in button, say so.
     const elementText = elements.map(e => e.name).join(' ').toLowerCase();
     const isLoginWall = /join today|sign in|log in|create account/i.test(title + ' ' + elementText);
@@ -3757,7 +3757,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
       }
     }
 
-    // ── Low-element heuristic: try same-origin frame piercing, flag cross-origin ─
+    // -- Low-element heuristic: try same-origin frame piercing, flag cross-origin -
     // If the main document has few elements, content is likely in iframes.
     // Same-origin frames: we can scan their elements directly via Playwright frames().
     // Cross-origin frames: we cannot read them, but we surface the URL for navigation.
@@ -3840,18 +3840,18 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
 
         const extras: string[] = [];
         if (sameOriginElements.length > 0) {
-          extras.push(`\n[SAME-ORIGIN FRAME ELEMENTS — interactable via normal browser_click/browser_fill]\n${sameOriginElements.join('\n')}`);
+          extras.push(`\n[SAME-ORIGIN FRAME ELEMENTS � interactable via normal browser_click/browser_fill]\n${sameOriginElements.join('\n')}`);
         }
         if (crossOrigin.length > 0) {
-          const lines = crossOrigin.map(f => `  - ${f.name || f.id || 'iframe'} → ${f.src.slice(0, 200)}`).join('\n');
-          extras.push(`\n[CROSS-ORIGIN IFRAMES — content cannot be read directly; navigate with browser_open]\n${lines}`);
+          const lines = crossOrigin.map(f => `  - ${f.name || f.id || 'iframe'} ? ${f.src.slice(0, 200)}`).join('\n');
+          extras.push(`\n[CROSS-ORIGIN IFRAMES � content cannot be read directly; navigate with browser_open]\n${lines}`);
         }
         if (extras.length > 0) {
           return snapshotText + extras.join('');
         }
       } catch { /* best effort */ }
 
-      // ── Fallback: append visible body text so AI can still read content ─────
+      // -- Fallback: append visible body text so AI can still read content -----
       try {
         const bodyText = await page.evaluate(() => {
           const el = (globalThis as any).document.body;
@@ -3873,7 +3873,7 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
   }
 }
 
-// ─── Element Interaction ───────────────────────────────────────────────────────
+// --- Element Interaction -------------------------------------------------------
 
 // Shared selector used consistently across snapshot + click + fill
 const INTERACTIVE_SELECTOR = [
@@ -4135,7 +4135,7 @@ async function fillByRef(page: PwPage, ref: number, text: string): Promise<{ rol
     // Select-all to clear any pre-existing text in the composer
     await page.keyboard.press('Control+A');
     await page.waitForTimeout(100);
-    // Type text character by character — this fires real KeyDown/KeyPress/KeyUp/Input
+    // Type text character by character � this fires real KeyDown/KeyPress/KeyUp/Input
     // events that React's synthetic event system correctly intercepts.
     await page.keyboard.type(text, { delay: 20 });
     await page.waitForTimeout(400);
@@ -4317,7 +4317,7 @@ async function extractStructuredFromPage(
       isGenerating: false,
     };
 
-    // ── Chat interface detection (ChatGPT, Claude, Gemini, etc.) ────────────────
+    // -- Chat interface detection (ChatGPT, Claude, Gemini, etc.) ----------------
     const isChatInterface = /(^|\.)chatgpt\.com$/.test(host)
       || /(^|\.)claude\.ai$/.test(host)
       || /(^|\.)gemini\.google\.com$/.test(host)
@@ -4327,7 +4327,7 @@ async function extractStructuredFromPage(
     if (isChatInterface) {
       out.pageType = 'chat_interface';
 
-      // Detect if the AI is still generating — look for stop/streaming indicators
+      // Detect if the AI is still generating � look for stop/streaming indicators
       const bodyText = normalize(doc.body?.innerText || '', 200);
       const stopBtn = doc.querySelector(
         'button[aria-label*="Stop"], button[data-testid*="stop"], [aria-label*="Stop generating"], .stop-button',
@@ -4339,7 +4339,7 @@ async function extractStructuredFromPage(
       const stillOnDefaultTitle = /^chatgpt$/i.test(title.trim());
       out.isGenerating = !!(stopBtn || streamingIndicator);
 
-      // Extract the last assistant message — ChatGPT uses [data-message-author-role="assistant"]
+      // Extract the last assistant message � ChatGPT uses [data-message-author-role="assistant"]
       // Claude.ai uses [data-is-streaming], Gemini uses .model-response-text
       const assistantMsgSelectors = [
         '[data-message-author-role="assistant"]',
@@ -4374,7 +4374,7 @@ async function extractStructuredFromPage(
     const isSearch = /(search|results|q=)/.test(url) || /(google|bing|duckduckgo|brave|yahoo)\./.test(host);
 
     if (isX) {
-      // Smarter X.com page type detection — not all x.com pages are feed pages.
+      // Smarter X.com page type detection � not all x.com pages are feed pages.
       // Compose, settings, notifications, and other interactive pages should be 'generic'
       // so the browser advisor treats them as interaction targets, not feed collectors.
       const xPathname = String((globalThis as any).location?.pathname || '');
@@ -4385,11 +4385,11 @@ async function extractStructuredFromPage(
       const isXProfileOrThread = /^\/[a-z0-9_]+(\/(status\/\d+)?)?$/i.test(xPathname) && !isXComposePage && !isXSettingsPage && !isXNotifications;
 
       if (isXComposePage || isXSettingsPage || isXNotifications) {
-        // Interactive page — treat as generic so advisor uses ref-based interaction mode
+        // Interactive page � treat as generic so advisor uses ref-based interaction mode
         out.pageType = 'generic';
         return out;
       } else if (isXHomeFeed || isXProfileOrThread) {
-        // Home feed has a composer at the top — if the composer textarea is present
+        // Home feed has a composer at the top � if the composer textarea is present
         // in the DOM, treat as generic so the scroll-before-act gate fires and forces
         // the model to interact with the composer rather than scrolling past it.
         const composerPresent = !!doc.querySelector(
@@ -4399,7 +4399,7 @@ async function extractStructuredFromPage(
         );
         out.pageType = composerPresent ? 'generic' : 'x_feed';
       } else {
-        // Unknown x.com path — fall back to generic (safer for interaction)
+        // Unknown x.com path � fall back to generic (safer for interaction)
         out.pageType = 'generic';
         return out;
       }
@@ -4625,9 +4625,9 @@ async function buildAdvisorPacketForSession(
   return packet;
 }
 
-// ─── Exported Tool Handlers ────────────────────────────────────────────────────
+// --- Exported Tool Handlers ----------------------------------------------------
 
-// ─── Shared browser session alias ────────────────────────────────────────────
+// --- Shared browser session alias --------------------------------------------
 // Browser sessions are keyed directly by runtime session ID. Main chat may use
 // the selected main target, while task/background/team sessions intentionally
 // stay isolated so each worker gets its own profile and CDP port.
@@ -4754,7 +4754,7 @@ const ATTR_SELECTOR_RX = /^[*a-z0-9_-]+\[[^\]]+\]$|^#[A-Za-z][\w-]*$/;
 async function resolveBrowserLocator(page: PwPage, pack: Partial<BrowserSelectorPack> | null | undefined): Promise<any | null> {
   if (!pack) return null;
   const tryLocator = (locator: any) => locator;
-  // Priority: testid attr selector → aria/name attr selector → role+name → css → xpath
+  // Priority: testid attr selector ? aria/name attr selector ? role+name ? css ? xpath
   if (pack.testid) {
     try {
       const loc = page.locator(`[data-testid="${pack.testid.replace(/"/g, '\\"')}"]`).first();
@@ -5591,18 +5591,18 @@ function validatedNativeKeyOptions(options?: BrowserKeyOptions): Record<string, 
     payload.holdMs = options.hold_ms;
   }
   if (options.keys !== undefined) {
-    if (!Array.isArray(options.keys) || options.keys.length < 1 || options.keys.length > 4 || options.keys.some(k => typeof k !== 'string' || !k.trim())) return 'keys must contain 1–4 nonempty key names.';
+    if (!Array.isArray(options.keys) || options.keys.length < 1 || options.keys.length > 4 || options.keys.some(k => typeof k !== 'string' || !k.trim())) return 'keys must contain 1�4 nonempty key names.';
     if (options.keys.some(k => /^(enter|return|space|spacebar|delete|backspace)$/i.test(k.trim()) || /^(key[a-z]|digit[0-9])$/i.test(k.trim()) || /^[a-z0-9]$/i.test(k.trim()))) return 'keys cannot include printable/submit/edit keys until chord final-action approval checking is supported.';
     payload.keys = options.keys;
   }
   if (options.sequence !== undefined) {
-    if (!Array.isArray(options.sequence) || options.sequence.length < 1 || options.sequence.length > 32) return 'sequence must contain 1–32 steps.';
+    if (!Array.isArray(options.sequence) || options.sequence.length < 1 || options.sequence.length > 32) return 'sequence must contain 1�32 steps.';
     let duration = Number(options.hold_ms || 0);
     const steps: Array<Record<string, unknown>> = [];
     for (const step of options.sequence) {
       if (!step || typeof step !== 'object') return 'sequence steps must be objects.';
       const keys = step.keys;
-      if (keys !== undefined && (!Array.isArray(keys) || keys.length < 1 || keys.length > 4 || keys.some(k => typeof k !== 'string' || !k.trim()))) return 'sequence step keys must contain 1–4 nonempty key names.';
+      if (keys !== undefined && (!Array.isArray(keys) || keys.length < 1 || keys.length > 4 || keys.some(k => typeof k !== 'string' || !k.trim()))) return 'sequence step keys must contain 1�4 nonempty key names.';
       if (step.key !== undefined && (typeof step.key !== 'string' || !step.key.trim())) return 'sequence step key must be a nonempty string.';
       // The final-action approval gate currently inspects the top-level key, not
       // arbitrary keys nested in a sequence. Reject those until the gate supports them.
@@ -5860,11 +5860,11 @@ export async function browserOpen(
   url: string,
   options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profile?: BrowserProfileKind | string; inhouseProfile?: unknown; profileDirectory?: unknown; onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
-  // ── URL sanity guard ──────────────────────────────────────────────────────
+  // -- URL sanity guard ------------------------------------------------------
   // When called from inside the node_call<> VM sandbox the URL may arrive as
   // undefined / null / a stringified object if the model emitted bad code.
   // CDP rejects all of these with "Cannot navigate to invalid URL" and the
-  // reactor retries indefinitely — producing the 29-step loop seen in logs.
+  // reactor retries indefinitely � producing the 29-step loop seen in logs.
   const rawUrl = String(url ?? '').trim();
   if (!rawUrl || rawUrl === 'undefined' || rawUrl === 'null' || rawUrl === 'object') {
     return 'ERROR: browser_open requires a valid URL string. Received: ' + JSON.stringify(url);
@@ -6045,7 +6045,7 @@ export async function browserSnapshot(
   }
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
-    // Wait for the DOM to settle before snapshotting — SPAs (like x.com) may still
+    // Wait for the DOM to settle before snapshotting � SPAs (like x.com) may still
     // be hydrating after domcontentloaded, leaving querySelectorAll with 0 results.
     // Keep this bounded so routine snapshots don't become a multi-second tax.
     await session.page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => {});
@@ -6337,7 +6337,7 @@ export async function browserClick(
     const cursorPoint = fastAck ? null : await resolveViewportPointFromTarget(session.page, { ref: requestedRef }, 'browser_click').catch(() => null);
     if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'start' });
     const el = await clickByRef(session.page, requestedRef, { settleMs: fastAck ? 0 : 1500 });
-    // Extra settle before snapshot/delta — dialogs / dropdowns / navigation need time.
+    // Extra settle before snapshot/delta � dialogs / dropdowns / navigation need time.
     if (!fastAck) await session.page.waitForTimeout(500);
     if (cursorPoint) await emitBrowserAgentCursor(sessionId, { ...cursorPoint, kind: 'click', phase: 'end', label: cursorPoint?.label || `Clicked @${requestedRef}` });
     if (shouldReturnSnapshot(observeMode)) {
@@ -6464,7 +6464,7 @@ export async function browserFill(
           return isVisible(e);
         });
 
-        // Strategy 1: X.com stable testid — tweetButtonInline is the in-timeline composer Post button
+        // Strategy 1: X.com stable testid � tweetButtonInline is the in-timeline composer Post button
         const xPostBtn = doc.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
         if (xPostBtn && isVisible(xPostBtn)) {
           const btnRef = visible.indexOf(xPostBtn) + 1;
@@ -6507,7 +6507,7 @@ export async function browserFill(
       );
     }
 
-    // ── X.com composer: click Post button directly after a contenteditable fill ──
+    // -- X.com composer: click Post button directly after a contenteditable fill --
     // The ref-based hint is unreliable because X renders multiple "Post"-labelled
     // buttons (inline composer + toolbar) and the wrong one gets picked.
     // Strategy: try stable testids in order, fall back to text match.
@@ -6778,7 +6778,7 @@ export async function browserPressKey(
 
 /**
  * Type text into whatever element currently has keyboard focus.
- * Unlike browserFill (which needs a @ref), this just sends keystrokes — works for
+ * Unlike browserFill (which needs a @ref), this just sends keystrokes � works for
  * contenteditable divs (e.g. X/Twitter compose box) where fill by ref often fails.
  */
 export async function browserType(
@@ -6858,7 +6858,7 @@ export async function browserWait(
 
 /**
  * Returns info about the currently keyboard-focused element on the page.
- * Critical for navigation shortcuts (j/k on X.com) — tells the AI which tweet/item
+ * Critical for navigation shortcuts (j/k on X.com) � tells the AI which tweet/item
  * is currently selected so it knows how many more presses are needed.
  */
 export async function browserGetFocusedItem(sessionId: string): Promise<string> {
@@ -6919,7 +6919,7 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
       const text = (focused.innerText || '').trim().slice(0, 120);
       const testId = focused.getAttribute('data-testid') || '';
 
-      // Check if this focused element is inside a tweet — find the ancestor article
+      // Check if this focused element is inside a tweet � find the ancestor article
       let article: any = focused;
       while (article && article.tagName?.toLowerCase() !== 'article') {
         article = article.parentElement;
@@ -6955,7 +6955,7 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
 
     if (info.type === 'tweet') {
       const lines = [
-        `⌨️ KEYBOARD FOCUS: Tweet #${info.position} of ${info.totalVisible} visible`,
+        `?? KEYBOARD FOCUS: Tweet #${info.position} of ${info.totalVisible} visible`,
         `   Author: ${info.author || '(unknown)'}`,
         `   Text: ${info.text ? info.text.slice(0, 100) : '(no text)'}`,
         info.tweetId ? `   Tweet ID: ${info.tweetId}` : '',
@@ -7049,7 +7049,7 @@ export async function browserScroll(
     const resolved = resolveSessionId(sessionId);
     const amount = Math.min(Math.max(Number(multiplier || 1) || 1, 0.25), 5);
     const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * amount);
-    const wheel: any = await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+    const wheel: any = await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', deltaY, deltaX: 0 });
     // Older Electron builds return only { ok }; treat unknown as moved.
     const moved = wheel?.moved !== false;
     const where = wheel?.after && typeof wheel.after.y === 'number' ? ` (scrollY ${wheel.before?.y ?? '?'} -> ${wheel.after.y})` : '';
@@ -7353,7 +7353,7 @@ async function browserScrollCollectInHouse(
       const previousScrollY = Number(previousState?.scrollY || 0);
       if (!isInitialPass) {
         const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * mult);
-        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', deltaY, deltaX: 0 });
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
       const state = await readInHouseScrollCollectionPage(resolved, Math.max(0, maxChars - totalChars));
@@ -7399,7 +7399,7 @@ async function browserScrollCollectInHouse(
       } catch {}
       if (totalChars >= maxChars) { stopReason = 'max_chars reached'; break; }
       if (Date.now() - startedAt >= maxSeconds * 1000) { stopReason = 'max_seconds reached'; break; }
-      if (!isInitialPass && direction === 'down' && (state?.bottom === true || currentScrollY === previousScrollY)) { scrollLog[scrollLog.length - 1] += ' — page bottom reached, stopping'; stopReason = 'reached bottom'; break; }
+      if (!isInitialPass && direction === 'down' && (state?.bottom === true || currentScrollY === previousScrollY)) { scrollLog[scrollLog.length - 1] += ' � page bottom reached, stopping'; stopReason = 'reached bottom'; break; }
       if (!isInitialPass && consecutiveNoNew >= stopAfterNoNew) { stopReason = `no new text after ${consecutiveNoNew} pass(es)`; break; }
       if (stopText && pageText.includes(stopText)) { stopReason = `stop_text "${stopText}" found`; break; }
     }
@@ -7446,7 +7446,7 @@ async function browserScrollCollectV2InHouse(sessionId: string, options: Record<
       const previousScrollY = Number(before?.scrollY || 0);
       if (pass > 0) {
         const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * multiplier);
-        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', deltaY, deltaX: 0 });
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
       const state = await readInHouseScrollCollectionPage(resolved, 200);
@@ -7576,7 +7576,7 @@ export async function browserScrollCollect(
         await session.page.waitForTimeout(delayMs);
       }
 
-      // Read visible text — with structured extraction for X.com/Twitter
+      // Read visible text � with structured extraction for X.com/Twitter
       const pageText = await session.page.evaluate((characterBudget: number) => {
         const doc = (globalThis as any).document;
         const normalize = (value: any, maxLen: number = 1000) =>
@@ -7610,7 +7610,7 @@ export async function browserScrollCollect(
             return lines.join('\n');
           }).join('\n---TWEET---\n').slice(0, characterBudget);
         }
-        // General fallback — use live body.innerText (not a detached clone)
+        // General fallback � use live body.innerText (not a detached clone)
         const body = doc.body;
         if (!body) return '';
         return (body.innerText || '')
@@ -7647,7 +7647,7 @@ export async function browserScrollCollect(
         }
       }
 
-      // Deduplicate — structured tweets vs general lines
+      // Deduplicate � structured tweets vs general lines
       const isStructuredTweets = pageText.includes('\n---TWEET---\n');
       const chunks = isStructuredTweets
         ? pageText.split('\n---TWEET---\n')
@@ -7715,7 +7715,7 @@ export async function browserScrollCollect(
 
       // Early stop: page bottom (scroll position didn't change)
       if (!isInitialPass && currentScrollY === prevScrollY && direction === 'down') {
-        scrollLog[scrollLog.length - 1] += ' — page bottom reached, stopping';
+        scrollLog[scrollLog.length - 1] += ' � page bottom reached, stopping';
         stopReason = 'reached bottom';
         break;
       }
@@ -8006,7 +8006,7 @@ export async function getBrowserAdvisorPacket(
   }
 }
 
-// ─── Tool Definitions (for Ollama) ─────────────────────────────────────────────
+// --- Tool Definitions (for Ollama) ---------------------------------------------
 
 export function getBrowserToolDefinitions(): any[] {
   return [
@@ -8213,7 +8213,7 @@ export function getBrowserToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'browser_snapshot',
-        description: 'Re-scan the current page and return an updated list of interactive elements with @ref numbers. ONLY call this when you do NOT already have a recent snapshot in context — do NOT call it twice in a row or immediately after another explicit observation unless you know the page changed. If you just received a snapshot, ACT on it immediately (browser_click or browser_fill) instead of re-snapping. Repeated snapshot calls without acting = stall loop.',
+        description: 'Re-scan the current page and return an updated list of interactive elements with @ref numbers. ONLY call this when you do NOT already have a recent snapshot in context � do NOT call it twice in a row or immediately after another explicit observation unless you know the page changed. If you just received a snapshot, ACT on it immediately (browser_click or browser_fill) instead of re-snapping. Repeated snapshot calls without acting = stall loop.',
         parameters: {
           type: 'object',
           properties: {
@@ -8424,7 +8424,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object',
           properties: {
             direction: { type: 'string', enum: ['down', 'up'], description: 'Scroll direction' },
-            multiplier: { type: 'number', description: 'Viewport height multiplier. Use 1.75 for X/Twitter, 1.0 for most sites. Range: 0.5–4.0.' },
+            multiplier: { type: 'number', description: 'Viewport height multiplier. Use 1.75 for X/Twitter, 1.0 for most sites. Range: 0.5�4.0.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for scrolling.' },
             capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after scrolling when you need newly visible refs immediately.' },
           },
@@ -8436,22 +8436,22 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'browser_scroll_collect',
         description:
-          'Scroll multiple times and collect ALL visible text at each position — a single-call web scraping engine. ' +
+          'Scroll multiple times and collect ALL visible text at each position � a single-call web scraping engine. ' +
           'Use this instead of repeated browser_scroll calls when you need to collect data from infinite scroll pages, ' +
           'search results, feeds, or any page with content that loads on scroll. ' +
           'Returns deduplicated text from all scroll positions in one response. ' +
           'When you have saved item roots or saved extraction schemas, prefer browser_scroll_collect_v2 for structured JSON items. ' +
-          'Does NOT return a DOM snapshot — call browser_snapshot() afterward if you need to interact with elements. ' +
+          'Does NOT return a DOM snapshot � call browser_snapshot() afterward if you need to interact with elements. ' +
           'Example: browser_scroll_collect({scrolls: 10, multiplier: 1.75}) on X/Twitter to collect ~30-50 tweets at once.',
         parameters: {
           type: 'object',
           properties: {
-            scrolls:    { type: 'number', description: 'Number of scroll iterations (1–30, default 5)' },
+            scrolls:    { type: 'number', description: 'Number of scroll iterations (1�30, default 5)' },
             direction:  { type: 'string', enum: ['down', 'up'], description: 'Scroll direction (default: down)' },
-            multiplier: { type: 'number', description: 'Viewport height multiplier per scroll (0.5–4.0, default 1.5). Use 1.75 for X/Twitter.' },
-            delay_ms:   { type: 'number', description: 'Wait between scrolls in ms for content to load (500–5000, default 1500)' },
+            multiplier: { type: 'number', description: 'Viewport height multiplier per scroll (0.5�4.0, default 1.5). Use 1.75 for X/Twitter.' },
+            delay_ms:   { type: 'number', description: 'Wait between scrolls in ms for content to load (500�5000, default 1500)' },
             stop_text:  { type: 'string', description: 'Stop scrolling early when this text appears on page (e.g. "No more results")' },
-            max_chars:  { type: 'number', description: 'Max total chars to collect (5000–100000, default 50000)' },
+            max_chars:  { type: 'number', description: 'Max total chars to collect (5000�100000, default 50000)' },
             include_initial: { type: 'boolean', description: 'Collect the current viewport before the first scroll (default true).' },
             max_seconds: { type: 'number', description: 'Overall time cap in seconds (5-180, default 45).' },
             stop_after_no_new: { type: 'number', description: 'Stop after this many consecutive scrolled passes add no new text (1-10, default 3).' },
@@ -8547,14 +8547,14 @@ export function getBrowserToolDefinitions(): any[] {
         },
       },
     },
-    // ─ Vision fallback tools ─ injected only when VISION MODE is active ──────────────────
+    // - Vision fallback tools - injected only when VISION MODE is active ------------------
     {
       type: 'function',
       function: {
         name: 'browser_vision_screenshot',
         description:
           'Capture the current browser tab viewport as PNG (not full desktop). Use when DOM snapshot is sparse. ' +
-          'The image is attached for vision-capable models — you choose browser_vision_click / browser_vision_type coordinates.',
+          'The image is attached for vision-capable models � you choose browser_vision_click / browser_vision_type coordinates.',
         parameters: {
           type: 'object',
           properties: {
@@ -8589,7 +8589,7 @@ export function getBrowserToolDefinitions(): any[] {
         description:
           'Click at pixel coordinates and type text. ' +
           'Use when VISION MODE is active and you need to type into a canvas/overlay input with no DOM ref. ' +
-          'After typing, check the returned snapshot element count — if > 10, switch back to DOM mode.',
+          'After typing, check the returned snapshot element count � if > 10, switch back to DOM mode.',
         parameters: {
           type: 'object',
           required: ['x', 'y', 'text'],
@@ -8608,7 +8608,7 @@ export function getBrowserToolDefinitions(): any[] {
         name: 'browser_send_to_telegram',
         description:
           'Capture the current browser tab as a screenshot and send it to the user via Telegram. ' +
-          'Use this to share what the browser is currently showing — search results, tweets, articles, dashboards, etc. ' +
+          'Use this to share what the browser is currently showing � search results, tweets, articles, dashboards, etc. ' +
           'Takes a fresh screenshot of the visible viewport (not full page) and sends it as a photo with caption.',
         parameters: {
           type: 'object',
@@ -8619,7 +8619,7 @@ export function getBrowserToolDefinitions(): any[] {
         },
       },
     },
-    // ─ NEW POWER TOOLS ──────────────────────────────────────────────────────────
+    // - NEW POWER TOOLS ----------------------------------------------------------
     {
       type: 'function',
       function: {
@@ -8731,7 +8731,7 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'browser_element_watch',
         description:
-          'Wait until a DOM element appears, disappears, or contains specific text — without burning tokens on repeated snapshots. ' +
+          'Wait until a DOM element appears, disappears, or contains specific text � without burning tokens on repeated snapshots. ' +
           'Uses Playwright\'s native waitForSelector for appear/disappear (efficient, no polling overhead). ' +
           'Use instead of browser_wait + browser_snapshot loops when you know exactly what you\'re waiting for. ' +
           'Returns a fresh snapshot when the condition is met.',
@@ -8767,7 +8767,7 @@ export function getBrowserToolDefinitions(): any[] {
         description:
           'Re-scan the page and return ONLY what changed since the last snapshot. ' +
           'Shows added elements, removed elements, and page title/URL changes. ' +
-          'Use this instead of browser_snapshot on SPAs and heavy pages to reduce token usage by 60–80%. ' +
+          'Use this instead of browser_snapshot on SPAs and heavy pages to reduce token usage by 60�80%. ' +
           'If no previous snapshot exists, returns a full snapshot. ' +
           'PREFER over browser_snapshot when you already have a snapshot in context and just want to see what changed after an action.',
         parameters: {
@@ -8783,7 +8783,7 @@ export function getBrowserToolDefinitions(): any[] {
         description:
           'Extract structured JSON data from the page using a CSS-schema. ' +
           'Define a container_selector, use item_root to reference a saved named item root, or use schema_name to reuse a saved extraction schema for the current site. Then define fields (each with a CSS selector and extraction type). ' +
-          'Returns a JSON array of objects — one per container match. ' +
+          'Returns a JSON array of objects � one per container match. ' +
           'Use this to scrape product listings, search results, tables, social posts, etc. in one call instead of parsing page text. ' +
           'Field type options: "text" (default, innerText), "href" (link href), "src" (img src), "attr" (any attribute), "html" (innerHTML). Use save_as to persist the active schema.',
         parameters: {
@@ -8803,7 +8803,7 @@ export function getBrowserToolDefinitions(): any[] {
                 save_as: { type: 'string', description: 'Optional name to persist this extraction schema for the current site.' },
                 fields: {
                   type: 'object',
-                  description: 'Map of field name → { selector: string, type?: "text"|"href"|"src"|"attr"|"html", attribute?: string }',
+                  description: 'Map of field name ? { selector: string, type?: "text"|"href"|"src"|"attr"|"html", attribute?: string }',
                   additionalProperties: {
                     type: 'object',
                     properties: {
@@ -8931,7 +8931,7 @@ export async function browserGetPageText(
         .slice(0, 6000);
     });
 
-    // 2. Detect iframes — report their src URLs so AI can navigate to them
+    // 2. Detect iframes � report their src URLs so AI can navigate to them
     const iframes = await session.page.evaluate(() => {
       return Array.from((globalThis as any).document.querySelectorAll('iframe'))
         .map((f: any) => ({
@@ -8964,7 +8964,7 @@ export async function browserGetPageText(
         if (fText && fText.length > 80) {
           iframeTexts.push(`--- IFRAME (${frameUrl.slice(0, 120)}) ---\n${fText}`);
         }
-      } catch { /* cross-origin iframe — skip text, will be listed in iframe URLs */ }
+      } catch { /* cross-origin iframe � skip text, will be listed in iframe URLs */ }
     }
 
     const parts: string[] = [
@@ -8984,7 +8984,7 @@ export async function browserGetPageText(
       parts.push(...iframeTexts);
     }
 
-    // Cross-origin iframes — can't read text but list the URLs
+    // Cross-origin iframes � can't read text but list the URLs
     const crossOriginIframes = iframes.filter(f => {
       try {
         const fHost = new URL(f.src).hostname;
@@ -9201,11 +9201,11 @@ function formatInHouseNetworkResult(result: any, options: { includeBodies?: bool
   if (!entries.length) {
     return result?.active
       ? 'No matching native network responses captured yet (observation is active).'
-      : 'No native network entries — start observation first with action="start".';
+      : 'No native network entries � start observation first with action="start".';
   }
   const lines = entries.map((entry: any) => {
     const ts = entry?.ts ? new Date(Number(entry.ts)).toISOString().slice(11, 23) : 'unknown time';
-    const status = Number(entry?.status || 0) || (entry?.error ? 'ERR' : '—');
+    const status = Number(entry?.status || 0) || (entry?.error ? 'ERR' : '�');
     const error = entry?.error ? ` (${String(entry.error).replace(/\s+/g, ' ').slice(0, 240)})` : '';
     return `[${ts}] ${String(entry?.method || 'GET')} ${status} ${String(entry?.contentType || '')}${error}\n    ${String(entry?.url || '')}`;
   });
@@ -9289,7 +9289,7 @@ export async function browserInspectConsole(
   }, null, 2);
 }
 
-// ─── browser_run_js ───────────────────────────────────────────────────────────
+// --- browser_run_js -----------------------------------------------------------
 
 /**
  * Execute arbitrary JavaScript in the current page context and return the result.
@@ -9447,7 +9447,7 @@ export async function browserRunSmokeSteps(sessionId: string, steps: any[] = [])
   return JSON.stringify({ ok: results.every((result) => result.ok), executed: results.length, results }, null, 2);
 }
 
-// ─── browser_intercept_network ────────────────────────────────────────────────
+// --- browser_intercept_network ------------------------------------------------
 
 /**
  * Hook into Playwright's network layer to intercept and log XHR/fetch responses.
@@ -9520,7 +9520,7 @@ export async function browserInterceptNetwork(
           try {
             body = await response.text();
             const bodyMaxChars = Math.max(0, Math.min(20_000, Number(options.bodyMaxChars ?? 1000)));
-            if (body && body.length > bodyMaxChars) body = body.slice(0, bodyMaxChars) + '…[truncated]';
+            if (body && body.length > bodyMaxChars) body = body.slice(0, bodyMaxChars) + '�[truncated]';
           } catch { /* ignore */ }
         }
         log.push({ url, method: req.method(), status: response.status(), contentType, body, ts: Date.now() });
@@ -9537,7 +9537,7 @@ export async function browserInterceptNetwork(
     const handler = _networkInterceptHandlers.get(resolved);
     if (handler) { session.context.off('response', handler); _networkInterceptHandlers.delete(resolved); }
     const count = (_networkInterceptLog.get(resolved) || []).length;
-    return `Network interception stopped. ${count} entries in log — use action="read" to view.`;
+    return `Network interception stopped. ${count} entries in log � use action="read" to view.`;
   }
 
   if (action === 'clear') {
@@ -9554,7 +9554,7 @@ export async function browserInterceptNetwork(
     if (log.length === 0) {
       return _networkInterceptHandlers.has(resolved)
         ? 'No matching network responses captured yet (interception is active).'
-        : 'No entries — start interception first with action="start".';
+        : 'No entries � start interception first with action="start".';
     }
     const lines = log.map(e => {
       const time = new Date(e.ts).toISOString().slice(11, 23);
@@ -9567,11 +9567,11 @@ export async function browserInterceptNetwork(
   return 'ERROR: action must be "start", "stop", "read", or "clear".';
 }
 
-// ─── browser_element_watch ────────────────────────────────────────────────────
+// --- browser_element_watch ----------------------------------------------------
 
 /**
  * Wait until a DOM element appears, disappears, or contains specific text.
- * Uses Playwright's native waitForSelector for appear/disappear — efficient,
+ * Uses Playwright's native waitForSelector for appear/disappear � efficient,
  * no polling overhead. Returns a fresh snapshot when condition is met.
  */
 export async function browserElementWatch(
@@ -9659,7 +9659,7 @@ export async function browserElementWatch(
           if (elText.includes(text)) {
             return `Element "${selector}" contains text "${text}".\n\n${await freshSnapshot()}`;
           }
-        } catch { /* element not present yet — keep polling */ }
+        } catch { /* element not present yet � keep polling */ }
         await session.page.waitForTimeout(500);
       }
       return `ERROR: Timed out after ${safeTimeout}ms waiting for "${selector}" to contain text "${text}".`;
@@ -9670,7 +9670,7 @@ export async function browserElementWatch(
   }
 }
 
-// ─── browser_snapshot_delta ───────────────────────────────────────────────────
+// --- browser_snapshot_delta ---------------------------------------------------
 
 /**
  * Re-scan the page and return ONLY what changed since the last snapshot.
@@ -9694,7 +9694,7 @@ export async function browserSnapshotDelta(sessionId: string): Promise<string> {
   if (!prevSnapshot) {
     const elemCount = (newSnapshot.match(/@\d+/g) || []).length;
     return attachShortcutsContext(
-      `No previous snapshot to diff — returning full snapshot (${elemCount} elements):\n\n${newSnapshot}`,
+      `No previous snapshot to diff � returning full snapshot (${elemCount} elements):\n\n${newSnapshot}`,
       url,
     );
   }
@@ -9719,17 +9719,17 @@ export async function browserSnapshotDelta(sessionId: string): Promise<string> {
     );
   }
 
-  const parts: string[] = [`DOM delta — +${added.length} added, -${removed.length} removed (${newSet.size} total)`];
-  if (prevTitle !== newTitle) parts.push(`Page title: "${prevTitle}" → "${newTitle}"`);
-  if (prevUrl !== newUrl) parts.push(`URL: ${prevUrl} → ${newUrl}`);
+  const parts: string[] = [`DOM delta � +${added.length} added, -${removed.length} removed (${newSet.size} total)`];
+  if (prevTitle !== newTitle) parts.push(`Page title: "${prevTitle}" ? "${newTitle}"`);
+  if (prevUrl !== newUrl) parts.push(`URL: ${prevUrl} ? ${newUrl}`);
   if (added.length > 0) { parts.push('\n=== ADDED ==='); parts.push(...added.slice(0, 60)); }
   if (removed.length > 0) { parts.push('\n=== REMOVED ==='); parts.push(...removed.slice(0, 60)); }
-  if (added.length > 60 || removed.length > 60) parts.push('\n…(truncated — use browser_snapshot for full view)');
+  if (added.length > 60 || removed.length > 60) parts.push('\n�(truncated � use browser_snapshot for full view)');
 
   return attachShortcutsContext(parts.join('\n'), url, sessionId);
 }
 
-// ─── browser_extract_structured ───────────────────────────────────────────────
+// --- browser_extract_structured -----------------------------------------------
 
 /**
  * Extract structured data from the current page by describing a schema.
@@ -9856,7 +9856,7 @@ export async function browserExtractStructured(
   }
 }
 
-// ─── Vision Tools (Component 1 + 3) ──────────────────────────────────────────
+// --- Vision Tools (Component 1 + 3) ------------------------------------------
 //
 // These tools capture the Playwright viewport as a PNG (not via PowerShell/desktop)
 // and allow coordinate-based click/type when the DOM snapshot has too few elements.
@@ -9972,7 +9972,7 @@ export async function browserSendToTelegram(
 
 /**
  * Click at viewport coordinates (pixels). Uses Playwright CDP mouse API.
- * More precise than DOM refs — works on canvas/SVG/WebGL pages.
+ * More precise than DOM refs � works on canvas/SVG/WebGL pages.
  * Returns a fresh DOM snapshot after clicking so the model can check if DOM recovered.
  */
 export async function browserVisionClick(
@@ -10122,7 +10122,7 @@ export async function browserVisionType(
   }
 }
 
-// ─── Session State Helpers (for system prompt injection) ───────────────────────
+// --- Session State Helpers (for system prompt injection) -----------------------
 
 export function hasBrowserSession(sessionId: string): boolean {
   const resolved = resolveSessionId(sessionId);
@@ -10403,9 +10403,9 @@ export async function browserTeachVerify(
     verification: null,
   });
 
-  // ── In-house browser verify ──────────────────────────────────────────────
+  // -- In-house browser verify ----------------------------------------------
   // The Playwright detached-tab verifier can't run in-house (no Playwright
-  // session). Replay the recorded steps in the SAME in-house view instead — it
+  // session). Replay the recorded steps in the SAME in-house view instead � it
   // shares the live login. (v1: this disturbs the visible page rather than using
   // a hidden tab; a same-partition detached view is a future enhancement.)
   if (getInHouseSession(resolved)) {
@@ -11547,9 +11547,9 @@ process.on('exit', () => {
   }
 });
 
-// ─── Preview Screenshot ───────────────────────────────────────────────────────
+// --- Preview Screenshot -------------------------------------------------------
 // Used by the Telegram file browser to render a visual preview of any workspace
-// file. Completely isolated from the main chat browser session — opens a fresh
+// file. Completely isolated from the main chat browser session � opens a fresh
 // page, screenshots it in chunks, then immediately closes the page.
 // Chrome is auto-launched if it isn't running (same path as normal browser tools).
 
@@ -11582,7 +11582,7 @@ export async function browserPreviewScreenshot(
   const PREVIEW_SESSION = '__preview_internal__';
   const session = await getOrCreateSession(PREVIEW_SESSION);
 
-  // Always open a BRAND NEW page — never reuse the session's shared page.
+  // Always open a BRAND NEW page � never reuse the session's shared page.
   // This ensures zero interference with the user's active browsing session.
   const page: PwPage = await session.context.newPage();
 
@@ -11595,13 +11595,13 @@ export async function browserPreviewScreenshot(
         await route.continue({ headers: { ...route.request().headers(), ...requestHeaders } });
       });
     }
-    // Clean 1280px viewport — matches a standard desktop browser width.
+    // Clean 1280px viewport � matches a standard desktop browser width.
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
     // Brief settle to let fonts/images render fully
     await page.waitForTimeout(400);
 
-    // Get the full rendered page height — use the maximum of several measures
+    // Get the full rendered page height � use the maximum of several measures
     // because some pages (e.g. 100vh layouts) return a small scrollHeight.
     const fullHeight: number = await page.evaluate(`
       Math.max(
@@ -11631,7 +11631,7 @@ export async function browserPreviewScreenshot(
       await page.waitForTimeout(80);
 
       // Resize viewport to exactly the chunk height so the screenshot
-      // captures only this slice — clip coords are always viewport-relative
+      // captures only this slice � clip coords are always viewport-relative
       // so we set the viewport to match the chunk height instead of clipping
       await page.setViewportSize({ width: viewportWidth, height: thisChunkHeight });
 
@@ -11658,12 +11658,12 @@ export async function browserPreviewScreenshot(
 
     return chunks;
   } finally {
-    // Always close this temporary page — never leave it open in Chrome
+    // Always close this temporary page � never leave it open in Chrome
     try { await page.close(); } catch {}
   }
 }
 
-// ─── X/Twitter Thread Scraper ─────────────────────────────────────────────────
+// --- X/Twitter Thread Scraper -------------------------------------------------
 // Detects X URLs and scrapes tweet thread data using snapshots + deltas.
 
 interface ExtractedTweet {
@@ -11825,7 +11825,7 @@ export async function fetchXThread(sessionId: string, url: string): Promise<stri
     try {
       await browserClose(xSessionId);
     } catch {
-      // Silent fail — browser may have already closed
+      // Silent fail � browser may have already closed
     }
   }
 }

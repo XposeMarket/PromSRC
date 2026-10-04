@@ -2632,8 +2632,11 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!message) return false;
     const messageIndex = messageRow.index;
     const timeline = mobileTimelineController.peek(`mobile:main:${sid}`);
+    // A row newer than the painted window (steer continuation) needs a full render.
     if (!threadEl.querySelector(`[data-msg-index="${messageIndex}"]`)
-      && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) return true;
+      && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) {
+      return messageIndex < Math.max(-1, ...timeline.paintEntries.map((e) => Number(e.originalIndex) || 0));
+    }
     const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
     const patched = _patchMobileThreadMessage(threadEl, message, messageIndex);
     if (!patched) return false;
@@ -3168,12 +3171,8 @@ function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
   const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
   if (!clientRequestId && !streamId) return null;
   const sid = String(sessionId || evt?.sessionId || '').trim();
-  // A gateway restart resumes the SAME request (same clientRequestId) on a NEW
-  // stream. The pre-restart stream can end with an abort/done frame that pins
-  // or freezes the turn, and matching on clientRequestId alone then discarded
-  // every post-restart frame as a duplicate: the live view froze until the app
-  // was reopened. A request-id match on a different, known stream is a
-  // continuation unless that turn already received its real final answer.
+  // A restart resumes the same clientRequestId on a new stream; a request-id
+  // match on a different known stream is a continuation unless already final.
   const requestMatchIsCompleted = (turn) => {
     if (!clientRequestId || String(turn?._clientRequestId || '').trim() !== clientRequestId) return false;
     const turnStreamId = String(turn?._streamId || turn?._pmLastStreamId || '').trim();
@@ -3347,10 +3346,10 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     }
     const hasPendingImageGeneration = _hasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
-      ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>`
+      ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText, turnPresentation)}</div>`
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
     inner += attachmentHtml;
-    inner += _renderMobileRichArtifacts(turnPresentation);
+    inner += _renderMobileRichArtifacts({ ...turnPresentation, content: markdownText });
     if (!(Array.isArray(turnPresentation.richArtifacts) && turnPresentation.richArtifacts.some((artifact) => artifact?.type === 'products'))) {
       inner += _renderMobileProductCarousel(turnPresentation);
     }

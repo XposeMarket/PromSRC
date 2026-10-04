@@ -47,4 +47,16 @@ assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_1', seq: 12, at: 19
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_1', seq: 13, at: 1999 }, steer), true);
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_2', seq: 1, at: 1999 }, steer), false);
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_2', seq: 1, at: 2001 }, steer), true);
+// The server's before-row id becomes the frozen row's identity so history
+// merges dedupe it, and the continuation id survives serialization.
+const thread2 = [{ role: 'ai', streaming: true, _clientRequestId: 'r2', workStartedAt: 1, timestamp: 1, body: { text: '' }, content: '', processEntries: [], liveTraceEntries: [] }];
+sandbox.__pmChat.threads.s2 = thread2;
+assert.equal(sandbox._appendMobileQueuedSteerTurn('s2', 'Go left', {
+  workflowGroupId: 'chat_steer_9', messageId: 'chat-steer:9', beforeMessageId: 'chat_steer_9:before', workflowBoundarySeq: 40, workflowStreamId: 's', timestamp: 3000,
+}), true);
+assert.equal(thread2[0].messageId, 'chat_steer_9:before');
+assert.equal(JSON.parse(JSON.stringify(thread2[0])).steerContinuationMessageId, 'chat_steer_9:continuation', 'link survives a JSON round trip');
+// The WS echo of the same steer must not split twice.
+assert.equal(sandbox._appendMobileQueuedSteerTurn('s2', 'Go left', { workflowGroupId: 'chat_steer_9', messageId: 'chat-steer:9' }), true);
+assert.equal(thread2.length, 3, 'duplicate steer (WS + POST) is idempotent');
 console.log('[mobile steer boundary] durable split, frozen prefix and replay filtering passed');

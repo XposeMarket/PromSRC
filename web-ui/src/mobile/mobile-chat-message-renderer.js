@@ -195,7 +195,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       inner += `<div class="pm-chat-approvals-inline">${activeApprovals.map((approval) => _renderMobileApprovalCard(approval, { compact: true })).join('')}</div>`;
     }
     if (b.browseState) inner += _renderBrowseCard(b.browseState);
-    inner += _renderMobileRichArtifacts(m);
+    inner += _renderMobileRichArtifacts(b.text && !m.content ? { ...m, content: b.text } : m);
     inner += _renderMobileVoiceWorkgroup(m);
     if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
       inner += _renderMobileProductCarousel(m);

@@ -109,6 +109,10 @@ const measurements = {
 // only on a real gateway status flip, defer re-render under an active hold,
 // re-find a detached row) adds 257 measured gzip bytes. The current main
 // manifest measures 257257 gzip bytes; hold that reviewed ceiling against new growth.
-assert(measurements.gzipBytes <= 257300, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #522 chat cards (quiz/flashcards/poll/writing/calculator/convert renderers,
+// live-data cards, card runtime + styles in web-ui/src/cards) render inside
+// renderMd, so they ship in this slice: measured 277816. Lazy-loading the card
+// renderers is the follow-up that should bring this back down.
+assert(measurements.gzipBytes <= 278000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
