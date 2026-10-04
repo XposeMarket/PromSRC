@@ -11,6 +11,16 @@
  */
 
 import { renderConnectorLogo } from './features/connectors/connector-logo-runtime.js';
+import { agentModelLabel, providerLogoKey, renderProviderLogo } from './components/provider-logo.js';
+
+// "Opus 5.5 · Medium: prompt" for a spawn row; model/provider come from the call args.
+function spawnAgentRoute(args = {}) {
+  const rawModel = String(args.model || '').trim();
+  const slash = rawModel.indexOf('/');
+  const providerId = String(args.provider || (slash > 0 ? rawModel.slice(0, slash) : '')).trim();
+  const model = slash > 0 ? rawModel.slice(slash + 1) : rawModel;
+  return { providerId, model, reasoningEffort: String(args.reasoning_effort || args.reasoningEffort || '').trim() };
+}
 
 function compact(value, max = 120) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -421,6 +431,10 @@ export function renderToolActivityIcon(activity = {}, escapeHtml) {
   const esc = typeof escapeHtml === 'function' ? escapeHtml : (value) => String(value ?? '');
   const connectorLogo = renderConnectorLogo(activity, esc);
   if (connectorLogo) return connectorLogo;
+  if (activity.key === 'background.spawn') {
+    const route = spawnAgentRoute(spawnArgsWithResult(activity));
+    if (providerLogoKey(route.providerId, route.model)) return renderProviderLogo(route.providerId, route.model, 'tool-activity-tool-icon tool-activity-provider-logo');
+  }
   const kind = toolActivityIconKind(activity);
   const path = TOOL_ACTIVITY_ICON_PATHS[kind] || TOOL_ACTIVITY_ICON_PATHS.wrench;
   return `<svg class="tool-activity-tool-icon" data-tool-icon="${esc(kind)}" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
@@ -511,6 +525,12 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (action === 'analyze_video' || action === 'video_analyze_imported_video') return make('media.inspect.video', 'video analysis', 'Preparing video frames…', 'Analyzing video', 'Analyzed video', { family: 'media', target: fileTarget });
   if (action === 'background_ops' || /^background_(spawn|steer|wait|status|progress|join)$/.test(action)) {
     const operation = action === 'background_ops' ? subAction : action.slice(11);
+    if (operation === 'spawn') {
+      const who = agentModelLabel(spawnAgentRoute(args)) || 'agent';
+      const task = firstValue(args, ['prompt', 'task', 'message'], 80);
+      const label = task ? `${who}: ${task}` : who;
+      return make('background.spawn', 'agent', 'Preparing agent…', `Spawning ${label}`, `Spawned ${label}`, { family: 'background', target: '', countNoun: 'agent' });
+    }
     const count = Array.isArray(args.background_ids) ? args.background_ids.length : args.background_id ? 1 : 0;
     const agents = count ? `${count} agent${count === 1 ? '' : 's'}` : 'background agents';
     const ms = Number(args.wait_ms ?? args.timeout_ms);
@@ -607,8 +627,19 @@ function successLabel(description, result) {
   return description.success;
 }
 
+// Default-routed spawns carry no model in args; the spawn result does.
+function spawnArgsWithResult(activity = {}) {
+  const args = activity.args || {};
+  if (args.model || !/background_(?:ops|spawn)/.test(String(activity.action || ''))) return args;
+  try {
+    const parsed = typeof activity.result === 'string' ? JSON.parse(activity.result) : activity.result;
+    if (parsed && parsed.model) return { ...args, model: parsed.model, provider: parsed.providerId || parsed.provider, reasoning_effort: parsed.reasoningEffort || parsed.executor_reasoning_effort };
+  } catch {}
+  return args;
+}
+
 function activityText(activity = {}) {
-  const description = describeTool(activity.action, activity.args);
+  const description = describeTool(activity.action, spawnArgsWithResult(activity));
   if (activity.kind === 'result') {
     const label = activity.ok === false ? failureLabel(description, activity.result) : successLabel(description, activity.result);
     const duration = durationLabel(activity.durationMs);
@@ -981,6 +1012,7 @@ export function toolActivitySummary(entriesInput, { live = false } = {}) {
     const first = list[0];
     if (list.length === 1) parts.push(activityText(first).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));
     else if (first.family === 'command') parts.push(`Ran ${list.length} commands`);
+    else if (first.key === 'background.spawn') parts.push(`Spawned ${list.length} agents`);
     else parts.push(`${list.length} ${first.countNoun || 'tool calls'}${/s$/i.test(first.countNoun || '') ? '' : 's'}`);
   }
   if (failed.length === 1) parts.push(activityText(failed[0]).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));

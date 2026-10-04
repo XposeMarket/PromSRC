@@ -18,7 +18,7 @@ const STYLE_DEFINITIONS = Object.freeze({
       id: 'pm-mobile-composer-stack-style',
       file: 'mobile-composer-stack.css',
       layer: 'components',
-      version: 'pm-v308-2026-10-04-glass-popovers',
+      version: 'pm-v309-2026-10-04-popover-route-override',
       attribute: 'data-prom-mobile-composer-stack-style',
     }),
   ]),

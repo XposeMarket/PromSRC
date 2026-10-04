@@ -11,6 +11,7 @@ import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -4646,9 +4647,9 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     return `
       <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}" data-pm-row-key="background:${escapeHtml(lane.id)}">
         <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(identity.name)} background work">
-          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(identity.color)}">${escapeHtml(identity.name.slice(0, 2).toUpperCase())}</span>
+          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(identity.color)}">${agentAvatarHtml(lane, identity.name)}</span>
           <span class="pm-background-spawn-main">
-            <strong style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</strong>
+            <strong><b style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</b><small>${escapeHtml(agentModelLabel(lane))}</small></strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>
