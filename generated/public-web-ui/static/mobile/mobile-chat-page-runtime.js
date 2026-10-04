@@ -3520,9 +3520,8 @@ void main() {
       let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, recoveryClientRequestId)
         || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null)
         || (status?.active && canRevive(activeThread, latestAssistantTurn, recoveryClientRequestId) ? latestAssistantTurn : null);
-      // The source/continuation link is deliberately non-enumerable and is
-      // lost by cache serialization. Restore it from durable workflow rows
-      // before any checkpoint or replay frame can target the frozen source.
+      // Restore the non-enumerable source/continuation link (lost by cache
+      // serialization) before any frame can target the frozen source.
       const latestSteerIndex = [...activeThread].findLastIndex((turn) => turn?.role === 'user'
         && String(turn.workflowPart || '') === 'interruption'
         && /^chat_steer_/i.test(String(turn.workflowGroupId || '')));
