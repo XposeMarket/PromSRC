@@ -6,6 +6,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
@@ -1376,10 +1377,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       sizeLabel: _formatBytes(file.size || 0),
       file,
     };
-    if (mimeType.startsWith('image/')) {
-      const dataUrl = await _fileToDataUrl(file);
-      return { ...base, kind: 'image', dataUrl, base64: dataUrl.replace(/^data:[^;]+;base64,/, '') };
-    }
+    if (mimeType.startsWith('image/')) return normalizeMobileImage(file, base, _fileToDataUrl, _formatBytes);
     if (mimeType.startsWith('video/')) {
       return { ...base, kind: 'video' };
     }
