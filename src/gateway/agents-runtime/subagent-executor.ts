@@ -3773,7 +3773,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     if (args?.title != null && payload.title == null) payload.title = String(args.title);
     const { UI_CARD_BUILDERS, buildProductCard } = await import('../../tools/ui-cards.js');
     const builder = cardType === 'product'
-      ? (p: any) => buildProductCard(p, (items) => enrichProductArtifactItems(items as any, { downloadImages: true, metadataTimeoutMs: 3000 }))
+      ? (p: any) => buildProductCard(
+        p,
+        (items) => enrichProductArtifactItems(items as any, { downloadImages: true, metadataTimeoutMs: 3000 }),
+        async (query) => {
+          const tr: any = await executeShoppingSearchProducts({ query, max_results: 4, merchant: p?.merchant ? String(p.merchant) : undefined });
+          return tr?.extra?.richArtifacts?.[0]?.items || tr?.data?.items || [];
+        },
+      )
       : UI_CARD_BUILDERS[cardType];
     if (builder) {
       const tr = await builder(payload);

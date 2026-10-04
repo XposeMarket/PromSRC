@@ -378,8 +378,20 @@ export async function buildPlacesCard(args: any): Promise<CardResult> {
 }
 
 // ── single / hero product ──────────────────────────────────────────────────
-export async function buildProductCard(args: any, enrich?: (items: any[]) => Promise<any[]>): Promise<CardResult> {
-  const raw = args?.item || args?.product || (Array.isArray(args?.items) ? args.items[0] : null) || args;
+export async function buildProductCard(
+  args: any,
+  enrich?: (items: any[]) => Promise<any[]>,
+  search?: (query: string) => Promise<any[]>,
+): Promise<CardResult> {
+  let raw = args?.item || args?.product || (Array.isArray(args?.items) ? args.items[0] : null) || args;
+  // A bare query (no title/url) runs the shopping search and shows the best hit.
+  const query = str(args?.query);
+  if (query && search && !str(raw?.title || raw?.name) && !str(raw?.productUrl || raw?.url)) {
+    const found = await search(query).catch(() => [] as any[]);
+    const best = (found || []).find((p: any) => p?.price && (p?.imageUrl || p?.imagePath)) || (found || [])[0];
+    if (!best) return fail(`No product found for "${query}".`);
+    raw = { ...best, imageUrl: best.imageUrl || best.image };
+  }
   let item: any = {
     title: str(raw?.title || raw?.name), productUrl: str(raw?.productUrl || raw?.url), price: str(raw?.price), merchant: str(raw?.merchant || raw?.store),
     imageUrl: str(raw?.imageUrl || raw?.image), rating: Number(raw?.rating) || undefined, reviewCount: Number(raw?.reviewCount ?? raw?.reviews) || undefined,

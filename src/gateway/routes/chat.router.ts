@@ -13963,7 +13963,12 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
   if (name.startsWith('show_card_')) {
     const { UI_CARD_BUILDERS, buildProductCard } = await import('../../tools/ui-cards.js');
     const type = name.slice('show_card_'.length);
-    const builder = type === 'product' ? buildProductCard : UI_CARD_BUILDERS[type];
+    const builder = type === 'product'
+      ? (p: any) => buildProductCard(p, undefined, async (query) => {
+        const tr: any = await executeShoppingSearchProducts({ query, max_results: 4, include_images: false });
+        return tr?.extra?.richArtifacts?.[0]?.items || tr?.data?.items || [];
+      })
+      : UI_CARD_BUILDERS[type];
     if (!builder) return { ok: false, summary: 'Unknown card.', artifact: null };
     return fromLookup(await builder(args), 'Card unavailable.');
   }

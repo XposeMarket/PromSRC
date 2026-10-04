@@ -78,6 +78,16 @@ assert.equal(renderDataCard({ type: 'unknown_type' }), '');
 async function main() {
 // product (no network: enrichment callback stubbed)
 const prod = await buildProductCard({ item: { title: 'AirPods Pro 3', productUrl: 'https://www.target.com/p/x', price: '$249.99' }, variant: 'hero' }, async (items) => items.map((i) => ({ ...i, imageUrl: 'https://img/x.jpg' })));
+// A bare query runs the search hook and prefers a priced, imaged hit.
+const byQuery = await buildProductCard({ query: 'airpods pro 3' }, undefined, async () => [
+  { title: 'Article', productUrl: 'https://a/x' },
+  { title: 'AirPods Pro 3', productUrl: 'https://t/p', price: '$249.99', imageUrl: 'https://img/a.jpg', merchant: 'Target' },
+]);
+assert.equal(byQuery.success, true, 'product card resolves a query');
+assert.equal((byQuery as any).extra.richArtifacts[0].item.price, '$249.99');
+const noHit = await buildProductCard({ query: 'nothing' }, undefined, async () => []);
+assert.equal(noHit.success, false);
+
 assert.equal(prod.extra?.richArtifacts[0].variant, 'hero');
 assert.equal(prod.extra?.richArtifacts[0].item.imageUrl, 'https://img/x.jpg', 'enrichment fills missing image');
 assert.ok(renderDataCard(prod.extra!.richArtifacts[0]).includes('Top pick'));
