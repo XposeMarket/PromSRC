@@ -219,11 +219,14 @@ function normalizeAnswers(record: PrometheusQuestionRecord, answers: any): Prome
   });
 }
 
-class PrometheusQuestionQueue {
+export class PrometheusQuestionQueue {
   private records: Map<string, PrometheusQuestionRecord> = new Map();
   private callbacks: Map<string, (answers: { answers: PrometheusQuestionAnswer[]; generalOther?: string }) => void> = new Map();
   private cancelCallbacks: Map<string, () => void> = new Map();
   private steerCallbacks: Map<string, (steerMessage: string) => void> = new Map();
+
+  private diskMtimeMs = 0;
+  private waiterPoll: NodeJS.Timeout | null = null;
 
   constructor() {
     this.loadDurableRecords();
@@ -238,14 +241,85 @@ class PrometheusQuestionQueue {
     return path.join(dir, 'questions.json');
   }
 
+  private normalizeRawRecord(raw: any): PrometheusQuestionRecord | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = String(raw.id || '').trim();
+    const sessionId = String(raw.sessionId || '').trim();
+    if (!id || !sessionId || !Array.isArray(raw.questions)) return null;
+    const status = ['pending', 'answered', 'cancelled', 'expired'].includes(raw.status) ? raw.status : 'pending';
+    return {
+      ...raw,
+      id,
+      sessionId,
+      title: String(raw.title || 'Prometheus question'),
+      prompt: String(raw.prompt || ''),
+      questions: raw.questions.map(normalizeQuestionItem).filter(Boolean),
+      createdAt: String(raw.createdAt || new Date().toISOString()),
+      status,
+    } as PrometheusQuestionRecord;
+  }
+
+  private readDiskRecords(): PrometheusQuestionRecord[] {
+    const p = this.storePath();
+    if (!fs.existsSync(p)) return [];
+    this.diskMtimeMs = fs.statSync(p).mtimeMs;
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    const raws = Array.isArray(parsed?.questions) ? parsed.questions : [];
+    return raws.map((raw: any) => this.normalizeRawRecord(raw)).filter(Boolean) as PrometheusQuestionRecord[];
+  }
+
+  /**
+   * questions.json is shared by every gateway process. During a warm restart the
+   * draining gateway keeps running turns that can create a card after the
+   * replacement booted, and only that process holds the waiter that resumes the
+   * turn. Merge what other processes wrote instead of trusting this process's
+   * boot snapshot: their new cards become visible/answerable here, and a card
+   * resolved elsewhere settles the local waiter.
+   */
+  syncFromDisk(force = false): void {
+    try {
+      const p = this.storePath();
+      if (!fs.existsSync(p)) return;
+      if (!force && fs.statSync(p).mtimeMs === this.diskMtimeMs) return;
+      for (const record of this.readDiskRecords()) this.mergeDiskRecord(record);
+    } catch (err: any) {
+      console.warn('[PrometheusQuestions] Failed to sync questions from disk:', err?.message || err);
+    }
+  }
+
+  private mergeDiskRecord(record: PrometheusQuestionRecord): void {
+    const local = this.records.get(record.id);
+    if (!local) {
+      this.records.set(record.id, record);
+      return;
+    }
+    if (local.status !== 'pending' || record.status === 'pending') return;
+    Object.assign(local, {
+      status: record.status,
+      answers: record.answers,
+      generalOther: record.generalOther,
+      resolvedAt: record.resolvedAt,
+      resolvedBy: record.resolvedBy,
+    });
+    const resolveCb = this.callbacks.get(local.id);
+    const cancelCb = this.cancelCallbacks.get(local.id);
+    this.clearWaiters(local.id);
+    if (record.status === 'answered') resolveCb?.({ answers: local.answers || [], generalOther: local.generalOther });
+    else cancelCb?.();
+  }
+
   private persistDurableRecords(): void {
     try {
+      // Fold in records another gateway process wrote so this write never
+      // deletes a card it does not know about.
+      try { for (const record of this.readDiskRecords()) this.mergeDiskRecord(record); } catch {}
       const records = [...this.records.values()]
         .filter((record) => record.status === 'pending' || Date.now() - new Date(record.resolvedAt || record.createdAt).getTime() < 24 * 60 * 60 * 1000);
       const p = this.storePath();
-      const tmp = `${p}.tmp-${Date.now()}`;
+      const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
       fs.writeFileSync(tmp, JSON.stringify({ questions: records }, null, 2), 'utf-8');
       fs.renameSync(tmp, p);
+      try { this.diskMtimeMs = fs.statSync(p).mtimeMs; } catch {}
     } catch (err: any) {
       console.warn('[PrometheusQuestions] Failed to persist questions:', err?.message || err);
     }
@@ -253,31 +327,36 @@ class PrometheusQuestionQueue {
 
   private loadDurableRecords(): void {
     try {
-      const p = this.storePath();
-      if (!fs.existsSync(p)) return;
-      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      const records = Array.isArray(parsed?.questions) ? parsed.questions : [];
-      for (const raw of records) {
-        if (!raw || typeof raw !== 'object') continue;
-        const id = String(raw.id || '').trim();
-        const sessionId = String(raw.sessionId || '').trim();
-        if (!id || !sessionId || !Array.isArray(raw.questions)) continue;
-        const status = ['pending', 'answered', 'cancelled', 'expired'].includes(raw.status) ? raw.status : 'pending';
-        this.records.set(id, {
-          ...raw,
-          id,
-          sessionId,
-          title: String(raw.title || 'Prometheus question'),
-          prompt: String(raw.prompt || ''),
-          questions: raw.questions.map(normalizeQuestionItem).filter(Boolean),
-          createdAt: String(raw.createdAt || new Date().toISOString()),
-          status,
-        } as PrometheusQuestionRecord);
+      const records = this.readDiskRecords();
+      // Week-old pending cards have no turn left to resume; they only block
+      // session settlement and clutter /api/questions.
+      const staleBefore = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      for (const record of records) {
+        if (record.status === 'pending' && Date.parse(record.createdAt) < staleBefore) {
+          record.status = 'expired';
+          record.resolvedAt = record.resolvedAt || new Date().toISOString();
+          record.resolvedBy = record.resolvedBy || 'stale_sweep';
+        }
+        this.records.set(record.id, record);
       }
       if (records.length) console.log(`[PrometheusQuestions] Restored ${this.records.size} durable question(s)`);
     } catch (err: any) {
       console.warn('[PrometheusQuestions] Failed to restore questions:', err?.message || err);
     }
+  }
+
+  /** While a waiter is installed, notice answers/cancels made by another gateway process. */
+  private ensureWaiterPoll(): void {
+    if (this.waiterPoll) return;
+    this.waiterPoll = setInterval(() => {
+      if (!this.callbacks.size && !this.cancelCallbacks.size) {
+        if (this.waiterPoll) clearInterval(this.waiterPoll);
+        this.waiterPoll = null;
+        return;
+      }
+      this.syncFromDisk();
+    }, 2_000);
+    this.waiterPoll.unref?.();
   }
 
   create(partial: Omit<PrometheusQuestionRecord, 'id' | 'createdAt' | 'status'>): PrometheusQuestionRecord {
@@ -295,10 +374,13 @@ class PrometheusQuestionQueue {
   }
 
   get(id: string): PrometheusQuestionRecord | null {
-    return this.records.get(id) || null;
+    const key = String(id || '');
+    if (!this.records.has(key)) this.syncFromDisk(true);
+    return this.records.get(key) || null;
   }
 
   listAll(): PrometheusQuestionRecord[] {
+    this.syncFromDisk();
     return [...this.records.values()].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -331,6 +413,7 @@ class PrometheusQuestionQueue {
       return;
     }
     this.callbacks.set(id, callback);
+    this.ensureWaiterPoll();
   }
 
   onCancel(id: string, callback: () => void): void {
@@ -339,7 +422,10 @@ class PrometheusQuestionQueue {
       callback();
       return;
     }
-    if (record?.status === 'pending') this.cancelCallbacks.set(id, callback);
+    if (record?.status === 'pending') {
+      this.cancelCallbacks.set(id, callback);
+      this.ensureWaiterPoll();
+    }
   }
 
   onSteer(id: string, callback: (steerMessage: string) => void): void {
