@@ -561,31 +561,47 @@ export function setWsClientStreamFocus(client: any, sessionIds: unknown, request
   }
 }
 
+function isBackgroundProgressFrame(frame: any): boolean {
+  return ['token', 'thinking', 'thinking_delta', 'reasoning_delta', 'reasoning_summary_delta',
+    'tool_progress', 'process_run_output', 'heartbeat', 'info', 'model_stream_event'].includes(
+      String(frame?.eventType || frame?.event || '').toLowerCase());
+}
+
+export function isUnfocusedProgressFrame(frame: any, focus: ReadonlySet<string> | undefined): boolean {
+  const sid = String(frame?.sessionId || frame?.run?.sessionId || '').trim();
+  if (!focus || !sid || focus.has(sid)) return false;
+  if (frame?.type === 'main_chat_stream_event') {
+    return FOCUS_FILTERED_STREAM_EVENTS.has(String(frame.event || ''))
+      && !['tool_call_start', 'tool_call_done'].includes(String(frame?.data?.event?.type || ''));
+  }
+  if (frame?.type === 'process_run_output') return true;
+  if (frame?.type === 'bg_agent_event') return isBackgroundProgressFrame(frame);
+  return false;
+}
+
 export function broadcastWS(data: object): void {
   if (_drainBroadcastRelay) {
     try { _drainBroadcastRelay(data); } catch {}
   }
   const frame: any = data;
   rememberStreamFrame(frame);
-  const msg = JSON.stringify(data);
+  // Don't serialize progress when every opted-in listener filters it out.
+  let msg: string | undefined;
   wssInstances.forEach((server) => {
     server.clients.forEach((client: any) => {
       if (client.readyState !== 1) return;
       const focus: Set<string> | undefined = client.__pmStreamFocus;
-      const sid = String(frame?.sessionId || '');
-      const filtered = focus && !focus.has(sid)
-        && frame?.type === 'main_chat_stream_event'
-        && FOCUS_FILTERED_STREAM_EVENTS.has(String(frame.event || ''))
-        && !['tool_call_start', 'tool_call_done'].includes(String(frame?.data?.event?.type || ''));
-      if (filtered) {
+      const sid = String(frame?.sessionId || frame?.run?.sessionId || '');
+      if (isUnfocusedProgressFrame(frame, focus)) {
         const now = Date.now();
         const activity: Map<string, number> = client.__pmSessionActivityAt || (client.__pmSessionActivityAt = new Map());
         if (now - (activity.get(sid) || 0) < 1000) return;
         activity.set(sid, now);
         if (activity.size > 256) activity.delete(activity.keys().next().value);
         const summary = JSON.stringify({ type: 'session_activity', sessionId: sid,
-          state: ['tool_progress', 'process_run_output', 'model_stream_event'].includes(String(frame.event)) ? 'tool' : 'streaming',
-          lastEventAt: now, preview: String(frame?.data?.text || frame?.data?.message || '').slice(0, 120) });
+          state: frame?.type === 'process_run_output' || frame?.type === 'bg_agent_event'
+            || ['tool_progress', 'process_run_output', 'model_stream_event'].includes(String(frame.event)) ? 'tool' : 'streaming',
+          lastEventAt: now, preview: String(frame?.message || frame?.text || frame?.data?.text || frame?.data?.message || '').slice(0, 120) });
         try { if (Number(client.bufferedAmount || 0) < 1024 * 1024) client.send(summary); } catch {}
         return;
       }
@@ -595,8 +611,13 @@ export function broadcastWS(data: object): void {
           try { client.terminate?.(); } catch {}
           return;
         }
-        if (buffered > 1024 * 1024) return;
-        client.send(msg);
+        // Completion/exit/error and structural frames are not disposable.
+        if (buffered > 1024 * 1024 && (
+          frame?.type === 'process_run_output'
+          || frame?.type === 'main_chat_stream_event' && FOCUS_FILTERED_STREAM_EVENTS.has(String(frame.event || ''))
+          || frame?.type === 'bg_agent_event' && isBackgroundProgressFrame(frame)
+        )) return;
+        client.send(msg ??= JSON.stringify(data));
       } catch {}
     });
   });

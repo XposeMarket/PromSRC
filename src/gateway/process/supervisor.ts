@@ -27,7 +27,6 @@ const configuredCaptureChars = Number(process.env.PROMETHEUS_PROCESS_CAPTURE_MAX
 const MAX_CAPTURE_CHARS = Number.isFinite(configuredCaptureChars)
   ? Math.max(64 * 1024, Math.min(16 * 1024 * 1024, Math.floor(configuredCaptureChars)))
   : 2 * 1024 * 1024;
-const OUTPUT_RECORD_PERSIST_INTERVAL_MS = 250;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -262,7 +261,6 @@ function buildSummary(exitCode: number | null, stderr: string, stdout: string): 
 export class ProcessSupervisor {
   private readonly store: ProcessRunStore;
   private readonly active = new Map<string, ManagedProcessRun>();
-  private readonly lastOutputRecordPersistAt = new Map<string, number>();
   private lastPersistenceWarningAt = 0;
   private readonly initialization: Promise<void>;
   private readonly initializedAt = Date.now();
@@ -561,7 +559,6 @@ export class ProcessSupervisor {
           });
         }
         this.active.delete(runId);
-        this.lastOutputRecordPersistAt.delete(runId);
         resolveWait(exit);
     };
     child.on('close', (code, signal) => { void finishRun(code, signal); });
@@ -758,7 +755,6 @@ export class ProcessSupervisor {
           });
         }
         this.active.delete(runId);
-        this.lastOutputRecordPersistAt.delete(runId);
         resolve(exit);
       })(); });
     });
@@ -839,18 +835,27 @@ export class ProcessSupervisor {
 
   private persistAndBroadcast(record: ProcessRunRecord, eventType: string, extra: Record<string, unknown> = {}): void {
     const now = Date.now();
-    const lastPersistedAt = this.lastOutputRecordPersistAt.get(record.runId) || 0;
-    const shouldPersist = eventType !== 'process_run_output' || now - lastPersistedAt >= OUTPUT_RECORD_PERSIST_INTERVAL_MS;
-    if (shouldPersist) {
+    // Streaming logs are already asynchronously appended. Do not force a
+    // synchronous temp-file write + rename for every output batch; lifecycle
+    // updates (including exit) still checkpoint the complete record durably.
+    if (eventType !== 'process_run_output') {
       try {
         this.store.writeRecord(record);
-        if (eventType === 'process_run_output') this.lastOutputRecordPersistAt.set(record.runId, now);
       } catch (error) {
         this.warnPersistenceFailure(`persisting record ${record.runId}`, error);
       }
     }
     try {
-      broadcastWS({ type: eventType, run: record, ...extra, timestamp: Date.now() });
+      // Full records, shellCommand and output logs remain available via process
+      // status/log APIs; streaming output only needs identity + its new chunk.
+      const run = eventType === 'process_run_output'
+        ? { runId: record.runId, sessionId: record.sessionId, toolCallId: record.toolCallId,
+            state: record.state, outputSeq: record.outputSeq }
+        : { ...record, shellCommand: undefined,
+            outputPreview: String(record.outputPreview || '').slice(-1_024),
+            command: String(record.command || '').slice(0, 500),
+            workspaceSnapshots: undefined, workspaceChanges: undefined };
+      broadcastWS({ type: eventType, sessionId: record.sessionId, run, ...extra, timestamp: now });
     } catch {
       // WebSocket broadcast is best-effort.
     }

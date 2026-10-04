@@ -28,6 +28,7 @@ import {
 import { buildTaskContinuitySnapshot } from './tasks/task-continuity';
 import { appendSubagentChatMessage } from './agents-runtime/subagent-chat-store';
 import { broadcastWS } from './comms/broadcaster';
+import { getPrometheusQuestionQueue } from './prometheus-questions';
 import { formatBackgroundSpawnContinuity } from './tasks/background-spawn-continuity';
 
 const TASK_RUNTIME_KINDS = new Set([
@@ -905,6 +906,30 @@ export function retriggerDeferredMainChatRuntime(
   runtime: LiveRuntimeSnapshot,
   retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
 ): boolean {
+  return retriggerDeferredMainChatRuntimeImpl(runtime, retrigger);
+}
+
+/**
+ * A foreground turn that was suspended on ask_prometheus_questions is waiting for
+ * the user, not doing work. Replaying it from its original request re-runs every
+ * tool and re-asks the question while the old card is still pending. Keep the
+ * card instead: answering it with no live owner yields a resumePrompt that
+ * continues the work with the answers (web, mobile and Telegram all send it).
+ */
+export function mainChatRuntimeAwaitingQuestion(runtime: Pick<LiveRuntimeSnapshot, 'sessionId' | 'checkpoint'>): boolean {
+  const sessionId = String(runtime.sessionId || '').trim();
+  if (!sessionId || String(runtime.checkpoint?.toolName || '') !== 'ask_prometheus_questions') return false;
+  try {
+    return getPrometheusQuestionQueue().listPending().some((question) => question.sessionId === sessionId);
+  } catch {
+    return false;
+  }
+}
+
+function retriggerDeferredMainChatRuntimeImpl(
+  runtime: LiveRuntimeSnapshot,
+  retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
+): boolean {
   if (automaticMainChatRecoveryAttempts(runtime) >= MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS) {
     pauseAutomaticMainChatRecovery(runtime);
     return true;
@@ -1049,6 +1074,14 @@ export function recoverInterruptedRuntimes(opts: {
           && automaticMainChatRecoveryAttempts(runtime) >= MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS;
         if (recoveryAttemptLimitReached) {
           pauseAutomaticMainChatRecovery(runtime);
+          continue;
+        }
+        if (runtime.kind === 'main_chat' && !plannedRestartTool && mainChatRuntimeAwaitingQuestion(runtime)) {
+          markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+            recovery: 'chat_awaiting_question',
+            sessionId: runtime.sessionId,
+            recoveredAt: Date.now(),
+          });
           continue;
         }
         // Unexpected foreground turns are safe to retrigger from their durable
