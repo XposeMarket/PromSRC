@@ -3,7 +3,7 @@ import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../featu
 import { formatModelWithReasoning } from '../model-display.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, canReviveRecoveryTurn as canRevive, reviveRecoveryTurn as revive } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, canReviveRecoveryTurn as canRevive, reviveIfFrozen as reviveFz } from './mobile-restart-continuity.js';
 
 export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
   if (!steer) return true;
@@ -3751,8 +3751,7 @@ void main() {
           fallback: remembered,
         });
         delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
-        // Revive the owned row frozen by the gap; a new row duplicated the trace.
-        if (aiTurn && !aiTurn.streaming && canRevive(activeThread, aiTurn, recoveryClientRequestId)) revive(aiTurn);
+        reviveFz(activeThread, aiTurn, recoveryClientRequestId);
         let hasLocalLiveHistory = !!(aiTurn?.streaming && (
           String(aiTurn.body?.text || aiTurn.content || '').trim()
           || (Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)
@@ -8672,7 +8671,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (aiTurn?.processEntries) aiTurn.processEntries = aiTurn.processEntries.filter((e) => !e?._pmStreamSnapshot);
     const sameLocalStream = !!aiTurn && aiTurn.streaming === true
       && String(aiTurn._streamId || run.streamId || '').trim() === streamId;
-    if (aiTurn && aiTurn.streaming !== true && canRevive(thread, aiTurn, run.clientRequestId)) revive(aiTurn);
+    reviveFz(thread, aiTurn, run.clientRequestId);
     if (!sameLocalStream) {
       if (!aiTurn || aiTurn.streaming !== true) {
         aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },

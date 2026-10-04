@@ -38,6 +38,13 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
   return true;
 }
 
+
+/** Revive `turn` in place when it is a frozen, revivable row of this request. */
+export function reviveIfFrozen(thread, turn, clientRequestId = '') {
+  if (turn && turn.streaming !== true && canReviveRecoveryTurn(thread, turn, clientRequestId)) reviveRecoveryTurn(turn);
+  return turn;
+}
+
 /** Revive a frozen live row in place (see canReviveRecoveryTurn). */
 export function reviveRecoveryTurn(turn) {
   if (!turn) return turn;
