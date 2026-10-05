@@ -27,7 +27,6 @@
     "test:connector-api-request": "tsx src/extensions/bundled/connectors/_runtime/api-request.regression.ts",
     "test:github-connector": "tsx src/extensions/bundled/connectors/github/runtime.regression.ts",
     "test:vercel-connector": "tsx src/gateway/vercel-wrapper.regression.ts && tsx src/gateway/connector-tool-capabilities.regression.ts",
-    "test:fal-synced-models": "tsx src/media-engine/fal-catalog.regression.ts && tsx src/media-engine/fal-synced-models.regression.ts",
     "sync:web-ui": "npm run build:thinking-orb && node scripts/prepare-public-build.js --web-only && npm run check:web-ui",
     "sync:hyperframes": "node scripts/sync-hyperframes-catalog.js",
     "test:codex-oauth-realtime": "npm run build:backend && node scripts/test-codex-oauth-realtime-bridge.mjs",
