@@ -355,7 +355,7 @@ export function getImageGenerationConfig(): {
   const imageCfg = (cfg.image_generation || {}) as any;
   return {
     provider: String(imageCfg.provider || 'auto').trim() || 'auto',
-    model: String(imageCfg.model || 'gpt-image-2-medium').trim() || 'gpt-image-2-medium',
+    model: String(imageCfg.model || 'gpt-image-2.5-flare-medium').trim() || 'gpt-image-2.5-flare-medium',
     save_to_workspace: imageCfg.save_to_workspace !== false,
     default_output_dir: String(imageCfg.default_output_dir || DEFAULT_IMAGE_OUTPUT_DIR).trim() || DEFAULT_IMAGE_OUTPUT_DIR,
     providers: (imageCfg.providers && typeof imageCfg.providers === 'object') ? imageCfg.providers : {},

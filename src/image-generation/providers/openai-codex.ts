@@ -38,10 +38,17 @@ function getCodexChatModelFallback(model: string): string | undefined {
 function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
   return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
 }
-const DEFAULT_MODEL = 'gpt-image-2-medium';
+const DEFAULT_MODEL = 'gpt-image-2.5-flare-medium';
 const DEFAULT_API_MODEL = 'gpt-image-2';
 const TRANSPARENT_API_MODEL = 'gpt-image-1.5';
 const MODEL_IDS = [
+  'gpt-image-2.5-flare-low',
+  'gpt-image-2.5-flare-medium',
+  'gpt-image-2.5-flare-high',
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst-medium',
+  'gpt-image-2.5-sunburst-high',
+  'gpt-image-2.5-sunburst',
   'gpt-image-2-low',
   'gpt-image-2-medium',
   'gpt-image-2-high',
@@ -52,6 +59,13 @@ const MODEL_IDS = [
 ] as const;
 
 const MODEL_METADATA: Record<string, { apiModel: string; quality?: 'low' | 'medium' | 'high' }> = {
+  'gpt-image-2.5-flare-low': { apiModel: 'gpt-image-2.5-flare', quality: 'low' },
+  'gpt-image-2.5-flare-medium': { apiModel: 'gpt-image-2.5-flare', quality: 'medium' },
+  'gpt-image-2.5-flare-high': { apiModel: 'gpt-image-2.5-flare', quality: 'high' },
+  'gpt-image-2.5-flare': { apiModel: 'gpt-image-2.5-flare' },
+  'gpt-image-2.5-sunburst-medium': { apiModel: 'gpt-image-2.5-sunburst', quality: 'medium' },
+  'gpt-image-2.5-sunburst-high': { apiModel: 'gpt-image-2.5-sunburst', quality: 'high' },
+  'gpt-image-2.5-sunburst': { apiModel: 'gpt-image-2.5-sunburst' },
   'gpt-image-2-low': { apiModel: DEFAULT_API_MODEL, quality: 'low' },
   'gpt-image-2-medium': { apiModel: DEFAULT_API_MODEL, quality: 'medium' },
   'gpt-image-2-high': { apiModel: DEFAULT_API_MODEL, quality: 'high' },

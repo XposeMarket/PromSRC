@@ -368,7 +368,7 @@ async function runViaRegistry(model: MediaModelManifest, input: ShotInput, outpu
     aspect_ratio: toPrometheusAspect(input.aspectRatio),
     count: input.count,
     provider: model.provider === 'openai' ? 'auto' : 'xai',
-    model: model.provider === 'openai' ? undefined : model.endpoint,
+    model: model.endpoint,
     output_dir: outputDir,
   } as any);
   if (!result.success) throw Object.assign(new Error((result as any).error), { errorType: (result as any).error_type || 'api_error' });

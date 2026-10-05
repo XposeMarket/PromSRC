@@ -132,11 +132,18 @@ const BUILTIN: MediaModelManifest[] = [
   },
   // ── OpenAI images (existing provider path) ──
   {
-    id: 'openai/gpt-image', label: 'OpenAI GPT Image', provider: 'openai', kind: 'image',
-    endpoint: 'gpt-image-1',
+    id: 'openai/gpt-image', label: 'OpenAI GPT Image 2.5 Flare', provider: 'openai', kind: 'image',
+    endpoint: 'gpt-image-2.5-flare-medium',
     map: { prompt: 'prompt', referenceImages: 'reference_images', aspectRatio: 'aspect_ratio', count: 'count' },
     pricing: { perImageUsd: 0.07, source: 'estimate' },
     tags: ['anchor', 'character', 'text-rendering', 'reference-edit'],
+  },
+  {
+    id: 'openai/gpt-image-sunburst', label: 'OpenAI GPT Image 2.5 Sunburst (precise)', provider: 'openai', kind: 'image',
+    endpoint: 'gpt-image-2.5-sunburst-high',
+    map: { prompt: 'prompt', referenceImages: 'reference_images', aspectRatio: 'aspect_ratio', count: 'count' },
+    pricing: { perImageUsd: 0.1, source: 'estimate' },
+    tags: ['anchor', 'character', 'product', 'reference-edit', 'precise'],
   },
   // ── fal queue ──
   {

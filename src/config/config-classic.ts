@@ -120,15 +120,15 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   },
   image_generation: {
     provider: process.env.PROMETHEUS_IMAGE_PROVIDER ?? 'auto',
-    model: process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+    model: process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2.5-flare-medium',
     save_to_workspace: process.env.PROMETHEUS_IMAGE_SAVE_TO_WORKSPACE !== '0',
     default_output_dir: process.env.PROMETHEUS_IMAGE_OUTPUT_DIR ?? 'generated/images',
     providers: {
       openai: {
-        model: process.env.OPENAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+        model: process.env.OPENAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2.5-flare-medium',
       },
       openai_codex: {
-        model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+        model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2.5-flare-medium',
       },
       xai: {
         model: process.env.XAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'grok-imagine-image-2.0',
