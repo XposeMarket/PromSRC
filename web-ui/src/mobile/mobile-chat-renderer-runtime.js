@@ -3046,13 +3046,19 @@ export function createMobileChatRendererRuntime(context = {}) {
     return bodyEl;
   }
   
-  function _mobileChatScrollSnapshot(bodyEl, threshold = 72) {
+  function _mobileChatScrollSnapshot(bodyEl, threshold = 8) {
     const scrollTarget = _mobileChatScrollTarget(bodyEl);
     if (!scrollTarget) return { nearBottom: true, distanceFromBottom: 0 };
     const distanceFromBottom = Math.max(0, scrollTarget.scrollHeight - scrollTarget.scrollTop - scrollTarget.clientHeight);
+    const viewportTop = scrollTarget.getBoundingClientRect?.().top || 0;
+    const firstVisible = [...(bodyEl?.querySelectorAll?.('[data-msg-index]') || [])]
+      .find((node) => node.getBoundingClientRect?.().bottom > viewportTop + 1);
     return {
       nearBottom: distanceFromBottom <= threshold,
       distanceFromBottom,
+      scrollTop: scrollTarget.scrollTop,
+      anchor: firstVisible,
+      anchorTop: firstVisible?.getBoundingClientRect?.().top,
     };
   }
   
@@ -3077,10 +3083,14 @@ export function createMobileChatRendererRuntime(context = {}) {
     const followBottom = forceBottom || snap.nearBottom;
     const apply = () => {
       if (followBottom) {
+        const currentGap = Math.max(0, scrollTarget.scrollHeight - scrollTarget.scrollTop - scrollTarget.clientHeight);
+        if (!forceBottom && currentGap > 72 && currentGap > snap.distanceFromBottom + 72) return;
         scrollTarget.scrollTop = scrollTarget.scrollHeight;
       } else {
-        const nextTop = scrollTarget.scrollHeight - scrollTarget.clientHeight - Number(snap.distanceFromBottom || 0);
-        scrollTarget.scrollTop = Math.max(0, nextTop);
+        const anchorTop = snap.anchor?.isConnected && snap.anchorTop != null
+          ? snap.anchor.getBoundingClientRect().top : null;
+        if (anchorTop != null) scrollTarget.scrollTop = Math.max(0,
+          scrollTarget.scrollTop + anchorTop - snap.anchorTop);
       }
     };
     _withMobileInstantScroll(bodyEl, apply);
