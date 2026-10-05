@@ -189,11 +189,41 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
 
 // ── estimate ────────────────────────────────────────────────────────────
 
+/** Repair historical budget totals from completed jobs, using the current model price when known. */
+export async function reconcileProjectSpend(workspacePath: string, projectId: string, project = loadProject(workspacePath, projectId)): Promise<VideoProject> {
+  let spent = 0;
+  const actual = new Map<string, number>();
+  for (const job of project.jobs) {
+    if (job.state !== 'done') continue;
+    const model = getModel(job.modelId);
+    const knownLive = model?.provider === 'fal' ? priceForModel(model, {
+      durationSec: Number(job.input.durationSec) || undefined,
+      resolution: String(job.input.resolution || project.target.resolution),
+      aspectRatio: String(job.input.aspectRatio || project.target.aspect),
+    }) : undefined;
+    const usd = knownLive !== undefined && model
+      ? estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
+        resolution: String(job.input.resolution || project.target.resolution),
+        aspectRatio: String(job.input.aspectRatio || project.target.aspect), count: job.count })
+      : job.actualUsd ?? job.estimateUsd;
+    actual.set(job.id, usd);
+    spent += usd;
+  }
+  spent = Math.round(spent * 1000) / 1000;
+  if (Math.abs(spent - project.budget.spentUsd) < 0.0001
+      && project.jobs.every((job) => job.state !== 'done' || job.actualUsd === actual.get(job.id))) return project;
+  return mutateProject(workspacePath, projectId, 'budget.reconcile', (p) => {
+    for (const job of p.jobs) if (actual.has(job.id)) job.actualUsd = actual.get(job.id);
+    p.budget.spentUsd = spent;
+  });
+}
+
 export interface ShotEstimate { shotId: string; title: string; modelId: string; count: number; usd: number; problems: string[] }
 
 export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean; resolution?: string }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
-  const p = loadProject(workspacePath, projectId);
+  let p = loadProject(workspacePath, projectId);
   if (args.modelId?.startsWith('fal/') || p.shots.some((s) => (s.modelId || p.defaults.videoModel).startsWith('fal/'))) await syncFalModels();
+  p = await reconcileProjectSpend(workspacePath, projectId, p);
   const ids = args.shotIds?.length ? args.shotIds : p.shots.map((s) => s.id);
   const count = Math.max(1, Math.min(4, Number(args.count) || 1));
   const shots: ShotEstimate[] = [];
@@ -246,9 +276,12 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
     }
     saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind !== 'image' ? await mediaDurationSec(abs) : undefined, poster });
   }
-  const perOutputUsd = saved.length ? job.estimateUsd / saved.length : 0;
-  await patchJob(workspacePath, projectId, job.id, { state: 'done' }, (p, j) => {
-    p.budget.spentUsd = Math.round((p.budget.spentUsd + j.estimateUsd) * 1000) / 1000;
+  // Only successfully delivered outputs accrue spend; quote may predate a live price refresh.
+  const actualUsd = saved.length ? estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
+    resolution: String(job.input.resolution || ''), aspectRatio: String(job.input.aspectRatio || ''), count: saved.length }) : 0;
+  const perOutputUsd = saved.length ? actualUsd / saved.length : 0;
+  await patchJob(workspacePath, projectId, job.id, { state: 'done', actualUsd }, (p, j) => {
+    p.budget.spentUsd = Math.round((p.budget.spentUsd + actualUsd) * 1000) / 1000;
     const prompt = String(j.input.prompt || '');
     if (model.kind === 'audio') {
       // Generated audio (music / SFX) lands as project assets only.
@@ -358,7 +391,8 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
       if (sub.fallbackFrom) {
         model = sub.model;
         // Bill at the fallback model's price, not the original model's estimate.
-        const estimateUsd = estimateCostUsd(model, { count: job.count });
+        const estimateUsd = estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
+          resolution: String(job.input.resolution || ''), aspectRatio: String(job.input.aspectRatio || ''), count: job.count });
         job = { ...job, modelId: model.id, estimateUsd };
         await patchJob(workspacePath, projectId, jobId, { modelId: model.id, estimateUsd, fallbackFrom: sub.fallbackFrom } as any);
       }
@@ -445,6 +479,9 @@ export async function generateShots(workspacePath: string, projectId: string, ar
   const cap = p0.budget.capUsd;
   if (cap != null && p0.budget.spentUsd + est.total > cap + 1e-9) {
     return { needsApproval: true, reason: `Budget cap $${cap.toFixed(2)} would be exceeded (spent $${p0.budget.spentUsd.toFixed(2)} + $${est.total.toFixed(2)}). Raise budget.capUsd via project.update first.`, estimate: est, jobs: [] };
+  }
+  if (!args.approved && est.shots.some((s) => s.problems.some((problem) => problem.startsWith('model has no pricing')))) {
+    return { needsApproval: true, reason: 'At least one model has unknown pricing. Confirm with the user before generating; a $0 estimate is not a free job.', estimate: est, jobs: [] };
   }
   if (!args.approved && est.total > p0.budget.autoApproveUsd + 1e-9) {
     return { needsApproval: true, reason: `Estimated $${est.total.toFixed(2)} is above the auto-approve limit ($${p0.budget.autoApproveUsd.toFixed(2)}). Confirm with the user, then call again with approved:true.`, estimate: est, jobs: [] };
