@@ -401,7 +401,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'jobs': {
       const p = loadProject(ws, need(args.projectId, 'projectId'));
       const jobs = (args.jobIds?.length ? p.jobs.filter((j) => args.jobIds.includes(j.id)) : p.jobs.slice(-15));
-      return { jobs: jobs.map((j) => ({ id: j.id, state: j.state, model: j.modelId, target: j.target, usd: j.estimateUsd, takes: j.takeIds, error: j.error })), spentUsd: p.budget.spentUsd };
+      return { jobs: jobs.map((j) => ({ id: j.id, state: j.state, model: j.modelId, target: j.target, usd: j.state === 'done' ? (j.actualUsd ?? j.estimateUsd) : 0, estimateUsd: j.estimateUsd, takes: j.takeIds, error: j.error })), spentUsd: p.budget.spentUsd };
     }
     case 'wait': {
       const projectId = need(args.projectId, 'projectId');

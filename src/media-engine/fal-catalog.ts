@@ -36,7 +36,8 @@ async function api(url: URL, key?: string): Promise<any> {
 export function falUnitCost(unitPrice: number, unit: string, input: { durationSec?: number; resolution?: string; aspectRatio?: string }): number | undefined {
   if (!Number.isFinite(unitPrice) || unitPrice < 0) return undefined;
   const label = unit.toLowerCase().replace(/[_-]/g, ' ');
-  if (/image|audio|compute|gpu|credit/.test(label)) return undefined;
+  if (/\b(audio|compute|gpu|credit)\b/.test(label)) return undefined;
+  if (/\bimages?\b/.test(label) && !/\b(video )?tokens?\b/.test(label)) return unitPrice;
   const duration = Math.max(1, Number(input.durationSec) || 5);
   const height = Number(String(input.resolution || '720p').match(/(\d{3,4})/)?.[1]) || 720;
   const aspect = String(input.aspectRatio || '16:9');
@@ -48,9 +49,9 @@ export function falUnitCost(unitPrice: number, unit: string, input: { durationSe
   if (/\b(video )?tokens?\b/.test(label)) return unitPrice * (height * width * frames / 1024);
   if (/million.*pixels?|megapixels?|\bmp\b/.test(label)) return unitPrice * megapixels * frames;
   if (/\bframe\b/.test(label)) return unitPrice * frames;
-  if (/\b(second|sec|s)\b/.test(label)) return unitPrice * duration;
+  if (/\b(seconds?|secs?|s)\b/.test(label)) return unitPrice * duration;
   if (/\b(minute|min)\b/.test(label)) return unitPrice * duration / 60;
-  if (/\b(video|request|generation|output|call)\b/.test(label)) return unitPrice;
+  if (/\b(videos?|requests?|generations?|outputs?|calls?)\b/.test(label)) return unitPrice;
   return undefined; // unknown billing units must not turn into a made-up per-second price
 }
 
@@ -63,6 +64,55 @@ export function priceForModel(model: MediaModelManifest, input: { durationSec?: 
 export function liveFalPrice(model: MediaModelManifest): MediaModelManifest['pricing'] | undefined {
   loadCache();
   return pricing.get(model.endpoint) || (model.pricing?.source === 'live' ? model.pricing : undefined);
+}
+
+const schemaPending = new Map<string, Promise<void>>();
+/** Hydrate only the requested synced endpoint; listing hundreds of models must not fetch hundreds of OpenAPI documents. */
+export async function hydrateFalModelSchema(model: MediaModelManifest): Promise<void> {
+  if (model.source !== 'fal-sync' || model.schemaLoaded) return;
+  let pendingSchema = schemaPending.get(model.endpoint);
+  if (!pendingSchema) {
+    pendingSchema = (async () => {
+      try {
+        const schemaEndpoint = model.endpoint.replace(/^fal-ai\//, '');
+        const url = `https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=${encodeURIComponent(schemaEndpoint)}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        if (!response.ok) return;
+        const root: any = await response.json();
+        const post = root.paths?.[`/${schemaEndpoint}`]?.post;
+        if (!post) return;
+        const schema = schemaRef(root, post.requestBody?.content?.['application/json']?.schema);
+        const props = schema?.properties || {};
+        const limits = { ...(model.limits || {}) };
+        for (const field of ['durationSec', 'resolution'] as const) {
+          const prop = props[model.map[field] || ''];
+          if (!prop) { model.map[field] = undefined; continue; }
+          const def = schemaRef(root, prop);
+          const values: unknown[] = def.enum || def.anyOf?.flatMap((entry: any) => schemaRef(root, entry)?.enum || []) || [];
+          if (field === 'resolution') {
+            limits.resolutions = values.map(String).filter(Boolean);
+            // An unconstrained property is not an enum: omit guessed resolution rather than send an invalid value.
+          } else if (values.length) {
+            model.durationValues = values.filter((value): value is string | number => typeof value === 'string' || typeof value === 'number');
+            limits.durations = values.map(Number).filter(Number.isFinite);
+            model.durationFormat = typeof values[0] === 'string' ? 'string' : 'number';
+          }
+        }
+        model.limits = limits;
+        model.schemaLoaded = true;
+      } catch { /* Schema unavailable: preserve existing model, but do not guess an enum. */ }
+    })().finally(() => schemaPending.delete(model.endpoint));
+    schemaPending.set(model.endpoint, pendingSchema);
+  }
+  await pendingSchema;
+}
+
+function schemaRef(root: any, value: any): any {
+  let result = value;
+  for (let i = 0; i < 6 && result?.$ref; i++) {
+    result = String(result.$ref).replace(/^#\//, '').split('/').reduce((node: any, key: string) => node?.[key.replace(/~1/g, '/').replace(/~0/g, '~')], root);
+  }
+  return result || {};
 }
 
 function toManifest(item: any): MediaModelManifest | undefined {

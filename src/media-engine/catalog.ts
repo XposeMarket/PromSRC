@@ -61,6 +61,8 @@ export interface MediaModelManifest {
   aspectFormat?: 'ratio' | 'prometheus';
   /** Duration value type expected by the endpoint. */
   durationFormat?: 'number' | 'string';
+  /** Exact duration enum strings (when an OpenAPI enum uses labels instead of numbers). */
+  durationValues?: Array<string | number>;
   pricing?: {
     perSecondUsd?: number;
     perImageUsd?: number;
@@ -78,6 +80,8 @@ export interface MediaModelManifest {
   notes?: string;
   builtin?: boolean;
   source?: 'fal-sync';
+  /** Runtime-only flag indicating this synced model's OpenAPI fields were inspected. */
+  schemaLoaded?: boolean;
 }
 
 const RATIO_BY_PROMETHEUS: Record<string, string> = { landscape: '16:9', portrait: '9:16', square: '1:1' };
@@ -485,16 +489,18 @@ function manifestFromSchema(args: {
   const requires: NeutralField[] = [];
   const limits: NonNullable<MediaModelManifest['limits']> = {};
   let durationFormat: 'number' | 'string' | undefined;
+  let durationValues: Array<string | number> | undefined;
   for (const [key, raw] of Object.entries<any>(props)) {
     const field = FIELD_GUESSES.find(([, re]) => re.test(key))?.[0];
     if (!field || map[field]) continue;
     map[field] = key;
     if (required.includes(key)) requires.push(field);
     const def = deref(args.root, raw);
-    const enumValues: any[] | undefined = def.enum || def.anyOf?.find((x: any) => x.enum)?.enum;
+    const enumValues: any[] | undefined = def.enum || def.anyOf?.flatMap((x: any) => deref(args.root, x).enum || []).filter((x: unknown) => x != null);
     if (field === 'durationSec' && enumValues) {
       limits.durations = enumValues.map(Number).filter(Number.isFinite);
       durationFormat = typeof enumValues[0] === 'string' ? 'string' : 'number';
+      durationValues = enumValues.filter((value: unknown) => typeof value === 'string' || typeof value === 'number');
     }
     if (field === 'aspectRatio' && enumValues) limits.aspects = enumValues.map(String);
     if (field === 'resolution' && enumValues) limits.resolutions = enumValues.map(String);
@@ -511,6 +517,7 @@ function manifestFromSchema(args: {
     requires,
     limits,
     durationFormat,
+    durationValues,
     aspectFormat: 'ratio',
     pricing: args.pricing || { source: 'estimate' },
     output: kind === 'video' ? 'video.url' : 'images.0.url',
@@ -535,10 +542,11 @@ export async function importModelManifests(args: {
   if (args.provider === 'fal') {
     const endpoint = String(args.endpoint || '').trim().replace(/^\/+/, '');
     if (!endpoint) throw new Error('fal import needs endpoint, e.g. fal-ai/kling-video/v2.1/master/image-to-video');
-    const res = await fetch(`https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=${encodeURIComponent(endpoint)}`, { signal: AbortSignal.timeout(20_000) });
+    const schemaEndpoint = endpoint.replace(/^fal-ai\//, '');
+    const res = await fetch(`https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=${encodeURIComponent(schemaEndpoint)}`, { signal: AbortSignal.timeout(20_000) });
     if (!res.ok) throw new Error(`fal schema fetch failed (${res.status}) for ${endpoint}`);
     const root: any = await res.json();
-    const post = root.paths?.[`/${endpoint}`]?.post;
+    const post = root.paths?.[`/${schemaEndpoint}`]?.post;
     if (!post) throw new Error(`fal schema has no submit path for ${endpoint}`);
     const schema = deref(root, post.requestBody?.content?.['application/json']?.schema);
     const slug = endpoint.replace(/^fal-ai\//, '').replace(/\//g, '-');

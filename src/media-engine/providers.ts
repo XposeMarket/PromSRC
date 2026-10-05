@@ -19,6 +19,7 @@ import { resolveVideoInput } from '../video-generation/utils.js';
 import { generateVideo } from '../video-generation/registry.js';
 import { generateImage } from '../image-generation/registry.js';
 import { clampDuration, toPrometheusAspect, toRatio, type MediaModelManifest, type NeutralField } from './catalog.js';
+import { hydrateFalModelSchema } from './fal-catalog.js';
 
 export interface ShotInput {
   prompt: string;
@@ -160,8 +161,21 @@ async function inlineInputs(input: ShotInput): Promise<ShotInput> {
   };
 }
 
+/** Pick an exact endpoint enum value, preserving casing; numeric choices use the nearest supported value. */
+export function matchEndpointEnum(requested: string | number, allowed: Array<string | number>): string | number | undefined {
+  if (!allowed.length) return undefined;
+  const exact = allowed.find((value) => String(value).toLowerCase() === String(requested).toLowerCase());
+  if (exact !== undefined) return exact;
+  const want = Number(String(requested).match(/\d+(?:\.\d+)?/)?.[0] ?? NaN);
+  const numeric = allowed.map((value) => ({ value, size: Number(String(value).match(/\d+(?:\.\d+)?/)?.[0] ?? NaN) }))
+    .filter((entry) => Number.isFinite(entry.size));
+  if (!Number.isFinite(want) || !numeric.length) return undefined;
+  return numeric.reduce((best, entry) => Math.abs(entry.size - want) < Math.abs(best.size - want) ? entry : best).value;
+}
+
 /** Map neutral shot fields to the endpoint's input body using the manifest. */
 export async function buildRequestBody(model: MediaModelManifest, input: ShotInput): Promise<Record<string, unknown>> {
+  if (model.source === 'fal-sync') await hydrateFalModelSchema(model);
   const body: Record<string, unknown> = { ...(model.defaults || {}) };
   const set = (field: NeutralField, value: unknown) => {
     const key = model.map[field];
@@ -184,7 +198,8 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   }
   if (model.kind !== 'image' && model.map.durationSec) {
     const d = clampDuration(model, input.durationSec);
-    set('durationSec', model.durationFormat === 'string' ? String(d) : d);
+    const value = model.durationValues?.length ? matchEndpointEnum(d, model.durationValues) : model.durationFormat === 'string' ? String(d) : d;
+    if (value !== undefined) set('durationSec', value);
   }
   if (input.aspectRatio) {
     const ratio = toRatio(input.aspectRatio);
@@ -195,7 +210,10 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   }
   if (input.resolution) {
     const allowed = model.limits?.resolutions;
-    if (!allowed || allowed.includes(input.resolution)) set('resolution', input.resolution);
+    if (allowed?.length) {
+      const value = matchEndpointEnum(input.resolution, allowed);
+      if (value !== undefined) set('resolution', value);
+    } else if (model.source !== 'fal-sync' && !allowed) set('resolution', input.resolution);
   }
   if (input.count && input.count > 1) set('count', input.count);
   Object.assign(body, input.extra || {});

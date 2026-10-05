@@ -180,6 +180,8 @@ export interface Job {
   statusUrl?: string;
   responseUrl?: string;
   estimateUsd: number;
+  /** Repriced on successful delivery; failed/canceled jobs never have actual spend. */
+  actualUsd?: number;
   error?: string;
   errorType?: string;
   takeIds: string[];
