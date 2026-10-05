@@ -12,6 +12,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 import { estimateCostUsd, getModel, type MediaModelManifest } from './catalog.js';
+import { syncFalModels, priceForModel } from './fal-catalog.js';
 import { cancel, downloadOutput, missingRequiredFields, poll, submit, type ShotInput } from './providers.js';
 import {
   fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, projectDir, selectedTake,
@@ -190,8 +191,9 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
 
 export interface ShotEstimate { shotId: string; title: string; modelId: string; count: number; usd: number; problems: string[] }
 
-export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
+export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean; resolution?: string }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
   const p = loadProject(workspacePath, projectId);
+  if (args.modelId?.startsWith('fal/') || p.shots.some((s) => (s.modelId || p.defaults.videoModel).startsWith('fal/'))) await syncFalModels();
   const ids = args.shotIds?.length ? args.shotIds : p.shots.map((s) => s.id);
   const count = Math.max(1, Math.min(4, Number(args.count) || 1));
   const shots: ShotEstimate[] = [];
@@ -206,8 +208,8 @@ export async function estimate(workspacePath: string, projectId: string, args: {
       const missing = missingRequiredFields(model, input).filter((f) => !(f === 'audio' && shot.line?.trim()) && !(f === 'sourceVideo' && args.sourceFromSelectedTake && selectedTake(shot)?.kind === 'video'));
       if (missing.length) problems.push(missingFieldsMessage(model, missing));
     } catch (e: any) { problems.push(String(e?.message || e)); }
-    if (!model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd) problems.push('model has no pricing; cost is unknown');
-    shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count }), problems });
+    if (priceForModel(model, { durationSec: shot.durationSec, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd) problems.push('model has no pricing; cost is unknown');
+    shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }), problems });
   }
   const total = Math.round(shots.reduce((s, x) => s + x.usd, 0) * 1000) / 1000;
   return { total, shots, budget: p.budget };

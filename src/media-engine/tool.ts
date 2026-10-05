@@ -6,6 +6,7 @@ import {
   getModel, importModelManifests, listModels, removeUserManifest, saveUserManifest, type MediaModelManifest,
 } from './catalog.js';
 import { providerKeyHint, providerStatus, setProviderKey } from './providers.js';
+import { liveFalPrice, syncFalModels } from './fal-catalog.js';
 import {
   applyOps, createProject, deleteProject, historyDepth, listProjects, loadProject, OP_NAMES,
   summarizeProject, undoRedo,
@@ -20,7 +21,7 @@ import { deleteBrand, deleteCast, saveCast } from './library.js';
 
 export const VIDEO_PROJECT_ACTIONS = [
   'help', 'list', 'create', 'get', 'delete', 'apply_ops', 'undo', 'redo',
-  'models', 'import_models', 'add_model', 'remove_model', 'providers', 'set_key',
+  'models', 'syncModels', 'import_models', 'add_model', 'remove_model', 'providers', 'set_key',
   'estimate', 'generate', 'generate_anchor', 'jobs', 'wait', 'cancel_job', 'render', 'frame',
   // studio
   'quickstart', 'templates', 'apply_template', 'import_asset', 'storyboard', 'voiceover', 'captions', 'music', 'music_beds',
@@ -30,7 +31,7 @@ export const VIDEO_PROJECT_ACTIONS = [
   'presets', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants',
 ] as const;
 
-export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets']);
+export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'syncModels', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets']);
 /** Actions that can spend money with an external provider. */
 export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants']);
 
@@ -218,14 +219,17 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       const { project, applied } = await undoRedo(ws, need(args.projectId, 'projectId'), action, 'agent');
       return { applied, project: brief(project, ws) };
     }
+    case 'syncModels':
+      return await syncFalModels(true);
     case 'models': {
+      const sync = await syncFalModels();
       const models = listModels({ kind: args.kind, provider: args.provider });
       return {
-        count: models.length,
+        count: models.length, sync,
         models: models.map((m: MediaModelManifest) => ({
           id: m.id, label: m.label, kind: m.kind, provider: m.provider, tags: m.tags,
           needs: m.requires, durations: m.limits?.durations || (m.limits?.maxDurationSec ? `${m.limits.minDurationSec ?? 1}-${m.limits.maxDurationSec}s` : undefined),
-          price: m.pricing, builtin: m.builtin,
+          price: liveFalPrice(m) || m.pricing, builtin: m.builtin, source: m.source,
         })),
       };
     }

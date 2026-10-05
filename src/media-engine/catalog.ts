@@ -13,6 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config.js';
+import { priceForModel } from './fal-catalog.js';
 
 export type MediaKind = 'video' | 'image' | 'audio';
 export type MediaTransport = 'xai' | 'openai' | 'fal' | 'higgsfield';
@@ -64,14 +65,19 @@ export interface MediaModelManifest {
     perSecondUsd?: number;
     perImageUsd?: number;
     perRequestUsd?: number;
-    /** 'published' when copied from provider pricing pages, else 'estimate'. */
-    source?: 'published' | 'estimate';
+    /** Raw fal billing unit/price (not interchangeable with per-second). */
+    unit?: string;
+    unitPriceUsd?: number;
+    fetchedAt?: string;
+    /** 'live' is fetched from fal's platform API. */
+    source?: 'published' | 'estimate' | 'live';
   };
   /** Dot path to the output URL in the completed payload. */
   output?: string;
   tags?: string[];
   notes?: string;
   builtin?: boolean;
+  source?: 'fal-sync';
 }
 
 const RATIO_BY_PROMETHEUS: Record<string, string> = { landscape: '16:9', portrait: '9:16', square: '1:1' };
@@ -170,7 +176,7 @@ const BUILTIN: MediaModelManifest[] = [
     map: { prompt: 'prompt', startImage: 'image_url', endImage: 'end_image_url', durationSec: 'duration', aspectRatio: 'aspect_ratio', resolution: 'resolution' },
     requires: ['prompt', 'startImage'], durationFormat: 'string', aspectFormat: 'ratio',
     limits: { minDurationSec: 3, maxDurationSec: 12, resolutions: ['480p', '720p', '1080p'] },
-    pricing: { perSecondUsd: 0.25, source: 'estimate' }, output: 'video.url',
+    pricing: { perSecondUsd: 0.03, source: 'estimate' }, output: 'video.url',
     tags: ['image-to-video', 'start-end-frame', 'consistency'],
   },
   {
@@ -378,10 +384,21 @@ export function listModels(filter: { kind?: MediaKind; provider?: string; tag?: 
   const byId = new Map<string, MediaModelManifest>();
   for (const m of BUILTIN) byId.set(m.id, m);
   for (const m of readUserManifests()) byId.set(m.id, m);
+  const endpoints = new Set([...byId.values()].filter((m) => m.provider === 'fal').map((m) => m.endpoint));
+  for (const m of syncedFalModels) if (!byId.has(m.id) && !endpoints.has(m.endpoint)) byId.set(m.id, m);
   return [...byId.values()].filter((m) =>
     (!filter.kind || m.kind === filter.kind)
     && (!filter.provider || m.provider === filter.provider)
     && (!filter.tag || (m.tags || []).includes(filter.tag)));
+}
+
+/** Updated by fal's read-only catalog sync; curated models always take precedence. */
+let syncedFalModels: MediaModelManifest[] = [];
+export function setSyncedFalModels(models: MediaModelManifest[]): void { syncedFalModels = models.filter((m) => m.provider === 'fal' && m.kind !== 'image'); }
+
+/** Built-ins and user manifests have priority over synced endpoints. */
+export function listCuratedModels(): MediaModelManifest[] {
+  return [...BUILTIN, ...readUserManifests()];
 }
 
 export function getModel(id: string): MediaModelManifest | undefined {
@@ -406,11 +423,19 @@ export function removeUserManifest(id: string): boolean {
   return true;
 }
 
-export function estimateCostUsd(model: MediaModelManifest, input: { durationSec?: number; count?: number }): number {
+export function estimateCostUsd(model: MediaModelManifest, input: { durationSec?: number; count?: number; resolution?: string; aspectRatio?: string }): number {
+  const live = model.provider === 'fal' ? priceForModel(model, input) : undefined;
+  if (live !== undefined) return Math.round(live * Math.max(1, Number(input.count) || 1) * 1000) / 1000;
   const p = model.pricing || {};
   const count = Math.max(1, Number(input.count) || 1);
   let usd = Number(p.perRequestUsd || 0);
-  if (model.kind !== 'image') usd += Number(p.perSecondUsd || 0) * Math.max(1, Number(input.durationSec) || 5);
+  if (model.kind !== 'image') {
+    const base = Number(p.perSecondUsd || 0) * Math.max(1, Number(input.durationSec) || 5);
+    // Seedance's 480p fallback is anchored to observed fal spend; higher resolutions scale by pixel area.
+    const pixels = model.endpoint === 'fal-ai/bytedance/seedance/v1/pro/image-to-video'
+      ? Math.pow((Number(input.resolution?.match(/\d+/)?.[0]) || 480) / 480, 2) : 1;
+    usd += base * pixels;
+  }
   else usd += Number(p.perImageUsd || 0);
   return Math.round(usd * count * 1000) / 1000;
 }
