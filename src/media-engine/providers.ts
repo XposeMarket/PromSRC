@@ -48,6 +48,21 @@ export interface SubmitResult {
   raw?: unknown;
 }
 
+// Only accept explicit USD amounts from fal's result/billing payload. Never infer cost from usage counts.
+export function falBilledUsd(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const body = payload as Record<string, unknown>;
+  for (const source of [body.billing, body] as unknown[]) {
+    if (!source || typeof source !== 'object') continue;
+    const row = source as Record<string, unknown>;
+    for (const field of ['cost_usd', 'total_cost_usd', 'amount_usd']) {
+      const amount = row[field];
+      if (typeof amount === 'number' && Number.isFinite(amount) && amount >= 0) return amount;
+    }
+  }
+  return undefined;
+}
+
 export interface MediaOutput {
   url?: string;
   /** Absolute local path when the transport already saved the file. */
@@ -175,8 +190,11 @@ export function matchEndpointEnum(requested: string | number, allowed: Array<str
 
 /** Map neutral shot fields to the endpoint's input body using the manifest. */
 export async function buildRequestBody(model: MediaModelManifest, input: ShotInput): Promise<Record<string, unknown>> {
-  if (model.source === 'fal-sync') await hydrateFalModelSchema(model);
-  const body: Record<string, unknown> = { ...(model.defaults || {}) };
+  if (model.source === 'fal-sync') {
+    await hydrateFalModelSchema(model);
+    if (!model.schemaLoaded) throw new Error(`fal input schema unavailable for ${model.endpoint}; refusing to send unvalidated fields.`);
+  }
+  const body: Record<string, unknown> = model.source === 'fal-sync' ? {} : { ...(model.defaults || {}) };
   const set = (field: NeutralField, value: unknown) => {
     const key = model.map[field];
     if (!key || value === undefined || value === null || value === '') return;
@@ -204,7 +222,11 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   if (input.aspectRatio) {
     const ratio = toRatio(input.aspectRatio);
     const allowed = model.limits?.aspects;
-    if (!allowed || allowed.includes(ratio)) {
+    if (allowed?.length) {
+      const value = allowed.find((entry) => entry.toLowerCase() === ratio.toLowerCase())
+        ?? allowed.find((entry) => entry.toLowerCase() === toPrometheusAspect(ratio).toLowerCase());
+      if (value !== undefined) set('aspectRatio', value);
+    } else if (model.source !== 'fal-sync' || !allowed) {
       set('aspectRatio', model.aspectFormat === 'prometheus' ? toPrometheusAspect(ratio) : ratio);
     }
   }
@@ -216,7 +238,8 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
     } else if (model.source !== 'fal-sync' && !allowed) set('resolution', input.resolution);
   }
   if (input.count && input.count > 1) set('count', input.count);
-  Object.assign(body, input.extra || {});
+  // Extra fields are only safe for curated models; synced models have not validated them against OpenAPI.
+  if (model.source !== 'fal-sync') Object.assign(body, input.extra || {});
   return body;
 }
 
