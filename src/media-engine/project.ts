@@ -182,6 +182,8 @@ export interface Job {
   estimateUsd: number;
   /** Repriced on successful delivery; failed/canceled jobs never have actual spend. */
   actualUsd?: number;
+  /** Explicit USD charge returned by the provider, if present (not a usage estimate). */
+  billedUsd?: number;
   error?: string;
   errorType?: string;
   takeIds: string[];

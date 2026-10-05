@@ -84,7 +84,11 @@ export async function hydrateFalModelSchema(model: MediaModelManifest): Promise<
         const schema = schemaRef(root, post.requestBody?.content?.['application/json']?.schema);
         const props = schema?.properties || {};
         const limits = { ...(model.limits || {}) };
-        for (const field of ['durationSec', 'resolution'] as const) {
+        // The sync advertises common fields, not the endpoint's actual request schema.
+        for (const field of Object.keys(model.map) as Array<keyof typeof model.map>) {
+          if (model.map[field] && !Object.hasOwn(props, model.map[field]!)) model.map[field] = undefined;
+        }
+        for (const field of ['durationSec', 'resolution', 'aspectRatio'] as const) {
           const prop = props[model.map[field] || ''];
           if (!prop) { model.map[field] = undefined; continue; }
           const def = schemaRef(root, prop);
@@ -92,6 +96,8 @@ export async function hydrateFalModelSchema(model: MediaModelManifest): Promise<
           if (field === 'resolution') {
             limits.resolutions = values.map(String).filter(Boolean);
             // An unconstrained property is not an enum: omit guessed resolution rather than send an invalid value.
+          } else if (field === 'aspectRatio') {
+            limits.aspects = values.map(String).filter(Boolean);
           } else if (values.length) {
             model.durationValues = values.filter((value): value is string | number => typeof value === 'string' || typeof value === 'number');
             limits.durations = values.map(Number).filter(Number.isFinite);

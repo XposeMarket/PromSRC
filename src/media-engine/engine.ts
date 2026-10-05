@@ -13,7 +13,7 @@ import { spawn } from 'child_process';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 import { estimateCostUsd, getModel, type MediaModelManifest } from './catalog.js';
 import { syncFalModels, priceForModel } from './fal-catalog.js';
-import { cancel, downloadOutput, missingRequiredFields, poll, submit, type ShotInput } from './providers.js';
+import { cancel, downloadOutput, falBilledUsd, missingRequiredFields, poll, submit, type ShotInput } from './providers.js';
 import {
   fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, projectDir, selectedTake,
   timelineDurationMs, toWorkspaceRel, VO_TRACK_LABEL, type Job, type Shot, type Take, type VideoProject,
@@ -206,8 +206,9 @@ export async function reconcileProjectSpend(workspacePath: string, projectId: st
         resolution: String(job.input.resolution || project.target.resolution),
         aspectRatio: String(job.input.aspectRatio || project.target.aspect), count: job.count })
       : job.actualUsd ?? job.estimateUsd;
-    actual.set(job.id, usd);
-    spent += usd;
+    const chargedUsd = job.billedUsd ?? usd;
+    actual.set(job.id, chargedUsd);
+    spent += chargedUsd;
   }
   spent = Math.round(spent * 1000) / 1000;
   if (Math.abs(spent - project.budget.spentUsd) < 0.0001
@@ -262,7 +263,7 @@ async function patchJob(workspacePath: string, projectId: string, jobId: string,
   });
 }
 
-async function finishJob(workspacePath: string, projectId: string, job: Job, model: MediaModelManifest, outputs: Array<{ url?: string; localPath?: string; mimeType?: string }>) {
+async function finishJob(workspacePath: string, projectId: string, job: Job, model: MediaModelManifest, outputs: Array<{ url?: string; localPath?: string; mimeType?: string }>, raw?: unknown) {
   const dir = mediaDir(workspacePath, projectId);
   const saved: Array<{ rel: string; durationSec?: number; poster?: string }> = [];
   for (let i = 0; i < outputs.length; i++) {
@@ -277,10 +278,11 @@ async function finishJob(workspacePath: string, projectId: string, job: Job, mod
     saved.push({ rel: toWorkspaceRel(workspacePath, abs), durationSec: model.kind !== 'image' ? await mediaDurationSec(abs) : undefined, poster });
   }
   // Only successfully delivered outputs accrue spend; quote may predate a live price refresh.
-  const actualUsd = saved.length ? estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
-    resolution: String(job.input.resolution || ''), aspectRatio: String(job.input.aspectRatio || ''), count: saved.length }) : 0;
+  const billedUsd = saved.length && model.provider === 'fal' ? falBilledUsd(raw) : undefined;
+  const actualUsd = billedUsd ?? (saved.length ? estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
+    resolution: String(job.input.resolution || ''), aspectRatio: String(job.input.aspectRatio || ''), count: saved.length }) : 0);
   const perOutputUsd = saved.length ? actualUsd / saved.length : 0;
-  await patchJob(workspacePath, projectId, job.id, { state: 'done', actualUsd }, (p, j) => {
+  await patchJob(workspacePath, projectId, job.id, { state: 'done', actualUsd, ...(billedUsd === undefined ? {} : { billedUsd }) }, (p, j) => {
     p.budget.spentUsd = Math.round((p.budget.spentUsd + actualUsd) * 1000) / 1000;
     const prompt = String(j.input.prompt || '');
     if (model.kind === 'audio') {
@@ -397,7 +399,7 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
         await patchJob(workspacePath, projectId, jobId, { modelId: model.id, estimateUsd, fallbackFrom: sub.fallbackFrom } as any);
       }
       if (result.state === 'done') {
-        await finishJob(workspacePath, projectId, { ...job, requestId: result.requestId }, model, result.outputs || []);
+        await finishJob(workspacePath, projectId, { ...job, requestId: result.requestId }, model, result.outputs || [], result.raw);
         return;
       }
       await patchJob(workspacePath, projectId, jobId, { requestId: result.requestId, statusUrl: result.statusUrl, responseUrl: result.responseUrl });
@@ -412,7 +414,7 @@ async function runJob(workspacePath: string, projectId: string, jobId: string, r
       const state = await poll(model, { requestId: job.requestId!, statusUrl: job.statusUrl, responseUrl: job.responseUrl });
       if (state.state === 'pending') continue;
       if (state.state === 'failed') { await failJob(workspacePath, projectId, jobId, state.error, state.errorType); return; }
-      await finishJob(workspacePath, projectId, job, model, state.outputs);
+      await finishJob(workspacePath, projectId, job, model, state.outputs, state.raw);
       return;
     }
     await failJob(workspacePath, projectId, jobId, 'Generation timed out after 30 minutes.', 'timeout');
