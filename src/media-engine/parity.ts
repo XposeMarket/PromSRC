@@ -15,7 +15,7 @@ import { importAsset, music, planRunCost } from './studio.js';
 
 export const DEFAULT_MODELS = {
   recastEdit: 'xai/grok-imagine-video-1.5-edit',
-  recastMotion: 'fal/wan-vace-pose',
+  recastMotion: 'fal/wan-animate-replace',
   recastSwap: 'fal/kling-o1-edit',
   lipsync: 'fal/sync-lipsync-v2',
   talkingPhoto: 'fal/omnihuman-v1.5',
@@ -79,13 +79,14 @@ export async function recast(ws: string, projectId: string, args: {
   const source = args.sourcePath || (args.shotId ? (args.takeId ? `${args.shotId}:${args.takeId}` : args.shotId) : '');
   if (!source) throw new Error('recast needs sourcePath (workspace video, e.g. from import_asset role footage) or shotId(+takeId).');
   const modelId = args.modelId || (mode === 'motion' ? DEFAULT_MODELS.recastMotion : mode === 'swap' ? DEFAULT_MODELS.recastSwap : DEFAULT_MODELS.recastEdit);
-  requireModel(modelId);
+  const model = requireModel(modelId);
   if ((mode === 'motion' || mode === 'swap') && !args.characterId) throw new Error(`recast mode ${mode} needs characterId (the new character/element; its anchor is sent as the reference image).`);
   if (args.characterId && !loadProject(ws, projectId).characters.some((c) => c.id === args.characterId)) throw new Error(`Character "${args.characterId}" not found.`);
   const dur = Math.max(1, Math.min(60, Math.round(await sourceDuration(ws, projectId, source))));
   const shotId = await reuseOrAddShot(ws, projectId, args.pendingShotId, {
     title: `Recast (${mode})`, prompt: String(args.prompt || ''), sourceVideo: source, modelId, durationSec: dur,
-    characterIds: args.characterId ? [args.characterId] : [], anchorMode: 'reference',
+    // Image-driven swap models (image_url) need the character anchor as the start image, not as a loose reference.
+    characterIds: args.characterId ? [args.characterId] : [], anchorMode: model.map.startImage && !model.map.referenceImages ? 'start' : 'reference',
   });
   const r = await generateShots(ws, projectId, { shotIds: [shotId], approved: args.approved === true });
   return { ...r, shotId, modelId };

@@ -266,10 +266,24 @@ const BUILTIN: MediaModelManifest[] = [
     pricing: { perSecondUsd: 0.1, source: 'estimate' }, output: 'video.url', tags: ['recast'],
   },
   {
-    id: 'fal/wan-vace-pose', label: 'Wan VACE 14B pose (motion transfer) via fal', provider: 'fal', kind: 'video',
+    id: 'fal/wan-vace-pose', label: 'Wan VACE 14B pose (prompt-driven restyle, keeps identity weakly) via fal', provider: 'fal', kind: 'video',
     endpoint: 'fal-ai/wan-vace-14b/pose',
     map: { prompt: 'prompt', sourceVideo: 'video_url', referenceImages: 'ref_image_urls' }, requires: ['prompt', 'sourceVideo'],
-    pricing: { perSecondUsd: 0.08, source: 'estimate' }, output: 'video.url', tags: ['motion-transfer'],
+    pricing: { perSecondUsd: 0.08, source: 'estimate' }, output: 'video.url', tags: ['restyle'],
+  },
+  {
+    // Puts the character from image_url INTO the source clip (keeps its background, lighting and camera).
+    id: 'fal/wan-animate-replace', label: 'Wan 2.2 Animate Replace (character swap into a clip) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/wan/v2.2-14b/animate/replace',
+    map: { sourceVideo: 'video_url', startImage: 'image_url', resolution: 'resolution' }, requires: ['sourceVideo', 'startImage'],
+    pricing: { perSecondUsd: 0.08, source: 'published' }, output: 'video.url', tags: ['motion-transfer', 'swap'],
+  },
+  {
+    // Animates the still in image_url (its own background) with the source clip's motion.
+    id: 'fal/wan-animate-move', label: 'Wan 2.2 Animate Move (animate a still with a clip\'s motion) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/wan/v2.2-14b/animate/move',
+    map: { sourceVideo: 'video_url', startImage: 'image_url', resolution: 'resolution' }, requires: ['sourceVideo', 'startImage'],
+    pricing: { perSecondUsd: 0.08, source: 'published' }, output: 'video.url', tags: ['motion-transfer'],
   },
   {
     id: 'fal/luma-ray2-modify', label: 'Luma Ray 2 Modify via fal', provider: 'fal', kind: 'video',
