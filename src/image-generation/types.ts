@@ -27,6 +27,9 @@ export interface GeneratedImageAsset {
   bytes: number;
   width?: number | null;
   height?: number | null;
+  /** Source dimensions before exact-size crop/resize, when the provider ignored the request. */
+  source_width?: number | null;
+  source_height?: number | null;
   has_alpha?: boolean | null;
   generation_id?: string | null;
   parent_generation_id?: string | null;

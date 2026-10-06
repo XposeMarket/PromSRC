@@ -7,9 +7,12 @@ import type {
 import {
   buildImageGenerationError,
   buildImageGenerationSuccess,
+  cropImageToRequestedSize,
+  resolveOpenAIImageSize,
   fetchBinaryAsset,
   getImageGenerationConfig,
   IMAGE_SIZE_BY_ASPECT_RATIO,
+  inspectImageBuffer,
   mimeTypeForImageOutputFormat,
   persistGeneratedImage,
   resolveReferenceImages,
@@ -130,6 +133,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
     const prompt = String(request.prompt || '').trim();
     let model = this.resolveModel(request.model);
     const size = request.size || IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
+    const { apiSize, target } = resolveOpenAIImageSize(size, request.aspect_ratio);
     const resolved = resolveApiModelForRequest(model, request.model, request.background);
     model = resolved.model;
     const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
@@ -187,7 +191,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         const form = new FormData();
         form.set('model', resolved.apiModel);
         form.set('prompt', prompt);
-        form.set('size', size);
+        form.set('size', apiSize);
         form.set('n', String(request.count));
         form.set('quality', quality);
         form.set('background', request.background);
@@ -235,7 +239,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         body: JSON.stringify({
           model: resolved.apiModel,
           prompt,
-          size,
+          size: apiSize,
           n: request.count,
           quality,
           background: request.background,
@@ -281,8 +285,10 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         }
 
         if (!imageBytes || imageBytes.length === 0) continue;
+        const sourceDimensions = inspectImageBuffer(imageBytes, itemMimeType);
         const persisted = await persistGeneratedImage({
-          bytes: imageBytes,
+          bytes: await cropImageToRequestedSize(imageBytes, target, itemMimeType),
+          sourceDimensions: { width: sourceDimensions.width, height: sourceDimensions.height },
           mimeType: itemMimeType,
           provider: this.id,
           prompt,
@@ -319,9 +325,9 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         images,
         revisedPrompt,
         quality,
-        size,
-        width: request.width,
-        height: request.height,
+        size: images[0].width && images[0].height ? `${images[0].width}x${images[0].height}` : size,
+        width: images[0].width ?? undefined,
+        height: images[0].height ?? undefined,
         background: request.background,
         outputFormat: request.output_format,
         outputCompression: request.output_compression,
