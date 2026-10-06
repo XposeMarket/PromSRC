@@ -80,18 +80,19 @@ const TEAM_AGENT_TOOL_NAMES = new Set([
   'request_context',
   'request_manager_help',
   'request_team_member_turn',
-  'dispatch_team_agent',
-  'talk_to_teammate',
+  // dispatch_team_agent, talk_to_teammate, share_artifact and team_manage are
+  // intentionally NOT routed here: the canonical (PR #542-patched) handlers live in
+  // subagent-executor.ts. This executor runs first, so listing them here shadowed
+  // those fixes (background dispatch, display-name lookup, flat/nested artifacts,
+  // team_manage status/update/delete, dispatched-member team context).
   'update_my_status',
   'update_team_goal',
-  'share_artifact',
   'post_to_team_chat',
   'message_main_agent',
   'reply_to_team',
   'manage_team_goal',
   'manage_team_context_ref',
   'spawn_subagent',
-  'team_manage',
   'ask_team_coordinator',
   'set_current_model',
   'set_agent_model',

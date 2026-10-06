@@ -1,6 +1,13 @@
 import assert from 'assert';
 import { normalizeAgentTeamWrapperTool, normalizeShareArtifactArgs } from './subagent-executor';
 import { jsonEditGuardError } from '../../tools/json-edit-guard';
+import { teamAgentCapabilityExecutor } from './capabilities/team-agent-executor';
+
+// The capability executor runs before subagent-executor's switch; if it claims these
+// tools, the canonical handlers (and their fixes) are dead code.
+for (const tool of ['team_manage', 'dispatch_team_agent', 'talk_to_teammate', 'share_artifact']) {
+  assert.strictEqual(teamAgentCapabilityExecutor.canHandle(tool), false, `${tool} must route to subagent-executor`);
+}
 
 /**
  * Regression coverage for the Teams Gauntlet findings (2026-10-06).
