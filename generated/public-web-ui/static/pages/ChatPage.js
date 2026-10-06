@@ -2238,7 +2238,7 @@ function restoreBrowserTeachSessionState(saved) {
 }
 
 function syncBrowserTeachSessionToBackend() {
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
   const teach = snapshotBrowserTeachSession(getBrowserTeachSession());
@@ -3094,8 +3094,13 @@ function getCurrentChatModeSessionId() {
   return String(window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
+function subBrowserSid() {
+  const c = window.__prometheusSourcePanelContext;
+  return window.currentMode === 'subagents' && c?.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT ? c.sessionId : '';
+}
+
 function getBrowserCanvasPrimarySessionId() {
-  return String(window.activeChatSessionId || window.agentSessionId || getBrowserCanvasState().sessionId || '').trim();
+  return String(subBrowserSid() || getCurrentChatModeSessionId() || getBrowserCanvasState().sessionId || '').trim();
 }
 
 function getBrowserSessionRegistry(state = getBrowserCanvasState()) {
@@ -3987,7 +3992,7 @@ function normalizeBrowserAddressInput(value) {
 }
 
 function getDirectBrowserSessionId(state = getBrowserCanvasState()) {
-  return String(window.activeChatSessionId || window.agentSessionId || state.sessionId || 'default').trim() || 'default';
+  return String(subBrowserSid() || getCurrentChatModeSessionId() || state.sessionId || 'default').trim() || 'default';
 }
 
 async function openDirectNativeBrowserSurface(options = {}) {
@@ -4010,10 +4015,11 @@ async function openDirectNativeBrowserSurface(options = {}) {
   state.loading = false;
   state.lastError = '';
   state.statusLabel = requestedUrl === 'about:blank' ? 'New tab ready. Enter a URL to browse.' : 'Browser ready.';
+  const sub = /^subagent_chat_/i.test(sessionId);
   upsertBrowserSessionRecord({
     sessionId,
-    browserOwnerType: 'main',
-    browserLabel: 'Main Agent',
+    browserOwnerType: sub ? 'background' : 'main',
+    browserLabel: sub ? 'Subagent' : 'Main Agent',
     active: true,
     url: requestedUrl,
     title: state.title,
@@ -5303,7 +5309,7 @@ function inspectBrowserCanvasPoint(event) {
   if (!point) return;
   const viewportX = point.x;
   const viewportY = point.y;
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) {
     showToast('Browser connection is reconnecting. Try again in a second.', 'info');
@@ -6209,7 +6215,7 @@ function saveSelectedBrowserMemory(kind = 'element') {
     showToast(`Give the ${label} a name first.`, 'info');
     return;
   }
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) {
     showToast('No active browser session is linked to this chat yet.', 'info');
     return;
@@ -19442,6 +19448,9 @@ function resetSourcePanelContextState() {
 function setSourcePanelChatContext(input = {}, options = {}) {
   const next = normalizeSourcePanelContext(input);
   const changed = sourcePanelState.contextKey !== next.key;
+  if (changed && [sourcePanelState.surface, next.surface].includes(SOURCE_PANEL_SURFACE.SUBAGENT_CHAT)) {
+    queueMicrotask(() => { try { returnBrowserCanvasToPrimarySession({ force: true }); } catch {} });
+  }
   window.__prometheusSourcePanelContext = next;
   sourcePanelState.surface = next.surface;
   sourcePanelState.contextSessionId = next.sessionId;
@@ -20123,7 +20132,7 @@ function sourcePanelData(sessionId = sourcePanelActiveSessionId()) {
   const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: isSubagentChat ? [] : sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
   data.processes = isSubagentChat ? [] : sourcePanelProcessItems(sessionId);
   data.environment = isSubagentChat ? [] : sourcePanelEnvironmentItems(data);
-  data.browserItems = isSubagentChat ? [] : sourcePanelBrowserItems(sessionId);
+  data.browserItems = sourcePanelBrowserItems(sessionId);
   return data;
 }
 
