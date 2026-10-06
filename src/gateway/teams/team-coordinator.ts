@@ -737,7 +737,7 @@ export async function runCoordinatorConversation(
       };
 
 	      const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
-	      const result = await _deps.handleChat(
+	      const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
 	        currentMessage,
 	        sessionId,
 	        trackingSse,
@@ -750,7 +750,7 @@ export async function runCoordinatorConversation(
 	        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	        undefined,
 	        managerRouting.providerOverride,
-	      );
+	      ));
 
 	      responseText = String(result.text || '').trim();
 	      const resultThinking = String(result.thinking || '').trim();
@@ -1004,7 +1004,7 @@ export async function runCoordinatorConversationDetailed(
         };
 
         const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
-        const result = await _deps.handleChat(
+        const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
           currentMessage,
           sessionId,
           trackingSse,
@@ -1017,7 +1017,7 @@ export async function runCoordinatorConversationDetailed(
           turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	          undefined,
 	          managerRouting.providerOverride,
-	        );
+	        ));
 
 	        responseText = String(result.text || '').trim();
 	        const resultThinking = String(result.thinking || '').trim();
@@ -1264,7 +1264,7 @@ export async function runCoordinatorReview(
       broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, event, data);
     };
     const managerRouting = prepareTeamManagerRuntime(team, sessionId);
-    const result = await _deps.handleChat(
+    const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
       reviewPrompt,
       sessionId,
       trackingSse,
@@ -1277,7 +1277,7 @@ export async function runCoordinatorReview(
       undefined,
       undefined,
       managerRouting.providerOverride,
-    );
+    ));
 
     const responseText = String(result.text || '').trim();
     const resultThinking = String(result.thinking || '').trim();
@@ -1357,4 +1357,24 @@ export async function runSubagentResultVerification(
     `Verify/analyze the work. Check files created or modified by the agent if relevant. If the output is incomplete, re-dispatch with a specific fix. If accepted, update memory.json and last_run.json.`,
   ].join('\n');
   await runCoordinatorConversation(teamId, prompt, broadcastFn, false);
+}
+
+/**
+ * Bind the async workspace scope for manager turns: team workspace root plus the
+ * team's allowed_work_paths. setWorkspace() alone only sets the root, so file tools
+ * denied the manager every configured allowed path (Teams Gauntlet v2 finding).
+ */
+function withTeamManagerWorkspaceScope<T>(teamId: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    const team = getManagedTeam(teamId);
+    const teamWs = getTeamWorkspacePath(teamId);
+    if (!team || !teamWs) return fn();
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resolveTeamAgentAllowedWorkPaths } = require('./team-dispatch-runtime');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { runWithWorkspace } = require('../../tools/workspace-context');
+    return runWithWorkspace(teamWs, fn, resolveTeamAgentAllowedWorkPaths(team, teamWs));
+  } catch {
+    return fn();
+  }
 }
