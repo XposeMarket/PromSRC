@@ -62,6 +62,7 @@ export class CodexIncompleteStreamError extends Error {
 // Model access depends on the connected account's provisioning.
 export const CODEX_MODELS = [
   CHATGPT_WEB_MODEL,
+  'gpt-6.1-sol',
   'gpt-6-astra',
   'gpt-6-sol',
   'gpt-6-luna',

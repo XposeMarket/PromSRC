@@ -57,6 +57,8 @@ const OPENAI_CODEX_MODEL_ALIASES: Record<string, string> = {
   astra: 'gpt-6-astra',
   'sol-6': 'gpt-6-sol',
   'luna-6': 'gpt-6-luna',
+  'sol-6.1': 'gpt-6.1-sol',
+  'gpt-6.1-sol': 'gpt-6.1-sol',
   'gpt-6-sol': 'gpt-6-sol',
   'gpt-6-luna': 'gpt-6-luna',
 };
@@ -87,7 +89,7 @@ export function inferProviderForBareModel(model?: string): string | null {
   const raw = String(model || '').trim().toLowerCase();
   if (!raw || raw.includes('/')) return null;
   if (OPENAI_CODEX_MODEL_ALIASES[raw]) return 'openai_codex';
-  if (/^gpt-(?:5\.6|6)-(?:sol|luna|terra|astra)(?:$|[-.])/.test(raw)) return 'openai_codex';
+  if (/^gpt-(?:5\.6|6(?:\.1)?)-(?:sol|luna|terra|astra)(?:$|[-.])/.test(raw)) return 'openai_codex';
   if (ANTHROPIC_MODEL_ALIASES[raw]) return 'anthropic';
   if (/^claude-/.test(raw)) return 'anthropic';
   return null;

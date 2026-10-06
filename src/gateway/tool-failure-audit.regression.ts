@@ -37,6 +37,7 @@ async function main() {
   assert.equal(inferProviderForBareModel('gpt-5.6-sol'), 'openai_codex');
   assert.equal(inferProviderForBareModel('sol'), 'openai_codex');
   assert.equal(inferProviderForBareModel('gpt-6-astra'), 'openai_codex');
+  assert.equal(inferProviderForBareModel('gpt-6.1-sol'), 'openai_codex');
   assert.equal(inferProviderForBareModel('claude-opus-5-5'), 'anthropic');
   assert.equal(inferProviderForBareModel('opus-4.8'), 'anthropic');
   assert.equal(inferProviderForBareModel('gpt-5.5'), null, 'ambiguous ids stay unqualified');

@@ -16,6 +16,7 @@ import {
 assert.equal(normalizeProviderModel('openai_codex', 'sol'), 'gpt-5.6-sol');
 assert.equal(normalizeProviderModel('openai_codex', 'luna'), 'gpt-5.6-luna');
 assert.equal(normalizeProviderModel('openai_codex', 'astra'), 'gpt-6-astra');
+assert.equal(normalizeProviderModel('openai_codex', 'sol-6.1'), 'gpt-6.1-sol');
 assert.deepEqual(parseProviderModelRef('openai_codex/terra'), { providerId: 'openai_codex', model: 'gpt-5.6-terra' });
 
 // ── Claude Opus 5.5 ─────────────────────────────────────────────────────────
