@@ -13,8 +13,11 @@ import type {
 import {
   buildImageGenerationError,
   buildImageGenerationSuccess,
+  cropImageToRequestedSize,
+  resolveOpenAIImageSize,
   getImageGenerationConfig,
   IMAGE_SIZE_BY_ASPECT_RATIO,
+  inspectImageBuffer,
   mimeTypeForImageOutputFormat,
   persistGeneratedImage,
   resolveReferenceImages,
@@ -351,6 +354,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
     const prompt = String(request.prompt || '').trim();
     let model = this.resolveModel(request.model);
     const size = request.size || IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
+    const { apiSize, target } = resolveOpenAIImageSize(size, request.aspect_ratio);
     const resolved = resolveApiModelForRequest(model, request.model, request.background);
     model = resolved.model;
     const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
@@ -410,8 +414,11 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
 
         for (const generated of streamResult.images) {
           if (images.length >= request.count) break;
+          const sourceBytes = Buffer.from(generated.imageB64, 'base64');
+          const sourceDimensions = inspectImageBuffer(sourceBytes, mimeType);
           const persisted = await persistGeneratedImage({
-            bytes: Buffer.from(generated.imageB64, 'base64'),
+            bytes: await cropImageToRequestedSize(sourceBytes, target, mimeType),
+            sourceDimensions: { width: sourceDimensions.width, height: sourceDimensions.height },
             mimeType,
             provider: this.id,
             prompt,
@@ -439,7 +446,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         const imageTool: Record<string, unknown> = {
           type: 'image_generation',
           model: resolved.apiModel,
-          size,
+          size: apiSize,
           quality,
           output_format: request.output_format,
           background: request.background,
@@ -487,7 +494,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         return { ok: true, result: await collectImageFromStream(response, async (partial) => {
           if (!request.on_partial_image || !request.stream) return;
           const persisted = await persistGeneratedImage({
-            bytes: Buffer.from(partial.imageB64, 'base64'),
+            bytes: await cropImageToRequestedSize(Buffer.from(partial.imageB64, 'base64'), target, mimeType),
             mimeType,
             provider: this.id,
             prompt,
@@ -585,9 +592,9 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         images,
         revisedPrompt,
         quality,
-        size,
-        width: request.width,
-        height: request.height,
+        size: images[0].width && images[0].height ? `${images[0].width}x${images[0].height}` : size,
+        width: images[0].width ?? undefined,
+        height: images[0].height ?? undefined,
         background: request.background,
         outputFormat: request.output_format,
         outputCompression: request.output_compression,

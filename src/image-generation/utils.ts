@@ -1,6 +1,7 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
+import sharp from 'sharp';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
 import type {
@@ -27,6 +28,33 @@ export const IMAGE_SIZE_BY_ASPECT_RATIO: Record<ImageAspectRatio, string> = {
 };
 export const GPT_IMAGE_2_EXACT_SIZE_RE = /^(?:1024x1024|1024x1536|1536x1024|auto|[1-9]\d{2,3}x[1-9]\d{2,3})$/;
 
+/** GPT Image 2.5 supports standard squares/portraits/landscapes or auto. */
+export function resolveOpenAIImageSize(size: string, aspectRatio: ImageAspectRatio): { apiSize: string; target?: { width: number; height: number } } {
+  const requested = String(size || IMAGE_SIZE_BY_ASPECT_RATIO[aspectRatio]).toLowerCase();
+  if (requested === 'auto') return { apiSize: 'auto' };
+  const aspectSizes: Record<string, string> = { '9:16': '1024x1536', '16:9': '1536x1024', '1:1': '1024x1024' };
+  const resolved = aspectSizes[requested] || requested;
+  const match = /^(\d+)x(\d+)$/.exec(resolved);
+  if (!match) throw new Error(`Invalid image size: ${requested}`);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const apiSize = width === height ? '1024x1024' : width < height ? '1024x1536' : '1536x1024';
+  return { apiSize, target: { width, height } };
+}
+
+/** Cover-resize with a centered crop only when the provider returned other dimensions. */
+export async function cropImageToRequestedSize(bytes: Buffer, target?: { width: number; height: number }, mimeType = 'image/png'): Promise<Buffer> {
+  if (!target) return bytes;
+  const source = sharp(bytes);
+  const metadata = await source.metadata();
+  if (metadata.width === target.width && metadata.height === target.height) return bytes;
+  const resized = source.resize(target.width, target.height, { fit: 'cover', position: 'centre' });
+  if (mimeType === 'image/webp') return resized.webp().toBuffer();
+  if (mimeType === 'image/jpeg') return resized.jpeg().toBuffer();
+  return resized.png().toBuffer();
+}
+
+
 type PersistGeneratedImageInput = {
   bytes: Buffer;
   mimeType?: string;
@@ -35,6 +63,7 @@ type PersistGeneratedImageInput = {
   outputDir?: string;
   outputRunDir?: string;
   saveToWorkspace: boolean;
+  sourceDimensions?: { width: number | null; height: number | null };
 };
 
 type PersistGeneratedImageResult = GeneratedImageAsset;
@@ -415,6 +444,7 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
       bytes: input.bytes.length,
       width: inspected.width,
       height: inspected.height,
+      ...(input.sourceDimensions ? { source_width: input.sourceDimensions.width, source_height: input.sourceDimensions.height } : {}),
       has_alpha: inspected.hasAlpha,
     };
   }
@@ -434,6 +464,7 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
     bytes: input.bytes.length,
     width: inspected.width,
     height: inspected.height,
+    ...(input.sourceDimensions ? { source_width: input.sourceDimensions.width, source_height: input.sourceDimensions.height } : {}),
     has_alpha: inspected.hasAlpha,
   };
 }

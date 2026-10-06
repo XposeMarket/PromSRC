@@ -407,8 +407,11 @@ async function runViaRegistry(model: MediaModelManifest, input: ShotInput, outpu
     prompt: input.prompt,
     reference_images: [input.startImage, ...(input.referenceImages || [])].filter(Boolean) as string[],
     aspect_ratio: toPrometheusAspect(input.aspectRatio),
+    size: model.provider === 'openai'
+      ? ({ portrait: '1024x1536', landscape: '1536x1024', square: '1024x1024' } as const)[toPrometheusAspect(input.aspectRatio) as 'portrait' | 'landscape' | 'square']
+      : undefined,
     count: input.count,
-    provider: model.provider === 'openai' ? 'auto' : 'xai',
+    provider: model.provider === 'openai' ? 'openai_codex' : 'xai',
     model: model.endpoint,
     output_dir: outputDir,
   } as any);
