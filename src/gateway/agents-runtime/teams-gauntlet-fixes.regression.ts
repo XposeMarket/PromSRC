@@ -51,6 +51,14 @@ async function main(): Promise<void> {
   assert.equal(jsonEditGuardError('already-bad.json', broken, broken + 'x'), null);
   assert.equal(jsonEditGuardError('bom.json', '\uFEFF' + good, '\uFEFF{"a":1}'), null);
 
+  // Gauntlet v2: managers called manage_goal "log_completion" (unknown action).
+  const { normalizeTeamGoalAction } = await import('./capabilities/team-agent-executor');
+  assert.equal(normalizeTeamGoalAction('log_completion'), 'log_completed');
+  assert.equal(normalizeTeamGoalAction('LOG_COMPLETE'), 'log_completed');
+  assert.equal(normalizeTeamGoalAction('update_focus'), 'set_focus');
+  assert.equal(normalizeTeamGoalAction('set_goal'), 'set_focus');
+  assert.equal(normalizeTeamGoalAction('add_milestone'), 'add_milestone');
+
   console.log('teams-gauntlet-fixes.regression: OK');
 }
 
