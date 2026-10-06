@@ -126,6 +126,8 @@ export function getAgentTeamScheduleTools(): any[] {
             request_id: { type: 'string' },
             confirm: { type: 'boolean' },
             delete_agents: { type: 'boolean' },
+            background: { type: 'boolean', description: 'dispatch_team_agent only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
+            value: { type: 'string', description: 'manage_goal value, e.g. the new focus text for team_action="set_focus".' },
           },
         },
       },
