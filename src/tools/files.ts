@@ -9,6 +9,7 @@ import { getActiveWorkspace, getActiveAllowedWorkspaces, hasActiveWorkspaceScope
 import { ToolResult } from '../types.js';
 import { createWorkspaceSnapshot, toSnapshotRef } from '../workspace-history';
 import { isCanonicalPathInsideSync } from './workspace-boundary.js';
+import { jsonEditGuardError } from './json-edit-guard.js';
 import {
   DEFAULT_FILE_TOOL_EXCLUDES,
   buildFileIntelligence,
@@ -1515,6 +1516,8 @@ export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchset
         const fr = applyLineEndingTolerantFindReplace(content, findStr, replaceStr, edit.replace_all === true);
         if (!fr) { results.push({ filename: String(filename), op, ok: false, error: `Text not found: "${findStr.slice(0, 60)}"` }); continue; }
         const newContent = fr.updated;
+        const jsonErrFr = jsonEditGuardError(String(filename), content, newContent);
+        if (jsonErrFr) { results.push({ filename: String(filename), op, ok: false, error: jsonErrFr }); continue; }
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:find_replace', String(filename)));
         await fs.writeFile(absPath, newContent, 'utf-8');
         const startLine = lineNumberAtOffset(content, fr.firstIndex);
@@ -1532,6 +1535,8 @@ export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchset
           continue;
         }
         const replaced = applyReplaceLinesEolSafe(content, startL, endL, newContent);
+        const jsonErrRl = jsonEditGuardError(String(filename), content, replaced.updated);
+        if (jsonErrRl) { results.push({ filename: String(filename), op, ok: false, error: jsonErrRl }); continue; }
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:replace_lines', String(filename)));
         await fs.writeFile(absPath, replaced.updated, 'utf-8');
         results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), replaced.updated, startL, Math.max(startL, startL + replaced.newLines.length - 1), `Updated ${filename}: replaced lines ${startL}-${replaced.endClamped}.`) });
@@ -1541,6 +1546,8 @@ export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchset
         const ins = String(edit.content ?? edit.new_content ?? '');
         const content = await fs.readFile(absPath, 'utf-8');
         const inserted = applyInsertAfterEolSafe(content, afterL, ins);
+        const jsonErrIa = jsonEditGuardError(String(filename), content, inserted.updated);
+        if (jsonErrIa) { results.push({ filename: String(filename), op, ok: false, error: jsonErrIa }); continue; }
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:insert_after', String(filename)));
         await fs.writeFile(absPath, inserted.updated, 'utf-8');
         results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), inserted.updated, inserted.insertAt + 1, Math.max(inserted.insertAt + 1, inserted.insertAt + inserted.newLines.length), `Updated ${filename}: inserted after line ${afterL}.`) });
@@ -1555,6 +1562,8 @@ export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchset
           continue;
         }
         const deleted = applyDeleteLinesEolSafe(content, startL, endL);
+        const jsonErrDl = jsonEditGuardError(String(filename), content, deleted.updated);
+        if (jsonErrDl) { results.push({ filename: String(filename), op, ok: false, error: jsonErrDl }); continue; }
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:delete_lines', String(filename)));
         await fs.writeFile(absPath, deleted.updated, 'utf-8');
         results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), deleted.updated, Math.min(startL, Math.max(1, deleted.lines.length)), Math.min(startL, Math.max(1, deleted.lines.length)), `Updated ${filename}: deleted lines ${startL}-${deleted.endClamped}.`) });

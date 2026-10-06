@@ -42,6 +42,7 @@ import { executeGenerateImage } from '../../tools/generate-image';
 import { executeGenerateVideo } from '../../tools/generate-video';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
 import { isCanonicalPathInsideSync } from '../../tools/workspace-boundary';
+import { jsonEditGuardError } from '../../tools/json-edit-guard';
 import { createWorkspaceSnapshot, listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot, toSnapshotRef } from '../../workspace-history';
 import {
   DEFAULT_FILE_TOOL_EXCLUDES,
@@ -1177,8 +1178,26 @@ function inferTeamNoteContext(sessionId: string): {
     const idx = stripped.lastIndexOf('_');
     const agentId = idx > 0 ? stripped.slice(0, idx) : stripped;
     const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(agentId));
-    return team ? { teamId: team.id, authorType: 'subagent', authorId: agentId, conversationMode: 'dispatch' } : null;
+    if (team) return { teamId: team.id, authorType: 'subagent', authorId: agentId, conversationMode: 'dispatch' };
   }
+  // Fallback: dispatched members can run under task/background session ids that
+  // do not carry the team_dispatch_ prefix. The dispatch runtime always binds a
+  // runtime actor with teamId + agentId, so use it. Without this, talk_to_manager,
+  // talk_to_teammate and share_artifact failed with "only works inside a team
+  // subagent session" for dispatched members (Teams Gauntlet 2026-10-06).
+  try {
+    const { getRuntimeActorContext } = require('../runtime-actor');
+    const actor = getRuntimeActorContext(sid);
+    const actorTeamId = String(actor?.teamId || '').trim();
+    const actorAgentId = String(actor?.agentId || '').trim();
+    if (actorTeamId && actorAgentId) {
+      if (actor?.kind === 'manager') return { teamId: actorTeamId, authorType: 'manager', authorId: 'manager', conversationMode: 'manager' };
+      const team = getManagedTeam(actorTeamId) as any;
+      if (team && Array.isArray(team.subagentIds) && team.subagentIds.includes(actorAgentId)) {
+        return { teamId: actorTeamId, authorType: 'subagent', authorId: actorAgentId, conversationMode: 'dispatch' };
+      }
+    }
+  } catch { /* runtime actor lookup is best-effort */ }
   return null;
 }
 
@@ -1725,6 +1744,97 @@ function startAgentConversationBackground(params: {
     promise,
   });
   return taskId;
+}
+
+/**
+ * Resolve a teammate reference (id, display name, or a sloppy variant such as
+ * "rhea", "tt_ reviewer", or a truncated id) to a real member id. Agents
+ * naturally address teammates by display name; exact-id-only matching made
+ * every such call fail (Teams Gauntlet 2026-10-06).
+ */
+export function resolveTeammateReference(team: any, raw: string): { ok: true; agentId: string } | { ok: false; error: string } {
+  const ref = String(raw || '').trim();
+  if (!ref) return { ok: false, error: 'talk_to_teammate requires agent_id (teammate id or display name) and message.' };
+  const lower = ref.toLowerCase();
+  if (lower === 'manager' || lower === 'all') return { ok: true, agentId: lower };
+  const ids: string[] = Array.isArray(team?.subagentIds) ? team.subagentIds.map(String) : [];
+  if (ids.includes(ref)) return { ok: true, agentId: ref };
+  const squash = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const want = squash(ref);
+  const candidates = ids.map((id) => {
+    const agent = getAgentById(id) as any;
+    return { id, name: String(agent?.name || '').trim() };
+  });
+  const exact = candidates.filter((c) => c.id.toLowerCase() === lower || (c.name && c.name.toLowerCase() === lower) || squash(c.id) === want || (c.name && squash(c.name) === want));
+  if (exact.length === 1) return { ok: true, agentId: exact[0].id };
+  const fuzzy = want.length >= 3
+    ? candidates.filter((c) => squash(c.id).startsWith(want) || want.startsWith(squash(c.id).slice(0, Math.max(6, want.length - 8))) || (c.name && squash(c.name).startsWith(want)))
+    : [];
+  if (exact.length === 0 && fuzzy.length === 1) return { ok: true, agentId: fuzzy[0].id };
+  const roster = candidates.map((c) => `${c.name || c.id} (${c.id})`).join(', ');
+  return {
+    ok: false,
+    error: `${ref} ${exact.length + fuzzy.length > 1 ? 'matches more than one member' : 'is not a member'} of team "${team?.name || team?.id}". Members: ${roster}. Use "manager" or "all" for the manager or a broadcast.`,
+  };
+}
+
+/** Accept share_artifact args flat or nested under artifact:{...}; derive name from path. */
+export function normalizeShareArtifactArgs(args: any): { name: string; type: string; description: string; content?: string; path?: string } {
+  const nested = args && typeof args.artifact === 'object' && args.artifact && !Array.isArray(args.artifact) ? args.artifact : {};
+  const pick = (key: string) => (args?.[key] ?? nested?.[key]);
+  const p = pick('path') ?? pick('file') ?? pick('filename');
+  const pathStr = p != null ? String(p).trim() : '';
+  let artifactName = String(pick('name') ?? pick('title') ?? '').trim();
+  if (!artifactName && pathStr) artifactName = path.basename(pathStr.replace(/[\\/]+$/, '')) || pathStr;
+  const content = pick('content') ?? pick('summary');
+  return {
+    name: artifactName,
+    type: String(pick('type') || (pathStr ? 'file' : 'data')).trim(),
+    description: String(pick('description') ?? '').trim(),
+    content: content != null ? (typeof content === 'string' ? content : JSON.stringify(content)) : undefined,
+    path: pathStr || undefined,
+  };
+}
+
+/**
+ * Team members cannot create proposals directly (the manager owns caps and
+ * approval). Previously the call just returned BLOCKED; now the full proposal
+ * payload is queued to the manager inbox and the manager is woken to submit it.
+ */
+function routeMemberProposalToManager(deps: any, teamId: string, fromAgentId: string, args: any): { ok: boolean; message: string } {
+  try {
+    const title = String(args?.title || '').trim();
+    const summary = String(args?.summary || '').trim();
+    if (!title || !summary) {
+      return { ok: false, message: 'ERROR: write_proposal from a team member still needs title and summary; it is forwarded to the manager for submission.' };
+    }
+    const payload: Record<string, any> = {};
+    for (const key of ['type', 'execution_mode', 'priority', 'title', 'summary', 'details', 'affected_files', 'execution_steps', 'estimated_impact', 'risk_tier', 'requires_build', 'executor_prompt']) {
+      if (args?.[key] !== undefined) payload[key] = args[key];
+    }
+    payload.executor_agent_id = String(args?.executor_agent_id || fromAgentId);
+    const fromName = String((getAgentById(fromAgentId) as any)?.name || fromAgentId);
+    const body = [
+      `[PROPOSAL REQUEST from ${fromName}] Review this and, if sound, submit it with write_proposal (executor_agent_id is pre-filled).`,
+      '```json',
+      JSON.stringify(payload, null, 2).slice(0, 12000),
+      '```',
+    ].join('\n');
+    const { queueManagerMessage } = require('../teams/managed-teams');
+    const ok = queueManagerMessage(teamId, fromAgentId, body);
+    if (!ok) return { ok: false, message: 'ERROR: Could not queue the proposal for the manager.' };
+    try {
+      const { scheduleTeamManagerAutoWake } = require('../teams/team-manager-autowake');
+      scheduleTeamManagerAutoWake(teamId, `${fromName} submitted a proposal request.`);
+    } catch { /* manager wake is best-effort */ }
+    try {
+      const chatMsg = appendTeamChat(teamId, { from: 'subagent', fromName, fromAgentId, content: `Proposal request sent to manager: ${title}` } as any);
+      deps?.broadcastTeamEvent?.({ type: 'team_chat_message', teamId, chatMessage: chatMsg, text: chatMsg?.content || '' });
+    } catch { /* non-fatal */ }
+    return { ok: true, message: `Proposal "${title}" forwarded to the team manager, who submits proposals for this team. The manager has been woken; you do not need to resend it.` };
+  } catch (err: any) {
+    return { ok: false, message: `ERROR: proposal routing failed: ${err?.message || err}` };
+  }
 }
 
 function isProposalLikeSourceSessionId(sessionId: string): boolean {
@@ -2852,6 +2962,17 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     if (args.timeout_ms == null && args.timeoutMs != null) args.timeout_ms = args.timeoutMs;
     delete args.maxSteps;
     delete args.timeoutMs;
+  }
+  // manage_goal / update_goal handlers read `action`, but the wrapper consumed it
+  // and the schema documents team_action. Without this every manager goal call
+  // failed with "requires team_id and action".
+  if (target === 'manage_team_goal' || target === 'update_team_goal') {
+    if (args.action == null && args.team_action != null) args.action = args.team_action;
+    if (args.action == null && args.goal_action != null) args.action = args.goal_action;
+    if (args.team_id == null && args.teamId != null) args.team_id = args.teamId;
+    if (args.value == null && args.goal != null) args.value = args.goal;
+    if (args.value == null && args.message != null) args.value = args.message;
+    delete args.team_action;
   }
   if (target === 'team_manage') {
     if (args.team_action != null && args.action == null) args.action = args.team_action;
@@ -6089,9 +6210,20 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               recoverable_only: recoverableOnly,
               detail,
               runs: tasks.map((task) => detail === 'full' ? summarizeAgentRunForTool(task, agentId || undefined) : summarizeAgentRunCompact(task, agentId || undefined)),
+              // Team managers run as live team_manager runtimes, not task records,
+              // so they never appeared here and looked like they never ran.
+              team_manager_runtimes: (() => {
+                try {
+                  const { listLiveRuntimes } = require('../live-runtime-registry');
+                  return (listLiveRuntimes() as any[])
+                    .filter((rt) => rt?.kind === 'team_manager' && (!agentId || rt.agentId === agentId || `${rt.teamId}_manager` === agentId))
+                    .slice(-10)
+                    .map((rt) => ({ id: rt.id, teamId: rt.teamId, agentId: rt.agentId, status: rt.status, sessionId: rt.sessionId, startedAt: rt.startedAt || null, detail: String(rt.detail || '').slice(0, 160) }));
+                } catch { return []; }
+              })(),
               message: tasks.length
                 ? `Found ${tasks.length} agent-owned run(s).`
-                : 'No matching agent-owned runs found.',
+                : 'No matching agent-owned runs found. Team manager turns are listed under team_manager_runtimes and team_manage(status).',
             }, null, 2),
             error: false,
           };
@@ -7235,7 +7367,15 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         const agentId = String(args?.agent_id || '').trim();
         const task = String(args?.task || args?.task_prompt || args?.taskPrompt || args?.message || '').trim();
         const context = args?.context ? String(args.context) : undefined;
-        const background = args?.background === true;
+        // Default to background when called from outside the team (main chat):
+        // a foreground dispatch blocked the caller for the member's whole run
+        // (2-7 min each). Inside the manager keep blocking so it can review.
+        const callerTeamContext = inferTeamNoteContext(sessionId);
+        const background = typeof args?.background === 'boolean'
+          ? args.background
+          : String(args?.background || '').toLowerCase() === 'true' ? true
+          : String(args?.background || '').toLowerCase() === 'false' ? false
+          : !callerTeamContext;
         if (!teamId || !agentId || !task) {
           return { name, args, result: 'ERROR: dispatch_team_agent requires team_id, agent_id, and task', error: true };
         }
@@ -8093,6 +8233,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	          const originalLines = splitLinesEolSafe(content);
 	          if (start > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, start, 'read_file', 'start_line'), error: true };
 	          const replaced = applyReplaceLinesEolSafe(content, start, end, String(args.new_content ?? ''));
+	          const jsonErr = jsonEditGuardError(resolved.normalizedRel, content, replaced.updated);
+	          if (jsonErr) return { name, args, result: jsonErr, error: true };
 	          const snapshot = snapshotPreMutation(resolved, 'replace_lines');
 	          fs.writeFileSync(resolved.absPath, replaced.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
@@ -8124,6 +8266,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	          const originalLines = splitLinesEolSafe(content);
 	          if (afterLine > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, afterLine, 'read_file', 'after_line'), error: true };
 	          const inserted = applyInsertAfterEolSafe(content, afterLine, String(args.content ?? ''));
+	          const jsonErr = jsonEditGuardError(resolved.normalizedRel, content, inserted.updated);
+	          if (jsonErr) return { name, args, result: jsonErr, error: true };
 	          const snapshot = snapshotPreMutation(resolved, 'insert_after');
 	          fs.writeFileSync(resolved.absPath, inserted.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
@@ -8157,6 +8301,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	          const originalLines = splitLinesEolSafe(content);
 	          if (start > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, start, 'read_file', 'start_line'), error: true };
 	          const deleted = applyDeleteLinesEolSafe(content, start, end);
+	          const jsonErr = jsonEditGuardError(resolved.normalizedRel, content, deleted.updated);
+	          if (jsonErr) return { name, args, result: jsonErr, error: true };
 	          const snapshot = snapshotPreMutation(resolved, 'delete_lines');
 	          fs.writeFileSync(resolved.absPath, deleted.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
@@ -16319,7 +16465,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         try {
           const action = String(args.action || '').trim().toLowerCase();
           if (!action) {
-            return { name, args, result: 'team_manage requires action: list|create|set_allowed_work_paths|start|trigger_review|dispatch|pause|resume', error: true };
+            return { name, args, result: 'team_manage requires action: list|status|create|update|set_allowed_work_paths|start|trigger_review|dispatch|pause|resume|delete', error: true };
           }
 
           if (action === 'list') {
@@ -16502,6 +16648,101 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               result: JSON.stringify({ success: true, action, team_id: team.id, allowedWorkPaths: team.allowedWorkPaths }, null, 2),
               error: false,
             };
+          }
+
+          if (action === 'get' || action === 'status' || action === 'info') {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (!teamId) return { name, args, result: `team_manage(${action}) requires team_id`, error: true };
+            const team = getManagedTeam(teamId) as any;
+            if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
+            const chat: any[] = Array.isArray(team.teamChat) ? team.teamChat : [];
+            const managerMessages = chat.filter((m) => m?.from === 'manager').slice(-5).map((m) => ({ at: m.timestamp || m.createdAt || null, text: String(m.content || '').slice(0, 400) }));
+            const room = team.roomState || {};
+            const status = {
+              id: team.id,
+              name: team.name,
+              purpose: team.purpose || team.mission || '',
+              currentFocus: team.currentFocus || room.runGoal || '',
+              allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths : [],
+              manager: {
+                agentId: team.managerAgentId,
+                sessionId: `team_coord_${team.id}`,
+                paused: team.manager?.paused === true,
+                model: team.manager?.model || null,
+                reviewTrigger: team.manager?.reviewTrigger,
+                lastReviewAt: team.manager?.lastReviewAt || null,
+                inboxPending: Array.isArray(room.managerInbox) ? room.managerInbox.length : 0,
+                messageCount: chat.filter((m) => m?.from === 'manager').length,
+                recentMessages: managerMessages,
+                note: 'Manager turns run in the team_coord session and are not listed by agent_run_ops; use this status for manager activity.',
+              },
+              members: (team.subagentIds || []).map((id: string) => {
+                const st = room.memberStates?.[id] || {};
+                return { id, name: String((getAgentById(id) as any)?.name || id), status: st.status || 'idle', currentTask: st.currentTask || '', blockedReason: st.blockedReason || '', lastResult: String(st.lastResult || '').slice(0, 300) };
+              }),
+              recentDispatches: (room.dispatches || []).slice(-10).map((d: any) => ({ id: d.id, agentId: d.agentId, status: d.status, taskId: d.taskId || null, summary: String(d.taskSummary || '').slice(0, 200) })),
+              sharedArtifacts: (room.sharedArtifacts || []).slice(-20).map((a: any) => ({ name: a.name, type: a.type, path: a.path, by: a.createdBy })),
+              blockers: (room.blockers || []).slice(-10),
+              totalRuns: team.totalRuns || 0,
+            };
+            return { name, args, result: JSON.stringify({ success: true, action: 'status', team: status }, null, 2), error: false };
+          }
+
+          if (action === 'update' || action === 'edit') {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (!teamId) return { name, args, result: 'team_manage(update) requires team_id', error: true };
+            const team = getManagedTeam(teamId) as any;
+            if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
+            const changed: string[] = [];
+            const str = (v: any, max: number) => String(v).slice(0, max);
+            if (args.name != null && String(args.name).trim()) { team.name = str(args.name, 80); changed.push('name'); }
+            if (args.description != null) { team.description = str(args.description, 300); changed.push('description'); }
+            if (args.emoji != null) { team.emoji = str(args.emoji, 4); changed.push('emoji'); }
+            if (args.purpose != null) {
+              team.purpose = str(args.purpose, 1000); team.mission = team.purpose;
+              if (team.roomState) team.roomState.purpose = team.purpose;
+              changed.push('purpose');
+            }
+            const ctx = args.team_context ?? args.teamContext;
+            if (ctx != null) { team.teamContext = str(ctx, 1000); changed.push('team_context'); }
+            team.manager = team.manager || {};
+            if (args.manager_system_prompt != null) { team.manager.systemPrompt = str(args.manager_system_prompt, 2000); changed.push('manager_system_prompt'); }
+            if (args.manager_model != null) { team.manager.model = String(args.manager_model).trim() || undefined; changed.push('manager_model'); }
+            if (args.review_trigger != null) {
+              const rt = String(args.review_trigger).trim().toLowerCase();
+              if (!['after_each_run', 'after_all_runs', 'daily', 'manual'].includes(rt)) {
+                return { name, args, result: `Invalid review_trigger "${rt}". Use after_each_run|after_all_runs|daily|manual.`, error: true };
+              }
+              team.manager.reviewTrigger = rt; changed.push('review_trigger');
+            }
+            const paths = Array.isArray(args.allowed_work_paths) ? args.allowed_work_paths : Array.isArray(args.allowedWorkPaths) ? args.allowedWorkPaths : null;
+            if (paths) { team.allowedWorkPaths = paths.map((v: any) => String(v).trim()).filter(Boolean); changed.push('allowed_work_paths'); }
+            const addIds: string[] = Array.isArray(args.add_subagent_ids) ? args.add_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
+            const removeIds: string[] = Array.isArray(args.remove_subagent_ids) ? args.remove_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
+            const unknown = addIds.filter((id) => !getAgentById(id));
+            if (unknown.length) return { name, args, result: `Unknown agent id(s): ${unknown.join(', ')}. Create them first with agent_ops spawn.`, error: true };
+            team.subagentIds = Array.isArray(team.subagentIds) ? team.subagentIds : [];
+            for (const id of addIds) {
+              if (!team.subagentIds.includes(id)) {
+                team.subagentIds.push(id);
+                team.roomState = team.roomState || {};
+                team.roomState.memberStates = team.roomState.memberStates || {};
+                team.roomState.memberStates[id] = team.roomState.memberStates[id] || { agentId: id, status: 'idle', lastUpdateAt: Date.now() };
+              }
+            }
+            if (removeIds.length) team.subagentIds = team.subagentIds.filter((id: string) => !removeIds.includes(id));
+            if (addIds.length) changed.push('add_subagent_ids');
+            if (removeIds.length) changed.push('remove_subagent_ids');
+            if (!changed.length) {
+              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, add_subagent_ids, remove_subagent_ids.', error: true };
+            }
+            team.updatedAt = Date.now();
+            saveManagedTeam(team);
+            for (const id of addIds) {
+              try { claimAgentForTeamWorkspace(team.id, id); } catch { /* identity claim is best-effort */ }
+            }
+            deps.broadcastTeamEvent({ type: 'team_updated', teamId: team.id, teamName: team.name, changed });
+            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [] }, null, 2), error: false };
           }
 
           if (action === 'trigger_review') {
@@ -16762,7 +17003,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             }
           }
 
-          return { name, args, result: `Unsupported team_manage action: ${action}`, error: true };
+          return { name, args, result: `Unsupported team_manage action: ${action}. Supported: list, status, create, update, set_allowed_work_paths, start, trigger_review, dispatch, pause, resume, run_round, run_session, delete.`, error: true };
         } catch (err: any) {
           return { name, args, result: `team_manage error: ${err.message}`, error: true };
         }
@@ -19080,6 +19321,14 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           // The manager owns proposal submission so team artifacts, proposal caps, and approval state stay coherent.
           const teamNoteForProposal = inferTeamNoteContext(sessionId);
           const isTeamSession = String(sessionId || '').startsWith('team_dispatch_') || teamNoteForProposal?.authorType === 'subagent';
+          if (isTeamSession && teamNoteForProposal?.teamId) {
+            // Route the member's proposal to the manager as a structured, ready-to-submit
+            // request instead of dead-ending. The manager owns submission (caps,
+            // approval state, executor assignment), so this keeps the invariant while
+            // giving the member a working path.
+            const routed = routeMemberProposalToManager(deps, teamNoteForProposal.teamId, teamNoteForProposal.authorId, args);
+            return { name, args, result: routed.message, error: !routed.ok };
+          }
           if (isTeamSession) {
             return {
               name, args,
@@ -19485,21 +19734,40 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         // ── Team collaboration tools ────────────────────────────────────
         if (name === 'talk_to_teammate') {
           try {
-            const targetAgentId = String(args?.agent_id || '').trim();
+            const rawTargetAgentId = String(args?.agent_id || args?.teammate_id || '').trim();
             const message = String(args?.message || '').trim();
             const messageTypeRaw = String(args?.type || 'chat').trim().toLowerCase();
             const messageType = ['chat', 'feedback', 'blocker', 'plan', 'result'].includes(messageTypeRaw)
               ? messageTypeRaw as 'chat' | 'feedback' | 'blocker' | 'plan' | 'result'
               : 'chat';
             const noteContext = inferTeamNoteContext(sessionId);
-            if (!noteContext || noteContext.authorType !== 'subagent') {
-              return { name, args, result: 'ERROR: talk_to_teammate only works inside a team subagent session.', error: true };
+            if (noteContext?.authorType === 'manager' && rawTargetAgentId && message) {
+              // Manager -> member direct message (previously a hard error, so the
+              // manager could only reach members via a full dispatch).
+              const mgrTeam = getManagedTeam(noteContext.teamId);
+              if (!mgrTeam) return { name, args, result: `ERROR: Team not found: ${noteContext.teamId}`, error: true };
+              const target = resolveTeammateReference(mgrTeam, rawTargetAgentId);
+              if (!target.ok) return { name, args, result: `ERROR: ${target.error}`, error: true };
+              if (target.agentId === 'manager') return { name, args, result: 'ERROR: the manager cannot message itself.', error: true };
+              const { queueAgentMessage } = require('../teams/managed-teams');
+              const recipients = target.agentId === 'all' ? mgrTeam.subagentIds : [target.agentId];
+              for (const id of recipients) {
+                queueAgentMessage(noteContext.teamId, id, `[From Manager] ${message}`);
+                scheduleTeamMemberAutoWake(noteContext.teamId, id, { reason: 'The manager sent you a message.', source: 'teammate_message' });
+              }
+              return { name, args, result: `Message queued for ${recipients.join(', ')}; they will be woken to respond.`, error: false };
             }
-            if (!targetAgentId || !message) {
-              return { name, args, result: 'ERROR: talk_to_teammate requires agent_id and message.', error: true };
+            if (!noteContext || noteContext.authorType !== 'subagent') {
+              return { name, args, result: 'ERROR: talk_to_teammate only works inside a team session (member or manager).', error: true };
+            }
+            if (!rawTargetAgentId || !message) {
+              return { name, args, result: 'ERROR: talk_to_teammate requires agent_id (teammate id or display name) and message.', error: true };
             }
             const team = getManagedTeam(noteContext.teamId);
             if (!team) return { name, args, result: `ERROR: Team not found: ${noteContext.teamId}`, error: true };
+            const resolvedTarget = resolveTeammateReference(team, rawTargetAgentId);
+            if (!resolvedTarget.ok) return { name, args, result: `ERROR: ${resolvedTarget.error}`, error: true };
+            const targetAgentId = resolvedTarget.agentId;
             const fromAgentId = noteContext.authorId;
             const fromAgent = getAgentById(fromAgentId) as any;
             const fromName = String(fromAgent?.name || fromAgentId).trim();
@@ -19660,15 +19928,12 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             }
             const fromAgentId = noteContext.authorId;
             const fromAgent = getAgentById(fromAgentId) as any;
-            const artifact = shareTeamArtifact(noteContext.teamId, {
-              name: String(args.name || '').trim(),
-              type: String(args.type || 'data').trim(),
-              description: String(args.description || '').trim(),
-              content: args.content,
-              path: args.path,
-              createdBy: fromAgentId,
-            });
-            if (!artifact) return { name, args, result: 'ERROR: Could not share artifact.', error: true };
+            const artifactInput = normalizeShareArtifactArgs(args);
+            if (!artifactInput.name) {
+              return { name, args, result: 'ERROR: share_artifact requires a name (or a path to derive one from). Pass name/path/description/content at the top level or inside artifact:{...}.', error: true };
+            }
+            const artifact = shareTeamArtifact(noteContext.teamId, { ...artifactInput, createdBy: fromAgentId });
+            if (!artifact) return { name, args, result: `ERROR: Could not share artifact: team ${noteContext.teamId} not found.`, error: true };
             routeTeamEvent({
               type: 'member_shared_artifact',
               teamId: noteContext.teamId,

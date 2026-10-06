@@ -225,7 +225,14 @@ function normalizePathForCompare(p: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string | null): string[] {
+function runScopedTeamWorkspace<T>(teamWorkspacePath: string | null, allowedWorkPaths: string[], fn: () => Promise<T>): Promise<T> {
+  if (!teamWorkspacePath) return fn();
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { runWithWorkspace } = require('../../tools/workspace-context');
+  return runWithWorkspace(teamWorkspacePath, fn, allowedWorkPaths);
+}
+
+export function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string | null): string[] {
   const mainWorkspace = getConfig().getWorkspacePath();
   const rawValues = [
     ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
@@ -783,7 +790,10 @@ async function runTeamAgentViaChatInternal(
   // tools, which trips Anthropic's OAuth subscription gate.
   try { setActivatedToolCategories(sessionId, []); } catch {}
   try {
-    const result = await withAdmissionRetry(() => deps.handleChat(
+    // Bind the async workspace scope (team workspace + team allowed_work_paths).
+    // setWorkspace() alone only sets the root, so team allowed_work_paths were
+    // silently ignored by file tools for dispatched members.
+    const result = await withAdmissionRetry(() => runScopedTeamWorkspace(teamWorkspacePath, allowedWorkPaths, () => deps.handleChat(
       task,
       sessionId,
       (event, data) => broadcastTeamTaskEvent({
@@ -803,7 +813,7 @@ async function runTeamAgentViaChatInternal(
       undefined,
       // Scan only the real task for tool categories, never the dispatch wrapper.
       { toolCategoryDetectionText: extractTeamDispatchTaskText(task) },
-    ));
+    )));
 
     const finalTask = loadTask(cronTask.id);
     const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
