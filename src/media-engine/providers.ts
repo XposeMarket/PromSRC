@@ -163,16 +163,72 @@ export async function toRemoteMedia(ref: string | undefined): Promise<string | u
   return resolved.url;
 }
 
-async function inlineInputs(input: ShotInput): Promise<ShotInput> {
+const FAL_STORAGE_INITIATE = 'https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3';
+const falUploadCache = new Map<string, string>();
+
+/**
+ * fal rejects base64 data URIs for many video/audio fields ("Video URL is invalid"),
+ * so local files are uploaded to fal's CDN and sent as real https URLs.
+ */
+export async function uploadToFalStorage(bytes: Buffer, fileName: string, mime: string): Promise<string> {
+  const key = getProviderKey('fal');
+  if (!key) throw Object.assign(new Error('fal API key is not configured.'), { errorType: 'auth_required' });
+  const init = await fetch(FAL_STORAGE_INITIATE, {
+    method: 'POST',
+    headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ content_type: mime, file_name: fileName }),
+  });
+  const meta = await readJson(init);
+  if (!init.ok || !meta?.upload_url || !meta?.file_url) throw new Error(`fal storage initiate failed (${init.status}): ${JSON.stringify(meta).slice(0, 300)}`);
+  const put = await fetch(meta.upload_url, { method: 'PUT', headers: { 'Content-Type': mime }, body: bytes });
+  if (!put.ok) throw new Error(`fal storage upload failed (${put.status}).`);
+  return String(meta.file_url);
+}
+
+function dataUriParts(uri: string): { mime: string; bytes: Buffer } | undefined {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/is.exec(uri);
+  if (!m) return undefined;
+  return { mime: m[1] || 'application/octet-stream', bytes: m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3])) };
+}
+
+/** Resolve a ref like toRemoteMedia, but host local/data media on fal's CDN. */
+export async function toFalMedia(ref: string | undefined): Promise<string | undefined> {
+  if (!ref) return undefined;
+  if (/^https?:/i.test(ref)) return ref;
+  const cached = falUploadCache.get(ref);
+  if (cached) return cached;
+  let bytes: Buffer | undefined; let mime = 'application/octet-stream'; let name = 'input.bin';
+  if (path.isAbsolute(ref) && fs.existsSync(ref)) {
+    bytes = fs.readFileSync(ref);
+    mime = MIME_BY_EXT[path.extname(ref).toLowerCase()] || mime;
+    name = path.basename(ref);
+  } else {
+    const uri = /^data:/i.test(ref) ? ref : await toRemoteMedia(ref);
+    if (!uri) return undefined;
+    if (/^https?:/i.test(uri)) return uri;
+    const parts = dataUriParts(uri);
+    if (!parts) return uri;
+    bytes = parts.bytes; mime = parts.mime;
+    const ext = Object.entries(MIME_BY_EXT).find(([, m]) => m === mime)?.[0] || '.bin';
+    name = path.basename(ref).replace(/[^\w.-]+/g, '_').slice(0, 80) || `input${ext}`;
+    if (!path.extname(name)) name += ext;
+  }
+  const url = await uploadToFalStorage(bytes, name, mime);
+  falUploadCache.set(ref, url);
+  return url;
+}
+
+async function inlineInputs(input: ShotInput, provider?: string): Promise<ShotInput> {
+  const resolve = provider === 'fal' ? toFalMedia : toRemoteMedia;
   const refs: string[] = [];
-  for (const r of input.referenceImages || []) { const u = await toRemoteMedia(r); if (u) refs.push(u); }
+  for (const r of input.referenceImages || []) { const u = await resolve(r); if (u) refs.push(u); }
   return {
     ...input,
-    startImage: await toRemoteMedia(input.startImage),
-    endImage: await toRemoteMedia(input.endImage),
+    startImage: await resolve(input.startImage),
+    endImage: await resolve(input.endImage),
     referenceImages: input.referenceImages ? refs : undefined,
-    sourceVideo: await toRemoteMedia(input.sourceVideo),
-    audio: await toRemoteMedia(input.audio),
+    sourceVideo: await resolve(input.sourceVideo),
+    audio: await resolve(input.audio),
   };
 }
 
@@ -423,7 +479,7 @@ async function runViaRegistry(model: MediaModelManifest, input: ShotInput, outpu
 // ── public transport API ────────────────────────────────────────────────
 
 export async function submit(model: MediaModelManifest, input: ShotInput, opts: { outputDir: string }): Promise<SubmitResult> {
-  const inlined = await inlineInputs(input);
+  const inlined = await inlineInputs(input, model.provider);
   if (model.provider === 'fal' || model.provider === 'higgsfield') return submitQueue(model, inlined);
   return runViaRegistry(model, inlined, opts.outputDir);
 }
