@@ -2901,6 +2901,9 @@ function clearInHouseSession(sessionId: string): void {
 // driving two accounts never collide. Either side can override via inhouse_profile.
 const inHouseProfilePreferences: Map<string, string> = new Map();
 const inHouseTargetSessions: Set<string> = new Set();
+// Agent sessions that explicitly switched back to a Chrome lane; they must not
+// be pulled onto the in-house default again until they ask for it.
+const inHouseOptOutSessions: Set<string> = new Set();
 
 function normalizeInHouseProfileId(value: unknown): string {
   return String(value ?? '')
@@ -2911,12 +2914,57 @@ function normalizeInHouseProfileId(value: unknown): string {
     .slice(0, 64);
 }
 
+/**
+ * Default in-house profile for agent-owned (non-main) browser sessions.
+ *
+ * Resolution order: the agent's own `browser_profile` setting, then the global
+ * `subagent_browser_profile` setting, then the shared "main" Prometheus
+ * profile. The value "isolated" (or "agent"/"own") gives the agent its own
+ * persistent partition derived from its stable owner identity; any other value
+ * is used as a profile id ("main" = the same logins as main chat).
+ */
+export const SHARED_SUBAGENT_BROWSER_PROFILE = 'main';
+
+function resolveBrowserSessionAgentId(metadata: BrowserSessionMetadata): string {
+  const sid = String(metadata.sessionId || '').trim();
+  if (/^(subagent_chat_|subagent-chat_|subagent_)/i.test(sid)) return String(metadata.ownerId || '').trim();
+  if (metadata.ownerType === 'task') return lookupTaskSummary(String(metadata.ownerId || '')).teamAgentId;
+  return '';
+}
+
+export function resolveAgentBrowserProfileSetting(metadata: BrowserSessionMetadata, cfgOverride?: any): string {
+  let cfg: any = cfgOverride;
+  if (!cfg) {
+    try { cfg = getConfig().getConfig() as any; } catch { cfg = {}; }
+  }
+  const agentId = resolveBrowserSessionAgentId(metadata);
+  let agentSetting = '';
+  if (agentId) {
+    const agents: any[] = Array.isArray(cfg?.agents) ? cfg.agents : [];
+    const agent = agents.find((entry: any) => String(entry?.id || '') === agentId);
+    agentSetting = String(agent?.browser_profile ?? agent?.browserProfile ?? '').trim();
+  }
+  const globalSetting = String(cfg?.subagent_browser_profile ?? cfg?.subagentBrowserProfile ?? '').trim();
+  const raw = (agentSetting || globalSetting || SHARED_SUBAGENT_BROWSER_PROFILE).toLowerCase();
+  if (raw === 'isolated' || raw === 'agent' || raw === 'own' || raw === 'per-agent') return 'isolated';
+  return normalizeInHouseProfileId(raw) || SHARED_SUBAGENT_BROWSER_PROFILE;
+}
+
+/** Agent-owned sessions that default onto the in-house lane (verifiers/scrapers stay on Playwright). */
+function isAgentOwnedBrowserSession(metadata: BrowserSessionMetadata): boolean {
+  return metadata.ownerType === 'background' || metadata.ownerType === 'task' || metadata.ownerType === 'team-agent';
+}
+
 function resolveInHouseProfileId(sessionId: string): string {
   const resolved = resolveSessionId(sessionId);
   const explicit = inHouseProfilePreferences.get(resolved);
   if (explicit) return explicit;
   const metadata = getBrowserSessionMetadata(resolved);
   if (metadata.ownerType === 'main') return 'main';
+  if (isAgentOwnedBrowserSession(metadata)) {
+    const setting = resolveAgentBrowserProfileSetting(metadata);
+    if (setting !== 'isolated') return setting;
+  }
   const ownerId = normalizeInHouseProfileId(metadata.ownerId || resolved) || normalizeInHouseProfileId(resolved) || 'agent';
   return `${metadata.ownerType}-${ownerId}`;
 }
@@ -2925,7 +2973,12 @@ function shouldUseInHouseBrowser(sessionId: string): boolean {
   const resolved = resolveSessionId(sessionId);
   const metadata = getBrowserSessionMetadata(resolved);
   if (metadata.ownerType === 'main') return getMainBrowserTarget(resolved) === 'inhouse';
-  return inHouseTargetSessions.has(resolved);
+  if (inHouseTargetSessions.has(resolved)) return true;
+  // Subagents/tasks/team agents use the in-app browser by default on desktop so
+  // they share logins with main chat and show up in the browser panel. They can
+  // still opt out per session with browser_open(target="prometheus").
+  if (inHouseOptOutSessions.has(resolved)) return false;
+  return isAgentOwnedBrowserSession(metadata) && isInHouseBrowserAvailable();
 }
 
 /**
@@ -5895,10 +5948,12 @@ export async function browserOpen(
         return 'ERROR: Prometheus in-house browser is only available in the Electron desktop app. Use the regular Prometheus Chrome profile instead.';
       }
       if (requestedInHouseProfile) inHouseProfilePreferences.set(resolvedSessionId, requestedInHouseProfile);
+      inHouseOptOutSessions.delete(resolvedSessionId);
       inHouseTargetSessions.add(resolvedSessionId);
     } else if (requestedTargetKind) {
       // Switching a subagent back off the in-house lane (prometheus / user_chrome).
       inHouseTargetSessions.delete(resolvedSessionId);
+      inHouseOptOutSessions.add(resolvedSessionId);
       if (getInHouseSession(resolvedSessionId)) {
         clearInHouseSession(resolvedSessionId);
         await callInHouseBrowser('hide', { sessionId: resolvedSessionId }).catch(() => {});

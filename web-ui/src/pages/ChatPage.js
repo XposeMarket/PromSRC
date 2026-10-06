@@ -2238,7 +2238,7 @@ function restoreBrowserTeachSessionState(saved) {
 }
 
 function syncBrowserTeachSessionToBackend() {
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
   const teach = snapshotBrowserTeachSession(getBrowserTeachSession());
@@ -3094,8 +3094,18 @@ function getCurrentChatModeSessionId() {
   return String(window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
+function getActiveSubagentChatBrowserSessionId() {
+  // While a subagent chat is open, its browser lane is the "primary" one: the
+  // browser panel, stream, controls, and Sources panel all bind to that agent's
+  // session (subagent_chat_<agentId>) instead of the last main chat.
+  if (String(window.currentMode || '').trim() !== 'subagents') return '';
+  const context = window.__prometheusSourcePanelContext;
+  if (!context || context.surface !== SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return '';
+  return String(context.sessionId || '').trim();
+}
+
 function getBrowserCanvasPrimarySessionId() {
-  return String(window.activeChatSessionId || window.agentSessionId || getBrowserCanvasState().sessionId || '').trim();
+  return String(getActiveSubagentChatBrowserSessionId() || window.activeChatSessionId || window.agentSessionId || getBrowserCanvasState().sessionId || '').trim();
 }
 
 function getBrowserSessionRegistry(state = getBrowserCanvasState()) {
@@ -3987,7 +3997,7 @@ function normalizeBrowserAddressInput(value) {
 }
 
 function getDirectBrowserSessionId(state = getBrowserCanvasState()) {
-  return String(window.activeChatSessionId || window.agentSessionId || state.sessionId || 'default').trim() || 'default';
+  return String(getActiveSubagentChatBrowserSessionId() || window.activeChatSessionId || window.agentSessionId || state.sessionId || 'default').trim() || 'default';
 }
 
 async function openDirectNativeBrowserSurface(options = {}) {
@@ -4010,10 +4020,11 @@ async function openDirectNativeBrowserSurface(options = {}) {
   state.loading = false;
   state.lastError = '';
   state.statusLabel = requestedUrl === 'about:blank' ? 'New tab ready. Enter a URL to browse.' : 'Browser ready.';
+  const directSubagentSession = /^subagent_chat_/i.test(sessionId);
   upsertBrowserSessionRecord({
     sessionId,
-    browserOwnerType: 'main',
-    browserLabel: 'Main Agent',
+    browserOwnerType: directSubagentSession ? 'background' : 'main',
+    browserLabel: directSubagentSession ? 'Subagent' : 'Main Agent',
     active: true,
     url: requestedUrl,
     title: state.title,
@@ -5303,7 +5314,7 @@ function inspectBrowserCanvasPoint(event) {
   if (!point) return;
   const viewportX = point.x;
   const viewportY = point.y;
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) {
     showToast('Browser connection is reconnecting. Try again in a second.', 'info');
@@ -6209,7 +6220,7 @@ function saveSelectedBrowserMemory(kind = 'element') {
     showToast(`Give the ${label} a name first.`, 'info');
     return;
   }
-  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const sessionId = getBrowserCanvasPrimarySessionId();
   if (!sessionId) {
     showToast('No active browser session is linked to this chat yet.', 'info');
     return;
@@ -19442,6 +19453,18 @@ function resetSourcePanelContextState() {
 function setSourcePanelChatContext(input = {}, options = {}) {
   const next = normalizeSourcePanelContext(input);
   const changed = sourcePanelState.contextKey !== next.key;
+  const previousSurface = sourcePanelState.surface;
+  if (changed && (previousSurface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT || next.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT)) {
+    // Entering/leaving/switching a subagent chat: rebind the browser canvas to
+    // the newly primary session once the context below is published.
+    queueMicrotask(() => {
+      try {
+        if (typeof returnBrowserCanvasToPrimarySession === 'function') {
+          returnBrowserCanvasToPrimarySession({ force: true });
+        }
+      } catch {}
+    });
+  }
   window.__prometheusSourcePanelContext = next;
   sourcePanelState.surface = next.surface;
   sourcePanelState.contextSessionId = next.sessionId;
@@ -20123,7 +20146,9 @@ function sourcePanelData(sessionId = sourcePanelActiveSessionId()) {
   const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: isSubagentChat ? [] : sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
   data.processes = isSubagentChat ? [] : sourcePanelProcessItems(sessionId);
   data.environment = isSubagentChat ? [] : sourcePanelEnvironmentItems(data);
-  data.browserItems = isSubagentChat ? [] : sourcePanelBrowserItems(sessionId);
+  // Subagent chats get the same Browser section as main chat, scoped to the
+  // subagent's own browser session.
+  data.browserItems = sourcePanelBrowserItems(sessionId);
   return data;
 }
 
