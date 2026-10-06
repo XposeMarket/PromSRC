@@ -25,6 +25,51 @@ import {
 const STYLE_ID = 'prom-vp-card-style';
 const CARD_SEL = '.prom-vp-card[data-vp-project]:not([data-vp-mounted])';
 const cache = new Map(); // projectId -> { project, history, at }
+const subscribers = new Map(); // projectId -> { cards, timer, request }
+const visibilityObserver = typeof IntersectionObserver === 'function'
+  ? new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const card = entry.target.__vpCard;
+      if (!card) continue;
+      card.visible = entry.isIntersecting;
+      if (card.visible && !card.loaded) { card.loaded = true; void refreshProject(card.id); }
+      else if (card.visible && !card.wasVisible) { void refreshProject(card.id); }
+      else scheduleProject(card.id);
+      card.wasVisible = card.visible;
+    }
+  }, { rootMargin: '120px' }) : null;
+
+function scheduleProject(id) {
+  const group = subscribers.get(id);
+  if (!group) return;
+  clearTimeout(group.timer);
+  for (const card of group.cards) {
+    if (!card.el.isConnected) {
+      group.cards.delete(card);
+      visibilityObserver?.unobserve(card.el);
+      delete card.el.__vpCard;
+    }
+  }
+  if (!group.cards.size) { subscribers.delete(id); return; }
+  const active = (cache.get(id)?.project?.jobs || []).some((j) => j.state === 'queued' || j.state === 'running');
+  if (active && [...group.cards].some((card) => card.visible)) {
+    group.timer = setTimeout(() => { void refreshProject(id); }, 3500);
+  }
+}
+
+async function refreshProject(id) {
+  const group = subscribers.get(id);
+  if (!group) return;
+  if (group.request) return group.request;
+  group.request = vpFetch(`/${encodeURIComponent(id)}`)
+    .then((res) => {
+      if (res.project) cache.set(id, { project: res.project, history: res.history, at: Date.now() });
+      for (const card of group.cards) void card.update(res);
+    })
+    .catch((error) => { for (const card of group.cards) void card.update(null, error); })
+    .finally(() => { group.request = null; scheduleProject(id); });
+  return group.request;
+}
 
 const I = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${d}</svg>`;
 const ICON = {
@@ -60,6 +105,18 @@ function mediaUrl(rel) {
   if (typeof resolver === 'function') {
     try { const u = resolver(p); if (u) return String(u); } catch { /* fall through */ }
   }
+  // Card hydration can precede the mobile API shim. Media elements cannot set
+  // the X-Pairing-Token header, so always carry the mobile grant in the URL.
+  if (typeof window !== 'undefined' && document.body?.classList?.contains('pm-mobile-active')) {
+    const base = String(window.__pmMobileActiveGatewayOrigin || window.location?.origin || '').replace(/\/+$/, '');
+    let token = String(window.__pmMobileActiveGatewayToken || '').trim();
+    if (!token && base === String(window.location?.origin || '')) {
+      try { token = String(localStorage.getItem('pm_device_token') || '').trim(); } catch { /* private mode */ }
+    }
+    const qs = new URLSearchParams({ path: p });
+    if (token) qs.set('pt', token);
+    return `${base}/api/canvas/inline?${qs}`;
+  }
   return `/api/canvas/inline?path=${encodeURIComponent(p)}`;
 }
 
@@ -94,7 +151,7 @@ function thumb(rel, cls = 'vpc-thumb') {
   const url = esc(mediaUrl(rel));
   return isVideo(rel)
     ? `<video class="${cls}" src="${url}#t=0.1" muted playsinline preload="metadata"></video>`
-    : `<img class="${cls}" src="${url}" alt="" loading="lazy" decoding="async">`;
+    : `<img class="${cls}" src="${url}" alt="" loading="eager" decoding="async">`;
 }
 
 function iconBtn(action, icon, label, attrs = '', extraCls = '') {
@@ -112,8 +169,19 @@ function mountCard(el) {
     actPending: null, models: [], aspects: new Set(), toast: '',
   };
   const h = { esc, usd, isVideo, mediaUrl, thumb, iconBtn, vpFetch };
-  let timer = null;
   const alive = () => el.isConnected;
+  const card = { el, id, visible: !visibilityObserver, wasVisible: !visibilityObserver, loaded: !visibilityObserver,
+    update: async (res, error) => {
+      if (!alive()) return;
+      if (res) remember(res);
+      st.error = error ? String(error?.message || error) : '';
+      if (card.visible) { await maybeEstimate(); paint(); }
+    } };
+  const group = subscribers.get(id) || { cards: new Set(), timer: null, request: null };
+  group.cards.add(card);
+  subscribers.set(id, group);
+  el.__vpCard = card;
+  visibilityObserver?.observe(el);
 
   function remember(res) {
     if (res?.project) st.project = res.project;
@@ -123,11 +191,7 @@ function mountCard(el) {
 
   async function load() {
     if (!alive()) return;
-    try { remember(await vpFetch(`/${encodeURIComponent(id)}`)); st.error = ''; }
-    catch (e) { st.error = String(e?.message || e); }
-    await maybeEstimate();
-    paint();
-    schedule();
+    await refreshProject(id);
   }
 
   function running() {
@@ -135,9 +199,7 @@ function mountCard(el) {
   }
 
   function schedule() {
-    clearTimeout(timer);
-    if (!alive()) return;
-    if (running().length || st.rendering) timer = setTimeout(load, 3500);
+    scheduleProject(id);
   }
 
   function shotsToGenerate() {
@@ -282,7 +344,7 @@ function mountCard(el) {
         <div class="vpc-take${tk.id === t?.id ? ' is-selected' : ''}">
           ${isVideo(tk.path)
             ? `<video src="${esc(mediaUrl(tk.path))}#t=0.1" controls playsinline preload="metadata"></video>`
-            : `<img src="${esc(mediaUrl(tk.path))}" alt="" loading="lazy">`}
+            : `<img src="${esc(mediaUrl(tk.path))}" alt="" loading="eager">`}
           <div class="vpc-row">
             ${qaChip(tk, h)}<span class="vpc-muted">${esc(shortModel(tk.modelId))} · ${usd(tk.costUsd)}</span>
             <span class="vpc-grow"></span>
@@ -378,7 +440,13 @@ function mountCard(el) {
       return;
     }
     const b = p.budget || {};
-    el.innerHTML = `<div class="vpc">
+    const scroller = document.body?.classList?.contains('pm-mobile-document-scroll')
+      ? (document.scrollingElement || document.documentElement)
+      : el.closest('.pm-chat-body');
+    const viewportTop = scroller?.getBoundingClientRect?.().top || 0;
+    const beforeRect = el.getBoundingClientRect?.();
+    const oldTop = scroller?.scrollTop;
+    const html = `<div class="vpc">
       <div class="vpc-head">
         <div class="vpc-headtext">
           <span class="vpc-kicker">${ICON.film}Video project · ${esc(p.target?.aspect || '')}</span>
@@ -404,6 +472,37 @@ function mountCard(el) {
       ${autopilotSection(p, st, h)}
       ${exportsSection(p, st, h)}
     </div>`;
+    // Patch only sections whose markup changed. Keep unchanged media nodes alive
+    // (especially playing video) and preserve horizontal strip scroll positions.
+    const current = el.querySelector(':scope > .vpc');
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const next = template.content.firstElementChild;
+    if (!current) el.replaceChildren(next);
+    else {
+      const oldParts = [...current.children];
+      const newParts = [...next.children];
+      const key = (node) => `${node.tagName}:${node.className?.replace?.(/ is-[\w-]+/g, '') || ''}:${node.querySelector?.('h4')?.textContent || ''}`;
+      for (let i = 0; i < newParts.length; i++) {
+        const fresh = newParts[i];
+        const old = oldParts.find((part) => key(part) === key(fresh) && !part.__vpMatched);
+        if (!old) current.insertBefore(fresh, current.children[i] || null);
+        else {
+          old.__vpMatched = true;
+          if (old.outerHTML !== fresh.outerHTML) {
+            fresh.querySelectorAll?.('.vpc-strip').forEach((strip, n) => {
+              strip.scrollLeft = old.querySelectorAll?.('.vpc-strip')[n]?.scrollLeft || 0;
+            });
+            old.replaceWith(fresh);
+          } else if (current.children[i] !== old) current.insertBefore(old, current.children[i] || null);
+        }
+      }
+      oldParts.forEach((node) => { if (!node.__vpMatched) node.remove(); delete node.__vpMatched; });
+    }
+    if (scroller && beforeRect && oldTop != null && beforeRect.bottom < viewportTop) {
+      const delta = el.getBoundingClientRect().bottom - beforeRect.bottom;
+      if (delta) scroller.scrollTop = oldTop + delta;
+    }
   }
 
   // ── events ────────────────────────────────────────────────────────────
@@ -465,7 +564,7 @@ function mountCard(el) {
   paint();
   const fresh = cached && Date.now() - cached.at < 3000;
   if (fresh) { void maybeEstimate().then(() => { paint(); schedule(); }); }
-  else void load();
+  else if (card.visible) void load();
 }
 
 let observer = null;
@@ -549,7 +648,7 @@ const CARD_CSS = `
 .prom-vp-card .vpc-takes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px}
 .prom-vp-card .vpc-take{border:1px solid var(--vpc-line);border-radius:9px;overflow:hidden;padding-bottom:2px}
 .prom-vp-card .vpc-take.is-selected{border-color:var(--vpc-accent)}
-.prom-vp-card .vpc-take video,.prom-vp-card .vpc-take img{display:block;width:100%;max-height:220px;background:#000;object-fit:contain}
+.prom-vp-card .vpc-take video,.prom-vp-card .vpc-take img{display:block;width:100%;aspect-ratio:9/16;max-height:220px;background:var(--vpc-soft);object-fit:contain}
 .prom-vp-card .vpc-take .vpc-row{padding:4px 6px 2px}
 .prom-vp-card .vpc-inuse{display:inline-flex;gap:4px;align-items:center;font-size:12px;color:var(--vpc-accent)}
 .prom-vp-card .vpc-inuse svg{width:13px;height:13px}
@@ -565,7 +664,7 @@ const CARD_CSS = `
 .prom-vp-card .vpc-err{margin:0;padding:8px 12px;color:var(--prom-danger,#e5484d);font-size:12px;border-bottom:1px solid var(--vpc-line)}
 .prom-vp-card .vpc-busy,.prom-vp-card .vpc-jobs{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--vpc-muted)}
 .prom-vp-card .vpc-busy{padding:6px 12px;border-bottom:1px solid var(--vpc-line)}
-.prom-vp-card .vpc-final video{display:block;width:100%;max-height:420px;border-radius:10px;background:#000}
+.prom-vp-card .vpc-final video{display:block;width:100%;aspect-ratio:16/9;max-height:420px;border-radius:10px;background:var(--vpc-soft)}
 .prom-vp-card .vpc-final .vpc-row{margin-top:6px}
 .prom-vp-card .vpc-spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--vpc-line);border-top-color:var(--vpc-accent);animation:vpc-spin .8s linear infinite;flex:none}
 @keyframes vpc-spin{to{transform:rotate(360deg)}}
