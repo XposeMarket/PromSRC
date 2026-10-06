@@ -7775,7 +7775,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       case 'manage_team_goal': {
         const teamId = String(args?.team_id || '').trim();
         const actionRaw = String(args?.action || '').trim().toLowerCase();
-        const action = actionRaw === 'update_focus' ? 'set_focus' : actionRaw;
+        const action = require('./capabilities/team-agent-executor').normalizeTeamGoalAction(actionRaw);
         if (!teamId || !action) return { name, args, result: 'ERROR: manage_team_goal requires team_id and action', error: true };
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
@@ -16733,8 +16733,19 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             if (removeIds.length) team.subagentIds = team.subagentIds.filter((id: string) => !removeIds.includes(id));
             if (addIds.length) changed.push('add_subagent_ids');
             if (removeIds.length) changed.push('remove_subagent_ids');
+            // A new goal must replace the stale run focus, otherwise the manager keeps
+            // reviewing the previous (finished) objective and reports "nothing to do".
+            const explicitFocus = String(args.focus ?? args.goal ?? args.current_focus ?? '').trim();
+            const goalChanged = changed.includes('purpose') || changed.includes('team_context') || !!explicitFocus;
+            if (goalChanged) {
+              const newFocus = (explicitFocus || String(team.purpose || team.teamContext || '')).slice(0, 1000);
+              team.currentFocus = newFocus;
+              team.roomState = team.roomState || {};
+              team.roomState.runGoal = newFocus;
+              if (explicitFocus) changed.push('focus');
+            }
             if (!changed.length) {
-              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, add_subagent_ids, remove_subagent_ids.', error: true };
+              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, focus/goal, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, add_subagent_ids, remove_subagent_ids.', error: true };
             }
             team.updatedAt = Date.now();
             saveManagedTeam(team);
@@ -16742,7 +16753,19 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               try { claimAgentForTeamWorkspace(team.id, id); } catch { /* identity claim is best-effort */ }
             }
             deps.broadcastTeamEvent({ type: 'team_updated', teamId: team.id, teamName: team.name, changed });
-            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [] }, null, 2), error: false };
+            // New goal => wake the manager so the team starts on it without a manual nudge.
+            // Pass wake:false to stage a goal without starting work.
+            let managerWoken = false;
+            if (goalChanged && args.wake !== false && team.manager?.paused !== true) {
+              try {
+                const { scheduleTeamManagerAutoWake } = require('../teams/team-manager-autowake');
+                managerWoken = scheduleTeamManagerAutoWake(
+                  team.id,
+                  `NEW TEAM GOAL set by main agent (previous objective is closed; do not re-review it): ${String(team.currentFocus || '').slice(0, 700)}. Plan the work and dispatch members now.`,
+                ) === true;
+              } catch { /* wake is best-effort */ }
+            }
+            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, currentFocus: team.currentFocus || '', manager_woken: managerWoken, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [] }, null, 2), error: false };
           }
 
           if (action === 'trigger_review') {

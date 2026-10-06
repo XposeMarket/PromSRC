@@ -175,10 +175,14 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
           `[YOUR WORKING DIRECTORY]`,
           `${teamWorkspacePath}`,
           ``,
-          `This is the team workspace for "${team?.name || teamId}". Write ALL task outputs and shared`,
-          `files here. Do NOT write to your own agent workspace or any other path.`,
-          `Allowed work paths for reading/building/reference:`,
+          `This is the team workspace for "${team?.name || teamId}". By default write task outputs and shared`,
+          `files here. Do NOT write to your own agent workspace.`,
+          `Allowed work paths (readable AND writable):`,
           ...allowedWorkPaths.map((p) => `  - ${p}`),
+          ...(allowedWorkPaths.some((p) => path.resolve(p) !== path.resolve(teamWorkspacePath))
+            ? [`  -> If the team purpose or your task names a directory inside one of these allowed paths`,
+               `     (e.g. a project folder), write there instead of the team workspace.`]
+            : []),
           `  -> Check existing files here before creating new ones.`,
           `  -> Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')

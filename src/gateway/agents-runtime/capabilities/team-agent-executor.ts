@@ -279,6 +279,25 @@ function buildMainAgentMembersRespondedPrompt(
   ].join('\n');
 }
 
+/** Aliases agents naturally reach for (e.g. "log_completion") -> canonical manage_team_goal actions. */
+export function normalizeTeamGoalAction(raw: string): string {
+  const a = String(raw || '').trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    update_focus: 'set_focus',
+    focus: 'set_focus',
+    set_goal: 'set_focus',
+    update_mission: 'set_mission',
+    mission: 'set_mission',
+    log_completion: 'log_completed',
+    log_complete: 'log_completed',
+    log_completed_work: 'log_completed',
+    complete: 'log_completed',
+    completed: 'log_completed',
+    milestone: 'add_milestone',
+  };
+  return aliases[a] || a;
+}
+
 export const teamAgentCapabilityExecutor: CapabilityExecutor = {
   id: 'team-agent',
 
@@ -599,8 +618,22 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         if (!message) return { name, args, result: 'ERROR: message is required', error: true };
         try {
           const noteContext = inferTeamNoteContext(sessionId);
+          if (noteContext?.authorType === 'manager' && noteContext.teamId) {
+            // The manager has no manager above it: route "talk to manager" to the
+            // main agent instead of erroring (Gauntlet v2 friction).
+            return teamAgentCapabilityExecutor.execute({
+              ...ctx,
+              name: 'message_main_agent',
+              args: {
+                team_id: noteContext.teamId,
+                message,
+                wait_for_reply: waitForReply,
+                message_type: waitForReply ? 'planning' : 'status',
+              },
+            });
+          }
           if (!noteContext || noteContext.authorType !== 'subagent') {
-            return { name, args, result: 'ERROR: talk_to_manager only works inside a team subagent session. Could not identify team.', error: true };
+            return { name, args, result: 'ERROR: talk_to_manager only works inside a team session. Could not identify team.', error: true };
           }
           const team = getManagedTeam(noteContext.teamId);
           const fromAgentId = noteContext.authorId;
@@ -1522,7 +1555,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
       case 'manage_team_goal': {
         const teamId = String(args?.team_id || '').trim();
         const actionRaw = String(args?.action || '').trim().toLowerCase();
-        const action = actionRaw === 'update_focus' ? 'set_focus' : actionRaw;
+        const action = normalizeTeamGoalAction(actionRaw);
         if (!teamId || !action) return { name, args, result: 'ERROR: manage_team_goal requires team_id and action', error: true };
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
