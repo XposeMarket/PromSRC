@@ -3046,14 +3046,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     return bodyEl;
   }
   
-  function _mobileChatScrollSnapshot(bodyEl, threshold = 72) {
-    const scrollTarget = _mobileChatScrollTarget(bodyEl);
-    if (!scrollTarget) return { nearBottom: true, distanceFromBottom: 0 };
-    const distanceFromBottom = Math.max(0, scrollTarget.scrollHeight - scrollTarget.scrollTop - scrollTarget.clientHeight);
-    return {
-      nearBottom: distanceFromBottom <= threshold,
-      distanceFromBottom,
-    };
+  function _mobileChatScrollSnapshot(bodyEl, threshold=8) {
+    const s = _mobileChatScrollTarget(bodyEl);
+    if(!s)return {nearBottom:true};
+    const gap = s.scrollHeight - s.scrollTop - s.clientHeight;
+    const anchor = [...bodyEl.querySelectorAll('[data-msg-index]')].find(
+      (n) => n.getBoundingClientRect().bottom > s.getBoundingClientRect().top);
+    return { nearBottom: gap <= threshold, gap, anchor, top: anchor?.getBoundingClientRect().top };
   }
   
   function _withMobileInstantScroll(bodyEl, fn) {
@@ -3074,13 +3073,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     const scrollTarget = _mobileChatScrollTarget(bodyEl);
     if (!scrollTarget) return;
     const snap = snapshot || _mobileChatScrollSnapshot(bodyEl);
-    const followBottom = forceBottom || snap.nearBottom;
     const apply = () => {
-      if (followBottom) {
+      if (forceBottom || snap.nearBottom) {
+        if (!forceBottom && scrollTarget.scrollHeight - scrollTarget.scrollTop
+            - scrollTarget.clientHeight > (snap.gap || 0) + 72) return;
         scrollTarget.scrollTop = scrollTarget.scrollHeight;
-      } else {
-        const nextTop = scrollTarget.scrollHeight - scrollTarget.clientHeight - Number(snap.distanceFromBottom || 0);
-        scrollTarget.scrollTop = Math.max(0, nextTop);
+      } else if (snap.anchor?.isConnected) {
+        scrollTarget.scrollTop += snap.anchor.getBoundingClientRect().top - snap.top;
       }
     };
     _withMobileInstantScroll(bodyEl, apply);

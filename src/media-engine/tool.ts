@@ -211,7 +211,12 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'delete':
       return { deleted: deleteProject(ws, need(args.projectId, 'projectId')) };
     case 'apply_ops': {
-      const { project, summaries } = await applyOps(ws, need(args.projectId, 'projectId'), args.ops, 'agent');
+      let ops = args.ops;
+      if (typeof ops === 'string') {
+        try { ops = JSON.parse(ops); }
+        catch { throw new Error('ops must be a non-empty array (or a JSON-encoded array).'); }
+      }
+      const { project, summaries } = await applyOps(ws, need(args.projectId, 'projectId'), ops, 'agent');
       return { applied: summaries, project: brief(project, ws) };
     }
     case 'undo':

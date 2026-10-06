@@ -167,7 +167,7 @@ const ASPECTS = ['9:16', '1:1', '16:9'];
 // ── thumbnails (bug fix: never show the anchor while a take exists) ────
 export function shotThumb(s, t, p, h) {
   const cls = 'vpc-thumb';
-  if (t?.poster) return `<img class="${cls}" src="${h.esc(h.mediaUrl(t.poster))}" alt="" loading="lazy" decoding="async">`;
+  if (t?.poster) return `<img class="${cls}" src="${h.esc(h.mediaUrl(t.poster))}" alt="" loading="eager" decoding="async">`;
   if (t?.path && h.isVideo(t.path)) return `<video class="${cls}" src="${h.esc(h.mediaUrl(t.path))}#t=0.1" muted playsinline preload="metadata"></video>`;
   if (t?.path) return h.thumb(t.path, cls);
   if (s?.storyboard) return h.thumb(s.storyboard, cls);
@@ -537,7 +537,7 @@ export const V2_CSS = `
 .prom-vp-card .vpc-steps .is-skipped{color:var(--vpc-muted)}
 .prom-vp-card .vpc-exports{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px}
 .prom-vp-card .vpc-export{border:1px solid var(--vpc-line);border-radius:9px;overflow:hidden}
-.prom-vp-card .vpc-export video{display:block;width:100%;max-height:260px;background:#000}
+.prom-vp-card .vpc-export video{display:block;width:100%;aspect-ratio:16/9;max-height:260px;background:var(--vpc-soft)}
 .prom-vp-card .vpc-export .vpc-row{padding:2px 6px}
 .prom-vp-card .vpc-toast{padding:6px 12px;font-size:12px;color:var(--vpc-accent);border-bottom:1px solid var(--vpc-line)}
 .prom-vp-card .vpc-ptools{display:inline-flex;flex-wrap:wrap;gap:2px}

@@ -8,7 +8,6 @@
  *   import { escHtml, timeAgo, showToast, renderMd } from './utils.js';
  */
 
-import { installVideoProjectCards } from './components/video-project-card.js';
 import { installGameProjectCards } from './components/game-project-card.js';
 import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
 export { withoutInlineCards };
@@ -1240,7 +1239,23 @@ window.escHtml = escHtml;
 window.escapeHtml = escHtml;
 window.sanitizeHtml = sanitizeHtml;
 window.renderMd = renderMd;
-installVideoProjectCards();
+// Video projects are rare in chat. Keep their editor out of mobile's initial
+// render bundle; hydrate on demand and let the card's observer handle updates.
+if (typeof document !== 'undefined') {
+  let videoCardLoading = false;
+  const loadVideoCards = () => {
+    if (videoCardLoading || !document.querySelector('.prom-vp-card')) return;
+    videoCardLoading = true;
+    import('./components/video-project-card.js').then(({ installVideoProjectCards }) => {
+      installVideoProjectCards();
+      videoCardObserver?.disconnect();
+    }).catch(() => { videoCardLoading = false; });
+  };
+  const videoCardObserver = typeof MutationObserver === 'function'
+    ? new MutationObserver(loadVideoCards) : null;
+  videoCardObserver?.observe(document.documentElement, { childList: true, subtree: true });
+  loadVideoCards();
+}
 installGameProjectCards();
 installPromCards();
 window.renderPromDataCard = renderDataCard;
