@@ -63,6 +63,23 @@ async function bootWithAuth() {
     unlockApp();
     return;
   }
+
+  // Accounts are optional (Prometheus is free). Ask the gateway whether the
+  // account gate is enabled; when it isn't, skip the login screen entirely.
+  // The full login path below is kept for PROMETHEUS_REQUIRE_ACCOUNT=1.
+  // On a cold first start the gateway may still be booting; keep asking for
+  // a while instead of flashing a login screen at a brand-new user.
+  let gate = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    gate = await checkSessionDetailed({ timeoutMs: 4000 }).catch(() => null);
+    if (gate && gate.status !== 0 && gate.reason !== 'status_unreachable') break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (gate?.authenticated && gate?.accountRequired === false) {
+    finishLocalBoot(gate.account);
+    return;
+  }
+
   const persistedAccount = getPersistedAccount();
   if (persistedAccount?.subscriptionActive || persistedAccount?.isAdmin) {
     finishAuthenticatedBoot(persistedAccount);
@@ -117,11 +134,26 @@ function startAccountMonitor() {
   }, ACCOUNT_MONITOR_INTERVAL_MS);
 }
 
+function requestOnboardingCheck() {
+  if (window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled) return;
+  // app.js may still be loading; it picks the flag up when it initializes.
+  window.__promOnboardingBootRequested = true;
+  if (typeof window.startPrometheusOnboardingOnBoot === 'function') window.startPrometheusOnboardingOnBoot();
+}
+
+function finishLocalBoot(account) {
+  document.body.classList.add('prom-local-mode');
+  updateAccountDisplay(account?.email ? account : { email: 'Not signed in (local mode)' });
+  unlockApp();
+  requestOnboardingCheck();
+}
+
 function finishAuthenticatedBoot(account) {
   updateAccountDisplay(account);
   unlockApp();
   if (window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled) return;
   startAccountMonitor();
+  requestOnboardingCheck();
 }
 
 bootWithAuth().catch((error) => {
