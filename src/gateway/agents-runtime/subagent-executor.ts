@@ -18701,7 +18701,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
           const noteWrite = require('../memory/intraday-notes').appendIntradayNote(workspacePath, {
             tag: noteTag, content: noteContent, sourceLine, taskId: noteTaskId,
-            status: args.status, resolves: args.resolves,
+            status: args.status, resolves: args.resolves, thread: args.thread,
           });
           noteWriteResult = noteWrite;
           try { require('../memory-index/recall-index').markRecallDirty(workspacePath, noteWrite.file, 500); } catch { /* best-effort */ }

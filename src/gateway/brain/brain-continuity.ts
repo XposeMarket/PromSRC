@@ -350,7 +350,44 @@ function atomicWrite(file: string, content: string): void {
   fs.renameSync(tmp, file);
 }
 
+export function carryForwardFileForDate(workspacePath: string, date: string): string {
+  return path.join(workspacePath, 'Brain', 'carry-forward', `${date}.md`);
+}
+
+/** Prompt read of the Brain carry-forward for a date (empty when none). */
+export function readCarryForwardForPrompt(workspacePath: string, date: string, maxChars = 3_000): string {
+  try {
+    const file = carryForwardFileForDate(workspacePath, date);
+    if (!fs.existsSync(file)) return '';
+    const raw = fs.readFileSync(file, 'utf-8').trim();
+    return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[carry-forward context truncated for prompt budget]` : raw;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Write the Brain carry-forward to Brain/carry-forward/<date>.md. It no longer
+ * goes into Raul's intraday notes file (it was ~19% of note bytes and buried
+ * real progress). Any legacy block already in the notes file is removed.
+ * Returns the carry-forward file path.
+ */
 export function applyCarryForwardToIntradayFile(workspacePath: string, decision: BrainCarryForwardDecisionFile): string {
+  const carryPath = carryForwardFileForDate(workspacePath, decision.targetDate);
+  atomicWrite(carryPath, `${renderCarryForwardSection(decision)}\n`);
+  const notesPath = path.join(workspacePath, 'memory', `${decision.targetDate}-intraday-notes.md`);
+  if (!fs.existsSync(notesPath)) return carryPath;
+  const existing = fs.readFileSync(notesPath, 'utf-8');
+  const start = existing.indexOf(CARRY_START);
+  const end = existing.indexOf(CARRY_END);
+  if (start >= 0 && end >= start) {
+    atomicWrite(notesPath, `${existing.slice(0, start)}${existing.slice(end + CARRY_END.length)}`.replace(/\n{3,}/g, '\n\n'));
+  }
+  return carryPath;
+}
+
+/** @deprecated legacy layout (carry-forward embedded in the notes file); kept for migrations/tests. */
+export function applyCarryForwardInsideNotesFileLegacy(workspacePath: string, decision: BrainCarryForwardDecisionFile): string {
   const notesPath = path.join(workspacePath, 'memory', `${decision.targetDate}-intraday-notes.md`);
   const existing = fs.existsSync(notesPath) ? fs.readFileSync(notesPath, 'utf-8') : '';
   const generated = renderCarryForwardSection(decision);

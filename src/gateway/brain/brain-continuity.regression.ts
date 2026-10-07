@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 import {
   applyCarryForwardToIntradayFile,
+  carryForwardFileForDate,
+  readCarryForwardForPrompt,
   buildBrainCapsuleContext,
   buildBrainCapsuleContextDetails,
   loadActiveBrainThoughtCapsules,
@@ -143,24 +145,29 @@ const decision = parseBrainCarryForwardDecision(JSON.stringify({
 assert.ok(decision);
 const notePath = path.join(root, 'memory', '2026-07-19-intraday-notes.md');
 fs.mkdirSync(path.dirname(notePath), { recursive: true });
-fs.writeFileSync(notePath, '### [TASK] 2026-07-19T00:05:00.000Z\nA live note that must survive.\n', 'utf-8');
-applyCarryForwardToIntradayFile(root, decision!);
+// Legacy embedded block in the notes file must be stripped; carry-forward now
+// lives in Brain/carry-forward/<date>.md and never in Raul's notes.
+fs.writeFileSync(notePath, '<!-- BRAIN_CARRY_FORWARD_START -->\nold block\n<!-- BRAIN_CARRY_FORWARD_END -->\n\n### [TASK] 2026-07-19T00:05:00.000Z\nA live note that must survive.\n', 'utf-8');
+const carryPath = applyCarryForwardToIntradayFile(root, decision!);
+assert.equal(carryPath, carryForwardFileForDate(root, '2026-07-19'));
+let carry = fs.readFileSync(carryPath, 'utf-8');
+assert.match(carry, /note when\/if any item below changes/);
+assert.match(carry, /Galaxy Drift controls/);
 let note = fs.readFileSync(notePath, 'utf-8');
-assert.match(note, /note when\/if any item below changes/);
-assert.match(note, /Galaxy Drift controls/);
 assert.match(note, /A live note that must survive/);
-assert.equal((note.match(/BRAIN_CARRY_FORWARD_START/g) || []).length, 1);
+assert.doesNotMatch(note, /BRAIN_CARRY_FORWARD_START|old block|Galaxy Drift/);
+const injectedCarry = readCarryForwardForPrompt(root, '2026-07-19');
+assert.match(injectedCarry, /Galaxy Drift controls/);
 const injectedNotes = processIntradayNotes(note, 12, 250, 10_000);
-assert.match(injectedNotes, /Galaxy Drift controls/);
 assert.match(injectedNotes, /A live note that must survive/);
 
 const updated = { ...decision!, generatedAt: '2026-07-19T00:10:00.000Z', items: [] };
 applyCarryForwardToIntradayFile(root, updated);
+carry = fs.readFileSync(carryPath, 'utf-8');
+assert.match(carry, /No temporary threads were carried forward/);
+assert.doesNotMatch(carry, /Galaxy Drift controls/);
 note = fs.readFileSync(notePath, 'utf-8');
-assert.match(note, /No temporary threads were carried forward/);
-assert.doesNotMatch(note, /Galaxy Drift controls/);
 assert.match(note, /A live note that must survive/);
-assert.equal((note.match(/BRAIN_CARRY_FORWARD_START/g) || []).length, 1);
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log('brain-continuity regression: ok');

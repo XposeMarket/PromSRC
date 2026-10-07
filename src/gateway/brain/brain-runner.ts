@@ -1630,7 +1630,8 @@ export class BrainRunner {
       const carryTargetDate = nextDateKey(dateStr);
       const carryDecisionFile = path.posix.join('Brain', 'continuity', dateStr, 'carry-forward.json');
       const absCarryDecisionFile = path.join(this.deps.workspacePath, carryDecisionFile);
-      const carryNotesFile = path.posix.join('memory', `${carryTargetDate}-intraday-notes.md`);
+      // Carry-forward lives in Brain/carry-forward/, not in Raul's intraday notes.
+      const carryNotesFile = path.posix.join('Brain', 'carry-forward', `${carryTargetDate}.md`);
 	    const prompt     = this._buildDreamPromptV2({
         dateStr, dreamLabel, thoughtCount, outFile: absOutFile,
         carryTargetDate, carryDecisionFile, carryNotesFile,
@@ -1828,8 +1829,7 @@ export class BrainRunner {
     let carryArtifact = inspectBrainCarryForwardArtifact(absCarryDecisionFile, runStartedAt, carryTargetDate);
     try {
       if (carryArtifact.status === 'valid' && carryArtifact.decision) {
-        applyCarryForwardToIntradayFile(this.deps.workspacePath, carryArtifact.decision);
-        carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
+        carryForwardFresh = artifactFresh(applyCarryForwardToIntradayFile(this.deps.workspacePath, carryArtifact.decision));
       }
       // Recover only a genuinely absent optional sidecar. Malformed, stale, or
       // wrong-target model output is preserved and makes the Dream fail closed.
@@ -1843,8 +1843,7 @@ export class BrainRunner {
         };
         fs.writeFileSync(absCarryDecisionFile, `${JSON.stringify(fallback, null, 2)}\n`, 'utf-8');
         carryArtifact = inspectBrainCarryForwardArtifact(absCarryDecisionFile, runStartedAt, carryTargetDate);
-        applyCarryForwardToIntradayFile(this.deps.workspacePath, fallback);
-        carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
+        carryForwardFresh = artifactFresh(applyCarryForwardToIntradayFile(this.deps.workspacePath, fallback));
         artifactRecoveryNotes.push('Recovered missing carry-forward decision with an empty validated next-day section.');
       }
     } catch (err: any) {
@@ -3101,7 +3100,7 @@ There is NO fixed item-count limit for valid carry-forward items. If a high-outp
 Write ${carryDecisionFile} as valid JSON (no Markdown fence):
 {"targetDate":"${carryTargetDate}","generatedAt":"ISO","sourceDream":"${outFileRel}","items":[{"threadKey":"stable key","title":"human title","state":"active|in_progress|blocked|dormant","verifiedFacts":["current fact"],"looseEnds":["unfinished item"],"nextNaturalOpening":"when/how Prometheus should surface it naturally","reviewBy":"ISO expiry/review time","evidence":["refs"],"lastValidatedAt":"ISO","verificationRequired":true}]}
 
-The runner validates that file and writes its rendered section at the top of ${carryNotesFile}, preserving any live notes already present. The generated header explicitly tells every writer to note when/if a carried item changes, completes, becomes blocked, or is superseded. Do not write ${carryNotesFile} directly.
+The runner validates that file and writes its rendered section to ${carryNotesFile} (never into the user's intraday notes). The generated header explicitly tells every writer to note when/if a carried item changes, completes, becomes blocked, or is superseded. Do not write ${carryNotesFile} directly.
 
 Then create directory ${dreamsDirRel} if needed.
 Write ${outFileRel} with this structure. Use \`workspace_edit\` with action "create" or "write" for the markdown artifact:

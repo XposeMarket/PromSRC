@@ -96,6 +96,18 @@ router.get('/api/skills/match', (req, res) => {
   res.json({ success: true, matches });
 });
 
+// Learning loop: rolling skill-trigger precision (offered vs read) per skill and trigger term.
+router.get('/api/learning/skill-routing-stats', (req, res) => {
+  try {
+    const { getConfig } = require('../../config/config');
+    const { computeSkillRoutingStats } = require('../learning/turn-recorder');
+    const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+    res.json({ success: true, stats: computeSkillRoutingStats(getConfig().getWorkspacePath(), days) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
 router.get('/api/skills/:id', (req, res) => {
   const skill = _sm.get(req.params.id);
   if (!skill) { res.status(404).json({ success: false, error: 'Skill not found' }); return; }
