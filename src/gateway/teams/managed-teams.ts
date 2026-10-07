@@ -379,6 +379,9 @@ export interface ManagedTeam {
   // memory.json / shared state either way.
   workDir?: string;
 
+  // Key of the goal whose [GOAL_COMPLETE] review already ran (see claimTeamGoalCompletionReview).
+  goalCompletionReviewKey?: string;
+
   // ── Structured Goal Model ──────────────────────────────────────────────────
   // `teamContext` is retained for backward compatibility but is now secondary.
   // The structured fields below are the source of truth for goal tracking.
@@ -1200,23 +1203,26 @@ function getStorePath(): string {
 let _cache: ManagedTeamStore | null = null;
 let _cacheTimestamp: number = 0;
 let _cacheFileMtimeMs = 0;
+let _cacheFileSize = -1;
 const _cacheTTL = 5 * 60 * 1000;
 
 export function loadManagedTeamStore(): ManagedTeamStore {
   const now = Date.now();
   const p = getStorePath();
   let fileMtimeMs = 0;
-  try { fileMtimeMs = fs.statSync(p).mtimeMs; } catch { /* missing store */ }
-  // TTL is only an optimization. Always notice a store written by another
-  // process/gateway instance so registry and workspace state cannot drift via
-  // a stale in-process cache.
-  if (_cache && (now - _cacheTimestamp) < _cacheTTL && fileMtimeMs === _cacheFileMtimeMs) {
+  let fileSize = -1;
+  try { const st = fs.statSync(p); fileMtimeMs = st.mtimeMs; fileSize = st.size; } catch { /* missing store */ }
+  // The file's mtime+size is authoritative: a store written by another
+  // process/gateway instance always forces a re-parse, and an unchanged file
+  // never does (invalidateCache is a no-op). TTL just bounds
+  // how long an unchanged parse is reused.
+  if (_cache && (now - _cacheTimestamp) < _cacheTTL && fileMtimeMs === _cacheFileMtimeMs && fileSize === _cacheFileSize) {
     return _cache;
   }
   if (!fs.existsSync(p)) {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = 0;
+    _cacheFileMtimeMs = 0; _cacheFileSize = -1;
     return _cache;
   }
   try {
@@ -1282,13 +1288,13 @@ export function loadManagedTeamStore(): ManagedTeamStore {
       updatedAt: Number(parsed?.updatedAt) || Date.now(),
     };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = fileMtimeMs;
+    _cacheFileMtimeMs = fileMtimeMs; _cacheFileSize = fileSize;
     if (mutated) saveManagedTeamStore(_cache);
     return _cache;
   } catch {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = fileMtimeMs;
+    _cacheFileMtimeMs = fileMtimeMs; _cacheFileSize = fileSize;
     return _cache;
   }
 }
@@ -1371,13 +1377,85 @@ export function saveManagedTeamStore(store: ManagedTeamStore): void {
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
     throw lastErr;
   }
-  try { _cacheFileMtimeMs = fs.statSync(p).mtimeMs; } catch { _cacheFileMtimeMs = 0; }
+  try { const st = fs.statSync(p); _cacheFileMtimeMs = st.mtimeMs; _cacheFileSize = st.size; } catch { _cacheFileMtimeMs = 0; _cacheFileSize = -1; }
 }
 
+// Mutators call this before re-reading so they see writes from another gateway
+// process (warm handoff). loadManagedTeamStore already compares the store
+// file's mtime+size, so keep the parsed cache and let that check decide.
+// Dropping the cache here made EVERY team event (room message, dispatch
+// update, auto-wake) re-read and re-parse the whole store: 41MB / ~0.4s each
+// on 2026-10-07, stacking into 9-18s event-loop stalls and recovery restarts.
 function invalidateCache(): void {
-  _cache = null;
-  _cacheTimestamp = 0;
-  _cacheFileMtimeMs = 0;
+  // Intentionally a no-op: see comment above.
+}
+
+/**
+ * Claim the one completion review for a team's current goal. Returns a key the
+ * first time, null afterwards until the goal changes. Persisted so restarts and
+ * post-completion wakes (watch timeouts, scheduled checks, member chatter that
+ * each re-emit [GOAL_COMPLETE]) don't spawn another review task.
+ */
+export function claimTeamGoalCompletionReview(teamId: string): string | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const goal = String(team.roomState?.runGoal || team.currentFocus || team.purpose || '').trim();
+  const key = `${teamId}:${crypto.createHash('sha1').update(goal).digest('hex').slice(0, 16)}`;
+  if (team.goalCompletionReviewKey === key) return null;
+  team.goalCompletionReviewKey = key;
+  saveManagedTeam(team);
+  return key;
+}
+
+const STALE_DISPATCH_NO_TASK_MS = 20 * 60 * 1000;
+const STALE_DISPATCH_TASK_MISSING_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Settle dispatch records left "running"/"queued" after their task finished or
+ * was lost (e.g. a gateway restart between dispatch and task creation left
+ * dispatch_muy971wt_aa1d running with taskId null forever).
+ */
+export function reconcileStaleTeamDispatches(
+  now: number = Date.now(),
+  lookupTask?: (taskId: string) => { status?: string } | null,
+): number {
+  invalidateCache();
+  const store = loadManagedTeamStore();
+  let fixed = 0;
+  for (const team of store.teams) {
+    const dispatches = team.roomState?.dispatches;
+    if (!Array.isArray(dispatches)) continue;
+    let changed = false;
+    for (let i = 0; i < dispatches.length; i++) {
+      const d = dispatches[i];
+      if (d.status !== 'running' && d.status !== 'queued') continue;
+      const age = now - Number(d.startedAt || d.createdAt || now);
+      let task: { status?: string } | null = null;
+      if (d.taskId && lookupTask) {
+        try { task = lookupTask(d.taskId); } catch { task = null; }
+      }
+      const taskStatus = String(task?.status || '');
+      let next: TeamDispatchStatus | null = null;
+      let note = '';
+      if (taskStatus === 'complete') { next = 'completed'; note = 'Reconciled: task completed.'; }
+      else if (taskStatus === 'failed') { next = 'failed'; note = 'Reconciled: task failed.'; }
+      else if (!d.taskId && age > STALE_DISPATCH_NO_TASK_MS) {
+        next = 'failed';
+        note = 'Orphaned: no task id was recorded (lost in a gateway restart).';
+      } else if (d.taskId && lookupTask && !task && age > STALE_DISPATCH_TASK_MISSING_MS) {
+        next = 'failed';
+        note = 'Orphaned: task record not found.';
+      }
+      if (!next) continue;
+      dispatches[i] = { ...d, status: next, finishedAt: now, resultPreview: d.resultPreview || note };
+      changed = true;
+      fixed++;
+    }
+    if (changed) team.updatedAt = now;
+  }
+  if (fixed > 0) saveManagedTeamStore(store);
+  return fixed;
 }
 
 // ─── Pagination Support ────────────────────────────────────────────────────────
