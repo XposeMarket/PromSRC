@@ -23,7 +23,7 @@ import {
 import { notifyMainAgent } from './notify-bridge';
 import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
-import { getTeamWorkspacePath, readTeamMemoryContext, ensureTeamInfoFile } from './team-workspace';
+import { getTeamWorkspacePath } from './team-workspace';
 import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
@@ -515,21 +515,8 @@ function buildTeamCallerContext(teamId: string): string {
       goalLines.push(`  - ${w}`);
     }
   }
-  if (team.milestones?.length) {
-    goalLines.push(`Milestones:`);
-    for (const ms of team.milestones) {
-      const agents = ms.relevantAgentIds?.length ? ` (agents: ${ms.relevantAgentIds.join(', ')})` : '';
-      goalLines.push(`  - [${ms.status.toUpperCase()}] ${ms.description}${agents}`);
-    }
-  }
   const goalContext = goalLines.join('\n');
 
-  // Inject cross-run memory files (memory.json, last_run.json, pending.json)
-  let memoryContext = '';
-  try {
-    ensureTeamInfoFile(team);
-    memoryContext = readTeamMemoryContext(team.id);
-  } catch { /* non-fatal */ }
 
   // Main agent thread context (last 5 messages)
   const threadMsgs = getMainAgentThread(teamId, 5);
@@ -559,28 +546,25 @@ function buildTeamCallerContext(teamId: string): string {
     managerInbox ? `\n[SUBAGENT MESSAGES WAITING FOR MANAGER]\n${managerInbox}` : '',
     teamContext ? `\nAdditional team context:\n${teamContext}` : '',
     threadContext,
-    memoryContext ? `\n[CROSS-RUN MEMORY — SYSTEM-INJECTED FILE SNAPSHOTS]\n${memoryContext}` : `\n[CROSS-RUN MEMORY]\n(memory files not yet initialized — write them at end of this run)`,
     ``,
     `COORDINATOR WORKFLOW (purpose → task → execute → validate → write back):`,
     `RUN STATE CONTRACT: Choose exactly one state for this turn and keep it consistent.`,
     `  - normal_execution: work can continue; dispatch only unblocked lanes.`,
     `  - blocker_only_verification: only produce blocker/standby artifacts because the user explicitly asked to test all lanes despite an upstream blocker.`,
-    `  - blocked_waiting_for_input: a hard blocker prevents useful next work; update memory once, message the main agent/user once, then end [WAITING_MAIN_AGENT] or [NEEDS_INPUT].`,
+    `  - blocked_waiting_for_input: a hard blocker prevents useful next work; message the main agent/user once, then end [WAITING_MAIN_AGENT] or [NEEDS_INPUT].`,
     `  - paused: do not dispatch new work or synthesize completion. Acknowledge pause only if needed.`,
-    `  - complete: all useful work for the current objective is done and memory is updated; end [GOAL_COMPLETE].`,
+    `  - complete: all useful work for the current objective is done and the outcome is logged; end [GOAL_COMPLETE].`,
     `If a collection/auth/session blocker happens in an upstream lane, default to blocked_waiting_for_input. Do NOT continue Nolan/Mira/Ari just to create downstream blocker artifacts unless the owner explicitly requested blocker-only lane verification.`,
-    `STEP 1 — DERIVE THIS RUN'S TASK: Use the system-injected cross-run memory snapshots above as already-read context. Do not call file_stats or read_file for team_info.md, memory.json, last_run.json, or pending.json just to inspect current memory. If the user gave a concrete run/start objective, decide what THIS specific run should accomplish. Only call manage_team_goal(action="update_focus", focus="<derived task>") when you are actually changing the team's execution focus for a real run; do not update focus for greetings, status checks, wake-up requests, or ordinary conversation.`,
+    `STEP 1 — DERIVE THIS RUN'S TASK from the current focus, recent completed work, and room state above. Only call manage_team_goal(action="set_focus", value="<task>") when you actually change the team's execution focus for a real run; never for greetings, status checks, or wake-ups.`,
     `STEP 2 — COLLABORATE BEFORE EXECUTION WHEN NEEDED: If you need a member's plan, judgment, readiness check, or clarification before assigning concrete work, use request_team_member_turn so they speak in the shared room first. Use background=true when you want multiple members to weigh in concurrently.`,
-    `STEP 3 — EXECUTE: Once work is concrete, dispatch agents with specific tasks derived from STEP 1. Don't re-do work that's already in memory.json as completed.`,
+    `STEP 3 — EXECUTE: Once work is concrete, dispatch agents with specific tasks derived from STEP 1. Don't re-do work already listed under Recent completed work.`,
     `STEP 4 — VALIDATE RESULTS: After EACH agent completes, carefully review their output:`,
     `  - Is the result SUBSTANTIVE (actual findings, data, analysis — not just directory listings or placeholders)?`,
     `  - Did they execute their task (call tools, return meaningful content)?`,
     `  - If result is empty, suspicious, or incomplete → RED FLAG: re-dispatch that agent with a specific fix request.`,
     `  - Do NOT accept vague/hollow completions without follow-up verification.`,
-    `STEP 5 — WRITE BACK: Before posting [GOAL_COMPLETE], update the memory files at ${teamWsPath}:`,
-    `  - memory.json: append new findings/knowledge to the entries array`,
-    `  - last_run.json: overwrite with what this run did (task, summary, agentsUsed, runAt)`,
-    `  - pending.json: add new unresolved items; remove items that were resolved this run`,
+    ``,
+    `STEP 5 — RECORD: Before [GOAL_COMPLETE], call manage_team_goal(action="log_completed", value="<one-line outcome + key file paths>"). Do not create or maintain memory.json, last_run.json, or pending.json: the team record is the source of truth.`,
     ``,
     `MANAGER RULES:`,
     `1. Use request_team_member_turn when you want a member to think with the team in-room before execution. Use dispatch_team_agent when the member is ready for actual execution work. Always pass team_id="${team.id}" and the agent_id from the list above.`,
@@ -612,16 +596,14 @@ function buildTeamCallerContext(teamId: string): string {
     `6. Work continuously only while the current run state is normal_execution. If a hard upstream blocker appears, stop dependent lanes unless blocker_only_verification was explicitly requested.`,
     `7. NEVER accept suspicious results — if you see ANY red flag above, immediately re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings." Do not re-dispatch VALID_BLOCKER_ARTIFACT results.`,
     `8. Emit only one terminal marker per manager response: [GOAL_COMPLETE], [NEEDS_INPUT], or [WAITING_MAIN_AGENT]. Do not later switch a blocked run to [GOAL_COMPLETE] unless a real unblock happened.`,
-    `8a. When this run is complete (all tasks substantively done + memory files updated), end with: [GOAL_COMPLETE]`,
+    `8a. When this run is complete (all tasks substantively done + outcome logged), end with: [GOAL_COMPLETE]`,
     `8b. If you need the team owner to make a decision or provide input, end with: [NEEDS_INPUT]`,
     `9. You are the ONLY bridge between this team and the main Prometheus agent. Use message_main_agent(team_id="${team.id}", message="...") to communicate.`,
     `10. NEVER pause or give up before first messaging the main agent. Errors, blockers, missing credentials — all go to the main agent first.`,
     `11. Do NOT create new teams. Explain to the main agent what team would help and why.`,
     `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. Send one clear message_main_agent escalation; do not repeat equivalent escalations in later turns unless new evidence appears. You will auto-resume when their reply arrives.`,
-    `13. Use manage_team_goal to update focus, log completed work, and manage milestones during real execution runs. Do not call it just because the owner sent a new chat message.`,
-    `14. Use manage_team_goal with pause_agent/unpause_agent to control which agents are active.`,
-    `15. request_team_member_turn, dispatch_team_agent, and internal_watch are available in this coordinator session. Do NOT claim tooling limitations or say a tool is unavailable unless you actually called it and received an explicit tool error in this turn.`,
-    `16. Update memory.json, last_run.json, and pending.json before [GOAL_COMPLETE]. Use the injected snapshots as the base content and write directly; avoid file_stats/read_file on those three files unless the snapshot is explicitly truncated or you need to recover from a write error. Include room discussions, dispatches, subagent results, verification decisions, files touched, unresolved items, and timestamp.`,
+    `13. manage_team_goal supports set_focus, log_completed, pause_agent, unpause_agent. Use set_focus/log_completed only during real execution runs, not because the owner sent a chat message. Change the team purpose with team_manage(update).`,
+    `15. request_team_member_turn and dispatch_team_agent are available in this coordinator session. A background dispatch wakes you automatically when the member finishes, fails, shares an artifact, or messages you: end your turn instead of creating internal_watch watches or polling get_agent_result. Do NOT claim a tool is unavailable unless you received an explicit tool error in this turn.`,
     `17. PROPOSALS: You are the only team actor allowed to create proposals with write_proposal.`,
     `    - Subagents may research, source-map, and prepare proposal-ready summaries/artifacts, but they must not submit proposals themselves.`,
     `    - When a validated team result recommends src/ code edits, a new feature, major config changes, or another human-approved change, YOU should create the pending proposal with write_proposal unless the owner explicitly disabled proposal creation for this run.`,
@@ -909,7 +891,7 @@ export async function runCoordinatorConversation(
       `Your previous turn has ended. Review the team chat for any new results from agents you dispatched or members you invited into the room.`,
       ``,
       `Continue working toward this run's derived task. Invite members into the room or dispatch more agents as needed, review results, and make progress.`,
-      `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE]. Use the injected memory snapshots as your base and avoid re-reading those files unless needed for error recovery.`,
+      `When this run's task is fully complete and the outcome is logged with manage_team_goal(log_completed), end with [GOAL_COMPLETE].`,
       `If you need the team owner to make a decision, end with [NEEDS_INPUT].`,
       `If you sent a message to the main agent and are waiting, end with [WAITING_MAIN_AGENT].`,
     ].join('\n');
@@ -1194,7 +1176,7 @@ export async function runCoordinatorConversationDetailed(
         `Your previous turn has ended. Review the team chat for any new results from agents you dispatched or members you invited into the room.`,
         ``,
         `Continue working toward this run's derived task. Invite members into the room or dispatch more agents as needed, review results, and make progress.`,
-        `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE]. Use the injected memory snapshots as your base and avoid re-reading those files unless needed for error recovery.`,
+        `When this run's task is fully complete and the outcome is logged with manage_team_goal(log_completed), end with [GOAL_COMPLETE].`,
         `If you need the team owner to make a decision, end with [NEEDS_INPUT].`,
         `If you sent a message to the main agent and are waiting, end with [WAITING_MAIN_AGENT].`,
       ].join('\n');
@@ -1360,7 +1342,7 @@ export async function runSubagentResultVerification(
     `The agent returned:`,
     agentResult,
     ``,
-    `Verify/analyze the work. Check files created or modified by the agent if relevant. If the output is incomplete, re-dispatch with a specific fix. If accepted, update memory.json and last_run.json.`,
+    `Verify/analyze the work. Check files created or modified by the agent if relevant. If the output is incomplete, re-dispatch with a specific fix. If accepted, log it with manage_team_goal(action="log_completed").`,
   ].join('\n');
   await runCoordinatorConversation(teamId, prompt, broadcastFn, false);
 }

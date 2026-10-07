@@ -142,10 +142,10 @@ if (!contextMatch) {
 }
 
 for (const required of [
-  'workspace/self/WEB_UI_ARCHITECTURE.md',
-  'workspace/self/WEB_UI_ARCHITECTURE_PERFORMANCE_REVIEW_2026-08-19.md',
-  'workspace/self/WEB_UI_COMPONENT_OWNERSHIP_REFACTOR_PLAN_2026-08-26.md',
-  'workspace/self/WEB_UI_PERFORMANCE_PROGRAM_2026-08-22.md',
+  'workspace/self/investigations/WEB_UI_ARCHITECTURE.md',
+  'workspace/self/investigations/WEB_UI_ARCHITECTURE_PERFORMANCE_REVIEW_2026-08-19.md',
+  'workspace/self/investigations/WEB_UI_COMPONENT_OWNERSHIP_REFACTOR_PLAN_2026-08-26.md',
+  'workspace/self/investigations/WEB_UI_PERFORMANCE_PROGRAM_2026-08-22.md',
   'web-ui/src/features/chat/OWNERSHIP.md',
 ]) {
   if (!fs.existsSync(path.join(root, required))) failures.push(`${required}: missing architecture documentation`);

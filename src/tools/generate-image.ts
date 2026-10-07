@@ -16,6 +16,8 @@ type GenerateImageArgs = {
   width?: number;
   height?: number;
   mask?: string;
+  moderation?: string;
+  resolution?: string;
   presentation_mode?: 'foreground' | 'background' | 'auto';
   partial_images?: number | boolean;
   stream?: boolean;
@@ -54,6 +56,8 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
     width: args?.width != null ? Number(args.width) : undefined,
     height: args?.height != null ? Number(args.height) : undefined,
     mask: args?.mask != null ? String(args.mask) : undefined,
+    moderation: args?.moderation != null ? String(args.moderation) : undefined,
+    resolution: args?.resolution != null ? String(args.resolution) : undefined,
     presentation_mode: args?.presentation_mode,
     partial_images: args?.partial_images,
     stream: args?.stream,
@@ -131,13 +135,15 @@ export const generateImageTool = {
     prompt: 'Text prompt describing the image to generate',
     reference_images: 'Optional local file paths, workspace-relative paths, HTTPS URLs, or data URLs to use as image references',
     aspect_ratio: 'Optional aspect ratio: landscape, square, or portrait',
-    count: 'Optional number of images to generate at once (1-4)',
+    count: 'Optional number of images to generate at once (1-10)',
     provider: 'Optional provider override: auto, openai, openai_codex, or xai. openai may use either an OpenAI API key or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.',
     model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-2.0',
     background: 'Optional background mode: transparent, opaque, or auto. Use transparent for real alpha in generated PNG/WebP files.',
     output_format: 'Optional output file format: png, jpeg, or webp. Transparency requires png or webp; png is used when transparent is requested.',
     output_compression: 'Optional compression/quality control for JPEG/WebP where supported, 0-100',
-    quality: 'Optional quality setting: low, medium, high, or auto.',
+    quality: 'Optional quality: low, medium, high, xhigh, max (xhigh/max: gpt-image-2.5 only), or auto. xAI grok-imagine-image-2.0 maps to low/medium/auto.',
+    moderation: 'Optional OpenAI moderation level: auto (default) or low (less restrictive).',
+    resolution: 'Optional xAI output resolution: 1k or 2k.',
     size: 'Optional exact output size WIDTHxHEIGHT for providers/models that support it',
     width: 'Optional exact output width in pixels',
     height: 'Optional exact output height in pixels',
@@ -166,7 +172,7 @@ export const generateImageTool = {
       count: {
         type: 'integer',
         minimum: 1,
-        maximum: 4,
+        maximum: 10,
         description: 'Number of separate image outputs, 1-4.',
       },
       provider: {
@@ -193,13 +199,15 @@ export const generateImageTool = {
       },
       quality: {
         type: 'string',
-        enum: ['low', 'medium', 'high', 'auto'],
+        enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
         description: 'Image generation quality.',
       },
       size: { type: 'string', description: 'Exact output size such as 1536x1024, 1024x1024, 1024x1536, or auto.' },
       width: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output width in pixels.' },
       height: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output height in pixels.' },
       mask: { type: 'string', description: 'PNG alpha mask for selection editing. Must match the first reference image dimensions.' },
+      moderation: { type: 'string', enum: ['auto', 'low'], description: 'OpenAI moderation level. low = less restrictive filtering.' },
+      resolution: { type: 'string', enum: ['1k', '2k'], description: 'xAI Grok Imagine output resolution.' },
       presentation_mode: {
         type: 'string',
         enum: ['foreground', 'background', 'auto'],

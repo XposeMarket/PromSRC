@@ -241,19 +241,15 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'manage_team_goal',
-        description: 'Manage the team\'s structured goal system. Actions: set_focus (update what the team is working on NOW), set_mission (update the permanent mission), log_completed (record completed work), add_milestone (project teams only), update_milestone (mark milestones complete/blocked), pause_agent (pause an individual agent), unpause_agent (resume an agent).',
+        description: 'Manage the team goal. Actions: set_focus (what the team is working on now), log_completed (record a finished outcome), pause_agent / unpause_agent. Change the long-term purpose with team_manage(update).',
         parameters: {
           type: 'object',
           required: ['team_id', 'action'],
           properties: {
             team_id: { type: 'string', description: 'The team ID' },
-            action: { type: 'string', enum: ['set_focus', 'update_focus', 'set_mission', 'log_completed', 'add_milestone', 'update_milestone', 'pause_agent', 'unpause_agent'], description: 'The goal management action to perform. update_focus is accepted as an alias for set_focus.' },
-            value: { type: 'string', description: 'For set_focus/set_mission/log_completed: the text value' },
-            milestone_id: { type: 'string', description: 'For update_milestone: the milestone ID to update' },
-            milestone_description: { type: 'string', description: 'For add_milestone: description of the milestone' },
-            milestone_status: { type: 'string', enum: ['pending', 'active', 'complete', 'blocked'], description: 'For add_milestone/update_milestone: the status' },
+            action: { type: 'string', enum: ['set_focus', 'update_focus', 'log_completed', 'pause_agent', 'unpause_agent'], description: 'Goal action. update_focus is an alias for set_focus.' },
+            value: { type: 'string', description: 'For set_focus/log_completed: the text value' },
             agent_id: { type: 'string', description: 'For pause_agent/unpause_agent: which agent to pause/unpause' },
-            relevant_agent_ids: { type: 'array', items: { type: 'string' }, description: 'For add_milestone: which agents are relevant to this milestone' },
             reason: { type: 'string', description: 'For pause_agent: why the agent is being paused' },
           },
         },

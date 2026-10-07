@@ -11,7 +11,7 @@ const app = read('web-ui/src/app.js');
 const connections = read('web-ui/src/pages/ConnectionsPage.js');
 const pagesCss = read('web-ui/src/styles/pages.css');
 const desktopDocs = read('workspace/self/17-desktop-web-ui.md');
-const connectorDocs = read('workspace/self/feature-index/18-settings-plugins-connectors.md');
+const connectorDocs = read('workspace/self/12-connectors-mcp-integrations.md');
 
 assert.match(index, /id="nav-plugins"[\s\S]*?setMode\('plugins'\)/, 'More must expose Plugins navigation');
 assert.match(index, /id="plugins-view"/, 'Plugins page view must exist');

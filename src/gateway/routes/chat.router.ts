@@ -114,7 +114,7 @@ import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
-import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../tasks/task-runner';
+import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../tasks/task-runner';
 import { formatBackgroundSpawnContinuity } from '../tasks/background-spawn-continuity';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
@@ -284,20 +284,6 @@ function normalizeRuntimeAttachmentPreviewsInput(value: unknown): any[] {
     .slice(0, 8);
 }
 
-// orchestration/multi-agent removed â€” stubs to prevent reference errors
-const OrchestrationTriggerState: any = class { recordToolResult() {} recordRoundNoProgress() {} shouldTrigger() { return { fire: false, reason: '' }; } markFired() {} };
-const callSecondaryPreflight: any = async () => null;
-const callSecondaryAdvisor: any = async () => null;
-const callSecondaryFileOpClassifier: any = async () => null;
-const callSecondaryFileAnalyzer: any = async () => null;
-const callSecondaryFileVerifier: any = async () => null;
-const callSecondaryFilePatchPlanner: any = async () => null;
-const callSecondaryBrowserAdvisor: any = async () => null;
-const callSecondaryDesktopAdvisor: any = async () => null;
-const formatPreflightExecutionObjective: any = () => '';
-const formatPreflightHint: any = () => '';
-const formatAdvisoryHint: any = () => '';
-const formatBrowserAdvisorHint: any = () => '';
 
 function buildVisionInjectedPreviewPayload(visionMessage: any): Record<string, any> | undefined {
   const parts = Array.isArray(visionMessage?.content) ? visionMessage.content : [];
@@ -370,13 +356,8 @@ function formatPreCreativeSwitchToolResultsForHandoff(toolResults: ToolResult[])
 
   return blocks.join('\n\n');
 }
-const formatDesktopAdvisorHint: any = () => '';
 const getOrchestrationConfig: any = () => null;
-const clampOrchestrationConfig: any = (x: any) => x;
 const clampPreemptConfig: any = (x: any) => x;
-const checkOrchestrationEligibility: any = () => false;
-const shouldRunPreflight: any = () => false;
-const secondarySupportsVision: any = () => false;
 
 const mainChatRequestDedupe = new Map<string, { at: number; sessionId: string; streamId: string; fingerprint: string }>();
 const MAIN_CHAT_REQUEST_DEDUPE_TTL_MS = 2 * 60 * 1000;
@@ -1060,7 +1041,12 @@ function findSessionMainChatRuntime(sessionId: string): { id: string } | null {
     (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
     && String(runtime.sessionId || '') === sid
     && String(runtime.status || 'running') === 'running'
-    && !runtime.abortRequestedAt);
+    && !runtime.abortRequestedAt
+    // A runtime mirrored from a draining previous gateway belongs to a turn
+    // running in that other process. Adopting it made a new timer turn look
+    // owned until the old gateway exited, then the owner watchdog killed it
+    // as runtime_missing.
+    && !(Number(runtime.remoteHostPid || 0) > 0));
   return match ? { id: match.id } : null;
 }
 
@@ -1830,39 +1816,7 @@ import {
 } from '../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
 import { runWithInternalWatchTurnContext, setCurrentInternalWatchTurnContext } from '../internal-watch/internal-watch-policy';
-// orchestration/file-op-v2 removed â€” stubs to prevent reference errors
-type FileOpType = 'CHAT' | 'FILE_EDIT' | 'FILE_CREATE' | 'FILE_ANALYSIS' | 'BROWSER_OP' | 'DESKTOP_OP';
-class FileOpProgressWatchdog { constructor(_n: number) {} record(_x: any) { return { no_progress: false }; } }
-const classifyFileOpType: any = () => ({ type: 'CHAT' as FileOpType, reason: 'file-op v2 disabled' });
-const resolveFileOpSettings: any = () => ({ enabled: false, watchdog_no_progress_cycles: 3, checkpointing_enabled: false, primary_edit_max_lines: 200, primary_edit_max_chars: 8000, primary_edit_max_files: 3 });
-const FILE_CREATE_TOOL_NAMES = new Set(['create_file', 'write_file', 'write', 'append_file', 'mkdir']);
-const FILE_EDIT_TOOL_NAMES = new Set([
-  'write_file', 'write', 'append_file', 'replace_lines', 'find_replace',
-  'insert_after', 'delete_lines', 'apply_patch', 'apply_patchset',
-  'apply_workspace_patchset', 'workspace_edit', 'prom_apply_dev_changes',
-]);
 const isFileMutationTool: any = (name: unknown) => FILE_MUTATION_TOOL_NAMES.has(String(name || '').trim());
-const isFileCreateTool: any = (name: unknown) => FILE_CREATE_TOOL_NAMES.has(String(name || '').trim());
-const isFileEditTool: any = (name: unknown) => FILE_EDIT_TOOL_NAMES.has(String(name || '').trim());
-const extractFileToolTarget: any = (_name: unknown, args: any) => {
-  if (!args || typeof args !== 'object') return null;
-  return String(args.filename || args.path || args.file || args.name || args.new_path || args.destination || '').trim() || null;
-};
-const estimateFileToolChange: any = (_name: unknown, args: any) => {
-  const content = String(args?.content ?? args?.new_content ?? args?.replace ?? '');
-  return {
-    lines_changed: content ? Math.max(1, content.split('\n').length) : 1,
-    chars_changed: content.length,
-  };
-};
-const canPrimaryApplyFileTool: any = () => ({ allowed: true, reason: '' });
-const shouldVerifyFileTurn: any = () => ({ verify: false, reasons: [] });
-const isSmallSuggestedFix: any = () => false;
-const buildFailureSignature: any = () => '';
-const buildPatchSignature: any = () => '';
-const loadFileOpCheckpoint: any = () => null;
-const saveFileOpCheckpoint: any = () => {};
-const clearFileOpCheckpoint: any = () => {};
 import { webSearch, webFetch } from '../../tools/web';
 import {
   canExecuteToolCallsInParallel,
@@ -2108,7 +2062,6 @@ import {
 import { OllamaProcessManager } from '../ollama-process-manager';
 import { raceWithWatchdog, PreemptState } from '../scheduling/preempt-watchdog';
 import { detectGpu, logGpuStatus } from '../gpu-detector';
-import { internalAgentTaskRouter } from '../agents-runtime/internal-agent-task';
 import {
   registerAgentBuilderTools,
   executeAgentBuilderTool,
@@ -2116,7 +2069,6 @@ import {
 } from '../agents-runtime/agent-builder-integration';
 
 
-import { activeTasks } from '../chat/chat-state';
 import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from './tool-result-elision';
 
 import {
@@ -4263,53 +4215,6 @@ async function handleChat(
   const browserAdvisorSeenFeedKeys = new Set<string>();
   htime('before orchestration config / fileop');
   const orchRuntimeCfg = getOrchestrationConfig();
-  const fileOpSettings = resolveFileOpSettings(orchRuntimeCfg as any);
-  const fileOpRouterEnabled =
-    orchestrationSkillEnabled
-    && (orchRuntimeCfg?.enabled ?? false)
-    && fileOpSettings.enabled
-    && !isBootStartupTurn;
-  const localFileOpClassification = fileOpRouterEnabled
-    ? classifyFileOpType(message)
-    : { type: 'CHAT' as FileOpType, reason: 'file-op v2 disabled' };
-  let fileOpClassification = localFileOpClassification;
-  if (fileOpRouterEnabled) {
-    sendSSE('ui_preflight', { message: 'Classifying the request...' });
-    const secondaryClass = await callSecondaryFileOpClassifier({
-      userMessage: message,
-      recentHistory: history.slice(-4).map(h => ({ role: h.role, content: h.content })),
-    });
-    if (secondaryClass) {
-      fileOpClassification = {
-        type: secondaryClass.operation as FileOpType,
-        reason: `secondary classifier: ${secondaryClass.reason || 'runtime classification'} (confidence ${secondaryClass.confidence.toFixed(2)})`,
-      };
-      sendSSE('orchestration', {
-        trigger: 'file_op_classifier',
-        mode: 'router',
-        route: secondaryClass.operation === 'BROWSER_OP'
-          ? 'browser_ops'
-          : secondaryClass.operation === 'DESKTOP_OP'
-            ? 'desktop_ops'
-            : (secondaryClass.operation === 'CHAT' ? 'chat' : 'file_ops'),
-        reason: secondaryClass.reason || 'secondary runtime classification',
-        operation: secondaryClass.operation,
-        confidence: secondaryClass.confidence,
-      });
-    } else {
-      // Secondary classifier unavailable â€” degrade to local classifier rather than
-      // collapsing to CHAT. Falling back to CHAT silently strips all file-op gating
-      // and verification, letting unchecked primary writes bypass all thresholds.
-      // Local classification is conservative (FILE_EDIT/FILE_CREATE) and safer.
-      sendSSE('info', {
-        message: `FILE_OP router: secondary classifier unavailable; degrading to local classification (${localFileOpClassification.type}).`,
-      });
-      fileOpClassification = {
-        type: localFileOpClassification.type,
-        reason: `secondary classifier unavailable â€” local fallback: ${localFileOpClassification.reason}`,
-      };
-    }
-  }
   // User preference: no automatic browser retries/snapshots.
   // Let the model explicitly decide when to call browser_snapshot.
   const browserAutoSnapshotRetriesEnabled = false;
@@ -4675,53 +4580,10 @@ async function handleChat(
     }
   };
 
-  const orchestrationState = new OrchestrationTriggerState();
   const orchestrationLog: string[] = [];
   const orchestrationStats = getOrchestrationSessionStats(sessionId);
   // Cached once per turn â€” used by browser interception, preempt nudge, and advisor calls
   const multiAgentActive = orchestrationSkillEnabled && ((getOrchestrationConfig()?.enabled) ?? false);
-  const fileOpV2Active = multiAgentActive
-    && fileOpSettings.enabled
-    && (fileOpClassification.type === 'FILE_ANALYSIS' || fileOpClassification.type === 'FILE_CREATE' || fileOpClassification.type === 'FILE_EDIT');
-  const fileOpType = fileOpClassification.type;
-  let fileOpOwner: 'primary' | 'secondary' = fileOpType === 'FILE_ANALYSIS' ? 'secondary' : 'primary';
-  const fileOpTouchedFiles = new Set<string>();
-  const fileOpToolHistory: Array<{
-    tool: string;
-    args: any;
-    result: string;
-    error: boolean;
-    actor: 'primary' | 'secondary';
-    estimate_lines: number;
-    estimate_chars: number;
-  }> = [];
-  let fileOpPrimaryWriteLines = 0;
-  let fileOpPrimaryWriteChars = 0;
-  let fileOpHadCreate = false;
-  let fileOpHadToolFailure = false;
-  let fileOpPrimaryStallPromoted = false;
-  let fileOpLastFailureSignature = '';
-  const fileOpPatchSignatures: string[] = [];
-  const fileOpWatchdog = new FileOpProgressWatchdog(fileOpSettings.watchdog_no_progress_cycles);
-  const resumedFileOpCheckpoint = (fileOpV2Active && fileOpSettings.checkpointing_enabled)
-    ? loadFileOpCheckpoint(sessionId)
-    : null;
-  if (
-    resumedFileOpCheckpoint
-    && resumedFileOpCheckpoint.goal === message
-    && resumedFileOpCheckpoint.phase !== 'done'
-  ) {
-    fileOpOwner = resumedFileOpCheckpoint.owner || fileOpOwner;
-    for (const f of resumedFileOpCheckpoint.files_changed || []) {
-      if (f) fileOpTouchedFiles.add(String(f));
-    }
-    for (const sig of resumedFileOpCheckpoint.patch_history_signatures || []) {
-      if (sig) fileOpPatchSignatures.push(String(sig));
-    }
-    if (fileOpPatchSignatures.length > 20) {
-      fileOpPatchSignatures.splice(0, fileOpPatchSignatures.length - 20);
-    }
-  }
   // Synthetic tool calls queued by the browser advisor for deterministic next steps.
   // When set, the main loop skips LLM generation and executes these directly.
   let pendingSyntheticToolCalls: Array<{ function: { name: string; arguments: any } }> = [];
@@ -4744,25 +4606,6 @@ async function handleChat(
       return;
     }
     if (!isFileMutationTool(toolName)) return;
-    const estimate = estimateFileToolChange(toolName, toolArgs);
-    const target = extractFileToolTarget(toolName, toolArgs);
-    if (target) fileOpTouchedFiles.add(target);
-    if (actor === 'primary') {
-      fileOpPrimaryWriteLines += estimate.lines_changed;
-      fileOpPrimaryWriteChars += estimate.chars_changed;
-    }
-    if (isFileCreateTool(toolName) && !toolResult.error) fileOpHadCreate = true;
-    if (toolResult.error) fileOpHadToolFailure = true;
-    fileOpToolHistory.push({
-      tool: toolName,
-      args: toolArgs,
-      result: toolResult.result,
-      error: toolResult.error,
-      actor,
-      estimate_lines: estimate.lines_changed,
-      estimate_chars: estimate.chars_changed,
-    });
-    if (fileOpToolHistory.length > 64) fileOpToolHistory.shift();
     recordEditLogEntry({
       sessionId,
       turnId: editLogTurnId,
@@ -4771,118 +4614,8 @@ async function handleChat(
       result: toolResult.result,
       error: toolResult.error,
     });
-    maybeSaveFileOpCheckpoint({
-      phase: 'execute',
-      next_action: `${actor} applied ${toolName}`,
-    });
   };
 
-  const maybeSaveFileOpCheckpoint = (patch: {
-    phase: 'plan' | 'execute' | 'verify' | 'repair' | 'done';
-    next_action: string;
-    findings?: any[];
-  }) => {
-    if (!fileOpV2Active || !fileOpSettings.checkpointing_enabled) return;
-    saveFileOpCheckpoint(sessionId, {
-      goal: message,
-      phase: patch.phase,
-      owner: fileOpOwner,
-      operation: fileOpType,
-      files_changed: Array.from(fileOpTouchedFiles).slice(0, 24),
-      last_verifier_findings: Array.isArray(patch.findings) ? patch.findings : [],
-      patch_history_signatures: fileOpPatchSignatures.slice(-12),
-      next_action: patch.next_action,
-    });
-  };
-
-  const executeSecondaryPatchCalls = async (
-    calls: Array<{ tool: string; args: any }>,
-    reason: string,
-  ): Promise<{ ran: number; patchSignature: string }> => {
-    const planCalls = (calls || []).filter(c => c && c.tool && typeof c.args === 'object');
-    if (!planCalls.length) return { ran: 0, patchSignature: '' };
-    const patchSignature = buildPatchSignature(planCalls.map(c => ({ tool: c.tool, args: c.args })));
-    fileOpPatchSignatures.push(patchSignature);
-    if (fileOpPatchSignatures.length > 20) fileOpPatchSignatures.shift();
-    sendSSE('info', { message: `FILE_OP v2: applying ${planCalls.length} secondary patch call(s) (${reason}).` });
-    let ran = 0;
-    for (const call of planCalls) {
-      const toolName = String(call.tool || '').trim();
-      const toolArgs = call.args || {};
-      markProgressStepStart(toolName);
-      sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true, actor: 'secondary' });
-      const toolResult = await executeToolWithTelemetry(toolName, toolArgs);
-      allToolResults.push(toolResult);
-      logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
-      trackFileOpMutation(toolName, toolArgs, toolResult, 'secondary');
-      if (toolResult.error) fileOpHadToolFailure = true;
-      markProgressStepResult(!toolResult.error, toolName);
-
-      if (toolName === 'request_dev_source_edit' && !toolResult.error) {
-        seedDevSourceEditProgressPlan(toolResult);
-      }
-
-      if (toolName === 'write_note' && !toolResult.error) {
-        const tag = String(toolArgs?.tag || toolArgs?.step || '').trim().replace(/\s+/g, '_').toLowerCase();
-        const completedDevEdit = toolResult.extra?.dev_edit_complete === true || toolResult.data?.dev_edit_complete === true || tag === 'dev_edit_complete';
-        if (completedDevEdit && progressState.manualStepAdvance && progressState.items.length >= 2) {
-          let guard = progressState.items.length + 1;
-          while (guard-- > 0 && progressState.items.some((item) => item.status === 'pending' || item.status === 'in_progress')) {
-            advanceProgressStep('dev_edit_complete');
-          }
-        }
-      }
-      sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 500), error: toolResult.error, stepNum: allToolResults.length, synthetic: true, actor: 'secondary' });
-      const goalReminder = goalReminderForTool(message, allToolResults.length);
-      const isBrowserTool = isBrowserToolName(toolName);
-      const isDesktopTool = isDesktopToolName(toolName);
-      // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
-      // Route through buildDesktopScreenshotContent so vision primaries get the PNG image.
-      const isDesktopVisualTool1 = isDesktopVisualToolName(toolName, toolArgs);
-      let toolMessageContent = (isBrowserTool && multiAgentActive)
-        ? buildBrowserAck(toolName, toolResult) + goalReminder
-        : (isDesktopTool && isDesktopVisualTool1)
-          ? buildDesktopScreenshotContent(toolResult, sessionId, goalReminder)
-          : (isDesktopTool)
-            ? buildDesktopAck(toolName, toolResult) + goalReminder
-            : toolResult.result + goalReminder;
-      if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
-      messages.push({ role: 'tool', tool_name: toolName, content: toolMessageContent });
-      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
-      orchestrationLog.push(
-        toolResult.error
-          ? `âœ— [secondary_patch] ${toolName}: ${toolResult.result.slice(0, 100)}`
-          : `âœ“ [secondary_patch] ${toolName}: ${toolResult.result.slice(0, 80)}`,
-      );
-      ran++;
-    }
-    return { ran, patchSignature };
-  };
-
-  if (fileOpV2Active) {
-    sendSSE('info', {
-      message: `FILE_OP v2 active: ${fileOpType} (${fileOpClassification.reason}).`,
-    });
-    sendSSE('orchestration', {
-      trigger: 'file_op_router',
-      mode: 'router',
-      route: 'file_ops',
-      reason: `${fileOpType} (${fileOpClassification.reason})`,
-      file_op_type: fileOpType,
-      owner: fileOpOwner,
-    });
-    if (resumedFileOpCheckpoint && resumedFileOpCheckpoint.goal === message && resumedFileOpCheckpoint.phase !== 'done') {
-      sendSSE('info', {
-        message: `FILE_OP v2: resuming checkpoint at phase="${resumedFileOpCheckpoint.phase}" next="${resumedFileOpCheckpoint.next_action || 'n/a'}".`,
-      });
-    } else {
-      maybeSaveFileOpCheckpoint({
-        phase: 'plan',
-        next_action: fileOpType === 'FILE_ANALYSIS' ? 'secondary analysis' : 'primary execution',
-      });
-    }
-  }
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
   const personalityProfile = isDirectSubagentChatTurn
@@ -6016,260 +5749,6 @@ Do not produce prose. Use the canonical thread tool now.` });
     };
   };
 
-  const rawOrchCfg = ((getConfig().getConfig() as any).orchestration || {}) as any;
-
-  // Optional preflight advisor pass: secondary model can route and provide
-  // a compact execution plan before primary starts tool calling.
-  const preflightCfg = orchestrationSkillEnabled ? getOrchestrationConfig() : null;
-  if (!preflightCfg?.enabled && String(rawOrchCfg?.preflight?.mode || '') === 'always') {
-    sendSSE('info', {
-      message: 'Preflight advisor is set to Always, but Multi-Agent Orchestrator skill is disabled.',
-    });
-  }
-  const skipGenericPreflightForFileOp = fileOpV2Active;
-  if (skipGenericPreflightForFileOp) {
-    sendSSE('info', {
-      message: `FILE_OP v2 route selected (${fileOpType}); skipping generic advisor preflight.`,
-    });
-  }
-  // Task runner sessions (sessionId starts with 'task_') are already inside a background task
-  // execution â€” skip preflight entirely to prevent recursive task spawning loops.
-  const isTaskRunnerSession = sessionId.startsWith('task_');
-
-  if (
-    preflightCfg?.enabled &&
-    !isBootStartupTurn &&
-    !isSupervisionLoop &&
-    !skipGenericPreflightForFileOp &&
-    !isTaskRunnerSession &&
-    shouldRunPreflight(message, preflightCfg.preflight.mode) &&
-    orchestrationStats.assistCount < preflightCfg.limits.max_assists_per_session
-  ) {
-    sendSSE('info', {
-      message: `Running advisor preflight via ${preflightCfg.secondary.provider}:${preflightCfg.secondary.model}...`,
-    });
-    console.log(
-      `[Orchestrator] Preflight start (${preflightCfg.secondary.provider}:${preflightCfg.secondary.model})`,
-    );
-    const preflightTaskLookupStartedAt = Date.now();
-    turnTiming.mark('preflight_blocked_task_lookup_start');
-    const preflightBlockedTask = findBlockedTaskForSession(sessionId);
-    turnTiming.mark('preflight_blocked_task_lookup_done', {
-      durationMs: Date.now() - preflightTaskLookupStartedAt,
-      found: !!preflightBlockedTask,
-    });
-    const preflight = await callSecondaryPreflight({
-      userMessage: message,
-      recentHistory: history.slice(-4).map(h => ({ role: h.role, content: h.content })),
-      blockedTask: preflightBlockedTask
-        ? {
-            id: preflightBlockedTask.id,
-            title: preflightBlockedTask.title,
-            // Clarify the status in human terms for the preflight prompt
-            status: preflightBlockedTask.status === 'awaiting_user_input'
-              ? 'awaiting_user_input (task asked user a question and is paused until they answer)'
-              : preflightBlockedTask.status,
-            currentStepIndex: preflightBlockedTask.currentStepIndex,
-            planLength: Array.isArray(preflightBlockedTask.plan) ? preflightBlockedTask.plan.length : 0,
-            pauseReason: preflightBlockedTask.pauseReason,
-          }
-        : undefined,
-    });
-
-    if (preflight) {
-      preflightRoute = preflight.route;
-      preflightReasonForTurn = String(preflight.reason || '').trim();
-      orchestrationLog.push(`[preflight:${preflight.route}] ${preflight.reason || 'no reason'}`);
-      console.log(
-        `[Orchestrator] Preflight route=${preflight.route} reason=${(preflight.reason || 'n/a').slice(0, 120)}`,
-      );
-      const stats = recordOrchestrationEvent(
-        sessionId,
-        {
-          trigger: 'preflight',
-          mode: 'planner',
-          reason: preflight.reason || 'preflight routing',
-          route: preflight.route,
-        },
-        preflightCfg,
-      );
-      sendSSE('orchestration', {
-        trigger: 'preflight',
-        mode: 'planner',
-        route: preflight.route,
-        reason: preflight.reason,
-        preflight,
-        assist_count: stats.assistCount,
-        assist_cap: preflightCfg.limits.max_assists_per_session,
-      });
-      const preflightProgressSteps = (
-        Array.isArray((preflight as any)?.quick_plan) ? (preflight as any).quick_plan
-          : Array.isArray((preflight as any)?.task_plan) ? (preflight as any).task_plan
-            : []
-      )
-        .map((line: any) => String(line || '').trim())
-        .filter(Boolean)
-        .slice(0, 6);
-      if (preflightProgressSteps.length >= 2) {
-        seedProgressFromLines(preflightProgressSteps, 'preflight');
-      }
-
-      // â”€â”€ Background task route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // Telegram sessions: never use background_task mode â€” run inline like normal chat.
-      // Background tasks lose the browser session aliasing and use a broken tool-arg
-      // serialisation path that causes browser_open to receive JSON strings instead of objects.
-      const isTelegramSession = String(sessionId || '').startsWith('telegram_');
-      if (preflight.route === 'background_task' && multiAgentActive && !isTelegramSession && !voiceAgentChatHandoffActive) {
-        const taskTitle = preflight.task_title || 'Background Task';
-        const taskPlan = (preflight.task_plan || []).map((desc: string, i: number) => ({
-          index: i,
-          description: desc,
-          status: 'pending' as const,
-        }));
-        const taskChannel = inferTaskChannelFromSession(sessionId);
-        const parsedTelegramChatId = taskChannel === 'telegram'
-          ? Number(String(sessionId || '').replace(/^telegram_/, ''))
-          : NaN;
-        const telegramChatId = Number.isFinite(parsedTelegramChatId) && parsedTelegramChatId > 0
-          ? parsedTelegramChatId
-          : undefined;
-        const task = createTask({
-          title: taskTitle,
-          prompt: message,
-          sessionId,
-          channel: taskChannel,
-          telegramChatId,
-          plan: taskPlan.length > 0 ? taskPlan : [{ index: 0, description: 'Execute task', status: 'pending' }],
-        });
-        appendJournal(task.id, { type: 'status_push', content: `Task queued: ${taskTitle}` });
-        // Issue 11: Seed runtimeProgress from the preflight plan immediately so the task
-        // panel shows steps before the BackgroundTaskRunner starts its first round.
-        // declare_plan inside handleChat will overwrite this once the runner fires.
-        if (preflightProgressSteps.length >= 2) {
-          updateTaskRuntimeProgress(task.id, {
-            source: 'preflight',
-            activeIndex: 0,
-            items: preflightProgressSteps.map((text: string, idx: number) => ({
-              id: `p${idx + 1}`,
-              text,
-              status: idx === 0 ? 'in_progress' : 'pending',
-            })),
-          });
-          // Also emit progress_state over the current HTTP SSE stream so the
-          // task panel widget in the active chat session sees the plan instantly.
-          sendSSE('progress_state', {
-            source: 'preflight',
-            reason: 'background_task_queued',
-            activeIndex: 0,
-            total: preflightProgressSteps.length,
-            items: preflightProgressSteps.map((text: string, idx: number) => ({
-              id: `p${idx + 1}`,
-              index: idx,
-              text,
-              status: idx === 0 ? 'in_progress' : 'pending',
-            })),
-          });
-        }
-        // Fire background runner (detached â€” does not block HTTP response)
-        const runner = new BackgroundTaskRunner(task.id, handleChat, makeBroadcastForTask(task.id), _telegramChannel);
-        runner.start().catch(err => console.error(`[BackgroundTaskRunner] Task ${task.id} error:`, err.message));
-        const queuedMessage = preflight.friendly_queued_message
-          || `On it! I've queued "${taskTitle}" as a background task. You can track progress in the Tasks panel.`;
-        sendSSE('task_queued', { taskId: task.id, title: taskTitle });
-        addMessage(sessionId, { role: 'assistant', content: queuedMessage, timestamp: Date.now() });
-        return { type: 'chat', text: queuedMessage };
-      }
-
-      if (
-        preflight.route === 'secondary_chat' &&
-        !voiceAgentChatHandoffActive &&
-        preflightCfg.preflight.allow_secondary_chat &&
-        preflight.secondary_response?.trim()
-      ) {
-        sendSSE('info', {
-          message: 'Advisor route selected secondary_chat. Returning secondary response directly.',
-        });
-        const text = preflight.secondary_response.trim();
-        return { type: 'chat', text };
-      }
-
-      if (preflight.route === 'secondary_chat' && (!preflightCfg.preflight.allow_secondary_chat || voiceAgentChatHandoffActive)) {
-        sendSSE('info', {
-          message: voiceAgentChatHandoffActive
-            ? 'Voice Agent requested the foreground Prometheus Worker. Continuing with primary.'
-            : 'Advisor suggested secondary_chat, but direct secondary chat is disabled. Continuing with primary.',
-        });
-      } else if (preflight.route === 'primary_direct') {
-        sendSSE('info', { message: 'Advisor route selected primary_direct. Continuing with primary response.' });
-        // If the advisor provided an executor_objective (e.g. agent_inspection â†’ call agent_list),
-        // inject it as a hint so the primary model follows the instruction instead of guessing.
-        if (preflight.executor_objective && preflight.executor_objective.trim()) {
-          const directHint = formatPreflightExecutionObjective(preflight);
-          messages.push({ role: 'user', content: directHint });
-          messages.push({ role: 'assistant', content: 'Understood. I will follow this guidance.' });
-        }
-      } else if (preflight.route === 'primary_with_plan') {
-        // primary_with_plan is retired when multi-agent is active â€” upgrade to background_task
-        // Exception: Telegram sessions always stay inline (no background tasks).
-        if (multiAgentActive && !isTelegramSession && !voiceAgentChatHandoffActive) {
-          sendSSE('info', { message: 'Advisor returned primary_with_plan but multi-agent is active â€” upgrading to background_task.' });
-          const taskTitle = preflight.task_title || (preflight.reason ? preflight.reason.slice(0, 60) : 'Background Task');
-          const taskPlan = (preflight.task_plan || preflight.quick_plan || []).map((desc: string, i: number) => ({
-            index: i, description: desc, status: 'pending' as const,
-          }));
-          const taskChannel = inferTaskChannelFromSession(sessionId);
-          const parsedTelegramChatId = taskChannel === 'telegram'
-            ? Number(String(sessionId || '').replace(/^telegram_/, ''))
-            : NaN;
-          const telegramChatId = Number.isFinite(parsedTelegramChatId) && parsedTelegramChatId > 0
-            ? parsedTelegramChatId
-            : undefined;
-          const task = createTask({
-            title: taskTitle,
-            prompt: message,
-            sessionId,
-            channel: taskChannel,
-            telegramChatId,
-            plan: taskPlan.length > 0 ? taskPlan : [{ index: 0, description: 'Execute task', status: 'pending' }],
-          });
-          appendJournal(task.id, { type: 'status_push', content: `Task queued (upgraded from primary_with_plan): ${taskTitle}` });
-          const runner = new BackgroundTaskRunner(task.id, handleChat, makeBroadcastForTask(task.id), _telegramChannel);
-          runner.start().catch((err: Error) => console.error(`[BackgroundTaskRunner] Task ${task.id} error:`, err.message));
-          const queuedMessage = preflight.friendly_queued_message
-            || `On it! I've queued "${taskTitle}" as a background task. You can track progress in the Tasks panel.`;
-          sendSSE('task_queued', { taskId: task.id, title: taskTitle });
-          addMessage(sessionId, { role: 'assistant', content: queuedMessage, timestamp: Date.now() });
-          return { type: 'chat', text: queuedMessage };
-        }
-        sendSSE('info', { message: 'Advisor route selected primary_with_plan. Injecting execution objective and plan guidance.' });
-      }
-
-      const shouldInjectObjective = preflight.route === 'primary_with_plan';
-      if (shouldInjectObjective) {
-        const objectiveHint = formatPreflightExecutionObjective(preflight);
-        const injected = replaceCurrentUserPromptWithAdvisorObjective(objectiveHint);
-        if (!injected) {
-          sendSSE('warn', {
-            message: 'Advisor objective injection failed; falling back to raw user prompt.',
-          });
-        }
-      }
-
-      if (preflight.route === 'primary_with_plan') {
-        const hint = formatPreflightHint(preflight);
-        messages.push({ role: 'user', content: hint });
-        messages.push({ role: 'assistant', content: 'Understood. I will follow this preflight guidance.' });
-      }
-    }
-  } else if (
-    preflightCfg?.enabled &&
-    !isBootStartupTurn &&
-    !isTaskRunnerSession &&
-    shouldRunPreflight(message, preflightCfg.preflight.mode) &&
-    orchestrationStats.assistCount >= preflightCfg.limits.max_assists_per_session
-  ) {
-    sendSSE('info', { message: 'Advisor preflight skipped: session assist cap reached.' });
-  }
 
   const resetBrowserAdvisorCollection = () => {
     browserAdvisorCollectedFeed.length = 0;
@@ -6325,664 +5804,13 @@ Do not produce prose. Use the canonical thread tool now.` });
     return { added, deduped, total: browserAdvisorCollectedFeed.length };
   };
 
-  const maybeRunBrowserAdvisorPass = async (
-    triggerToolName: string,
-    triggerResult: ToolResult,
-    triggerToolArgs?: Record<string, any>,
-    decision?: PostActionObservationDecision,
-    prefetchedPacket?: BrowserAdvisorPacket | null,
-  ): Promise<void> => {
-    if (!isBrowserToolName(triggerToolName)) return;
-    if (decision && !decision.shouldRunAdvisor) return;
-    if (!decision && triggerResult.error) return;
-    const orchCfg = getOrchestrationConfig();
-    if (!orchestrationSkillEnabled || !orchCfg?.enabled) return;
-    if (browserAdvisorCallsThisTurn >= browserMaxAdvisorCallsPerTurn) return;
-    if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) return;
 
-    const packet = prefetchedPacket
-      || await getBrowserAdvisorPacket(sessionId, { maxItems: browserPacketMaxItems, snapshotElements: 180 });
-    if (!packet) return;
-    const packetUrlKey = toUrlKey(packet.page.url);
-    if (
-      triggerToolName === 'browser_open'
-      || (browserAdvisorUrlKey && packetUrlKey && packetUrlKey !== browserAdvisorUrlKey && !browserContinuationPending)
-    ) {
-      resetBrowserAdvisorCollection();
-    }
-    browserAdvisorUrlKey = packetUrlKey || browserAdvisorUrlKey;
-    if (!browserStabilizeUrlKey || (packetUrlKey && packetUrlKey !== browserStabilizeUrlKey)) {
-      browserStabilizeUrlKey = packetUrlKey || browserStabilizeUrlKey;
-      browserStabilizeWaitRetries = 0;
-      browserStabilizeTabProbes = 0;
-      browserStabilizeExhausted = false;
-      browserVisionModeActive = false; // new page â€” start in DOM mode
-    }
-
-    const isFeedOrSearchPage = packet.page.pageType === 'x_feed' || packet.page.pageType === 'search_results';
-    const quality = evaluateBrowserSnapshotQuality(packet.snapshot, packet.snapshotElements, message);
-    if (quality.low) {
-      const diag = quality.diagnostics;
-      const diagMsg = diag
-        ? ` hidden=${diag.hidden}, unlabeled_non_input=${diag.unlabeledNonInput}, unnamed_input_included=${diag.unnamedInputIncluded}`
-        : '';
-      sendSSE('info', {
-        message: `Snapshot quality low: elements=${quality.elementCount}, input_candidates=${quality.inputCandidates}, reasons=${quality.reasons.join(' | ')}.${diagMsg}`,
-      });
-      const logLine = `[snapshot_quality] low | elements=${quality.elementCount} | inputs=${quality.inputCandidates} | reasons=${quality.reasons.join('; ')}`;
-      orchestrationLog.push(logLine.slice(0, 260));
-    }
-
-    const stabilizationEligibleTool = (
-      triggerToolName === 'browser_open'
-      || triggerToolName === 'browser_snapshot'
-      || triggerToolName === 'browser_wait'
-      || triggerToolName === 'browser_press_key'
-    );
-    const stabilizationEligiblePage = packet.page.pageType === 'generic' || packet.page.pageType === 'article';
-    const shouldAutoStabilize =
-      quality.elementCount < 10
-      || (goalLikelyNeedsTextInput(message) && quality.inputCandidates === 0);
-    if (
-      stabilizationEligibleTool
-      && stabilizationEligiblePage
-      && quality.low
-      && shouldAutoStabilize
-      && !isFeedOrSearchPage
-      && !browserStabilizeExhausted
-    ) {
-      if (browserStabilizeWaitRetries < browserStabilizeMaxWaitRetries) {
-        browserStabilizeWaitRetries += 1;
-        browserContinuationPending = true;
-        browserAdvisorRoute = 'continue_browser';
-        browserAdvisorHintPreview = 'Snapshot stabilization in progress';
-        pendingSyntheticToolCalls = [
-          { function: { name: 'browser_wait', arguments: { ms: 1500 } } },
-          { function: { name: 'browser_snapshot', arguments: {} } },
-        ];
-        sendSSE('info', {
-          message: `Snapshot stabilization: wait+snapshot (${browserStabilizeWaitRetries}/${browserStabilizeMaxWaitRetries}) before advisor routing.`,
-        });
-        return;
-      }
-
-      const shouldProbeFocus = goalLikelyNeedsTextInput(message) && quality.inputCandidates === 0;
-      if (shouldProbeFocus && browserStabilizeTabProbes < browserStabilizeMaxTabProbes) {
-        browserStabilizeTabProbes += 1;
-        browserContinuationPending = true;
-        browserAdvisorRoute = 'continue_browser';
-        browserAdvisorHintPreview = 'Input focus probe in progress';
-        pendingSyntheticToolCalls = [
-          { function: { name: 'browser_press_key', arguments: { key: 'Tab' } } },
-          { function: { name: 'browser_wait', arguments: { ms: 500 } } },
-          { function: { name: 'browser_snapshot', arguments: {} } },
-        ];
-        sendSSE('info', {
-          message: `Snapshot stabilization: Tab focus probe (${browserStabilizeTabProbes}/${browserStabilizeMaxTabProbes}) to surface input controls.`,
-        });
-        return;
-      }
-
-      browserStabilizeExhausted = true;
-      sendSSE('info', {
-        message: 'Snapshot stabilization exhausted for this page; proceeding with current snapshot evidence.',
-      });
-
-      // â”€â”€â”€ Component 4: Vision Fallback Trigger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // After stabilization is exhausted AND DOM is still sparse, try vision fallback.
-      // We capture a Playwright viewport screenshot and pass it to the advisor so it
-      // can identify UI elements visually and route browser_vision_click/type instead.
-      const orchCfgForVision = getOrchestrationConfig();
-      const visionEligible =
-        orchestrationSkillEnabled &&
-        orchCfgForVision?.enabled &&
-        quality.elementCount < 10 &&
-        !browserVisionModeActive &&
-        secondarySupportsVision(orchCfgForVision);
-
-      if (visionEligible) {
-        const vshot = await browserVisionScreenshot(sessionId);
-        if (vshot) {
-          browserVisionModeActive = true;
-          sendSSE('info', {
-            message: `Vision fallback activated: DOM has only ${quality.elementCount} elements. Capturing viewport screenshot for vision-guided routing.`,
-          });
-          sendSSE('browser_vision_mode', {
-            active: true,
-            elementCount: quality.elementCount,
-            viewport: { width: vshot.width, height: vshot.height },
-          });
-          // The screenshot will be passed to the advisor on the next advisor call below.
-          // We store it temporarily on the packet by augmenting the advisor input below.
-          // Flag is read in the advisor input construction.
-        } else {
-          sendSSE('info', { message: 'Vision fallback: screenshot capture failed, proceeding without vision.' });
-        }
-      }
-      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    } else if (
-      !quality.low
-      && (browserStabilizeWaitRetries > 0 || browserStabilizeTabProbes > 0 || browserVisionModeActive)
-    ) {
-      // DOM has recovered â€” exit vision mode if active
-      if (browserVisionModeActive) {
-        browserVisionModeActive = false;
-        sendSSE('info', {
-          message: `DOM recovered: ${quality.elementCount} elements visible. Exiting vision mode â€” switching back to DOM refs.`,
-        });
-        sendSSE('browser_vision_mode', { active: false, elementCount: quality.elementCount });
-      } else {
-        sendSSE('info', {
-          message: `Snapshot stabilization complete: elements=${quality.elementCount}, input_candidates=${quality.inputCandidates}.`,
-        });
-      }
-      browserStabilizeWaitRetries = 0;
-      browserStabilizeTabProbes = 0;
-      browserStabilizeExhausted = false;
-    } else if (browserVisionModeActive && quality.elementCount >= 10) {
-      // Vision mode active but DOM has now recovered â€” clear it
-      browserVisionModeActive = false;
-      sendSSE('info', {
-        message: `DOM recovered to ${quality.elementCount} elements. Exiting vision mode.`,
-      });
-      sendSSE('browser_vision_mode', { active: false, elementCount: quality.elementCount });
-    }
-
-    if (
-      !isBrowserHeavyResearchPage({
-        url: packet.page.url,
-        pageType: packet.page.pageType,
-        snapshotElements: packet.snapshotElements,
-        feedCount: packet.extractedFeed.length,
-      })
-    ) {
-      return;
-    }
-    const hashUnchanged = packet.contentHash === browserAdvisorLastHash;
-    if (hashUnchanged && !browserContinuationPending) {
-      // On non-feed interactive pages, a stuck snapshot hash means the model is looping.
-      // After 2 consecutive identical snapshots, force the advisor to run so it generates
-      // a concrete @ref-based action instead of silently returning and letting the model re-snapshot.
-      consecutiveUnchangedSnapshots += 1;
-      if (consecutiveUnchangedSnapshots >= 2) {
-        // Force advisor call â€” override the early return so it runs with existing data.
-        // Applies to ALL page types including feed pages: if the snapshot hasn't changed,
-        // the model is looping and needs a concrete directive from the advisor.
-        browserContinuationPending = true;
-        browserAdvisorRoute = 'continue_browser';
-        browserAdvisorHintPreview = 'Snapshot unchanged â€” forcing advisor to generate concrete action';
-        sendSSE('info', { message: `Snapshot hash unchanged (${consecutiveUnchangedSnapshots}x) â€” forcing browser advisor to generate concrete action.` });
-        // Don't return â€” fall through to advisor call below
-      } else {
-        return;
-      }
-    } else {
-      consecutiveUnchangedSnapshots = 0;
-    }
-    browserAdvisorLastHash = packet.contentHash;
-    browserAdvisorCallsThisTurn += 1;
-    browserAdvisorBatch += 1;
-
-    const merged = mergeBrowserFeedBatch(packet.extractedFeed as Array<Record<string, any>>);
-    const isFeedCollectionPage = packet.page.pageType === 'x_feed' || packet.page.pageType === 'search_results';
-    if (isFeedCollectionPage) {
-      browserNoFeedProgressStreak = merged.added > 0 ? 0 : (browserNoFeedProgressStreak + 1);
-    } else {
-      browserNoFeedProgressStreak = 0;
-    }
-
-    sendSSE('browser_advisor_start', {
-      trigger_tool: triggerToolName,
-      page_type: packet.page.pageType,
-      url: packet.page.url,
-      snapshot_elements: packet.snapshotElements,
-      extracted_count: packet.extractedFeed.length,
-    });
-    sendSSE('feed_collected', {
-      batch: browserAdvisorBatch,
-      added: merged.added,
-      total: merged.total,
-      deduped: merged.deduped,
-      url: packet.page.url,
-    });
-
-    const recentFailures = allToolResults
-      .filter((r) => r.error)
-      .slice(-4)
-      .map((r) => `${r.name}: ${String(r.result || '').slice(0, 180)}`);
-
-    const advisorFeed = browserAdvisorCollectedFeed.length > 0
-      ? browserAdvisorCollectedFeed.slice(-browserMaxCollectedItems)
-      : (packet.extractedFeed as Array<Record<string, any>>);
-
-    // â”€â”€ Change 5: chat_interface generation-wait â€” skip advisor, inject synthetic wait â”€â”€
-    if (browserAutoSnapshotRetriesEnabled && packet.page.pageType === 'chat_interface' && packet.isGenerating) {
-      sendSSE('info', { message: 'Browser: chat interface still generating â€” waiting for response before advising.' });
-      pendingSyntheticToolCalls = [
-        { function: { name: 'browser_wait', arguments: { ms: 3000 } } },
-        { function: { name: 'browser_snapshot', arguments: {} } },
-      ];
-      return; // don't call advisor yet â€” next round will re-enter this function with fresh snapshot
-    }
-
-    // Component 4: capture fresh viewport screenshot for advisor when vision mode is active.
-    // We do this every advisor call while vision mode is on so the advisor always has
-    // the current page state, not a stale one from stabilization.
-    let visionShotBase64: string | undefined;
-    if (browserVisionModeActive) {
-      const vshot = await browserVisionScreenshot(sessionId);
-      visionShotBase64 = vshot?.base64;
-    }
-
-    let advisor = await callSecondaryBrowserAdvisor({
-      goal: message,
-      minFeedItemsBeforeAnswer: browserMinFeedItemsBeforeAnswer,
-      page: {
-        title: packet.page.title,
-        url: packet.page.url,
-        pageType: packet.page.pageType,
-        snapshotElements: packet.snapshotElements,
-      },
-      extractedFeed: advisorFeed,
-      textBlocks: packet.textBlocks,
-      snapshot: packet.snapshot,
-      scrollState: {
-        batch: browserAdvisorBatch,
-        total_collected: advisorFeed.length,
-        dedupe_count: browserAdvisorDedupeCount,
-      },
-      lastActions: orchestrationLog.slice(-8),
-      recentFailures,
-      pageText: packet.pageText,
-      isGenerating: packet.isGenerating,
-      // Vision fields (only populated in vision mode)
-      screenshotBase64: visionShotBase64,
-      visionModeActive: browserVisionModeActive,
-    });
-    if (!advisor) return;
-
-    // Guardrail: collect_more should only run on feed/search collection pages.
-    // For generic pages (e.g. chatgpt.com composer), force decisive routing.
-    if (advisor.route === 'collect_more' && !isFeedCollectionPage) {
-      sendSSE('info', {
-        message: 'Browser advisor override: collect_more disabled on non-feed page; switching to direct interaction mode.',
-      });
-      advisor = {
-        ...advisor,
-        route: 'handoff_primary',
-        reason: 'collect_more disabled for non-feed pages; choose a concrete interaction from current snapshot.',
-        next_tool: { tool: 'browser_snapshot', params: {} },
-        primary_hint: 'Do not scroll/PageDown here. Use the current snapshot refs to click/fill the correct control directly.',
-      };
-    }
-
-    // Guardrail: if feed collection is making no progress, stop scroll loops.
-    if (
-      advisor.route === 'collect_more'
-      && isFeedCollectionPage
-      && browserNoFeedProgressStreak >= 2
-      && advisorFeed.length === 0
-    ) {
-      sendSSE('info', {
-        message: 'Browser advisor override: collection stalled with zero extracted items; stopping scroll loop.',
-      });
-      advisor = {
-        ...advisor,
-        route: 'continue_browser',
-        reason: 'No feed items extracted after repeated collection attempts; stop scrolling and select a concrete next interaction.',
-        next_tool: { tool: 'browser_snapshot', params: {} },
-        primary_hint: 'Collection is stalled (0 extracted). Do not keep PageDown looping. Use snapshot evidence and pick a concrete click/fill step.',
-      };
-    }
-
-    if (advisor.route === 'collect_more') {
-      if (!advisor.next_tool?.tool) {
-        advisor = {
-          ...advisor,
-          next_tool: { tool: 'browser_press_key', params: { key: 'PageDown' } },
-        };
-      } else if (
-        advisor.next_tool.tool === 'browser_press_key'
-        && (!advisor.next_tool.params || !advisor.next_tool.params.key)
-      ) {
-        advisor = {
-          ...advisor,
-          next_tool: { tool: 'browser_press_key', params: { ...(advisor.next_tool.params || {}), key: 'PageDown' } },
-        };
-      }
-    }
-
-    const hint = formatBrowserAdvisorHint(advisor);
-    const stats = recordOrchestrationEvent(
-      sessionId,
-      {
-        trigger: 'auto',
-        mode: 'planner',
-        reason: `browser_advisor:${advisor.route}${advisor.reason ? ` (${advisor.reason})` : ''}`,
-        route: advisor.route,
-      },
-      orchCfg,
-    );
-
-    browserAdvisorRoute = advisor.route;
-    browserAdvisorHintPreview = String(advisor.primary_hint || advisor.reason || advisor.answer || '').slice(0, 220);
-    browserContinuationPending = advisor.route === 'continue_browser' || advisor.route === 'collect_more' || advisor.route === 'vision_interact';
-    if (!browserContinuationPending) {
-      browserForcedRetries = 0;
-    }
-
-    sendSSE('browser_advisor_route', {
-      route: advisor.route,
-      reason: advisor.reason,
-      answer: advisor.answer || '',
-      primary_hint: advisor.primary_hint || '',
-      next_tool: advisor.next_tool || null,
-      collect_policy: advisor.collect_policy || null,
-      raw_response: advisor.raw_response || '',
-      assist_count: stats.assistCount,
-      assist_cap: orchCfg.limits.max_assists_per_session,
-    });
-    sendSSE('browser_advisor_nudge', {
-      route: advisor.route,
-      preview: browserAdvisorHintPreview,
-    });
-
-    orchestrationLog.push(`[browser:${advisor.route}] ${String(advisor.reason || 'n/a').slice(0, 200)}`);
-
-    // â”€â”€ Synthetic tool call injection for deterministic collect_more scrolls â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // When the advisor says scroll (PageDown), skip LLM generation entirely.
-    // Inject as a synthetic assistant message that the main loop executes directly.
-    // This eliminates the 75s stall window between advisor directive and actual scroll.
-    const isCollectMoreScroll = advisor.route === 'collect_more'
-      && multiAgentActive
-      && isFeedCollectionPage
-      && advisor.next_tool?.tool === 'browser_press_key';
-    const isCollectMoreWait = advisor.route === 'collect_more'
-      && multiAgentActive
-      && isFeedCollectionPage
-      && advisor.next_tool?.tool === 'browser_wait';
-
-    if (browserAutoSnapshotRetriesEnabled && (isCollectMoreScroll || isCollectMoreWait)) {
-      // Queue synthetic tool calls: scroll + wait + snapshot (all deterministic)
-      const scrollParams = advisor.next_tool!.params || { key: 'PageDown' };
-      pendingSyntheticToolCalls = [
-        { function: { name: advisor.next_tool!.tool, arguments: scrollParams } },
-        { function: { name: 'browser_wait', arguments: { ms: 1500 } } },
-        { function: { name: 'browser_snapshot', arguments: {} } },
-      ];
-      sendSSE('info', { message: `Advisor: synthetic scroll queued (${advisor.route}) â€” skipping LLM generation.` });
-      // Push a compact hint so the LLM knows what happened after the synthetic round
-      messages.push({ role: 'user', content: hint });
-      messages.push({ role: 'assistant', content: `[ADVISOR] ${advisorFeed.length}/${browserMinFeedItemsBeforeAnswer} items. Scrolling for more.` });
-      return;
-    }
-
-    // For non-deterministic steps, use the normal message injection path
-    // â”€â”€ Changes 2 & 3: context wipe + stripped executor system for browser ops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Secondary holds full state via buildSecondaryAssistContext().
-    // Primary only needs: minimal system + original goal + last 4 tool acks + this directive.
-    // Wipe now, before pushing the hint pair, so the hint ends up at the bottom cleanly.
-    if (multiAgentActive) {
-      const systemMsg = messages[0]; // always keep system at [0]
-      // Stripped executor system â€” no editing rules, no identity prose, just tool list + 3 rules
-      const strippedSystem = {
-        role: 'system',
-        content: `You are Prom. Execute browser tool calls exactly as instructed by the advisor directive below.
-
-BROWSER TOOLS: browser_open, browser_snapshot, browser_click, browser_fill, browser_drag, browser_upload_file, browser_press_key, browser_wait, browser_scroll, browser_click_and_download, browser_close, web_fetch, download_url, download_media, generate_image, generate_video
-
-RULES:
-1. Call exactly the tool and params the advisor specifies.
-2. Do not think, plan, or explain. Just call the tool.
-3. Prefer snapshot/screenshot evidence over browser_run_js unless a JS inspection is explicitly required.
-4. If the directive says answer_now, respond in 1-2 sentences using the provided draft.`,
-      };
-      // Keep last 4 tool-result messages so the LLM has minimal recent action context
-      const recentToolMsgs = messages
-        .filter((m: any) => m.role === 'tool')
-        .slice(-4);
-      // Rebuild messages: stripped system + goal + last 4 tool acks
-      messages.length = 0;
-      messages.push(strippedSystem);
-      messages.push({ role: 'user', content: message });
-      messages.push({ role: 'assistant', content: 'Understood. Executing browser task.' });
-      for (const tm of recentToolMsgs) messages.push(tm);
-    }
-
-    messages.push({ role: 'user', content: hint });
-    messages.push({ role: 'assistant', content: 'Understood. Continuing with browser advisor guidance.' });
-    if (advisor.route === 'answer_now' && advisor.answer.trim()) {
-      messages.push({
-        role: 'user',
-        content: `Use the browser evidence and answer now in 1-2 concise sentences. Draft answer: ${advisor.answer.slice(0, 700)}`,
-      });
-    } else if (advisor.next_tool?.tool) {
-      const isWebFetchStep = advisor.next_tool.tool === 'web_fetch';
-      const collectTail = advisor.route === 'collect_more' && !isWebFetchStep
-        ? ' Then continue collection: if needed call browser_wait(1200), and capture browser_snapshot before deciding again only if new content should have loaded or the UI is still ambiguous.'
-        : '';
-      const webFetchNote = isWebFetchStep
-        ? ' Use web_fetch (not browser_open) since you already have the URL and only need the text content.'
-        : '';
-      messages.push({
-        role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. Do not stop with intent text. After this step, capture browser_snapshot or browser_vision_screenshot only if state likely changed or the UI is ambiguous before deciding again.${collectTail}${webFetchNote}`,
-      });
-    }
-  };
-
-  const maybeRunDesktopAdvisorPass = async (
-    triggerToolName: string,
-    triggerResult: ToolResult,
-    decision?: PostActionObservationDecision,
-  ): Promise<void> => {
-    if (!isDesktopToolName(triggerToolName)) return;
-    if (decision && !decision.shouldRunAdvisor) return;
-    if (!decision && triggerResult.error) return;
-    if (!isDesktopVisualToolName(triggerToolName, triggerResult?.args as any)) return;
-    const orchCfg = getOrchestrationConfig();
-    if (!orchestrationSkillEnabled || !orchCfg?.enabled) return;
-    if (desktopAdvisorCallsThisTurn >= desktopMaxAdvisorCallsPerTurn) return;
-    if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) return;
-
-    const packet = getDesktopAdvisorPacket(sessionId);
-    if (!packet) return;
-
-    desktopAdvisorCallsThisTurn += 1;
-    sendSSE('desktop_advisor_start', {
-      trigger_tool: triggerToolName,
-      active_window: packet.activeWindow?.title || '',
-      open_windows: packet.openWindows.length,
-      width: packet.width,
-      height: packet.height,
-      ocr_confidence: Number(packet.ocrConfidence || 0),
-      ocr_chars: String(packet.ocrText || '').length,
-    });
-
-    const recentFailures = allToolResults
-      .filter((r) => r.error)
-      .slice(-4)
-      .map((r) => `${r.name}: ${String(r.result || '').slice(0, 180)}`);
-    const clipboardPreview = (() => {
-      for (let i = allToolResults.length - 1; i >= 0; i--) {
-        const r = allToolResults[i];
-        if (!r || r.error) continue;
-        if (r.name !== 'desktop_get_clipboard') continue;
-        return String(r.result || '').slice(0, 1200);
-      }
-      return '';
-    })();
-
-    const advisor = await callSecondaryDesktopAdvisor({
-      goal: message,
-      screenshot: {
-        width: packet.width,
-        height: packet.height,
-        capturedAt: packet.capturedAt,
-        contentHash: packet.contentHash,
-      },
-      // Pass the raw screenshot to the advisor when available. The advisor function
-      // will only inject it as an image_url content part when the secondary provider
-      // supports vision (openai / openai_codex). For Ollama/llama.cpp it is ignored.
-      screenshotBase64: packet.screenshotBase64 || undefined,
-      activeWindow: packet.activeWindow
-        ? { processName: packet.activeWindow.processName, title: packet.activeWindow.title }
-        : undefined,
-      openWindows: packet.openWindows.slice(0, 40).map((w) => ({ processName: w.processName, title: w.title })),
-      lastActions: orchestrationLog.slice(-8),
-      recentFailures,
-      clipboardPreview,
-      ocrText: packet.ocrText || '',
-      ocrConfidence: Number(packet.ocrConfidence || 0),
-    });
-    if (!advisor) return;
-
-    const hint = formatDesktopAdvisorHint(advisor);
-    const stats = recordOrchestrationEvent(
-      sessionId,
-      {
-        trigger: 'auto',
-        mode: 'planner',
-        reason: `desktop_advisor:${advisor.route}${advisor.reason ? ` (${advisor.reason})` : ''}`,
-        route: advisor.route,
-      },
-      orchCfg,
-    );
-
-    desktopAdvisorRoute = advisor.route;
-    desktopAdvisorHintPreview = String(advisor.primary_hint || advisor.reason || advisor.answer || '').slice(0, 220);
-    desktopContinuationPending = advisor.route === 'continue_desktop';
-
-    sendSSE('desktop_advisor_route', {
-      route: advisor.route,
-      reason: advisor.reason,
-      answer: advisor.answer || '',
-      primary_hint: advisor.primary_hint || '',
-      next_tool: advisor.next_tool || null,
-      raw_response: advisor.raw_response || '',
-      assist_count: stats.assistCount,
-      assist_cap: orchCfg.limits.max_assists_per_session,
-    });
-    sendSSE('desktop_advisor_nudge', {
-      route: advisor.route,
-      preview: desktopAdvisorHintPreview,
-    });
-
-    orchestrationLog.push(`[desktop:${advisor.route}] ${String(advisor.reason || 'n/a').slice(0, 200)}`);
-
-    if (multiAgentActive) {
-      const strippedSystem = {
-        role: 'system',
-        content: `You are Prom. Execute desktop tool calls exactly as instructed by the advisor directive below.
-
-DESKTOP TOOLS: desktop_list_apps, desktop_list_windows, desktop_get_window_state, desktop_screenshot, desktop_get_monitors, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_scroll, desktop_wait, desktop_type, desktop_type_raw, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard, desktop_window_click, desktop_window_type, desktop_window_press_key, desktop_window_scroll, desktop_window_drag
-WINDOW-SCOPED MODEL: Prefer desktop_list_windows / desktop_get_window_state to resolve a stable window_id, then desktop_window_click / desktop_window_type / desktop_window_press_key (coordinates default to window-space) for deterministic targeting of a specific app window.
-
-RULES:
-1. Call exactly the tool and params the advisor specifies.
-2. Do not think, plan, or explain. Just call the tool.
-3. If the directive says answer_now, respond in 1-2 sentences using the provided draft.`,
-      };
-      const recentToolMsgs = messages
-        .filter((m: any) => m.role === 'tool')
-        .slice(-4);
-      messages.length = 0;
-      messages.push(strippedSystem);
-      messages.push({ role: 'user', content: message });
-      messages.push({ role: 'assistant', content: 'Understood. Executing desktop task.' });
-      for (const tm of recentToolMsgs) messages.push(tm);
-    }
-
-    messages.push({ role: 'user', content: hint });
-    messages.push({ role: 'assistant', content: 'Understood. Continuing with desktop advisor guidance.' });
-    if (advisor.route === 'answer_now' && advisor.answer.trim()) {
-      messages.push({
-        role: 'user',
-        content: `Use desktop evidence and answer now in 1-2 concise sentences. Draft answer: ${advisor.answer.slice(0, 700)}`,
-      });
-    } else if (advisor.next_tool?.tool) {
-      messages.push({
-        role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. After acting, capture desktop_screenshot again only if the UI likely changed or the outcome is ambiguous before deciding the next step.`,
-      });
-    }
-  };
-
-  if (fileOpV2Active && fileOpType === 'FILE_ANALYSIS') {
-    sendSSE('info', { message: 'FILE_OP v2: delegating analysis to secondary model.' });
-    const candidateFiles = (() => {
-      try {
-        return fs.readdirSync(workspacePath, { withFileTypes: true })
-          .filter(e => e.isFile())
-          .map(e => e.name)
-          .slice(0, 80);
-      } catch {
-        return [] as string[];
-      }
-    })();
-    const analysis = await callSecondaryFileAnalyzer({
-      userMessage: message,
-      recentHistory: history.slice(-6).map(h => ({ role: h.role, content: h.content })),
-      candidateFiles,
-    });
-    if (analysis) {
-      maybeSaveFileOpCheckpoint({
-        phase: 'done',
-        next_action: 'analysis complete',
-      });
-      clearFileOpCheckpoint(sessionId);
-      const lines: string[] = [];
-      if (analysis.summary) lines.push(analysis.summary);
-      if (analysis.diagnosis) lines.push(`Diagnosis: ${analysis.diagnosis}`);
-      if (analysis.exact_files.length) lines.push(`Files: ${analysis.exact_files.join(', ')}`);
-      if (analysis.edit_plan.length) lines.push(`Plan: ${analysis.edit_plan.join(' -> ')}`);
-      const text = lines.join('\n');
-      return { type: 'chat', text };
-    }
-    // Secondary unavailable â€” fail-closed. Spec: FILE_ANALYSIS is always Secondary, no primary fallback.
-    sendSSE('info', { message: 'FILE_OP v2: secondary analyzer unavailable; cannot complete FILE_ANALYSIS (fail-closed).' });
-    return { type: 'chat', text: 'Analysis could not be completed: the secondary model is unavailable. Please try again.' };
-  }
 
   // â”€â”€ FILE_CREATE upfront size routing â”€â”€
   // If the request is clearly secondary territory (full page / large template),
   // skip primary entirely â€” queue secondary patch plan now so round 0 executes
   // it as synthetic calls without ever running the LLM for generation.
   // This eliminates the stallâ†’restart spiral for large creates.
-  if (
-    fileOpV2Active
-    && fileOpType === 'FILE_CREATE'
-    && fileOpOwner === 'primary'
-    && pendingSyntheticToolCalls.length === 0
-  ) {
-    const looksLarge = requestedFullTemplate(message)
-      || /\b(landing page|full html|multi.?section|multiple sections|panels?|sections?.+panels?|panels?.+sections?|full.?page|whole page|full.?site|complete.?page)\b/i.test(message);
-    if (looksLarge) {
-      fileOpOwner = 'secondary';
-      fileOpPrimaryStallPromoted = true;
-      sendSSE('info', {
-        message: 'FILE_OP v2: large FILE_CREATE detected upfront â€” routing directly to secondary (skipping primary generation).',
-      });
-      maybeSaveFileOpCheckpoint({ phase: 'plan', next_action: 'upfront secondary routing for large create' });
-      const patchPlan = await callSecondaryFilePatchPlanner({
-        userMessage: message,
-        operationType: 'FILE_CREATE',
-        owner: 'secondary',
-        reason: 'Upfront large-create detection: request exceeds primary create thresholds before generation',
-        fileSnapshots: collectFileSnapshots(workspacePath, Array.from(fileOpTouchedFiles)),
-        verifier: null,
-      });
-      if (patchPlan?.tool_calls?.length) {
-        pendingSyntheticToolCalls = patchPlan.tool_calls.map((tc: any) => ({
-          function: { name: tc.tool, arguments: tc.args || {} },
-        }));
-        sendSSE('info', {
-          message: `FILE_OP v2: queued ${pendingSyntheticToolCalls.length} secondary call(s) for large create.`,
-        });
-        maybeSaveFileOpCheckpoint({ phase: 'execute', next_action: 'execute secondary upfront create batch' });
-      }
-    }
-  }
 
   sendSSE('info', { message: 'Thinking...' });
   console.log('[v2] -- CHAT --');
@@ -7210,18 +6038,6 @@ RULES:
           continuationNudges = 0;
         }
         // Fire advisor after each browser/desktop tool in the synthetic batch
-        await maybeRunBrowserAdvisorPass(
-          appliedObservation.advisorTriggerToolName,
-          appliedObservation.advisorTriggerToolResult,
-          appliedObservation.advisorTriggerToolArgs,
-          appliedObservation.decision,
-          appliedObservation.browserAfterPacket,
-        );
-        await maybeRunDesktopAdvisorPass(
-          appliedObservation.advisorTriggerToolName,
-          appliedObservation.advisorTriggerToolResult,
-          appliedObservation.decision,
-        );
       }
 
       sendSSE('info', { message: 'Synthetic steps complete.' });
@@ -7232,92 +6048,6 @@ RULES:
     // â”€â”€ Secondary-owned FILE_OP: skip Ollama, run verify, return directly â”€â”€
     // When secondary has already executed all patch calls there is nothing left
     // for primary to do. Build the reply from what we already know in-memory.
-    if (
-      fileOpV2Active
-      && fileOpOwner === 'secondary'
-      && pendingSyntheticToolCalls.length === 0
-      && fileOpToolHistory.some(h => isFileMutationTool(h.tool))
-    ) {
-      // Run verification if triggered
-      const verifyDecision = shouldVerifyFileTurn({
-        had_create: fileOpHadCreate,
-        user_requested_full_template: requestedFullTemplate(message),
-        primary_write_lines: fileOpPrimaryWriteLines,
-        primary_write_chars: fileOpPrimaryWriteChars,
-        had_tool_failure: fileOpHadToolFailure,
-        touched_files: Array.from(fileOpTouchedFiles),
-        high_stakes_touched: Array.from(fileOpTouchedFiles).some(isHighStakesFile),
-      }, fileOpSettings);
-
-      if (verifyDecision.verify) {
-        sendSSE('info', { message: `FILE_OP v2: verifier check (${verifyDecision.reasons.join(' | ')}).` });
-        maybeSaveFileOpCheckpoint({ phase: 'verify', next_action: 'run secondary verifier' });
-        const targetFiles = Array.from(fileOpTouchedFiles);
-        const verifier = await callSecondaryFileVerifier({
-          userMessage: message,
-          operationType: fileOpType as 'FILE_CREATE' | 'FILE_EDIT',
-          fileSnapshots: collectFileSnapshots(workspacePath, targetFiles),
-          recentToolExecutions: fileOpToolHistory.slice(-24).map(h => ({
-            tool: h.tool, args: h.args, result: h.result, error: h.error,
-          })),
-        });
-        if (verifier?.verdict === 'FAIL') {
-          // Re-enter the repair loop by queuing a secondary patch plan and continuing
-          const patchPlan = await callSecondaryFilePatchPlanner({
-            userMessage: message,
-            operationType: fileOpType as 'FILE_CREATE' | 'FILE_EDIT',
-            owner: 'secondary',
-            reason: (verifier.reasons || []).join(' | ') || 'verifier fail',
-            fileSnapshots: collectFileSnapshots(workspacePath, targetFiles),
-            verifier,
-          });
-          if (patchPlan?.tool_calls?.length) {
-            pendingSyntheticToolCalls = patchPlan.tool_calls.map((tc: any) => ({
-              function: { name: tc.tool, arguments: tc.args || {} },
-            }));
-            maybeSaveFileOpCheckpoint({ phase: 'execute', next_action: 'repair after verify fail' });
-            continue; // back to top of round loop â€” executes repair batch next
-          }
-        } else if (verifier?.verdict === 'PASS') {
-          maybeSaveFileOpCheckpoint({ phase: 'done', next_action: 'verification pass' });
-          clearFileOpCheckpoint(sessionId);
-        }
-      } else {
-        maybeSaveFileOpCheckpoint({ phase: 'done', next_action: 'turn complete' });
-        clearFileOpCheckpoint(sessionId);
-      }
-
-      // Build reply from actual results â€” no Ollama, no extra AI call
-      const createdFiles = fileOpToolHistory
-        .filter(h => h.tool === 'create_file' && !h.error)
-        .map(h => String(h.args?.filename || h.args?.name || h.args?.path || 'file'));
-      const editedFiles = fileOpToolHistory
-        .filter(h => isFileMutationTool(h.tool) && h.tool !== 'create_file' && !h.error)
-        .map(h => String(h.args?.filename || h.args?.name || h.args?.path || 'file'));
-      const failedOps = fileOpToolHistory.filter(h => h.error);
-
-      const parts: string[] = [];
-      if (createdFiles.length) parts.push(`Created ${createdFiles.join(', ')}`);
-      if (editedFiles.length) parts.push(`Updated ${[...new Set(editedFiles)].join(', ')}`);
-      if (failedOps.length) parts.push(`${failedOps.length} operation(s) failed`);
-      const finalText = parts.length ? parts.join('. ') + '.' : 'Done.';
-
-      console.log(`[v2] FINAL (secondary-owned): ${finalText}`);
-      if (progressState.items.length >= 2) {
-        for (const item of progressState.items) {
-          if (item.status === 'in_progress') item.status = 'done';
-          else if (item.status === 'pending') item.status = 'skipped';
-        }
-        progressState.activeIndex = -1;
-        emitProgressState('finalized');
-      }
-      const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
-      return {
-        type: 'execute',
-        text: finalTextWithSkillOffer,
-        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
-      };
-    }
 
     let response: any;
     let responseStopReason: string | undefined;
@@ -7353,9 +6083,7 @@ RULES:
       // holds all context and issues exact directives; the primary just executes.
       // Thinking during browser ops burns the full stall threshold (110s) for no gain.
       const isActiveAutomationOp = multiAgentActive && (
-        fileOpType === 'BROWSER_OP'
-        || fileOpType === 'DESKTOP_OP'
-        || browserContinuationPending
+        browserContinuationPending
         || browserAdvisorRoute !== null
         || desktopContinuationPending
         || desktopAdvisorRoute !== null
@@ -7769,42 +6497,6 @@ RULES:
 
         if (watchdogOutcome.timedOut) {
           // â”€â”€ FILE_OP stall: bypass preempt restart entirely, promote immediately â”€â”€
-          if (
-            fileOpV2Active
-            && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
-            && fileOpOwner === 'primary'
-          ) {
-            sendSSE('info', {
-              message: `FILE_OP v2: stall detected during ${fileOpType} after ${Math.round(watchdogOutcome.elapsedMs / 1000)}s â€” promoting immediately to secondary (no Ollama restart).`,
-            });
-            fileOpOwner = 'secondary';
-            fileOpPrimaryStallPromoted = true;
-            maybeSaveFileOpCheckpoint({
-              phase: 'repair',
-              next_action: 'stall promotion to secondary patch planning',
-            });
-            const patchPlan = await callSecondaryFilePatchPlanner({
-              userMessage: message,
-              operationType: fileOpType,
-              owner: fileOpOwner,
-              reason: `Primary stalled after ${Math.round(watchdogOutcome.elapsedMs / 1000)}s`,
-              fileSnapshots: collectFileSnapshots(workspacePath, Array.from(fileOpTouchedFiles)),
-              verifier: null,
-            });
-            if (patchPlan?.tool_calls?.length) {
-              pendingSyntheticToolCalls = patchPlan.tool_calls.map((tc: any) => ({
-                function: { name: tc.tool, arguments: tc.args || {} },
-              }));
-              sendSSE('info', {
-                message: `FILE_OP v2: queued ${patchPlan.tool_calls.length} secondary patch call(s) after stall promotion.`,
-              });
-              maybeSaveFileOpCheckpoint({
-                phase: 'execute',
-                next_action: 'execute secondary synthetic patch batch',
-              });
-            }
-            continue;
-          }
 
           // â”€â”€ Non-FILE_OP stall: normal preempt restart path â”€â”€
           preemptState.recordPreempt(round);
@@ -7831,39 +6523,6 @@ RULES:
             });
 
             // Fire secondary rescue advisor
-            const orchCfgForPreempt = getOrchestrationConfig();
-            if (orchCfgForPreempt?.enabled && orchestrationStats.assistCount < orchCfgForPreempt.limits.max_assists_per_session) {
-              sendSSE('info', { message: 'Preempt: consulting rescue advisor...' });
-              const liveInfoForRescue = getBrowserSessionInfo(sessionId);
-              const advice = await callSecondaryAdvisor(
-                message,
-                orchestrationLog,
-                `Generation stalled after ${Math.round(watchdogOutcome.elapsedMs / 1000)}s with no output`,
-                'rescue',
-                liveInfoForRescue.active ? {
-                  active: true,
-                  title: liveInfoForRescue.title,
-                  url: liveInfoForRescue.url,
-                  totalCollected: browserAdvisorCollectedFeed.length,
-                } : undefined,
-                buildSecondaryAssistContext(),
-              );
-              if (advice) {
-                const hint = formatAdvisoryHint(advice);
-                const stats = recordOrchestrationEvent(
-                  sessionId,
-                  { trigger: 'auto', reason: 'preempt_stall', mode: 'rescue' },
-                  orchCfgForPreempt,
-                );
-                sendSSE('preempt_rescue', {
-                  round,
-                  assist_count: stats.assistCount,
-                  assist_cap: orchCfgForPreempt.limits.max_assists_per_session,
-                });
-                messages.push({ role: 'user', content: hint });
-                messages.push({ role: 'assistant', content: 'Understood. Acting immediately.' });
-              }
-            }
 
             // Inject strict nudge and retry â€” model just woke up fresh
             // Re-inject live browser state so model doesn't re-open an already-open browser
@@ -8214,203 +6873,6 @@ RULES:
         continue;
       }
 
-      if (
-        fileOpV2Active
-        && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
-        && fileOpToolHistory.some(h => isFileMutationTool(h.tool))
-      ) {
-        const verifyDecision = shouldVerifyFileTurn({
-          had_create: fileOpHadCreate,
-          user_requested_full_template: requestedFullTemplate(message),
-          primary_write_lines: fileOpPrimaryWriteLines,
-          primary_write_chars: fileOpPrimaryWriteChars,
-          had_tool_failure: fileOpHadToolFailure,
-          touched_files: Array.from(fileOpTouchedFiles),
-          high_stakes_touched: Array.from(fileOpTouchedFiles).some(isHighStakesFile),
-        }, fileOpSettings);
-
-        if (verifyDecision.verify) {
-          sendSSE('info', {
-            message: `FILE_OP v2: verifier check (${verifyDecision.reasons.join(' | ')}).`,
-          });
-          maybeSaveFileOpCheckpoint({
-            phase: 'verify',
-            next_action: 'run secondary verifier',
-          });
-
-          const runVerifier = async () => {
-            const targetFiles = (() => {
-              const direct = Array.from(fileOpTouchedFiles);
-              if (direct.length) return direct;
-              const fromHistory = fileOpToolHistory
-                .map(h => extractFileToolTarget(h.tool, h.args))
-                .filter(Boolean);
-              return Array.from(new Set(fromHistory));
-            })();
-            return callSecondaryFileVerifier({
-              userMessage: message,
-              operationType: fileOpType,
-              fileSnapshots: collectFileSnapshots(workspacePath, targetFiles),
-              recentToolExecutions: fileOpToolHistory.slice(-24).map(h => ({
-                tool: h.tool,
-                args: h.args,
-                result: h.result,
-                error: h.error,
-              })),
-            });
-          };
-
-          let verifier = await runVerifier();
-          if (verifier?.verdict === 'PASS') {
-            maybeSaveFileOpCheckpoint({
-              phase: 'done',
-              next_action: 'verification pass',
-            });
-            clearFileOpCheckpoint(sessionId);
-          } else if (verifier?.verdict === 'FAIL') {
-            let delegatePrimaryMicroFix = false;
-            let reasonForPatch = (verifier.reasons || []).join(' | ') || 'verifier fail';
-            let latestVerifier: typeof verifier | null = verifier;
-            let noProgressEscalations = 0;
-
-            while (latestVerifier && latestVerifier.verdict === 'FAIL') {
-              const failureSig = buildFailureSignature(latestVerifier as any);
-              const smallFix = isSmallSuggestedFix(latestVerifier as any, fileOpSettings);
-              const previousPatchSig = fileOpPatchSignatures[fileOpPatchSignatures.length - 1] || 'none';
-              const progress = fileOpWatchdog.record({
-                failure_signature: failureSig,
-                patch_signature: previousPatchSig,
-                large_patch: !smallFix,
-              });
-              fileOpLastFailureSignature = failureSig;
-              if (progress.no_progress) {
-                noProgressEscalations++;
-                // Escalation ladder â€” each level changes strategy, not just intensity:
-                // Level 1: Broaden patch scope, rewrite the broken section
-                // Level 2: Regenerate the entire file from scratch using original prompt + accumulated findings
-                // Level 3: Switch actor â€” force primary micro-fix attempt if fix is plausibly small
-                // Level 4+: Re-derive requirements checklist and verify full spec coverage
-                if (noProgressEscalations === 1) {
-                  reasonForPatch = `ESCALATION L1 (no progress on sig=${failureSig}): Broaden patch scope. Do NOT make the same targeted fix again. Rewrite the entire broken section from scratch using the original requirements and verifier findings.`;
-                } else if (noProgressEscalations === 2) {
-                  reasonForPatch = `ESCALATION L2 (still no progress): Regenerate the ENTIRE file from scratch. Use the original user prompt, all accumulated verifier findings, and current constraints. Do not attempt another targeted patch.`;
-                } else if (noProgressEscalations === 3) {
-                  // Switch actor: force primary micro-fix regardless of smallFix gating
-                  reasonForPatch = `ESCALATION L3: Switching actor to primary for a targeted micro-fix attempt.`;
-                  sendSSE('info', {
-                    message: `FILE_OP v2: no-progress watchdog L3 â€” switching actor to primary micro-fix.`,
-                  });
-                  delegatePrimaryMicroFix = true;
-                } else {
-                  reasonForPatch = `ESCALATION L${noProgressEscalations} (requirements re-derivation): Re-derive the full requirements checklist from the original user prompt. List every requirement explicitly, then verify which are missing or broken. Patch only what the checklist shows is unmet.`;
-                }
-                sendSSE('info', {
-                  message: `FILE_OP v2: no-progress watchdog triggered (level ${noProgressEscalations}); escalating repair strategy.`,
-                });
-              }
-
-              maybeSaveFileOpCheckpoint({
-                phase: 'repair',
-                next_action: progress.no_progress
-                  ? `escalate repair strategy L${noProgressEscalations} (no progress watchdog)`
-                  : 'repair current verifier findings',
-                findings: latestVerifier.findings || [],
-              });
-
-              if (delegatePrimaryMicroFix) break;
-
-              if (smallFix) {
-                delegatePrimaryMicroFix = true;
-                break;
-              }
-
-              fileOpOwner = 'secondary';
-              const patchPlan = await callSecondaryFilePatchPlanner({
-                userMessage: message,
-                operationType: fileOpType,
-                owner: fileOpOwner,
-                reason: reasonForPatch,
-                fileSnapshots: collectFileSnapshots(workspacePath, Array.from(fileOpTouchedFiles)),
-                verifier: latestVerifier,
-              });
-
-              if (!patchPlan?.tool_calls?.length) {
-                sendSSE('info', {
-                  message: 'FILE_OP v2: secondary patch planner returned no executable calls; switching to primary micro-fix attempt.',
-                });
-                delegatePrimaryMicroFix = true;
-                break;
-              }
-
-              const applied = await executeSecondaryPatchCalls(
-                patchPlan.tool_calls,
-                progress.no_progress ? 'watchdog escalation' : 'verifier repair',
-              );
-              maybeSaveFileOpCheckpoint({
-                phase: 'execute',
-                next_action: applied.ran > 0 ? 'secondary patch batch applied' : 'secondary patch batch empty',
-              });
-
-              latestVerifier = await runVerifier();
-              if (latestVerifier?.verdict === 'PASS') {
-                maybeSaveFileOpCheckpoint({
-                  phase: 'done',
-                  next_action: 'verification pass after secondary repair',
-                });
-                clearFileOpCheckpoint(sessionId);
-                break;
-              }
-              if (!latestVerifier) break;
-              reasonForPatch = (latestVerifier.reasons || []).join(' | ') || 'verifier fail after repair';
-            }
-
-            if (delegatePrimaryMicroFix) {
-              const findingsText = (latestVerifier?.findings || [])
-                .slice(0, 3)
-                .map((f: any) => `${f.filename || 'file'}:${f.type || 'issue'} expected="${String(f.expected || '').slice(0, 70)}" observed="${String(f.observed || '').slice(0, 70)}"`)
-                .join(' | ');
-              const failReasons = (latestVerifier?.reasons || []).join(' | ');
-              fileOpOwner = 'primary';
-              if (candidateText) messages.push({ role: 'assistant', content: candidateText });
-              messages.push({
-                role: 'user',
-                content: `Verifier FAIL (${failReasons || 'unspecified'}). Apply ONLY a minimal tool patch now. Constraints: max ${fileOpSettings.primary_edit_max_lines} changed lines, max ${fileOpSettings.primary_edit_max_chars} chars, max ${fileOpSettings.primary_edit_max_files} file. No refactor, no extra files. Findings: ${findingsText || 'fix request mismatch and re-check.'}`,
-              });
-              maybeSaveFileOpCheckpoint({
-                phase: 'execute',
-                next_action: 'primary micro-fix patch requested',
-                findings: latestVerifier?.findings || [],
-              });
-              continue;
-            }
-
-            const finalVerifier = await runVerifier();
-            if (finalVerifier?.verdict === 'FAIL') {
-              const reasons = (finalVerifier.reasons || []).join(' | ') || 'verification failed';
-              if (candidateText) messages.push({ role: 'assistant', content: candidateText });
-              messages.push({
-                role: 'user',
-                content: `Verifier still FAIL (${reasons}). Apply the next concrete patch now and continue until it passes.`,
-              });
-              maybeSaveFileOpCheckpoint({
-                phase: 'execute',
-                next_action: 'retry after final verifier fail',
-                findings: finalVerifier.findings || [],
-              });
-              continue;
-            }
-            maybeSaveFileOpCheckpoint({
-              phase: 'done',
-              next_action: 'verification pass after repair loop',
-            });
-            clearFileOpCheckpoint(sessionId);
-          } else {
-            sendSSE('info', {
-              message: 'FILE_OP v2: secondary verifier unavailable; continuing with current result.',
-            });
-          }
-        }
-      }
 
       const requiresWriteNoteBeforeFinal =
         /\bMUST\s+call\s+write_note\b/i.test(message)
@@ -8627,13 +7089,6 @@ RULES:
         emitProgressState('finalized');
       }
 
-      if (fileOpV2Active) {
-        maybeSaveFileOpCheckpoint({
-          phase: 'done',
-          next_action: 'turn complete',
-        });
-        clearFileOpCheckpoint(sessionId);
-      }
 
       // â”€â”€ Background agent finalization gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	      // Collect all background_spawn IDs from this turn, join them, and merge
@@ -9305,116 +7760,7 @@ RULES:
         }
       }
 
-      if (
-        fileOpV2Active
-        && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
-        && fileOpOwner === 'secondary'
-        && isFileMutationTool(toolName)
-      ) {
-        sendSSE('info', {
-          message: 'FILE_OP v2: secondary-owned turn; replacing primary mutation call with secondary patch plan.',
-        });
-        const target = extractFileToolTarget(toolName, toolArgs);
-        const patchPlan = await callSecondaryFilePatchPlanner({
-          userMessage: message,
-          operationType: fileOpType,
-          owner: fileOpOwner,
-          reason: 'secondary-owned execution',
-          fileSnapshots: collectFileSnapshots(
-            workspacePath,
-            target ? [target, ...Array.from(fileOpTouchedFiles)] : Array.from(fileOpTouchedFiles),
-          ),
-          blockedPrimaryCall: {
-            tool: toolName,
-            args: toolArgs,
-            reason: 'secondary-owned execution',
-          },
-          verifier: null,
-        });
-        if (patchPlan?.tool_calls?.length) {
-          const applied = await executeSecondaryPatchCalls(patchPlan.tool_calls, 'secondary owner replacement');
-          if (applied.ran > 0) roundHadProgress = true;
-        } else {
-          fileOpHadToolFailure = true;
-          messages.push({
-            role: 'tool',
-            tool_name: toolName,
-            tool_call_id: toolCallId || undefined,
-            content: 'FILE_OP v2: secondary planner produced no replacement calls.',
-          });
-        }
-        continue;
-      }
 
-      if (
-        fileOpV2Active
-        && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
-        && fileOpOwner === 'primary'
-        && isFileMutationTool(toolName)
-      ) {
-        const allowance = canPrimaryApplyFileTool({
-          tool_name: toolName,
-          args: toolArgs,
-          message,
-          touched_files: fileOpTouchedFiles,
-          settings: fileOpSettings,
-        });
-        if (!allowance.allowed) {
-          fileOpOwner = 'secondary';
-          maybeSaveFileOpCheckpoint({
-            phase: 'repair',
-            next_action: `secondary takeover after gate block: ${allowance.reason}`,
-          });
-          sendSSE('info', {
-            message: `FILE_OP v2 gate: promoted to secondary (${allowance.reason}).`,
-          });
-          const target = extractFileToolTarget(toolName, toolArgs);
-          const snapshots = collectFileSnapshots(
-            workspacePath,
-            target ? [target, ...Array.from(fileOpTouchedFiles)] : Array.from(fileOpTouchedFiles),
-          );
-          const patchPlan = await callSecondaryFilePatchPlanner({
-            userMessage: message,
-            operationType: fileOpType,
-            owner: fileOpOwner,
-            reason: allowance.reason,
-            fileSnapshots: snapshots,
-            blockedPrimaryCall: {
-              tool: toolName,
-              args: toolArgs,
-              reason: allowance.reason,
-            },
-            verifier: null,
-          });
-          if (patchPlan?.tool_calls?.length) {
-            const applied = await executeSecondaryPatchCalls(patchPlan.tool_calls, 'primary threshold gate');
-            if (applied.ran > 0) roundHadProgress = true;
-            maybeSaveFileOpCheckpoint({
-              phase: 'execute',
-              next_action: applied.ran > 0 ? 'secondary patch calls applied' : 'no patch calls applied',
-            });
-            continue;
-          }
-          fileOpHadToolFailure = true;
-          const failText = 'FILE_OP v2: secondary patch planner returned no executable calls.';
-          messages.push({
-            role: 'tool',
-            tool_name: toolName,
-            tool_call_id: toolCallId || undefined,
-            content: failText,
-          });
-          markProgressStepStart(toolName);
-          markProgressStepResult(false);
-          sendSSE('tool_result', {
-            action: toolName,
-            result: failText,
-            error: true,
-            stepNum: allToolResults.length,
-            actor: 'secondary',
-          });
-          continue;
-        }
-      }
 
       if (!preDispatchedCalls.has(call)) {
         console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
@@ -9705,49 +8051,6 @@ RULES:
         continue;
       }
 
-      if (toolName === 'start_task') {
-        const taskGoal = toolArgs.goal || message;
-        sendSSE('info', { message: `Starting multi-step task: ${taskGoal}` });
-
-        const taskTools = tools.filter((t: any) => t.function.name !== 'start_task') as any[];
-
-        const taskResult = await runTask({
-          goal: taskGoal,
-          tools: taskTools,
-          executor: async (name, args) => {
-            const r = await executeToolWithTelemetry(name, args);
-            return { result: r.result, error: r.error };
-          },
-          onProgress: sendSSE,
-          systemContext: personalityCtx.slice(0, 500),
-        });
-        markProgressStepResult(taskResult.status !== 'failed');
-        finalizeProgressRound();
-
-        activeTasks.set(sessionId, taskResult);
-
-        const summary = taskResult.status === 'complete'
-          ? `Task completed in ${taskResult.currentStep} steps!`
-          : taskResult.status === 'failed'
-            ? `Task failed at step ${taskResult.currentStep}: ${taskResult.error}`
-            : `Task stopped at step ${taskResult.currentStep}.`;
-
-        const journalSummary = taskResult.journal.slice(-5).map(j => j.result).join('\n');
-
-        return {
-          type: 'execute',
-          text: `${summary}\n\nRecent steps:\n${journalSummary}`,
-          thinking: allThinking || undefined,
-          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
-          toolResults: taskResult.journal.map(j => ({
-            name: j.action.split('(')[0],
-            args: {},
-            result: j.result,
-            error: j.result.startsWith('âŒ'),
-          })),
-        };
-      }
-
       // â”€â”€ Sub-agent spawn â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       if (toolName === 'subagent_spawn') {
         const isTaskSession = sessionId.startsWith('task_');
@@ -9844,68 +8147,6 @@ RULES:
 
       // â”€â”€ Orchestration: explicit request from primary
       if (toolName === 'request_secondary_assist') {
-        const orchCfg = getOrchestrationConfig();
-        if (orchestrationSkillEnabled && orchCfg?.enabled) {
-          if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) {
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: `Secondary advisor session cap reached (${orchCfg.limits.max_assists_per_session}). Continue without escalation.`,
-            });
-            markProgressStepResult(false);
-            continue;
-          }
-
-          const mode   = (toolArgs.mode || 'rescue') as 'planner' | 'rescue';
-          const reason = toolArgs.reason || 'Explicitly requested by executor';
-          sendSSE('info', { message: `Consulting secondary advisor (${mode} mode)...` });
-          console.log(`[Orchestrator] Explicit trigger: ${reason}`);
-          const advice = await callSecondaryAdvisor(
-            message,
-            orchestrationLog,
-            reason,
-            mode,
-            undefined,
-            buildSecondaryAssistContext(),
-          );
-          if (advice) {
-            const hint = formatAdvisoryHint(advice);
-            orchestrationState.markFired(round);
-            const stats = recordOrchestrationEvent(
-              sessionId,
-              { trigger: 'explicit', reason, mode },
-              orchCfg,
-            );
-            sendSSE('orchestration', {
-              trigger: 'explicit',
-              reason,
-              mode,
-              advice,
-              assist_count: stats.assistCount,
-              assist_cap: orchCfg.limits.max_assists_per_session,
-            });
-            console.log(
-              `[Orchestrator] Explicit assist complete (${stats.assistCount}/${orchCfg.limits.max_assists_per_session})`,
-            );
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: hint,
-            });
-            markProgressStepResult(true);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: 'Secondary advisor unavailable. Continue with your best judgment.',
-            });
-            markProgressStepResult(false);
-          }
-          continue;
-        }
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -9939,7 +8180,6 @@ RULES:
       allToolResults.push(toolResult);
       logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
       trackFileOpMutation(toolName, toolArgs, toolResult, 'primary');
-      if (fileOpV2Active && toolResult.error) fileOpHadToolFailure = true;
       if (!toolResult.error) roundHadProgress = true;
       markProgressStepResult(!toolResult.error, toolName);
 
@@ -9959,7 +8199,6 @@ RULES:
       }
 
       // â”€â”€ Orchestration: track trigger state
-      orchestrationState.recordToolResult(round, toolName, toolArgs, toolResult.error);
       orchestrationLog.push(
         toolResult.error
           ? `âœ— ${toolName}(${JSON.stringify(toolArgs).slice(0, 60)}): ${toolResult.result.slice(0, 100)}`
@@ -10192,18 +8431,6 @@ RULES:
       if (!toolResult.error) {
         continuationNudges = 0;
       }
-	      await maybeRunBrowserAdvisorPass(
-	        appliedObservation.advisorTriggerToolName,
-	        appliedObservation.advisorTriggerToolResult,
-	        appliedObservation.advisorTriggerToolArgs,
-	        appliedObservation.decision,
-	        appliedObservation.browserAfterPacket,
-	      );
-	      await maybeRunDesktopAdvisorPass(
-	        appliedObservation.advisorTriggerToolName,
-	        appliedObservation.advisorTriggerToolResult,
-	        appliedObservation.decision,
-	      );
 
     }
 
@@ -10243,51 +8470,6 @@ RULES:
       if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
     }
 
-    // â”€â”€ Orchestration: auto-trigger check after each round
-    const orchCfg = getOrchestrationConfig();
-    if (orchestrationSkillEnabled && orchCfg?.enabled && !isBootStartupTurn) {
-      if (!roundHadProgress) orchestrationState.recordRoundNoProgress(round);
-      const { fire, reason } = orchestrationState.shouldTrigger(
-        orchCfg,
-        round,
-        Date.now(),
-        orchestrationStats.assistCount,
-      );
-      if (fire && orchestrationStats.assistCount < orchCfg.limits.max_assists_per_session) {
-        sendSSE('info', { message: `Auto-consulting advisor: ${reason}` });
-        console.log(`[Orchestrator] Auto-trigger (${reason})`);
-        const advice = await callSecondaryAdvisor(
-          message,
-          orchestrationLog,
-          reason,
-          'rescue',
-          undefined,
-          buildSecondaryAssistContext(),
-        );
-        if (advice) {
-          const hint = formatAdvisoryHint(advice);
-          orchestrationState.markFired(round);
-          const stats = recordOrchestrationEvent(
-            sessionId,
-            { trigger: 'auto', reason, mode: 'rescue' },
-            orchCfg,
-          );
-          sendSSE('orchestration', {
-            trigger: 'auto',
-            reason,
-            mode: 'rescue',
-            advice,
-            assist_count: stats.assistCount,
-            assist_cap: orchCfg.limits.max_assists_per_session,
-          });
-          console.log(
-            `[Orchestrator] Auto assist complete (${stats.assistCount}/${orchCfg.limits.max_assists_per_session})`,
-          );
-          messages.push({ role: 'user', content: hint });
-          messages.push({ role: 'assistant', content: 'Understood. Following the advisor guidance now.' });
-        }
-      }
-    }
 
     sendSSE('info', { message: 'Processing...' });
   }
@@ -11685,13 +9867,26 @@ async function runInteractiveTurn(
       packet ? formatTurnContextPacketsForPrompt([packet], 6_000) : '',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
-    const visibleCheckpointText = [
-      'Restart Context Packet',
-      '',
-      `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
-      stepSummary,
-      'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
-    ].join('\n');
+    const abortCause = describeTurnAbortCause(abortSignal as any);
+    const userCancelled = /^User cancelled/i.test(abortCause);
+    // A system-caused stop (watchdog, restart, drain) must stay visible: the
+    // "Restart Context Packet" prefix is hidden by the mobile transcript, which
+    // made killed timer turns look like they never replied.
+    const visibleCheckpointText = userCancelled
+      ? [
+        'Restart Context Packet',
+        '',
+        `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
+        stepSummary,
+        'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
+      ].join('\n')
+      : [
+        `**This turn was stopped by the gateway, not by you.** ${abortCause}`,
+        '',
+        `I was working on: ${workSummary.slice(0, 260)}`,
+        stepSummary,
+        'Say "continue" and I will pick up from the saved checkpoint.',
+      ].join('\n');
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
     const assistantWorkEndedAt = Date.now();

@@ -17,7 +17,7 @@ import type {
 export const DEFAULT_IMAGE_ASPECT_RATIO: ImageAspectRatio = 'landscape';
 export const DEFAULT_IMAGE_OUTPUT_DIR = 'generated/images';
 export const DEFAULT_IMAGE_COUNT = 1;
-export const MAX_IMAGE_COUNT = 4;
+export const MAX_IMAGE_COUNT = 10;
 export const MAX_REFERENCE_IMAGE_COUNT = 16;
 export const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 
@@ -29,7 +29,7 @@ export const IMAGE_SIZE_BY_ASPECT_RATIO: Record<ImageAspectRatio, string> = {
 export const GPT_IMAGE_2_EXACT_SIZE_RE = /^(?:1024x1024|1024x1536|1536x1024|auto|[1-9]\d{2,3}x[1-9]\d{2,3})$/;
 
 /** GPT Image 2.5 supports standard squares/portraits/landscapes or auto. */
-export function resolveOpenAIImageSize(size: string, aspectRatio: ImageAspectRatio): { apiSize: string; target?: { width: number; height: number } } {
+export function resolveOpenAIImageSize(size: string, aspectRatio: ImageAspectRatio, arbitrary = false): { apiSize: string; target?: { width: number; height: number } } {
   const requested = String(size || IMAGE_SIZE_BY_ASPECT_RATIO[aspectRatio]).toLowerCase();
   if (requested === 'auto') return { apiSize: 'auto' };
   const aspectSizes: Record<string, string> = { '9:16': '1024x1536', '16:9': '1536x1024', '1:1': '1024x1024' };
@@ -38,6 +38,14 @@ export function resolveOpenAIImageSize(size: string, aspectRatio: ImageAspectRat
   if (!match) throw new Error(`Invalid image size: ${requested}`);
   const width = Number(match[1]);
   const height = Number(match[2]);
+  if (arbitrary) {
+    const w = Math.max(16, Math.round(width / 16) * 16);
+    const h = Math.max(16, Math.round(height / 16) * 16);
+    const ratio = Math.max(w, h) / Math.min(w, h);
+    if (ratio <= 3 && Math.max(w, h) <= 3840 && Math.min(w, h) <= 2160) {
+      return { apiSize: `${w}x${h}`, target: { width, height } };
+    }
+  }
   const apiSize = width === height ? '1024x1024' : width < height ? '1024x1536' : '1536x1024';
   return { apiSize, target: { width, height } };
 }
@@ -329,8 +337,37 @@ export function normalizeImageOutputCompression(value?: unknown, format?: ImageO
 
 export function normalizeImageQuality(value?: unknown): ImageQuality | undefined {
   const raw = String(value || '').trim().toLowerCase();
-  if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'auto') return raw;
+  if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max' || raw === 'auto') return raw;
+  if (raw === 'x-high' || raw === 'extra-high' || raw === 'ultra') return 'xhigh';
   return undefined;
+}
+
+export function normalizeImageModeration(value?: unknown): 'low' | 'auto' | undefined {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'low' || raw === 'auto' ? raw : undefined;
+}
+
+export function normalizeImageResolution(value?: unknown): '1k' | '2k' | undefined {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === '1k' || raw === '2k' ? raw : undefined;
+}
+
+/** Keep provider-native ratios (xAI accepts 4:3, 21:9, 19.5:9, auto, ...). */
+export function normalizeNativeAspectRatio(value?: unknown): string | undefined {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'auto') return 'auto';
+  return /^\d+(\.\d+)?:\d+(\.\d+)?$/.test(raw) ? raw : undefined;
+}
+
+/** gpt-image-2.x accepts arbitrary WIDTHxHEIGHT (multiples of 16, ratio 1:3..3:1, max 3840x2160). */
+export function supportsArbitraryOpenAIImageSize(apiModel: string): boolean {
+  return /^gpt-image-2/.test(String(apiModel || ''));
+}
+
+/** xhigh/max quality exist only on the gpt-image-2.5 family. */
+export function resolveOpenAIQualityForModel(quality: string, apiModel: string): string {
+  if ((quality === 'xhigh' || quality === 'max') && !/^gpt-image-2\.5/.test(apiModel)) return 'high';
+  return quality;
 }
 
 export function normalizeImagePresentationMode(value?: unknown): 'foreground' | 'background' {
