@@ -29,6 +29,7 @@ const teamDispatchRuntime = read('src/gateway/teams/team-dispatch-runtime.ts');
 const teamMemberRoom = read('src/gateway/teams/team-member-room.ts');
 const cronScheduler = read('src/gateway/scheduling/cron-scheduler.ts');
 const subagentExecutor = read('src/gateway/agents-runtime/subagent-executor.ts');
+const teamAgentExecutor = read('src/gateway/agents-runtime/capabilities/team-agent-executor.ts');
 const backgroundTrace = read('src/gateway/tasks/background-agent-trace.ts');
 const backgroundRunner = read('src/gateway/tasks/background-task-runner.ts');
 const teamCoordinator = read('src/gateway/teams/team-coordinator.ts');
@@ -143,8 +144,10 @@ assert.match(teamMemberRoom, /appendBackgroundSseTrace\(\[\], tracker\.liveTrace
   'team-room member turns must capture the shared structured trace format');
 assert.match(teamMemberRoom, /liveTraceEntries: tracker\.liveTraceEntries/,
   'member final messages must retain the structured trace for history and Runs');
-assert.match(subagentExecutor, /recordTeamRun\(teamId,[\s\S]*?liveTraceEntries: result\?\.liveTraceEntries/,
-  'the active legacy manager executor must record member room turns in team Runs');
+// request_team_member_turn is owned by the capability executor (the registry runs it
+// before subagent-executor's switch), so that's where room turns must be recorded.
+assert.match(teamAgentExecutor, /recordTeamRun\(teamId,[\s\S]*?liveTraceEntries: result\?\.liveTraceEntries/,
+  'the active team-agent executor must record member room turns in team Runs');
 assert.match(subagentExecutor, /processEntries: result\.processEntries,[\s\S]*?liveTraceEntries: result\.liveTraceEntries/,
   'the active legacy dispatch executor must retain member traces in team chat');
 assert.match(cronScheduler, /chatMessage,/,
