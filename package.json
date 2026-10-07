@@ -70,6 +70,7 @@
     "test:thread-ops-model-route": "tsx src/gateway/threads/thread-ops-model-route.regression.ts",
     "test:agent-team-wrapper-params": "tsx src/gateway/agents-runtime/agent-team-wrapper-params.regression.ts",
     "test:teams-gauntlet-fixes": "tsx src/gateway/agents-runtime/teams-gauntlet-fixes.regression.ts",
+    "test:recovery-claims": "tsx src/gateway/runtime/recovery-claims.regression.ts",
     "test:tool-category-manifest": "tsx src/runtime/tool-category-manifest.regression.ts",
     "test:tool-result-elision": "tsx src/gateway/routes/tool-result-elision.regression.ts",
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
