@@ -1,5 +1,5 @@
 /**
- * video_project — Prom's single control surface for the generative video
+ * video_project � Prom's single control surface for the generative video
  * engine. Every edit goes through project ops (undoable, shared with the UI).
  */
 import {
@@ -18,6 +18,9 @@ import * as studio from './studio.js';
 import * as parity from './parity.js';
 import * as trend from './trend.js';
 import { listPresets } from './presets.js';
+import { breakdownReel } from './inspect.js';
+import fs from 'fs';
+import path from 'path';
 import { deleteBrand, deleteCast, listCast, saveCast } from './library.js';
 
 export const VIDEO_PROJECT_ACTIONS = [
@@ -31,10 +34,10 @@ export const VIDEO_PROJECT_ACTIONS = [
   // parity
   'presets', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants',
   // trend transfer + finishing
-  'trend_transfer', 'trend_assemble', 'phone_finish',
+  'trend_transfer', 'trend_assemble', 'phone_finish', 'breakdown',
 ] as const;
 
-export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'syncModels', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets']);
+export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'syncModels', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets', 'breakdown']);
 /** Actions that can spend money with an external provider. */
 export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants', 'trend_transfer']);
 
@@ -50,6 +53,7 @@ export function getVideoProjectToolDef(): any {
         'Flow: create -> apply_ops plan.setShots (+character.upsert) -> generate_anchor (optional identity still) -> estimate -> generate (needs approved:true above the auto-approve limit; confirm cost with the user first) -> wait -> apply_ops timeline.assemble / take.select / clip.trim -> render.',
         'Anchors from generate_anchor arrive as character candidates; the user approves one (character.approveAnchor) before it drives identity. Shot anchorMode "start" uses the anchor as the first frame, "reference" as reference images.',
         'CHAT CARD: put the project\'s chatCard fence (```video-project\n{"projectId":"vp_..."}\n```) in your reply once per project. It renders a live card in chat (desktop + phone) with anchor approve/reroll, shot list, cost + Approve & generate, takes, redo, and Render/final video, so the user never has to leave chat.',
+        'TREND: breakdown {sourcePath, modelId?} (free) shows model-safe parts + per-part action/garment changes/risks before any spend; trend_transfer runs it automatically (short parts are slowed and sped back up by trend_assemble; garment changes go into the start frames). Every finished take gets a dense vision QA (frame every ~0.25s) in the wake message: never present a FAIL take as good.',
         'SUPERCOMPUTER MODE: quickstart {brief, templateId?, productPath? (a chat upload like uploads/can.png), productName?, capUsd?} creates the project, imports the product photo, applies a template (ugc-testimonial, product-demo, cinematic-trailer, explainer, before-after, local-business-promo) and runs the autopilot: anchors -> storyboard stills -> voiceover -> video -> vision QA (+rerolls) -> assemble -> captions -> music -> render. It returns needsApproval with a whole-run cost breakdown first; show it, get ONE yes, then call run {projectId, approved:true}. run is resumable and skips finished steps.',
         'Studio actions: import_asset (product/character photo), apply_template, storyboard (cheap stills per shot, approve with shot.approveStoryboard), voiceover (shot.line -> TTS VO track; voice.set op picks openai/xai voice), captions {style: pop|bold|minimal|karaoke}, music {builtin: pulse|chill|hype}, qa (vision score per take), hooks (A/B hook takes) + render_variants, render {aspects:["9:16","1:1","16:9"]}, upgrade (re-generate picked shots at 720p/1080p), route (smart model per shot), cast_*/brand_* (persistent cast + brand kits across projects).',
         'ASYNC: long generations do not need you to wait. generate/storyboard/run/hooks accept notify:true (default for run): Prometheus wakes this chat with a [video_project wake] message when the jobs settle, so end your turn after kicking them off.',
@@ -290,7 +294,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Anchor candidates ready for approval on the card.', args.notify === true);
       return wake ? { ...r, wake } : r;
     }
-    // ── studio ──
+    // -- studio --
     case 'templates':
       return { templates: studio.listTemplates() };
     case 'music_beds':
@@ -368,6 +372,15 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), `Trend parts ready; then trend_assemble {shotIds:${JSON.stringify(r.shotIds)}, audioPath:${JSON.stringify(args.sourcePath)}}`, args.notify !== false);
       const next = r.needsApproval ? 'Show the matched start frames (parts[].frame) and the quote; after the user approves call trend_transfer again with the SAME shotIds and approved:true.' : undefined;
       return { ...r, ...(wake ? { wake } : {}), ...(next ? { next } : {}) };
+    }
+    case 'breakdown': {
+      // $0 reel understanding: model-safe parts + per-part action, garment changes, risks.
+      const src = need(args.sourcePath || args.path, 'sourcePath');
+      const srcAbs = path.isAbsolute(src) ? src : path.resolve(ws, src);
+      if (!fs.existsSync(srcAbs)) throw new Error(`Clip not found: ${src}`);
+      const m = getModel(args.modelId || trend.TREND_DEFAULT_MODEL);
+      const work = path.join(ws, 'video-projects', '_breakdown', path.basename(srcAbs).replace(/\W+/g, '_').slice(0, 40));
+      return await breakdownReel(srcAbs, { workDir: work, cuts: args.cuts, maxParts: args.maxParts, minPartSec: m?.limits?.minDurationSec ?? 0 });
     }
     case 'trend_assemble':
       return await trend.trendAssemble(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds || [], audioPath: args.audioPath || args.sourcePath, audioStartSec: args.audioStartSec, phoneLook: args.phoneLook });

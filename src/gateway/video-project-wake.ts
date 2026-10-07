@@ -118,6 +118,33 @@ export function resetVideoProjectWakeForTests(): void {
   if (pollTimer) clearInterval(pollTimer); pollTimer = null;
 }
 
+const qaInFlight = new Set<string>();
+let autoQaEnabled = process.env.PROMETHEUS_VIDEO_AUTO_QA !== '0';
+type AutoQaRunner = (workspacePath: string, projectId: string, shotIds: string[]) => Promise<{ results: Array<{ title: string; score: number; verdict: string; issues: string[] }>; failed: string[] }>;
+let qaRunner: AutoQaRunner | null = null;
+
+/** Tests: swap the QA runner (or disable auto QA) so nothing calls vision providers. */
+export function setVideoAutoQaForTests(opts: { enabled?: boolean; runner?: AutoQaRunner | null }): void {
+  if (opts.enabled !== undefined) autoQaEnabled = opts.enabled;
+  if (opts.runner !== undefined) qaRunner = opts.runner;
+}
+
+async function runAutoQa(workspacePath: string, projectId: string, shotIds: string[]): Promise<string> {
+  const run: AutoQaRunner = qaRunner || (async (ws, pid, ids) => (await import('../media-engine/studio.js')).qa(ws, pid, { shotIds: ids }));
+  const res = await run(workspacePath, projectId, shotIds);
+  const bad = res.results.filter((r) => r.verdict !== 'pass');
+  const good = res.results.filter((r) => r.verdict === 'pass');
+  const lines = [
+    ...bad.map((r) => `FAIL '${r.title}' ${r.score}/10: ${r.issues.slice(0, 4).join('; ') || 'flagged'}`),
+    ...good.map((r) => `pass '${r.title}' ${r.score}/10${r.issues.length ? ` (${r.issues.slice(0, 2).join('; ')})` : ''}`),
+    ...res.failed.map((f) => `QA error ${f}`),
+  ];
+  const verdict = bad.length
+    ? `Dense QA FAILED ${bad.length} take(s). Do not present them as good: show the defect timestamps, fix the cause (start frame / model / source part), quote, and reroll only those.`
+    : res.failed.length ? 'Dense QA could not check every take; look at the unchecked ones before presenting.' : 'Dense QA passed every take; continue to the next step.';
+  return `${verdict} QA: ${lines.join(' | ')}`;
+}
+
 function describeTarget(p: VideoProject, job: any): string {
   const t = job?.target || {};
   if (t.shotId) {
@@ -166,8 +193,18 @@ function checkWatch(w: VideoJobWatch): void {
     if (done === 0) {
       finish(w, `[video_project wake] ALL ${jobs.length} job(s) FAILED for ${title} (${w.projectId}): ${parts.slice(1).join(', ') || 'no output'}. Nothing was generated; spent $${spent.toFixed(2)}. Tell the user what failed and why, fix the cause, then quote before rerunning.`);
     } else {
-      const partial = done < jobs.length ? ` Only ${done} of ${jobs.length} succeeded.` : '';
-      finish(w, `[video_project wake] Jobs finished for ${title} (${w.projectId}): ${parts.join(', ')}. Spent $${spent.toFixed(2)}.${partial}${note} Watch the new takes (analyze_video contact sheet) before calling them good, then the next step.`);
+      // Partial batches: the caller's success note ("Shots generated") would be misleading.
+      const partial = done < jobs.length ? ` Only ${done} of ${jobs.length} succeeded; fix the failed shot(s) before assembling.` : note;
+      const head = `[video_project wake] Jobs finished for ${title} (${w.projectId}): ${parts.join(', ')}. Spent $${spent.toFixed(2)}.${partial}`;
+      const shotIds = [...new Set(jobs.filter((j) => j.state === 'done' && j.target?.shotId).map((j) => String(j.target.shotId)))];
+      if (!shotIds.length || !autoQaEnabled) { finish(w, `${head} Watch the new takes (analyze_video contact sheet) before calling them good, then the next step.`); return; }
+      // Dense QA gate BEFORE anyone sees the takes ($0, subscription vision).
+      if (qaInFlight.has(w.id)) return;
+      qaInFlight.add(w.id);
+      void runAutoQa(w.workspacePath, w.projectId, shotIds)
+        .then((qa) => finish(w, `${head} ${qa}`))
+        .catch((e) => finish(w, `${head} Auto QA could not run (${String(e?.message || e).slice(0, 160)}): check the takes with qa or analyze_video before showing them.`))
+        .finally(() => qaInFlight.delete(w.id));
     }
   } else {
     const pending = jobs.filter((j) => !TERMINAL.has(j.state)).length + missing.length;
