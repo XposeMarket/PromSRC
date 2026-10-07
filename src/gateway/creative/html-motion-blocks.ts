@@ -405,7 +405,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'cta', label: 'CTA text', kind: 'text', default: 'prometheus.app' },
       { id: 'start', label: 'Start seconds', kind: 'number', default: 6 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 2 },
-      { id: 'accent', label: 'Accent color', kind: 'color', default: '#f97316' },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#d6b75e' },
     ],
     requiredStageFeatures: STAGE_REQS,
     outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: false, assetPlaceholders: [] },
@@ -477,7 +477,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'item3', label: 'Notification 3', kind: 'text', default: 'MP4 ready' },
       { id: 'start', label: 'Start seconds', kind: 'number', default: 1 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 4 },
-      { id: 'accent', label: 'Accent color', kind: 'color', default: '#f97316' },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#d6b75e' },
     ],
     requiredStageFeatures: STAGE_REQS,
     outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: false, assetPlaceholders: [] },
@@ -549,7 +549,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
     slots: [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 3 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 0.65 },
-      { id: 'from', label: 'Gradient color 1', kind: 'color', default: '#f97316' },
+      { id: 'from', label: 'Gradient color 1', kind: 'color', default: '#d6b75e' },
       { id: 'to', label: 'Gradient color 2', kind: 'color', default: '#facc15' },
     ],
     requiredStageFeatures: STAGE_REQS,
@@ -697,7 +697,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 8 },
       { id: 'bars', label: 'Bars', kind: 'number', default: 64 },
-      { id: 'accent', label: 'Accent color', kind: 'color', default: '#f97316' },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#d6b75e' },
     ],
     requiredStageFeatures: STAGE_REQS,
     outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: [] },
@@ -753,7 +753,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
       { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
-      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#d6b75e' },
       { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
       { id: 'count', label: 'Particle count', kind: 'number', default: 900 },
       { id: 'radius', label: 'Field radius', kind: 'number', default: 7 },
@@ -776,7 +776,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 5 },
       { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
-      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#d6b75e' },
       { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
       { id: 'intensity', label: 'Light intensity', kind: 'number', default: 0.9 },
       { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
@@ -797,7 +797,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
       { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
-      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#d6b75e' },
       { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
       { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
     ],
@@ -818,7 +818,7 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
       { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
       { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
       { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
-      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#d6b75e' },
       { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
       { id: 'intensity', label: 'Light intensity', kind: 'number', default: 0.9 },
       { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
@@ -1099,7 +1099,7 @@ const RENDERERS: Record<string, Renderer> = {
     const headline = escapeHtml(slotValue(input, 'headline', 'Build with Prometheus'));
     const subline = escapeHtml(slotValue(input, 'subline', 'Try the agent OS free'));
     const cta = escapeHtml(slotValue(input, 'cta', 'prometheus.app'));
-    const accent = escapeHtml(slotValue(input, 'accent', '#f97316'));
+    const accent = escapeHtml(slotValue(input, 'accent', '#d6b75e'));
     return {
       html: `<section class="prom-block prom-endcard" data-role="end-card" data-start="${seconds(input, 'start', 6)}" data-duration="${seconds(input, 'duration', 2)}"><h1>${headline}</h1><p>${subline}</p><b>${cta}</b></section>`,
       css: `.prom-endcard{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:18px;text-align:center;background:radial-gradient(ellipse at center,rgba(15,23,42,.0),rgba(2,6,23,.85));color:#fff;padding:0 8%}.prom-endcard h1{margin:0;font:900 110px/1 Inter,system-ui,sans-serif;letter-spacing:-.04em}.prom-endcard p{margin:0;font:600 32px/1.3 Inter,system-ui,sans-serif;color:rgba(248,250,252,.78)}.prom-endcard b{display:inline-block;padding:14px 28px;border-radius:999px;background:${accent};color:#0b0f1a;font:800 30px/1 Inter,system-ui,sans-serif;letter-spacing:.02em}`,
@@ -1141,7 +1141,7 @@ const RENDERERS: Record<string, Renderer> = {
       escapeHtml(slotValue(input, 'item2', 'Frame QA passed')),
       escapeHtml(slotValue(input, 'item3', 'MP4 ready')),
     ];
-    const accent = escapeHtml(slotValue(input, 'accent', '#f97316'));
+    const accent = escapeHtml(slotValue(input, 'accent', '#d6b75e'));
     return {
       html: `<div class="prom-block prom-notify-stack" data-role="activity" data-start="${seconds(input, 'start', 1)}" data-duration="${seconds(input, 'duration', 4)}">${items.map((item, i) => `<div class="prom-note" style="--i:${i}"><b></b><span>${item}</span></div>`).join('')}</div>`,
       css: `.prom-notify-stack{position:absolute;left:8%;right:8%;top:34%;display:grid;gap:18px}.prom-note{display:flex;align-items:center;gap:18px;padding:24px 26px;border-radius:24px;background:rgba(15,23,42,.82);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 60px rgba(2,6,23,.34);color:#fff;font:800 30px/1.1 Inter,system-ui,sans-serif;animation:prom-note-in .48s calc(var(--i)*.22s) both}.prom-note b{width:18px;height:18px;border-radius:50%;background:${accent};box-shadow:0 0 28px ${accent}}@keyframes prom-note-in{from{opacity:0;transform:translateY(30px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}`,
@@ -1184,7 +1184,7 @@ const RENDERERS: Record<string, Renderer> = {
     };
   },
   'gradient-wipe-transition': (_block, input) => {
-    const from = escapeHtml(slotValue(input, 'from', '#f97316'));
+    const from = escapeHtml(slotValue(input, 'from', '#d6b75e'));
     const to = escapeHtml(slotValue(input, 'to', '#facc15'));
     return {
       html: `<div class="prom-block prom-gradient-wipe" data-role="transition" data-start="${seconds(input, 'start', 3)}" data-duration="${seconds(input, 'duration', 0.65)}"></div>`,
@@ -1282,7 +1282,7 @@ const RENDERERS: Record<string, Renderer> = {
     const start = slotNumber(input, 'start', 0);
     const dur = Math.max(0.1, slotNumber(input, 'duration', 8));
     const bars = Math.max(12, Math.min(160, Math.round(slotNumber(input, 'bars', 64))));
-    const accent = escapeHtml(slotValue(input, 'accent', '#f97316'));
+    const accent = escapeHtml(slotValue(input, 'accent', '#d6b75e'));
     return {
       html: `<canvas id="${id}" class="prom-block prom-waveform" data-role="waveform" data-start="${start}s" data-duration="${dur}s"></canvas>`,
       css: `.prom-waveform{position:absolute;left:8%;right:8%;bottom:16%;height:180px;width:auto;display:block;filter:drop-shadow(0 18px 44px rgba(0,0,0,.32))}`,
@@ -1318,7 +1318,7 @@ const RENDERERS: Record<string, Renderer> = {
     start: slotNumber(input, 'start', 0),
     duration: slotNumber(input, 'duration', 6),
     accent: slotValue(input, 'accent', '#38bdf8'),
-    secondary: slotValue(input, 'secondary', '#f97316'),
+    secondary: slotValue(input, 'secondary', '#d6b75e'),
     background: slotValue(input, 'background', '#05070d'),
     speed: slotNumber(input, 'speed', 1),
     count: slotNumber(input, 'count', 900),
@@ -1330,7 +1330,7 @@ const RENDERERS: Record<string, Renderer> = {
     start: slotNumber(input, 'start', 0),
     duration: slotNumber(input, 'duration', 5),
     accent: slotValue(input, 'accent', '#38bdf8'),
-    secondary: slotValue(input, 'secondary', '#f97316'),
+    secondary: slotValue(input, 'secondary', '#d6b75e'),
     background: slotValue(input, 'background', '#05070d'),
     intensity: slotNumber(input, 'intensity', 0.9),
     speed: slotNumber(input, 'speed', 1),
@@ -1340,7 +1340,7 @@ const RENDERERS: Record<string, Renderer> = {
     start: slotNumber(input, 'start', 0),
     duration: slotNumber(input, 'duration', 6),
     accent: slotValue(input, 'accent', '#38bdf8'),
-    secondary: slotValue(input, 'secondary', '#f97316'),
+    secondary: slotValue(input, 'secondary', '#d6b75e'),
     background: slotValue(input, 'background', '#05070d'),
     speed: slotNumber(input, 'speed', 1),
   }),
@@ -1350,7 +1350,7 @@ const RENDERERS: Record<string, Renderer> = {
     start: slotNumber(input, 'start', 0),
     duration: slotNumber(input, 'duration', 6),
     accent: slotValue(input, 'accent', '#38bdf8'),
-    secondary: slotValue(input, 'secondary', '#f97316'),
+    secondary: slotValue(input, 'secondary', '#d6b75e'),
     background: slotValue(input, 'background', '#05070d'),
     intensity: slotNumber(input, 'intensity', 0.9),
     speed: slotNumber(input, 'speed', 1),

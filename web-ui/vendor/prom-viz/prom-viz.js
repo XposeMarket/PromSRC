@@ -45,7 +45,7 @@
     ":root{--pv-font:'PV Sans',system-ui,-apple-system,'Segoe UI',sans-serif;--pv-mono:'PV Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;",
     "--pv-text:var(--prom-text,currentColor);--pv-muted:var(--prom-muted,#8a8f98);--pv-line:var(--prom-border,rgba(127,127,127,.22));",
     "--pv-line-2:var(--prom-border-strong,rgba(127,127,127,.4));--pv-surface:var(--prom-surface,rgba(127,127,127,.06));",
-    "--pv-soft:var(--prom-surface-secondary,rgba(127,127,127,.1));--pv-accent:var(--prom-accent,#ff7a1a);--pv-on-accent:var(--prom-on-accent,#fff);",
+    "--pv-soft:var(--prom-surface-secondary,rgba(127,127,127,.1));--pv-accent:var(--prom-accent,#d6b75e);--pv-on-accent:var(--prom-on-accent,#050505);",
     "--pv-ok:var(--prom-success,#22a06b);--pv-warn:var(--prom-warning,#d99a00);--pv-bad:var(--prom-danger,#e5484d);--pv-r:12px}",
     "body{font-family:var(--pv-font);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;padding:2px 1px 6px}",
     ".pv{display:flex;flex-direction:column;gap:20px;color:var(--pv-text);min-width:0}",
@@ -190,7 +190,7 @@
       text = resolveColor(dark ? '#e6ebf2' : '#1f2328');
       root.style.setProperty('--prom-text', rgb(text, 1));
     }
-    var accent = tokenColor('--prom-accent', '#ff7a1a');
+    var accent = tokenColor('--prom-accent', '#d6b75e');
     var ah = toHsl(accent);
     // Near-white/near-black/grey accents (mono themes) are useless as a data color.
     var weakAccent = ah.s < 22 || ah.l > 88 || ah.l < 12;
@@ -1418,7 +1418,7 @@
   // ── Public API ────────────────────────────────────────────────────────────
   readTheme();
   var api = {
-    version: '1.1.0',
+    version: '1.1.1',
     slider: slider, params: params, loop: loop, timeline: timeline, sankey: sankey, form: form,
     insert: insert, toast: toast, toPng: toPng, csv: csv, exportBar: exportBar,
     page: page, section: section, grid: grid, card: card, callout: callout, badge: badge,

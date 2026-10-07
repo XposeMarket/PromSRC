@@ -137,7 +137,7 @@ export function renderCreativeWorkspaceStudioV3(context, { shell, library, stage
         <div style="display:flex;flex-direction:column;gap:4px">
           ${[['Solar', 'solar:stars-bold-duotone','solar:'],['Material','mdi:material-design','mdi:'],['Phosphor','ph:star-duotone','ph:'],['Tabler','tabler:star','tabler:'],['Heroicons','heroicons:star-solid','heroicons:'],['Lucide','lucide:star','lucide:']].map(([label, icon, prefix]) => `
             <button class="creative-lib-cat-back" style="justify-content:flex-start;gap:8px;padding:7px 8px" onclick="canvasSearchIconify('${prefix}')">
-              <iconify-icon icon="${context.escHtml(icon)}" width="16" height="16" style="color:#fb923c"></iconify-icon>
+              <iconify-icon icon="${context.escHtml(icon)}" width="16" height="16" style="color:#f0d98b"></iconify-icon>
               <span style="font-size:11px;font-weight:600;color:#d6d3d1">${context.escHtml(label)}</span>
               <span style="font-size:10px;color:#6b7280;margin-left:auto">${context.escHtml(prefix)}*</span>
             </button>
@@ -484,7 +484,7 @@ export function renderCreativeWorkspaceStudioV3(context, { shell, library, stage
           <div class="creative-field-grid" style="margin-top:12px">
             ${context.renderCreativePropertyFieldStudioV3('Background', 'meta.background', selected.meta?.background || '#111827', 'color')}
             ${context.renderCreativePropertyFieldStudioV3('Text color', 'meta.textColor', selected.meta?.textColor || '#f8fafc', 'color')}
-            ${context.renderCreativePropertyFieldStudioV3('Accent', 'meta.accent', selected.meta?.accent || '#f97316', 'color')}
+            ${context.renderCreativePropertyFieldStudioV3('Accent', 'meta.accent', selected.meta?.accent || '#d6b75e', 'color')}
             ${context.renderCreativePropertyFieldStudioV3('Radius', 'meta.radius', selected.meta?.radius || 18)}
           </div>
           ${['card'].includes(String(selected.meta?.component || 'card')) ? context.renderCreativePropertyFieldStudioV3('Title', 'meta.title', selected.meta?.title || 'Feature card', 'text') : ''}

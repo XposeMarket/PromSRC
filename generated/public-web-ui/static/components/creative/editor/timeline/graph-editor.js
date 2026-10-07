@@ -89,7 +89,7 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
 
     // Playhead
     const phX = (timeMs / dur) * w;
-    ctx.strokeStyle = 'rgba(249,115,22,0.6)';
+    ctx.strokeStyle = 'rgba(214,183,94,0.6)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(phX, 0); ctx.lineTo(phX, GRAPH_H); ctx.stroke();
 
@@ -135,7 +135,7 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
       const y = normY(kf.v, _activeProp) * GRAPH_H;
       ctx.beginPath();
       ctx.arc(x, y, POINT_R, 0, Math.PI * 2);
-      ctx.fillStyle = '#f97316';
+      ctx.fillStyle = '#d6b75e';
       ctx.fill();
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;

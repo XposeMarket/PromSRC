@@ -56,7 +56,7 @@ export function createTextEditor({ viewportRoot, store, getScene, applyOps, onEl
       color: ${el.meta?.color || el.color || '#ffffff'};
       text-align: ${el.meta?.textAlign || el.textAlign || 'left'};
       background: rgba(0,0,0,0.35);
-      border: 1.5px solid #f97316;
+      border: 1.5px solid #d6b75e;
       border-radius: 2px;
       resize: none;
       outline: none;

@@ -333,16 +333,16 @@ export function mountLoginScreen(onSuccess) {
       .pls-backdrop {
         position: absolute;
         inset: 0;
-        background: #0a0a0f;
-        background-image: radial-gradient(ellipse at 50% 0%, rgba(249,115,22,0.07) 0%, transparent 60%);
+        background: #050505;
+        background-image: radial-gradient(ellipse at 50% 0%, rgba(214,183,94,0.07) 0%, transparent 60%);
       }
       .pls-card {
         position: relative;
         width: 100%;
         max-width: 400px;
         margin: 0 16px;
-        background: rgba(18,22,30,0.98);
-        border: 1px solid rgba(249,115,22,0.18);
+        background: rgba(10,10,10,0.98);
+        border: 1px solid rgba(214,183,94,0.18);
         border-radius: 18px;
         padding: 40px 36px 32px;
         box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset;
@@ -363,7 +363,7 @@ export function mountLoginScreen(onSuccess) {
         font-size: 22px;
         font-weight: 800;
         letter-spacing: 0.1em;
-        background: linear-gradient(135deg, #f97316 0%, #facc15 100%);
+        background: linear-gradient(135deg, #f0d98b 0%, #d6b75e 55%, #a98a3b 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -398,7 +398,7 @@ export function mountLoginScreen(onSuccess) {
         line-height: 1.5;
       }
       .pls-sub-warn svg { flex-shrink: 0; margin-top: 1px; }
-      .pls-link { color: #f97316; text-decoration: underline; }
+      .pls-link { color: #d6b75e; text-decoration: underline; }
       .pls-form { display: flex; flex-direction: column; gap: 14px; }
       .pls-field { display: flex; flex-direction: column; gap: 6px; }
       .pls-field label {
@@ -419,10 +419,10 @@ export function mountLoginScreen(onSuccess) {
         transition: border-color 0.15s;
       }
       .pls-field input::placeholder { color: #4a5568; }
-      .pls-field input:focus { border-color: rgba(249,115,22,0.5); background: rgba(249,115,22,0.04); }
+      .pls-field input:focus { border-color: rgba(214,183,94,0.5); background: rgba(214,183,94,0.04); }
       .pls-btn {
         margin-top: 4px;
-        background: linear-gradient(135deg, #f97316 0%, #ea6f10 100%);
+        background: linear-gradient(135deg, #d6b75e 0%, #a98a3b 100%);
         color: #fff;
         border: none;
         border-radius: 10px;
@@ -436,7 +436,7 @@ export function mountLoginScreen(onSuccess) {
         justify-content: center;
         gap: 8px;
         transition: opacity 0.15s, transform 0.1s;
-        box-shadow: 0 4px 20px rgba(249,115,22,0.25);
+        box-shadow: 0 4px 20px rgba(214,183,94,0.25);
       }
       .pls-btn:hover { opacity: 0.92; }
       .pls-btn:active { transform: scale(0.99); }
@@ -452,7 +452,7 @@ export function mountLoginScreen(onSuccess) {
         text-decoration: none;
         transition: color 0.15s;
       }
-      .pls-signup-link:hover { color: #f97316; }
+      .pls-signup-link:hover { color: #d6b75e; }
       #prometheus-login-screen.pls-fade-out {
         animation: pls-fadeout 0.35s ease forwards;
       }

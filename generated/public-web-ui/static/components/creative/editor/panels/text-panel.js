@@ -6,7 +6,7 @@ const PRESETS = [
   { label: 'Big Title',    fontSize: 96,  fontWeight: 700, color: '#ffffff', text: 'Big Title',    x: 96,  y: 180, width: 1728, height: 140 },
   { label: 'Subtitle',     fontSize: 56,  fontWeight: 400, color: '#e2e8f0', text: 'Subtitle',     x: 96,  y: 340, width: 1728, height: 90  },
   { label: 'Body',         fontSize: 36,  fontWeight: 400, color: '#cbd5e1', text: 'Body text here', x: 96, y: 460, width: 1728, height: 60  },
-  { label: 'Lower Third',  fontSize: 40,  fontWeight: 600, color: '#f97316', text: 'Lower Third',  x: 80,  y: 860, width: 900,  height: 70  },
+  { label: 'Lower Third',  fontSize: 40,  fontWeight: 600, color: '#d6b75e', text: 'Lower Third',  x: 80,  y: 860, width: 900,  height: 70  },
   { label: 'Caption',      fontSize: 28,  fontWeight: 400, color: '#94a3b8', text: 'Caption text', x: 96,  y: 980, width: 1728, height: 50  },
   { label: 'Bold Quote',   fontSize: 52,  fontWeight: 800, color: '#fbbf24', text: '"Quote here"', x: 200, y: 400, width: 1520, height: 80  },
   { label: 'Label',        fontSize: 22,  fontWeight: 500, color: '#a78bfa', text: 'LABEL',        x: 80,  y: 80,  width: 300,  height: 40  },
