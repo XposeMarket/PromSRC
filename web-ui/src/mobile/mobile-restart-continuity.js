@@ -27,7 +27,11 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
   const owned = String(turn._clientRequestId || '').trim();
   if (expected && owned && expected !== owned) return false;
   const sameRequest = !!expected && expected === owned;
-  const answered = !!String(turn.body?.text || turn.content || '').trim() && Number(turn.workEndedAt || 0) > 0;
+  // Any visible answer text proves the row is a reply, not a live placeholder.
+  // History/cache rows often lack workEndedAt and _clientRequestId; requiring
+  // workEndedAt let recovery (e.g. a stale aborted runtime still reported
+  // active after a restart) adopt the previous reply and replay-reset it blank.
+  const answered = !!String(turn.body?.text || turn.content || '').trim();
   if (answered && !sameRequest && !turn.errorPresentation) return false;
   const list = Array.isArray(thread) ? thread : [];
   const index = list.lastIndexOf(turn);

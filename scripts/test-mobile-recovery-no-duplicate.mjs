@@ -32,4 +32,8 @@ assert.equal(canReviveRecoveryTurn([user, before], before, cid), false, 'steer b
 const errored = { role: 'ai', streaming: false, workEndedAt: 9, errorPresentation: { kind: 'network' }, body: { text: 'Connection lost' } };
 assert.equal(canReviveRecoveryTurn([user, errored], errored, ''), true, 'a connection-error row is revived, not duplicated');
 
+const cachedReply = { role: 'ai', streaming: false, body: { text: 'previous reply' } };
+assert.equal(canReviveRecoveryTurn([user, cachedReply], cachedReply, ''), false, 'a cached reply without workEndedAt/identity is never revived and wiped');
+assert.equal(canReviveRecoveryTurn([user, cachedReply], cachedReply, 'stuck_other_req'), false, 'a stale runtime of another request cannot adopt a cached reply');
+
 console.log('mobile recovery no-duplicate: ok');
