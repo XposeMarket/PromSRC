@@ -31,6 +31,7 @@ const PUBLIC_WEB_VENDOR_FILES = [
   'vendor/iconify/iconify.min.js',
   'vendor/lottie-player/lottie-player.js',
   'vendor/chart/chart.umd.js',
+  'vendor/prom-viz/prom-viz.js',
   'vendor/maplibre/maplibre-gl.js',
   'vendor/maplibre/maplibre-gl.css',
   'vendor/mermaid/mermaid.min.js',
@@ -258,6 +259,7 @@ function copyPublicWebVendorAssets() {
   copyVendorFile('node_modules/@iconify/iconify/dist/iconify.min.js', 'iconify/iconify.min.js');
   copyVendorFile('node_modules/@lottiefiles/lottie-player/dist/lottie-player.js', 'lottie-player/lottie-player.js');
   copyVendorFile('node_modules/chart.js/dist/chart.umd.js', 'chart/chart.umd.js');
+  copyVendorFile('web-ui/vendor/prom-viz/prom-viz.js', 'prom-viz/prom-viz.js');
   copyVendorFile('node_modules/maplibre-gl/dist/maplibre-gl.js', 'maplibre/maplibre-gl.js');
   copyVendorFile('node_modules/maplibre-gl/dist/maplibre-gl.css', 'maplibre/maplibre-gl.css');
   copyVendorFile('node_modules/mermaid/dist/mermaid.min.js', 'mermaid/mermaid.min.js');

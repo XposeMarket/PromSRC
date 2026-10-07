@@ -680,9 +680,12 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
 <\/script>
 <\/body><\/html>`;
   }
-  // html block
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  // html block. The Prometheus Viz Kit (window.ui / window.PV) is preloaded so
+  // generated visuals get KPI strips, annotated charts, heatmaps, treemaps,
+  // tabs, tooltips, number formatting and design-variant compare for free.
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${sharedStyles}body{font-family:inherit;color:var(--prom-text);min-height:0;width:100%;overflow-x:hidden}<\/style>
+<script src="/vendor/prom-viz/prom-viz.js?v=1"><\/script>
 <\/head><body>${code}<\/body><\/html>`;
 }
 
@@ -727,6 +730,31 @@ function installVisualMessageBridge() {
       } catch {}
     });
   };
+  // Expand / collapse a visual to a full-viewport overlay without reloading
+  // the iframe (moving it in the DOM would reset its state).
+  const collapseExpanded = () => {
+    document.querySelectorAll('.visual-block.visual-block--expanded').forEach((block) => {
+      block.classList.remove('visual-block--expanded');
+      document.documentElement.classList.remove('prom-visual-expanded-open');
+      const btn = block.querySelector('[data-visual-expand]');
+      if (btn) { btn.setAttribute('title', 'Expand visual'); btn.setAttribute('aria-label', 'Expand visual'); }
+    });
+  };
+  document.addEventListener('click', (event) => {
+    const btn = event.target?.closest?.('[data-visual-expand]');
+    if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const block = btn.closest('.visual-block');
+    if (!block) return;
+    if (block.classList.contains('visual-block--expanded')) { collapseExpanded(); return; }
+    collapseExpanded();
+    block.classList.add('visual-block--expanded');
+    document.documentElement.classList.add('prom-visual-expanded-open');
+    btn.setAttribute('title', 'Close expanded visual');
+    btn.setAttribute('aria-label', 'Close expanded visual');
+  }, true);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') collapseExpanded(); });
   document.addEventListener('prom-theme-change', () => setTimeout(broadcastTheme, 0));
   document.addEventListener('prom-appearance-change', () => setTimeout(broadcastTheme, 0));
   window.addEventListener('message', (event) => {
@@ -963,6 +991,7 @@ export function buildVisualIframe(lang, code, options = {}) {
   const escapedCode = escapeAttr(code);
   const minHeight = lang === 'chart' ? 240 : lang === 'html' ? 180 : 220;
   return `<div class="visual-block visual-block--inline" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" data-vis-surface="inline">
+  <button type="button" class="visual-expand-btn" data-visual-expand="1" title="Expand visual" aria-label="Expand visual"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   <iframe
     id="${id}"
     data-prom-visual="true"

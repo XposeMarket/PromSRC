@@ -1,35 +1,43 @@
-{
-  "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "interactive-visuals",
-  "name": "interactive-visuals",
-  "description": "Choose the smallest suitable visual renderer for /visual or an ambiguous visualize-this request: native chart, Mermaid, SVG, or interactive HTML. Use for format selection, not for building an explicitly requested interactive artifact (interactive-artifacts) or a named chart (chart-visualizer).",
-  "version": "2.1.0",
-  "entrypoint": "SKILL.md",
-  "triggers": [
-    "which visual should i use for these metrics",
-    "show this visually in a diagram",
-    "turn this into a visual",
-    "choose a visual format",
-    "visualize this process",
-    "make a diagram",
-    "/visual"
-  ],
-  "categories": [
-    "visuals",
-    "router",
-    "cards",
-    "dashboards"
-  ],
-  "requiredTools": [
-    "skills"
-  ],
-  "implicitInvocation": true,
-  "permissions": {},
-  "resources": [
-    {
-      "path": "references/soul-visual-defaults.md",
-      "type": "doc",
-      "description": "When to use which visual skill; migrated from SOUL Visuals section"
-    }
-  ]
+﻿{
+    "schemaVersion":  "prometheus-skill-bundle-v1",
+    "id":  "interactive-visuals",
+    "name":  "interactive-visuals",
+    "description":  "Build analyst-grade inline visuals in chat (dashboards, multi-view breakdowns, design-variant mocks, explainers) with the preloaded Prometheus Viz Kit (window.ui) in html blocks; also routes /visual to chart, Mermaid, SVG, or HTML.",
+    "version":  "3.0.0",
+    "entrypoint":  "SKILL.md",
+    "triggers":  [
+                     "which visual should i use for these metrics",
+                     "show this visually in a diagram",
+                     "turn this into a visual",
+                     "choose a visual format",
+                     "visualize this process",
+                     "make a diagram",
+                     "/visual",
+                     "make a dashboard",
+                     "break this down visually",
+                     "show me design variants",
+                     "mock up this ui",
+                     "visualize my usage",
+                     "interactive breakdown"
+                 ],
+    "categories":  [
+                       "visuals",
+                       "router",
+                       "cards",
+                       "dashboards"
+                   ],
+    "requiredTools":  [
+
+                      ],
+    "implicitInvocation":  true,
+    "permissions":  {
+
+                    },
+    "resources":  [
+                      {
+                          "path":  "references/soul-visual-defaults.md",
+                          "type":  "doc",
+                          "description":  "When to use which visual skill; migrated from SOUL Visuals section"
+                      }
+                  ]
 }

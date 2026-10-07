@@ -739,6 +739,45 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   background: transparent;
 }
 
+/* Expand-to-fullscreen control for inline visuals (Theo-style ↗). */
+.visual-block { position: relative; }
+.visual-expand-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--line, rgba(127,127,127,.25));
+  background: var(--panel, rgba(127,127,127,.08));
+  color: var(--muted, #8a8a8a);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease;
+}
+.visual-block:hover .visual-expand-btn,
+.visual-expand-btn:focus-visible,
+.visual-block--expanded .visual-expand-btn { opacity: 1; }
+.visual-expand-btn:hover { color: var(--text, currentColor); }
+@media (hover: none) { .visual-expand-btn { opacity: .85; } }
+.visual-block.visual-block--expanded {
+  position: fixed !important;
+  inset: 0;
+  z-index: 10050;
+  margin: 0 !important;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)) !important;
+  max-width: none !important;
+  overflow: auto !important;
+  background: var(--bg, var(--pm-bg, #0f1115)) !important;
+}
+.visual-block.visual-block--expanded iframe { max-width: 1280px; margin: 28px auto 0; }
+.visual-block.visual-block--expanded .visual-expand-btn { position: fixed; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+html.prom-visual-expanded-open, html.prom-visual-expanded-open body { overflow: hidden; }
+
 .msg-bubble-stack {
   position: relative;
   min-width: 0;
