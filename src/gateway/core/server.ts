@@ -262,6 +262,9 @@ function sendRawFile(req: http.IncomingMessage, res: http.ServerResponse, filePa
       ? `W/"${stat.size}-${Math.floor(stat.mtimeMs)}-${compressed.encoding}"`
       : `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
     res.setHeader('Cache-Control', getRawStaticCacheControl(req, filePath));
+    // Sandboxed chat visuals run in an opaque (null) origin; fonts are
+    // CORS-checked, so allow the bundled woff2 files to load inside them.
+    if (path.extname(filePath).toLowerCase() === '.woff2') res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
     res.setHeader('ETag', etag);
     if (compressed) {

@@ -29,6 +29,7 @@ const GENERATED_VENDOR_FILES = [
   'vendor/iconify/iconify.min.js',
   'vendor/lottie-player/lottie-player.js',
   'vendor/chart/chart.umd.js',
+  'vendor/prom-viz/prom-viz.js',
   'vendor/maplibre/maplibre-gl.js',
   'vendor/maplibre/maplibre-gl.css',
   'vendor/mermaid/mermaid.min.js',
