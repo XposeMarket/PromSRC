@@ -84,6 +84,7 @@ jobs:
       - name: Verify tool activity edit line stats
         run: |
           node scripts/test-tool-activity-edit-stats.mjs
+          node scripts/test-prom-viz-version.mjs
           npm run test:tool-activity-stream
       - name: Verify Creative video timeline interactions
         run: node scripts/test-creative-video-timeline-interactions.mjs

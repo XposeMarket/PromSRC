@@ -227,6 +227,11 @@ const VISUAL_THEME_FALLBACKS = Object.freeze({
   danger: 'currentColor',
 });
 
+// Cache-bust key for the Viz Kit script. /vendor is served with max-age=86400, so this
+// MUST change whenever prom-viz.js changes or clients keep running the old kit for a day
+// and new ui.* calls crash. scripts/test-prom-viz-version.mjs enforces it matches ui.version.
+const PROM_VIZ_VERSION = '1.1.0';
+
 function cleanVisualCssValue(value, fallback) {
   const cleaned = String(value || '').replace(/[<>{};\r\n]/g, '').trim();
   return cleaned || fallback;
@@ -693,7 +698,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
   // tabs, tooltips, number formatting and design-variant compare for free.
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${sharedStyles}body{font-family:inherit;color:var(--prom-text);min-height:0;width:100%;overflow-x:hidden}<\/style>
-<script src="/vendor/prom-viz/prom-viz.js?v=1"><\/script>
+<script src="/vendor/prom-viz/prom-viz.js?v=${PROM_VIZ_VERSION}"><\/script>
 <\/head><body>${code}<\/body><\/html>`;
 }
 
