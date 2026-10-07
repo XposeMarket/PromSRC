@@ -444,8 +444,9 @@ function _renderCronCard(job) {
 
   const ownerValue = _scheduleOwnerValue(job);
   const subagentId = ownerValue === SCHEDULE_OWNER_MAIN ? '' : ownerValue;
-  const nextRun    = job.next_run || job.nextRun  ? new Date(job.next_run || job.nextRun).toLocaleString()  : 'Never';
-  const lastRun    = job.last_run || job.lastRun  ? new Date(job.last_run || job.lastRun).toLocaleString() : 'Never';
+  const nextRun    = _formatNextRun(job);
+  const lastRun    = _formatMaybeDate(job.last_run || job.lastRun);
+  const scheduleText = _formatScheduleSummary(job);
 
   return `
     <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;padding:12px;
@@ -460,10 +461,12 @@ function _renderCronCard(job) {
         <div style="font-size:12px;color:var(--muted);line-height:1.4;margin-bottom:6px">
           ${escHtml((job.prompt || '').slice(0, 60))}${(job.prompt || '').length > 60 ? '…' : ''}
         </div>
+        <div style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:5px">${escHtml(scheduleText)}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;color:var(--muted);margin-bottom:6px">
           <div><strong>Next:</strong> ${nextRun}</div>
           <div><strong>Last:</strong> ${lastRun}</div>
         </div>
+        ${_scheduleHealthHtml(job)}
         <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:2px">
           <strong>Assigned to:</strong>
           ${ownerValue === SCHEDULE_OWNER_MAIN
@@ -500,20 +503,75 @@ function _renderCronCard(job) {
 }
 
 function _formatMaybeDate(value) {
-  return value ? new Date(value).toLocaleString() : 'Never';
+  return value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never';
+}
+
+// Paused/disabled jobs do not run, so a stale stored next_run must not be shown.
+function _formatNextRun(job) {
+  const enabled = job.enabled !== false;
+  if (!enabled || job.status === 'paused' || job.status === 'disabled') return 'Paused';
+  return _formatMaybeDate(job.next_run || job.nextRun);
+}
+
+// Health strip: last error, consecutive failures, pause reason.
+function _scheduleHealthHtml(job) {
+  const parts = [];
+  const errs = Number(job.consecutive_errors || 0);
+  const lastError = String(job.last_error || '').trim();
+  const pausedReason = String(job.paused_reason || '').trim();
+  if (pausedReason && pausedReason !== 'manual' && (job.status === 'paused' || job.status === 'disabled' || job.enabled === false)) {
+    parts.push(`<div><strong>Paused:</strong> ${escHtml(pausedReason.replace(/_/g, ' '))}</div>`);
+  }
+  if (lastError) {
+    parts.push(`<div title="${escHtml(lastError)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      <strong>Last error${errs > 1 ? ` (${errs} in a row)` : ''}:</strong> ${escHtml(lastError.slice(0, 140))}</div>`);
+  }
+  if (!parts.length) return '';
+  return `<div style="font-size:11px;line-height:1.45;color:#9b1c1c;background:rgba(239,68,68,.08);
+              border:1px solid rgba(239,68,68,.25);border-radius:7px;padding:5px 8px;margin-bottom:6px;min-width:0">
+      ${parts.join('')}</div>`;
+}
+
+// Mirror of the server cron validation so obvious mistakes are caught before Save.
+function _validateCronClient(pattern) {
+  const value = String(pattern || '').trim();
+  if (!value) return null;
+  const fields = value.split(/\s+/);
+  if (fields.length < 5 || fields.length > 6) return `Cron needs 5 fields (minute hour day month weekday), got ${fields.length}.`;
+  const ok = /^[\d*\/,\-?LW#A-Za-z]+$/;
+  const bad = fields.find((f) => !ok.test(f));
+  return bad ? `Invalid cron field "${bad}".` : null;
 }
 
 function _formatScheduleSummary(job) {
   const cron = String(job.cron || job.schedule || '').trim();
   const runAt = job.run_at || job.runAt;
   if (runAt) return `One-time run at ${_formatMaybeDate(runAt)}`;
-  const tz = job.timezone || job.tz || 'local time';
+  const tz = job.timezone || job.tz || _scheduleLocalTimezoneLabel();
   const parts = cron.split(/\s+/);
   if (parts.length >= 5) {
     const [minute, hour, dom, month, dow] = parts;
     const time = /^(\d+)$/.test(hour) && /^(\d+)$/.test(minute)
       ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
       : '';
+    const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayList = (spec) => String(spec).split(',').map((d) => {
+      const r = d.split('-').map((n) => DAY_NAMES[Number(n) % 7] || n);
+      return r.join('–');
+    }).join(', ');
+    const fmt12 = (h, m) => {
+      const hh = Number(h); const mm = String(m).padStart(2, '0');
+      return `${((hh + 11) % 12) + 1}:${mm} ${hh < 12 ? 'AM' : 'PM'}`;
+    };
+    if (minute === '*' && hour === '*') return `Every minute (${tz})`;
+    if (/^\d+$/.test(minute) && hour === '*' && dom === '*' && dow === '*' && minute !== '0') return `Hourly at :${minute.padStart(2, '0')} (${tz})`;
+    if (/^\d+$/.test(minute) && /^\*\/\d+$/.test(hour)) return `Every ${hour.slice(2)} hours at :${minute.padStart(2, '0')} (${tz})`;
+    if (time && dom === '*' && month === '*' && dow === '0,6') return `Weekends at ${fmt12(hour, minute)} (${tz})`;
+    if (time && dom === '*' && month === '*' && /^[\d,\-]+$/.test(dow) && dow !== '1-5') return `${dayList(dow)} at ${fmt12(hour, minute)} (${tz})`;
+    if (time && /^\d+$/.test(dom) && month === '*' && dow === '*') return `Monthly on day ${dom} at ${fmt12(hour, minute)} (${tz})`;
+    if (/^\d+$/.test(minute) && /^\d+(,\d+)+$/.test(hour) && dom === '*' && month === '*' && dow === '*') {
+      return `Daily at ${hour.split(',').map((h) => fmt12(h, minute)).join(', ')} (${tz})`;
+    }
     if (minute === '0' && hour === '*') return `Every hour (${tz})`;
     if (/^\*\/\d+$/.test(minute) && hour === '*') return `Every ${minute.slice(2)} minutes (${tz})`;
     if (time && dom === '*' && month === '*' && dow === '*') return `Every day at ${time} (${tz})`;
@@ -522,6 +580,10 @@ function _formatScheduleSummary(job) {
     if (time && month === '*' && dow === '*') return `Monthly at ${time} (${tz})`;
   }
   return cron ? `${cron} (${tz})` : 'Manual schedule';
+}
+
+function _scheduleLocalTimezoneLabel() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'; } catch { return 'local time'; }
 }
 
 function _openScheduledTeam(teamId) {
@@ -545,7 +607,7 @@ function _renderTeamScheduleCard(job) {
   const statusBg    = running ? 'rgba(20,184,166,.16)' : isDisabled ? '#e5e7eb' : isPaused ? '#fff4d6' : '#d9f7ed';
   const statusTxt   = running ? '#0f766e' : isDisabled ? '#374151' : isPaused ? '#7d5700' : '#066046';
   const scheduleText = _formatScheduleSummary(job);
-  const nextRun = _formatMaybeDate(job.next_run || job.nextRun);
+  const nextRun = _formatNextRun(job);
   const lastRun = _formatMaybeDate(job.last_run || job.lastRun);
 
   return `
@@ -578,6 +640,7 @@ function _renderTeamScheduleCard(job) {
           <div><strong>Next:</strong> ${nextRun}</div>
           <div><strong>Last:</strong> ${lastRun}</div>
         </div>
+        ${_scheduleHealthHtml(job)}
         <div style="font-size:10px;color:var(--muted);font-family:monospace">team_id: ${escHtml(teamId)}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;padding-top:2px">
@@ -993,6 +1056,8 @@ async function saveSchedule() {
     showToast('Pattern required', 'Schedule pattern is required', 'warning'); return;
   }
   if (!prompt)  { showToast('Prompt required',  'Prompt/action is required',    'warning'); return; }
+  const cronProblem = /^[\d*]/.test(String(pattern || '').trim()) ? _validateCronClient(pattern) : null;
+  if (cronProblem) { showToast('Invalid schedule', cronProblem, 'warning'); return; }
 
   const method  = editingScheduleId ? 'PUT'  : 'POST';
   const apiPath = editingScheduleId ? `/api/schedules/${editingScheduleId}` : '/api/schedules';

@@ -12,7 +12,7 @@ assert.doesNotMatch(timerRunnerSource, /if \(isModelBusy\(\)\)/, 'due timers mus
 assert.match(watchRunnerSource, /pendingMatchObservation/, 'watch matches must be latched while delivery waits');
 assert.match(watchRunnerSource, /refreshInternalWatchObservation/, 'watch inspection must refresh real state even if the poller is unhealthy');
 assert.doesNotMatch(watchRunnerSource, /await this\.fire(?:Match|Timeout)\(/, 'one watch delivery must not block observation of every later watch');
-assert.match(watchRunnerSource, /candidate\.scheduleId === taskId/, 'task watches may follow a scheduled job id to its linked task');
+assert.match(watchRunnerSource, /(?:candidate|summary)\.scheduleId === taskId/, 'task watches may follow a scheduled job id to its linked task');
 assert.match(watchRunnerSource, /findArchivedScheduledJob/, 'scheduled-job watches must resolve retained one-shots');
 assert.match(watchRunnerSource, /addPendingRuntimeSteerForSession/, 'a watch that completes during an active turn must use the live steer inbox');
 assert.match(watchRunnerSource, /steerActiveTurn\(watch, obs, 'match'/, 'matched watches must attempt live in-turn delivery while Prometheus is busy');
@@ -20,7 +20,7 @@ assert.match(watchRunnerSource, /deliveryMode: 'live_steer' \| 'follow_up'/, 'wa
 assert.match(watchRunnerSource, /runInteractiveTurn/, 'post-turn watch delivery must still launch a normal Prometheus follow-up turn');
 const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 assert.match(chatSource, /liveEventsAppliedBeforeFinal = await injectPendingChatSteers\(\)/, 'finalization must drain watch events that arrive during the provider response');
-assert.match(chatSource, /if \(!isSyntheticInternalWatch && shouldCheckBlockedTaskFollowup\(message\)\)/, 'private watch payloads must never enter user blocked-task follow-up routing');
+assert.match(chatSource, /if \(!isSyntheticInternalWatch(?: && !\w+)* && shouldCheckBlockedTaskFollowup\(message\)\)/, 'private watch payloads must never enter user blocked-task follow-up routing');
 assert.match(chatSource, /runWithInternalWatchTurnContext\(flags\.internalWatchContext/, 'watch policy must cover the entire synthetic turn, including wrapper and preflight paths');
 assert.match(cronSource, /normalizedType === 'one-shot' \? null/, 'one-shot jobs must not expose a cron schedule');
 assert.match(cronSource, /archiveCompletedScheduledJob\(job\)/, 'completed one-shots must be retained');

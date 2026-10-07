@@ -24,7 +24,10 @@ assert(livePrompt.includes('Browser observations in the Activity Package are evi
 assert(runner.includes("'brain_context_search'"));
 assert(runner.includes("'brain_activity_read'"));
 assert(runner.includes("'brain_thought_submit'"));
-assert(runner.includes('{ brainThoughtRuntime: true, runtimeId }'));
+// Runtime options are built by brainScheduledChatRuntimeOptions(kind, runtimeId)
+// since the Thought/Dream runtime refactor; Thought must still opt in.
+assert(runner.includes("kind === 'thought' ? { brainThoughtRuntime: true } : {}"));
+assert(runner.includes("brainScheduledChatRuntimeOptions('thought', runtimeId)"));
 assert(server.includes('createBrainHandleChatAdapter(handleChat)'));
 assert(runner.includes('submissionSucceeded && fileLooksFresh && capsuleArtifactValid && !runFailed'));
 assert(!livePrompt.includes('workspace_edit'));

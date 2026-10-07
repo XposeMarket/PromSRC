@@ -379,6 +379,8 @@ router.get('/api/bg-tasks', (req, res) => {
     } : task.teamSubagent,
     status: task.status,
     pauseReason: task.pauseReason,
+    // Failed cards show the real failure reason without opening the task.
+    lastError: task.status === 'failed' && task.finalSummary ? String(task.finalSummary).slice(0, 240) : undefined,
     pausedByScheduleId: task.pausedByScheduleId,
     shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
     plan: Array.isArray(task.plan) ? task.plan.slice(0, compact ? 10 : 20).map((step: any) => compact ? {

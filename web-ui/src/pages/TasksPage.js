@@ -661,6 +661,7 @@ function bgtCardHTML(t, col) {
       ${displayStatus === 'needs_assistance' ? `<span style="font-size:10px;background:#f5eeff;color:#6d2d9e;border-radius:999px;padding:1px 8px;font-weight:700">Needs you</span>` : ''}
       ${displayStatus === 'paused' ? `<span style="font-size:10px;background:#f5f5f5;color:#555;border-radius:999px;padding:1px 8px;font-weight:700">${t.pauseReason || 'paused'}</span>` : ''}
     </div>
+    ${displayStatus === 'failed' && (t.lastError || t.finalSummary) ? `<div title="${escHtml(String(t.lastError || t.finalSummary))}" style="margin-top:7px;font-size:10px;line-height:1.4;color:#9b1c1c;background:rgba(239,68,68,.08);border-radius:6px;padding:4px 7px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(String(t.lastError || t.finalSummary).slice(0, 160))}</div>` : ''}
   </div>`;
 }
 
@@ -814,15 +815,16 @@ async function bgtRefreshOpenPanel() {
     : '';
   console.log('[BGT panel] task.status =', JSON.stringify(task.status), 'norm =', taskStatusNorm);
   if (pendingApprovals.length === 0 && (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed' || taskStatusNorm === 'awaiting_user_input')) {
-    const lastPause = [...journal].reverse().find(e => e.type === 'pause' || e.type === 'error');
+    const isFailedTask = taskStatusNorm === 'failed';
+    const lastPause = [...journal].reverse().find(e => isFailedTask ? e.type === 'error' : (e.type === 'pause' || e.type === 'error'));
     const lastStatusPush = [...journal].reverse().find(e => e.type === 'status_push' && e.content);
-    const pauseMsg = escHtml((lastPause?.content || lastStatusPush?.content || 'Task paused and waiting for input.').replace(/^Task paused for assistance:\s*/i, ''));
+    const pauseMsg = escHtml((lastPause?.content || (isFailedTask ? task.finalSummary : '') || lastStatusPush?.content || (isFailedTask ? 'Task failed.' : 'Task paused and waiting for input.')).replace(/^Task paused for assistance:\s*/i, ''));
     const pauseDetail = lastPause?.detail ? escHtml(lastPause.detail.slice(0, 300)) : '';
     const clarificationMsg = task.pendingClarificationQuestion
       ? '<div style="font-size:11px;color:#6d2d9e;margin-top:6px"><strong>Pending question:</strong> ' + escHtml(task.pendingClarificationQuestion) + '</div>'
       : '';
     assistanceHTML = '<div style="background:#f5eeff;border:1px solid #cba8f5;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#6d2d9e">'
-      + '<div style="font-weight:800;margin-bottom:6px">⚠️ Task needs your input</div>'
+      + '<div style="font-weight:800;margin-bottom:6px">' + (isFailedTask ? '❌ Task failed' : '⚠️ Task needs your input') + '</div>'
       + '<div style="color:#3d1a6e;margin-bottom:' + (pauseDetail ? '6px' : '0') + '">' + pauseMsg + '</div>'
       + (pauseDetail ? '<div style="font-size:11px;color:#6d2d9e;opacity:0.8;margin-bottom:4px">' + pauseDetail + '</div>' : '')
       + clarificationMsg
