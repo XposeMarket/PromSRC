@@ -15499,11 +15499,6 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         }
       }
 
-      case 'start_task': {
-        // This is handled specially in deps.handleChat — shouldn't reach here
-        return { name, args, result: 'Task system ready. Use the task endpoint.', error: false };
-      }
-
       case 'background_spawn': {
         try {
           const prompt = String(args.task_prompt || args.prompt || '').trim();
