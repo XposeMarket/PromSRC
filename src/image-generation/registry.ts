@@ -18,6 +18,9 @@ import {
   normalizeImageOutputCompression,
   normalizeImagePresentationMode,
   normalizeImageQuality,
+  normalizeImageModeration,
+  normalizeImageResolution,
+  normalizeNativeAspectRatio,
   normalizeImageSize,
   normalizeReferenceImages,
   validateMaskImage,
@@ -136,6 +139,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   const outputFormat = normalizeImageOutputFormat(request.output_format, background);
   const outputCompression = normalizeImageOutputCompression(request.output_compression, outputFormat);
   const quality = normalizeImageQuality(request.quality);
+  const moderation = normalizeImageModeration(request.moderation);
+  const resolution = normalizeImageResolution(request.resolution);
+  const nativeAspectRatio = normalizeNativeAspectRatio(request.aspect_ratio);
   const presentationMode = normalizeImagePresentationMode(request.presentation_mode);
   const partialImagesRaw = request.partial_images === true ? 1 : Math.floor(Number(request.partial_images));
   const partialImages = Math.max(0, Math.min(3, Number.isFinite(partialImagesRaw) ? partialImagesRaw : (presentationMode === 'background' ? 1 : 0)));
@@ -226,6 +232,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
           output_format: outputFormat,
           output_compression: outputCompression,
           quality,
+          moderation,
+          resolution,
+          native_aspect_ratio: nativeAspectRatio,
           size: providerRequest.size,
           width: providerRequest.width,
           height: providerRequest.height,
@@ -278,6 +287,9 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         output_format: outputFormat,
         output_compression: outputCompression,
         quality,
+        moderation,
+        resolution,
+        native_aspect_ratio: nativeAspectRatio,
         size: providerRequest.size,
         width: providerRequest.width,
         height: providerRequest.height,
