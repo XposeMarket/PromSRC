@@ -1170,7 +1170,20 @@ function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
   // request may still be unwinding. Keep the coordinator busy until its
   // finally block (or the watchdog) releases it; do not admit a second model
   // turn against the first one's still-running promise.
-  if (abortingRuntime) return { active: true, runtime: abortingRuntime, stream, recovered: false };
+  if (abortingRuntime) {
+    // The owner watchdog only walks *active streams*. A user stop closes the
+    // stream immediately, so an abort that never settles (owner died during a
+    // gateway restart, hung promise) would hold the session forever and every
+    // send returns 409 SESSION_TURN_ACTIVE. Settle it here past the grace.
+    const abortAge = Date.now() - Number(abortingRuntime.abortRequestedAt || Date.now());
+    if (stream?.active || abortAge <= MAIN_CHAT_ABORT_SETTLE_GRACE_MS) {
+      return { active: true, runtime: abortingRuntime, stream, recovered: false };
+    }
+    try { finishLiveRuntime(abortingRuntime.id); } catch {}
+    mainChatTurnCoordinator.discard(sid, 'The aborted Chat execution owner did not settle.');
+    console.warn(`[main-chat-owner] settled stale aborted runtime=${abortingRuntime.id} session=${sid} after ${abortAge}ms`);
+    return { active: false, runtime: null, stream: getMainChatStream(sid), recovered: true, recoveryReason: 'orphaned_stream_or_lease' as const };
+  }
 
   const lease = mainChatTurnCoordinator.getActive(sid);
   // Avoid racing a just-created stream from a non-HTTP caller.  The normal
