@@ -106,6 +106,12 @@ export class MainChatTimerRunner {
         `[Timer ${timer.id}] This is a delayed main-chat user turn. Treat it like the user just sent it in this same chat session.`,
       );
       const text = String(result?.text || '').trim();
+      if (abortSignal.aborted) {
+        // The turn was cut off (watchdog, restart, user stop). Record that
+        // instead of a silent "completed" with an empty preview.
+        const reason = String((abortSignal as any).reason || (abortController.signal as any).reason || 'aborted');
+        throw new Error(`Timer turn was interrupted before it finished (${reason.slice(0, 120)}). Say "continue" to resume it.`);
+      }
       const completedTimer = updateMainChatTimer(timer.id, {
         status: 'completed',
         completedAt: new Date().toISOString(),

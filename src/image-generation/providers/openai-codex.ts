@@ -15,6 +15,8 @@ import {
   buildImageGenerationSuccess,
   cropImageToRequestedSize,
   resolveOpenAIImageSize,
+  resolveOpenAIQualityForModel,
+  supportsArbitraryOpenAIImageSize,
   getImageGenerationConfig,
   IMAGE_SIZE_BY_ASPECT_RATIO,
   inspectImageBuffer,
@@ -43,7 +45,6 @@ function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string)
 }
 const DEFAULT_MODEL = 'gpt-image-2.5-flare-medium';
 const DEFAULT_API_MODEL = 'gpt-image-2';
-const TRANSPARENT_API_MODEL = 'gpt-image-1.5';
 const MODEL_IDS = [
   'gpt-image-2.5-flare-low',
   'gpt-image-2.5-flare-medium',
@@ -100,12 +101,9 @@ function coerceModelId(value?: string): string | undefined {
 function resolveApiModelForRequest(model: string, requestedModel: string | undefined, background: string): { model: string; apiModel: string; explicitUnsupportedTransparent: boolean } {
   const meta = MODEL_METADATA[model] || MODEL_METADATA[DEFAULT_MODEL];
   const explicitRequested = Boolean(String(requestedModel || '').trim());
-  if (background === 'transparent' && String(meta.apiModel).startsWith('gpt-image-2')) {
-    if (explicitRequested) {
-      return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: true };
-    }
-    return { model: TRANSPARENT_API_MODEL, apiModel: TRANSPARENT_API_MODEL, explicitUnsupportedTransparent: false };
-  }
+  // gpt-image-2.5 supports transparent output natively and gpt-image-2 has it
+  // in preview (OpenAI API reference, Sept 2026), so never swap models for alpha.
+  void explicitRequested; void background;
   return { model, apiModel: meta.apiModel, explicitUnsupportedTransparent: false };
 }
 
@@ -334,7 +332,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
     outputFormats: ['png', 'jpeg', 'webp'] as const,
     outputCompression: true,
     exactSizes: true,
-    sizes: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
+    sizes: ['1024x1024', '1024x1536', '1536x1024', 'auto', 'WxH (gpt-image-2.x: multiples of 16, 1:3..3:1, up to 3840x2160)'],
   };
 
   listModels(): readonly string[] {
@@ -354,11 +352,11 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
     const prompt = String(request.prompt || '').trim();
     let model = this.resolveModel(request.model);
     const size = request.size || IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
-    const { apiSize, target } = resolveOpenAIImageSize(size, request.aspect_ratio);
     const resolved = resolveApiModelForRequest(model, request.model, request.background);
+    const { apiSize, target } = resolveOpenAIImageSize(size, request.aspect_ratio, supportsArbitraryOpenAIImageSize(resolved.apiModel));
     model = resolved.model;
     const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
-    const quality = request.quality || meta.quality || 'medium';
+    const quality = resolveOpenAIQualityForModel(request.quality || meta.quality || 'medium', resolved.apiModel);
     const mimeType = mimeTypeForImageOutputFormat(request.output_format);
     const configDir = getConfigDir();
 
@@ -385,7 +383,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         background: request.background,
         outputFormat: request.output_format,
         presentationMode: request.presentation_mode,
-        error: `${resolved.apiModel} does not support transparent backgrounds. Use background="opaque"/"auto" with ${resolved.apiModel}, or omit the model so Prometheus can use ${TRANSPARENT_API_MODEL} for true alpha output.`,
+        error: `${resolved.apiModel} does not support transparent backgrounds. Use background="opaque"/"auto" with ${resolved.apiModel}, or pick a gpt-image-2.x / gpt-image-1.5 model for true alpha output.`,
         errorType: 'unsupported_background',
       });
     }
@@ -451,6 +449,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
           output_format: request.output_format,
           background: request.background,
           ...(request.output_compression != null ? { output_compression: request.output_compression } : {}),
+          ...(request.moderation ? { moderation: request.moderation } : {}),
           action: referenceImages.length ? 'edit' : 'generate',
           partial_images: request.partial_images || 0,
         };

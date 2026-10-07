@@ -3,7 +3,9 @@ export const VALID_IMAGE_ASPECT_RATIOS = ['landscape', 'square', 'portrait'] as 
 export type ImageAspectRatio = typeof VALID_IMAGE_ASPECT_RATIOS[number];
 export type ImageBackground = 'transparent' | 'opaque' | 'auto';
 export type ImageOutputFormat = 'png' | 'jpeg' | 'webp';
-export type ImageQuality = 'low' | 'medium' | 'high' | 'auto';
+export type ImageQuality = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
+export type ImageModeration = 'low' | 'auto';
+export type ImageResolution = '1k' | '2k';
 export type ImageGenerationPresentationMode = 'foreground' | 'background';
 
 export interface ImageGenerationProviderCapabilities {
@@ -54,6 +56,10 @@ export interface ImageGenerationRequest {
   width?: number;
   height?: number;
   mask?: string;
+  /** OpenAI content-moderation level (low = less restrictive). */
+  moderation?: string;
+  /** xAI output resolution (1k or 2k). */
+  resolution?: string;
   presentation_mode?: ImageGenerationPresentationMode | 'auto';
   partial_images?: number | boolean;
   stream?: boolean;
@@ -77,6 +83,10 @@ export interface ImageGenerationResolvedRequest {
   width?: number;
   height?: number;
   mask?: string;
+  moderation?: ImageModeration;
+  resolution?: ImageResolution;
+  /** Provider-native ratio such as 21:9, 4:3 or auto (xAI), when the caller passed one. */
+  native_aspect_ratio?: string;
   presentation_mode: ImageGenerationPresentationMode;
   partial_images: number;
   stream: boolean;
