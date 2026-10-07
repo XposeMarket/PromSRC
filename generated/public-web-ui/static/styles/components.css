@@ -9711,13 +9711,6 @@ button.source-panel-row:hover {
   -webkit-tap-highlight-color: transparent;
 }
 .prom-inline-figure.is-video .prom-inline-media { cursor: auto; width: 100%; }
-.prom-inline-video-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.prom-inline-video-row .prom-inline-caption { flex: 1; min-width: 0; }
-.prom-inline-save { flex: none; margin-top: 4px; padding: 4px; border: 0; background: none; color: var(--prom-muted, rgba(127,127,127,.9)); cursor: pointer; line-height: 0; }
-.prom-inline-save:hover { color: var(--prom-text, inherit); }
-.prom-inline-save.is-busy { opacity: .45; }
-.prom-inline-save.is-done { color: var(--prom-success, #22c55e); }
-.prom-inline-save.is-error { color: var(--prom-danger, #ef4444); }
 .prom-inline-caption {
   margin-top: 6px;
   font-size: .82em;
