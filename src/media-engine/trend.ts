@@ -14,27 +14,19 @@ import { getModel } from './catalog.js';
 import { generateShots, mediaDurationSec, runFfmpeg, type GenerateResult } from './engine.js';
 import { applyOps, fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, selectedTake, toWorkspaceRel } from './project.js';
 import { generateImage } from '../image-generation/registry.js';
+import { breakdownReel, trendWindow, type ReelBreakdown } from './inspect.js';
 
 export const TREND_DEFAULT_MODEL = 'fal/kling-v3-pro-motion-control';
 
 export interface TrendPart { startSec: number; endSec: number; look?: string; startImage?: string }
-
-async function detectCuts(abs: string, threshold = 0.08, minGapSec = 1.5): Promise<number[]> {
-  const { stderr } = await runFfmpeg(['-hide_banner', '-i', abs, '-vf', `select='gt(scene,${threshold})',showinfo`, '-an', '-f', 'null', '-'], 120_000).catch(() => ({ code: 1, stderr: '' }));
-  const cuts: number[] = [];
-  for (const m of stderr.matchAll(/pts_time:([\d.]+)/g)) {
-    const t = Number(m[1]);
-    if (t > minGapSec && (!cuts.length || t - cuts[cuts.length - 1] >= minGapSec)) cuts.push(+t.toFixed(2));
-  }
-  return cuts;
-}
+export type { ReelBreakdown };
 
 function abs(ws: string, ref: string): string { return path.isAbsolute(ref) ? ref : fromWorkspaceRel(ws, ref); }
 
 export async function trendTransfer(ws: string, projectId: string, args: {
   sourcePath: string; characterId: string; cuts?: number[]; maxParts?: number; looks?: string[];
   startImages?: string[]; prompt?: string; modelId?: string; approved?: boolean; shotIds?: string[];
-}): Promise<GenerateResult & { shotIds: string[]; parts: Array<TrendPart & { shotId: string; segment: string; frame: string }>; modelId: string }> {
+}): Promise<GenerateResult & { shotIds: string[]; parts: Array<TrendPart & { shotId: string; segment: string; frame: string }>; modelId: string; breakdown?: ReelBreakdown }> {
   const modelId = args.modelId || TREND_DEFAULT_MODEL;
   if (!getModel(modelId)) throw new Error(`Unknown model "${modelId}".`);
   const p = loadProject(ws, projectId);
@@ -53,24 +45,26 @@ export async function trendTransfer(ws: string, projectId: string, args: {
 
   const srcAbs = abs(ws, args.sourcePath);
   if (!fs.existsSync(srcAbs)) throw new Error(`Clip not found: ${args.sourcePath}`);
-  const total = (await mediaDurationSec(srcAbs)) || 5;
-  let cuts = (args.cuts?.length ? args.cuts : await detectCuts(srcAbs)).filter((c) => c > 0.5 && c < total - 0.5).sort((a, b) => a - b);
-  const maxParts = Math.max(1, Math.min(6, Number(args.maxParts) || 3));
-  if (cuts.length > maxParts - 1) cuts = cuts.slice(0, maxParts - 1);
-  const bounds = [0, ...cuts, total];
+  const model = getModel(modelId)!;
   const dir = path.join(mediaDir(ws, projectId), 'trend', newId('tr'));
   fs.mkdirSync(dir, { recursive: true });
+  // Understand the reel first ($0): model-minimum-safe parts + what happens inside each part.
+  const breakdown = await breakdownReel(srcAbs, { workDir: path.join(dir, 'bd'), cuts: args.cuts, maxParts: args.maxParts, minPartSec: model.limits?.minDurationSec ?? 0 });
   const img = getModel(p.defaults.imageModel?.startsWith('openai/') ? p.defaults.imageModel : 'openai/gpt-image');
 
-  const parts: Array<TrendPart & { shotId: string; segment: string; frame: string }> = [];
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const startSec = +bounds[i].toFixed(2); const endSec = +bounds[i + 1].toFixed(2);
+  const parts: Array<TrendPart & { shotId: string; segment: string; frame: string; speed: number }> = [];
+  for (const [i, bp] of breakdown.parts.entries()) {
+    const { startSec, endSec, speed } = bp;
+    const len = +(endSec - startSec).toFixed(2);
     const segAbs = path.join(dir, `part${i + 1}.mp4`); const firstAbs = path.join(dir, `part${i + 1}_first.jpg`);
-    await runFfmpeg(['-y', '-loglevel', 'error', '-ss', String(startSec), '-i', srcAbs, '-t', String(+(endSec - startSec).toFixed(2)), '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-c:a', 'aac', segAbs], 180_000);
+    // Parts under the model minimum are uploaded slowed (speed < 1); trendAssemble speeds them back up.
+    const slow = speed < 1 ? ['-vf', `setpts=PTS/${speed}`, '-an'] : ['-c:a', 'aac'];
+    await runFfmpeg(['-y', '-loglevel', 'error', '-ss', String(startSec), '-i', srcAbs, '-t', String(len), ...slow, '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', segAbs], 180_000);
     await runFfmpeg(['-y', '-loglevel', 'error', '-ss', String(startSec + 0.05), '-i', srcAbs, '-frames:v', '1', firstAbs], 60_000);
     if (!fs.existsSync(segAbs)) throw new Error(`ffmpeg could not cut part ${i + 1}.`);
     let frame = args.startImages?.[i];
-    const look = args.looks?.[i];
+    // A garment that changes mid-part must already exist in the start frame, or the model tears the outfit to fake it.
+    const look = args.looks?.[i] || (bp.garmentChange ? bp.look : undefined);
     if (!frame) {
       if (!img) throw new Error('No OpenAI image model in the catalog for matched start frames.');
       const r: any = await generateImage({
@@ -80,40 +74,54 @@ export async function trendTransfer(ws: string, projectId: string, args: {
       } as any);
       const out = r?.images?.[0]?.path || r?.image?.path;
       if (!r?.success || !out) throw new Error(`Start frame ${i + 1} failed: ${r?.error || 'no image'}`);
-      frame = out;
+      // Generated names embed the prompt and blow past Windows MAX_PATH; keep a short stable name.
+      const outAbs = abs(ws, out);
+      const shortAbs = path.join(dir, `part${i + 1}_frame${path.extname(outAbs) || '.png'}`);
+      try { fs.renameSync(outAbs, shortAbs); frame = shortAbs; } catch { frame = out; }
     }
-    parts.push({ startSec, endSec, look, startImage: frame, shotId: '', segment: toWorkspaceRel(ws, segAbs), frame: toWorkspaceRel(ws, abs(ws, frame!)) });
+    parts.push({ startSec, endSec, speed, look, startImage: frame, shotId: '', segment: toWorkspaceRel(ws, segAbs), frame: toWorkspaceRel(ws, abs(ws, frame!)) });
   }
 
   const before = new Set(p.shots.map((s) => s.id));
   await applyOps(ws, projectId, parts.map((pt, i) => ({
     op: 'shot.add', title: `Trend part ${i + 1}${pt.look ? `: ${pt.look.slice(0, 40)}` : ''}`, prompt: args.prompt || `${character.name} performs the reference motion naturally.`,
-    sourceVideo: pt.segment, startImage: pt.frame, modelId, durationSec: Math.max(1, Math.round(pt.endSec - pt.startSec)),
-    characterIds: [character.id], anchorMode: 'start', notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s of ${args.sourcePath}`,
+    sourceVideo: pt.segment, startImage: pt.frame, modelId, durationSec: Math.max(1, Math.ceil((pt.endSec - pt.startSec) / pt.speed)),
+    characterIds: [character.id], anchorMode: 'start',
+    notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s speed=${pt.speed} of ${args.sourcePath}${breakdown.parts[i]?.action ? ` | ${breakdown.parts[i].action}` : ''}`,
   })) as any, 'agent');
   const added = loadProject(ws, projectId).shots.filter((s) => !before.has(s.id));
   added.forEach((s, i) => { parts[i].shotId = s.id; });
   const shotIds = added.map((s) => s.id);
   const r = await generateShots(ws, projectId, { shotIds, approved: args.approved === true });
-  return { ...r, shotIds, parts, modelId };
+  return { ...r, shotIds, parts, modelId, breakdown };
+}
+
+/** Playback factor a trend shot was generated at (notes "speed=0.49"); 1 when absent. */
+export function trendSpeed(notes?: string): number {
+  const v = Number((String(notes || '').match(/speed=([\d.]+)/) || [])[1]);
+  return v > 0 && v <= 1 ? v : 1;
 }
 
 /** Join the trend parts' selected takes in order over the source clip's original audio. */
 export async function trendAssemble(ws: string, projectId: string, args: { shotIds: string[]; audioPath?: string; audioStartSec?: number; phoneLook?: boolean }): Promise<{ path: string; durationSec: number; phoneLook?: string }> {
   const p = loadProject(ws, projectId);
-  const takes = args.shotIds.map((id) => {
+  const items = args.shotIds.map((id) => {
     const s = p.shots.find((x) => x.id === id); const t = s && selectedTake(s);
     if (!t || t.kind !== 'video') throw new Error(`${s?.title || id} has no video take yet.`);
-    return abs(ws, t.path);
+    const win = trendWindow(s!);
+    return { path: abs(ws, t.path), speed: trendSpeed(s!.notes), len: win ? +(win.endSec - win.startSec).toFixed(3) : undefined };
   });
+  const takes = items.map((x) => x.path);
   const outDir = path.join(path.dirname(mediaDir(ws, projectId)), 'exports'); fs.mkdirSync(outDir, { recursive: true });
   const outAbs = path.join(outDir, `${projectId}_trend_${Date.now()}.mp4`);
-  const [w, h] = p.target.aspect === '16:9' ? [1280, 720] : [720, 1280];
+  // Full-res single encode: Kling delivers ~1080p, downscaling before grain/grade made exports look noisy.
+  const [w, h] = p.target.aspect === '16:9' ? [1920, 1080] : [1080, 1920];
   const a: string[] = ['-y', '-hide_banner'];
   for (const t of takes) a.push('-i', t);
   const audio = args.audioPath ? abs(ws, args.audioPath) : undefined;
   if (audio) a.push('-ss', String(args.audioStartSec || 0), '-i', audio);
-  const f = takes.map((_, i) => `[${i}:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=30,setsar=1[v${i}]`);
+  // Slowed parts play back at the original beat, then trim to the source window length.
+  const f = items.map((it, i) => `[${i}:v]${it.speed < 1 ? `setpts=PTS*${it.speed},` : ''}${it.len ? `trim=duration=${it.len},setpts=PTS-STARTPTS,` : ''}scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=30,setsar=1[v${i}]`);
   f.push(`${takes.map((_, i) => `[v${i}]`).join('')}concat=n=${takes.length}:v=1:a=0[vout]`);
   a.push('-filter_complex', f.join(';'), '-map', '[vout]');
   if (audio) a.push('-map', `${takes.length}:a?`, '-c:a', 'aac', '-b:a', '192k', '-shortest');
@@ -134,7 +142,7 @@ export const PHONE_LOOK_STRENGTHS = { light: { grain: 4, sat: 0.94, drift: 0.003
 export async function phoneFinish(ws: string, args: { path: string; projectId?: string; strength?: keyof typeof PHONE_LOOK_STRENGTHS }): Promise<{ path: string; strength: string }> {
   const inAbs = abs(ws, args.path);
   if (!fs.existsSync(inAbs)) throw new Error(`Video not found: ${args.path}`);
-  const strength = args.strength && PHONE_LOOK_STRENGTHS[args.strength] ? args.strength : 'medium';
+  const strength = args.strength && PHONE_LOOK_STRENGTHS[args.strength] ? args.strength : 'light';
   const s = PHONE_LOOK_STRENGTHS[strength];
   const z = 0.97; const d = s.drift;
   const vf = [

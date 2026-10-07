@@ -6,7 +6,7 @@ import {
   initSessionWake, wakeSession, resetSessionWakeForTests, registerThreadCallback, fireThreadCallbacks, hasThreadCallback,
 } from './session-wake';
 import {
-  watchVideoJobs, initVideoProjectWake, resetVideoProjectWakeForTests, listVideoWatches, checkAllVideoWatches, VIDEO_WAKE_TIMEOUT_MS,
+  watchVideoJobs, initVideoProjectWake, resetVideoProjectWakeForTests, listVideoWatches, checkAllVideoWatches, VIDEO_WAKE_TIMEOUT_MS, setVideoAutoQaForTests,
 } from './video-project-wake';
 import { createProject, mutateProject } from '../media-engine/project.js';
 
@@ -59,7 +59,8 @@ async function main() {
   await mutateProject(ws, p.id, 'test.j2', (proj: any) => { proj.jobs[1].state = 'done'; });
   await flush();
   assert.equal(calls.length, 1);
-  assert.match(calls[0].message, /Jobs finished for Promo .*1 done, 1 failed \(shot 'Hook': nsfw filter\)\. Spent \$0\.50\. Only 1 of 2 succeeded\. Batch A\./);
+  assert.match(calls[0].message, /Jobs finished for Promo .*1 done, 1 failed \(shot 'Hook': nsfw filter\)\. Spent \$0\.50\. Only 1 of 2 succeeded; fix the failed shot\(s\) before assembling\./);
+  assert.doesNotMatch(calls[0].message, /Batch A/, 'success note dropped on partial batches');
   assert.doesNotMatch(calls[0].message, /Shots generated/);
   assert.equal(listVideoWatches().length, 0);
   console.log('ok video-all-terminal:', calls[0].message);
@@ -88,6 +89,21 @@ async function main() {
   assert.equal(calls.length, 1);
   assert.match(calls[0].message, /Timed out after 45 min/);
   console.log('ok timeout');
+
+  // 4b. dense auto-QA gate runs before the wake and reports FAIL takes
+  calls.length = 0;
+  const seen: string[][] = [];
+  setVideoAutoQaForTests({ runner: async (_ws, _pid, ids) => { seen.push(ids); return { results: [{ title: 'Hook', score: 4, verdict: 'reroll', issues: ['@0.75s shirt splits open down the middle'] }], failed: [] }; } });
+  await mutateProject(ws, p.id, 'test.j5', (proj: any) => { proj.jobs.push({ id: 'j5', state: 'running', target: { shotId: 'sh1' }, takeIds: [], estimateUsd: 0.5 }); });
+  watchVideoJobs({ workspacePath: ws, sessionId: 'sv', projectId: p.id, jobIds: ['j5'], note: 'Shots generated.' });
+  await mutateProject(ws, p.id, 'test.j5done', (proj: any) => { const j = proj.jobs.find((x: any) => x.id === 'j5'); j.state = 'done'; j.actualUsd = 0.5; });
+  await flush(); await flush();
+  assert.deepEqual(seen, [['sh1']]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].message, /Dense QA FAILED 1 take/);
+  assert.match(calls[0].message, /FAIL 'Hook' 4\/10: @0\.75s shirt splits/);
+  console.log('ok auto-qa-gate');
+  setVideoAutoQaForTests({ runner: null });
   resetVideoProjectWakeForTests();
   fs.rmSync(ws, { recursive: true, force: true });
 

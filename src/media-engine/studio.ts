@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { estimateCostUsd, getModel } from './catalog.js';
 import { buildCaptionCues } from './captions.js';
+import { denseTakeCheck, type TakeDefect } from './inspect.js';
 import {
   estimate, extractFrameAt, generateCharacterAnchor, generateShots, generateStoryboards, mediaDurationSec,
   renderProject, runFfmpeg, waitForJobs,
@@ -311,7 +312,18 @@ function parseQa(text: string): { score: number; issues: string[]; verdict: 'pas
   return { score, issues, verdict: j.verdict === 'reroll' || score < 6 ? 'reroll' : 'pass' };
 }
 
-export async function qaTake(ws: string, p: VideoProject, shot: Shot, take: Take): Promise<{ score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string }> {
+export async function qaTake(ws: string, p: VideoProject, shot: Shot, take: Take): Promise<{ score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string; defects?: TakeDefect[]; framesChecked?: number }> {
+  // Video takes: dense check (a frame every ~0.25s + identity anchor + start frame). A 3-frame
+  // start/middle/end sample missed a half-second shirt split on 2026-10-07.
+  if (take.kind === 'video') {
+    try {
+      const d = await denseTakeCheck(ws, p, shot, take, { workDir: path.join(mediaDir(ws, p.id), 'qa', 'dense') });
+      return { score: d.score, issues: d.issues, verdict: d.verdict, model: d.model, defects: d.defects, framesChecked: d.framesChecked };
+    } catch (e: any) {
+      if (/vision failed/i.test(String(e?.message))) throw e;
+      /* grid extraction failed: fall back to the 3-frame sample below */
+    }
+  }
   const abs = fromWorkspaceRel(ws, take.path);
   const frames: string[] = [];
   for (const cid of shot.characterIds) {
@@ -365,7 +377,7 @@ export async function qa(ws: string, projectId: string, args: { shotIds?: string
     try { await transcribeTakes(ws, projectId, { shotIds: args.shotIds }); } catch { /* on-script check is best-effort */ }
   }
   const p = loadProject(ws, projectId);
-  const results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[]; model: string }> = [];
+  const results: Array<{ shotId: string; title: string; takeId: string; score: number; verdict: string; issues: string[]; model: string; framesChecked?: number }> = [];
   const failed: string[] = [];
   const shots = p.shots.filter((s) => (!args.shotIds?.length || args.shotIds.includes(s.id)) && selectedTake(s));
   // Two at a time: vision providers rate-limit per team (xAI: 2 req/s).
@@ -386,7 +398,7 @@ export async function qa(ws: string, projectId: string, args: { shotIds?: string
   await mutateProject(ws, projectId, 'qa', (proj) => {
     for (const r of results) {
       const t = proj.shots.find((s) => s.id === r.shotId)?.takes.find((x) => x.id === r.takeId);
-      if (t) t.qa = { score: r.score, issues: r.issues, verdict: r.verdict as any, model: r.model, at: Date.now() };
+      if (t) t.qa = { score: r.score, issues: r.issues, verdict: r.verdict as any, model: r.model, at: Date.now(), ...(r.framesChecked ? { framesChecked: r.framesChecked } : {}) };
     }
   });
   return { results: results.map(({ model: _m, ...r }) => r), failed };

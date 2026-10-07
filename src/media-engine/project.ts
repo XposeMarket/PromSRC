@@ -79,7 +79,7 @@ export interface TakeTranscript { text: string; words: Array<{ text: string; sta
  */
 export type AudioMode = 'native' | 'voiceover';
 
-export interface TakeQa { score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string; at: number }
+export interface TakeQa { score: number; issues: string[]; verdict: 'pass' | 'reroll'; model: string; at: number; framesChecked?: number }
 
 export interface CaptionCue { startMs: number; endMs: number; text: string; words?: Array<{ text: string; startMs: number; endMs: number }> }
 export type CaptionStyle = 'bold' | 'pop' | 'minimal' | 'karaoke';
