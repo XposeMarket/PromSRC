@@ -24,12 +24,17 @@ This approach lets you add unlimited named themes (blue, purple, etc.) without t
 
 ## Current Themes
 
+**Prometheus One (black + gold) is the brand and the default.** Its skin id is historically `light` (it replaced the old Light slot), so `data-skin="light"` means P1, not a light theme. Every preset is `base: dark` and shares the P1 shell.
+
 ```
-dark  → Default Dark  (base: dark)
-light → Light         (base: light)
-blue  → Olympian Blue (base: dark)
-purple→ Aether Violet (base: dark)
+light  → Prometheus One (DEFAULT)  black #050505 + gold #d6b75e, bone text #f2ebdd
+gray   → Ash & Ember     legacy graphite + orange, kept as an optional skin
+dark   → Default Dark    warm graphite, orange accent (optional skin)
+blue   → Olympian Blue   electric navy
+purple → Aether Violet   deep violet
 ```
+
+The old ember/orange (#f97316 / #ea6a1f) look is NOT the brand anymore. It only survives inside the opt-in `gray` and `dark` skin blocks. Brand-level surfaces that ignore skins (login screen, creative editor chrome, motion-template defaults, Viz Kit fallbacks, voice-orb fallbacks) use P1 gold. Canonical palette: `workspace/skills/prometheus-ash-archive-style/palettes/prometheus-one.md`.
 
 
 ## Desktop vs Mobile Token Layers

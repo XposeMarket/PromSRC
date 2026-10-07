@@ -373,6 +373,15 @@ export interface ManagedTeam {
   // and team workspace are always allowed at runtime.
   allowedWorkPaths?: string[];
 
+  // Project working directory for every member + manager turn (file tools resolve
+  // relative paths here). Must sit inside the main workspace or allowedWorkPaths.
+  // Unset => the team workspace. The team workspace stays readable/writable for
+  // memory.json / shared state either way.
+  workDir?: string;
+
+  // Key of the goal whose [GOAL_COMPLETE] review already ran (see claimTeamGoalCompletionReview).
+  goalCompletionReviewKey?: string;
+
   // ── Structured Goal Model ──────────────────────────────────────────────────
   // `teamContext` is retained for backward compatibility but is now secondary.
   // The structured fields below are the source of truth for goal tracking.
@@ -1194,23 +1203,26 @@ function getStorePath(): string {
 let _cache: ManagedTeamStore | null = null;
 let _cacheTimestamp: number = 0;
 let _cacheFileMtimeMs = 0;
+let _cacheFileSize = -1;
 const _cacheTTL = 5 * 60 * 1000;
 
 export function loadManagedTeamStore(): ManagedTeamStore {
   const now = Date.now();
   const p = getStorePath();
   let fileMtimeMs = 0;
-  try { fileMtimeMs = fs.statSync(p).mtimeMs; } catch { /* missing store */ }
-  // TTL is only an optimization. Always notice a store written by another
-  // process/gateway instance so registry and workspace state cannot drift via
-  // a stale in-process cache.
-  if (_cache && (now - _cacheTimestamp) < _cacheTTL && fileMtimeMs === _cacheFileMtimeMs) {
+  let fileSize = -1;
+  try { const st = fs.statSync(p); fileMtimeMs = st.mtimeMs; fileSize = st.size; } catch { /* missing store */ }
+  // The file's mtime+size is authoritative: a store written by another
+  // process/gateway instance always forces a re-parse, and an unchanged file
+  // never does (invalidateCache is a no-op). TTL just bounds
+  // how long an unchanged parse is reused.
+  if (_cache && (now - _cacheTimestamp) < _cacheTTL && fileMtimeMs === _cacheFileMtimeMs && fileSize === _cacheFileSize) {
     return _cache;
   }
   if (!fs.existsSync(p)) {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = 0;
+    _cacheFileMtimeMs = 0; _cacheFileSize = -1;
     return _cache;
   }
   try {
@@ -1258,6 +1270,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         changeHistory: historyNormalized,
         contextReferences: refsNormalized,
         allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths.map(String).filter(Boolean) : [],
+        workDir: typeof team.workDir === 'string' && team.workDir.trim() ? team.workDir.trim() : undefined,
         // Ensure runHistory is always an array (backwards-compat with older JSON)
         runHistory: Array.isArray(team.runHistory) ? team.runHistory : [],
       } as ManagedTeam;
@@ -1275,18 +1288,75 @@ export function loadManagedTeamStore(): ManagedTeamStore {
       updatedAt: Number(parsed?.updatedAt) || Date.now(),
     };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = fileMtimeMs;
+    _cacheFileMtimeMs = fileMtimeMs; _cacheFileSize = fileSize;
     if (mutated) saveManagedTeamStore(_cache);
     return _cache;
   } catch {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
-    _cacheFileMtimeMs = fileMtimeMs;
+    _cacheFileMtimeMs = fileMtimeMs; _cacheFileSize = fileSize;
     return _cache;
   }
 }
 
+// Per-message tool traces (processEntries/liveTraceEntries) were persisted for
+// every team chat/room message and run, up to 320 entries each, so the store
+// grew to 36-48MB and every team event rewrote it synchronously (2026-10-07: a
+// 9s event-loop stall forced a recovery handoff). Keep full traces only on the
+// most recent messages/runs, and cap entry count and entry size there.
+const TRACE_FULL_RECENT_MESSAGES = 12;
+const TRACE_FULL_RECENT_RUNS = 6;
+const TRACE_MAX_ENTRIES_RECENT = 80;
+const TRACE_MAX_ENTRY_CHARS = 1_500;
+const TRACE_KEYS = ['processEntries', 'liveTraceEntries'] as const;
+
+function clampTraceEntry(entry: any): any {
+  if (!entry || typeof entry !== 'object') return entry;
+  let json: string;
+  try { json = JSON.stringify(entry); } catch { return undefined; }
+  if (json.length <= TRACE_MAX_ENTRY_CHARS) return entry;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(entry)) {
+    if (typeof v === 'string') out[k] = v.length > 400 ? `${v.slice(0, 400)}...` : v;
+    else if (typeof v === 'number' || typeof v === 'boolean' || v == null) out[k] = v;
+    else {
+      let sv = '';
+      try { sv = JSON.stringify(v); } catch { sv = ''; }
+      out[k] = sv.length > 400 ? `${sv.slice(0, 400)}...` : v;
+    }
+  }
+  return out;
+}
+
+function compactTraceHolder(holder: any, keepFull: boolean): void {
+  if (!holder || typeof holder !== 'object') return;
+  for (const key of TRACE_KEYS) {
+    const arr = holder[key];
+    if (!Array.isArray(arr)) continue;
+    if (!keepFull) { delete holder[key]; continue; }
+    holder[key] = arr.slice(-TRACE_MAX_ENTRIES_RECENT).map(clampTraceEntry).filter((e: any) => e !== undefined);
+  }
+}
+
+export function compactManagedTeamForStorage(team: any): void {
+  if (!team || typeof team !== 'object') return;
+  const list = (v: any) => (Array.isArray(v) ? v : []);
+  const chat = list(team.teamChat);
+  chat.forEach((m: any, i: number) => compactTraceHolder(m?.metadata, i >= chat.length - TRACE_FULL_RECENT_MESSAGES));
+  const room = list(team.roomState?.roomMessages);
+  room.forEach((m: any, i: number) => compactTraceHolder(m?.metadata, i >= room.length - TRACE_FULL_RECENT_MESSAGES));
+  const runs = list(team.runHistory);
+  runs.forEach((r: any, i: number) => {
+    const recent = i >= runs.length - TRACE_FULL_RECENT_RUNS;
+    compactTraceHolder(r, recent);
+    if (!recent && r && typeof r === 'object' && r.roomSnapshot) delete r.roomSnapshot;
+  });
+}
+
 export function saveManagedTeamStore(store: ManagedTeamStore): void {
+  for (const team of Array.isArray(store?.teams) ? store.teams : []) {
+    try { compactManagedTeamForStorage(team); } catch { /* never block a save */ }
+  }
   _cache = { ...store, updatedAt: Date.now() };
   _cacheTimestamp = Date.now();  // Refresh TTL on save
   const p = getStorePath();
@@ -1307,13 +1377,85 @@ export function saveManagedTeamStore(store: ManagedTeamStore): void {
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
     throw lastErr;
   }
-  try { _cacheFileMtimeMs = fs.statSync(p).mtimeMs; } catch { _cacheFileMtimeMs = 0; }
+  try { const st = fs.statSync(p); _cacheFileMtimeMs = st.mtimeMs; _cacheFileSize = st.size; } catch { _cacheFileMtimeMs = 0; _cacheFileSize = -1; }
 }
 
+// Mutators call this before re-reading so they see writes from another gateway
+// process (warm handoff). loadManagedTeamStore already compares the store
+// file's mtime+size, so keep the parsed cache and let that check decide.
+// Dropping the cache here made EVERY team event (room message, dispatch
+// update, auto-wake) re-read and re-parse the whole store: 41MB / ~0.4s each
+// on 2026-10-07, stacking into 9-18s event-loop stalls and recovery restarts.
 function invalidateCache(): void {
-  _cache = null;
-  _cacheTimestamp = 0;
-  _cacheFileMtimeMs = 0;
+  // Intentionally a no-op: see comment above.
+}
+
+/**
+ * Claim the one completion review for a team's current goal. Returns a key the
+ * first time, null afterwards until the goal changes. Persisted so restarts and
+ * post-completion wakes (watch timeouts, scheduled checks, member chatter that
+ * each re-emit [GOAL_COMPLETE]) don't spawn another review task.
+ */
+export function claimTeamGoalCompletionReview(teamId: string): string | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const goal = String(team.roomState?.runGoal || team.currentFocus || team.purpose || '').trim();
+  const key = `${teamId}:${crypto.createHash('sha1').update(goal).digest('hex').slice(0, 16)}`;
+  if (team.goalCompletionReviewKey === key) return null;
+  team.goalCompletionReviewKey = key;
+  saveManagedTeam(team);
+  return key;
+}
+
+const STALE_DISPATCH_NO_TASK_MS = 20 * 60 * 1000;
+const STALE_DISPATCH_TASK_MISSING_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Settle dispatch records left "running"/"queued" after their task finished or
+ * was lost (e.g. a gateway restart between dispatch and task creation left
+ * dispatch_muy971wt_aa1d running with taskId null forever).
+ */
+export function reconcileStaleTeamDispatches(
+  now: number = Date.now(),
+  lookupTask?: (taskId: string) => { status?: string } | null,
+): number {
+  invalidateCache();
+  const store = loadManagedTeamStore();
+  let fixed = 0;
+  for (const team of store.teams) {
+    const dispatches = team.roomState?.dispatches;
+    if (!Array.isArray(dispatches)) continue;
+    let changed = false;
+    for (let i = 0; i < dispatches.length; i++) {
+      const d = dispatches[i];
+      if (d.status !== 'running' && d.status !== 'queued') continue;
+      const age = now - Number(d.startedAt || d.createdAt || now);
+      let task: { status?: string } | null = null;
+      if (d.taskId && lookupTask) {
+        try { task = lookupTask(d.taskId); } catch { task = null; }
+      }
+      const taskStatus = String(task?.status || '');
+      let next: TeamDispatchStatus | null = null;
+      let note = '';
+      if (taskStatus === 'complete') { next = 'completed'; note = 'Reconciled: task completed.'; }
+      else if (taskStatus === 'failed') { next = 'failed'; note = 'Reconciled: task failed.'; }
+      else if (!d.taskId && age > STALE_DISPATCH_NO_TASK_MS) {
+        next = 'failed';
+        note = 'Orphaned: no task id was recorded (lost in a gateway restart).';
+      } else if (d.taskId && lookupTask && !task && age > STALE_DISPATCH_TASK_MISSING_MS) {
+        next = 'failed';
+        note = 'Orphaned: task record not found.';
+      }
+      if (!next) continue;
+      dispatches[i] = { ...d, status: next, finishedAt: now, resultPreview: d.resultPreview || note };
+      changed = true;
+      fixed++;
+    }
+    if (changed) team.updatedAt = now;
+  }
+  if (fixed > 0) saveManagedTeamStore(store);
+  return fixed;
 }
 
 // ─── Pagination Support ────────────────────────────────────────────────────────
@@ -1646,6 +1788,7 @@ export function createManagedTeam(input: {
   reviewTrigger?: ManagedTeam['manager']['reviewTrigger'];
   originatingSessionId?: string;
   allowedWorkPaths?: string[];
+  workDir?: string;
 }): ManagedTeam {
   const now = Date.now();
   const teamId = `team_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
@@ -1666,6 +1809,7 @@ export function createManagedTeam(input: {
     managerAgentId: `${teamId}_manager`,
     subagentIds: input.subagentIds,
     allowedWorkPaths: Array.isArray(input.allowedWorkPaths) ? input.allowedWorkPaths.map(String).filter(Boolean) : [],
+    ...(input.workDir && String(input.workDir).trim() ? { workDir: String(input.workDir).trim() } : {}),
     teamContext: input.teamContext,
     teamMode: 'autonomous',
     purpose: purposeOrContext,

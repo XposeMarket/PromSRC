@@ -1,66 +1,68 @@
-{
-  "schemaVersion": "prometheus-skill-bundle-v1",
-  "id": "prometheus-ash-archive-style",
-  "name": "prometheus-ash-archive-style",
-  "description": "Apply Prometheus's named Ash and Archive brand direction to visuals, interfaces, promos, and HyperFrames work only when the user explicitly requests Prometheus house style or this aesthetic.",
-  "version": "1.0.0",
-  "entrypoint": "SKILL.md",
-  "triggers": [
-    "ash and archive style",
-    "make it less ai-looking",
-    "prometheus visual direction",
-    "prometheus brand visuals",
-    "industrial editorial style"
-  ],
-  "categories": [
-    "creative",
-    "brand",
-    "video",
-    "hyperframes",
-    "motion-design",
-    "prometheus"
-  ],
-  "requiredTools": [
-    "workspace_write",
-    "creative_quality"
-  ],
-  "implicitInvocation": false,
-  "permissions": {
-    "workspaceRead": true,
-    "workspaceWrite": true
-  },
-  "resources": [
-    {
-      "path": "palettes/ash-archive.md",
-      "type": "reference",
-      "description": "Canonical Ash & Archive palette tokens for Prometheus creative work."
-    },
-    {
-      "path": "references/detailed-guide.md",
-      "type": "reference"
-    },
-    {
-      "path": "references/mythic-editorial-launch-visuals.md",
-      "type": "reference",
-      "description": "Campaign-specific mythic editorial Prometheus launch visual direction."
-    },
-    {
-      "path": "references/polsia-reference-analysis.md",
-      "type": "reference",
-      "description": "Style extraction from the Polsia/Bencera reference video and how to adapt it for Prometheus without copying it."
-    },
-    {
-      "path": "templates/hyperframes-brief.md",
-      "type": "template",
-      "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
-    },
-    {
-      "path": "palettes/prometheus-one.md",
-      "type": "doc"
-    },
-    {
-      "path": "templates/prometheus-one-brief.md",
-      "type": "template"
-    }
-  ]
+﻿{
+    "schemaVersion":  "prometheus-skill-bundle-v1",
+    "id":  "prometheus-ash-archive-style",
+    "name":  "prometheus-ash-archive-style",
+    "description":  "Prometheus house style. Default brand is Prometheus One (black + restrained metallic gold, bone type, P1 ring mark) for Prometheus UI, promos, release videos, motion graphics, and HyperFrames work. The legacy Ash \u0026 Archive ember/orange direction is opt-in only when Raul explicitly asks for it.",
+    "version":  "2.0.0",
+    "entrypoint":  "SKILL.md",
+    "triggers":  [
+                     "prometheus one style",
+                     "prometheus brand visuals",
+                     "prometheus visual direction",
+                     "black and gold prometheus",
+                     "prometheus promo video style",
+                     "ash and archive style",
+                     "make it less ai-looking"
+                 ],
+    "categories":  [
+                       "creative",
+                       "brand",
+                       "video",
+                       "hyperframes",
+                       "motion-design",
+                       "prometheus"
+                   ],
+    "requiredTools":  [
+                          "workspace_write",
+                          "creative_quality"
+                      ],
+    "implicitInvocation":  false,
+    "permissions":  {
+                        "workspaceRead":  true,
+                        "workspaceWrite":  true
+                    },
+    "resources":  [
+                      {
+                          "path":  "palettes/ash-archive.md",
+                          "type":  "reference",
+                          "description":  "Canonical Ash \u0026 Archive palette tokens for Prometheus creative work."
+                      },
+                      {
+                          "path":  "references/detailed-guide.md",
+                          "type":  "reference"
+                      },
+                      {
+                          "path":  "references/mythic-editorial-launch-visuals.md",
+                          "type":  "reference",
+                          "description":  "Campaign-specific mythic editorial Prometheus launch visual direction."
+                      },
+                      {
+                          "path":  "references/polsia-reference-analysis.md",
+                          "type":  "reference",
+                          "description":  "Style extraction from the Polsia/Bencera reference video and how to adapt it for Prometheus without copying it."
+                      },
+                      {
+                          "path":  "templates/hyperframes-brief.md",
+                          "type":  "template",
+                          "description":  "Pre-authoring brief for Ash \u0026 Archive HyperFrames videos."
+                      },
+                      {
+                          "path":  "palettes/prometheus-one.md",
+                          "type":  "doc"
+                      },
+                      {
+                          "path":  "templates/prometheus-one-brief.md",
+                          "type":  "template"
+                      }
+                  ]
 }

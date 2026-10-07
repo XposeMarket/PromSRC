@@ -67,6 +67,10 @@ export interface MediaModelManifest {
     perSecondUsd?: number;
     perImageUsd?: number;
     perRequestUsd?: number;
+    /** Per-second rate by output resolution (e.g. Wan Animate 480p/580p/720p). Wins over flat/live rates. */
+    byResolutionPerSecondUsd?: Record<string, number>;
+    /** Billed through a subscription (OpenAI images via ChatGPT OAuth): $0 marginal cost, not "unknown". */
+    includedInSubscription?: boolean;
     /** Raw fal billing unit/price (not interchangeable with per-second). */
     unit?: string;
     unitPriceUsd?: number;
@@ -82,6 +86,8 @@ export interface MediaModelManifest {
   source?: 'fal-sync';
   /** Runtime-only flag indicating this synced model's OpenAPI fields were inspected. */
   schemaLoaded?: boolean;
+  /** Synced endpoint has required fields Prometheus cannot fill; never submit it as-is. */
+  unmappedRequired?: string[];
 }
 
 const RATIO_BY_PROMETHEUS: Record<string, string> = { landscape: '16:9', portrait: '9:16', square: '1:1' };
@@ -145,14 +151,14 @@ const BUILTIN: MediaModelManifest[] = [
     id: 'openai/gpt-image', label: 'OpenAI GPT Image 2.5 Flare', provider: 'openai', kind: 'image',
     endpoint: 'gpt-image-2.5-flare-medium',
     map: { prompt: 'prompt', referenceImages: 'reference_images', aspectRatio: 'aspect_ratio', count: 'count' },
-    pricing: { perImageUsd: 0.07, source: 'estimate' },
+    pricing: { perImageUsd: 0, includedInSubscription: true, source: 'published' },
     tags: ['anchor', 'character', 'text-rendering', 'reference-edit'],
   },
   {
     id: 'openai/gpt-image-sunburst', label: 'OpenAI GPT Image 2.5 Sunburst (precise)', provider: 'openai', kind: 'image',
     endpoint: 'gpt-image-2.5-sunburst-high',
     map: { prompt: 'prompt', referenceImages: 'reference_images', aspectRatio: 'aspect_ratio', count: 'count' },
-    pricing: { perImageUsd: 0.1, source: 'estimate' },
+    pricing: { perImageUsd: 0, includedInSubscription: true, source: 'published' },
     tags: ['anchor', 'character', 'product', 'reference-edit', 'precise'],
   },
   // ── fal queue ──
@@ -276,14 +282,29 @@ const BUILTIN: MediaModelManifest[] = [
     id: 'fal/wan-animate-replace', label: 'Wan 2.2 Animate Replace (character swap into a clip) via fal', provider: 'fal', kind: 'video',
     endpoint: 'fal-ai/wan/v2.2-14b/animate/replace',
     map: { sourceVideo: 'video_url', startImage: 'image_url', resolution: 'resolution' }, requires: ['sourceVideo', 'startImage'],
-    pricing: { perSecondUsd: 0.08, source: 'published' }, output: 'video.url', tags: ['motion-transfer', 'swap'],
+    pricing: { perSecondUsd: 0.08, byResolutionPerSecondUsd: { '480p': 0.04, '580p': 0.06, '720p': 0.08 }, source: 'published' }, output: 'video.url', tags: ['motion-transfer', 'swap'],
   },
   {
     // Animates the still in image_url (its own background) with the source clip's motion.
     id: 'fal/wan-animate-move', label: 'Wan 2.2 Animate Move (animate a still with a clip\'s motion) via fal', provider: 'fal', kind: 'video',
     endpoint: 'fal-ai/wan/v2.2-14b/animate/move',
     map: { sourceVideo: 'video_url', startImage: 'image_url', resolution: 'resolution' }, requires: ['sourceVideo', 'startImage'],
-    pricing: { perSecondUsd: 0.08, source: 'published' }, output: 'video.url', tags: ['motion-transfer'],
+    pricing: { perSecondUsd: 0.08, byResolutionPerSecondUsd: { '480p': 0.04, '580p': 0.06, '720p': 0.08 }, source: 'published' }, output: 'video.url', tags: ['motion-transfer'],
+  },
+  {
+    // Character image (appearance + background) performs the clip's motion. Match image_url to the clip's first frame.
+    id: 'fal/kling-v3-pro-motion-control', label: 'Kling 3 Pro Motion Control (character image + motion clip) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/kling-video/v3/pro/motion-control',
+    map: { prompt: 'prompt', sourceVideo: 'video_url', startImage: 'image_url' }, requires: ['sourceVideo', 'startImage'],
+    defaults: { character_orientation: 'video', keep_original_sound: true },
+    pricing: { perSecondUsd: 0.168, source: 'published' }, output: 'video.url', tags: ['motion-transfer', 'premium-motion', 'trend-transfer'],
+  },
+  {
+    id: 'fal/kling-v3-standard-motion-control', label: 'Kling 3 Standard Motion Control (cheaper tier) via fal', provider: 'fal', kind: 'video',
+    endpoint: 'fal-ai/kling-video/v3/standard/motion-control',
+    map: { prompt: 'prompt', sourceVideo: 'video_url', startImage: 'image_url' }, requires: ['sourceVideo', 'startImage'],
+    defaults: { character_orientation: 'video', keep_original_sound: true },
+    pricing: { perSecondUsd: 0.112, source: 'estimate' }, output: 'video.url', tags: ['motion-transfer', 'trend-transfer'],
   },
   {
     id: 'fal/luma-ray2-modify', label: 'Luma Ray 2 Modify via fal', provider: 'fal', kind: 'video',
@@ -442,6 +463,10 @@ export function removeUserManifest(id: string): boolean {
 }
 
 export function estimateCostUsd(model: MediaModelManifest, input: { durationSec?: number; count?: number; resolution?: string; aspectRatio?: string }): number {
+  const p0 = model.pricing || {};
+  if (p0.includedInSubscription) return 0;
+  const tier = p0.byResolutionPerSecondUsd && model.kind !== 'image' ? resolutionRate(p0.byResolutionPerSecondUsd, input.resolution) : undefined;
+  if (tier !== undefined) return Math.round(tier * Math.max(1, Number(input.durationSec) || 5) * Math.max(1, Number(input.count) || 1) * 1000) / 1000;
   const live = model.provider === 'fal' ? priceForModel(model, input) : undefined;
   if (live !== undefined) return Math.round(live * Math.max(1, Number(input.count) || 1) * 1000) / 1000;
   const p = model.pricing || {};
@@ -456,6 +481,20 @@ export function estimateCostUsd(model: MediaModelManifest, input: { durationSec?
   }
   else usd += Number(p.perImageUsd || 0);
   return Math.round(usd * count * 1000) / 1000;
+}
+
+function resolutionRate(rates: Record<string, number>, resolution: string | undefined): number | undefined {
+  const want = Number(String(resolution || '').match(/\d+/)?.[0]);
+  const keys = Object.keys(rates).map((k) => ({ k, n: Number(k.match(/\d+/)?.[0]) })).filter((x) => Number.isFinite(x.n)).sort((a, b) => a.n - b.n);
+  if (!keys.length) return undefined;
+  if (!Number.isFinite(want)) return rates[keys[keys.length - 1].k];
+  // Bill at the smallest tier that covers the requested resolution (fal rounds up).
+  return rates[(keys.find((x) => x.n >= want) || keys[keys.length - 1]).k];
+}
+
+/** Curated (built-in or hand-added) manifests are verified; fal-sync entries only have guessed inputs. */
+export function isVerifiedModel(model: MediaModelManifest | undefined): boolean {
+  return !!model && model.source !== 'fal-sync';
 }
 
 /** Snap a requested duration onto what the model accepts. */

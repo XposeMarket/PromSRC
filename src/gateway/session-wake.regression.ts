@@ -59,7 +59,8 @@ async function main() {
   await mutateProject(ws, p.id, 'test.j2', (proj: any) => { proj.jobs[1].state = 'done'; });
   await flush();
   assert.equal(calls.length, 1);
-  assert.match(calls[0].message, /Jobs finished for Promo .*1 done, 1 failed \(shot 'Hook': nsfw filter\)\. Spent \$0\.50\. Batch A\./);
+  assert.match(calls[0].message, /Jobs finished for Promo .*1 done, 1 failed \(shot 'Hook': nsfw filter\)\. Spent \$0\.50\. Only 1 of 2 succeeded\. Batch A\./);
+  assert.doesNotMatch(calls[0].message, /Shots generated/);
   assert.equal(listVideoWatches().length, 0);
   console.log('ok video-all-terminal:', calls[0].message);
 

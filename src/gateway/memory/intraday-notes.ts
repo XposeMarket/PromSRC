@@ -145,8 +145,22 @@ export function resolveNotes(workspacePath: string, ids: string[]): { resolved: 
   const wanted = new Set(ids.map((id) => String(id || '').trim()).filter((id) => /^n_[a-z0-9]+$/.test(id)));
   const resolved: string[] = [];
   if (!wanted.size) return { resolved, unresolved: ids.filter(Boolean).map(String) };
-  for (let d = 0; d <= CARRY_DAYS && wanted.size; d += 1) {
-    const file = noteFileForDate(workspacePath, utcDate(d));
+  // Recent files first, then every older note file (newest first): an explicit
+  // id must be closable regardless of age, or stale open items can never be cleared.
+  const files: string[] = [];
+  for (let d = 0; d <= CARRY_DAYS; d += 1) files.push(noteFileForDate(workspacePath, utcDate(d)));
+  try {
+    const dir = path.dirname(noteFileForDate(workspacePath, utcDate(0)));
+    const older = fs.readdirSync(dir)
+      .filter((name) => /^\d{4}-\d{2}-\d{2}-intraday-notes\.md$/.test(name))
+      .sort()
+      .reverse()
+      .map((name) => path.join(dir, name))
+      .filter((file) => !files.includes(file));
+    files.push(...older);
+  } catch { /* no memory dir */ }
+  for (const file of files) {
+    if (!wanted.size) break;
     if (!fs.existsSync(file)) continue;
     const raw = fs.readFileSync(file, 'utf-8');
     let changed = false;

@@ -351,7 +351,8 @@ export function normalizeProject(raw: any): VideoProject {
     },
     budget: {
       capUsd: raw.budget?.capUsd != null ? num(raw.budget.capUsd, 0) : undefined,
-      autoApproveUsd: num(raw.budget?.autoApproveUsd, 1),
+      // Default: every paid run is quoted and confirmed first (Raul's rule). Projects can opt in to a limit.
+      autoApproveUsd: num(raw.budget?.autoApproveUsd, 0),
       spentUsd: num(raw.budget?.spentUsd, 0),
     },
     characters: arr<Character>(raw.characters).map((c) => ({ ...c, anchors: arr(c.anchors), refs: arr(c.refs), candidates: arr(c.candidates) })),
@@ -582,7 +583,7 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
       }
       if (o.budget) {
         if (o.budget.capUsd !== undefined) p.budget.capUsd = o.budget.capUsd === null ? undefined : num(o.budget.capUsd, 0);
-        if (o.budget.autoApproveUsd !== undefined) p.budget.autoApproveUsd = Math.max(0, num(o.budget.autoApproveUsd, 1));
+        if (o.budget.autoApproveUsd !== undefined) p.budget.autoApproveUsd = Math.max(0, num(o.budget.autoApproveUsd, 0));
       }
       return 'Updated project settings';
     }

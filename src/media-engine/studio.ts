@@ -494,7 +494,7 @@ export async function applyTemplate(ws: string, projectId: string, args: {
   const productCharId = args.productCharId || p.characters.find((c) => c.kind === 'product')?.id;
   const personCharId = args.personCharId || p.characters.find((c) => (c.kind || 'person') === 'person')?.id;
   const plan = planFromTemplate(t, { brief: args.brief || p.brief, product: args.product, character: args.character, brand: args.brand || p.brand?.name }, { productCharId, personCharId });
-  const ops = [...plan.ops, { op: 'project.update', templateId: t.id, hookVariants: plan.hookVariants || [], audioMode: t.audioMode || 'voiceover' }];
+  const ops = [...plan.ops, { op: 'project.update', templateId: t.id, hookVariants: plan.hookVariants || [], audioMode: t.audioMode || 'native' }];
   const { summaries } = await applyOps(ws, projectId, ops as any, 'agent');
   if (args.music !== false && plan.music?.builtin && plan.music.builtin !== 'none') {
     try { await music(ws, projectId, { builtin: plan.music.builtin, volume: plan.music.volume }); } catch { /* music is optional */ }
@@ -773,7 +773,7 @@ export async function quickstart(ws: string, args: {
     title: args.title || `${t.name}: ${args.productName || args.brief.slice(0, 40)}`,
     brief: args.brief,
     target: { aspect: args.aspect || t.aspect, resolution: args.resolution || '480p', fps: 30, durationSec: t.durationSec } as any,
-    budget: { capUsd: args.capUsd ?? 5, autoApproveUsd: 1 } as any,
+    budget: { capUsd: args.capUsd ?? 5, autoApproveUsd: 0 } as any,
   } as any);
   const id = p.id;
   if (args.brandId) await brandApply(ws, id, args.brandId);

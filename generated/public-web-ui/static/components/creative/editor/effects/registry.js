@@ -199,7 +199,7 @@ registerEffect({
 registerEffect({
   id: 'glow',
   label: 'Glow',
-  defaultParams: { blur: 12, color: '#f97316', opacity: 0.8 },
+  defaultParams: { blur: 12, color: '#d6b75e', opacity: 0.8 },
   paramDefs: [
     { key: 'blur',    label: 'Blur',    type: 'number', min: 0, max: 60, step: 1 },
     { key: 'color',   label: 'Color',   type: 'color' },
@@ -207,7 +207,7 @@ registerEffect({
   ],
   preApply(ctx, _el, p) {
     ctx.shadowBlur  = p.blur  ?? 12;
-    ctx.shadowColor = (p.color || '#f97316') + Math.round((p.opacity ?? 0.8) * 255).toString(16).padStart(2,'0');
+    ctx.shadowColor = (p.color || '#d6b75e') + Math.round((p.opacity ?? 0.8) * 255).toString(16).padStart(2,'0');
     ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
   },
   postApply(ctx) {
