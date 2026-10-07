@@ -8,7 +8,8 @@
   "docsUrl": "https://www.instagram.com/",
   "tags": ["instagram", "social", "browser session"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:instagram"
+    "binding": "gateway/connections/browser-session:instagram",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#E1306C",
@@ -20,11 +21,15 @@
     ]
   },
   "ownership": {
+    "toolNamespaces": ["connector_instagram"],
+    "tools": ["connector_instagram_api_request"],
     "capabilities": ["social", "analytics", "browser_session"]
   },
   "setup": {
     "authType": "browser_session",
     "statusMode": "generic",
+    "docsHint": "Browser login does not authorize the API. API tools require an Instagram Login access_token saved in secure credentials or INSTAGRAM_ACCESS_TOKEN; refresh externally when expired.",
+    "fields": [{ "key": "access_token", "label": "Optional Instagram API access token", "input": "password", "secret": true, "required": false }],
     "browserLogin": {
       "url": "https://www.instagram.com/accounts/login/",
       "checkUrl": "https://www.instagram.com/"
