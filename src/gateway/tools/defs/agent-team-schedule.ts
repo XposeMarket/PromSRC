@@ -120,6 +120,8 @@ export function getAgentTeamScheduleTools(): any[] {
             add_subagent_ids: { type: 'array', items: { type: 'string' } },
             remove_subagent_ids: { type: 'array', items: { type: 'string' } },
             allowed_work_paths: { type: 'array', items: { type: 'string' } },
+            work_dir: { type: 'string', description: 'Project working directory for member and manager turns (inside the main workspace or allowed_work_paths). Relative file paths resolve here.' },
+            clear_work_dir: { type: 'boolean' },
             kickoff_initial_review: { type: 'boolean' },
             kickoff_after_seconds: { type: 'number' },
             ref: { type: 'string' },
