@@ -1050,6 +1050,17 @@ function finishMainChatStream(sessionId: string, streamId: string): void {
   if (latest) broadcastMainChatStreamUpdate(stream, latest);
 }
 
+function findSessionMainChatRuntime(sessionId: string): { id: string } | null {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const match = listLiveRuntimes().find((runtime: any) =>
+    (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
+    && String(runtime.sessionId || '') === sid
+    && String(runtime.status || 'running') === 'running'
+    && !runtime.abortRequestedAt);
+  return match ? { id: match.id } : null;
+}
+
 function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStreamState, reason: string): void {
   if (!stream.active) return;
   try {
@@ -1192,6 +1203,12 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
   pruneMainChatStreams();
   const streams = Array.from(mainChatStreams.values()).filter((stream) => stream.active);
   for (const stream of streams) {
+    if (!stream.runtimeId) {
+      // Synthetic turns (internal watch, Telegram) register their runtime
+      // before the stream exists; adopt it instead of declaring an orphan.
+      const adopted = findSessionMainChatRuntime(stream.sessionId);
+      if (adopted) stream.runtimeId = adopted.id;
+    }
     const runtime = stream.runtimeId ? getLiveRuntime(stream.runtimeId) : null;
     if (!runtime) {
       if (isMainChatStreamOwnerOrphaned({
@@ -1436,7 +1453,7 @@ function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
 export function describeTurnAbortCause(abortSignal: { aborted?: boolean; reason?: unknown } | undefined | null): string {
   const raw = String((abortSignal as any)?.reason ?? '').trim();
   const reason = raw.toLowerCase();
-  if (reason.includes('watchdog')) {
+  if (reason.includes('watchdog') || reason.includes('runtime_missing') || reason.includes('owner_lost')) {
     return `Gateway watchdog interrupted the active turn (${raw.slice(0, 120)}); this was not a user cancellation.`;
   }
   if (reason && /restart|shutdown|drain|sigterm|sigint|exit|crash|reload|gateway/.test(reason)) {
@@ -10858,6 +10875,10 @@ async function runInteractiveTurn(
   const turnLease = preAcquiredTurnLease || await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
   turnTiming.mark('lease_acquired', { waitMs: Date.now() - leaseWaitStartedAt });
   let runtimeAdmissionLease: RuntimeAdmissionLease | null = null;
+  // Runtime registered by this turn when no caller-owned runtime exists
+  // (timer turns, session wakes). Without it the owner watchdog reconciles the
+  // stream as orphaned after MAIN_CHAT_ORPHAN_GRACE_MS of quiet work.
+  let ownedTurnRuntimeId = '';
   try {
   const admissionWaitStartedAt = Date.now();
   runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
@@ -10938,8 +10959,32 @@ async function runInteractiveTurn(
     localMainChatStream.abortExecution = (reason: string) => {
       if (abortSignal.aborted) return;
       abortSignal.aborted = true;
+      // Keep the cause so describeTurnAbortCause does not report a watchdog
+      // or owner-loss abort as "User cancelled the active turn".
+      try { if (!(abortSignal as any).reason) (abortSignal as any).reason = reason; } catch {}
       try { (abortSignal as any).abort?.(reason); } catch {}
     };
+  }
+  if (localMainChatStream && !localMainChatStream.runtimeId) {
+    const callerRuntime = findSessionMainChatRuntime(sessionId);
+    if (callerRuntime) {
+      localMainChatStream.runtimeId = callerRuntime.id;
+    } else {
+      ownedTurnRuntimeId = registerLiveRuntime({
+        kind: 'main_chat',
+        label: isTimerTurn ? 'Timer turn' : 'Main chat',
+        sessionId,
+        source: turnOrigin.channel,
+        detail: String(message || '').slice(0, 160),
+        abortSignal: abortSignal as any,
+        onAbort: () => {
+          try { localMainChatStream.abortExecution?.('runtime_abort'); } catch {}
+        },
+        recoveryPolicy: 'do_not_resume',
+        recoveryData: { syntheticOwnedTurn: true, timerTurn: isTimerTurn },
+      });
+      localMainChatStream.runtimeId = ownedTurnRuntimeId;
+    }
   }
   turnTiming.mark('stream_setup_done', {
     durationMs: Date.now() - streamSetupStartedAt,
@@ -11778,6 +11823,9 @@ async function runInteractiveTurn(
   }
   } finally {
     turnTiming.mark('lease_release');
+    if (ownedTurnRuntimeId) {
+      try { finishLiveRuntime(ownedTurnRuntimeId); } catch {}
+    }
     runtimeAdmissionLease?.release();
     // The HTTP admission path acquires atomically before creating a stream;
     // its outer finally owns release so every visible/server state transition
