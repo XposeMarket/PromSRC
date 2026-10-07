@@ -335,13 +335,17 @@ function envInt(name: string, fallback: number, minimum: number, maximum: number
 export function shouldDeferAutomaticBrainJob(job: BrainJobKind, now = Date.now()): BrainAutomaticRunGuard {
   const windowMs = envInt('PROMETHEUS_BRAIN_PROVIDER_FAILURE_WINDOW_MS', DEFAULT_FAILURE_WINDOW_MS, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
   const threshold = envInt('PROMETHEUS_BRAIN_PROVIDER_FAILURE_THRESHOLD', DEFAULT_FAILURE_THRESHOLD, 1, 10);
+  // Records are appended in run order, so the file index breaks timestamp ties:
+  // two runs finishing in the same millisecond must still read newest-first.
   const summaries = readBrainProviderDiagnosticRecords()
-    .filter((record): record is BrainProviderRunSummary => record.kind === 'run_summary' && record.job === job)
-    .filter((record) => {
+    .map((record, index) => ({ record, index }))
+    .filter((entry): entry is { record: BrainProviderRunSummary; index: number } => entry.record.kind === 'run_summary' && entry.record.job === job)
+    .filter(({ record }) => {
       const at = Date.parse(record.at);
       return Number.isFinite(at) && now - at >= 0 && now - at <= windowMs;
     })
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    .sort((a, b) => (Date.parse(b.record.at) - Date.parse(a.record.at)) || (b.index - a.index))
+    .map(({ record }) => record);
 
   const keys = new Set<string>();
   for (const summary of summaries) {
