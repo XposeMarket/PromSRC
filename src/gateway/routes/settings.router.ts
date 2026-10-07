@@ -2690,6 +2690,55 @@ router.post('/api/auth/anthropic/setup-token', (req, res) => {
   res.json(result);
 });
 
+// ─── One-click Claude connect (drives `claude setup-token` in the background) ──
+// POST /api/auth/anthropic/cli/start   → { state, authUrl? } (UI opens authUrl)
+// GET  /api/auth/anthropic/cli/status  → poll until state === 'connected'
+// POST /api/auth/anthropic/cli/code    → fallback: forward a pasted code
+// POST /api/auth/anthropic/cli/cancel
+// POST /api/auth/anthropic/cli/install → install Claude Code if missing
+const anthropicCli = () => require('../../auth/anthropic-cli-connect');
+
+router.post('/api/auth/anthropic/cli/start', (req, res) => {
+  try {
+    const accountId = String(req.body?.accountId || '').trim();
+    res.json({ success: true, ...anthropicCli().startAnthropicCliConnect(CONFIG_DIR_PATH, accountId || undefined) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.get('/api/auth/anthropic/cli/status', (_req, res) => {
+  try {
+    res.json({ success: true, ...anthropicCli().getAnthropicCliConnectStatus(), install: anthropicCli().getClaudeInstallStatus() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.post('/api/auth/anthropic/cli/code', (req, res) => {
+  try {
+    res.json({ success: true, ...anthropicCli().submitAnthropicCliCode(String(req.body?.code || '')) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.post('/api/auth/anthropic/cli/cancel', (_req, res) => {
+  try {
+    res.json({ success: true, ...anthropicCli().cancelAnthropicCliConnect() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.post('/api/auth/anthropic/cli/install', (_req, res) => {
+  try {
+    res.json({ success: true, ...anthropicCli().installClaudeCli() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 // POST /api/auth/anthropic/disconnect  — clear stored tokens
 router.post('/api/auth/anthropic/disconnect', (req, res) => {
   const configDir = CONFIG_DIR_PATH;

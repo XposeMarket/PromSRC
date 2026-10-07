@@ -376,6 +376,21 @@ router.get('/api/account/config', (_req, res) => {
 // GET /api/account/status — return cached auth state instantly by default.
 // Pass ?strict=1 for a boot-time account verification check that blocks on refresh.
 router.get('/api/account/status', async (req, res) => {
+  if (!isAccountRequired()) {
+    // Local mode: no login. A previously signed-in session is still reported
+    // for display, but it is never verified or required.
+    return res.json({
+      authenticated: true,
+      accountRequired: false,
+      localMode: !_session,
+      email: _session?.email || null,
+      userId: _session?.userId || null,
+      isAdmin: !!_session?.isAdmin,
+      subscriptionActive: true,
+      purchaseActive: true,
+      accessActive: true,
+    });
+  }
   if (isTruthyQueryValue(req.query?.strict)) {
     try {
       return res.json(await resolveStrictSessionStatus());
@@ -504,7 +519,33 @@ export function getCurrentUserId(): string | null {
   return _session.userId || null;
 }
 
+/**
+ * Accounts are optional while Prometheus is a free local product. The account
+ * gate (login screen + 401s) is kept intact behind this switch so it can be
+ * re-enabled later without code changes:
+ *   - env PROMETHEUS_REQUIRE_ACCOUNT=1, or
+ *   - config.json { "account": { "required": true } }
+ */
+export function isAccountRequired(): boolean {
+  const env = String(process.env.PROMETHEUS_REQUIRE_ACCOUNT || '').trim().toLowerCase();
+  if (env === '1' || env === 'true' || env === 'yes') return true;
+  if (env === '0' || env === 'false' || env === 'no') return false;
+  try {
+    return (getConfig().getConfig() as any)?.account?.required === true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when a signed-in account session exists (independent of the gate). */
+export function hasAccountSession(): boolean {
+  return !!_session;
+}
+
 export function getSessionStatus(): { authenticated: boolean; subscriptionActive: boolean; purchaseActive: boolean; accessActive: boolean; isAdmin: boolean } {
+  if (!isAccountRequired()) {
+    return { authenticated: true, subscriptionActive: true, purchaseActive: true, accessActive: true, isAdmin: !!_session?.isAdmin };
+  }
   if (!_session) return { authenticated: false, subscriptionActive: false, purchaseActive: false, accessActive: false, isAdmin: false };
   const expired = _session.expiresAt < Math.floor(Date.now() / 1000);
   // Do not hard-fail protected local routes during the short window where an
