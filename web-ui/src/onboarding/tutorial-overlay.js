@@ -1,178 +1,211 @@
-// Animated tutorial overlay. 7 panels introducing Prometheus's main surfaces.
-// Pure HTML/CSS/SVG — no video dependency. Resolves with 'completed' or 'skipped'.
+// Guided tour. Instead of slides describing the app, it spotlights the real
+// controls in place: a cut-out highlight over the element plus a callout card
+// anchored next to it. Steps whose target is missing or hidden fall back to a
+// centered card, so the tour never breaks when the layout changes.
+//
+// Resolves with 'completed' or 'skipped'.
 
-const PANELS = [
+const STEPS = [
   {
-    title: 'Welcome to Prometheus',
-    caption: 'I\'m your everything-AI. Anything you can describe, I can probably help you do — chat, files, browser, desktop, the works.',
-    illus: svgWelcome(),
+    title: 'A quick look around',
+    body: 'Prom is an assistant that actually does things on your computer: files, browser, code, schedules, and teams of agents. This tour takes about 30 seconds.',
   },
   {
-    title: 'Your chat is the command line',
-    caption: 'Talk to me like a teammate. I remember context, I write to my own memory, and I can hand work off to background agents.',
-    illus: svgChat(),
+    target: '#chat-input',
+    title: 'Just ask',
+    body: 'Everything starts here. Describe what you want in plain words, like "clean up my Downloads folder" or "research flights to Denver". Prom picks the tools.',
+    place: 'top',
   },
   {
-    title: 'Tasks run in the background',
-    caption: 'Long jobs go to the Tasks tab so the chat stays responsive. Check back any time to see progress or final results.',
-    illus: svgTasks(),
+    target: '#model-switcher-btn',
+    title: 'Switch models any time',
+    body: 'This is the model doing the thinking. Click it to switch models or how hard it thinks. Your choice is saved.',
+    place: 'top',
   },
   {
-    title: 'Schedule & Heartbeat keep me alive',
-    caption: 'I can run on a cron, or on a recurring heartbeat to check in on your goals — even when you\'re not at your desk.',
-    illus: svgSchedule(),
+    target: '#sessions-new-btn',
+    title: 'Chats are saved',
+    body: 'Start a fresh chat for each topic. Earlier chats stay in the sidebar, and Prom keeps important facts in long-term memory.',
+    place: 'right',
   },
   {
-    title: 'Teams and Subagents do parallel work',
-    caption: 'Spin up a team for big projects. I act as the manager, dispatching specialized subagents to work in parallel.',
-    illus: svgTeams(),
+    target: '#nav-bgtasks',
+    title: 'Long jobs run in the background',
+    body: 'Big work runs here so the chat stays free. Check progress or results whenever you like.',
+    place: 'right',
   },
   {
-    title: 'Browser, Desktop, Canvas, Files',
-    caption: 'I can drive a real browser, click around your desktop, edit files in a shared canvas, and execute code. Real tools, not just text.',
-    illus: svgTools(),
+    target: '#nav-schedule',
+    title: 'Put work on autopilot',
+    body: 'Ask for something "every morning" or "every Friday" and it shows up here as an automation.',
+    place: 'right',
   },
   {
-    title: 'Last step: connect your brain',
-    caption: 'Pick a model provider next — ChatGPT, Claude, an API key, or local Ollama. After that we\'ll do a quick meet-and-greet.',
-    illus: svgModel(),
+    target: '#nav-teams',
+    title: 'Teams for bigger projects',
+    body: 'For bigger goals, Prom can create a team of specialist agents, manage them, and report back.',
+    place: 'right',
+  },
+  {
+    target: '[onclick="openSettings()"]',
+    title: 'Settings and connections',
+    body: 'Connect models, apps like Gmail or GitHub, voice, and your phone. You can replay this tour from Settings › System.',
+    place: 'right',
+  },
+  {
+    title: "You're all set",
+    body: 'Try asking something real. A good first one: "What can you help me with on this computer?"',
+    finalLabel: 'Start chatting',
   },
 ];
+
+function visibleRect(selector) {
+  if (!selector) return null;
+  let el = null;
+  try { el = document.querySelector(selector); } catch { return null; }
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return null;
+  if (r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) return null;
+  const style = getComputedStyle(el);
+  if (style.visibility === 'hidden' || style.display === 'none') return null;
+  return r;
+}
 
 export function showTutorial() {
   return new Promise((resolve) => {
     let index = 0;
+    let finished = false;
 
     const root = document.createElement('div');
-    root.id = 'prom-onboarding-root';
+    root.id = 'prom-tour-root';
     root.innerHTML = `
-      <div class="prom-onb-card" role="dialog" aria-modal="true" aria-label="Prometheus onboarding tutorial">
-        <div class="prom-onb-header">
-          <div class="prom-onb-step" data-step>Step 1 of ${PANELS.length}</div>
-          <button class="prom-onb-skip" data-skip>Skip tour</button>
+      <div class="prom-tour-shade" data-shade></div>
+      <div class="prom-tour-spot" data-spot hidden></div>
+      <div class="prom-tour-card" role="dialog" aria-modal="true" aria-live="polite" data-card>
+        <div class="prom-tour-top">
+          <span class="prom-tour-count" data-count></span>
+          <button class="prom-tour-skip" data-skip type="button">Skip tour</button>
         </div>
-        <div class="prom-onb-body">
-          <div class="prom-onb-illus" data-illus></div>
-          <h2 class="prom-onb-title" data-title></h2>
-          <p class="prom-onb-caption" data-caption></p>
-        </div>
-        <div class="prom-onb-footer">
-          <div class="prom-onb-dots" data-dots></div>
-          <div class="prom-onb-actions">
-            <button class="prom-onb-btn" data-back>Back</button>
-            <button class="prom-onb-btn primary" data-next>Next</button>
+        <h3 class="prom-tour-title" data-title></h3>
+        <p class="prom-tour-body" data-body></p>
+        <div class="prom-tour-bottom">
+          <div class="prom-tour-dots" data-dots></div>
+          <div class="prom-tour-actions">
+            <button class="prom-onb-btn" data-back type="button">Back</button>
+            <button class="prom-onb-btn primary" data-next type="button">Next</button>
           </div>
         </div>
       </div>
     `;
     document.body.appendChild(root);
 
-    const stepEl    = root.querySelector('[data-step]');
-    const illusEl   = root.querySelector('[data-illus]');
-    const titleEl   = root.querySelector('[data-title]');
-    const captionEl = root.querySelector('[data-caption]');
-    const dotsEl    = root.querySelector('[data-dots]');
-    const backBtn   = root.querySelector('[data-back]');
-    const nextBtn   = root.querySelector('[data-next]');
-    const skipBtn   = root.querySelector('[data-skip]');
+    const shade = root.querySelector('[data-shade]');
+    const spot = root.querySelector('[data-spot]');
+    const card = root.querySelector('[data-card]');
+    const countEl = root.querySelector('[data-count]');
+    const titleEl = root.querySelector('[data-title]');
+    const bodyEl = root.querySelector('[data-body]');
+    const dotsEl = root.querySelector('[data-dots]');
+    const backBtn = root.querySelector('[data-back]');
+    const nextBtn = root.querySelector('[data-next]');
+    const skipBtn = root.querySelector('[data-skip]');
+
+    function position() {
+      const step = STEPS[index];
+      const rect = visibleRect(step.target);
+      const pad = 6;
+      const margin = 14;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      if (!rect) {
+        spot.hidden = true;
+        shade.hidden = false;
+        card.classList.add('centered');
+        card.style.left = '';
+        card.style.top = '';
+        return;
+      }
+
+      shade.hidden = true;
+      spot.hidden = false;
+      card.classList.remove('centered');
+      spot.style.left = `${rect.left - pad}px`;
+      spot.style.top = `${rect.top - pad}px`;
+      spot.style.width = `${rect.width + pad * 2}px`;
+      spot.style.height = `${rect.height + pad * 2}px`;
+
+      const cw = card.offsetWidth;
+      const ch = card.offsetHeight;
+      const order = [step.place || 'bottom', 'bottom', 'top', 'right', 'left'];
+      let left = 0;
+      let top = 0;
+      for (const place of order) {
+        if (place === 'top')    { left = rect.left + rect.width / 2 - cw / 2; top = rect.top - pad - margin - ch; }
+        if (place === 'bottom') { left = rect.left + rect.width / 2 - cw / 2; top = rect.bottom + pad + margin; }
+        if (place === 'right')  { left = rect.right + pad + margin;           top = rect.top + rect.height / 2 - ch / 2; }
+        if (place === 'left')   { left = rect.left - pad - margin - cw;        top = rect.top + rect.height / 2 - ch / 2; }
+        const fits = left >= 8 && top >= 8 && left + cw <= vw - 8 && top + ch <= vh - 8;
+        if (fits) break;
+      }
+      left = Math.max(8, Math.min(left, vw - cw - 8));
+      top = Math.max(8, Math.min(top, vh - ch - 8));
+      card.style.left = `${left}px`;
+      card.style.top = `${top}px`;
+    }
 
     function render() {
-      const p = PANELS[index];
-      stepEl.textContent  = `Step ${index + 1} of ${PANELS.length}`;
-      illusEl.innerHTML   = p.illus;
-      titleEl.textContent = p.title;
-      captionEl.textContent = p.caption;
-      dotsEl.innerHTML = PANELS.map((_, i) => {
-        const cls = i === index ? 'active' : (i < index ? 'done' : '');
-        return `<div class="prom-onb-dot ${cls}"></div>`;
-      }).join('');
+      const step = STEPS[index];
+      countEl.textContent = `${index + 1} / ${STEPS.length}`;
+      titleEl.textContent = step.title;
+      bodyEl.textContent = step.body;
+      dotsEl.innerHTML = STEPS.map((_, i) => `<span class="prom-tour-dot${i === index ? ' active' : i < index ? ' done' : ''}"></span>`).join('');
       backBtn.disabled = index === 0;
-      nextBtn.textContent = (index === PANELS.length - 1) ? 'Finish' : 'Next';
+      nextBtn.textContent = index === STEPS.length - 1 ? (step.finalLabel || 'Done') : 'Next';
+      skipBtn.hidden = index === STEPS.length - 1;
+      card.classList.remove('enter');
+      void card.offsetWidth;
+      card.classList.add('enter');
+      requestAnimationFrame(position);
+      nextBtn.focus({ preventScroll: true });
     }
 
     function done(reason) {
-      root.style.transition = 'opacity 180ms ease-out';
-      root.style.opacity = '0';
-      setTimeout(() => { root.remove(); resolve(reason); }, 180);
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('resize', position);
+      document.removeEventListener('keydown', onKey, true);
+      root.classList.add('leaving');
+      setTimeout(() => {
+        root.remove();
+        if (reason === 'completed') {
+          try { document.getElementById('chat-input')?.focus(); } catch {}
+        }
+        resolve(reason);
+      }, 180);
     }
 
-    backBtn.addEventListener('click', () => { if (index > 0) { index--; render(); } });
-    nextBtn.addEventListener('click', () => {
-      if (index < PANELS.length - 1) { index++; render(); }
+    function next() {
+      if (index < STEPS.length - 1) { index++; render(); }
       else done('completed');
-    });
-    skipBtn.addEventListener('click', () => done('skipped'));
+    }
+    function back() {
+      if (index > 0) { index--; render(); }
+    }
 
+    function onKey(e) {
+      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); next(); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); back(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done('skipped'); }
+    }
+
+    try { if (typeof window.setMode === 'function') window.setMode('chat'); } catch {}
+    nextBtn.addEventListener('click', next);
+    backBtn.addEventListener('click', back);
+    skipBtn.addEventListener('click', () => done('skipped'));
+    window.addEventListener('resize', position);
+    document.addEventListener('keydown', onKey, true);
     render();
   });
-}
-
-// ── SVG illustrations (compact, brand-aligned) ──
-
-function svgWelcome() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5b8def"/><stop offset="1" stop-color="#a36ce0"/>
-    </linearGradient></defs>
-    <circle cx="100" cy="70" r="46" fill="url(#g1)"/>
-    <path d="M 100 38 L 114 70 L 100 102 L 86 70 Z" fill="#fff" opacity="0.9"/>
-    <circle cx="100" cy="70" r="6" fill="#0d4faf"/>
-  </svg>`;
-}
-function svgChat() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <rect x="20" y="30" width="120" height="36" rx="10" fill="#dbe5ff"/>
-    <rect x="60" y="76" width="120" height="36" rx="10" fill="#0d4faf"/>
-    <circle cx="36" cy="48" r="5" fill="#0d4faf"/><circle cx="52" cy="48" r="5" fill="#0d4faf"/><circle cx="68" cy="48" r="5" fill="#0d4faf"/>
-    <circle cx="80" cy="94" r="5" fill="#fff"/><circle cx="96" cy="94" r="5" fill="#fff"/><circle cx="112" cy="94" r="5" fill="#fff"/>
-  </svg>`;
-}
-function svgTasks() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <rect x="30" y="28" width="140" height="20" rx="5" fill="#e6f0ff"/>
-    <rect x="30" y="28" width="100" height="20" rx="5" fill="#0d4faf"/>
-    <rect x="30" y="58" width="140" height="20" rx="5" fill="#e6f0ff"/>
-    <rect x="30" y="58" width="60" height="20" rx="5" fill="#5b8def"/>
-    <rect x="30" y="88" width="140" height="20" rx="5" fill="#e6f0ff"/>
-    <rect x="30" y="88" width="130" height="20" rx="5" fill="#a36ce0"/>
-  </svg>`;
-}
-function svgSchedule() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="100" cy="70" r="44" fill="none" stroke="#0d4faf" stroke-width="3"/>
-    <line x1="100" y1="70" x2="100" y2="38" stroke="#0d4faf" stroke-width="3" stroke-linecap="round"/>
-    <line x1="100" y1="70" x2="124" y2="78" stroke="#a36ce0" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="100" cy="70" r="4" fill="#0d4faf"/>
-  </svg>`;
-}
-function svgTeams() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="100" cy="50" r="14" fill="#0d4faf"/>
-    <circle cx="56"  cy="96" r="12" fill="#5b8def"/>
-    <circle cx="100" cy="96" r="12" fill="#5b8def"/>
-    <circle cx="144" cy="96" r="12" fill="#5b8def"/>
-    <line x1="100" y1="64" x2="56"  y2="84" stroke="#a8b8d8" stroke-width="2"/>
-    <line x1="100" y1="64" x2="100" y2="84" stroke="#a8b8d8" stroke-width="2"/>
-    <line x1="100" y1="64" x2="144" y2="84" stroke="#a8b8d8" stroke-width="2"/>
-  </svg>`;
-}
-function svgTools() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <rect x="20"  y="34" width="40" height="40" rx="8" fill="#5b8def"/>
-    <rect x="74"  y="34" width="40" height="40" rx="8" fill="#a36ce0"/>
-    <rect x="128" y="34" width="40" height="40" rx="8" fill="#0d4faf"/>
-    <rect x="20"  y="86" width="40" height="22" rx="6" fill="#dbe5ff"/>
-    <rect x="74"  y="86" width="40" height="22" rx="6" fill="#dbe5ff"/>
-    <rect x="128" y="86" width="40" height="22" rx="6" fill="#dbe5ff"/>
-  </svg>`;
-}
-function svgModel() {
-  return `<svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="100" cy="70" r="36" fill="#fff" stroke="#0d4faf" stroke-width="3"/>
-    <path d="M 80 70 L 95 84 L 122 56" stroke="#0d4faf" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="44"  y1="70" x2="60"  y2="70" stroke="#a36ce0" stroke-width="3" stroke-linecap="round"/>
-    <line x1="140" y1="70" x2="156" y2="70" stroke="#a36ce0" stroke-width="3" stroke-linecap="round"/>
-    <line x1="100" y1="22" x2="100" y2="34" stroke="#a36ce0" stroke-width="3" stroke-linecap="round"/>
-    <line x1="100" y1="106" x2="100" y2="118" stroke="#a36ce0" stroke-width="3" stroke-linecap="round"/>
-  </svg>`;
 }

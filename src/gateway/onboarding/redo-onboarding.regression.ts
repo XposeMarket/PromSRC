@@ -43,7 +43,9 @@ async function run(): Promise<void> {
     assert.ok(fs.existsSync(path.join(workspace, 'BOOTSTRAP.md')), 'redo should restore missing bootstrap guide additively');
 
     const replayed = store.getRecord('user');
-    assert.equal(store.nextStep(replayed), 'tutorial');
+    // Onboarding v2 order: model -> meet -> memory_confirm -> tutorial. The
+    // model stays connected through a redo, so replay resumes at meet.
+    assert.equal(store.nextStep(replayed), 'meet');
     assert.equal(replayed.model.firstConnectedAt !== null, true, 'model connection state should remain intact');
 
     console.log('redo onboarding regression passed');

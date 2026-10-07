@@ -13,10 +13,10 @@
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-01-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-02-2db8477d4141.js"></script>
+<script src="/build/inline/index-inline-02-3efe138e2c48.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script src="/build/inline/index-inline-03-e9885749b55f.js"></script>
-<link rel="stylesheet" href="/build/styles/desktop-BKYAHCCR.css">
+<link rel="stylesheet" href="/build/styles/desktop-KYZB7P6D.css">
 
 
 
@@ -4059,10 +4059,18 @@
           <div id="prov-fields-anthropic" style="display:none">
             <div class="right-section-title" style="margin-bottom:8px">Anthropic Claude</div>
             <div id="anthropic-disconnected-state">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">
-                Connect your Claude Pro or Max subscription.<br>
-                Run <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">claude setup-token</code> in your terminal, then paste the token below.
+              <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+                Connect your Claude Pro or Max subscription. A browser window opens. Approve it and Prom connects automatically.
               </div>
+              <button class="btn" id="anthropic-oneclick-btn" onclick="connectAnthropicOneClick()" style="width:100%;background:var(--brand);color:#fff;border:none;padding:10px;border-radius:10px;font-size:13px;cursor:pointer;margin-bottom:8px">Connect Claude account</button>
+              <div id="anthropic-oneclick-code-row" style="display:none;gap:8px;margin-bottom:8px">
+                <input id="anthropic-oneclick-code" type="text" placeholder="Paste the code from the Claude page" style="flex:1;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px" />
+                <button class="btn btn-sm" onclick="submitAnthropicOneClickCode()">Submit</button>
+              </div>
+              <details style="margin:4px 0 10px;font-size:12px;color:var(--muted)">
+                <summary style="cursor:pointer">Use an API key or paste a setup-token instead</summary>
+                <div style="margin-top:8px;line-height:1.6">Paste an Anthropic API key, or the output of <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">claude setup-token</code>.</div>
+              </details>
               <input id="settings-anthropic-token" type="password" placeholder="sk-ant-oat-... (paste setup-token here)" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
               <div style="display:flex;gap:8px">
                 <button class="btn" onclick="connectAnthropic()" style="flex:1;background:var(--brand);color:#fff;border:none;padding:10px;border-radius:10px;font-size:13px;cursor:pointer">Connect</button>
@@ -5289,9 +5297,9 @@
 </div>
 
 <!-- Raw development keeps native modules; public builds rewrite this to a hashed entry. -->
+<link rel="modulepreload" href="/build/chunks/chunk-6FFPACLU.js">
 <link rel="modulepreload" href="/build/chunks/chunk-HJADIT6Y.js">
-<link rel="modulepreload" href="/build/chunks/chunk-QR4FLHBP.js">
-<script type="module" src="/build/entries/desktop-UXJOYOVT.js"></script>
+<script type="module" src="/build/entries/desktop-23AEYZWN.js"></script>
 <script src="/build/inline/index-inline-08-4550e6a395a8.js"></script>
 
 <script src="/build/inline/index-inline-09-4ae0a1e9d247.js"></script>

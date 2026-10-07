@@ -222,6 +222,18 @@ export async function checkSessionDetailed(opts = {}) {
   const { ok, status, data } = response;
   const retryable = status === 0 || data.retryable === true;
 
+  if (ok && data.authenticated && data.accountRequired === false) {
+    // Local mode: no account needed. Don't persist a fake account hint.
+    return {
+      authenticated: true,
+      accountRequired: false,
+      definitive: true,
+      reason: null,
+      retryable: false,
+      account: data.email ? { email: data.email, userId: data.userId, isAdmin: Boolean(data.isAdmin) } : null,
+    };
+  }
+
   if (ok && data.authenticated) {
     return {
       authenticated: true,

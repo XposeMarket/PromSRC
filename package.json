@@ -1,7 +1,7 @@
 {
   "name": "prometheus",
   "version": "1.0.17",
-  "description": "Prometheus â€” Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "engines": {
     "node": ">=20.20.0 <23"
   },
@@ -10,6 +10,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",
     "build": "npm run build:backend && npm run build:web",
     "build:backend": "tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js",
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",

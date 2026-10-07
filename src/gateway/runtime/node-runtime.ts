@@ -54,9 +54,23 @@ export function getNodeRuntimeSnapshot(): NodeRuntimeSnapshot {
   };
 }
 
+/**
+ * The packaged desktop app runs the gateway on Electron's embedded Node
+ * (ELECTRON_RUN_AS_NODE). That runtime is pinned and tested with the app
+ * build, and Electron 33 ships Node 20.18.x — below the floor we require for
+ * a user-installed Node. Rejecting it made every packaged build exit on boot.
+ * The version floor only guards source/dev runs on a system Node.
+ */
+export function isBundledElectronRuntime(
+  versions: NodeJS.ProcessVersions = process.versions,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return Boolean((versions as Record<string, string | undefined>).electron) || env.ELECTRON_RUN_AS_NODE === '1';
+}
+
 export function assertSupportedNodeRuntime(context = 'gateway'): NodeRuntimeSnapshot {
   const snapshot = getNodeRuntimeSnapshot();
-  if (!isSupportedNodeVersion(snapshot.nodeVersion)) {
+  if (!isBundledElectronRuntime() && !isSupportedNodeVersion(snapshot.nodeVersion)) {
     const message = [
       'Unsupported Node.js runtime for ' + context + ': ' + snapshot.nodeVersion + '.',
       'Prometheus requires Node.js >= ' + MIN_NODE_MAJOR + '.' + MIN_NODE_MINOR + '.0 and < ' + MAX_NODE_MAJOR_EXCLUSIVE + '.0.0.',
