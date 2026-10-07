@@ -168,6 +168,7 @@ extraResources:
     to: "bundled-skills"
     filter:
       - "**/*"
+      - "!.cache/**"
   - from: "node_modules/playwright-core/.local-browsers"
     to: "playwright-browsers"
     filter:

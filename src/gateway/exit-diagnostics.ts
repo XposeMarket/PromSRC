@@ -6,7 +6,14 @@ const processWithMarker = process as NodeJS.Process & { [marker]?: boolean };
 
 function appendExitDiagnostic(type: string, details: Record<string, unknown> = {}): void {
   try {
-    const logDir = path.join(process.cwd(), '.prometheus', 'logs');
+    // Packaged builds run with cwd = the install's resources dir (read-only
+    // under Program Files, and shipped in the next build if written). Prefer
+    // the per-user data roots Electron passes to the gateway.
+    const runtimeDir = String(process.env.PROMETHEUS_RUNTIME_DIR || '').trim();
+    const dataDir = String(process.env.PROMETHEUS_DATA_DIR || '').trim();
+    const logDir = runtimeDir
+      ? path.join(runtimeDir, 'logs')
+      : path.join(dataDir || process.cwd(), '.prometheus', 'logs');
     fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(path.join(logDir, 'gateway-exit-diagnostics.ndjson'), `${JSON.stringify({
       timestamp: new Date().toISOString(),
