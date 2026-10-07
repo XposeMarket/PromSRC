@@ -352,7 +352,7 @@ export interface TaskRecord {
   /** If true, keep completion/results out of originating chat and only update task UI. */
   suppressOriginDelivery?: boolean;
   /** Tracks the silent verification phase for run_once tasks */
-  verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+  verificationStatus?: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
   /** Set when this task was launched by the realtime voice worker-dispatch batch path. */
   voiceDispatch?: {
     workgroupId: string;
@@ -411,7 +411,7 @@ export interface TaskSummary {
   brainRunId?: string;
   brainDate?: string;
   brainArtifact?: string;
-  verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+  verificationStatus?: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
   voiceDispatch?: TaskRecord['voiceDispatch'];
   managerEnabled?: boolean;
   executorProvider?: string;
@@ -607,6 +607,7 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
     verificationStatus: input?.verificationStatus === 'pending'
       || input?.verificationStatus === 'running'
       || input?.verificationStatus === 'complete'
+      || input?.verificationStatus === 'failed'
       || input?.verificationStatus === 'skipped'
       ? input.verificationStatus
       : undefined,
@@ -736,6 +737,30 @@ function saveIndex(index: TaskIndex): void {
       if (!['EBUSY', 'EPERM', 'EACCES', 'UNKNOWN'].includes(String(err?.code || ''))) {
         throw err;
       }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Crash-safe file write: write a sibling temp file, then rename over the
+ * target. A crash mid-write can no longer leave a truncated task record.
+ * Retries transient Windows sharing errors like saveIndex does.
+ */
+function writeFileAtomic(target: string, payload: string): void {
+  const dir = path.dirname(target);
+  let lastError: any;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const tmp = path.join(dir, `.${path.basename(target)}.${process.pid}.${Date.now()}.${taskIndexWriteCounter++}.tmp`);
+    try {
+      fs.writeFileSync(tmp, payload, 'utf-8');
+      fs.renameSync(tmp, target);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best effort */ }
+      if (!['EBUSY', 'EPERM', 'EACCES', 'UNKNOWN'].includes(String(err?.code || ''))) throw err;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
     }
   }
@@ -1208,7 +1233,7 @@ export function saveTask(task: TaskRecord): void {
     task.journal = task.journal.slice(-500);
   }
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
-  fs.writeFileSync(taskFilePath(task.id), JSON.stringify(task, null, 2), 'utf-8');
+  writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2));
   upsertTaskSummary(task);
   // Keep the durable journal searchable from the task's originating chat. A
   // dynamic import avoids coupling the task persistence module to the chat
@@ -1576,7 +1601,7 @@ export function loadEvidenceBus(taskId: string): EvidenceBus | null {
 }
 
 function saveEvidenceBus(bus: EvidenceBus): void {
-  fs.writeFileSync(busFilePath(bus.taskId), JSON.stringify(bus, null, 2), 'utf-8');
+  writeFileAtomic(busFilePath(bus.taskId), JSON.stringify(bus, null, 2));
 }
 
 export function getOrCreateEvidenceBus(taskId: string): EvidenceBus {

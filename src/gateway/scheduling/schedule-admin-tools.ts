@@ -185,7 +185,7 @@ function readCronJsonlHistory(jobId: string): Array<Record<string, any>> {
           retryCount: 0,
           outputSummary: output,
           error: String(entry.status || '') === 'error' ? output : null,
-          blockerReason: classifyBlocker(output),
+          blockerReason: String(entry.status || '') === 'error' ? classifyBlocker(output) : null,
         };
       });
   } catch {
@@ -212,7 +212,7 @@ function readScheduleRunHistory(job: CronJob): Array<Record<string, any>> {
       retryCount: attempts - 1,
       outputSummary: output,
       error: entry.errorIfAny || (entry.status === 'failed' ? output : null),
-      blockerReason: classifyBlocker(entry.errorIfAny || output),
+      blockerReason: entry.errorIfAny || entry.status === 'failed' ? classifyBlocker(entry.errorIfAny || output) : null,
       evidenceWritten: entry.evidenceWritten || 0,
     };
   });
@@ -252,7 +252,7 @@ function getRunHistory(job: CronJob, limit: number): Array<Record<string, any>> 
   ]).slice(0, limit);
 }
 
-function normalizeExpectedOutputs(raw: any): ExpectedOutput[] {
+export function normalizeExpectedOutputs(raw: any): ExpectedOutput[] {
   const values = Array.isArray(raw) ? raw : [];
   const out: ExpectedOutput[] = [];
   for (const item of values) {
@@ -755,7 +755,12 @@ export function jobHealth(job: CronJob): Record<string, any> {
     consecutiveErrors: job.consecutiveErrors || 0,
     outputAlertCount: outputAlerts.length,
     outputContractConfigured: contractConfigured,
-    blockerReason: classifyBlocker(job.lastResult || ''),
+    // Only classify a blocker when the last run actually failed. Keyword
+    // matching on successful output (e.g. a report mentioning "timeout")
+    // produced phantom blockers with consecutiveErrors=0.
+    blockerReason: /^\s*ERROR:/i.test(String(job.lastResult || '')) ? classifyBlocker(job.lastResult || '') : null,
+    lastError: /^\s*ERROR:/i.test(String(job.lastResult || '')) ? String(job.lastResult || '').slice(0, 300) : null,
+    pausedReason: (job as any).pausedReason || null,
   };
 }
 

@@ -1007,6 +1007,21 @@ export function getAgentTeamScheduleTools(): any[] {
               },
               description: 'Full replacement schedule context cards for create/update.',
             },
+            preview_only: { type: 'boolean', description: 'Optional (create/update): run in preview mode, producing a report without side effects.' },
+            expected_outputs: {
+              type: 'array',
+              description: 'Optional (create/update): workspace-relative files each run must produce. Items are paths or {path, required_text?, absent_text?}. Used for run verification and job health.',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  required_text: { type: 'string' },
+                  absent_text: { type: 'string' },
+                },
+              },
+            },
+            wait: { type: 'boolean', description: 'Optional (run_now): wait for the run to finish (up to wait_seconds, default 300) and return its result instead of returning while it is still running.' },
+            wait_seconds: { type: 'number', description: 'Optional (run_now): max seconds to wait for completion (max 600).' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
           },

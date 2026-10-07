@@ -52,6 +52,15 @@ export function evaluateInternalWatchTaskControlPolicy(
   const action = String(args?.action || '').trim().toLowerCase();
   const explicitTaskId = String(args?.task_id || args?.taskId || args?.id || '').trim();
   const isReadOnly = READ_ONLY_ACTIONS.has(action);
+  // A live-steered watch result lands inside a turn the user (or another
+  // caller) already owns. Its policy only governs the watched task: it must
+  // not freeze task control for unrelated tasks for the rest of that turn.
+  // Watches without a task target (file/schedule watches) never restrict
+  // task_control in a live turn. Synthetic follow-up turns stay fully gated.
+  if (context.delivery === 'live_steer') {
+    if (!context.targetTaskId) return null;
+    if (explicitTaskId && explicitTaskId !== context.targetTaskId) return null;
+  }
   const actionPermitted = context.actionPolicy === 'review_only'
     ? isReadOnly
     : context.actionPolicy === 'recover_same_run'

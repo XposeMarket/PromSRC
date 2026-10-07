@@ -783,6 +783,45 @@ export function getNextRun(cronExpr: string | null, from: Date, tz?: string): Da
   }
 }
 
+/** Returns an error message for an invalid IANA timezone, or null when valid/empty. */
+export function validateScheduleTimezone(tz: string | null | undefined): string | null {
+  const value = String(tz || '').trim();
+  if (!value) return null;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return null;
+  } catch {
+    return `Invalid timezone "${value}". Use an IANA name such as America/New_York or UTC.`;
+  }
+}
+
+/**
+ * Returns an error message for an invalid cron expression, or null when valid.
+ * getNextRun silently falls back to "+30 minutes" on a bad expression, so
+ * create/update must reject bad input up front instead of storing it.
+ */
+export function validateCronExpression(expr: string | null | undefined, tz?: string | null): string | null {
+  const value = String(expr || '').trim();
+  if (!value) return 'Cron expression is required for recurring jobs.';
+  const tzError = validateScheduleTimezone(tz);
+  if (tzError) return tzError;
+  try {
+    const cron = new Cron(value, {
+      timezone: String(tz || '').trim() || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      paused: true,
+      catch: false,
+    });
+    const next = cron.nextRun(new Date());
+    cron.stop();
+    if (!next || !Number.isFinite(next.getTime())) {
+      return `Cron expression "${value}" never fires.`;
+    }
+    return null;
+  } catch (err: any) {
+    return `Invalid cron expression "${value}": ${String(err?.message || err)}`;
+  }
+}
+
 // ─── Telegram Stub ─────────────────────────────────────────────────────────────
 // TODO: Replace this stub with actual telegram delivery when implementing Telegram channel.
 // The interface is already defined — just fill in the body of deliverTelegram().
@@ -1037,6 +1076,12 @@ export class CronScheduler {
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date();
     const normalizedType: CronJob['type'] = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
+    const tzError = validateScheduleTimezone(partial.tz);
+    if (tzError) throw new Error(tzError);
+    if (normalizedType === 'recurring' && partial.schedule) {
+      const cronError = validateCronExpression(partial.schedule, partial.tz);
+      if (cronError) throw new Error(cronError);
+    }
 
     const job: CronJob = {
       id,
@@ -1060,6 +1105,8 @@ export class CronScheduler {
       runAt: partial.runAt || null,
       enabled: partial.enabled !== false,
       previewOnly: partial.previewOnly === true,
+      ...(Array.isArray((partial as any).expectedOutputs) ? { expectedOutputs: (partial as any).expectedOutputs } : {}),
+      ...((partial as any).expectedResult !== undefined ? { expectedResult: (partial as any).expectedResult } : {}),
       priority: typeof partial.priority === 'number' ? partial.priority : this.store.jobs.length,
       delivery: 'web',
       lastRun: null,
@@ -1096,13 +1143,37 @@ export class CronScheduler {
       normalizedPartial.type = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
       if (normalizedPartial.type === 'one-shot' && partial.schedule === undefined) normalizedPartial.schedule = null;
     }
-    this.store.jobs[idx] = { ...this.store.jobs[idx], ...normalizedPartial };
-    for (const [key, value] of Object.entries(normalizedPartial)) {
-      if (value === undefined) delete (this.store.jobs[idx] as any)[key];
+    const current = this.store.jobs[idx];
+    const nextTz = normalizedPartial.tz !== undefined ? normalizedPartial.tz : current.tz;
+    const tzError = normalizedPartial.tz !== undefined ? validateScheduleTimezone(normalizedPartial.tz) : null;
+    if (tzError) throw new Error(tzError);
+    const nextType = normalizedPartial.type ?? current.type;
+    if (
+      nextType === 'recurring'
+      && (normalizedPartial.schedule !== undefined || normalizedPartial.tz !== undefined)
+    ) {
+      const nextSchedule = normalizedPartial.schedule !== undefined ? normalizedPartial.schedule : current.schedule;
+      if (nextSchedule) {
+        const cronError = validateCronExpression(nextSchedule, nextTz);
+        if (cronError) throw new Error(cronError);
+      }
     }
-    // Recalculate nextRun if schedule changed
-    if (partial.schedule !== undefined || partial.runAt !== undefined || partial.tz !== undefined) {
-      const job = this.store.jobs[idx];
+    const wasPaused = current.status === 'paused' || current.enabled === false;
+    // Mutate in place: a running executeJobInner holds this same object, so
+    // replacing it would leave the run writing to a stale copy (pauses and
+    // edits made during a run were silently lost or undone).
+    Object.assign(current, normalizedPartial);
+    for (const [key, value] of Object.entries(normalizedPartial)) {
+      if (value === undefined) delete (current as any)[key];
+    }
+    const nowPaused = current.status === 'paused' || current.enabled === false;
+    const resumed = wasPaused && !nowPaused;
+    // Recalculate nextRun if schedule changed, or the job was just resumed
+    // (otherwise a resumed job keeps a months-old nextRun and fires instantly).
+    if (nowPaused && !wasPaused) {
+      current.nextRun = null;
+    } else if (resumed || partial.schedule !== undefined || partial.runAt !== undefined || partial.tz !== undefined) {
+      const job = current;
       job.nextRun = job.type === 'one-shot' && job.runAt
         ? job.runAt
         : applyDeterministicStagger(
@@ -2143,11 +2214,19 @@ export class CronScheduler {
 
     if (job.type === 'one-shot' || job.deleteAfterRun) {
       this.store.jobs = this.store.jobs.filter(j => j.id !== job.id);
-    } else if (job.status === 'paused' && job.pausedReason === 'configuration_error') {
-      // Preserve the explicit configuration pause raised for a missing team.
-      // Without this branch the generic completion path immediately changed
-      // the job back to scheduled and retried the same bad target forever.
+    } else if (job.status === 'paused' || job.enabled === false) {
+      // Preserve any pause raised while the run was in flight: the explicit
+      // configuration pause for a missing team, and manual pauses from the UI
+      // or schedule_job(pause). The generic path below used to flip these
+      // back to scheduled, undoing the user's pause.
+      job.status = 'paused';
+      job.pausedReason = job.pausedReason || 'manual';
       job.nextRun = null;
+      if (runStatus === 'error' && !isBlockedMissingSource) {
+        job.consecutiveErrors = (job.consecutiveErrors || 0) + 1;
+      } else {
+        job.consecutiveErrors = 0;
+      }
     } else {
       job.status = 'scheduled';
       if (runStatus === 'error' && !isBlockedMissingSource) {
@@ -2371,6 +2450,7 @@ export class CronScheduler {
     if (!job) return null;
     job.status = 'paused';
     job.pausedReason = reason;
+    job.nextRun = null;
     this.saveStore();
     this.broadcastUpdate();
     console.log(`[CronScheduler] Job "${job.name}" paused (reason: ${reason})`);
