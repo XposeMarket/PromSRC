@@ -20,7 +20,7 @@ import {
 } from './managed-teams';
 import { ensureTeamWorkspace, ensureTeamAgentIdentity, getTeamWorkspacePath } from './team-workspace';
 import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
-import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
+import { _activeAgentSessions, resolveTeamExecutionRoot, resolveTeamAgentAllowedWorkPaths, type RunAgentResult } from './team-dispatch-runtime';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
@@ -526,8 +526,14 @@ function normalizePathForCompare(p: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function memberExecutionRoot(teamId: string): string {
+  const teamWs = getTeamWorkspacePath(teamId);
+  try { return resolveTeamExecutionRoot(getManagedTeam(teamId), teamWs) || teamWs; } catch { return teamWs; }
+}
+
 function resolveTeamMemberAllowedWorkPaths(agentId: string, teamId: string): string[] {
   void agentId;
+  try { return resolveTeamAgentAllowedWorkPaths(getManagedTeam(teamId), getTeamWorkspacePath(teamId)); } catch { /* fall back below */ }
   const team = getManagedTeam(teamId) as any;
   const mainWorkspace = getConfig().getWorkspacePath();
   const teamWorkspace = getTeamWorkspacePath(teamId);
@@ -818,7 +824,7 @@ async function runTeamMemberRoomTurnInternal(
   setRuntimeActorContext(sessionId, {
     kind: 'agent', surface: 'team_room', agentId, displayName: agentName,
     teamId, teamName: team.name, identityRoot, memoryRoot: identityRoot,
-    executionRoot: getTeamWorkspacePath(teamId),
+    executionRoot: memberExecutionRoot(teamId),
     allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
   });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
@@ -847,7 +853,7 @@ async function runTeamMemberRoomTurnInternal(
   try {
 	    try {
 	      const { setWorkspace } = require('../session');
-	      setWorkspace(sessionId, getTeamWorkspacePath(teamId));
+	      setWorkspace(sessionId, memberExecutionRoot(teamId));
 	    } catch { /* non-fatal */ }
 
     updateTeamMemberState(teamId, agentId, {
@@ -885,7 +891,7 @@ async function runTeamMemberRoomTurnInternal(
     try { setActivatedToolCategories(sessionId, []); } catch {}
 
     const result = await runWithWorkspace(
-      getTeamWorkspacePath(teamId),
+      memberExecutionRoot(teamId),
       () => deps.handleChat(
       String(prompt || '').trim(),
       sessionId,
@@ -1149,7 +1155,7 @@ async function runTeamMemberDirectTurnInternal(
   setRuntimeActorContext(thread.sessionId, {
     kind: 'agent', surface: 'direct_chat', agentId, displayName: agentName,
     teamId, teamName: team.name, identityRoot, memoryRoot: identityRoot,
-    executionRoot: getTeamWorkspacePath(teamId),
+    executionRoot: memberExecutionRoot(teamId),
     allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
   });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
@@ -1175,7 +1181,7 @@ async function runTeamMemberDirectTurnInternal(
   try {
 	    try {
 	      const { setWorkspace } = require('../session');
-	      setWorkspace(thread.sessionId, getTeamWorkspacePath(teamId));
+	      setWorkspace(thread.sessionId, memberExecutionRoot(teamId));
 	    } catch { /* non-fatal */ }
 
     updateTeamMemberState(teamId, agentId, {
@@ -1210,7 +1216,7 @@ async function runTeamMemberDirectTurnInternal(
     try { setActivatedToolCategories(thread.sessionId, []); } catch {}
 
     const result = await runWithWorkspace(
-      getTeamWorkspacePath(teamId),
+      memberExecutionRoot(teamId),
       () => deps.handleChat(
       prompt,
       thread.sessionId,

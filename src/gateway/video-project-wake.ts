@@ -154,7 +154,7 @@ function checkWatch(w: VideoJobWatch): void {
   if (!allTerminal && !timedOut) return;
 
   const count = (s: string) => jobs.filter((j) => j.state === s).length;
-  const spent = jobs.filter((j) => j.state === 'done').reduce((sum, j) => sum + (Number(j.estimateUsd) || 0), 0);
+  const spent = jobs.filter((j) => j.state === 'done').reduce((sum, j) => sum + (Number(j.actualUsd ?? j.estimateUsd) || 0), 0);
   const failures = jobs.filter((j) => j.state === 'failed')
     .map((j) => `${describeTarget(project!, j)}: ${String(j.error || 'unknown error').slice(0, 200)}`);
   const parts = [`${count('done')} done`];
@@ -162,7 +162,13 @@ function checkWatch(w: VideoJobWatch): void {
   if (count('canceled')) parts.push(`${count('canceled')} canceled`);
   const note = w.note ? ` ${w.note.replace(/\.?$/, '.')}` : '';
   if (allTerminal) {
-    finish(w, `[video_project wake] Jobs finished for ${title} (${w.projectId}): ${parts.join(', ')}. Spent $${spent.toFixed(2)}.${note} Continue the plan: review takes, then the next step.`);
+    const done = count('done');
+    if (done === 0) {
+      finish(w, `[video_project wake] ALL ${jobs.length} job(s) FAILED for ${title} (${w.projectId}): ${parts.slice(1).join(', ') || 'no output'}. Nothing was generated; spent $${spent.toFixed(2)}. Tell the user what failed and why, fix the cause, then quote before rerunning.`);
+    } else {
+      const partial = done < jobs.length ? ` Only ${done} of ${jobs.length} succeeded.` : '';
+      finish(w, `[video_project wake] Jobs finished for ${title} (${w.projectId}): ${parts.join(', ')}. Spent $${spent.toFixed(2)}.${partial}${note} Watch the new takes (analyze_video contact sheet) before calling them good, then the next step.`);
+    }
   } else {
     const pending = jobs.filter((j) => !TERMINAL.has(j.state)).length + missing.length;
     finish(w, `[video_project wake] Timed out after 45 min watching ${title} (${w.projectId}): ${parts.join(', ')}, ${pending} still pending/unknown. Spent $${spent.toFixed(2)}.${note} Check job status, then decide whether to wait, retry, or continue.`);

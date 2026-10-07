@@ -54,13 +54,13 @@ try {
 
   console.log('templates');
   const list = listTemplates();
-  const want = ['ugc-testimonial', 'product-demo', 'cinematic-trailer', 'explainer', 'before-after', 'local-business-promo'];
-  check(want.every((id) => list.some((t) => t.id === id)) && list.length === 6, '6 templates present');
+  const want = ['ugc-testimonial', 'product-demo', 'cinematic-trailer', 'explainer', 'before-after', 'local-business-promo', 'faceless-youtube'];
+  check(want.every((id) => list.some((t) => t.id === id)) && list.length === want.length, `${want.length} templates present`);
   for (const s of list) {
     const t = getTemplate(s.id)!;
     const sum = t.shots.reduce((a, x) => a + x.durationSec, 0);
     check(Math.abs(sum - t.durationSec) <= t.durationSec * 0.3, `${t.id} duration ${sum}~${t.durationSec}`);
-    check(t.shots.every((x) => x.prompt.trim().length > 20 && x.durationSec >= 3 && x.durationSec <= 6), `${t.id} shots valid`);
+    check(t.shots.every((x) => x.prompt.trim().length > 20 && x.durationSec >= 3 && x.durationSec <= (t.id === 'faceless-youtube' ? 30 : 6)), `${t.id} shots valid`);
     for (const vars of [{ brief: 'summer vibes', product: 'Fizz Soda', character: 'Ava', brand: 'Fizz' }, {}]) {
       const plan = planFromTemplate(t, vars, { productCharId: 'char_p', personCharId: 'char_c' });
       const strs: string[] = [];

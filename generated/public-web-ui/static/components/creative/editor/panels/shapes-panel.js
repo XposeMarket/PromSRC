@@ -7,7 +7,7 @@ const SHAPES = [
   { label: 'Rounded',   type: 'shape',   icon: '▢', fill: '#8b5cf6', stroke: 'none', strokeWidth: 0, width: 400, height: 240, rx: 24 },
   { label: 'Circle',    type: 'ellipse', icon: '●', fill: '#ec4899', stroke: 'none', strokeWidth: 0, width: 300, height: 300 },
   { label: 'Ellipse',   type: 'ellipse', icon: '⬬', fill: '#06b6d4', stroke: 'none', strokeWidth: 0, width: 500, height: 280 },
-  { label: 'Line',      type: 'shape',   icon: '—', fill: '#f97316', stroke: 'none', strokeWidth: 0, width: 600, height: 8  },
+  { label: 'Line',      type: 'shape',   icon: '—', fill: '#d6b75e', stroke: 'none', strokeWidth: 0, width: 600, height: 8  },
   { label: 'Square',    type: 'shape',   icon: '■', fill: '#10b981', stroke: 'none', strokeWidth: 0, width: 300, height: 300 },
   { label: 'Rect Outline', type: 'shape', icon: '□', fill: 'rgba(0,0,0,0)', stroke: '#6366f1', strokeWidth: 4, width: 400, height: 240 },
   { label: 'Circle Outline', type: 'ellipse', icon: '○', fill: 'rgba(0,0,0,0)', stroke: '#ec4899', strokeWidth: 4, width: 300, height: 300 },

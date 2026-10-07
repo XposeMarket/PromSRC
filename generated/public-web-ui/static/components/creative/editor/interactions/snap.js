@@ -106,7 +106,7 @@ export function drawSnapGuides(ctx, guides, transform, sceneW, sceneH) {
   if (!guides?.length) return;
   const { zoom, panX, panY } = transform;
   ctx.save();
-  ctx.strokeStyle = '#f97316';
+  ctx.strokeStyle = '#d6b75e';
   ctx.lineWidth   = 0.5;
   ctx.setLineDash([4, 3]);
 

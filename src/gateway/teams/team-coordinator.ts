@@ -451,8 +451,14 @@ function prepareTeamManagerRuntime(team: any, sessionId: string): { modelOverrid
     teamName: team.name,
     identityRoot: manager.identityPath,
     memoryRoot: manager.identityPath,
-    executionRoot: teamWorkspace,
-    allowedWorkPaths: [getConfig().getWorkspacePath(), teamWorkspace],
+    executionRoot: resolveManagerExecutionRoot(team.id) || teamWorkspace,
+    allowedWorkPaths: (() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { resolveTeamAgentAllowedWorkPaths } = require('./team-dispatch-runtime');
+        return [getConfig().getWorkspacePath(), ...resolveTeamAgentAllowedWorkPaths(team, teamWorkspace)];
+      } catch { return [getConfig().getWorkspacePath(), teamWorkspace]; }
+    })(),
   });
   const rawModel = String(managerAgent?.model || team.manager?.model || '').trim();
   const parsed = rawModel ? parseProviderModelRef(rawModel) : null;
@@ -693,7 +699,7 @@ export async function runCoordinatorConversation(
 
     // Rebuild caller context each turn (picks up latest team chat, goal state, thread)
     const callerContext = buildTeamCallerContext(teamId);
-    try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
+    try { setWorkspace(sessionId, resolveManagerExecutionRoot(teamId)); } catch { /* non-fatal */ }
 
     // Ensure team_ops + source_write tools are available in the coordinator session every turn
     // (category activation is per-session but must be re-applied after restarts)
@@ -972,7 +978,7 @@ export async function runCoordinatorConversationDetailed(
       }
 
       const callerContext = buildTeamCallerContext(teamId);
-      try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
+      try { setWorkspace(sessionId, resolveManagerExecutionRoot(teamId)); } catch { /* non-fatal */ }
 
       prepareTeamManagerToolScope(sessionId);
 
@@ -1232,7 +1238,7 @@ export async function runCoordinatorReview(
     source: 'system',
     detail: 'Scheduled team-state review',
   });
-  try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
+  try { setWorkspace(sessionId, resolveManagerExecutionRoot(teamId)); } catch { /* non-fatal */ }
 
   // Ensure team_ops + source_write tools are available in the coordinator session
   prepareTeamManagerToolScope(sessionId);
@@ -1373,8 +1379,20 @@ function withTeamManagerWorkspaceScope<T>(teamId: string, fn: () => Promise<T>):
     const { resolveTeamAgentAllowedWorkPaths } = require('./team-dispatch-runtime');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { runWithWorkspace } = require('../../tools/workspace-context');
-    return runWithWorkspace(teamWs, fn, resolveTeamAgentAllowedWorkPaths(team, teamWs));
+    return runWithWorkspace(resolveManagerExecutionRoot(teamId) || teamWs, fn, resolveTeamAgentAllowedWorkPaths(team, teamWs));
   } catch {
     return fn();
+  }
+}
+
+/** Manager execution root: team.workDir when valid, else the team workspace. */
+function resolveManagerExecutionRoot(teamId: string): string {
+  const teamWs = getTeamWorkspacePath(teamId);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resolveTeamExecutionRoot } = require('./team-dispatch-runtime');
+    return resolveTeamExecutionRoot(getManagedTeam(teamId), teamWs) || teamWs;
+  } catch {
+    return teamWs;
   }
 }

@@ -88,6 +88,17 @@ export async function hydrateFalModelSchema(model: MediaModelManifest): Promise<
         for (const field of Object.keys(model.map) as Array<keyof typeof model.map>) {
           if (model.map[field] && !Object.hasOwn(props, model.map[field]!)) model.map[field] = undefined;
         }
+        // The sync only guesses inputs from the category; add media fields the schema really has.
+        const ADD: Array<[keyof typeof model.map, string]> = [['startImage', 'image_url'], ['sourceVideo', 'video_url'], ['audio', 'audio_url'], ['endImage', 'end_image_url']];
+        for (const [field, key] of ADD) if (!model.map[field] && Object.hasOwn(props, key)) (model.map as any)[field] = key;
+        const required: string[] = Array.isArray(schema?.required) ? schema.required.map(String) : [];
+        const mapped = new Set(Object.values(model.map).filter(Boolean) as string[]);
+        model.requires = Array.from(new Set([
+          ...(model.requires || []).filter((f) => (model.map as any)[f]),
+          ...Object.entries(model.map).filter(([, k]) => k && required.includes(String(k))).map(([f]) => f),
+        ])) as any;
+        const unmapped = required.filter((k) => !mapped.has(k) && schemaRef(root, props[k])?.default === undefined);
+        model.unmappedRequired = unmapped.length ? unmapped : undefined;
         for (const field of ['durationSec', 'resolution', 'aspectRatio'] as const) {
           const prop = props[model.map[field] || ''];
           if (!prop) { model.map[field] = undefined; continue; }

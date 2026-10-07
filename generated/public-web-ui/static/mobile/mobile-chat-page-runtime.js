@@ -205,6 +205,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _mobileMediaKind,
       _mobileMediaUrl,
       _mobileMessageCopyText,
+      _mobileCopyPlain,
       _mobileQuestionRememberDraft,
       _mobileRealtimeAgentDisableAlwaysListening,
       _mobileRealtimeProviderLabel,
@@ -6456,7 +6457,7 @@ void main() {
   }
 
   async function copyMobileTextValue(text, successMessage = 'Message copied') {
-    const value = String(text || '').trim();
+    const value = _mobileCopyPlain(text);
     if (!value) return false;
     try {
       await navigator.clipboard.writeText(value);

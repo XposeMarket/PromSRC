@@ -2946,6 +2946,18 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   delete args.action;
   const target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  // Strict-schema models fill every optional field with "" or []. Treat those as
+  // absent; otherwise `team_action: ""` overrode real values (manager goal calls
+  // failed with "requires team_id and action") and empty arrays looked like
+  // explicit clears.
+  // Scoped to the team wrappers: agent_ops intentionally uses "" to clear fields
+  // such as reasoning_effort.
+  if (name === 'team_ops_wrapper' || name === 'team_collab_ops') {
+    for (const key of Object.keys(args)) {
+      const value = args[key];
+      if (value === '' || value === null || (Array.isArray(value) && value.length === 0)) delete args[key];
+    }
+  }
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
     if (args.assignment == null && args.task_prompt != null) args.assignment = args.task_prompt;
@@ -3010,6 +3022,22 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     if (target === 'dispatch_team_agent') {
       if (args.task_prompt == null && args.task != null) args.task_prompt = args.task;
       if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    }
+    // get_agent_result needs a task_id. Managers usually only know the member,
+    // so resolve that member's most recent background dispatch in this team.
+    if (target === 'get_agent_result' && args.task_id == null) {
+      if (args.taskId != null) args.task_id = args.taskId;
+      const memberId = String(args.agent_id || args.subagent_id || '').trim();
+      if (args.task_id == null && memberId) {
+        const teamId = String(args.team_id || '').trim();
+        let best: { id: string; startedAt: number } | null = null;
+        for (const [id, entry] of getBgAgentResults().entries()) {
+          if (entry.agentId !== memberId) continue;
+          if (teamId && entry.teamId !== teamId) continue;
+          if (!best || entry.startedAt > best.startedAt) best = { id, startedAt: entry.startedAt };
+        }
+        if (best) args.task_id = best.id;
+      }
     }
   }
   if (name === 'team_collab_ops') {
@@ -16559,6 +16587,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               ).slice(0, 2000),
               managerModel: args.manager_model ? String(args.manager_model) : undefined,
               allowedWorkPaths,
+              workDir: String(args.work_dir ?? args.workDir ?? '').trim() || undefined,
               reviewTrigger,
 	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
 	            });
@@ -16659,6 +16688,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               purpose: team.purpose || team.mission || '',
               currentFocus: team.currentFocus || room.runGoal || '',
               allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths : [],
+              workDir: team.workDir || null,
               manager: {
                 agentId: team.managerAgentId,
                 sessionId: `team_coord_${team.id}`,
@@ -16717,6 +16747,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const paths = Array.isArray(args.allowed_work_paths) ? args.allowed_work_paths : Array.isArray(args.allowedWorkPaths) ? args.allowedWorkPaths : null;
             const cleanPaths = paths ? paths.map((v: any) => String(v).trim()).filter(Boolean) : [];
             if (cleanPaths.length) { team.allowedWorkPaths = cleanPaths; changed.push('allowed_work_paths'); }
+            const rawWorkDir = args.work_dir ?? args.workDir;
+            if (has(rawWorkDir)) {
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { resolveTeamWorkDir } = require('../teams/team-dispatch-runtime');
+              const resolvedWorkDir = resolveTeamWorkDir({ ...team, workDir: String(rawWorkDir).trim() });
+              if (!resolvedWorkDir) {
+                return { name, args, result: `work_dir "${String(rawWorkDir)}" must be inside the main workspace or one of the team allowed_work_paths (${(team.allowedWorkPaths || []).join(', ') || 'none set'}).`, error: true };
+              }
+              team.workDir = resolvedWorkDir; changed.push('work_dir');
+            } else if (args.clear_work_dir === true) { delete team.workDir; changed.push('work_dir'); }
             else if (args.clear_allowed_work_paths === true) { team.allowedWorkPaths = []; changed.push('allowed_work_paths'); }
             const addIds: string[] = Array.isArray(args.add_subagent_ids) ? args.add_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const removeIds: string[] = Array.isArray(args.remove_subagent_ids) ? args.remove_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
@@ -16746,7 +16786,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               if (explicitFocus) changed.push('focus');
             }
             if (!changed.length) {
-              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, focus/goal, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, add_subagent_ids, remove_subagent_ids.', error: true };
+              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, focus/goal, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, work_dir, add_subagent_ids, remove_subagent_ids.', error: true };
             }
             team.updatedAt = Date.now();
             saveManagedTeam(team);
@@ -16766,7 +16806,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 ) === true;
               } catch { /* wake is best-effort */ }
             }
-            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, currentFocus: team.currentFocus || '', manager_woken: managerWoken, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [] }, null, 2), error: false };
+            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, currentFocus: team.currentFocus || '', manager_woken: managerWoken, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [], workDir: team.workDir || null }, null, 2), error: false };
           }
 
           if (action === 'trigger_review') {
