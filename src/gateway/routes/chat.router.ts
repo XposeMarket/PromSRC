@@ -132,6 +132,8 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { recordLearningTurn } from '../learning/turn-recorder.js';
+import { getSkillRoutingReport } from '../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
@@ -3489,6 +3491,16 @@ async function handleChat(
       request: message,
       finalResponse,
       toolResults: allToolResults,
+    });
+    // Learning loop capture: persist offered vs read skills + correction signals.
+    recordLearningTurn({
+      workspacePath,
+      sessionId,
+      executionMode,
+      request: message,
+      finalResponse,
+      toolResults: allToolResults,
+      routing: getSkillRoutingReport(sessionId),
     });
     return finalResponse;
   };

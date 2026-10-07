@@ -96,6 +96,12 @@ export interface AppendNoteInput {
   taskId?: string | null;
   status?: unknown;
   resolves?: unknown;
+  /**
+   * Optional stable task key (e.g. "last-ward-combat"). A new note on the same
+   * thread supersedes earlier OPEN notes on that thread, so one task shows one
+   * current state instead of a pile of stale updates.
+   */
+  thread?: unknown;
 }
 
 export interface AppendNoteResult {
@@ -105,6 +111,33 @@ export interface AppendNoteResult {
   deduped: boolean;
   resolved: string[];
   unresolved: string[];
+  thread?: string;
+  superseded?: string[];
+}
+
+const THREAD_LINE_RE = /^_Thread: ([a-z0-9][a-z0-9._:-]{0,79})_$/m;
+
+export function normalizeThreadKey(value: unknown): string {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+export function noteThread(n: Pick<ParsedNote, 'body'>): string {
+  return THREAD_LINE_RE.exec(n.body)?.[1] || '';
+}
+
+/** Open note ids on a thread across the recent note files (oldest first). */
+function openIdsOnThread(workspacePath: string, thread: string): string[] {
+  const ids: string[] = [];
+  for (let d = CARRY_DAYS; d >= 0; d -= 1) {
+    const file = noteFileForDate(workspacePath, utcDate(d));
+    if (!fs.existsSync(file)) continue;
+    try {
+      for (const n of parseNotes(fs.readFileSync(file, 'utf-8'), file)) {
+        if (n.status === 'open' && n.id && noteThread(n) === thread) ids.push(n.id);
+      }
+    } catch { /* unreadable file */ }
+  }
+  return ids;
 }
 
 /** Mark notes done by id across the recent note files. Returns ids actually flipped. */
@@ -154,12 +187,17 @@ export function appendIntradayNote(workspacePath: string, input: AppendNoteInput
     return { id: dup.id, file, status: dup.status, deduped: true, resolved, unresolved };
   }
 
+  const thread = normalizeThreadKey(input.thread);
+  // Supersede earlier open notes on the same thread (they become done).
+  const superseded = thread ? resolveNotes(workspacePath, openIdsOnThread(workspacePath, thread)).resolved : [];
+
   const id = newNoteId();
   const tag = String(input.tag || 'general').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_') || 'GENERAL';
   let entry = `\n### [${tag}] ${new Date(now).toISOString()} #${id} (${status})\n${input.sourceLine}\n${body}`;
   if (input.taskId) entry += `\n_Related task: ${input.taskId}_`;
+  if (thread) entry += `\n_Thread: ${thread}_`;
   fs.appendFileSync(file, entry + '\n');
-  return { id, file, status, deduped: false, resolved, unresolved };
+  return { id, file, status, deduped: false, resolved, unresolved, ...(thread ? { thread, superseded } : {}) };
 }
 
 function firstLine(body: string, max = 140): string {
@@ -201,7 +239,16 @@ export function renderNotesForPrompt(workspacePath: string, todayRaw: string, op
       } catch { /* unreadable file */ }
     }
   }
-  const open = [...carried, ...today.filter((n) => n.status === 'open')].reverse();
+  // Newest open note per thread wins (older ones on a thread are normally
+  // already superseded on disk; this also covers hand-edited files).
+  const seenThreads = new Set<string>();
+  const open = [...carried, ...today.filter((n) => n.status === 'open')].reverse().filter((n) => {
+    const t = noteThread(n);
+    if (!t) return true;
+    if (seenThreads.has(t)) return false;
+    seenThreads.add(t);
+    return true;
+  });
   const info = today.filter((n) => n.status === 'info').reverse();
   const done = today.filter((n) => n.status === 'done').reverse();
 

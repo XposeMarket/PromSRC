@@ -37,6 +37,8 @@ export interface SkillRoutingCandidate {
   instructionChars: number;
   estimatedTokens: number;
   promptSignalEvidence?: string[];
+  /** Trigger terms that matched; persisted by the learning recorder for per-term precision. */
+  matchedTriggers?: string[];
 }
 
 export interface SkillRoutingReport {
@@ -145,6 +147,7 @@ export function resolveSkillRuntimeRouting(input: {
       instructionChars,
       estimatedTokens: Math.ceil(instructionChars / 4),
       promptSignalEvidence: match.promptSignalEvidence,
+      matchedTriggers: (match.matchedTriggers || []).slice(0, 12),
     });
   };
 

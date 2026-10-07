@@ -548,6 +548,8 @@ export function createProposal(
     );
   }
 
+  enforceAutomatedProposalGate(partial);
+
   const id = `prop_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const proposalBase: Proposal = {
     ...partial,
@@ -787,6 +789,46 @@ export function markProposalFailed(id: string, reason: string): Proposal | null 
     });
   } catch { /* broadcast is best-effort */ }
   return p;
+}
+
+// ─── Automated-source gate (learning loop) ─────────────────────────────────────
+// Brain/background sources filed 115 of 119 pending proposals and almost none
+// were ever acted on. Automated sources now get: a daily cap, title dedupe
+// against pending, and a 14-day expiry of their own stale pending items.
+export const AUTOMATED_PROPOSAL_DAILY_CAP = 3;
+export const AUTOMATED_PROPOSAL_MAX_AGE_DAYS = 14;
+
+export function isAutomatedProposalSource(p: { sourceSessionId?: string; sourceAgentId?: string }): boolean {
+  const s = String(p.sourceSessionId || '').toLowerCase();
+  const a = String(p.sourceAgentId || '').toLowerCase();
+  return s.startsWith('brain_') || a.startsWith('brain') || a === 'thoughts' || a === 'dreams';
+}
+
+function normalizeTitle(t: string): string {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Move automated pending proposals older than maxAgeDays to expired (archive bucket; reversible). */
+export function expireStaleAutomatedProposals(maxAgeDays = AUTOMATED_PROPOSAL_MAX_AGE_DAYS, now = Date.now()): number {
+  const cutoff = now - maxAgeDays * 86_400_000;
+  const stale = listProposals('pending').filter((p) => isAutomatedProposalSource(p) && p.createdAt < cutoff);
+  for (const p of stale) { p.status = 'expired'; saveProposal(p); }
+  return stale.length;
+}
+
+function enforceAutomatedProposalGate(partial: { title?: string; sourceSessionId?: string; sourceAgentId?: string }): void {
+  if (!isAutomatedProposalSource(partial)) return;
+  try { expireStaleAutomatedProposals(); } catch { /* best-effort */ }
+  const pending = listProposals('pending').filter((p) => isAutomatedProposalSource(p));
+  const title = normalizeTitle(String(partial.title || ''));
+  if (title && pending.some((p) => normalizeTitle(p.title) === title)) {
+    throw new Error(`[ProposalStore] An automated proposal with this title is already pending: "${partial.title}". Update it instead of filing a duplicate.`);
+  }
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const today = listProposals().filter((p) => isAutomatedProposalSource(p) && p.createdAt >= dayStart.getTime()).length;
+  if (today >= AUTOMATED_PROPOSAL_DAILY_CAP) {
+    throw new Error(`[ProposalStore] Daily cap reached: automated sources may file at most ${AUTOMATED_PROPOSAL_DAILY_CAP} proposals per day. Keep only the highest-value, execution-ready change.`);
+  }
 }
 
 export function archiveOldProposals(maxAgeDays = 7): number {
