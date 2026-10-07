@@ -1041,7 +1041,12 @@ function findSessionMainChatRuntime(sessionId: string): { id: string } | null {
     (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
     && String(runtime.sessionId || '') === sid
     && String(runtime.status || 'running') === 'running'
-    && !runtime.abortRequestedAt);
+    && !runtime.abortRequestedAt
+    // A runtime mirrored from a draining previous gateway belongs to a turn
+    // running in that other process. Adopting it made a new timer turn look
+    // owned until the old gateway exited, then the owner watchdog killed it
+    // as runtime_missing.
+    && !(Number(runtime.remoteHostPid || 0) > 0));
   return match ? { id: match.id } : null;
 }
 
@@ -9862,13 +9867,26 @@ async function runInteractiveTurn(
       packet ? formatTurnContextPacketsForPrompt([packet], 6_000) : '',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
-    const visibleCheckpointText = [
-      'Restart Context Packet',
-      '',
-      `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
-      stepSummary,
-      'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
-    ].join('\n');
+    const abortCause = describeTurnAbortCause(abortSignal as any);
+    const userCancelled = /^User cancelled/i.test(abortCause);
+    // A system-caused stop (watchdog, restart, drain) must stay visible: the
+    // "Restart Context Packet" prefix is hidden by the mobile transcript, which
+    // made killed timer turns look like they never replied.
+    const visibleCheckpointText = userCancelled
+      ? [
+        'Restart Context Packet',
+        '',
+        `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
+        stepSummary,
+        'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
+      ].join('\n')
+      : [
+        `**This turn was stopped by the gateway, not by you.** ${abortCause}`,
+        '',
+        `I was working on: ${workSummary.slice(0, 260)}`,
+        stepSummary,
+        'Say "continue" and I will pick up from the saved checkpoint.',
+      ].join('\n');
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
     const assistantWorkEndedAt = Date.now();
