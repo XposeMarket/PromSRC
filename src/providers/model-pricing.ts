@@ -60,6 +60,8 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^anthropic$/i, model: /opus-4-(6|7|8)|opus-4\.(6|7|8)/i, input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   { provider: /^anthropic$/i, model: /opus/i, input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
   { provider: /^anthropic$/i, model: /sonnet/i, input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+  // Haiku 5.5 short-prompt tier (<=100K): $0.10/$0.50. Long prompts bill $0.50/$2.50.
+  { provider: /^anthropic$/i, model: /haiku-5|haiku-5\.5/i, input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125 },
   { provider: /^anthropic$/i, model: /haiku/i, input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 },
 
   { provider: /^xai$/i, model: /^(grok-build-0\.1|grok-code-fast)/i, input: 1.00, output: 2.00, cacheRead: 0.20 },

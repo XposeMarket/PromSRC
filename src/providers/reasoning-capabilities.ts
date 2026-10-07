@@ -75,7 +75,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   }
 
   if (id === 'anthropic') {
-    const effortCapable = /^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name);
+    const effortCapable = /^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6)|haiku-5)(?:-|$)/.test(name);
     if (!effortCapable) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
       if (manual) {
@@ -93,8 +93,8 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     // Opus 4.5 keeps manual thinking budgets but still accepts native effort.
     const thinkingMode = /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive';
-    // Opus 5.5 is the only effort model whose API default is medium.
-    const defaultEffort: ReasoningEffort = /^claude-opus-5-5(?:-|$)/.test(name) ? 'medium' : 'high';
+    // Opus 5.5 and Haiku 5.5 default to medium effort per the API docs.
+    const defaultEffort: ReasoningEffort = /^claude-(?:opus-5-5|haiku-5-5)(?:-|$)/.test(name) ? 'medium' : 'high';
     return { efforts, defaultEffort, thinkingMode, nativeEffort: true };
   }
 

@@ -250,6 +250,7 @@ export const ANTHROPIC_MODELS = [
   'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5-20250929',
+  'claude-haiku-5-5',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-4-20250514',
 ];
@@ -347,6 +348,7 @@ export class AnthropicAdapter implements LLMProvider {
       || /^claude-opus-5(?:\b|[-_])/.test(model)
       || /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
       || /^claude-sonnet-5(?:\b|[-_])/.test(model)
+      || /^claude-haiku-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model);
   }
 
@@ -369,6 +371,7 @@ export class AnthropicAdapter implements LLMProvider {
       || /^claude-opus-5(?:\b|[-_])/.test(model)
       || /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
       || /^claude-sonnet-5(?:\b|[-_])/.test(model)
+      || /^claude-haiku-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model)
       || /^claude-mythos-preview(?:\b|[-_])/.test(model);
   }
@@ -378,7 +381,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
-    if (/^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6))(?:\b|[-_])/.test(name)) {
+    if (/^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/.test(name)) {
       return {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 128_000,
