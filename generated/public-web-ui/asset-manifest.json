@@ -1,12 +1,7 @@
 {
   "schemaVersion": 1,
-<<<<<<< HEAD
-  "buildId": "024b8be2fe90839d",
-  "sourceDigest": "024b8be2fe90839d3be4ce8d0dbe43a27f081770e644f0df544f21db5208ca4e",
-=======
-  "buildId": "61aaf3b9b8c34969",
-  "sourceDigest": "61aaf3b9b8c34969c0d23c82408f802701adf59211e9bbde1aa6551ce99ce256",
->>>>>>> origin/main
+  "buildId": "60eaff8cb1c59faf",
+  "sourceDigest": "60eaff8cb1c59faf17499de8dad72ef3aaa356404c37e63ba030230921945289",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
