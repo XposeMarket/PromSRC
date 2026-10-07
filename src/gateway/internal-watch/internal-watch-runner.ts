@@ -99,6 +99,8 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
   if (watch.target.type === 'task') {
     const taskId = String(cfg.taskId || cfg.task_id || '').trim();
     if (!taskId) return { exists: false, error: 'task_id_required' };
+    const teamBg = observeTeamBackgroundDispatch(taskId);
+    if (teamBg) return teamBg;
     const task = loadTask(taskId) || (() => {
       const candidate = listTaskSummaries()
         .filter((summary) => summary.scheduleId === taskId)
@@ -370,6 +372,51 @@ export function refreshInternalWatchObservation(watch: InternalWatch, cronSchedu
   }
 }
 
+/**
+ * dispatch_team_agent(background) returns team_bg_* ids that live in the team
+ * dispatch runtime, not the task store. Without this a watch on one observes
+ * exists:false forever and only ever times out.
+ */
+export function observeTeamBackgroundDispatch(taskId: string): Observation | null {
+  if (!/^team_bg_/i.test(String(taskId || ''))) return null;
+  try {
+    const runtime = require('../teams/team-dispatch-runtime');
+    const entry = runtime?._bgAgentResults?.get?.(taskId);
+    if (!entry) return { exists: false, taskId, teamBackgroundDispatch: true, error: 'team_bg_not_found' };
+    const status = entry.status === 'running' ? 'running'
+      : entry.status === 'complete' ? 'complete'
+        : 'failed';
+    const result = entry.result || {};
+    return {
+      exists: true,
+      taskId,
+      watchedId: taskId,
+      teamBackgroundDispatch: true,
+      status,
+      teamId: entry.teamId,
+      agentId: entry.agentId,
+      startedAt: entry.startedAt,
+      finalSummary: String(result.result || result.error || '').slice(0, 4000),
+      error: result.error ? String(result.error).slice(0, 1000) : undefined,
+    };
+  } catch (err: any) {
+    return { exists: false, taskId, error: String(err?.message || err) };
+  }
+}
+
+/** Team id when a watch was created inside a team manager/member session. */
+export function resolveWatchOwningTeamId(watch: InternalWatch): string | null {
+  const sid = String(watch.origin?.sessionId || '').trim();
+  if (!/^team_/i.test(sid)) return null;
+  try {
+    const { inferTeamNoteContext } = require('../agents-runtime/capabilities/team-agent-helpers');
+    const ctx = inferTeamNoteContext(sid);
+    if (ctx?.teamId) return String(ctx.teamId);
+  } catch {}
+  const coord = sid.match(/^team_coord_(.+)$/);
+  return coord ? coord[1] : null;
+}
+
 function isToolLimitedSessionId(sessionId: string): boolean {
   const sid = String(sessionId || '').trim();
   return !sid || TOOL_LIMITED_SESSION_RE.test(sid);
@@ -377,12 +424,15 @@ function isToolLimitedSessionId(sessionId: string): boolean {
 
 /** Timer-like routing: a watch wakes the creating main-chat thread before task provenance fallbacks. */
 export function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observation): string {
+  // A team-owned watch must never fall through to "whatever main chat was
+  // last active": that is how a Teams watcher landed in an unrelated chat.
+  const teamOwned = !!resolveWatchOwningTeamId(watch);
   const candidates = [
     watch.deliverySessionId,
     watch.origin?.sessionId,
     obs.originatingSessionId,
-    getLastMainSessionId(),
-    'default',
+    teamOwned ? '' : getLastMainSessionId(),
+    teamOwned ? '' : 'default',
   ];
   for (const candidate of candidates) {
     const sid = String(candidate || '').trim();
@@ -548,7 +598,8 @@ export class InternalWatchRunner {
 
   private async fireMatch(watch: InternalWatch, obs: Observation): Promise<void> {
     this.runningWatchIds.add(watch.id);
-    if (isModelBusy()) {
+    // Team-owned watches wake their team manager, never the busy main chat.
+    if (isModelBusy() && !resolveWatchOwningTeamId(watch)) {
       this.runningWatchIds.delete(watch.id);
       return;
     }
@@ -662,7 +713,7 @@ export class InternalWatchRunner {
 
   private async fireTimeout(watch: InternalWatch): Promise<void> {
     this.runningWatchIds.add(watch.id);
-    if (isModelBusy()) {
+    if (isModelBusy() && !resolveWatchOwningTeamId(watch)) {
       const obs = watch.lastObservation || { status: 'timeout' };
       const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
       if (this.steerActiveTurn(watch, obs, 'timeout', timeoutInstruction)) {
@@ -709,6 +760,22 @@ export class InternalWatchRunner {
     let runtimeId = '';
     const abortController = new AbortController();
     const abortSignal = { aborted: false, signal: abortController.signal };
+    const owningTeamId = resolveWatchOwningTeamId(watch);
+    const explicitMainDelivery = !!String(watch.deliverySessionId || '').trim() && !isToolLimitedSessionId(String(watch.deliverySessionId));
+    if (owningTeamId && !explicitMainDelivery) {
+      // Route team watches back to the team manager that created them.
+      const { scheduleTeamManagerAutoWake } = require('../teams/team-manager-autowake');
+      const queued = scheduleTeamManagerAutoWake(owningTeamId, `Internal watch "${watch.label}" ${kind}: ${payload}`);
+      this.broadcast({
+        type: 'internal_watch_delivered',
+        watchId: watch.id,
+        teamId: owningTeamId,
+        originSessionId: watch.origin.sessionId,
+        delivery: queued ? 'team_manager_wake' : 'team_manager_unavailable',
+      });
+      if (!queued) console.warn(`[InternalWatch] team ${owningTeamId} manager unavailable for watch ${watch.id}; not delivering to a main chat`);
+      return;
+    }
     try {
       if (watch.deliveryMode === 'notify_only' && kind !== 'gateway_restart_interruption') {
         this.broadcast({

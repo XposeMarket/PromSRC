@@ -907,6 +907,20 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
   if (action === 'get') {
     if (!taskId) return { success: false, action, code: 'missing_task_id', message: 'task_control(get) requires task_id.' };
     const task = loadTask(taskId);
+    if (!task && /^team_bg_/i.test(taskId)) {
+      // Background team dispatches live in the team dispatch runtime, not the task store.
+      const { observeTeamBackgroundDispatch } = require('../internal-watch/internal-watch-runner');
+      const obs = observeTeamBackgroundDispatch(taskId);
+      if (obs?.exists) {
+        return {
+          success: true,
+          action,
+          task: obs as any,
+          message: `Team background dispatch ${taskId} (${obs.agentId}) is ${obs.status}.`,
+        } as any;
+      }
+      return { success: false, action, code: 'not_found', message: `Team background dispatch not found: ${taskId}. It may have been lost in a gateway restart (team_bg results are in-memory); check team_manage(status) dispatches.` };
+    }
     if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${taskId}` };
     return { success: true, action, task: summarizeTaskRecord(task), message: `Loaded task "${task.title}".` };
   }
