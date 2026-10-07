@@ -1146,7 +1146,8 @@ function resolveWorkspaceImageSources(html) {
     const pathAttr = escapeAttr(decoded);
     const caption = alt ? `<span class="prom-inline-caption">${alt}</span>` : '';
     if (INLINE_VIDEO_RE.test(decoded)) {
-      return `<span class="prom-inline-figure is-video"><video class="prom-inline-media" src="${escapeAttr(url)}" controls playsinline preload="metadata" data-workspace-path="${pathAttr}"></video>${caption}</span>`;
+      const saveIcon = `<button type="button" class="prom-inline-save" aria-label="Save video" title="Save video" data-save-src="${escapeAttr(url)}" data-workspace-path="${pathAttr}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></button>`;
+      return `<span class="prom-inline-figure is-video"><video class="prom-inline-media" src="${escapeAttr(url)}" controls playsinline preload="metadata" data-workspace-path="${pathAttr}"></video><span class="prom-inline-video-row">${caption || '<span></span>'}${saveIcon}</span></span>`;
     }
     const rest = attrs.replace(/\s(?:loading|class)="[^"]*"/gi, '');
     return `<span class="prom-inline-figure"><img${rest} src="${escapeAttr(url)}" class="prom-inline-media" loading="lazy" decoding="async" data-workspace-path="${pathAttr}" role="button" tabindex="0">${caption}</span>`;
@@ -1201,6 +1202,64 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
   };
   document.addEventListener('click', activate);
   document.addEventListener('keydown', activate);
+
+  // Save icon under inline videos. On iOS the share sheet (navigator.share with
+  // a File) offers "Save Video" to Photos. Safari drops the tap's user
+  // activation if the download takes too long, so the file is cached: a second
+  // tap then opens the sheet instantly. Desktop falls back to a download.
+  const savedFiles = new Map();
+  const loadFile = async (src, name) => {
+    if (savedFiles.has(src)) return savedFiles.get(src);
+    const res = await fetch(src, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4';
+    const file = new File([blob], name, { type });
+    savedFiles.set(src, file);
+    return file;
+  };
+  const downloadFile = (file) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  };
+  document.addEventListener('click', async (event) => {
+    const btn = event.target?.closest?.('.prom-inline-save');
+    if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (btn.dataset.busy === '1') return;
+    const src = btn.getAttribute('data-save-src') || '';
+    const path = btn.getAttribute('data-workspace-path') || '';
+    const name = (path.split(/[\\/]/).pop() || 'video.mp4').replace(/[?#].*$/, '');
+    btn.dataset.busy = '1';
+    btn.classList.add('is-busy');
+    try {
+      const file = await loadFile(src, name);
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+          btn.classList.add('is-done');
+        } catch (err) {
+          // Activation expired during the download: file is cached now, so
+          // the next tap shares immediately.
+          if (err?.name === 'NotAllowedError') btn.classList.add('is-ready');
+        }
+      } else {
+        downloadFile(file);
+        btn.classList.add('is-done');
+      }
+    } catch {
+      btn.classList.add('is-error');
+      setTimeout(() => btn.classList.remove('is-error'), 2000);
+    } finally {
+      btn.dataset.busy = '';
+      btn.classList.remove('is-busy');
+    }
+  });
 }
 
 // Rendering the same finished message repeatedly (every chat re-render, chat
