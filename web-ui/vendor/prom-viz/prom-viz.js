@@ -168,8 +168,18 @@
 
   var T = {};
   function readTheme() {
+    var cs = getComputedStyle(root);
+    var scheme = (cs.getPropertyValue('--prom-scheme') || cs.colorScheme || '').trim();
     var text = tokenColor('--prom-text', '#1f2328');
-    var dark = lum(text) > 0.4; // light text => dark theme
+    var bgTok = tokenColor('--prom-bg', 'transparent');
+    // Host scheme hint wins; then page background; text luminance is the last resort.
+    var dark = /dark/.test(scheme) ? true : /light/.test(scheme) ? false
+      : (bgTok && bgTok.a > 0.5 ? lum(bgTok) < 0.3 : lum(text) > 0.4);
+    // Guard against a host handing us text that is unreadable on its own scheme.
+    if (dark !== (lum(text) > 0.3)) {
+      text = resolveColor(dark ? '#e6ebf2' : '#1f2328');
+      root.style.setProperty('--prom-text', rgb(text, 1));
+    }
     var accent = tokenColor('--prom-accent', '#ff7a1a');
     var ah = toHsl(accent);
     // Near-white/near-black/grey accents (mono themes) are useless as a data color.

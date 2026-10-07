@@ -242,24 +242,32 @@ function readVisualTheme() {
     }
     return fallback;
   };
+  // The mobile app paints with its own --pm-* skin tokens (Default Dark,
+  // Olympian Blue, Aether Violet, ...). The desktop tokens (--text, --brand,
+  // --panel) stay at desktop defaults there, which handed inline visuals dark
+  // text and a near-white accent on a navy chat. Prefer the mobile skin first.
+  const mobile = !!document.body?.classList?.contains('pm-mobile-active')
+    || !!document.querySelector?.('.pm-app');
+  const m = (mobileNames, desktopNames) => (mobile ? [...mobileNames, ...desktopNames] : desktopNames);
   const theme = {
     isDark: root.getAttribute('data-theme') === 'dark',
-    bg: read(['--bg', '--pm-chat-page-bg'], VISUAL_THEME_FALLBACKS.bg),
-    bgSoft: read(['--bg-soft'], VISUAL_THEME_FALLBACKS.bgSoft),
-    surface: read(['--panel', '--composer-panel'], VISUAL_THEME_FALLBACKS.surface),
-    surfaceSecondary: read(['--panel-2', '--composer-bg'], VISUAL_THEME_FALLBACKS.surfaceSecondary),
-    border: read(['--line', '--composer-border'], VISUAL_THEME_FALLBACKS.border),
-    borderStrong: read(['--line-strong'], VISUAL_THEME_FALLBACKS.borderStrong),
-    text: read(['--text', '--fg', '--composer-text'], VISUAL_THEME_FALLBACKS.text),
-    muted: read(['--muted', '--composer-muted'], VISUAL_THEME_FALLBACKS.muted),
-    accent: read(['--brand', '--pm-custom-accent'], VISUAL_THEME_FALLBACKS.accent),
-    accentStrong: read(['--brand-2'], VISUAL_THEME_FALLBACKS.accentStrong),
+    bg: read(m(['--pm-bg'], ['--bg', '--pm-chat-page-bg']), VISUAL_THEME_FALLBACKS.bg),
+    bgSoft: read(m(['--pm-bg-soft'], ['--bg-soft']), VISUAL_THEME_FALLBACKS.bgSoft),
+    surface: read(m(['--pm-surface'], ['--panel', '--composer-panel']), VISUAL_THEME_FALLBACKS.surface),
+    surfaceSecondary: read(m(['--pm-surface-strong'], ['--panel-2', '--composer-bg']), VISUAL_THEME_FALLBACKS.surfaceSecondary),
+    border: read(m(['--pm-border'], ['--line', '--composer-border']), VISUAL_THEME_FALLBACKS.border),
+    borderStrong: read(m(['--pm-border-strong'], ['--line-strong']), VISUAL_THEME_FALLBACKS.borderStrong),
+    text: read(m(['--pm-text'], ['--text', '--fg', '--composer-text']), VISUAL_THEME_FALLBACKS.text),
+    muted: read(m(['--pm-muted'], ['--muted', '--composer-muted']), VISUAL_THEME_FALLBACKS.muted),
+    accent: read(m(['--pm-accent'], ['--brand', '--pm-custom-accent']), VISUAL_THEME_FALLBACKS.accent),
+    accentStrong: read(m(['--pm-accent-dark'], ['--brand-2']), VISUAL_THEME_FALLBACKS.accentStrong),
     success: read(['--ok'], VISUAL_THEME_FALLBACKS.success),
     warning: read(['--warn'], VISUAL_THEME_FALLBACKS.warning),
     danger: read(['--err'], VISUAL_THEME_FALLBACKS.danger),
   };
   theme.series = [theme.accent, theme.accentStrong, theme.success, theme.warning, theme.danger, theme.muted];
   theme.vars = {
+    '--prom-scheme': theme.isDark ? 'dark' : 'light',
     '--prom-bg': theme.bg,
     '--prom-bg-soft': theme.bgSoft,
     '--prom-surface': theme.surface,
