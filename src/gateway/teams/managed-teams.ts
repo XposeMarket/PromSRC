@@ -373,6 +373,12 @@ export interface ManagedTeam {
   // and team workspace are always allowed at runtime.
   allowedWorkPaths?: string[];
 
+  // Project working directory for every member + manager turn (file tools resolve
+  // relative paths here). Must sit inside the main workspace or allowedWorkPaths.
+  // Unset => the team workspace. The team workspace stays readable/writable for
+  // memory.json / shared state either way.
+  workDir?: string;
+
   // ── Structured Goal Model ──────────────────────────────────────────────────
   // `teamContext` is retained for backward compatibility but is now secondary.
   // The structured fields below are the source of truth for goal tracking.
@@ -1258,6 +1264,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         changeHistory: historyNormalized,
         contextReferences: refsNormalized,
         allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths.map(String).filter(Boolean) : [],
+        workDir: typeof team.workDir === 'string' && team.workDir.trim() ? team.workDir.trim() : undefined,
         // Ensure runHistory is always an array (backwards-compat with older JSON)
         runHistory: Array.isArray(team.runHistory) ? team.runHistory : [],
       } as ManagedTeam;
@@ -1286,7 +1293,64 @@ export function loadManagedTeamStore(): ManagedTeamStore {
   }
 }
 
+// Per-message tool traces (processEntries/liveTraceEntries) were persisted for
+// every team chat/room message and run, up to 320 entries each, so the store
+// grew to 36-48MB and every team event rewrote it synchronously (2026-10-07: a
+// 9s event-loop stall forced a recovery handoff). Keep full traces only on the
+// most recent messages/runs, and cap entry count and entry size there.
+const TRACE_FULL_RECENT_MESSAGES = 12;
+const TRACE_FULL_RECENT_RUNS = 6;
+const TRACE_MAX_ENTRIES_RECENT = 80;
+const TRACE_MAX_ENTRY_CHARS = 1_500;
+const TRACE_KEYS = ['processEntries', 'liveTraceEntries'] as const;
+
+function clampTraceEntry(entry: any): any {
+  if (!entry || typeof entry !== 'object') return entry;
+  let json: string;
+  try { json = JSON.stringify(entry); } catch { return undefined; }
+  if (json.length <= TRACE_MAX_ENTRY_CHARS) return entry;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(entry)) {
+    if (typeof v === 'string') out[k] = v.length > 400 ? `${v.slice(0, 400)}...` : v;
+    else if (typeof v === 'number' || typeof v === 'boolean' || v == null) out[k] = v;
+    else {
+      let sv = '';
+      try { sv = JSON.stringify(v); } catch { sv = ''; }
+      out[k] = sv.length > 400 ? `${sv.slice(0, 400)}...` : v;
+    }
+  }
+  return out;
+}
+
+function compactTraceHolder(holder: any, keepFull: boolean): void {
+  if (!holder || typeof holder !== 'object') return;
+  for (const key of TRACE_KEYS) {
+    const arr = holder[key];
+    if (!Array.isArray(arr)) continue;
+    if (!keepFull) { delete holder[key]; continue; }
+    holder[key] = arr.slice(-TRACE_MAX_ENTRIES_RECENT).map(clampTraceEntry).filter((e: any) => e !== undefined);
+  }
+}
+
+export function compactManagedTeamForStorage(team: any): void {
+  if (!team || typeof team !== 'object') return;
+  const list = (v: any) => (Array.isArray(v) ? v : []);
+  const chat = list(team.teamChat);
+  chat.forEach((m: any, i: number) => compactTraceHolder(m?.metadata, i >= chat.length - TRACE_FULL_RECENT_MESSAGES));
+  const room = list(team.roomState?.roomMessages);
+  room.forEach((m: any, i: number) => compactTraceHolder(m?.metadata, i >= room.length - TRACE_FULL_RECENT_MESSAGES));
+  const runs = list(team.runHistory);
+  runs.forEach((r: any, i: number) => {
+    const recent = i >= runs.length - TRACE_FULL_RECENT_RUNS;
+    compactTraceHolder(r, recent);
+    if (!recent && r && typeof r === 'object' && r.roomSnapshot) delete r.roomSnapshot;
+  });
+}
+
 export function saveManagedTeamStore(store: ManagedTeamStore): void {
+  for (const team of Array.isArray(store?.teams) ? store.teams : []) {
+    try { compactManagedTeamForStorage(team); } catch { /* never block a save */ }
+  }
   _cache = { ...store, updatedAt: Date.now() };
   _cacheTimestamp = Date.now();  // Refresh TTL on save
   const p = getStorePath();
@@ -1646,6 +1710,7 @@ export function createManagedTeam(input: {
   reviewTrigger?: ManagedTeam['manager']['reviewTrigger'];
   originatingSessionId?: string;
   allowedWorkPaths?: string[];
+  workDir?: string;
 }): ManagedTeam {
   const now = Date.now();
   const teamId = `team_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
@@ -1666,6 +1731,7 @@ export function createManagedTeam(input: {
     managerAgentId: `${teamId}_manager`,
     subagentIds: input.subagentIds,
     allowedWorkPaths: Array.isArray(input.allowedWorkPaths) ? input.allowedWorkPaths.map(String).filter(Boolean) : [],
+    ...(input.workDir && String(input.workDir).trim() ? { workDir: String(input.workDir).trim() } : {}),
     teamContext: input.teamContext,
     teamMode: 'autonomous',
     purpose: purposeOrContext,
