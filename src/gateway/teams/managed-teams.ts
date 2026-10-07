@@ -1290,9 +1290,23 @@ export function saveManagedTeamStore(store: ManagedTeamStore): void {
   _cache = { ...store, updatedAt: Date.now() };
   _cacheTimestamp = Date.now();  // Refresh TTL on save
   const p = getStorePath();
-  const tmp = `${p}.tmp-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(_cache, null, 2), 'utf-8');
-  fs.renameSync(tmp, p);
+  const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
+  // Compact JSON: this store reaches tens of MB and is rewritten synchronously
+  // on every team event; pretty-printing added size and event-loop time (a 9s
+  // stall here triggered the 2026-10-07 recovery handoff).
+  fs.writeFileSync(tmp, JSON.stringify(_cache), 'utf-8');
+  let lastErr: any;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try { fs.renameSync(tmp, p); lastErr = null; break; } catch (err: any) {
+      lastErr = err;
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(String(err?.code))) break;
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1)); } catch { /* best effort */ }
+    }
+  }
+  if (lastErr) {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    throw lastErr;
+  }
   try { _cacheFileMtimeMs = fs.statSync(p).mtimeMs; } catch { _cacheFileMtimeMs = 0; }
 }
 

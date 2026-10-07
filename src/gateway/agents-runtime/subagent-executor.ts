@@ -16695,20 +16695,24 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
             const changed: string[] = [];
             const str = (v: any, max: number) => String(v).slice(0, max);
-            if (args.name != null && String(args.name).trim()) { team.name = str(args.name, 80); changed.push('name'); }
-            if (args.description != null) { team.description = str(args.description, 300); changed.push('description'); }
-            if (args.emoji != null) { team.emoji = str(args.emoji, 4); changed.push('emoji'); }
-            if (args.purpose != null) {
+            // Wrapper schemas make models send every field, blank: "" / [] means
+            // "not provided", never "clear it". (2026-10-07: the manager's own
+            // update wiped purpose, focus and allowed_work_paths this way.)
+            const has = (v: any) => v != null && !(typeof v === 'string' && !v.trim());
+            if (has(args.name)) { team.name = str(args.name, 80); changed.push('name'); }
+            if (has(args.description)) { team.description = str(args.description, 300); changed.push('description'); }
+            if (has(args.emoji)) { team.emoji = str(args.emoji, 4); changed.push('emoji'); }
+            if (has(args.purpose)) {
               team.purpose = str(args.purpose, 1000); team.mission = team.purpose;
               if (team.roomState) team.roomState.purpose = team.purpose;
               changed.push('purpose');
             }
             const ctx = args.team_context ?? args.teamContext;
-            if (ctx != null) { team.teamContext = str(ctx, 1000); changed.push('team_context'); }
+            if (has(ctx)) { team.teamContext = str(ctx, 1000); changed.push('team_context'); }
             team.manager = team.manager || {};
-            if (args.manager_system_prompt != null) { team.manager.systemPrompt = str(args.manager_system_prompt, 2000); changed.push('manager_system_prompt'); }
-            if (args.manager_model != null) { team.manager.model = String(args.manager_model).trim() || undefined; changed.push('manager_model'); }
-            if (args.review_trigger != null) {
+            if (has(args.manager_system_prompt)) { team.manager.systemPrompt = str(args.manager_system_prompt, 2000); changed.push('manager_system_prompt'); }
+            if (has(args.manager_model)) { team.manager.model = String(args.manager_model).trim() || undefined; changed.push('manager_model'); }
+            if (has(args.review_trigger)) {
               const rt = String(args.review_trigger).trim().toLowerCase();
               if (!['after_each_run', 'after_all_runs', 'daily', 'manual'].includes(rt)) {
                 return { name, args, result: `Invalid review_trigger "${rt}". Use after_each_run|after_all_runs|daily|manual.`, error: true };
@@ -16716,7 +16720,9 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               team.manager.reviewTrigger = rt; changed.push('review_trigger');
             }
             const paths = Array.isArray(args.allowed_work_paths) ? args.allowed_work_paths : Array.isArray(args.allowedWorkPaths) ? args.allowedWorkPaths : null;
-            if (paths) { team.allowedWorkPaths = paths.map((v: any) => String(v).trim()).filter(Boolean); changed.push('allowed_work_paths'); }
+            const cleanPaths = paths ? paths.map((v: any) => String(v).trim()).filter(Boolean) : [];
+            if (cleanPaths.length) { team.allowedWorkPaths = cleanPaths; changed.push('allowed_work_paths'); }
+            else if (args.clear_allowed_work_paths === true) { team.allowedWorkPaths = []; changed.push('allowed_work_paths'); }
             const addIds: string[] = Array.isArray(args.add_subagent_ids) ? args.add_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const removeIds: string[] = Array.isArray(args.remove_subagent_ids) ? args.remove_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const unknown = addIds.filter((id) => !getAgentById(id));
@@ -18701,7 +18707,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
           const noteWrite = require('../memory/intraday-notes').appendIntradayNote(workspacePath, {
             tag: noteTag, content: noteContent, sourceLine, taskId: noteTaskId,
-            status: args.status, resolves: args.resolves,
+            status: args.status, resolves: args.resolves, thread: args.thread,
           });
           noteWriteResult = noteWrite;
           try { require('../memory-index/recall-index').markRecallDirty(workspacePath, noteWrite.file, 500); } catch { /* best-effort */ }

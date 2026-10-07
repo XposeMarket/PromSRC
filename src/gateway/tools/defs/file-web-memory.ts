@@ -2494,6 +2494,7 @@ export function getFileWebMemoryTools(): any[] {
             step: { type: 'string', description: 'Optional step label' },
             status: { type: 'string', enum: ['open', 'done', 'info'], description: 'open = unfinished work/bug/backlog item (stays in view and carries into later days until resolved); done = completed work; info = context only (default).' },
             resolves: { type: 'array', items: { type: 'string' }, description: 'Note ids (e.g. "n_abc123", shown as #n_... in TODAY_NOTES) this note completes. Those open items are marked done.' },
+            thread: { type: 'string', description: 'Stable task key, e.g. "last-ward-combat" or "pr-549". Use the same key for every update on one task: the new note supersedes earlier open notes on that thread, so only the current state stays open.' },
           },
         },
       },

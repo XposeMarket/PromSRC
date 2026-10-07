@@ -38,7 +38,7 @@ import {
   type Stage4MenuSegmentId,
 } from '../runtime/instruction-intent-detector';
 import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
-import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext } from './brain/brain-continuity.js';
+import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext, readCarryForwardForPrompt } from './brain/brain-continuity.js';
 import { renderNotesForPrompt } from './memory/intraday-notes';
 import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
 import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
@@ -161,6 +161,7 @@ export function processIntradayNotesForPrompt(workspacePath: string, raw: string
     if (carry.length > 6_000) carry = `${carry.slice(0, 6_000)}\n...[carry-forward context truncated for prompt budget]`;
     rest = `${rest.slice(0, start)}${rest.slice(finish)}`;
   }
+  if (!carry) carry = readCarryForwardForPrompt(workspacePath, new Date().toISOString().split('T')[0]);
   let notes = '';
   try { notes = renderNotesForPrompt(workspacePath, rest, { budgetChars }); } catch { notes = processIntradayNotes(rest); }
   return [carry, notes].filter(Boolean).join('\n\n');

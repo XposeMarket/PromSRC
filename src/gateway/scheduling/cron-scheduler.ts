@@ -95,6 +95,8 @@ export interface CronJob {
   lastOrchestrationDurationMs?: number | null;
   consecutiveErrors?: number;
   queuedAt?: string | null;
+  /** Gateway pid executing this run. A warm-handoff replacement must not re-fire a job another live gateway is still running. */
+  runningPid?: number | null;
   deleteAfterRun?: boolean;
   nextRun: string | null;
   status: 'scheduled' | 'queued' | 'running' | 'completed' | 'paused';
@@ -666,6 +668,30 @@ function applyDeterministicStagger(nextRunIso: string, jobId: string, schedule: 
   return new Date(nextRunDate.getTime() + staggerMs).toISOString();
 }
 
+/** True when pid is a different, still-alive process (e.g. a draining gateway). */
+export function isForeignLiveGatewayPid(pid: unknown): boolean {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0 || n === process.pid) return false;
+  try { process.kill(n, 0); return true; } catch (err: any) { return err?.code === 'EPERM'; }
+}
+
+/**
+ * Windows rename over a file another process (second gateway, AV, indexer) has
+ * open fails with EPERM/EBUSY/EACCES. Retry briefly instead of failing the run.
+ */
+export function renameFileWithRetrySync(tmp: string, target: string, attempts = 8): void {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try { fs.renameSync(tmp, target); return; } catch (err: any) {
+      lastErr = err;
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(String(err?.code))) break;
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (i + 1)); } catch { /* best effort */ }
+    }
+  }
+  try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  throw lastErr;
+}
+
 function hydrateManagedTeamFromWorkspaceInfo(agentId: string): ManagedTeam | null {
   const workspace = getConfig().getWorkspacePath() || process.cwd();
   const teamsRoot = path.join(workspace, 'teams');
@@ -843,6 +869,7 @@ export class CronScheduler {
   // Each schedule owns an independent task/session. Keep only a per-job guard
   // so a single schedule cannot accidentally run twice at the same time.
   private runningJobIds: Set<string> = new Set();
+  private storeMtimeMs = 0;
   private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
   private defaultStore(): CronStore {
@@ -861,6 +888,7 @@ export class CronScheduler {
     this.deps = deps;
     this.storePath = deps.storePath;
     this.store = this.loadStore();
+    try { this.storeMtimeMs = fs.statSync(this.storePath).mtimeMs; } catch { this.storeMtimeMs = 0; }
     this.normalizeDisabledJobStatuses();
     console.log(`[CronScheduler] Loaded ${this.store.jobs.length} jobs from ${this.storePath} (independent schedule execution enabled)`);
     this.maybeConsolidateLegacyAutomatedSessions();
@@ -920,7 +948,10 @@ export class CronScheduler {
             const legacyMainJob = !teamId
               && (subagentId === 'main' || (sessionTarget === 'main' && (!assignmentTarget || assignmentTarget === 'main')));
             const rawStatus = String(j?.status || '').trim().toLowerCase();
-            const normalizedStatus = rawStatus === 'running' || rawStatus === 'queued'
+            const runningElsewhere = rawStatus === 'running' && isForeignLiveGatewayPid(j?.runningPid);
+            const normalizedStatus = runningElsewhere
+              ? 'running'
+              : rawStatus === 'running' || rawStatus === 'queued'
               ? 'scheduled'
               : (rawStatus === 'paused' || rawStatus === 'completed' ? rawStatus : 'scheduled');
             return {
@@ -953,12 +984,35 @@ export class CronScheduler {
     try {
       const dir = path.dirname(this.storePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      const tmp = `${this.storePath}.tmp-${Date.now()}`;
+      const tmp = `${this.storePath}.tmp-${process.pid}-${Date.now()}`;
       fs.writeFileSync(tmp, JSON.stringify(this.store, null, 2), 'utf-8');
-      fs.renameSync(tmp, this.storePath);
+      renameFileWithRetrySync(tmp, this.storePath);
+      try { this.storeMtimeMs = fs.statSync(this.storePath).mtimeMs; } catch { this.storeMtimeMs = 0; }
     } catch (err: any) {
       console.error('[CronScheduler] Failed to save store:', err.message);
     }
+  }
+
+  /**
+   * During a warm handoff two gateways share jobs.json: the draining one still
+   * serves in-flight turns that create/pause/delete schedules, while the
+   * replacement ticks. Re-read the file when another process changed it so
+   * neither side fires or overwrites from a stale in-memory copy. Jobs this
+   * process is executing keep their in-memory object (executeJob holds it).
+   */
+  private refreshStoreFromDiskIfChanged(): void {
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(this.storePath).mtimeMs; } catch { return; }
+    if (!mtimeMs || mtimeMs === this.storeMtimeMs) return;
+    const fresh = this.loadStore();
+    const local = new Map(this.store.jobs.map((j) => [j.id, j]));
+    fresh.jobs = fresh.jobs.map((j) => (this.runningJobIds.has(j.id) && local.get(j.id)) || j);
+    for (const id of this.runningJobIds) {
+      const mine = local.get(id);
+      if (mine && !fresh.jobs.some((j) => j.id === id)) fresh.jobs.push(mine);
+    }
+    this.store = { ...fresh, legacyAutomatedSessionsConsolidated: fresh.legacyAutomatedSessionsConsolidated || this.store.legacyAutomatedSessionsConsolidated };
+    this.storeMtimeMs = mtimeMs;
   }
 
   private compactRunHistory(jobId: string, filePath: string): void {
@@ -1018,6 +1072,7 @@ export class CronScheduler {
   }
 
   createJob(partial: Partial<CronJob> & { name: string; prompt: string }): CronJob {
+    this.refreshStoreFromDiskIfChanged();
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date();
     const normalizedType: CronJob['type'] = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
@@ -1080,6 +1135,7 @@ export class CronScheduler {
   }
 
   updateJob(id: string, partial: Partial<CronJob>): CronJob | null {
+    this.refreshStoreFromDiskIfChanged();
     const idx = this.store.jobs.findIndex(j => j.id === id);
     if (idx === -1) return null;
     const normalizedPartial: Partial<CronJob> = { ...partial };
@@ -1132,6 +1188,7 @@ export class CronScheduler {
   }
 
   deleteJob(id: string): boolean {
+    this.refreshStoreFromDiskIfChanged();
     const before = this.store.jobs.length;
     this.store.jobs = this.store.jobs.filter(j => j.id !== id);
     const deletedArchive = deleteArchivedScheduledJob(id);
@@ -1158,6 +1215,7 @@ export class CronScheduler {
   }
 
   async runJobNow(id: string, options: RunJobNowOptions = {}): Promise<void> {
+    this.refreshStoreFromDiskIfChanged();
     const job = this.store.jobs.find(j => j.id === id);
     if (!job) return;
     if (job.type === 'heartbeat') {
@@ -1235,6 +1293,13 @@ export class CronScheduler {
   }
 
   private tick(): void {
+    // A gateway draining after a warm handoff must never start new schedule
+    // runs; the replacement owns ticking (2026-10-07: one-shots fired twice).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (require('../lifecycle').isGatewayHandoffDraining?.()) { this.stop(); return; }
+    } catch { /* lifecycle unavailable in isolated tests */ }
+    this.refreshStoreFromDiskIfChanged();
     // CRITICAL: Check if ANY cron jobs are enabled, not just heartbeat!
     // Heartbeat is a separate feature — regular cron jobs should execute independent of it.
     const hasEnabledJobs = this.store.jobs.some(j => j.enabled && j.type !== 'heartbeat');
@@ -1305,6 +1370,7 @@ export class CronScheduler {
 
     // Mark as running
     job.status = 'running';
+    job.runningPid = process.pid;
     job.queuedAt = null;
     job.lastRunStartedAt = new Date(start).toISOString();
     this.saveStore();
@@ -2139,6 +2205,7 @@ export class CronScheduler {
       : (/^\s*ERROR:/i.test(resultText) ? 'error' : 'success');
 
     job.lastRun = new Date().toISOString();
+    job.runningPid = null;
     job.lastResult = resultText.slice(0, 3000);
     job.lastDuration = duration;
     job.lastRunnerDurationMs = duration;
@@ -2378,6 +2445,7 @@ export class CronScheduler {
    * Pause a job (e.g., to resume/retry later)
    */
   pauseJob(id: string, reason: 'manual' | 'interrupted_by_schedule' = 'manual'): CronJob | null {
+    this.refreshStoreFromDiskIfChanged();
     const job = this.store.jobs.find(j => j.id === id);
     if (!job) return null;
     job.status = 'paused';
@@ -2393,6 +2461,7 @@ export class CronScheduler {
    * Resume a paused job
    */
   resumeJob(id: string): CronJob | null {
+    this.refreshStoreFromDiskIfChanged();
     const job = this.store.jobs.find(j => j.id === id);
     if (!job) return null;
     if (job.status !== 'paused') {
@@ -2420,6 +2489,7 @@ export class CronScheduler {
    * Return the current list of all jobs.
    */
   getJobs(): CronJob[] {
+    this.refreshStoreFromDiskIfChanged();
     this.repairStaleRunningJobStatuses();
     return this.store.jobs;
   }
@@ -2444,7 +2514,9 @@ export class CronScheduler {
     for (const job of this.store.jobs) {
       if (job.status !== 'running') continue;
       if (this.runningJobIds.has(job.id)) continue;
+      if (isForeignLiveGatewayPid(job.runningPid)) continue;
       job.status = 'scheduled';
+      job.runningPid = null;
       job.pausedReason = undefined;
       changed = true;
     }

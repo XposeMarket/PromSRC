@@ -132,6 +132,8 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { recordLearningTurn } from '../learning/turn-recorder.js';
+import { getSkillRoutingReport } from '../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
@@ -1168,7 +1170,20 @@ function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
   // request may still be unwinding. Keep the coordinator busy until its
   // finally block (or the watchdog) releases it; do not admit a second model
   // turn against the first one's still-running promise.
-  if (abortingRuntime) return { active: true, runtime: abortingRuntime, stream, recovered: false };
+  if (abortingRuntime) {
+    // The owner watchdog only walks *active streams*. A user stop closes the
+    // stream immediately, so an abort that never settles (owner died during a
+    // gateway restart, hung promise) would hold the session forever and every
+    // send returns 409 SESSION_TURN_ACTIVE. Settle it here past the grace.
+    const abortAge = Date.now() - Number(abortingRuntime.abortRequestedAt || Date.now());
+    if (stream?.active || abortAge <= MAIN_CHAT_ABORT_SETTLE_GRACE_MS) {
+      return { active: true, runtime: abortingRuntime, stream, recovered: false };
+    }
+    try { finishLiveRuntime(abortingRuntime.id); } catch {}
+    mainChatTurnCoordinator.discard(sid, 'The aborted Chat execution owner did not settle.');
+    console.warn(`[main-chat-owner] settled stale aborted runtime=${abortingRuntime.id} session=${sid} after ${abortAge}ms`);
+    return { active: false, runtime: null, stream: getMainChatStream(sid), recovered: true, recoveryReason: 'orphaned_stream_or_lease' as const };
+  }
 
   const lease = mainChatTurnCoordinator.getActive(sid);
   // Avoid racing a just-created stream from a non-HTTP caller.  The normal
@@ -3490,6 +3505,16 @@ async function handleChat(
       finalResponse,
       toolResults: allToolResults,
     });
+    // Learning loop capture: persist offered vs read skills + correction signals.
+    recordLearningTurn({
+      workspacePath,
+      sessionId,
+      executionMode,
+      request: message,
+      finalResponse,
+      toolResults: allToolResults,
+      routing: getSkillRoutingReport(sessionId),
+    });
     return finalResponse;
   };
   let allThinking = '';
@@ -5109,7 +5134,7 @@ async function handleChat(
     'Generated visuals run in a sandbox. They may use HTML, CSS, vanilla JavaScript, local state, and the Prometheus visual state bridge, but must never receive credentials or directly access Electron/Node, the filesystem, cookies, browser permissions, external accounts, arbitrary iframes, or unrestricted networking. External actions must go through an explicitly registered Prometheus tool and policy check.',
     'Theme contract: visual roots and controls must be transparent unless the visual itself intentionally creates an internal surface. Never hardcode a light/dark canvas or a fixed outer panel. Use Prometheus tokens such as --prom-bg, --prom-surface, --prom-surface-secondary, --prom-border, --prom-text, --prom-muted, --prom-accent, --prom-success, --prom-warning, and --prom-danger; charts and diagrams should inherit the host theme.',
     'Native interactive cards are fenced JSON blocks you write yourself (no tool call): ```quiz {"title","questions":[{"question","options":[..],"answer":<index>,"hint"?,"explanation"?}]}```; ```flashcards {"title","cards":[{"front","back"}]}```; ```poll {"question","options":[..],"multiple"?}```; ```writing {"kind":"Email"|"Post"|"Draft","subject"?,"text"}``` for any draft the user will copy; ```followups ["next question 1","next question 2"]``` (2-4 short items, last thing in a reply, only when genuinely useful); ```reminder {"title","when"}``` to offer a reminder; ```convert {"value":5,"from":"mi","to":"km"}``` for a live unit converter; ```calculator {"expression":"(12.5*4)+3^2"}``` for a live calculator. Live data (currency, clocks, sports, news, images, video, places, single products) comes from show_ui_card instead. Each show_ui_card result gives a ref: put {{card:REF}} on its own line in the final reply to place that card mid-answer (like an inline image); cards you do not place render after the reply.',
-    'Viz kit: every ```html visual preloads window.ui (Prometheus Viz Kit) with ui.page, ui.kpis, ui.section, ui.chart (line/area/stacked/bar/stackedBar with crosshair tooltips, annotations, target lines), ui.bars, ui.heatmap, ui.treemap (zoomable), ui.donut, ui.table (sortable), ui.tabs, ui.segmented, ui.compare (design variants with a Pick button), ui.callout, ui.badge, ui.fmt and ui.state. Build data visuals and UI-variant mocks with it instead of hand-rolled divs: lead with an insight headline (the finding, not the topic), a KPI strip, then 2-4 linked views over real data. Read the interactive-visuals skill before composing a non-trivial html visual.',
+    'Viz kit: every ```html visual preloads window.ui (Prometheus Viz Kit) with ui.page, ui.kpis, ui.section, ui.chart (line/area/stacked/bar/stackedBar with crosshair tooltips, annotations, target lines), ui.bars, ui.heatmap, ui.treemap (zoomable), ui.donut, ui.table (sortable), ui.tabs, ui.segmented, ui.compare (design variants with a Pick button), ui.timeline, ui.sankey, ui.slider/ui.params + ui.loop (what-if sims), ui.form (returns JSON to chat), ui.exportBar (PNG/X post/CSV), ui.callout, ui.badge, ui.fmt and ui.state. Pass ask:\'Why is {label} {value}?\' to views so tapping a data point drops a question into the composer. Build data visuals and UI-variant mocks with it instead of hand-rolled divs: lead with an insight headline (the finding, not the topic), a KPI strip, then 2-4 linked views over real data. Read the interactive-visuals skill before composing a non-trivial html visual.',
     'Inline visuals may sit between prose and should be one complete fenced chart, mermaid, svg, or html block when emitted. Keep surrounding explanation short. Use a larger artifact surface only when the experience is genuinely long-lived, multi-view, editing-heavy, or the deliverable itself should live independently of the message. Never generate a visual merely for decoration.',
   ].join('\n');
 const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';

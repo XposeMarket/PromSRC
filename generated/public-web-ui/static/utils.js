@@ -717,7 +717,7 @@ function captureControls(){var controls={};document.querySelectorAll('input,sele
 function restoreControls(){var controls=state&&state.controls||{};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var saved=controls[keyFor(el,index)];if(!saved)return;if(Object.prototype.hasOwnProperty.call(saved,'value'))el.value=saved.value;if(Object.prototype.hasOwnProperty.call(saved,'checked'))el.checked=!!saved.checked});var details=state&&state.details||{};document.querySelectorAll('details').forEach(function(el,index){var key=el.id||('details-'+index);if(Object.prototype.hasOwnProperty.call(details,key))el.open=!!details[key]})}
 function applyTheme(theme){try{if(!theme||typeof theme!=='object')return;var vars=theme.vars||{};Object.keys(vars).forEach(function(name){if(/^--[a-z0-9-]+$/i.test(name))document.documentElement.style.setProperty(name,String(vars[name]||''))});window.dispatchEvent(new CustomEvent('prometheus:visual-theme-change',{detail:theme}));send()}catch(e){}}
 window.addEventListener('message',function(event){var data=event&&event.data;if(!data||data.type!=='prometheus:visual-theme'||String(data.visualId||'')!==String(visualId))return;applyTheme(data.theme)});
-window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})}};
+window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})},insertPrompt:function(input){post('prometheus:visual-insert',{prompt:String(input&&input.prompt||'').slice(0,8000),send:!!(input&&input.send)})},download:function(input){post('prometheus:visual-download',{name:String(input&&input.name||'visual.png').slice(0,120),dataUrl:String(input&&input.dataUrl||''),mime:String(input&&input.mime||'')})}};
 window.openai=window.openai||{};window.openai.widgetState=state;window.openai.setWidgetState=function(next){window.prometheusVisual.setState(next)};window.openai.sendFollowUpMessage=function(input){window.prometheusVisual.sendFollowUpMessage(input);return Promise.resolve()};
 restoreControls();document.addEventListener('input',captureControls,true);document.addEventListener('change',captureControls,true);document.addEventListener('toggle',captureControls,true);
 if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});var errs=0;addEventListener('error',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.message||'Script error').slice(0,240)})});addEventListener('unhandledrejection',function(e){if(errs++>2)return;post('prometheus:visual-error',{message:String(e&&e.reason&&e.reason.message||e&&e.reason||'Unhandled promise rejection').slice(0,240)})});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
@@ -812,9 +812,69 @@ function installVisualMessageBridge() {
       return;
     }
     if (data.type === 'prometheus:visual-followup' && data.prompt) {
-      window.dispatchEvent(new CustomEvent('prometheus:visual-followup', { detail: { visualId, prompt: String(data.prompt), title: String(data.title || '') } }));
+      const detail = { visualId, prompt: String(data.prompt).slice(0, 8000), title: String(data.title || '') };
+      const evt = new CustomEvent('prometheus:visual-followup', { detail, cancelable: true });
+      // Nothing used to consume this event, so ui.ask / ui.compare "Pick this" never reached the chat.
+      if (window.dispatchEvent(evt)) sendVisualPromptToChat(detail.prompt);
+      return;
+    }
+    if (data.type === 'prometheus:visual-insert' && data.prompt) {
+      const prompt = String(data.prompt).slice(0, 8000);
+      if (data.send) sendVisualPromptToChat(prompt); else insertVisualPromptIntoComposer(prompt);
+      return;
+    }
+    if (data.type === 'prometheus:visual-download' && data.dataUrl) {
+      downloadVisualExport(String(data.name || 'visual.png'), String(data.dataUrl), String(data.mime || ''));
     }
   });
+}
+
+function sendVisualPromptToChat(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+  try {
+    if (typeof window.__pmMobileSendMessage === 'function') { window.__pmMobileSendMessage(text); return true; }
+    if (typeof window.sendChat === 'function') { window.sendChat(text); return true; }
+  } catch (error) {
+    console.warn('[visual] follow-up send failed', error);
+  }
+  return insertVisualPromptIntoComposer(text);
+}
+
+// Tap-to-ask: drop the data point into the composer (append, don't clobber a draft) and focus it.
+function insertVisualPromptIntoComposer(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+  const input = document.getElementById('pm-composer-input')
+    || document.getElementById('chat-input')
+    || document.querySelector('textarea[data-chat-input]');
+  if (!input) return false;
+  const current = String(input.value || '');
+  input.value = current.trim() ? `${current.replace(/\s+$/, '')}\n${text}` : text;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  try { input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); } catch {}
+  return true;
+}
+
+function downloadVisualExport(name, dataUrl, mime) {
+  if (!/^data:(image\/(png|svg\+xml)|text\/csv)[;,]/i.test(dataUrl)) return;
+  const safeName = String(name || 'visual').replace(/[^\w.-]+/g, '-').slice(0, 120) || 'visual';
+  const viaAnchor = () => {
+    const a = document.createElement('a');
+    a.href = dataUrl; a.download = safeName; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  const mobile = document.body?.classList?.contains('pm-mobile') || /iPhone|iPad|Android/i.test(navigator.userAgent || '');
+  if (mobile && navigator.canShare && typeof File === 'function') {
+    fetch(dataUrl).then((r) => r.blob()).then((blob) => {
+      const file = new File([blob], safeName, { type: mime || blob.type });
+      if (navigator.canShare({ files: [file] })) return navigator.share({ files: [file], title: safeName });
+      viaAnchor();
+      return undefined;
+    }).catch((err) => { if (err?.name !== 'AbortError') viaAnchor(); });
+    return;
+  }
+  viaAnchor();
 }
 
 function visualIframeReuseKey(frame) {
