@@ -12,7 +12,7 @@
  *     and drops stale session/task caches when the host reports a write.
  */
 import { getConfig } from '../../config/config';
-import { broadcastWS, enterGatewayDrainMode } from '../comms/broadcaster';
+import { broadcastWS, enterGatewayDrainMode, isGatewayDraining } from '../comms/broadcaster';
 import { suspendRuntimeProgressLeaseWrites } from '../gateway-progress-lease';
 import {
   abortLiveRuntime,
@@ -62,6 +62,12 @@ export function setHandoffRecoveryHandler(handler: (() => void) | null): void {
 
 function scheduleRecoveryPass(reason: string): void {
   if (!recoveryHandler || recoveryPassScheduled) return;
+  // A gateway that is itself draining is no longer the owner of new work; the
+  // newest replacement (which also adopted this host) runs recovery instead.
+  if (isGatewayDraining()) {
+    console.log(`[gateway-handoff] skipped interrupted-runtime recovery (${reason}): this gateway is draining`);
+    return;
+  }
   recoveryPassScheduled = true;
   setTimeout(() => {
     recoveryPassScheduled = false;

@@ -11,6 +11,7 @@
 
 import express from 'express';
 import { slimSessionList, responseEtag } from './perf-projections';
+import { claimRuntimeRecovery } from '../runtime/recovery-claims';
 import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../media-analysis-preview';
 // cors and http moved to core/app.ts + core/server.ts (B3)
 import path from 'path';
@@ -12008,6 +12009,13 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   const recoveryData = runtime?.recoveryData || {};
   const message = String(recoveryData.message || runtime?.detail || '').trim();
   if (!sessionId || !message) return false;
+
+  // Several gateway processes can run a recovery pass for the same lost host
+  // during a warm handoff. Only one of them may replay this interrupted turn.
+  if (!claimRuntimeRecovery(String(runtime?.id || ''), 'main_chat_retrigger')) {
+    console.warn(`[RuntimeRecovery] Skipped retrigger of ${sessionId} (old=${runtime?.id}): another gateway process already claimed it.`);
+    return false;
+  }
 
   const admissionLease = mainChatTurnCoordinator.tryAcquire(sessionId);
   if (!admissionLease) {
