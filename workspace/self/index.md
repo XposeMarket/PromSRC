@@ -1,93 +1,67 @@
-# SELF — Prometheus Self-Reference (Split Index)
+# self/: Prometheus Guidebook (start here)
 
-Last verified against current `src/`, `web-ui/`, gateway route/tool definitions, config defaults, command policy/approval surfaces, provider-aware context budgeting, memory-maintenance/search workers, context-build workers, model-call workers, Brain activity workers, thread/session recovery, current `/api/health` and `/api/status` diagnostics, mobile/desktop UI surfaces, and the public release/runtime layout on: 2026-09-05
-Workspace: `workspace/` (repository-relative; the runtime resolves the actual workspace root from config)
-Project root: repository root (resolved at runtime; do not hard-code a workstation drive path)
+> **Last verified:** 2026-10-07 against PromSRC `a48712ccc` (main) · Rebuilt from scratch on 2026-10-07; the old Aug-2026 docs are in `archive/self-2026-08/` (stale, use only as historical hints).
+> **What this is:** the agent-facing map of how Prometheus works. Read the matching doc **before** changing or debugging a subsystem, and **update it** after you change one (see [Conventions](_tools/CONVENTIONS.md)).
 
-This directory is the split Prometheus self-reference under `workspace/self/`: source-verified architecture documentation broken into per-area files so Prometheus can read and edit individual sections without churning the monolithic historical `workspace/SELF.md` sync copy.
+## Ground truth in 10 lines
 
-**Path rule:** source and documentation paths in this self-reference are repository-relative unless a section explicitly labels a path as runtime data (`<configDir>`, `<workspaceRoot>`, etc.) or historical evidence. Machine-specific roots such as `D:\Prometheus` must not be used as current architecture locations.
+- **Live source:** `C:\Users\rafel\PromSRC` (package `prometheus` v1.0.17, Electron main `electron/main.js`). Don't do PR work here.
+- **PR work:** git worktree per task at `C:\Users\rafel\promsrc-pr\<slug>`, then a PR via the `connector_github` tool. **`gh` CLI is not installed.** → [07](07-source-editing-and-pr-workflow.md)
+- **Runtime workspace:** `C:\Users\rafel\AppData\Roaming\Prometheus\workspace` (skills, memory files, Brain, audit, projects). → [01](01-identity-and-paths.md)
+- **Gateway:** default port `18789` (`src/config/gateway-port.ts`). → [02](02-startup-gateway-runtime.md)
+- **System prompt** is built in `src/gateway/prompt-context.ts`. It hard-reads `self/index.md` (first 3000 chars) and `self/06-image-voice.md` (voice, 7000 chars), so **keep both filenames.**
+- **Tools** are category-gated (`src/gateway/tool-builder.ts`), with ~640 definitions in source. → [05](05-tools-and-categories.md) · [inventory](generated/tools.md)
+- **Primary model:** Claude Opus 5.5. OpenAI GPT-6.1 Sol / GPT-6 Luna are for spawned workers. → [04](04-chat-pipeline-and-providers.md), [08](08-agents-tasks-background.md)
+- **Big subsystems added since August:** media engine/video ([15](15-media-engine-video.md)), games engine ([16](16-games-engine.md)), Teams v3 ([09](09-teams.md)), account-optional onboarding ([19](19-onboarding-accounts-auth.md)), connector `api_request` escape hatches ([12](12-connectors-mcp-integrations.md)).
+- **Raul's rules** (USER.md) override convenience. Most relevant here: auto-PR on Prometheus faults, no self-merge, quote cost before paid media runs.
+- **When something is weird,** check [25 Sharp edges](25-sharp-edges.md) first.
 
-## How to read
+## Core docs
 
-- Start here, then jump to the file that matches the area you're working on.
-- Anchors/section numbers from the original `SELF.md` are preserved at the top of every file.
-- Creative-mode coverage is large enough to live in its own subfolder under `creative/`.
-- Treat a named implementation path as current only when that path still exists in source. When source moves or a subsystem is retired, update the owning self-reference file and its cross-references together.
+| # | Doc | Read when you're touching… |
+|---|-----|---------------------------|
+| 01 | [Identity & paths](01-identity-and-paths.md) | where anything lives, config files, soul files |
+| 02 | [Startup, gateway, runtime](02-startup-gateway-runtime.md) | boot, port, process supervisor, restart, health, CLI |
+| 03 | [Prompt assembly & context](03-prompt-assembly-and-context.md) | system prompt, injected blocks, compaction, budgets |
+| 04 | [Chat pipeline & providers](04-chat-pipeline-and-providers.md) | tool loop, streaming, providers, model routing, threads |
+| 05 | [Tools & categories](05-tools-and-categories.md) | adding/changing tools, categories, tool_search, result bounding |
+| 06 | [Image & voice](06-image-voice.md) | voice agent, realtime, dictation, image generation |
+| 07 | [Source editing & PR workflow](07-source-editing-and-pr-workflow.md) | changing Prometheus itself, worktrees, CI, merge → restart |
+| 08 | [Agents, tasks, background](08-agents-tasks-background.md) | background_ops, subagents, task runner, spawn routing |
+| 09 | [Teams](09-teams.md) | managed teams, manager/member turns, goals, dispatch |
+| 10 | [Scheduling, automations, triggers](10-scheduling-automations-triggers.md) | schedules, heartbeat, timers, webhooks, goals |
+| 11 | [Memory, notes, Brain](11-memory-notes-brain.md) | memory tool, write_note, Brain Thought/Dream, audit index |
+| 12 | [Connectors, MCP, integrations](12-connectors-mcp-integrations.md) | connectors, OAuth, MCP servers, X/Vercel wrappers |
+| 13 | [Browser & desktop](13-browser-desktop.md) | browser/desktop automation, vision, login handoff |
+| 14 | [Creative, HyperFrames, Remotion](14-creative-hyperframes-remotion.md) | creative studio, motion templates, scene graph |
+| 15 | [Media engine & video](15-media-engine-video.md) | video projects, shots/jobs, providers (fal/Kling/Wan/Grok), cost caps |
+| 16 | [Games engine](16-games-engine.md) | games-engine subsystem, game builds |
+| 17 | [Desktop web UI](17-desktop-web-ui.md) | web-ui pages, components, build/sync |
+| 18 | [Mobile app](18-mobile-app.md) | mobile UI, pairing, Tailscale Funnel |
+| 19 | [Onboarding, accounts, auth](19-onboarding-accounts-auth.md) | first-run flow, accounts, provider auth |
+| 20 | [Skills runtime](20-skills-runtime.md) | skills, routing, SKILL.md format |
+| 21 | [Security, approvals, permissions](21-security-approvals-permissions.md) | approval gates, Lite/Default, elevated, secrets |
+| 22 | [Comms, Telegram, notifications](22-comms-telegram-notifications.md) | channels, delivery_send, push |
+| 23 | [Rich output, cards, artifacts](23-rich-output-cards-artifacts.md) | show_ui_card, fenced cards, html visuals |
+| 24 | [Release, packaging, update](24-release-packaging-update.md) | Electron build, public release, updater |
+| 25 | [Sharp edges](25-sharp-edges.md) | known traps across the system |
 
-## Section → file map
+## Generated inventories (never hand-edit; rerun `node self/_tools/generate-inventories.mjs`)
 
-| § | Area | File |
-|---|------|------|
-| 1 | Core Identity | [01-identity.md](01-identity.md) |
-| 2, 3, 3A, 3B | Startup, Runtime Surfaces, Auth Gate, Mobile Pairing/HTTPS/Tailscale | [02-startup-runtime.md](02-startup-runtime.md) |
-| 4, 5 | Execution Modes, Prompt Assembly | [03-execution-and-prompting.md](03-execution-and-prompting.md) |
-| 6 | Creative Modes (overview) | [creative/00-overview.md](creative/00-overview.md) |
-| 6A | Creative Runtime and Scene Graph | [creative/01-runtime-scene-graph.md](creative/01-runtime-scene-graph.md) |
-| 6B | Creative Assets, Uploads, Media Intake | [creative/02-assets-uploads.md](creative/02-assets-uploads.md) |
-| 6C | Creative Video and Editing | [creative/03-video-editing.md](creative/03-video-editing.md) |
-| 6D | HTML Motion and HyperFrames | [creative/04-html-motion-hyperframes.md](creative/04-html-motion-hyperframes.md) |
-| 6D-1 | Creative Generative Pipeline + 2026-05-20 self-edit notes | [creative/05-generative-pipeline.md](creative/05-generative-pipeline.md) |
-| 6E | HTML Motion Templates | [creative/06-motion-templates.md](creative/06-motion-templates.md) |
-| 6F | HTML Motion Blocks | [creative/07-motion-blocks.md](creative/07-motion-blocks.md) |
-| 6G | Remotion Motion Templates | [creative/08-remotion-templates.md](creative/08-remotion-templates.md) |
-| 6H | Premium Editable Creative Templates | [creative/09-premium-templates.md](creative/09-premium-templates.md) |
-| 6I | Creative QA Rules | [creative/10-qa-rules.md](creative/10-qa-rules.md) |
-| 7, 8, 9 | Browser Modes, Teach/Copilot UI, Observation/Vision | [04-browser.md](04-browser.md) |
-| 10, 11 | Tool Architecture, Web/Media tools | [05-tools.md](05-tools.md) |
-| 12, 12A | OpenAI Image Gen + Creative Media Config, Voice/Realtime | [06-image-voice.md](06-image-voice.md) |
-| 13, 13A, 14, 15, 15A, 15B | Source Editing, Coding API, Proposals, Self-Edit Sandbox, Fast Dev Source Edit Approvals, Dev-Live Self-Edits | [07-source-editing.md](07-source-editing.md) |
-| 16, 17, 18, 19 | Tasks/Background, Subagents/Teams/Coordinator, Spawn Strategy, Deploy Analysis | [08-tasks-and-agents.md](08-tasks-and-agents.md) |
-| 20, 21 | Providers, Model Configuration | [09-providers-and-models.md](09-providers-and-models.md) |
-| 22, 23 | MCP, Connections (incl. X/xAI shared OAuth) | [10-mcp-and-connections.md](10-mcp-and-connections.md) |
-| 24, 24A | Terminal Command/Approval, Managed Process Supervisor | [11-run-and-supervisor.md](11-run-and-supervisor.md) |
-| 25, 25A, 25B | Telegram/Channels, Brain Runner, Skill Gardener | [12-telegram-and-brain.md](12-telegram-and-brain.md) |
-| 26, 27 | Memory Files/Search, Memory Index Layers | [13-memory.md](13-memory.md) |
-| 28, 28A, 28B | Bundled Skills, Hub/Frontend Views, Onboarding/Migration | [14-skills-and-frontend.md](14-skills-and-frontend.md) |
-| 29, 30, 31 | Data Paths, Sharp Edges, Maintenance Rule | [15-paths-and-sharp-edges.md](15-paths-and-sharp-edges.md) |
-| 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
-| 32A | Mobile Liquid Glass UI Reference and Dev Slider Restore Notes | [24-mobile-liquid-glass.md](24-mobile-liquid-glass.md) |
-| 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
-| — | Local UI URLs, `?desktop=1`, self-edit live verification | [17-local-ui-verification.md](17-local-ui-verification.md) |
-| 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
-| 35 | Onboarding System, Replay, Dev Test, Migration Boundary | [19-onboarding-system.md](19-onboarding-system.md) |
-| 36 | Rich Chat Artifacts (cards), Data Tools, Voice Integration | [20-rich-artifacts.md](20-rich-artifacts.md) |
-| 37 | Runtime Prompt Map (all agent surfaces, files, overlaps) | [21-runtime-prompt-map.md](21-runtime-prompt-map.md) |
-| 38 | Runtime Prompt Verbatim Inventory (literal strings + injection map) | [22-runtime-prompt-verbatim.md](22-runtime-prompt-verbatim.md) |
-| 39 | Runtime Context Build Pipeline (assembly order, block by block) | [23-runtime-context-flow.md](23-runtime-context-flow.md) |
-| 40 | Runtime Instruction Census (verified injection ownership, costs, overlaps, role matrix) | [26-runtime-instruction-census.md](26-runtime-instruction-census.md) |
-| 41 | Stage 4 Tool-Menu Trigger Benchmark (deterministic triggers, rollback, savings, test corpus) | [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md) |
-| 42 | Stage 5 Deterministic Skill Routing (inventory, relevance decisions, discovery, rollback, benchmark) | [28-deterministic-skill-routing.md](28-deterministic-skill-routing.md) |
-| 43 | Canonical Agent Identity and Memory Runtime (main, manager, standalone/team agents, compatibility) | [29-agent-identity-and-memory-runtime.md](29-agent-identity-and-memory-runtime.md) |
-| 44 | Gateway and Runtime Process Isolation (current memory/context/model/Brain worker boundaries and retired architecture names) | [30-runtime-process-isolation.md](30-runtime-process-isolation.md) |
-| 45 | Brain Thought Six-Hour Activity Package (canonical stores, direct prompt contract, provenance, redaction, continuations, measurements) | [31-thought-activity-package.md](31-thought-activity-package.md) |
-| 46 | Persistent Chat Sources / Context (registry, immutable versions, Browser history/save, retrieval budget, UI, security, migration) | [32-persistent-chat-sources.md](32-persistent-chat-sources.md) |
-| 47 | P0-4 Process Hygiene Observer and Dry-Run Boundary (ownership/lease-aware report-only classification, protection, redaction, and Thought handoff) | [37-process-hygiene.md](37-process-hygiene.md) |
-| 48 | P10-36 Mobile Gateway Connections (independent computer targets, pairing/catalog/status, immutable target selection, read-only first slice) | [38-mobile-gateway-connections.md](38-mobile-gateway-connections.md) |
-| — | Workspace-first operating mode and reversible hiding of direct Prometheus dev/source/repo-sync tools | [33-workspace-first-dev-tools.md](33-workspace-first-dev-tools.md) |
-| — | Tool-category workflow packs, tightened activation benchmark, schema/prose measurements, and skill-routing audit | [34-tool-category-routing-and-skill-audit.md](34-tool-category-routing-and-skill-audit.md) |
-| — | Tool latency benchmark, prompt payload A/B, executor/provider timing, and MEMORY.md findings | [35-tool-latency-benchmark-2026-08-09.md](35-tool-latency-benchmark-2026-08-09.md) |
-| — | P11-37 external conversation sessions, MCP/setup imports, provenance, rollback, and imported-source sidebar marks | [36-external-imports.md](36-external-imports.md) |
-| Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
-
-Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.
-
-> CRITICAL realtime gotchas (OpenAI/xAI mobile voice + visual input sharp edges — see §12A-CRITICAL, §12A-2, and §12A-3 of [06-image-voice.md](06-image-voice.md)):
-> 1. AUTH/500: OpenAI Realtime 500s ("Internal Server Error") on Codex OAuth because the realtime CALL endpoint needs a real platform api_key (raw OAuth bearer gets 403 on `/v1/models`). The api_key is minted by exchanging the OAuth **id_token**, which needs an `organization_id` claim — only on a FRESH LOGIN that does NOT send `codex_cli_simplified_flow=true` in `startOAuthFlow`. Working logs show `auth: 'openai_codex_oauth_api_key'`.
-> 2. NO INPUT (after auth fixed): session connects + soundwaves animate but no transcription/audio because the OpenAI WebRTC path did its OWN `getUserMedia` — a SECOND iOS mic capture that comes back silent. Fix: reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()`/`__pmVoice.warmMicStream`) like xAI does; never open a second concurrent `getUserMedia` on iOS.
-> 3. VISUAL INPUTS (mobile Realtime): camera photos/videos are in-app captures, not native saved photos. OpenAI Realtime visual context must be sent as `conversation.item.create` user messages with `input_image` content parts (`image_url` data URLs plus `detail: "auto"`), aggressively downscaled to fit mobile Safari/WebRTC data-channel limits. Voice-camera captures are staged in the chat bubble and flushed to the next spoken PTT/always-listening turn, or to the typed chat send path when the user types after taking a photo.
-
-## Operational Runbooks
-
-- Public runtime and installer dependency hardening: [public-runtime-release/README.md](public-runtime-release/README.md)
-- Owner-approved public release and self-update flow: [18-public-release.md](18-public-release.md)
+| File | Contents |
+|------|----------|
+| [generated/tools.md](generated/tools.md) | every tool definition found in source, grouped by prefix, with file |
+| [generated/tool-categories.md](generated/tool-categories.md) | category IDs + policies |
+| [generated/routes.md](generated/routes.md) | all HTTP routes by router file |
+| [generated/connectors.md](generated/connectors.md) | connectors / MCP presets / provider extensions, with api_request gap flags |
+| [generated/skills.md](generated/skills.md) | installed skills + descriptions |
+| [generated/source-map.md](generated/source-map.md) | src/ dir sizes, largest files, web-ui layout |
+| [generated/tests.md](generated/tests.md) | scripts/test-* and *.regression.ts, so you can find the tests for what you touched |
+| [generated/changelog.md](generated/changelog.md) | merged PRs since 2026-08-01 |
 
 ## Maintenance
 
-When editing, change the file that owns the affected section and keep `workspace/SELF.md` synchronized when the monolithic copy still contains that material. Before naming an implementation directory, route, environment variable, or persistent data path as current, verify it against the current source tree. A moved/removed path is a documentation bug even when the architectural concept survived elsewhere.
-
-## Workspace persona files (USER / SOUL / MEMORY)
-
-- **SOUL.md** (2026-07-07 slim): persona, conversational turns, action-first, owner authority, memory routing, light pointers only. Operational runbooks → **MEMORY.md** `operational_rules`, **skills**, and section files above.
-- **USER.md** (2026-07-07 slim): identity, communication_style, projects only — internals → MEMORY, skills, **self/13-memory.md**.
-- **MEMORY.md**: durable history, decisions, migrated runbooks, operational rules.
+- [Conventions & doc template](_tools/CONVENTIONS.md): rules every self/ doc follows.
+- [ISSUES.md](ISSUES.md): running log of Prometheus tool/runtime friction found during work (feeds auto-PRs).
+- `investigations/`: dated, point-in-time reports and benchmarks (`YYYY-MM-DD-slug.md`). They are not core reference.
+- Drift check: `node C:\Users\rafel\PromSRC\scripts\test-self-doc-drift.mjs` (verifies index links resolve; it reads `PromSRC/workspace/self`, see [25](25-sharp-edges.md)).
