@@ -18,7 +18,7 @@ import { markClientPerformance } from './performance.js';
  */
 
 import { state, THEME_KEY, APPEARANCE_KEY } from './state.js';
-import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
+import { runIfNeeded as runOnboardingIfNeeded, startOnBoot as startOnboardingOnBoot } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
 import { escHtml } from './utils.js';
 import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
@@ -1117,3 +1117,11 @@ initSidebarSectionToggles();
 window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
   console.warn('[onboarding] manual start failed:', err);
 });
+
+// First-start onboarding. desktop-entry.js calls this once the app is
+// unlocked; the server decides (from the persisted install record) whether
+// anything should run, so restarts and reloads are no-ops.
+window.startPrometheusOnboardingOnBoot = () => startOnboardingOnBoot().catch((err) => {
+  console.warn('[onboarding] boot check failed:', err);
+});
+if (window.__promOnboardingBootRequested) window.startPrometheusOnboardingOnBoot();

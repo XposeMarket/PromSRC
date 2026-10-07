@@ -2806,6 +2806,67 @@ async function connectAnthropic() {
   }
 }
 
+let _anthropicOneClickSignal = null;
+
+async function connectAnthropicOneClick() {
+  const statusEl = document.getElementById('anthropic-oauth-status');
+  const btn = document.getElementById('anthropic-oneclick-btn');
+  const codeRow = document.getElementById('anthropic-oneclick-code-row');
+  if (_anthropicOneClickSignal) {
+    _anthropicOneClickSignal.cancelled = true;
+    _anthropicOneClickSignal = null;
+    if (btn) btn.textContent = 'Connect Claude account';
+    if (codeRow) codeRow.style.display = 'none';
+    setSettingsStatus(statusEl, 'info', 'Cancelled.');
+    return;
+  }
+  const { connectClaudeOneClick } = await import('../onboarding/claude-connect.js');
+  const signal = { cancelled: false };
+  _anthropicOneClickSignal = signal;
+  if (btn) btn.textContent = 'Cancel';
+  setSettingsStatus(statusEl, 'info', 'Starting Claude sign-in…');
+  const labels = {
+    cli_missing: 'Installing Claude Code (one time)…',
+    installing: 'Installing Claude Code (one time)…',
+    starting: 'Starting Claude sign-in…',
+    awaiting_browser: 'Approve in your browser. Prom connects automatically.',
+    awaiting_code: 'Paste the code shown on the Claude page.',
+    connected: 'Claude approved.',
+  };
+  const result = await connectClaudeOneClick({
+    signal,
+    installIfMissing: true,
+    accountId: getSelectedProviderAccountId('anthropic'),
+    onState(state) {
+      if (signal.cancelled) return;
+      if (labels[state]) setSettingsStatus(statusEl, 'info', labels[state]);
+      if (codeRow) codeRow.style.display = state === 'awaiting_code' ? 'flex' : 'none';
+    },
+  }).catch((e) => ({ ok: false, error: e.message }));
+  if (_anthropicOneClickSignal === signal) _anthropicOneClickSignal = null;
+  if (btn) btn.textContent = 'Connect Claude account';
+  if (codeRow) codeRow.style.display = 'none';
+  if (signal.cancelled) return;
+  if (result.ok) {
+    setSettingsStatus(statusEl, 'info', '');
+    await refreshAnthropicStatus();
+    await refreshCredentialedRoutingProviderChoices();
+    addProcessEntry('final', 'Anthropic connected.');
+  } else {
+    setSettingsStatus(statusEl, 'error', result.error || 'Could not connect Claude.');
+  }
+}
+
+async function submitAnthropicOneClickCode() {
+  const input = document.getElementById('anthropic-oneclick-code');
+  const code = String(input?.value || '').trim();
+  if (!code) return;
+  const { submitClaudeCode } = await import('../onboarding/claude-connect.js');
+  const r = await submitClaudeCode(code).catch((e) => ({ error: e.message }));
+  if (r?.error) setSettingsStatus(document.getElementById('anthropic-oauth-status'), 'error', r.error);
+  else if (input) input.value = '';
+}
+
 async function testAnthropicConnection() {
   const statusEl = document.getElementById('anthropic-oauth-status');
   setSettingsStatus(statusEl, 'info', 'Testing…');
@@ -5979,6 +6040,8 @@ window.deleteMCPServer = deleteMCPServer;
 window.deleteSelectedAgent = deleteSelectedAgent;
 window.deleteSiteShortcutUI = deleteSiteShortcutUI;
 window.connectAnthropic = connectAnthropic;
+window.connectAnthropicOneClick = connectAnthropicOneClick;
+window.submitAnthropicOneClickCode = submitAnthropicOneClickCode;
 window.disconnectAnthropic = disconnectAnthropic;
 window.onAnthropicUsageTrackingToggle = onAnthropicUsageTrackingToggle;
 window.completeAnthropicUsageTracking = completeAnthropicUsageTracking;
