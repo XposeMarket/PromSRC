@@ -206,7 +206,8 @@ export interface VideoProject {
   brief: string;
   target: ProjectTarget;
   defaults: { videoModel: string; imageModel: string };
-  budget: { capUsd?: number; autoApproveUsd: number; spentUsd: number };
+  /** policy 2 = autoApproveUsd defaults to $0 (Raul's quote-first rule). Older projects are migrated on load. */
+  budget: { capUsd?: number; autoApproveUsd: number; spentUsd: number; policy?: number };
   characters: Character[];
   styles: Style[];
   shots: Shot[];
@@ -352,8 +353,10 @@ export function normalizeProject(raw: any): VideoProject {
     budget: {
       capUsd: raw.budget?.capUsd != null ? num(raw.budget.capUsd, 0) : undefined,
       // Default: every paid run is quoted and confirmed first (Raul's rule). Projects can opt in to a limit.
-      autoApproveUsd: num(raw.budget?.autoApproveUsd, 0),
+      // Pre-policy projects kept a silent $1 auto-approve; reset them to $0 once.
+      autoApproveUsd: raw.budget?.policy === BUDGET_POLICY ? num(raw.budget?.autoApproveUsd, 0) : 0,
       spentUsd: num(raw.budget?.spentUsd, 0),
+      policy: BUDGET_POLICY,
     },
     characters: arr<Character>(raw.characters).map((c) => ({ ...c, anchors: arr(c.anchors), refs: arr(c.refs), candidates: arr(c.candidates) })),
     styles: arr<Style>(raw.styles).map((s) => ({ ...s, refs: arr(s.refs) })),
@@ -406,6 +409,8 @@ export function listProjects(workspacePath: string): Array<Pick<VideoProject, 'i
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+export const BUDGET_POLICY = 2;
+
 export async function createProject(workspacePath: string, input: {
   title?: string; brief?: string; target?: Partial<ProjectTarget>;
   defaults?: Partial<VideoProject['defaults']>; budget?: Partial<VideoProject['budget']>;
@@ -417,7 +422,8 @@ export async function createProject(workspacePath: string, input: {
     brief: input.brief,
     target: input.target,
     defaults: input.defaults,
-    budget: input.budget,
+    // An explicit budget at creation is the user's choice: keep it under the current policy.
+    budget: { ...(input.budget || {}), policy: BUDGET_POLICY },
   });
   project.opLog.push({ seq: 1, at: Date.now(), actor: 'system', op: 'project.create', summary: `Created "${project.title}"` });
   project.version = 1;

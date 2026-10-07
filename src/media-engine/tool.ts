@@ -18,7 +18,7 @@ import * as studio from './studio.js';
 import * as parity from './parity.js';
 import * as trend from './trend.js';
 import { listPresets } from './presets.js';
-import { deleteBrand, deleteCast, saveCast } from './library.js';
+import { deleteBrand, deleteCast, listCast, saveCast } from './library.js';
 
 export const VIDEO_PROJECT_ACTIONS = [
   'help', 'list', 'create', 'get', 'delete', 'apply_ops', 'undo', 'redo',
@@ -105,7 +105,7 @@ export function getVideoProjectToolDef(): any {
           aspect: { type: 'string' },
           shotId: { type: 'string' },
           prompts: { type: 'array', items: { type: 'string' }, description: 'hooks: alternative hook prompts.' },
-          resolution: { type: 'string', enum: ['480p', '720p', '1080p'], description: 'upgrade target resolution.' },
+          resolution: { type: 'string', enum: ['480p', '720p', '1080p'], description: 'estimate / generate / upgrade output resolution (defaults to the project target). Resolution-tiered models such as Wan Animate are priced per tier.' },
           quality: { type: 'string', enum: ['draft', 'premium'], description: 'route.' },
           storyboard: { type: 'boolean', description: 'run: generate storyboard stills first (default true).' },
           qa: { type: 'boolean', description: 'run: vision QA + rerolls (default true).' },
@@ -274,10 +274,10 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       return { stored: true, provider, hint: providerKeyHint(provider) };
     }
     case 'estimate':
-      return await estimate(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, count: args.count, modelId: args.modelId });
+      return await estimate(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution });
     case 'generate': {
       const pid = need(args.projectId, 'projectId');
-      const r: any = await generateShots(ws, pid, { shotIds: args.shotIds, count: args.count, modelId: args.modelId, approved: args.approved === true });
+      const r: any = await generateShots(ws, pid, { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution, approved: args.approved === true });
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Shots generated.', args.notify === true);
       return wake ? { ...r, wake } : r;
     }
@@ -419,8 +419,11 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       // Standalone: cast_save {name, anchors:[face], refs:[pack], notes(personality), voice, tags} needs no project.
       if (!args.projectId) {
         const anchors = Array.isArray(args.anchors) ? args.anchors.map(String) : args.path ? [String(args.path)] : [];
-        if (!args.castId && !anchors.length) throw new Error('cast_save without projectId needs name + anchors (the approved face image) or castId to update.');
-        return { saved: saveCast(ws, { id: args.castId, name: need(args.name, 'name'), kind: args.kind === 'product' ? 'product' : args.kind === 'person' ? 'person' : undefined,
+        // No castId: update the existing cast with the same name instead of creating a duplicate.
+        const sameName = !args.castId && args.name ? listCast(ws).find((c) => c.name.trim().toLowerCase() === String(args.name).trim().toLowerCase()) : undefined;
+        const castId = args.castId || sameName?.id;
+        if (!castId && !anchors.length) throw new Error('cast_save without projectId needs name + anchors (the approved face image) or castId to update.');
+        return { ...(sameName ? { reusedExisting: sameName.id } : {}), saved: saveCast(ws, { id: castId, name: need(args.name, 'name'), kind: args.kind === 'product' ? 'product' : args.kind === 'person' ? 'person' : undefined,
           anchors: anchors.length ? anchors : undefined, refs: Array.isArray(args.refs) ? args.refs.map(String) : undefined,
           notes: args.notes, voice: args.voice, tags: args.tags } as any) };
       }

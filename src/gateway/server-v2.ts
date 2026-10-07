@@ -1219,6 +1219,8 @@ setShutdownHooks({
     try { secureXaiVoiceStreaming?.close(); } catch {}
     try { openAiRealtimeProxy.close(); } catch {}
     try { secureOpenAiRealtimeProxy?.close(); } catch {}
+    // The draining gateway kept 127.0.0.1:9234 and the replacement's relay failed with EADDRINUSE (2026-10-07).
+    void import('./user-chrome-relay').then((m) => m.stopUserChromeRelayForHandoff()).catch(() => {});
     let settled = false;
     const done = (): void => {
       if (settled) return;
