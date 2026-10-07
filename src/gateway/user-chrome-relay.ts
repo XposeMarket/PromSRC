@@ -75,8 +75,11 @@ export class UserChromeRelay {
     this.pairingSecret = String(options?.pairingSecret || readPairing().secret);
   }
 
+  private bindRetries = 0;
+  private stopped = false;
+
   ensureStarted(): void {
-    if (this.server) return;
+    if (this.server || this.stopped) return;
     const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });
     const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
     const clearServer = () => { if (this.server === server) { this.server = null; this.wss = null; } };
@@ -86,7 +89,18 @@ export class UserChromeRelay {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     });
     wss.on('connection', (ws: WebSocket) => this.handleConnection(ws));
-    server.on('error', (err) => { console.error('[User Chrome relay]', err.message); clearServer(); });
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      console.error('[User Chrome relay]', err.message);
+      clearServer();
+      // A draining gateway (warm handoff) can still hold 9234 for a moment; keep retrying
+      // instead of leaving this gateway without a relay until the next browser tool call.
+      if (err.code === 'EADDRINUSE' && !this.stopped && this.bindRetries < 120) {
+        this.bindRetries += 1;
+        const retry = setTimeout(() => { if (!this.stopped) this.ensureStarted(); }, 5_000);
+        retry.unref?.();
+      }
+    });
+    server.on('listening', () => { if (this.bindRetries) console.log(`[User Chrome relay] listening on ${this.port} after ${this.bindRetries} retr${this.bindRetries === 1 ? 'y' : 'ies'}`); this.bindRetries = 0; });
     server.on('close', clearServer);
     server.listen(this.port, '127.0.0.1');
     this.server = server; this.wss = wss;
@@ -143,6 +157,17 @@ export class UserChromeRelay {
     ws.on('close', () => { clearTimeout(timer); this.clearPeer(ws, 'Personal Chrome extension disconnected.'); });
     ws.on('error', () => {});
   }
+  /** Release port 9234 (warm-handoff drain) so the replacement gateway can bind it. */
+  stop(): Promise<void> {
+    this.stopped = true;
+    const server = this.server; const wss = this.wss;
+    if (this.peer) { try { this.peer.close(4008, 'gateway handoff'); } catch {} }
+    this.rejectPending('Gateway is restarting; retry on the new gateway.');
+    try { wss?.clients.forEach((c) => { try { c.terminate(); } catch {} }); wss?.close(); } catch {}
+    this.server = null; this.wss = null;
+    if (!server) return Promise.resolve();
+    return new Promise<void>((resolve) => { const t = setTimeout(resolve, 1_000); server.close(() => { clearTimeout(t); resolve(); }); });
+  }
   onEvent(handler: (event: any) => void) { this.eventHandlers.add(handler); return () => this.eventHandlers.delete(handler); }
   getStatus(): UserChromeRelayStatus { return { running: !!this.server?.listening, connected: !!this.peer && this.peer.readyState === WebSocket.OPEN, authenticated: !!this.peerAuth && !!this.peer && this.peer.readyState === WebSocket.OPEN, extensionVersion: this.peerMeta?.extensionVersion, connectedAt: this.peerMeta?.connectedAt, lastSeenAt: this.peerMeta?.lastSeenAt, port: this.port, pairingFile: pairingFile(), extensionPath: getUserChromeExtensionPath() }; }
   private isPeerReady(): boolean { return !!this.peer && this.peer.readyState === WebSocket.OPEN && !!this.peerAuth; }
@@ -177,6 +202,8 @@ export class UserChromeRelay {
 }
 let singleton: UserChromeRelay | null = null;
 export function getUserChromeRelay() { singleton ||= new UserChromeRelay(); singleton.ensureStarted(); return singleton; }
+/** Warm handoff: free the fixed relay port without creating a relay that never started. */
+export async function stopUserChromeRelayForHandoff(): Promise<void> { if (singleton) await singleton.stop(); }
 export function getUserChromeExtensionOnboarding(): string {
   const status = getUserChromeRelay().getStatus();
   return ['Personal Chrome uses the Prometheus Personal Chrome extension, not CDP port 9223.', '1. In Chrome, open chrome://extensions, enable Developer mode, then choose Load unpacked.', `2. Select this real folder (never app.asar): ${status.extensionPath}.`, `3. Open Extension options and paste the pairing code from ${status.pairingFile}.`, `4. Keep Chrome running. The extension connects only to ws://127.0.0.1:${status.port}/prometheus-user-chrome and reconnects after service-worker suspension.`, 'Grant debugger permission when Chrome asks. Incognito requires enabling "Allow in incognito" in Extension details.'].join('\n');
