@@ -201,7 +201,7 @@ export async function reconcileProjectSpend(workspacePath: string, projectId: st
       resolution: String(job.input.resolution || project.target.resolution),
       aspectRatio: String(job.input.aspectRatio || project.target.aspect),
     }) : undefined;
-    const usd = knownLive !== undefined && model
+    const usd = (knownLive !== undefined || model?.pricing?.includedInSubscription || model?.pricing?.byResolutionPerSecondUsd) && model
       ? estimateCostUsd(model, { durationSec: Number(job.input.durationSec) || undefined,
         resolution: String(job.input.resolution || project.target.resolution),
         aspectRatio: String(job.input.aspectRatio || project.target.aspect), count: job.count })
@@ -239,7 +239,13 @@ export async function estimate(workspacePath: string, projectId: string, args: {
       const missing = missingRequiredFields(model, input).filter((f) => !(f === 'audio' && shot.line?.trim()) && !(f === 'sourceVideo' && args.sourceFromSelectedTake && selectedTake(shot)?.kind === 'video'));
       if (missing.length) problems.push(missingFieldsMessage(model, missing));
     } catch (e: any) { problems.push(String(e?.message || e)); }
-    if (priceForModel(model, { durationSec: shot.durationSec, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd) problems.push('model has no pricing; cost is unknown');
+    if (priceForModel(model, { durationSec: shot.durationSec, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd && !model.pricing?.includedInSubscription) problems.push('model has no pricing; cost is unknown');
+    if (model.source === 'fal-sync') {
+      const { hydrateFalModelSchema } = await import('./fal-catalog.js');
+      await hydrateFalModelSchema(model);
+      if (model.unmappedRequired?.length) problems.push(`${model.id} requires ${model.unmappedRequired.join(', ')} which Prometheus cannot fill; add a curated manifest (add_model with defaults) first`);
+      else problems.push('unverified synced model: inputs were guessed from the fal catalog; check models -> needs before approving a paid run');
+    }
     shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }), problems });
   }
   const total = Math.round(shots.reduce((s, x) => s + x.usd, 0) * 1000) / 1000;
@@ -473,7 +479,7 @@ export async function generateShots(workspacePath: string, projectId: string, ar
   rawPrompt?: string;
 }): Promise<GenerateResult> {
   const est = await estimate(workspacePath, projectId, args);
-  const blocking = est.shots.filter((s) => s.problems.some((x) => !x.startsWith('model has no pricing')));
+  const blocking = est.shots.filter((s) => s.problems.some((x) => !x.startsWith('model has no pricing') && !x.startsWith('unverified synced model')));
   if (blocking.length) {
     throw new Error(`Cannot generate: ${blocking.map((s) => `${s.title}: ${s.problems.join('; ')}`).join(' | ')}`);
   }
@@ -484,6 +490,9 @@ export async function generateShots(workspacePath: string, projectId: string, ar
   }
   if (!args.approved && est.shots.some((s) => s.problems.some((problem) => problem.startsWith('model has no pricing')))) {
     return { needsApproval: true, reason: 'At least one model has unknown pricing. Confirm with the user before generating; a $0 estimate is not a free job.', estimate: est, jobs: [] };
+  }
+  if (!args.approved && est.shots.some((s) => s.problems.some((x) => x.startsWith('unverified synced model')))) {
+    return { needsApproval: true, reason: 'A synced fal model is unverified (inputs guessed). Check its inputs and confirm with the user, then call again with approved:true.', estimate: est, jobs: [] };
   }
   if (!args.approved && est.total > p0.budget.autoApproveUsd + 1e-9) {
     return { needsApproval: true, reason: `Estimated $${est.total.toFixed(2)} is above the auto-approve limit ($${p0.budget.autoApproveUsd.toFixed(2)}). Confirm with the user, then call again with approved:true.`, estimate: est, jobs: [] };

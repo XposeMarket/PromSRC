@@ -16,6 +16,7 @@ import {
 } from './engine.js';
 import * as studio from './studio.js';
 import * as parity from './parity.js';
+import * as trend from './trend.js';
 import { listPresets } from './presets.js';
 import { deleteBrand, deleteCast, saveCast } from './library.js';
 
@@ -29,11 +30,13 @@ export const VIDEO_PROJECT_ACTIONS = [
   'cast_list', 'cast_save', 'cast_add', 'cast_delete', 'brand_list', 'brand_save', 'brand_apply', 'brand_delete',
   // parity
   'presets', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants',
+  // trend transfer + finishing
+  'trend_transfer', 'trend_assemble', 'phone_finish',
 ] as const;
 
 export const VIDEO_PROJECT_READ_ACTIONS = new Set(['help', 'list', 'get', 'models', 'syncModels', 'providers', 'estimate', 'jobs', 'wait', 'frame', 'templates', 'music_beds', 'run_cost', 'cast_list', 'brand_list', 'presets']);
 /** Actions that can spend money with an external provider. */
-export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants']);
+export const VIDEO_PROJECT_PAID_ACTIONS = new Set(['generate', 'generate_anchor', 'storyboard', 'voiceover', 'qa', 'hooks', 'upgrade', 'run', 'quickstart', 'recast', 'lipsync', 'talking_photo', 'draw_to_video', 'upscale', 'foley', 'faceless', 'batch_variants', 'trend_transfer']);
 
 export function getVideoProjectToolDef(): any {
   return {
@@ -63,7 +66,7 @@ export function getVideoProjectToolDef(): any {
           brief: { type: 'string' },
           target: { type: 'object', description: '{ aspect:"16:9"|"9:16"|"1:1", resolution:"480p"|"720p"|"1080p", fps, durationSec }' },
           defaults: { type: 'object', description: '{ videoModel, imageModel } catalog ids' },
-          budget: { type: 'object', description: '{ capUsd, autoApproveUsd } (default auto-approve $1)' },
+          budget: { type: 'object', description: '{ capUsd, autoApproveUsd } (default auto-approve $0: every paid run needs approved:true after the user confirms the quote)' },
           ops: { type: 'array', items: { type: 'object' }, description: 'For apply_ops: [{op:"shot.update", id, prompt}, ...]. Applied atomically as one undo step.' },
           shotIds: { type: 'array', items: { type: 'string' }, description: 'For estimate/generate. Default: all shots.' },
           count: { type: 'integer', minimum: 1, maximum: 4, description: 'Takes (variations) per shot.' },
@@ -109,6 +112,16 @@ export function getVideoProjectToolDef(): any {
           maxRerolls: { type: 'integer' },
           steps: { type: 'array', items: { type: 'string' }, description: 'run: limit to these steps.' },
           notify: { type: 'boolean', description: 'Wake this chat when the started jobs finish (default true for run/quickstart).' },
+          anchors: { type: 'array', items: { type: 'string' }, description: 'cast_save (standalone): approved face/identity image paths' },
+          refs: { type: 'array', items: { type: 'string' }, description: 'cast_save (standalone): asset-pack images (turnaround, expressions, outfits)' },
+          voice: { type: 'object', description: 'cast_save: { provider, voice }' },
+          cuts: { type: 'array', items: { type: 'number' }, description: 'trend_transfer: cut points in seconds (outfit/scene changes). Omit to auto-detect.' },
+          looks: { type: 'array', items: { type: 'string' }, description: 'trend_transfer: outfit/look per part for the matched start frames' },
+          startImages: { type: 'array', items: { type: 'string' }, description: 'trend_transfer: pre-made start frames per part (skips frame generation)' },
+          maxParts: { type: 'number' },
+          audioStartSec: { type: 'number' },
+          phoneLook: { type: 'boolean', description: 'trend_assemble: also write a phone-look finished copy (default true)' },
+          strength: { type: 'string', enum: ['light', 'medium', 'strong'], description: 'phone_finish strength' },
           castId: { type: 'string' },
           brandId: { type: 'string' },
           castIds: { type: 'array', items: { type: 'string' } },
@@ -211,11 +224,13 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'delete':
       return { deleted: deleteProject(ws, need(args.projectId, 'projectId')) };
     case 'apply_ops': {
-      let ops = args.ops;
-      if (typeof ops === 'string') {
+      let ops = args.ops ?? args.operations;
+      // Models sometimes double-encode the array ("\"[...]\""); unwrap up to 3 string layers.
+      for (let i = 0; i < 3 && typeof ops === 'string'; i++) {
         try { ops = JSON.parse(ops); }
         catch { throw new Error('ops must be a non-empty array (or a JSON-encoded array).'); }
       }
+      if (ops && !Array.isArray(ops) && typeof ops === 'object' && (ops as any).op) ops = [ops];
       const { project, summaries } = await applyOps(ws, need(args.projectId, 'projectId'), ops, 'agent');
       return { applied: summaries, project: brief(project, ws) };
     }
@@ -234,7 +249,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
         models: models.map((m: MediaModelManifest) => ({
           id: m.id, label: m.label, kind: m.kind, provider: m.provider, tags: m.tags,
           needs: m.requires, durations: m.limits?.durations || (m.limits?.maxDurationSec ? `${m.limits.minDurationSec ?? 1}-${m.limits.maxDurationSec}s` : undefined),
-          price: liveFalPrice(m) || m.pricing, builtin: m.builtin, source: m.source,
+          price: liveFalPrice(m) || m.pricing, builtin: m.builtin, source: m.source, verified: m.source !== 'fal-sync',
         })),
       };
     }
@@ -347,6 +362,17 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       if (args.wait === true) return await studio.runAutopilot(ws, pid, { ...runArgs, approved: true });
       return { ...startRunInBackground(ctx, pid, { ...runArgs, approved: true }), costUsd: cost.usd };
     }
+    case 'trend_transfer': {
+      const pid = need(args.projectId, 'projectId');
+      const r: any = await trend.trendTransfer(ws, pid, { sourcePath: need(args.sourcePath, 'sourcePath'), characterId: need(args.characterId, 'characterId'), cuts: args.cuts, maxParts: args.maxParts, looks: args.looks, startImages: args.startImages, prompt: args.prompt, modelId: args.modelId, approved: args.approved === true, shotIds: args.shotIds });
+      const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), `Trend parts ready; then trend_assemble {shotIds:${JSON.stringify(r.shotIds)}, audioPath:${JSON.stringify(args.sourcePath)}}`, args.notify !== false);
+      const next = r.needsApproval ? 'Show the matched start frames (parts[].frame) and the quote; after the user approves call trend_transfer again with the SAME shotIds and approved:true.' : undefined;
+      return { ...r, ...(wake ? { wake } : {}), ...(next ? { next } : {}) };
+    }
+    case 'trend_assemble':
+      return await trend.trendAssemble(ws, need(args.projectId, 'projectId'), { shotIds: args.shotIds || [], audioPath: args.audioPath || args.sourcePath, audioStartSec: args.audioStartSec, phoneLook: args.phoneLook });
+    case 'phone_finish':
+      return await trend.phoneFinish(ws, { path: need(args.path || args.sourcePath, 'path'), projectId: args.projectId, strength: args.strength });
     case 'presets':
       return { presets: listPresets(args.group) };
     case 'recast': {
@@ -390,7 +416,15 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'cast_list':
       return { cast: studio.listCast(ws, args.kind ? { kind: args.kind } : undefined) };
     case 'cast_save':
-      return { saved: studio.castSave(ws, need(args.projectId, 'projectId'), need(args.characterId, 'characterId'), { tags: args.tags }) };
+      // Standalone: cast_save {name, anchors:[face], refs:[pack], notes(personality), voice, tags} needs no project.
+      if (!args.projectId) {
+        const anchors = Array.isArray(args.anchors) ? args.anchors.map(String) : args.path ? [String(args.path)] : [];
+        if (!args.castId && !anchors.length) throw new Error('cast_save without projectId needs name + anchors (the approved face image) or castId to update.');
+        return { saved: saveCast(ws, { id: args.castId, name: need(args.name, 'name'), kind: args.kind === 'product' ? 'product' : args.kind === 'person' ? 'person' : undefined,
+          anchors: anchors.length ? anchors : undefined, refs: Array.isArray(args.refs) ? args.refs.map(String) : undefined,
+          notes: args.notes, voice: args.voice, tags: args.tags } as any) };
+      }
+      return { saved: studio.castSave(ws, args.projectId, need(args.characterId, 'characterId'), { tags: args.tags }) };
     case 'cast_add':
       return await studio.castAdd(ws, need(args.projectId, 'projectId'), need(args.castId, 'castId'));
     case 'cast_delete':
