@@ -23,7 +23,7 @@ const MODEL_IDS = [
   'grok-imagine-image-pro',
 ] as const;
 const DEFAULT_ENDPOINT = 'https://api.x.ai/v1';
-const MAX_XAI_REFERENCE_IMAGES = 3;
+const MAX_XAI_REFERENCE_IMAGES = 5;
 
 const XAI_ASPECT_RATIO_BY_PROMETHEUS: Record<string, string> = {
   landscape: '16:9',
@@ -84,9 +84,9 @@ function resolveDefaultModel(): string {
   return coerceModelId(String(providerCfg.model || imageCfg.model || process.env.XAI_IMAGE_MODEL || DEFAULT_MODEL)) || DEFAULT_MODEL;
 }
 
-function getResolution(): string {
+function getResolution(requested?: string): string {
   const providerCfg = getXAIImageProviderConfig();
-  const raw = String(providerCfg.resolution || process.env.XAI_IMAGE_RESOLUTION || '1k').trim().toLowerCase();
+  const raw = String(requested || providerCfg.resolution || process.env.XAI_IMAGE_RESOLUTION || '1k').trim().toLowerCase();
   return raw === '2k' ? '2k' : '1k';
 }
 
@@ -117,7 +117,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
     outputFormats: ['png'] as const,
     outputCompression: false,
     exactSizes: false,
-    sizes: ['16:9/1k', '1:1/1k', '9:16/1k', '16:9/2k', '1:1/2k', '9:16/2k'],
+    sizes: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20', '21:9', '5:2', 'x 1k|2k'],
   };
 
   listModels(): readonly string[] {
@@ -139,8 +139,13 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
   async generate(request: ImageGenerationResolvedRequest): Promise<ImageGenerationResult> {
     const prompt = String(request.prompt || '').trim();
     const model = this.resolveModel(request.model);
-    const aspectRatio = XAI_ASPECT_RATIO_BY_PROMETHEUS[request.aspect_ratio] || '16:9';
-    const resolution = getResolution();
+    const aspectRatio = request.native_aspect_ratio || XAI_ASPECT_RATIO_BY_PROMETHEUS[request.aspect_ratio] || '16:9';
+    const resolution = getResolution(request.resolution);
+    // xAI quality: low | medium | auto, grok-imagine-image-2.0 only.
+    const rawQuality = String(request.quality || '').toLowerCase();
+    const xaiQuality = model === 'grok-imagine-image-2.0' && rawQuality
+      ? (rawQuality === 'low' || rawQuality === 'auto' ? rawQuality : 'medium')
+      : undefined;
     const runtime = await getRequestRuntime().catch(() => ({ bearerToken: undefined, baseUrl: getApiBase() }));
     const bearerToken = runtime.bearerToken;
     const referenceImages = request.reference_images || [];
@@ -189,6 +194,8 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
           model,
           prompt,
           response_format: 'b64_json',
+          ...(xaiQuality ? { quality: xaiQuality } : {}),
+          ...(request.resolution ? { resolution } : {}),
         };
 
         if (resolvedReferences.length === 1) {
@@ -221,6 +228,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
             response_format: 'b64_json',
             aspect_ratio: aspectRatio,
             resolution,
+            ...(xaiQuality ? { quality: xaiQuality } : {}),
           }),
           signal: AbortSignal.timeout(5 * 60 * 1000),
         });
