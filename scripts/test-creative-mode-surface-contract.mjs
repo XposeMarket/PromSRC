@@ -12,7 +12,7 @@ const designRegression = read('scripts/test-design-preview-contract.mjs');
 const imageRegression = read('scripts/test-image-generation-flow.mjs');
 const promptContext = read('src/gateway/prompt-context.ts');
 const chatRouter = read('src/gateway/routes/chat.router.ts');
-const overview = read('workspace/self/creative/00-overview.md');
+const overview = read('workspace/self/14-creative-hyperframes-remotion.md');
 
 assert.match(tools, /design[\s\S]*image[\s\S]*canvas[\s\S]*video/, 'Creative tool definitions must retain all supported mode values');
 
