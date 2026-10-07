@@ -645,8 +645,6 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     console.warn('[TeamManagerAutoWake] Could not wire auto-wake deps:', e.message);
   }
 
-  const coordinatorCompletionDedup = new Set<string>();
-
   // Wire coordinator deps — main agent acts as team manager
   try {
     const { setCoordinatorDeps } = require('../teams/team-coordinator.js');
@@ -657,12 +655,26 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
         if (reason !== 'goal_complete') return;
 
         const normalizedManagerMessage = String(managerMessage || '').trim();
-        const dedupKey = `${teamId}:${turns}:${normalizedManagerMessage.slice(0, 240)}`;
-        if (coordinatorCompletionDedup.has(dedupKey)) {
-          console.log(`[TeamCoordinator] Duplicate goal_complete callback skipped for team ${teamId}`);
+        // One review per goal. Post-completion wakes (watch timeouts, scheduled
+        // checks, member chatter) each re-emit [GOAL_COMPLETE]; the old per-message
+        // in-memory dedup let every one spawn another analysis task (4 on 2026-10-07)
+        // and kept the team visibly "running" after it was done.
+        const { claimTeamGoalCompletionReview } = require('../teams/managed-teams.js');
+        if (!claimTeamGoalCompletionReview(teamId)) {
+          console.log(`[TeamCoordinator] goal_complete already reviewed for current goal of team ${teamId}; skipping`);
           return;
         }
-        coordinatorCompletionDedup.add(dedupKey);
+        // The goal is done: retire the manager's still-active watches so their
+        // timeouts don't wake the manager into another completion loop.
+        try {
+          const { getActiveInternalWatches, cancelInternalWatch } = require('../internal-watch/internal-watch-store.js');
+          const { resolveWatchOwningTeamId } = require('../internal-watch/internal-watch-runner.js');
+          for (const w of getActiveInternalWatches()) {
+            if (resolveWatchOwningTeamId(w) === teamId) cancelInternalWatch(w.id);
+          }
+        } catch (err: any) {
+          console.warn(`[TeamCoordinator] Could not retire team watches for ${teamId}: ${err?.message || err}`);
+        }
 
         const team = getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId);
         const teamName = team?.name || teamId;
@@ -748,6 +760,18 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   // work can use the team. Repair missing active artifacts immediately and
   // report membership drift; never recreate registry entries from stale dirs.
   try {
+    try {
+      const { reconcileStaleTeamDispatches } = require('../teams/managed-teams.js');
+      const { loadTask } = require('../tasks/task-store.js');
+      const settle = () => {
+        const n = reconcileStaleTeamDispatches(Date.now(), (id: string) => loadTask(id));
+        if (n > 0) console.log(`[TeamRegistry] Settled ${n} stale team dispatch record(s).`);
+      };
+      settle();
+      setInterval(() => { try { settle(); } catch { /* best effort */ } }, 10 * 60 * 1000).unref?.();
+    } catch (err: any) {
+      console.warn('[TeamRegistry] Stale dispatch reconcile failed:', err?.message || err);
+    }
     const orphanedManagers = reconcileOrphanedManagerAgents();
     if (orphanedManagers.length > 0) {
       console.warn(`[TeamRegistry] Detached ${orphanedManagers.length} orphaned manager record(s): ${orphanedManagers.join('; ')}`);

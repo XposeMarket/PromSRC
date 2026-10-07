@@ -172,11 +172,7 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
     ``,
     teamWorkspacePath
       ? [
-          `[YOUR WORKING DIRECTORY]`,
-          `${teamWorkspacePath}`,
-          ``,
-          `This is the team workspace for "${team?.name || teamId}". By default write task outputs and shared`,
-          `files here. Do NOT write to your own agent workspace.`,
+          ...workingDirectoryLines(team, teamId, String(teamWorkspacePath)),
           `Allowed work paths (readable AND writable):`,
           ...allowedWorkPaths.map((p) => `  - ${p}`),
           ...(allowedWorkPaths.some((p) => path.resolve(p) !== path.resolve(String(teamWorkspacePath)))
@@ -229,6 +225,27 @@ function normalizePathForCompare(p: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function workingDirectoryLines(team: any, teamId: string, teamWorkspacePath: string): string[] {
+  const workDir = resolveTeamWorkDir(team);
+  if (workDir) {
+    return [
+      `[YOUR WORKING DIRECTORY]`,
+      `${workDir}`,
+      ``,
+      `This is the project directory for "${team?.name || teamId}". Relative paths in file tools resolve here,`,
+      `so write all task outputs (code, tests, specs, reviews) here. Do NOT write to your own agent workspace.`,
+      `Team workspace (shared state, memory.json/last_run.json/pending.json): ${teamWorkspacePath}`,
+    ];
+  }
+  return [
+    `[YOUR WORKING DIRECTORY]`,
+    `${teamWorkspacePath}`,
+    ``,
+    `This is the team workspace for "${team?.name || teamId}". By default write task outputs and shared`,
+    `files here. Do NOT write to your own agent workspace.`,
+  ];
+}
+
 function runScopedTeamWorkspace<T>(teamWorkspacePath: string | null, allowedWorkPaths: string[], fn: () => Promise<T>): Promise<T> {
   if (!teamWorkspacePath) return fn();
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -236,11 +253,43 @@ function runScopedTeamWorkspace<T>(teamWorkspacePath: string | null, allowedWork
   return runWithWorkspace(teamWorkspacePath, fn, allowedWorkPaths);
 }
 
+/**
+ * Resolve the team's project working directory (team.workDir). Returns null when
+ * unset or when it falls outside the main workspace and every allowed path, so a
+ * bad value can never widen the sandbox. Creates the directory when missing.
+ */
+export function resolveTeamWorkDir(team: any): string | null {
+  const raw = String(team?.workDir || team?.work_dir || '').trim();
+  if (!raw) return null;
+  const mainWorkspace = getConfig().getWorkspacePath();
+  const resolved = path.resolve(path.isAbsolute(raw) ? raw : path.join(mainWorkspace, raw));
+  const roots = [
+    mainWorkspace,
+    ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
+  ].map((r: any) => String(r || '').trim().replace(/[\\/]\*\*?$/, '')).filter(Boolean)
+    .map((r: string) => path.resolve(path.isAbsolute(r) ? r : path.join(mainWorkspace, r)));
+  const target = normalizePathForCompare(resolved);
+  const inside = roots.some((r: string) => {
+    const base = normalizePathForCompare(r);
+    return target === base || target.startsWith(base.endsWith(path.sep) ? base : base + path.sep);
+  });
+  if (!inside) return null;
+  try { fs.mkdirSync(resolved, { recursive: true }); } catch { return null; }
+  return resolved;
+}
+
+/** Execution root for team turns: team.workDir when valid, else the team workspace. */
+export function resolveTeamExecutionRoot(team: any, teamWorkspacePath?: string | null): string | null {
+  return resolveTeamWorkDir(team) || teamWorkspacePath || null;
+}
+
 export function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string | null): string[] {
   const mainWorkspace = getConfig().getWorkspacePath();
+  const workDir = resolveTeamWorkDir(team);
   const rawValues = [
     ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
     ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
+    ...(workDir ? [workDir] : []),
   ];
   const roots = [
     ...(teamWorkspacePath ? [teamWorkspacePath] : [mainWorkspace]),
@@ -360,6 +409,7 @@ async function runTeamAgentViaChatInternal(
     try { teamWorkspacePath = ensureTeamWorkspace(teamId); } catch {}
   }
   const allowedWorkPaths = resolveTeamAgentAllowedWorkPaths(team, teamWorkspacePath);
+  const executionRoot = resolveTeamExecutionRoot(team, teamWorkspacePath);
 
   // Load agent role from the team-scoped identity directory.
   // ensureTeamAgentIdentity bootstraps AGENT.md from the global agent workspace
@@ -481,11 +531,7 @@ async function runTeamAgentViaChatInternal(
     ``,
     teamWorkspacePath
       ? [
-          `[YOUR WORKING DIRECTORY]`,
-          `${teamWorkspacePath}`,
-          ``,
-          `This is the team workspace for "${team?.name || teamId}". By default write task outputs and shared`,
-          `files here. Do NOT write to your own agent workspace.`,
+          ...workingDirectoryLines(team, teamId, String(teamWorkspacePath)),
           `Allowed work paths (readable AND writable):`,
           ...allowedWorkPaths.map((p) => `  - ${p}`),
           ...(allowedWorkPaths.some((p) => path.resolve(p) !== path.resolve(String(teamWorkspacePath)))
@@ -526,8 +572,8 @@ async function runTeamAgentViaChatInternal(
   }
 
   if (teamWorkspacePath) {
-    deps.setWorkspace(sessionId, teamWorkspacePath);
-    cronTask.agentWorkspace = teamWorkspacePath;
+    deps.setWorkspace(sessionId, executionRoot || teamWorkspacePath);
+    cronTask.agentWorkspace = executionRoot || teamWorkspacePath;
     cronTask.agentAllowedWorkPaths = allowedWorkPaths;
   }
   const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent as any) : undefined);
@@ -540,7 +586,7 @@ async function runTeamAgentViaChatInternal(
     teamName: team?.name || teamId,
     identityRoot,
     memoryRoot: identityRoot,
-    executionRoot: teamWorkspacePath || getConfig().getWorkspacePath(),
+    executionRoot: executionRoot || teamWorkspacePath || getConfig().getWorkspacePath(),
     allowedWorkPaths,
   });
   if (agentRouting.modelOverride) {
@@ -803,7 +849,7 @@ async function runTeamAgentViaChatInternal(
     // Bind the async workspace scope (team workspace + team allowed_work_paths).
     // setWorkspace() alone only sets the root, so team allowed_work_paths were
     // silently ignored by file tools for dispatched members.
-    const result = await withAdmissionRetry(() => runScopedTeamWorkspace(teamWorkspacePath, allowedWorkPaths, () => deps.handleChat(
+    const result = await withAdmissionRetry(() => runScopedTeamWorkspace(executionRoot || teamWorkspacePath, allowedWorkPaths, () => deps.handleChat(
       task,
       sessionId,
       (event, data) => broadcastTeamTaskEvent({

@@ -249,6 +249,7 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   if (model.source === 'fal-sync') {
     await hydrateFalModelSchema(model);
     if (!model.schemaLoaded) throw new Error(`fal input schema unavailable for ${model.endpoint}; refusing to send unvalidated fields.`);
+    if (model.unmappedRequired?.length) throw new Error(`${model.id} requires ${model.unmappedRequired.join(', ')} which Prometheus cannot fill. Add a curated manifest (add_model with defaults) instead.`);
   }
   const body: Record<string, unknown> = model.source === 'fal-sync' ? {} : { ...(model.defaults || {}) };
   const set = (field: NeutralField, value: unknown) => {

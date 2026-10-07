@@ -207,7 +207,7 @@ function applyRoundedClip(ctx, width, height, radius) {
 }
 
 function drawIcon(ctx, el, sw, sh) {
-  const color = metaValue(el, 'color', metaValue(el, 'fill', '#f97316'));
+  const color = metaValue(el, 'color', metaValue(el, 'fill', '#d6b75e'));
   const glyphs = {
     play: '▶', pause: 'Ⅱ', check: '✓', close: '×', plus: '+',
     star: '★', heart: '♥', bolt: 'ϟ', camera: '●', music: '♫',
@@ -216,7 +216,7 @@ function drawIcon(ctx, el, sw, sh) {
   const inferred = Object.entries(glyphs).find(([key]) => name.includes(key))?.[1];
   const glyph = String(metaValue(el, 'glyph', '') || '') || glyphs[name] || inferred || '◆';
   const radius = Math.min(sw, sh) * 0.18;
-  ctx.fillStyle = metaValue(el, 'background', 'rgba(249,115,22,0.18)');
+  ctx.fillStyle = metaValue(el, 'background', 'rgba(214,183,94,0.18)');
   ctx.beginPath();
   if (typeof ctx.roundRect === 'function') ctx.roundRect(0, 0, sw, sh, radius);
   else ctx.rect(0, 0, sw, sh);
@@ -231,7 +231,7 @@ function drawIcon(ctx, el, sw, sh) {
 function drawComponent(ctx, el, sw, sh) {
   const radius = Math.min(sw, sh) * 0.08;
   const background = metaValue(el, 'background', metaValue(el, 'fill', 'rgba(255,255,255,0.08)'));
-  const accent = metaValue(el, 'accent', '#f97316');
+  const accent = metaValue(el, 'accent', '#d6b75e');
   const title = metaValue(el, 'title', metaValue(el, 'label', el.name || 'Component'));
   const body = metaValue(el, 'body', metaValue(el, 'content', ''));
   const value = metaValue(el, 'value', '');
@@ -675,7 +675,7 @@ function drawSelectionHighlight(ctx, el, timeMs, transform) {
   ctx.translate(-sw / 2, -sh / 2);
 
   // Dashed selection border
-  ctx.strokeStyle = '#f97316';
+  ctx.strokeStyle = '#d6b75e';
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 3]);
   ctx.strokeRect(-1, -1, sw + 2, sh + 2);
@@ -684,7 +684,7 @@ function drawSelectionHighlight(ctx, el, timeMs, transform) {
   // Corner handles
   const hs = 6;
   ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#f97316';
+  ctx.strokeStyle = '#d6b75e';
   ctx.lineWidth = 1.5;
   const corners = [[0,0],[sw,0],[0,sh],[sw,sh]];
   for (const [cx, cy] of corners) {

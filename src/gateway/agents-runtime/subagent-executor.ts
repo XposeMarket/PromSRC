@@ -16592,6 +16592,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               ).slice(0, 2000),
               managerModel: args.manager_model ? String(args.manager_model) : undefined,
               allowedWorkPaths,
+              workDir: String(args.work_dir ?? args.workDir ?? '').trim() || undefined,
               reviewTrigger,
 	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
 	            });
@@ -16692,6 +16693,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               purpose: team.purpose || team.mission || '',
               currentFocus: team.currentFocus || room.runGoal || '',
               allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths : [],
+              workDir: team.workDir || null,
               manager: {
                 agentId: team.managerAgentId,
                 sessionId: `team_coord_${team.id}`,
@@ -16750,6 +16752,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const paths = Array.isArray(args.allowed_work_paths) ? args.allowed_work_paths : Array.isArray(args.allowedWorkPaths) ? args.allowedWorkPaths : null;
             const cleanPaths = paths ? paths.map((v: any) => String(v).trim()).filter(Boolean) : [];
             if (cleanPaths.length) { team.allowedWorkPaths = cleanPaths; changed.push('allowed_work_paths'); }
+            const rawWorkDir = args.work_dir ?? args.workDir;
+            if (has(rawWorkDir)) {
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { resolveTeamWorkDir } = require('../teams/team-dispatch-runtime');
+              const resolvedWorkDir = resolveTeamWorkDir({ ...team, workDir: String(rawWorkDir).trim() });
+              if (!resolvedWorkDir) {
+                return { name, args, result: `work_dir "${String(rawWorkDir)}" must be inside the main workspace or one of the team allowed_work_paths (${(team.allowedWorkPaths || []).join(', ') || 'none set'}).`, error: true };
+              }
+              team.workDir = resolvedWorkDir; changed.push('work_dir');
+            } else if (args.clear_work_dir === true) { delete team.workDir; changed.push('work_dir'); }
             else if (args.clear_allowed_work_paths === true) { team.allowedWorkPaths = []; changed.push('allowed_work_paths'); }
             const addIds: string[] = Array.isArray(args.add_subagent_ids) ? args.add_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const removeIds: string[] = Array.isArray(args.remove_subagent_ids) ? args.remove_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
@@ -16779,7 +16791,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               if (explicitFocus) changed.push('focus');
             }
             if (!changed.length) {
-              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, focus/goal, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, add_subagent_ids, remove_subagent_ids.', error: true };
+              return { name, args, result: 'team_manage(update) needs at least one field: name, description, emoji, purpose, team_context, focus/goal, manager_system_prompt, manager_model, review_trigger, allowed_work_paths, work_dir, add_subagent_ids, remove_subagent_ids.', error: true };
             }
             team.updatedAt = Date.now();
             saveManagedTeam(team);
@@ -16799,7 +16811,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 ) === true;
               } catch { /* wake is best-effort */ }
             }
-            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, currentFocus: team.currentFocus || '', manager_woken: managerWoken, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [] }, null, 2), error: false };
+            return { name, args, result: JSON.stringify({ success: true, action: 'update', team_id: team.id, changed, currentFocus: team.currentFocus || '', manager_woken: managerWoken, subagentIds: team.subagentIds, allowedWorkPaths: team.allowedWorkPaths || [], workDir: team.workDir || null }, null, 2), error: false };
           }
 
           if (action === 'trigger_review') {

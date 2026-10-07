@@ -50,7 +50,7 @@ function baseCanvas(options: ThreeMotionBaseOptions, role: string): { id: string
   const start = clampNumber(options.start, 0, 0, 300);
   const duration = clampNumber(options.duration, 6, 0.1, 300);
   const accent = color(options.accent, '#38bdf8');
-  const secondary = color(options.secondary, '#f97316');
+  const secondary = color(options.secondary, '#d6b75e');
   const background = color(options.background, '#05070d');
   const intensity = clampNumber(options.intensity, 0.8, 0, 2);
   const speed = clampNumber(options.speed, 1, 0.05, 4);
