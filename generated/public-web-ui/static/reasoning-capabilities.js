@@ -52,7 +52,7 @@ export function reasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (id === 'anthropic') {
-    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
+    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6)|haiku-5)(?:-|$)/.test(name)) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
       // Manual-budget models accept low/medium/high as a thinking-budget hint
       // (mirrors src/providers/reasoning-capabilities.ts).
@@ -63,7 +63,7 @@ export function reasoningCapability(provider, model) {
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     // Opus 5.5 is the only effort model whose API default is medium.
-    return { efforts, defaultEffort: /^claude-opus-5-5(?:-|$)/.test(name) ? 'medium' : 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
+    return { efforts, defaultEffort: /^claude-(?:opus-5-5|haiku-5-5)(?:-|$)/.test(name) ? 'medium' : 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
   }
   if (id === 'perplexity') return { efforts: ['low','medium','high'] };
   // docs.x.ai: xhigh is available on grok-4.6 and later (+ 4.20 multi-agent).
