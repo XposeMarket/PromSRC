@@ -10472,7 +10472,7 @@ function loadMobileChatPageRenderer() {
   _mobileMediaKind,
   _mobileMediaUrl,
   _mobileMessageCopyText,
-  mobileMarkdownToPlainText,
+  _mobileCopyPlain: mobileMarkdownToPlainText,
   _mobileQuestionRememberDraft,
   _mobileRealtimeAgentDisableAlwaysListening,
   _mobileRealtimeProviderLabel,

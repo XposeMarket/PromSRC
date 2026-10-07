@@ -205,7 +205,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _mobileMediaKind,
       _mobileMediaUrl,
       _mobileMessageCopyText,
-      mobileMarkdownToPlainText,
+      _mobileCopyPlain,
       _mobileQuestionRememberDraft,
       _mobileRealtimeAgentDisableAlwaysListening,
       _mobileRealtimeProviderLabel,
@@ -6457,7 +6457,7 @@ void main() {
   }
 
   async function copyMobileTextValue(text, successMessage = 'Message copied') {
-    const value = String(text || '').trim();
+    const value = _mobileCopyPlain(text);
     if (!value) return false;
     try {
       await navigator.clipboard.writeText(value);
@@ -6486,7 +6486,7 @@ void main() {
 
   async function copyMobileChatMessage(index) {
     const msg = _activeMobileThread()[index];
-    return copyMobileTextValue(mobileMarkdownToPlainText(_mobileMessageCopyText(msg)));
+    return copyMobileTextValue(_mobileMessageCopyText(msg));
   }
 
   function _mobileSpeakResponseLabel() {
@@ -6627,7 +6627,7 @@ void main() {
     const record = _mobileBackgroundAgentDetailRecord(String(id || '').trim());
     if (!record) return false;
     const message = _mobileBackgroundAgentDetailMessage(record);
-    return copyMobileTextValue(mobileMarkdownToPlainText(_mobileMessageCopyText(message) || record.error || record.result), 'Agent response copied');
+    return copyMobileTextValue(_mobileMessageCopyText(message) || record.error || record.result, 'Agent response copied');
   }
 
   function speakMobileResponseText(text) {
@@ -6714,7 +6714,7 @@ void main() {
       }
       return;
     }
-    if (action === 'copy') return copyMobileTextValue(mobileMarkdownToPlainText(_mobileMessageCopyText(sideState.thread?.[index])));
+    if (action === 'copy') return copyMobileTextValue(_mobileMessageCopyText(sideState.thread?.[index]));
     if (action === 'speak') return speakMobileSideMessage(index);
     if (action === 'fork') return forkMobileSideConversationFromMessage(index);
   }
