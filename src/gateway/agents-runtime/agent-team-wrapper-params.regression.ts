@@ -138,6 +138,47 @@ async function main(): Promise<void> {
   const missingAction = normalizeAgentTeamWrapperTool('team_ops_wrapper', {});
   assert.ok(missingAction?.error, 'missing action should still error');
 
+  // Strict-schema models send every optional field as "" / []. A blank
+  // team_action must not wipe the real goal action (live manager failure,
+  // Teams v4 retest 2026-10-07).
+  const blankFilledGoal = normalizeAgentTeamWrapperTool('team_ops_wrapper', {
+    action: 'manage_goal',
+    team_action: 'update_focus',
+    team_id: 'team_x',
+    teamId: 'team_x',
+    agent_id: '',
+    subagent_id: '',
+    task: '',
+    subagent_ids: [],
+    value: 'new focus',
+  });
+  assert.equal(blankFilledGoal?.name, 'manage_team_goal');
+  assert.equal(blankFilledGoal?.args.action, 'update_focus');
+  assert.equal(blankFilledGoal?.args.team_id, 'team_x');
+  assert.equal('agent_id' in (blankFilledGoal?.args || {}), false, 'blank strings are treated as absent');
+  assert.equal('subagent_ids' in (blankFilledGoal?.args || {}), false, 'empty arrays are treated as absent');
+
+  // get_agent_result by member: resolves the member's latest dispatch in this team.
+  const { _bgAgentResults } = require('../teams/team-dispatch-runtime');
+  const never = new Promise<any>(() => {});
+  _bgAgentResults.set('team_bg_old', { status: 'complete', agentId: 'tt_reviewer', teamId: 'team_x', startedAt: 1, promise: never });
+  _bgAgentResults.set('team_bg_new', { status: 'running', agentId: 'tt_reviewer', teamId: 'team_x', startedAt: 2, promise: never });
+  _bgAgentResults.set('team_bg_other_team', { status: 'running', agentId: 'tt_reviewer', teamId: 'team_y', startedAt: 3, promise: never });
+  const byMember = normalizeAgentTeamWrapperTool('team_ops_wrapper', {
+    action: 'get_agent_result', team_id: 'team_x', subagent_id: 'tt_reviewer', agent_id: '', task: '',
+  });
+  assert.equal(byMember?.name, 'get_agent_result');
+  assert.equal(byMember?.args.task_id, 'team_bg_new', 'latest dispatch of that member in that team');
+  const explicit = normalizeAgentTeamWrapperTool('team_ops_wrapper', {
+    action: 'get_agent_result', team_id: 'team_x', agent_id: 'tt_reviewer', task_id: 'team_bg_old',
+  });
+  assert.equal(explicit?.args.task_id, 'team_bg_old', 'explicit task_id wins');
+  for (const id of ['team_bg_old', 'team_bg_new', 'team_bg_other_team']) _bgAgentResults.delete(id);
+
+  // agent_ops keeps "" (it clears reasoning_effort).
+  const clearEffort = normalizeAgentTeamWrapperTool('agent_ops', { action: 'update', agent_id: 'a1', reasoning_effort: '' });
+  assert.equal(clearEffort?.args.reasoning_effort, '', 'agent_ops blank reasoning_effort must survive');
+
   console.log('agent-team-wrapper-params regression passed');
 }
 
