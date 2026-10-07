@@ -67,7 +67,16 @@ try {
   assert.equal(repaired.jobs.find((j) => j.id === 'done_1')?.actualUsd, 0.15);
   assert.equal(repaired.jobs.find((j) => j.id === 'billed_1')?.actualUsd, 0.11);
   assert.equal(repaired.jobs.find((j) => j.id === 'failed_1')?.actualUsd, undefined);
-  assert.equal((await estimate(ws, project.id, { modelId: model.id })).shots[0].usd, 0.15);
+  // estimate() triggers a live fal sync; keep it offline so the fixture model stays registered.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error('offline regression'); }) as typeof fetch;
+  try {
+    // First sync lazily loads the on-disk fal cache, which would replace the fixture; warm it, then re-install.
+    const { syncFalModels } = await import('./fal-catalog.js');
+    await syncFalModels();
+    setSyncedFalModels([model]);
+    assert.equal((await estimate(ws, project.id, { modelId: model.id })).shots[0].usd, 0.15);
+  } finally { globalThis.fetch = realFetch; }
   assert.equal(loadProject(ws, project.id).budget.spentUsd, 0.26);
   assert.equal(estimateCostUsd(model, { durationSec: 5 }), 0.15);
   const unknown = { ...model, id: 'fal/unknown-test', endpoint: 'fal-ai/unknown-test', pricing: { source: 'estimate' as const } };

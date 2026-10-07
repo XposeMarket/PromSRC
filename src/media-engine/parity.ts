@@ -15,7 +15,10 @@ import { importAsset, music, planRunCost } from './studio.js';
 
 export const DEFAULT_MODELS = {
   recastEdit: 'xai/grok-imagine-video-1.5-edit',
-  recastMotion: 'fal/wan-animate-replace',
+  // Motion transfer = character image performs the clip's moves (keeps the image's face, body, outfit).
+  recastMotion: 'fal/kling-v3-pro-motion-control',
+  /** Fill the dancer's silhouette instead (keeps the clip's background; body shape follows the source). */
+  recastReplace: 'fal/wan-animate-replace',
   recastSwap: 'fal/kling-o1-edit',
   lipsync: 'fal/sync-lipsync-v2',
   talkingPhoto: 'fal/omnihuman-v1.5',
@@ -228,7 +231,7 @@ export async function faceless(ws: string, args: {
     const p = await createProject(ws, {
       title: `Faceless: ${topic.slice(0, 60)}`, brief: topic,
       target: { aspect: '16:9', resolution: args.resolution || '720p', fps: 30, durationSec: minutes * 60 } as any,
-      budget: { capUsd: args.capUsd ?? 10, autoApproveUsd: 1 } as any,
+      budget: { capUsd: args.capUsd ?? 10, autoApproveUsd: 0 } as any,
     });
     pid = p.id;
   }
