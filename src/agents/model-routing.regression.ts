@@ -28,6 +28,10 @@ assert.equal(normalizeProviderModel('anthropic', 'claude-opus-5.5'), 'claude-opu
 assert.equal(normalizeProviderModel('anthropic', 'sonnet-5.5'), 'claude-sonnet-5-5');
 assert.ok(ANTHROPIC_MODELS.includes('claude-sonnet-5-5'), 'claude-sonnet-5-5 must be listed in the Anthropic model catalog');
 assert.ok(getReasoningCapability('anthropic', 'claude-sonnet-5-5').efforts.includes('xhigh'), 'Sonnet 5.5 must accept xhigh effort');
+assert.equal(normalizeProviderModel('anthropic', 'haiku-5.5'), 'claude-haiku-5-5');
+assert.ok(ANTHROPIC_MODELS.includes('claude-haiku-5-5'), 'claude-haiku-5-5 must be listed');
+assert.equal(getReasoningCapability('anthropic', 'claude-haiku-5-5').nativeEffort, true, 'Haiku 5.5 has native effort');
+assert.equal(getReasoningCapability('anthropic', 'claude-haiku-5-5').defaultEffort, 'medium');
 // Opus 5 must keep resolving to itself; 5.5 must not shadow it.
 assert.equal(normalizeProviderModel('anthropic', 'opus-5'), 'claude-opus-5');
 assert.deepEqual(
