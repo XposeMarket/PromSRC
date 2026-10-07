@@ -8,7 +8,8 @@
   "docsUrl": "https://www.linkedin.com/",
   "tags": ["linkedin", "social", "browser session"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:linkedin"
+    "binding": "gateway/connections/browser-session:linkedin",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#0A66C2",
@@ -19,11 +20,15 @@
     ]
   },
   "ownership": {
+    "toolNamespaces": ["connector_linkedin"],
+    "tools": ["connector_linkedin_api_request"],
     "capabilities": ["social", "publishing", "browser_session"]
   },
   "setup": {
     "authType": "browser_session",
     "statusMode": "generic",
+    "docsHint": "Browser login does not authorize the API. API tools require a provider access_token saved in secure credentials or LINKEDIN_ACCESS_TOKEN; refresh externally when expired.",
+    "fields": [{ "key": "access_token", "label": "Optional LinkedIn API access token", "input": "password", "secret": true, "required": false }],
     "browserLogin": {
       "url": "https://www.linkedin.com/login",
       "checkUrl": "https://www.linkedin.com/feed/"

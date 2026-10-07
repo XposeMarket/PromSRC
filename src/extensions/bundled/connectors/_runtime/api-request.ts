@@ -21,6 +21,8 @@ export type ApiBodyEncoding = 'json' | 'form';
 
 export interface ConnectorApiRequestSpec<C> {
   connectorId: string;
+  /** Optional credential-backed instance for providers without a registry OAuth class. */
+  getConnector?: () => C | undefined;
   displayName: string;
   /** Named base URLs. The first key is the default. Paths are appended verbatim. */
   bases: Record<string, string | ((c: C) => string | Promise<string>)>;
@@ -133,10 +135,10 @@ export function registerConnectorApiRequestTool<C>(api: PrometheusExtensionApi, 
     connectorId: spec.connectorId,
     capability: 'api',
     execute: async (args: any) => {
-      if (!connectorConnected(spec.connectorId)) return notConnected(spec.displayName);
-      const c = getLiveConnector<C>(spec.connectorId);
-      if (!c) return toolError(`${spec.displayName} is unavailable.`);
       try {
+        if (!spec.getConnector && !connectorConnected(spec.connectorId)) return notConnected(spec.displayName);
+        const c = spec.getConnector ? spec.getConnector() : getLiveConnector<C>(spec.connectorId);
+        if (!c) return notConnected(spec.displayName);
         return await executeConnectorApiRequest(spec, c, args);
       } catch (err: any) {
         return toolError(`${spec.displayName} API request failed: ${err?.message || String(err)}`);
