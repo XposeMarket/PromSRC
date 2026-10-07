@@ -15,6 +15,7 @@ import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads }
 // cors and http moved to core/app.ts + core/server.ts (B3)
 import path from 'path';
 import fs from 'fs';
+import { claimMainChatRetrigger } from '../runtime/main-chat-retrigger-claim';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
@@ -12009,8 +12010,22 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   const message = String(recoveryData.message || runtime?.detail || '').trim();
   if (!sessionId || !message) return false;
 
+  // Several gateways can be alive during a warm handoff and each runs the
+  // recovery pass over the same durable ledger. The admission lease below is
+  // per-process, so claim the interrupted runtime across processes first.
+  const releaseRetriggerClaim = claimMainChatRetrigger(
+    path.join(getConfig().getConfigDir(), 'runtime-recovery-claims'),
+    String(runtime?.id || ''),
+    { owner: sessionId },
+  );
+  if (!releaseRetriggerClaim) {
+    console.warn(`[RuntimeRecovery] Skipped retrigger of ${sessionId} (old=${runtime?.id}): another gateway process already claimed it.`);
+    return false;
+  }
+
   const admissionLease = mainChatTurnCoordinator.tryAcquire(sessionId);
   if (!admissionLease) {
+    releaseRetriggerClaim();
     console.warn(`[RuntimeRecovery] Could not retrigger ${sessionId}: a replacement turn already owns the session.`);
     return false;
   }
