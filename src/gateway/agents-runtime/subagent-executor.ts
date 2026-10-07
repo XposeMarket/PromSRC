@@ -2946,6 +2946,18 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   delete args.action;
   const target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  // Strict-schema models fill every optional field with "" or []. Treat those as
+  // absent; otherwise `team_action: ""` overrode real values (manager goal calls
+  // failed with "requires team_id and action") and empty arrays looked like
+  // explicit clears.
+  // Scoped to the team wrappers: agent_ops intentionally uses "" to clear fields
+  // such as reasoning_effort.
+  if (name === 'team_ops_wrapper' || name === 'team_collab_ops') {
+    for (const key of Object.keys(args)) {
+      const value = args[key];
+      if (value === '' || value === null || (Array.isArray(value) && value.length === 0)) delete args[key];
+    }
+  }
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
     if (args.assignment == null && args.task_prompt != null) args.assignment = args.task_prompt;
@@ -3010,6 +3022,22 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     if (target === 'dispatch_team_agent') {
       if (args.task_prompt == null && args.task != null) args.task_prompt = args.task;
       if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    }
+    // get_agent_result needs a task_id. Managers usually only know the member,
+    // so resolve that member's most recent background dispatch in this team.
+    if (target === 'get_agent_result' && args.task_id == null) {
+      if (args.taskId != null) args.task_id = args.taskId;
+      const memberId = String(args.agent_id || args.subagent_id || '').trim();
+      if (args.task_id == null && memberId) {
+        const teamId = String(args.team_id || '').trim();
+        let best: { id: string; startedAt: number } | null = null;
+        for (const [id, entry] of getBgAgentResults().entries()) {
+          if (entry.agentId !== memberId) continue;
+          if (teamId && entry.teamId !== teamId) continue;
+          if (!best || entry.startedAt > best.startedAt) best = { id, startedAt: entry.startedAt };
+        }
+        if (best) args.task_id = best.id;
+      }
     }
   }
   if (name === 'team_collab_ops') {
