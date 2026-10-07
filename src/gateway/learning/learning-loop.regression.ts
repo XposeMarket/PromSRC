@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildLearningTurnRecord, recordLearningTurn, computeSkillRoutingStats, sha } from './turn-recorder';
-import { appendIntradayNote, parseNotes, renderNotesForPrompt, noteFileForDate } from '../memory/intraday-notes';
+import { appendIntradayNote, parseNotes, renderNotesForPrompt, noteFileForDate, resolveNotes } from '../memory/intraday-notes';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'learning-loop-'));
 
@@ -69,6 +69,14 @@ const rendered = renderNotesForPrompt(root, raw);
 assert.match(rendered, /combat art v2/);
 assert.match(rendered, /unrelated open item/);
 assert.doesNotMatch(rendered.split('DONE TODAY')[0], /combat art v1/);
+
+// ── Explicit resolves close notes of any age (older than the 7-day carry window) ──
+const oldFile = noteFileForDate(root, '2026-01-02');
+fs.writeFileSync(oldFile, '### [TASK] 2026-01-02T00:00:00.000Z #n_oldstale1 (open)\nancient open item\n', 'utf-8');
+const res = resolveNotes(root, ['n_oldstale1', 'n_missing99']);
+assert.deepEqual(res.resolved, ['n_oldstale1']);
+assert.deepEqual(res.unresolved, ['n_missing99']);
+assert.match(fs.readFileSync(oldFile, 'utf-8'), /#n_oldstale1 \(done\)/);
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log('learning-loop regression: ok');
