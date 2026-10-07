@@ -2032,14 +2032,14 @@ const CREATIVE_MODE_META = {
   canvas: {
     label: 'Image',
     title: 'Prometheus Image',
-    accent: '#f97316',
-    glow: 'rgba(249,115,22,0.18)',
+    accent: '#d6b75e',
+    glow: 'rgba(214,183,94,0.18)',
   },
   image: {
     label: 'Image',
     title: 'Prometheus Image',
-    accent: '#f97316',
-    glow: 'rgba(249,115,22,0.18)',
+    accent: '#d6b75e',
+    glow: 'rgba(214,183,94,0.18)',
   },
   video: {
     label: 'Video',
@@ -21580,14 +21580,14 @@ function desktopVoiceOrbSvg() {
         <radialGradient id="${id}-core" cx="32%" cy="25%" r="78%">
           <stop offset="0%" stop-color="var(--pm-voice-orb-light, #fff6e6)" stop-opacity=".98"/>
           <stop offset="24%" stop-color="var(--pm-voice-orb-hot, #ffd9a8)" stop-opacity=".82"/>
-          <stop offset="58%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".66"/>
+          <stop offset="58%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity=".66"/>
           <stop offset="88%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".78"/>
           <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".94"/>
         </radialGradient>
         <radialGradient id="${id}-aura" cx="50%" cy="48%" r="58%">
           <stop offset="0%" stop-color="var(--pm-voice-orb-glow, #ffb578)" stop-opacity=".56"/>
-          <stop offset="54%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".18"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+          <stop offset="54%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity=".18"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity="0"/>
         </radialGradient>
         <radialGradient id="${id}-rim" cx="32%" cy="20%" r="82%">
           <stop offset="0%" stop-color="#fff" stop-opacity=".23"/>
@@ -21596,11 +21596,11 @@ function desktopVoiceOrbSvg() {
           <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".72"/>
         </radialGradient>
         <linearGradient id="${id}-wave" x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
-          <stop offset="17%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
+          <stop offset="0%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity="0"/>
+          <stop offset="17%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity=".94"/>
           <stop offset="50%" stop-color="var(--pm-voice-orb-light, #fff3d8)" stop-opacity="1"/>
-          <stop offset="83%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+          <stop offset="83%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity=".94"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #d6b75e)" stop-opacity="0"/>
         </linearGradient>
         <clipPath id="${id}-clip"><circle cx="160" cy="160" r="128"/></clipPath>
         <filter id="${id}-wave-glow" x="-30%" y="-120%" width="160%" height="340%"><feGaussianBlur stdDeviation="4.8"/></filter>
@@ -21624,7 +21624,7 @@ function desktopVoiceOrbSvg() {
           <circle cx="160" cy="160" r="128"/>
         </g>
         <path class="pm-orb-flow pm-orb-flow-a" d="M25 115 C74 83 106 103 143 89 S222 58 298 103" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".16" stroke-width="2"/>
-        <path class="pm-orb-flow pm-orb-flow-b" d="M13 207 C68 240 99 214 142 232 S224 261 307 210" fill="none" stroke="var(--pm-voice-orb-accent, #ea6a1f)" stroke-opacity=".32" stroke-width="2.4"/>
+        <path class="pm-orb-flow pm-orb-flow-b" d="M13 207 C68 240 99 214 142 232 S224 261 307 210" fill="none" stroke="var(--pm-voice-orb-accent, #d6b75e)" stroke-opacity=".32" stroke-width="2.4"/>
       </g>
       <circle class="pm-orb-rim" cx="160" cy="160" r="128" fill="url(#${id}-rim)"/>
       <path class="pm-orb-rim-light" d="M72 88 C96 52 140 34 184 37 C224 39 258 61 278 91" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".46" stroke-width="2.2" stroke-linecap="round"/>
@@ -29392,7 +29392,7 @@ function getStructuredCreativeModeLabel(mode = window.currentCreativeMode) {
         content: normalized === 'video' ? 'Shared scene graph, ready for motion.' : 'Shared scene graph, ready for composition.',
         fontSize: 24,
         fontWeight: 600,
-        color: normalized === 'video' ? '#cbd5e1' : '#9a3412',
+        color: normalized === 'video' ? '#cbd5e1' : '#6d5a2b',
         lineHeight: 1.35,
       },
     },
@@ -29406,7 +29406,7 @@ function getStructuredCreativeModeLabel(mode = window.currentCreativeMode) {
       zIndex: 3,
       meta: {
         iconName: normalized === 'video' ? 'solar:clapperboard-play-bold-duotone' : 'solar:palette-round-bold-duotone',
-        color: normalized === 'video' ? '#38bdf8' : '#f97316',
+        color: normalized === 'video' ? '#38bdf8' : '#d6b75e',
       },
     },
   ]);
@@ -30331,7 +30331,7 @@ function buildBlankHtmlMotionComposition() {
       color: #fff;
       background:
         radial-gradient(circle at 18% 12%, rgba(56,189,248,.28), transparent 32%),
-        radial-gradient(circle at 82% 18%, rgba(249,115,22,.24), transparent 30%),
+        radial-gradient(circle at 82% 18%, rgba(214,183,94,.24), transparent 30%),
         linear-gradient(160deg, #050816 0%, #101827 54%, #050816 100%);
     }
     .prom-block {
@@ -33401,7 +33401,7 @@ function renderCreativeWorkspace(options = {}) {
         <div style="display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px;align-items:center">
           <div style="font-size:11px;color:${element.id === creativeSelectedId ? '#f8fafc' : '#a8a29e'};font-weight:${element.id === creativeSelectedId ? '700' : '600'}">${escHtml(element.meta?.content || element.meta?.iconName || `${element.type} ${idx + 1}`)}</div>
           <div style="height:16px;border-radius:999px;background:rgba(255,255,255,0.06);position:relative;overflow:hidden">
-            <div style="position:absolute;left:${8 + idx * 6}%;top:2px;bottom:2px;width:${Math.max(18, 28 - idx)}%;border-radius:999px;background:${element.id === creativeSelectedId ? 'linear-gradient(90deg,#38bdf8,#60a5fa)' : 'linear-gradient(90deg,#f97316,#fb923c)'}"></div>
+            <div style="position:absolute;left:${8 + idx * 6}%;top:2px;bottom:2px;width:${Math.max(18, 28 - idx)}%;border-radius:999px;background:${element.id === creativeSelectedId ? 'linear-gradient(90deg,#38bdf8,#60a5fa)' : 'linear-gradient(90deg,#d6b75e,#f0d98b)'}"></div>
           </div>
         </div>
       `).join('');
@@ -33484,7 +33484,7 @@ function renderCreativeKeyframeSectionV2(selected) {
         <button onclick="canvasAddCreativeKeyframe()" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(56,189,248,0.35);background:rgba(56,189,248,0.14);color:#7dd3fc;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer"><iconify-icon icon="solar:add-circle-bold-duotone" width="14" height="14"></iconify-icon>Add @ ${escHtml(formatCreativeTimelineTime(creativeTimelineMs))}</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <button onclick="canvasApplyCreativeAnimationPreset('fade_in')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(249,115,22,0.32);background:rgba(249,115,22,0.14);color:#fdba74;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade In</button>
+        <button onclick="canvasApplyCreativeAnimationPreset('fade_in')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(214,183,94,0.32);background:rgba(214,183,94,0.14);color:#fdba74;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade In</button>
         <button onclick="canvasApplyCreativeAnimationPreset('slide_up')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(56,189,248,0.32);background:rgba(56,189,248,0.14);color:#7dd3fc;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Slide Up</button>
         <button onclick="canvasApplyCreativeAnimationPreset('fade_slide_up')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(168,85,247,0.32);background:rgba(168,85,247,0.14);color:#d8b4fe;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade + Up</button>
       </div>
@@ -33498,7 +33498,7 @@ function renderCreativeKeyframeSectionV2(selected) {
         </select>
       </label>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <button onclick="canvasApplyCreativeAnimationPreset('fade_in')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(249,115,22,0.32);background:rgba(249,115,22,0.14);color:#fdba74;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade In</button>
+        <button onclick="canvasApplyCreativeAnimationPreset('fade_in')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(214,183,94,0.32);background:rgba(214,183,94,0.14);color:#fdba74;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade In</button>
         <button onclick="canvasApplyCreativeAnimationPreset('slide_up')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(56,189,248,0.32);background:rgba(56,189,248,0.14);color:#7dd3fc;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Slide Up</button>
         <button onclick="canvasApplyCreativeAnimationPreset('fade_slide_up')" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(168,85,247,0.32);background:rgba(168,85,247,0.14);color:#d8b4fe;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;cursor:pointer">Fade + Up</button>
       </div>
@@ -33785,7 +33785,7 @@ function renderCreativeWorkspaceV2({ shell, library, stage, props, timeline, tim
           <div style="display:grid;grid-template-columns:160px minmax(0,1fr);gap:10px;align-items:center;margin-bottom:8px">
             <div style="font-size:11px;color:${element.id === creativeSelectedId ? '#f8fafc' : '#a8a29e'};font-weight:${element.id === creativeSelectedId ? '700' : '600'};cursor:pointer" onclick="canvasSelectCreativeElement('${element.id}')">${escHtml(String(label).slice(0, 34))}</div>
             <div style="height:20px;border-radius:999px;background:rgba(255,255,255,0.06);position:relative;overflow:hidden">
-              <div style="position:absolute;left:${left}%;top:3px;bottom:3px;width:${width}%;border-radius:999px;background:${element.id === creativeSelectedId ? 'linear-gradient(90deg,#38bdf8,#60a5fa)' : 'linear-gradient(90deg,#f97316,#fb923c)'}"></div>
+              <div style="position:absolute;left:${left}%;top:3px;bottom:3px;width:${width}%;border-radius:999px;background:${element.id === creativeSelectedId ? 'linear-gradient(90deg,#38bdf8,#60a5fa)' : 'linear-gradient(90deg,#d6b75e,#f0d98b)'}"></div>
               ${keyframes.map((keyframe) => {
                 const dotLeft = Math.max(0, Math.min(100, ((Number(keyframe.atMs) || 0) / durationMs) * 100));
                 return `<div title="${escHtml(formatCreativeTimelineTime(keyframe.atMs))}" style="position:absolute;left:calc(${dotLeft}% - 4px);top:5px;width:8px;height:8px;border-radius:999px;background:${element.id === creativeSelectedId ? '#e0f2fe' : '#fde68a'};box-shadow:0 0 0 2px rgba(15,23,42,0.75)"></div>`;
@@ -34471,9 +34471,9 @@ function createCreativeFabricBaseOptions(baseElement, element) {
     originY: 'top',
     transparentCorners: false,
     cornerStyle: 'circle',
-    cornerColor: '#f97316',
+    cornerColor: '#d6b75e',
     cornerStrokeColor: '#ffffff',
-    borderColor: '#fb923c',
+    borderColor: '#f0d98b',
     padding: 2,
     objectCaching: false,
   };
@@ -34676,7 +34676,7 @@ function createCreativeFabricComponentObject(api, baseElement, element) {
   const height = Math.max(24, Number(element?.height) || 24);
   const background = baseElement?.meta?.background || '#111827';
   const textColor = baseElement?.meta?.textColor || '#f8fafc';
-  const accent = baseElement?.meta?.accent || '#f97316';
+  const accent = baseElement?.meta?.accent || '#d6b75e';
   const radius = Math.max(0, Number(baseElement?.meta?.radius) || 18);
   const children = [];
   if (component === 'button') {
@@ -35502,7 +35502,7 @@ function renderCreativeComponentBodyStudioV3(baseElement) {
   const component = String(baseElement?.meta?.component || 'card').trim().toLowerCase();
   const background = baseElement?.meta?.background || '#111827';
   const textColor = baseElement?.meta?.textColor || '#f8fafc';
-  const accent = baseElement?.meta?.accent || '#f97316';
+  const accent = baseElement?.meta?.accent || '#d6b75e';
   const radius = Math.max(0, Number(baseElement?.meta?.radius) || 18);
   if (component === 'button') {
     return `
@@ -36188,14 +36188,14 @@ function renderCreativeStageElementStudioV3(baseElement, mode) {
   const element = getRenderedCreativeElement(baseElement, mode);
   const visualState = getCreativeElementVisualStateStudioV3(baseElement, mode);
   const isSelected = baseElement.id === creativeSelectedId;
-  const selectedClass = isSelected ? '2px solid rgba(249,115,22,0.95)' : '1px solid transparent';
+  const selectedClass = isSelected ? '2px solid rgba(214,183,94,0.95)' : '1px solid transparent';
   const shadowParts = [];
   if (baseElement.locked) shadowParts.push('inset 0 0 0 1px rgba(250,204,21,0.85)');
   if (isSelected) shadowParts.push('0 0 0 1px rgba(251,146,60,0.78)', '0 16px 30px rgba(15,15,16,0.18)');
   const selectionShadow = shadowParts.length ? shadowParts.join(',') : 'none';
   const canResize = isSelected && baseElement.locked !== true && baseElement.visible !== false;
   const resizeHandle = canResize
-    ? `<div data-creative-resize-handle="true" title="Drag to resize" style="position:absolute;right:7px;bottom:7px;width:13px;height:13px;border-radius:5px;background:linear-gradient(180deg,#fb923c,#f97316);border:2px solid rgba(255,255,255,0.92);box-shadow:0 0 0 1px rgba(0,0,0,0.28),0 10px 20px rgba(249,115,22,0.28);cursor:nwse-resize;z-index:3"></div>`
+    ? `<div data-creative-resize-handle="true" title="Drag to resize" style="position:absolute;right:7px;bottom:7px;width:13px;height:13px;border-radius:5px;background:linear-gradient(180deg,#f0d98b,#d6b75e);border:2px solid rgba(255,255,255,0.92);box-shadow:0 0 0 1px rgba(0,0,0,0.28),0 10px 20px rgba(214,183,94,0.28);cursor:nwse-resize;z-index:3"></div>`
     : '';
   const compositingCss = buildCreativeLayerCompositingCssStudioV3(baseElement, visualState);
   const sharedStyle = [
@@ -36239,7 +36239,7 @@ function renderCreativeStageElementStudioV3(baseElement, mode) {
     const poster = baseElement.meta?.poster ? ` poster="${escHtml(creativeMediaSourceUrl(baseElement.meta.poster))}"` : '';
     const body = source
       ? `<video data-creative-video-element="${escHtml(baseElement.id)}" src="${source}"${poster} muted playsinline preload="auto" style="width:100%;height:100%;object-fit:${fit};border-radius:${radius}px;display:block;background:#111827;border:1px solid rgba(255,255,255,0.12)"></video>`
-      : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;border:1px dashed rgba(249,115,22,0.3);background:linear-gradient(135deg,#1f2937,#3f3f46);color:#fed7aa;font-size:12px;font-weight:800"><iconify-icon icon="solar:film-roll-bold-duotone" width="30" height="30"></iconify-icon></div>`;
+      : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;border:1px dashed rgba(214,183,94,0.3);background:linear-gradient(135deg,#1f2937,#3f3f46);color:#fed7aa;font-size:12px;font-weight:800"><iconify-icon icon="solar:film-roll-bold-duotone" width="30" height="30"></iconify-icon></div>`;
     return `<div ${baseAttrs} style="${sharedStyle}">${body}${resizeHandle}</div>`;
   }
   if (baseElement.type === 'hyperframes') {
@@ -36252,7 +36252,7 @@ function renderCreativeStageElementStudioV3(baseElement, mode) {
     const lottieLoop = baseElement.meta?.loop !== false ? 'loop' : '';
     const lottieAutoplay = baseElement.meta?.autoplay !== false ? 'autoplay' : '';
     const lottieSpeed = Number(baseElement.meta?.speed) || 1;
-    const lottiePlaceholder = !lottieSrc ? `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border-radius:12px;border:1px dashed rgba(249,115,22,0.3)"><iconify-icon icon="solar:film-roll-bold-duotone" width="32" height="32" style="color:#fb923c;opacity:0.6"></iconify-icon></div>` : '';
+    const lottiePlaceholder = !lottieSrc ? `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.04);border-radius:12px;border:1px dashed rgba(214,183,94,0.3)"><iconify-icon icon="solar:film-roll-bold-duotone" width="32" height="32" style="color:#f0d98b;opacity:0.6"></iconify-icon></div>` : '';
     return `<div ${baseAttrs} style="${sharedStyle}">${lottieSrc ? `<lottie-player src="${lottieSrc}" ${lottieLoop} ${lottieAutoplay} speed="${lottieSpeed}" style="width:100%;height:100%"></lottie-player>` : lottiePlaceholder}${resizeHandle}</div>`;
   }
   if (baseElement.type === 'group') {
@@ -38188,9 +38188,9 @@ function buildCreativeTemplateElements(template, payload = {}, mode = normalizeC
     : (Number.isFinite(Number(creativeSceneDoc?.height)) ? Number(creativeSceneDoc.height) : fallbackHeight);
   const isPortrait = height > width * 1.12;
   const templateDefaults = {
-    quote_card: { title: 'A stronger idea starts here.', subtitle: 'Make the message impossible to miss.', cta: 'Read more', accent: '#f97316' },
-    thumbnail: { title: 'Big Result, Simple Move', subtitle: 'A polished starter layout ready for editing.', cta: 'Watch now', accent: '#f97316' },
-    video_promo: { title: 'Launch Better Work', subtitle: 'Fast visuals, sharp motion, ready to export.', cta: 'Learn more', accent: '#f97316' },
+    quote_card: { title: 'A stronger idea starts here.', subtitle: 'Make the message impossible to miss.', cta: 'Read more', accent: '#d6b75e' },
+    thumbnail: { title: 'Big Result, Simple Move', subtitle: 'A polished starter layout ready for editing.', cta: 'Watch now', accent: '#d6b75e' },
+    video_promo: { title: 'Launch Better Work', subtitle: 'Fast visuals, sharp motion, ready to export.', cta: 'Learn more', accent: '#d6b75e' },
     app_launch: { title: 'Launch your app with motion', subtitle: 'Show the product, the promise, and the CTA in one clean frame.', cta: 'Try it now', accent: '#2563EB' },
     event_flyer: { title: 'The event starts here', subtitle: 'Date, venue, headline, and reason to show up.', cta: 'Reserve your spot', accent: '#E11D48' },
     testimonial: { title: '“This changed the workflow.”', subtitle: 'Real proof, clean hierarchy, and a strong trust moment.', cta: 'See the story', accent: '#38BDF8' },
@@ -38199,7 +38199,7 @@ function buildCreativeTemplateElements(template, payload = {}, mode = normalizeC
     audiogram: { title: 'Turn audio into attention', subtitle: 'Waveform, cover art, captions, and progress motion.', cta: 'Listen now', accent: '#16D9FF' },
     product_ad: { title: 'Prometheus Creative', subtitle: 'A polished starter layout ready for editing.', cta: 'Shop now', accent: '#16a34a' },
   };
-  const defaults = templateDefaults[template] || { title: 'Prometheus Creative', subtitle: 'A polished starter layout ready for editing.', cta: 'Learn more', accent: '#f97316' };
+  const defaults = templateDefaults[template] || { title: 'Prometheus Creative', subtitle: 'A polished starter layout ready for editing.', cta: 'Learn more', accent: '#d6b75e' };
   const background = String(payload.background || (isVideo ? '#101828' : '#f8fafc')).trim();
   const accent = String(payload.accent || defaults.accent).trim();
   const title = String(payload.title || defaults.title).trim();
@@ -40813,7 +40813,7 @@ function showCreativeHtmlMotionActionPopover(element, frame) {
   const canSeparateFlow = showEdit && !isCreativeHtmlMotionFlowTextTarget(element);
   creativeHtmlMotionActionPopoverEl.innerHTML = `
     <button type="button" onclick="handleCreativeHtmlMotionChat()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(56,189,248,0.16);color:#bae6fd;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:chat-round-line-bold-duotone" width="14" height="14"></iconify-icon>Chat</button>
-    ${showEdit ? `<button type="button" onclick="handleCreativeHtmlMotionEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(249,115,22,0.16);color:#fdba74;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>` : ''}
+    ${showEdit ? `<button type="button" onclick="handleCreativeHtmlMotionEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(214,183,94,0.16);color:#fdba74;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>` : ''}
     ${canSeparateFlow ? `<button type="button" onclick="handleCreativeHtmlMotionSeparateFlowObject()" title="Create a separate draggable flow object and mark this copy as flow text" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(163,255,18,0.16);color:#d9ff99;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:scissors-bold-duotone" width="14" height="14"></iconify-icon>Separate Flow</button>` : ''}
     <button type="button" onclick="toggleCreativeHtmlMotionSpatialDebug()" title="Show or hide layout bodies, collision halos, and flow shapes" style="display:inline-flex;align-items:center;gap:6px;border:none;background:${creativeHtmlMotionSpatialDebugEnabled ? 'rgba(34,197,94,0.22)' : 'rgba(255,255,255,0.06)'};color:${creativeHtmlMotionSpatialDebugEnabled ? '#bbf7d0' : '#d6d3d1'};border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:radar-2-bold-duotone" width="14" height="14"></iconify-icon>Debug</button>
     <button type="button" onclick="clearCreativeHtmlMotionSelectionContext()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(255,255,255,0.06);color:#d6d3d1;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:close-circle-bold-duotone" width="14" height="14"></iconify-icon>Clear</button>
@@ -41185,7 +41185,7 @@ function showBrowserDesignActionPopover(selection = getBrowserCanvasState().sele
     browserDesignActionPopoverEl.id = 'browser-design-action-popover';
     browserDesignActionPopoverEl.style.cssText = 'position:fixed;z-index:10002;display:none;gap:4px;padding:5px;border-radius:10px;border:1px solid rgba(56,189,248,0.28);background:rgba(8,15,28,0.97);box-shadow:0 12px 30px rgba(2,6,23,0.5);backdrop-filter:blur(12px);font-family:Manrope,sans-serif';
     browserDesignActionPopoverEl.innerHTML = `
-      <button type="button" onclick="handleBrowserDesignEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(249,115,22,0.16);color:#fdba74;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>
+      <button type="button" onclick="handleBrowserDesignEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(214,183,94,0.16);color:#fdba74;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>
       <button type="button" onclick="handleBrowserDesignChat()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(56,189,248,0.16);color:#bae6fd;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:chat-round-line-bold-duotone" width="14" height="14"></iconify-icon>Chat</button>
       <button type="button" onclick="handleBrowserDesignSelect()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(168,85,247,0.18);color:#d8b4fe;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon>Select</button>
     `;
@@ -41337,7 +41337,7 @@ function showDesignActionPopover(element, frame) {
     designActionPopoverEl.id = 'design-action-popover';
     designActionPopoverEl.style.cssText = 'position:fixed;z-index:10000;display:none;gap:4px;padding:4px;border-radius:10px;border:1px solid rgba(255,255,255,0.14);background:rgba(17,15,14,0.96);box-shadow:0 8px 24px rgba(0,0,0,0.45);backdrop-filter:blur(12px);font-family:Manrope,sans-serif';
     designActionPopoverEl.innerHTML = `
-      <button type="button" onclick="handleDesignEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(249,115,22,0.16);color:#fdba74;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>
+      <button type="button" onclick="handleDesignEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(214,183,94,0.16);color:#fdba74;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>
       <button type="button" onclick="handleDesignChat()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(56,189,248,0.16);color:#bae6fd;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:chat-round-line-bold-duotone" width="14" height="14"></iconify-icon>Chat</button>
       <button type="button" onclick="handleDesignSelect()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(168,85,247,0.18);color:#d8b4fe;border-radius:6px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon>Select</button>
     `;
@@ -41685,7 +41685,7 @@ function showDesignFilesPopover(element, frame, results) {
   designFilesPopoverEl.innerHTML = `
     <div style="padding:6px 8px;font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#a8a29e">Open in code</div>
     ${results.map((r) => `
-      <button type="button" onclick="openDesignFilePick('${escHtml(r.diskPath).replace(/'/g, '&#39;')}')" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;border:none;background:transparent;color:#e7e5e4;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;text-align:left" onmouseover="this.style.background='rgba(249,115,22,0.12)';this.style.color='#fdba74'" onmouseout="this.style.background='transparent';this.style.color='#e7e5e4'">
+      <button type="button" onclick="openDesignFilePick('${escHtml(r.diskPath).replace(/'/g, '&#39;')}')" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;border:none;background:transparent;color:#e7e5e4;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;text-align:left" onmouseover="this.style.background='rgba(214,183,94,0.12)';this.style.color='#fdba74'" onmouseout="this.style.background='transparent';this.style.color='#e7e5e4'">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.name)}</span>
         <span style="font-size:10px;color:#78716c;font-weight:700">${r.matches.length} match${r.matches.length === 1 ? '' : 'es'}</span>
       </button>
@@ -41857,9 +41857,9 @@ function setupDesignPreviewSelection(frame, tab) {
     styleEl.id = 'prometheus-design-selection-style';
     styleEl.textContent = `
       [data-prometheus-design-selected="true"] {
-        outline: 2px solid #f97316 !important;
+        outline: 2px solid #d6b75e !important;
         outline-offset: 2px !important;
-        box-shadow: 0 0 0 4px rgba(249,115,22,0.18), inset 0 0 0 9999px rgba(249,115,22,0.08) !important;
+        box-shadow: 0 0 0 4px rgba(214,183,94,0.18), inset 0 0 0 9999px rgba(214,183,94,0.08) !important;
       }
       [data-prometheus-design-multi-selected="true"] {
         outline: 2px solid #a855f7 !important;
@@ -42126,7 +42126,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
       }
     }
     if (topbar) topbar.style.display = 'none';
-    if (btn) { btn.style.background='rgba(249,115,22,0.15)'; btn.style.borderColor='rgba(249,115,22,0.45)'; btn.style.color='#f97316'; }
+    if (btn) { btn.style.background='rgba(214,183,94,0.15)'; btn.style.borderColor='rgba(214,183,94,0.45)'; btn.style.color='#d6b75e'; }
     if (dot) dot.style.display = 'none';
     try {
       if (!canvasEditorInitialized) initCanvasEditor();
@@ -44566,11 +44566,11 @@ function canvasRenderWorkspaceTree(nodes, depth) {
       const isProjectRoot = !!canvasProjectRoot && normalizeCanvasPath(canvasProjectRoot) === folderPath;
       return `
         <div>
-          <div class="canvas-file-tree-dir" style="display:flex;align-items:center;gap:6px;padding:7px 8px;padding-left:${pad + 12}px;border-radius:8px;cursor:pointer;background:${isProjectRoot ? 'rgba(249,115,22,0.14)' : 'transparent'}" onclick="toggleCanvasFolder('${escHtml(folderPath).replace(/'/g, '\\&apos;')}')">
+          <div class="canvas-file-tree-dir" style="display:flex;align-items:center;gap:6px;padding:7px 8px;padding-left:${pad + 12}px;border-radius:8px;cursor:pointer;background:${isProjectRoot ? 'rgba(214,183,94,0.14)' : 'transparent'}" onclick="toggleCanvasFolder('${escHtml(folderPath).replace(/'/g, '\\&apos;')}')">
             <span style="color:var(--muted);font-size:10px;width:10px;flex-shrink:0">${isOpen ? '▼' : '▶'}</span>
             <span>📁</span>
             <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:${isProjectRoot ? '800' : '700'}">${escHtml(node.name)}</span>
-            ${isProjectRoot ? `<span style="font-size:10px;color:#fb923c;font-weight:800">ROOT</span>` : `<button onclick="canvasUseFolderAsProject('${escHtml(folderPath).replace(/'/g, '\\&apos;')}', '${escHtml(node.name).replace(/'/g, '\\&apos;')}', event)" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:1px 6px;font-size:10px;cursor:pointer">Use</button>`}
+            ${isProjectRoot ? `<span style="font-size:10px;color:#f0d98b;font-weight:800">ROOT</span>` : `<button onclick="canvasUseFolderAsProject('${escHtml(folderPath).replace(/'/g, '\\&apos;')}', '${escHtml(node.name).replace(/'/g, '\\&apos;')}', event)" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:1px 6px;font-size:10px;cursor:pointer">Use</button>`}
           </div>
           ${isOpen && node.children && node.children.length ? `<div style="margin-left:${pad + 18}px;border-left:1px solid rgba(255,255,255,0.08)">${canvasRenderWorkspaceTree(node.children, depth + 1)}</div>` : ''}
         </div>`;
@@ -44579,7 +44579,7 @@ function canvasRenderWorkspaceTree(nodes, depth) {
     const icon = icons[ext] || '\uD83D\uDCC4';
     const filePath = normalizeCanvasPath(node.path);
     const isActive = canvasTabs.some((tab) => normalizeCanvasPath(tab.diskPath) === filePath);
-    return `<div class="canvas-file-tree-item" style="padding:7px 8px;padding-left:${pad + 12}px;border-radius:8px;cursor:pointer;background:${isActive ? 'rgba(249,115,22,0.14)' : 'transparent'}" onclick="canvasPresentFile('${escHtml(filePath).replace(/'/g, '\\&apos;')}', '${escHtml(node.name).replace(/'/g, '\\&apos;')}')">${icon} ${escHtml(node.name)}</div>`;
+    return `<div class="canvas-file-tree-item" style="padding:7px 8px;padding-left:${pad + 12}px;border-radius:8px;cursor:pointer;background:${isActive ? 'rgba(214,183,94,0.14)' : 'transparent'}" onclick="canvasPresentFile('${escHtml(filePath).replace(/'/g, '\\&apos;')}', '${escHtml(node.name).replace(/'/g, '\\&apos;')}')">${icon} ${escHtml(node.name)}</div>`;
   }).join('');
 }
 

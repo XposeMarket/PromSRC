@@ -497,7 +497,7 @@ const testimonialSocialProof: HtmlMotionTemplate = {
     { id: 'rating', label: 'Star rating (1-5)', example: '5' },
     { id: 'metricValue', label: 'Headline metric', example: '+218%' },
     { id: 'metricLabel', label: 'Metric label', example: 'output velocity' },
-    { id: 'accent', label: 'Accent color', example: '#fb923c' },
+    { id: 'accent', label: 'Accent color', example: '#f0d98b' },
   ],
   renderHtml(input) {
     const quote = escapeHtml(pick(input, 'quote', 'Prometheus turned a week of editing into a 5-minute drop.'));
@@ -508,7 +508,7 @@ const testimonialSocialProof: HtmlMotionTemplate = {
     const stars = '★'.repeat(ratingNum) + '☆'.repeat(5 - ratingNum);
     const metricValue = escapeHtml(pick(input, 'metricValue', '+218%'));
     const metricLabel = escapeHtml(pick(input, 'metricLabel', 'output velocity'));
-    const accent = escapeHtml(pick(input, 'accent', '#fb923c'));
+    const accent = escapeHtml(pick(input, 'accent', '#f0d98b'));
     const initial = author.charAt(0).toUpperCase();
     return `<!doctype html><html><head><meta charset="utf-8"><style>
       ${baseCss('linear-gradient(170deg, #1a1208 0%, #2c1a09 50%, #0e0904 100%)')}
@@ -1605,7 +1605,7 @@ const ugcReviewCard: HtmlMotionTemplate = {
     { id: 'chip1', label: 'Benefit chip 1', example: 'No timeline wrestling' },
     { id: 'chip2', label: 'Benefit chip 2', example: 'Frame QA built in' },
     { id: 'chip3', label: 'Benefit chip 3', example: 'Exports MP4' },
-    { id: 'accent', label: 'Accent color', example: '#f97316' },
+    { id: 'accent', label: 'Accent color', example: '#d6b75e' },
   ],
   renderHtml(input) {
     const hook = escapeHtml(pick(input, 'hook', 'I tried this for one week'));
@@ -1615,7 +1615,7 @@ const ugcReviewCard: HtmlMotionTemplate = {
     const chip1 = escapeHtml(pick(input, 'chip1', 'Faster drafts'));
     const chip2 = escapeHtml(pick(input, 'chip2', 'Cleaner edits'));
     const chip3 = escapeHtml(pick(input, 'chip3', 'Ready to post'));
-    const accent = escapeHtml(pick(input, 'accent', '#f97316'));
+    const accent = escapeHtml(pick(input, 'accent', '#d6b75e'));
     return `<!doctype html><html><head><meta charset="utf-8"><style>${baseCss('linear-gradient(180deg,#f7efe4 0%,#e8d6be 100%)')}
       .stage{color:#1f1611}.badge{top:116px;font:900 24px/1 Inter,sans-serif;letter-spacing:5px;color:${accent};text-transform:uppercase;animation:fadeUp .6s both}
       .hook{top:210px;font:950 94px/.95 Inter,sans-serif;letter-spacing:-5px;max-width:900px;animation:fadeUp .7s .15s both}.phone{position:absolute;left:96px;right:96px;top:640px;height:720px;border-radius:54px;background:#fffaf2;box-shadow:0 34px 100px rgba(31,22,17,.28);padding:64px;animation:scalePop .75s .65s both}
@@ -1848,12 +1848,12 @@ const threeSaasLaunchOrbit: HtmlMotionTemplate = {
     { id: 'proof2', label: 'Proof chip 2', example: 'Editable HTML Motion' },
     { id: 'proof3', label: 'Proof chip 3', example: 'Frame QA before export' },
     { id: 'accent', label: 'Accent color', example: '#38bdf8' },
-    { id: 'secondary', label: 'Secondary color', example: '#f97316' },
+    { id: 'secondary', label: 'Secondary color', example: '#d6b75e' },
     { id: 'background', label: 'Background color', example: '#05070d' },
   ],
   parameters: [
     { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#38bdf8', target: { lane: 'html-motion', path: 'css.--accent' } },
-    { id: 'secondary', label: 'Secondary', type: 'color', defaultValue: '#f97316', target: { lane: 'html-motion', path: 'css.--secondary' } },
+    { id: 'secondary', label: 'Secondary', type: 'color', defaultValue: '#d6b75e', target: { lane: 'html-motion', path: 'css.--secondary' } },
     { id: 'particleCount', label: 'Particle count', type: 'range', defaultValue: 1400, min: 200, max: 4000, step: 100, target: { lane: 'html-motion', path: 'three.particleCount' } },
   ],
   renderHtml(input) {
@@ -1865,7 +1865,7 @@ const threeSaasLaunchOrbit: HtmlMotionTemplate = {
     const proof2 = escapeHtml(pick(input, 'proof2', 'Editable HTML Motion'));
     const proof3 = escapeHtml(pick(input, 'proof3', 'Frame QA before export'));
     const accent = escapeHtml(pick(input, 'accent', '#38bdf8'));
-    const secondary = escapeHtml(pick(input, 'secondary', '#f97316'));
+    const secondary = escapeHtml(pick(input, 'secondary', '#d6b75e'));
     const background = escapeHtml(pick(input, 'background', '#05070d'));
     const particles = renderThreeParticleFieldParts({
       id: 'three-launch-particles',

@@ -143,7 +143,7 @@ export const CREATIVE_STYLE_PRESETS = [
     id: 'local-business',
     label: 'Local Business Ad',
     fonts: { heading: 'Montserrat', body: 'Manrope' },
-    colors: { background: '#082F49', surface: '#FFFFFF', text: '#F8FAFC', muted: '#D0E8F2', accent: '#F97316', accent2: '#22C55E' },
+    colors: { background: '#082F49', surface: '#FFFFFF', text: '#F8FAFC', muted: '#D0E8F2', accent: '#d6b75e', accent2: '#22C55E' },
     motion: ['slide_up', 'bounce_in', 'pulse'],
   },
 ];
@@ -1196,7 +1196,7 @@ function getComponentMetaDefaults(component = 'card') {
     return {
       component: 'button',
       label: 'Get Started',
-      background: '#f97316',
+      background: '#d6b75e',
       textColor: '#fff7ed',
       accent: '#fdba74',
       radius: 999,
@@ -1218,7 +1218,7 @@ function getComponentMetaDefaults(component = 'card') {
       label: 'Section divider',
       stroke: '#475569',
       textColor: '#cbd5e1',
-      accent: '#f97316',
+      accent: '#d6b75e',
     };
   }
   if (normalized === 'stat') {
@@ -1228,7 +1228,7 @@ function getComponentMetaDefaults(component = 'card') {
       value: '24%',
       background: '#111827',
       textColor: '#f8fafc',
-      accent: '#f97316',
+      accent: '#d6b75e',
       radius: 24,
     };
   }
@@ -1319,7 +1319,7 @@ function getComponentMetaDefaults(component = 'card') {
     body: 'Use starter components to block in polished layouts quickly.',
     background: '#111827',
     textColor: '#f8fafc',
-    accent: '#f97316',
+    accent: '#d6b75e',
     radius: 24,
   };
 }
