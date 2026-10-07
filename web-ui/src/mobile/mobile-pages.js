@@ -1941,6 +1941,64 @@ function _cloneMobileMessageForBranch(msg) {
   return clone;
 }
 
+// Copy button output: what the reader sees, not the markdown source.
+// Interactive card fences (followups, quiz, chart, html...) are UI chrome and
+// are dropped; a writing card keeps its text; normal code blocks keep their
+// code without the fences. Links keep the label, tables become tab-separated.
+const MOBILE_COPY_DROP_FENCES = new Set(['followups', 'quiz', 'flashcards', 'poll', 'reminder', 'convert', 'calculator', 'html', 'chart', 'mermaid', 'svg', 'visual']);
+function mobileMarkdownToPlainText(markdown) {
+  let text = String(markdown || '').replace(/\r\n?/g, '\n');
+  if (!text.trim()) return '';
+  const blocks = [];
+  text = text.replace(/^[ \t]*(`{3,}|~{3,})[ \t]*([\w-]*)[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm, (_m, _f, lang, body) => {
+    const kind = String(lang || '').toLowerCase();
+    if (MOBILE_COPY_DROP_FENCES.has(kind)) return '';
+    let out = body.replace(/\n$/, '');
+    if (kind === 'writing') {
+      try {
+        const data = JSON.parse(out);
+        out = [data.subject ? `Subject: ${data.subject}` : '', String(data.text || '')].filter(Boolean).join('\n\n');
+      } catch {}
+    }
+    blocks.push(out);
+    return `\u0000${blocks.length - 1}\u0000`;
+  });
+  const codes = [];
+  text = text.replace(/`([^`\n]+)`/g, (_m, code) => { codes.push(code); return `\u0001${codes.length - 1}\u0001`; });
+  const lines = text.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    let line = lines[i];
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line) && /-/.test(line)) continue;
+      line = line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()).join('\t');
+    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push(''); continue; }
+    line = line
+      .replace(/^\s{0,3}#{1,6}\s+/, '')
+      .replace(/^(\s*)>\s?/, '$1')
+      .replace(/^(\s*)[*+]\s+/, '$1- ')
+      .replace(/^(\s*)- \[( |x|X)\]\s+/, '$1- ');
+    out.push(line);
+  }
+  text = out.join('\n')
+    .replace(/\{\{card:[^}]*\}\}/g, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\((?:[^()]|\([^)]*\))*\)/g, '$1')
+    .replace(/<(https?:\/\/[^>\s]+)>/g, '$1')
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1$2')
+    .replace(/(^|[^\w_])_(?=\S)([^_\n]*?\S)_(?![\w_])/g, '$1$2')
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1')
+    .replace(/<\/?(?:br|b|strong|i|em|u|s|sub|sup|kbd|mark|span|p)\b[^>]*>/gi, '')
+    .replace(/\\([\\`*_{}\[\]()#+\-.!|>~])/g, '$1')
+    .replace(/\u0001(\d+)\u0001/g, (_m, i) => codes[Number(i)] ?? '')
+    .replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)] ?? '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 function _mobileMessageCopyText(msg) {
   const text = String(msg?.content || msg?.body?.text || '').trim();
   return msg?.role === 'user' ? _stripMobileInternalUploadContext(text) : text;
@@ -10414,6 +10472,7 @@ function loadMobileChatPageRenderer() {
   _mobileMediaKind,
   _mobileMediaUrl,
   _mobileMessageCopyText,
+  mobileMarkdownToPlainText,
   _mobileQuestionRememberDraft,
   _mobileRealtimeAgentDisableAlwaysListening,
   _mobileRealtimeProviderLabel,
@@ -11322,6 +11381,7 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_isMobileHiddenVoiceDraftMessage": { enumerable: true, get: () => _isMobileHiddenVoiceDraftMessage },
   "_isMobileRestartContextPacketText": { enumerable: true, get: () => _isMobileRestartContextPacketText },
   "_mobileMessageCopyText": { enumerable: true, get: () => _mobileMessageCopyText },
+  "mobileMarkdownToPlainText": { enumerable: true, get: () => mobileMarkdownToPlainText },
   "_mobileVoiceSettingsFromAgentProfile": { enumerable: true, get: () => _mobileVoiceSettingsFromAgentProfile },
   "_normalizeVoiceAgentProcessEntry": { enumerable: true, get: () => _normalizeVoiceAgentProcessEntry },
   "_takePendingVoiceAgentProcessEntries": { enumerable: true, get: () => _takePendingVoiceAgentProcessEntries },
