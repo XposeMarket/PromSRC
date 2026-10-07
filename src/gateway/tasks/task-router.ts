@@ -491,14 +491,30 @@ export function isAdjustmentIntent(message: string): boolean {
 }
 
 export function getLatestPauseContext(task: TaskRecord): { reason: string; detail: string } {
-  const latestPause = [...(task.journal || [])].reverse().find((j) => j.type === 'pause');
+  const journal = [...(task.journal || [])].reverse();
+  if (task.status === 'failed') {
+    // Failed tasks must report the real failure (e.g. a provider 429), not
+    // the generic "paused" fallback that used to hide every Brain failure.
+    const latestError = journal.find((j) => j.type === 'error');
+    const summary = String(task.finalSummary || '').trim();
+    if (latestError) {
+      return {
+        reason: String(latestError.content || summary || 'failed').slice(0, 220),
+        detail: String(latestError.detail || (latestError.content ? summary : '') || '').slice(0, 420),
+      };
+    }
+    return { reason: (summary || 'failed').slice(0, 220), detail: summary.length > 220 ? summary.slice(0, 420) : '' };
+  }
+  const latestPause = journal.find((j) => j.type === 'pause');
   if (latestPause) {
     return {
       reason: String(latestPause.content || '').replace(/^Task paused for assistance:\s*/i, '').slice(0, 220),
       detail: String(latestPause.detail || '').slice(0, 420),
     };
   }
-  return { reason: task.pauseReason || 'paused', detail: '' };
+  if (task.pauseReason) return { reason: task.pauseReason, detail: '' };
+  if (task.status === 'paused') return { reason: 'paused', detail: '' };
+  return { reason: '', detail: '' };
 }
 
 export function summarizeTaskRecord(task: TaskRecord): Record<string, any> {

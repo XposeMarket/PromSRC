@@ -1769,6 +1769,9 @@ function serializeSchedule(job: any): any {
     last_run: job.lastRun,
     last_result: (job.lastResult || '').slice(0, 200),
     last_duration: job.lastDuration,
+    last_error: /^\s*ERROR:/i.test(String(job.lastResult || '')) ? String(job.lastResult || '').replace(/^\s*ERROR:\s*/i, '').slice(0, 300) : '',
+    consecutive_errors: Number(job.consecutiveErrors || 0),
+    paused_reason: job.pausedReason || '',
     session_target: job.sessionTarget || 'isolated',
     last_output_session_id: job.lastOutputSessionId || '',
     delivery_channel: job.delivery || 'web',
@@ -1960,7 +1963,8 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
     
     res.json({ success: true, job });
   } catch (err: any) {
-    res.json({ success: false, error: err.message });
+    res.status(/invalid (cron|timezone)|never fires/i.test(String(err?.message || '')) ? 400 : 200)
+      .json({ success: false, error: err.message });
   }
 });
 

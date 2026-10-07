@@ -9,7 +9,10 @@ import {
   scheduleJobOutputsTool,
   scheduleJobPatchTool,
   scheduleJobStuckControlTool,
+  normalizeExpectedOutputs,
 } from '../../scheduling/schedule-admin-tools';
+import { validateCronExpression, validateScheduleTimezone } from '../../scheduling/cron-scheduler';
+import { normalizeScheduleSpec } from '../../scheduling/schedule-pattern';
 import {
   cancelMainChatTimer,
   createMainChatTimer,
@@ -67,6 +70,16 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'system_diagnostics',
   'diagnostic_packet',
 ]);
+
+/** Map a background_<id> worker session back to the main chat that spawned it. */
+export function resolveBackgroundTimerOwnerSession(sessionId: string): string | null {
+  const match = /^background_(bg_[A-Za-z0-9-]+)$/.exec(String(sessionId || '').trim());
+  if (!match) return null;
+  const record = listBackgroundStatuses().find((status) => status.id === match[1]);
+  const owner = String(record?.spawnerSessionId || '').trim();
+  if (!owner || /^(cron_|task_|background_|dispatch_|self_repair_|team_|agent_|auto_)/i.test(owner)) return null;
+  return owner;
+}
 
 export const automationCapabilityExecutor: CapabilityExecutor = {
   id: 'automation',
@@ -188,7 +201,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
 
       case 'timer': {
         const action = String(args.action || '').trim().toLowerCase();
-        const mainChatOnly = !/^(cron_|task_|background_|dispatch_|self_repair_|team_|agent_|auto_)/i.test(String(sessionId || ''));
+        // Background agents may create timers: they fire into the main chat
+        // that spawned the agent. Cron, task, team and other automated
+        // sessions stay blocked.
+        const timerOwnerSession = resolveBackgroundTimerOwnerSession(String(sessionId || ''));
+        const mainChatOnly = !!timerOwnerSession
+          || !/^(cron_|task_|background_|dispatch_|self_repair_|team_|agent_|auto_)/i.test(String(sessionId || ''));
         if (!mainChatOnly) {
           return {
             name,
@@ -365,12 +383,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           }
 
           const timer = createMainChatTimer({
-            sessionId,
+            sessionId: timerOwnerSession || sessionId,
             instruction,
             dueAt,
             label: String(args.label || '').trim() || undefined,
           });
-          deps.broadcastWS?.({ type: 'timer_created', timer, sessionId });
+          deps.broadcastWS?.({ type: 'timer_created', timer, sessionId: timerOwnerSession || sessionId });
           return {
             name,
             args,
@@ -578,11 +596,31 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           }
 
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
-          const rawKind = String(schedule.kind || args.kind || 'recurring').trim().toLowerCase();
-          const kind: 'recurring' | 'one-shot' = (rawKind === 'one_shot' || rawKind === 'one-shot') ? 'one-shot' : 'recurring';
-          const cron = String(schedule.cron || args.cron || '').trim();
-          const runAtRaw = String(schedule.run_at || args.run_at || '').trim();
           const timezone = String(args.timezone || args.tz || '').trim() || undefined;
+          let kind: 'recurring' | 'one-shot' = 'recurring';
+          let cron = String(schedule.cron || args.cron || '').trim();
+          let runAtRaw = String(schedule.run_at || args.run_at || '').trim();
+          // Friendly fields (text, repeat/time, days_of_week, every_hours,
+          // every_days) are advertised by the schema; compile them to cron.
+          try {
+            const normalized = normalizeScheduleSpec({
+              ...schedule,
+              kind: schedule.kind || args.kind || undefined,
+              cron: schedule.cron || args.cron,
+              run_at: schedule.run_at || args.run_at,
+            }, timezone);
+            kind = normalized.kind === 'one-shot' ? 'one-shot' : 'recurring';
+            if (normalized.kind === 'one-shot') runAtRaw = String(normalized.runAt || runAtRaw);
+            else cron = String(normalized.cron || cron);
+          } catch (err: any) {
+            const rawKind = String(schedule.kind || args.kind || '').trim().toLowerCase();
+            const wantsOneShot = rawKind === 'one_shot' || rawKind === 'one-shot' || !!runAtRaw;
+            if (wantsOneShot && !runAtRaw) return { name, args, result: 'schedule.kind=one_shot requires schedule.run_at (ISO datetime)', error: true };
+            if (!wantsOneShot && !cron) {
+              return { name, args, result: `schedule.kind=recurring requires schedule.cron or a friendly schedule (text, repeat+time, every_hours): ${err?.message || err}`, error: true };
+            }
+            kind = wantsOneShot ? 'one-shot' : 'recurring';
+          }
           const delivery = (args.delivery && typeof args.delivery === 'object') ? args.delivery : {};
           const channel = normalizeDeliveryChannel(delivery.channel || args.channel);
           const modelOverride = String(args.model_override || args.model || '').trim() || undefined;
@@ -607,12 +645,21 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             return { name, args, result: 'schedule.kind=recurring requires schedule.cron', error: true };
           }
 
+          const tzError = validateScheduleTimezone(timezone);
+          if (tzError) return { name, args, result: tzError, error: true };
+          if (kind === 'recurring') {
+            const cronError = validateCronExpression(cron, timezone);
+            if (cronError) return { name, args, result: cronError, error: true };
+          }
+
           const requestedTeamId = String(args.team_id || args.teamId || '').trim() || undefined;
           if (requestedTeamId && !getManagedTeam(requestedTeamId)) {
             return { name, args, result: `Team not found: ${requestedTeamId}`, error: true };
           }
           const requestedSubagentId = requestedTeamId ? undefined : (String(args.subagent_id || '').trim() || undefined);
           const assignmentTarget = requestedTeamId ? 'team' : (requestedSubagentId ? 'subagent' : 'main');
+          const previewOnlyRaw = args.preview_only ?? args.previewOnly;
+          const expectedOutputsRaw = args.expected_outputs ?? args.expectedOutputs;
 
           let created = deps.cronScheduler.createJob({
             name: nameValue,
@@ -627,6 +674,10 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             team_id: requestedTeamId,
             assignmentTarget,
             deliverToMainChannel: assignmentTarget === 'main',
+            previewOnly: previewOnlyRaw === true || String(previewOnlyRaw).toLowerCase() === 'true',
+            ...(Array.isArray(args.skillIds) ? { skillIds: args.skillIds } : {}),
+            ...((args.context_refs || args.contextReferences) ? { context_refs: args.context_refs || args.contextReferences } : {}),
+            ...(expectedOutputsRaw !== undefined ? { expectedOutputs: normalizeExpectedOutputs(expectedOutputsRaw) } : {}),
           } as any);
           if (requestedSubagentId) {
             ensureScheduleRuntimeForAgent(requestedSubagentId, {
@@ -661,13 +712,13 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         }
 
         if (action === 'pause') {
-          const updated = deps.cronScheduler.updateJob(jobId, { status: 'paused', enabled: false } as any);
+          const updated = deps.cronScheduler.updateJob(jobId, { status: 'paused', enabled: false, pausedReason: 'manual' } as any);
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
           return { name, args, result: JSON.stringify({ success: true, action: 'pause', job: summarizeCronJob(updated) }, null, 2), error: false };
         }
 
         if (action === 'resume') {
-          const updated = deps.cronScheduler.updateJob(jobId, { status: 'scheduled', enabled: true } as any);
+          const updated = deps.cronScheduler.updateJob(jobId, { status: 'scheduled', enabled: true, pausedReason: undefined } as any);
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
           return { name, args, result: JSON.stringify({ success: true, action: 'resume', job: summarizeCronJob(updated) }, null, 2), error: false };
         }
@@ -675,13 +726,57 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         if (action === 'run_now') {
           const exists = deps.cronScheduler.getJobs().some((j: any) => j.id === jobId);
           if (!exists) return { name, args, result: `Job not found: ${jobId}`, error: true };
-          deps.cronScheduler.runJobNow(jobId, { respectActiveHours: false }).catch((err: any) =>
-            console.error(`[schedule_job] run_now failed for ${jobId}:`, err?.message || err)
-          );
+          const waitSecondsRaw = Number(args.wait_seconds ?? args.waitSeconds);
+          const waitMs = Number.isFinite(waitSecondsRaw) && waitSecondsRaw > 0
+            ? Math.min(600, waitSecondsRaw) * 1000
+            : (args.wait === true ? 300_000 : 1500);
+          let runError: string | null = null;
+          const runPromise = deps.cronScheduler.runJobNow(jobId, { respectActiveHours: false }).catch((err: any) => {
+            runError = String(err?.message || err);
+            console.error(`[schedule_job] run_now failed for ${jobId}:`, runError);
+          });
+          // Surface immediate rejections (already running, missing team, ...)
+          // and fast results instead of always reporting "queued".
+          const settled = await Promise.race([
+            runPromise.then(() => true),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), waitMs)),
+          ]);
+          if (runError) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: false, action: 'run_now', job_id: jobId, status: 'rejected', error: runError }, null, 2),
+              error: true,
+            };
+          }
+          const after = deps.cronScheduler.getJobs().find((j: any) => j.id === jobId);
+          if (settled) {
+            const lastResult = String(after?.lastResult || '');
+            const failed = /^\s*ERROR:/i.test(lastResult);
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: !failed,
+                action: 'run_now',
+                job_id: jobId,
+                status: failed ? 'failed' : 'completed',
+                last_run: after?.lastRun || null,
+                result_excerpt: lastResult.slice(0, 1200),
+              }, null, 2),
+              error: failed,
+            };
+          }
           return {
             name,
             args,
-            result: JSON.stringify({ success: true, action: 'run_now', job_id: jobId, message: 'Job queued for immediate run.' }, null, 2),
+            result: JSON.stringify({
+              success: true,
+              action: 'run_now',
+              job_id: jobId,
+              status: 'running',
+              message: 'Run started and is still in progress (not finished). Check schedule_job(list) or automation_dashboard for the outcome, or call run_now with wait:true to wait for completion.',
+            }, null, 2),
             error: false,
           };
         }
@@ -767,6 +862,43 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           if (rawKind === 'recurring') patch.type = 'recurring';
           if (schedule.cron !== undefined || args.cron !== undefined) patch.schedule = String(schedule.cron || args.cron || '').trim();
           if (schedule.run_at !== undefined || args.run_at !== undefined) patch.runAt = String(schedule.run_at || args.run_at || '').trim();
+          const hasFriendlySchedule = ['text', 'repeat', 'time', 'days_of_week', 'daysOfWeek', 'every_hours', 'everyHours', 'every_days', 'everyDays']
+            .some((key) => schedule[key] !== undefined);
+          if (hasFriendlySchedule && patch.schedule === undefined && patch.runAt === undefined) {
+            try {
+              const normalized = normalizeScheduleSpec({ ...schedule, kind: schedule.kind || args.kind || undefined }, patch.tz || undefined);
+              patch.type = normalized.kind === 'one-shot' ? 'one-shot' : 'recurring';
+              if (normalized.kind === 'recurring') {
+                patch.schedule = normalized.cron;
+                patch.runAt = null;
+              } else {
+                patch.runAt = normalized.runAt;
+                patch.schedule = null;
+              }
+            } catch (err: any) {
+              return { name, args, result: `Invalid schedule: ${err?.message || err}`, error: true };
+            }
+          }
+          if (Array.isArray(args.skillIds)) patch.skillIds = args.skillIds;
+          if (args.context_refs !== undefined || args.contextReferences !== undefined) {
+            patch.context_refs = args.context_refs || args.contextReferences || [];
+          }
+          if (args.preview_only !== undefined || args.previewOnly !== undefined) {
+            const raw = args.preview_only ?? args.previewOnly;
+            patch.previewOnly = raw === true || String(raw).toLowerCase() === 'true';
+          }
+          if (args.expected_outputs !== undefined || args.expectedOutputs !== undefined) {
+            patch.expectedOutputs = normalizeExpectedOutputs(args.expected_outputs ?? args.expectedOutputs);
+          }
+          if (patch.tz !== undefined) {
+            const tzError = validateScheduleTimezone(patch.tz);
+            if (tzError) return { name, args, result: tzError, error: true };
+          }
+          if (patch.schedule) {
+            const existingJob = deps.cronScheduler.getJobs().find((j: any) => j.id === jobId);
+            const cronError = validateCronExpression(patch.schedule, patch.tz !== undefined ? patch.tz : existingJob?.tz);
+            if (cronError) return { name, args, result: cronError, error: true };
+          }
 
           if (Object.keys(patch).length === 0) {
             return { name, args, result: 'No update fields provided for schedule_job(update).', error: true };
@@ -786,7 +918,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             patch.runAt = parsed.toISOString();
           }
 
-          let updated = deps.cronScheduler.updateJob(jobId, patch as any);
+          let updated: any;
+          try {
+            updated = deps.cronScheduler.updateJob(jobId, patch as any);
+          } catch (err: any) {
+            return { name, args, result: `schedule_job(update) rejected: ${err?.message || err}`, error: true };
+          }
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
           if (String(updated.team_id || '').trim()) {
             return {

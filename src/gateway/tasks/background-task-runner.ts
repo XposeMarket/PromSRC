@@ -2853,7 +2853,7 @@ export class BackgroundTaskRunner {
     try {
       const task = loadTask(this.taskId);
       if (!task?.voiceDispatch?.workgroupId || !task.originatingSessionId) return;
-      if (event === 'task_complete' && task.taskKind === 'run_once' && task.verificationStatus !== 'complete') return;
+      if (event === 'task_complete' && task.taskKind === 'run_once' && task.verificationStatus !== 'complete' && task.verificationStatus !== 'failed') return;
       const payload = data as any;
       const kind = event === 'task_step_done'
         ? 'milestone'
@@ -3207,6 +3207,7 @@ export class BackgroundTaskRunner {
     const verifySessionId = `run_once_verify_${task.id}_${Date.now()}`;
 
     let verificationText = taskResult;
+    let verificationFailed = false;
     try {
       task.verificationStatus = 'running';
       saveTask(task);
@@ -3216,15 +3217,26 @@ export class BackgroundTaskRunner {
         undefined, 'background_task',
         undefined, undefined, undefined, undefined,
       );
-      verificationText = (verifyResult?.text || '').trim() || taskResult;
+      const text = (verifyResult?.text || '').trim();
+      if (!text || /^error:/i.test(text)) {
+        verificationFailed = true;
+        if (text) console.warn(`[RunOnce] Verification returned an error for task ${task.id}: ${text.slice(0, 200)}`);
+      } else {
+        verificationText = text;
+      }
     } catch (err: any) {
+      verificationFailed = true;
       console.warn(`[RunOnce] Verification error for task ${task.id}:`, err?.message);
     } finally {
       try { clearHistory(verifySessionId); } catch {}
     }
+    if (verificationFailed) {
+      verificationText = `${taskResult}\n\n(Verification could not run, so this result is unverified.)`;
+    }
 
-    // Update task with verification status + final result
-    task.verificationStatus = 'complete';
+    // Update task with verification status + final result. A thrown or empty
+    // verifier must never be recorded as verified.
+    task.verificationStatus = verificationFailed ? 'failed' : 'complete';
     task.finalSummary = verificationText;
     saveTask(task);
 
