@@ -15047,6 +15047,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
 	          if (!['file', 'task', 'scheduled_job', 'event_queue'].includes(targetType)) {
 	            return { name, args, result: 'internal_watch(create) requires target.type: file, task, scheduled_job, or event_queue', error: true };
 	          }
+	          // Team managers are woken by dispatch completion events (team-event-router);
+	          // task-watch polling caused id mismatches and post-completion wake loops.
+	          if (targetType === 'task' && String(sessionId || '').startsWith('team_coord_')) {
+	            return {
+	              name,
+	              args,
+	              result: 'internal_watch(create task) is not used by team managers: a background dispatch_team_agent wakes you automatically when the member finishes, fails, shares an artifact, or messages you. End your turn and wait for that wake.',
+	              error: true,
+	            };
+	          }
 	          const targetConfig: Record<string, any> = { ...targetRaw };
 	          delete targetConfig.type;
 	          if (targetType === 'file') {
@@ -15756,7 +15766,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 model: team.manager?.model || null,
                 reviewTrigger: team.manager?.reviewTrigger,
                 lastReviewAt: team.manager?.lastReviewAt || null,
-                inboxPending: Array.isArray(room.managerInbox) ? room.managerInbox.length : 0,
+                inboxPending: Array.isArray(room.managerInbox) ? room.managerInbox.filter((m: any) => !m?.drainedAt).length : 0,
                 messageCount: chat.filter((m) => m?.from === 'manager').length,
                 recentMessages: managerMessages,
                 note: 'Manager turns run in the team_coord session and are not listed by agent_run_ops; use this status for manager activity.',

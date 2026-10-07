@@ -141,12 +141,15 @@ function hasActivePlanWorkForTeam(teamId: string): boolean {
   return plan.some((item) => ['pending', 'active', 'blocked'].includes(String(item?.status || '')));
 }
 
-function shouldWakeManager(event: TeamEventRouterInput, membersWoken: string[]): boolean {
+export function shouldWakeManager(event: TeamEventRouterInput, membersWoken: string[]): boolean {
   if (event.type === 'member_failed_task' || event.type === 'member_blocked') return true;
   if (event.type === 'member_shared_artifact') return true;
   if (event.warning || event.error || event.admissionCode) return true;
   if (membersWoken.length > 0) return true;
   if (event.type === 'member_completed_task' && hasActivePlanWorkForTeam(event.teamId)) return true;
+  // Background dispatches return to nobody: the manager must be woken with the result
+  // (this replaces manager-created internal_watch polling on team task ids).
+  if (event.type === 'member_completed_task' && String(event.source || '').includes('background')) return true;
   return false;
 }
 

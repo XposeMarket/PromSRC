@@ -14,9 +14,13 @@ assert.match(teamWrapperBlock, /dispatch:\s*'dispatch_team_agent'/,
   'team_ops_wrapper dispatch must use the team-aware executor');
 assert.doesNotMatch(teamWrapperBlock, /dispatch:\s*'dispatch_to_agent'/,
   'team_ops_wrapper dispatch must not create a standalone task');
-assert.match(teamExecutor, /case 'dispatch_team_agent':/,
-  'the team-aware dispatch capability must remain registered');
-assert.match(teamExecutor, /runTeamAgentViaChat\(agentId, dispatchPrompt\.effectiveTask, teamId\)/,
+// dispatch_team_agent is handled by subagent-executor (the capability executor must
+// not claim it, or it shadows the canonical handler; see PR #543).
+assert.doesNotMatch(teamExecutor, /^\s*'dispatch_team_agent',\s*$/m,
+  'team-agent-executor must not claim dispatch_team_agent');
+assert.match(wrapper, /case 'dispatch_team_agent':/,
+  'the team-aware dispatch handler must remain registered');
+assert.match(wrapper, /runTeamAgentViaChat\(agentId, dispatchPrompt\.effectiveTask, teamId\)/,
   'team dispatch must execute through the team-bound chat runtime');
 
 console.log('team ops dispatch context regression passed');

@@ -18,7 +18,6 @@ import {
 } from '../../teams/team-dispatch-runtime';
 import {
   addTeamContextReference,
-  addTeamMilestone,
   appendMainAgentThread,
   appendTeamChat,
   appendTeamRoomMessage,
@@ -39,8 +38,6 @@ import {
   updateTeamContextReference,
   updateTeamDispatchRecord,
   updateTeamFocus,
-  updateTeamMilestone,
-  updateTeamMission,
   updateTeamMemberState,
   upsertTeamPlanItem,
 } from '../../teams/managed-teams';
@@ -286,14 +283,11 @@ export function normalizeTeamGoalAction(raw: string): string {
     update_focus: 'set_focus',
     focus: 'set_focus',
     set_goal: 'set_focus',
-    update_mission: 'set_mission',
-    mission: 'set_mission',
     log_completion: 'log_completed',
     log_complete: 'log_completed',
     log_completed_work: 'log_completed',
     complete: 'log_completed',
     completed: 'log_completed',
-    milestone: 'add_milestone',
   };
   return aliases[a] || a;
 }
@@ -1253,39 +1247,13 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           ok = updateTeamFocus(teamId, value);
           data.focus = value;
           shouldMirrorGoalUpdateToChat = args?.announce === true || args?.mirror_to_chat === true;
-        } else if (action === 'set_mission') {
-          const value = String(args?.value || args?.mission || '').trim();
-          if (!value) return { name, args, result: 'ERROR: set_mission requires value', error: true };
-          ok = updateTeamMission(teamId, value);
-          data.mission = value;
+        } else if (action === 'set_mission' || action === 'add_milestone' || action === 'update_milestone') {
+          return { name, args, result: `ERROR: manage_team_goal action "${action}" was removed. Use set_focus or log_completed; change the team purpose with team_manage(update).`, error: true };
         } else if (action === 'log_completed') {
           const value = String(args?.value || args?.entry || '').trim();
           if (!value) return { name, args, result: 'ERROR: log_completed requires value', error: true };
           ok = logCompletedWork(teamId, value);
           data.entry = value;
-        } else if (action === 'add_milestone') {
-          const description = String(args?.milestone_description || args?.value || '').trim();
-          if (!description) return { name, args, result: 'ERROR: add_milestone requires milestone_description', error: true };
-          const status = ['pending', 'active', 'complete', 'blocked'].includes(String(args?.milestone_status || 'pending'))
-            ? String(args?.milestone_status || 'pending') as 'pending' | 'active' | 'complete' | 'blocked'
-            : 'pending';
-          const milestone = addTeamMilestone(teamId, {
-            description,
-            status,
-            relevantAgentIds: Array.isArray(args?.relevant_agent_ids) ? args.relevant_agent_ids.map((v: any) => String(v)).filter(Boolean) : [],
-          });
-          ok = !!milestone;
-          data.milestone = milestone;
-        } else if (action === 'update_milestone') {
-          const milestoneId = String(args?.milestone_id || '').trim();
-          if (!milestoneId) return { name, args, result: 'ERROR: update_milestone requires milestone_id', error: true };
-          const updates: any = {};
-          if (args?.milestone_description !== undefined) updates.description = String(args.milestone_description);
-          if (['pending', 'active', 'complete', 'blocked'].includes(String(args?.milestone_status || ''))) updates.status = String(args.milestone_status);
-          if (Array.isArray(args?.relevant_agent_ids)) updates.relevantAgentIds = args.relevant_agent_ids.map((v: any) => String(v)).filter(Boolean);
-          const milestone = updateTeamMilestone(teamId, milestoneId, updates);
-          ok = !!milestone;
-          data.milestone = milestone;
         } else if (action === 'pause_agent') {
           const agentId = String(args?.agent_id || '').trim();
           if (!agentId) return { name, args, result: 'ERROR: pause_agent requires agent_id', error: true };

@@ -497,7 +497,7 @@ export function ensureTeamInfoFile(team: ManagedTeam): string {
 
 export function initTeamWorkspaceArtifacts(team: ManagedTeam): void {
   ensureTeamWorkspace(team.id);
-  initTeamMemoryFiles(team.id);
+  // memory.json / last_run.json / pending.json are no longer created: the team record is the goal source of truth.
   ensureTeamInfoFile(team);
 }
 
