@@ -164,4 +164,14 @@ export const CARD_CSS = `
 /* inline citation chips */
 .pc-cite{display:inline-flex;align-items:center;gap:3px;vertical-align:1px;margin:0 2px;padding:1px 7px;border-radius:999px;background:var(--pc-soft,rgba(127,127,127,.12));color:var(--pc-muted,inherit);font-size:11.5px;font-weight:600;text-decoration:none;white-space:nowrap}
 .pc-cite:hover{color:var(--pc-accent,inherit)}.pc-cite img{width:12px;height:12px;border-radius:3px}
+/* inline visual expand-to-fullscreen (desktop + mobile; kept out of the ratcheted legacy stylesheets) */
+.visual-block{position:relative}
+.visual-expand-btn{position:absolute;top:4px;right:4px;z-index:3;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));background:var(--pm-surface,var(--panel,rgba(127,127,127,.1)));color:var(--pm-muted,var(--muted,#8a8a8a));cursor:pointer;opacity:0;transition:opacity .15s ease,color .15s ease;-webkit-tap-highlight-color:transparent}
+.visual-block:hover .visual-expand-btn,.visual-expand-btn:focus-visible,.visual-block--expanded .visual-expand-btn{opacity:1}
+.visual-expand-btn:hover{color:var(--pm-text,var(--text,currentColor))}
+@media (hover:none){.visual-expand-btn{opacity:.85}}
+html .visual-block.visual-block--expanded,html .pm-bubble .visual-block.visual-block--expanded,html .pm-msg .pm-bubble .visual-block.visual-block--expanded{position:fixed!important;inset:0;z-index:10050;margin:0!important;padding:calc(env(safe-area-inset-top) + 48px) 14px calc(env(safe-area-inset-bottom) + 16px)!important;max-width:none!important;width:100vw;overflow:auto!important;-webkit-overflow-scrolling:touch;border:0!important;border-radius:0!important;background:var(--pm-bg,var(--bg,#0f1115))!important}
+html .visual-block.visual-block--expanded iframe{max-width:1280px;margin:0 auto}
+html .visual-block.visual-block--expanded .visual-expand-btn{position:fixed;top:calc(env(safe-area-inset-top) + 10px);right:14px;opacity:1}
+html.prom-visual-expanded-open,html.prom-visual-expanded-open body{overflow:hidden}
 `;
