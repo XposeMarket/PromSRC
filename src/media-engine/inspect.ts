@@ -220,7 +220,7 @@ export function planParts(total: number, cuts: number[], minPartSec: number, max
   const parts = b.slice(1).map((e, i) => ({ startSec: +b[i].toFixed(2), endSec: +e.toFixed(2), speed: 1 }));
   for (const pt of parts) {
     const len = pt.endSec - pt.startSec;
-    if (len < minPartSec) pt.speed = +(Math.max(0.33, len / (minPartSec + 0.05))).toFixed(3);
+    if (len < minPartSec) pt.speed = Math.max(0.001, Math.floor(len / (minPartSec + 0.05) * 1000) / 1000);
   }
   return parts;
 }
