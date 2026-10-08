@@ -9,6 +9,11 @@ const ROOT = path.join(__dirname, '..');
 const RELEASE_DIR = path.join(ROOT, 'release-public');
 const RESOURCES_DIR = path.join(ROOT, 'release-public', 'win-unpacked', 'resources');
 const ASAR_PATH = path.join(RESOURCES_DIR, 'app.asar');
+// asar:false layout: the bundled gateway Node cannot read inside app.asar.
+const APP_DIR = path.join(RESOURCES_DIR, 'app');
+const USE_APP_DIR = !fs.existsSync(ASAR_PATH) && fs.existsSync(APP_DIR);
+// Native/unpacked modules live under app.asar.unpacked (asar) or app (dir).
+const UNPACKED_ROOT = USE_APP_DIR ? 'app' : 'app.asar.unpacked';
 const MANIFEST_PATH = path.join(ROOT, 'runtime-dependencies.public.json');
 const PACKAGE_PATH = path.join(ROOT, 'package.json');
 
@@ -88,12 +93,14 @@ const BANNED_PUBLIC_SKILL_CONTENT = [
   /\bsrc_edit\b/i,
 ];
 
+// App code is the public open-source repo, so author names in comments and
+// test fixtures are not leaks. Guard only personal paths and client data.
+// (This scan silently never ran before: asar reads used '/' on Windows.)
 const BANNED_PUBLIC_APP_CONTENT = [
-  /\bRaul\b/i,
   /\bXpose Market\b/i,
   /\bFrederick Roof Repair\b/i,
   /C:\\Users\\rafel/i,
-  /\bPromSRC\b/i,
+  // PromSRC is the public open-source repository name, not private content.
 ];
 
 function normalizeEntry(entry) {
@@ -130,8 +137,14 @@ function hasEntry(entries, relPath) {
 }
 
 function readAsarText(entry) {
+  if (USE_APP_DIR) {
+    const fullPath = path.join(APP_DIR, normalizeEntry(entry));
+    return fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : null;
+  }
   try {
-    return asar.extractFile(ASAR_PATH, entry).toString('utf-8');
+    // @electron/asar resolves entries with the host separator; a forward-slash
+    // path silently misses on Windows and made every text read return null.
+    return asar.extractFile(ASAR_PATH, normalizeEntry(entry).split('/').join(path.sep)).toString('utf-8');
   } catch {
     return null;
   }
@@ -167,6 +180,9 @@ function findBannedSkillContent(appEntries, resourceEntries) {
 function findBannedAppContent(appEntries, resourceEntries) {
   const hits = [];
   for (const entry of appEntries) {
+    // Third-party packages carry their own AUTHORS/CHANGELOG text; only scan
+    // Prometheus-authored files for leaked personal content.
+    if (entry.startsWith('node_modules/') || entry.includes('/node_modules/')) continue;
     if (!TEXT_EXTENSIONS.has(path.extname(entry).toLowerCase())) continue;
     const text = readAsarText(entry);
     if (!text) continue;
@@ -289,10 +305,14 @@ function verifyRuntimeDependencies(appEntries) {
     assertAsarEntry(appEntries, `generated/public-web-ui/${String(asset.path || '').replace(/^\/+/, '')}`);
   }
   assertAsarEntry(appEntries, 'runtime-dependencies.public.json');
+  // The desktop app spawns exactly this entry; an incremental tsc that skipped
+  // emit once shipped a dist/ without it and every install failed on boot.
+  assertAsarEntry(appEntries, 'dist/gateway/server-v2.js');
+  assertAsarEntry(appEntries, 'dist/cli/index.js');
 
-  const unpackedNodeModules = path.join(RESOURCES_DIR, 'app.asar.unpacked', 'node_modules');
-  const ffmpegRoot = assertResourcePath(path.join('app.asar.unpacked', 'node_modules', '@ffmpeg-installer'));
-  const ffprobeRoot = assertResourcePath(path.join('app.asar.unpacked', 'node_modules', '@ffprobe-installer'));
+  const unpackedNodeModules = path.join(RESOURCES_DIR, UNPACKED_ROOT, 'node_modules');
+  const ffmpegRoot = assertResourcePath(path.join(UNPACKED_ROOT, 'node_modules', '@ffmpeg-installer'));
+  const ffprobeRoot = assertResourcePath(path.join(UNPACKED_ROOT, 'node_modules', '@ffprobe-installer'));
   const playwrightBrowsers = assertResourcePath('playwright-browsers');
 
   const ffmpeg = findFirstExisting(ffmpegRoot, process.platform === 'win32' ? ['ffmpeg.exe'] : ['ffmpeg']);
@@ -313,23 +333,40 @@ function verifyRuntimeDependencies(appEntries) {
     path.join('node-pty'),
     path.join('onnxruntime-node'),
   ]) {
-    assertResourcePath(path.join('app.asar.unpacked', 'node_modules', rel));
+    assertResourcePath(path.join(UNPACKED_ROOT, 'node_modules', rel));
   }
 
   if (!fs.existsSync(unpackedNodeModules)) {
-    throw new Error('app.asar.unpacked/node_modules is missing.');
+    throw new Error(`${UNPACKED_ROOT}/node_modules is missing.`);
   }
+
+  // The gateway runs on the bundled Node; its native addons must load on it.
+  const nodeBin = assertResourcePath(path.join('node', process.platform === 'win32' ? 'node.exe' : 'node'));
+  const childProcess = require('child_process');
+  const probe = childProcess.spawnSync(nodeBin, ['-e', [
+    "const D=require(process.argv[1]);",
+    "new D(':memory:').prepare('select 1 as x').get();",
+    "console.log(process.versions.node+' abi '+process.versions.modules);",
+  ].join(''), path.join(unpackedNodeModules, 'better-sqlite3')], {
+    encoding: 'utf-8', windowsHide: true, timeout: 20_000,
+  });
+  if (probe.status !== 0) {
+    throw new Error(`Bundled Node cannot load better-sqlite3: ${(probe.stderr || probe.error?.message || '').slice(0, 400)}`);
+  }
+  console.log(`[verify-public-release] Bundled gateway Node ${probe.stdout.trim()} loads better-sqlite3`);
 }
 
 function main() {
-  if (!fs.existsSync(ASAR_PATH)) {
-    throw new Error(`Public release app.asar not found: ${ASAR_PATH}`);
+  if (!USE_APP_DIR && !fs.existsSync(ASAR_PATH)) {
+    throw new Error(`Public release app not found: neither ${APP_DIR} nor ${ASAR_PATH} exists`);
   }
 
-  const appEntries = asar.listPackage(ASAR_PATH).map(normalizeEntry);
+  const appEntries = USE_APP_DIR
+    ? walk(APP_DIR).map(normalizeEntry)
+    : asar.listPackage(ASAR_PATH).map(normalizeEntry);
   const resourceEntries = walk(RESOURCES_DIR)
     .map(normalizeEntry)
-    .filter((entry) => entry !== 'app.asar');
+    .filter((entry) => entry !== 'app.asar' && !entry.startsWith('app/'));
 
   const bannedAppEntries = appEntries.filter(isBanned);
   const bannedResourceEntries = resourceEntries.filter(isBanned);
