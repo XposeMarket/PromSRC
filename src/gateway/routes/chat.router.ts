@@ -2080,6 +2080,7 @@ import {
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../providers/chatgpt-web/chatgpt-web-models';
+import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
 import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, waitForChatGPTBridgeSlot } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 // â”€â”€â”€ Injected singletons (set by initChatRouter in server-v2.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -6255,6 +6256,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           }
           if (nativeType !== 'chatgpt.tool_start' && nativeType !== 'chatgpt.tool_result') return;
           const data = event.data && typeof event.data === 'object' ? event.data : {};
+          // Prometheus-connector calls already render as real tool rows from
+          // the bridge executor; a second chatgpt_app_* row duplicated each one.
+          if ((data as any).viaBridge) return;
           const action = String((data as any).name || 'chatgpt_tool').slice(0, 120);
           const toolCallId = String((data as any).id || '').slice(0, 240);
           if (nativeType === 'chatgpt.tool_start') {
@@ -6294,6 +6298,17 @@ Do not produce prose. Use the canonical thread tool now.` });
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
       const providerToolSurface = buildProviderToolSurface(generationOverride);
       tools = providerToolSurface.provider;
+      // ChatGPT (openai_codex/chatgpt) reaches Prometheus tools through its
+      // connector, whose catalog is a snapshot taken when the message is sent:
+      // request_tool_category cannot add tools mid-turn there. Serve the full
+      // runtime surface instead, so file/GitHub/browser tools are always
+      // callable and the catalog stays stable across turns. chatgpt_sandbox is
+      // dropped: ChatGPT already has its own python, and delegating to a second
+      // ChatGPT left deliverables in a foreign sandbox (2026-10-07 game report).
+      if (String(generationOverride.providerId || '') === 'openai_codex' && isChatGPTWebModel(generationOverride.model)) {
+        tools = buildCurrentTurnTools(new Set<string>(getRuntimeToolCategoryIds().map(String)))
+          .filter((tool: any) => String(tool?.function?.name || '') !== 'chatgpt_sandbox');
+      }
       currentModelSystemBlock = formatCurrentModelSystemBlock(generationOverride);
       if (generationOverride.source === 'turn_override') {
         // â”€â”€ Local primary switch_model promotion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

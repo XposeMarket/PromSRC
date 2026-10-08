@@ -48,6 +48,8 @@ export interface ChatGPTWebAdapterDeps {
    * answers point at nothing outside chatgpt.com (2026-09-26 game report).
    */
   saveSandboxFile?: (conversationId: string, fileName: string, data: Buffer) => Promise<string>;
+  /** Workspace path of a sandbox file with this name saved in the last few minutes, if any. */
+  findRecentSandboxFile?: (fileName: string) => Promise<string | null>;
 }
 
 /** ChatGPT's file service rejects very large images; the web client caps near 20 MB. */
@@ -76,6 +78,19 @@ export function extractImageParts(content: unknown): Array<{ data: Buffer; mimeT
     if (out.length >= MAX_IMAGES_PER_MESSAGE) break;
   }
   return out;
+}
+
+/**
+ * Was this connector call addressed to the Prometheus bridge? ChatGPT's call
+ * path can carry the display name, the asdk_app id or only the link id, so
+ * match any of them (a name-only check missed live calls and every bridge
+ * tool rendered twice, 2026-10-07).
+ */
+export function isBridgeCall(bridge: ChatGPTWebBridgeSource | null | undefined, call: { connector?: string; segments?: string[] } | undefined): boolean {
+  if (!bridge || !call) return false;
+  const keys = new Set([bridge.name, bridge.id, bridge.linkId].filter(Boolean).map((v) => String(v).toLowerCase()));
+  const segs = [call.connector, ...(call.segments || [])].filter(Boolean).map((v) => String(v).toLowerCase());
+  return segs.some((s) => keys.has(s));
 }
 
 function textOf(content: unknown): string {
@@ -115,7 +130,9 @@ export function buildChatGPTWebMessages(messages: ChatMessage[], bridge: boolean
       '[PROMETHEUS BRIDGE]',
       'You are running inside Prometheus through the ChatGPT backend. The "Prometheus" connector (app) is attached and connected in this chat: it exposes the Prometheus tools named in the instructions above and runs them on the user\'s own computer (files, shell, browser, memory, notes).',
       `Call them with api_tool.call_tool${toolPath ? ` using path "${toolPath}"` : ''} and the tool\'s JSON arguments. They are available right now: never say the connector or a tool is unavailable without calling it first. Prefer calling a tool over guessing.`,
-      'Where work goes: deliverables the user asked for (apps, games, documents, code, projects) belong on the user\'s computer, so write them with the Prometheus file tools into the workspace. Your own python sandbox (/mnt/data) is for scratch work, computation, data analysis and charts. If you do produce a file in the sandbox, link it as sandbox:/mnt/data/<name>; Prometheus copies linked sandbox files into the workspace automatically.',
+      'Every Prometheus tool category is already loaded for you (files, terminal, git, GitHub via connector_github including merge_pr, browser, desktop, media, agents). Do not call request_tool_category; just call the tool. A merge, post or delete may pause for the user\'s approval inside Prometheus: that is expected, so call it and report what came back.',
+      'Where work goes: deliverables the user asked for (apps, games, documents, code, projects) belong on the user\'s computer. Write them with workspace_edit (action "write", create_dirs true) into the workspace, e.g. games/<name>/index.html, never only in your python sandbox. Your own native tools (python, web search, image generation) stay available for research, computation and charts. If you do produce a file in your sandbox, link it as sandbox:/mnt/data/<name>; Prometheus copies linked sandbox files into the workspace automatically.',
+      'Sending files: to show the user an image or video, embed it in your answer with markdown and its workspace path, e.g. ![caption](games/snake/screenshot.png). To push a file to their phone or another channel, call delivery_send with action "present_file" or attachmentPath.',
     ].join('\n')
     : '[PROMETHEUS BRIDGE]\nYou are running inside Prometheus through the ChatGPT backend. The Prometheus tool bridge is not connected for this chat, so you cannot act on the user\'s computer; say so plainly if a request needs local tools. Files you create in your python sandbox are copied to the user when you link them as sandbox:/mnt/data/<name>.';
   const system = [clip(systemText, MAX_SYSTEM_CHARS), bridgeNote].filter(Boolean).join('\n\n');
@@ -258,7 +275,7 @@ export class ChatGPTWebAdapter {
             // Calls into the Prometheus connector already run (and render) as real
             // Prometheus tool rows through the bridge executor; only ChatGPT's own
             // tools and other apps get a ChatGPT-origin row here.
-            const viaBridge = !!bridge && ev.connector?.connector === bridge.name;
+            const viaBridge = isBridgeCall(bridge, ev.connector);
             if (!viaBridge) {
               emit({ type: 'tool_call_start', id: `chatgpt_${ev.id}`, name: ev.name, nativeType: 'chatgpt.tool_call' });
               emit({ type: 'tool_call_done', id: `chatgpt_${ev.id}`, name: ev.name, arguments: ev.args, nativeType: 'chatgpt.tool_call' });
@@ -267,7 +284,7 @@ export class ChatGPTWebAdapter {
             break;
           }
           case 'tool_result': {
-            const viaBridge = !!bridge && ev.connector?.connector === bridge.name;
+            const viaBridge = isBridgeCall(bridge, ev.connector);
             emit({ type: 'provider_event', nativeType: 'chatgpt.tool_result', data: { id: `chatgpt_${ev.id}`, name: ev.name, result: ev.result, error: !!ev.error, viaBridge } });
             break;
           }
@@ -339,7 +356,7 @@ export class ChatGPTWebAdapter {
     const conversationId = parser.getConversationId();
     const sandboxPaths = extractSandboxPaths(finalText);
     if (sandboxPaths.length && conversationId && this.deps.saveSandboxFile) {
-      const messageIds = parser.getFinalMessageIds();
+      const messageIds = parser.getDownloadCandidateMessageIds();
       const saved: string[] = [];
       for (const sandboxPath of sandboxPaths.slice(0, 20)) {
         let savedPath = '';
@@ -350,6 +367,13 @@ export class ChatGPTWebAdapter {
             savedPath = await this.deps.saveSandboxFile(conversationId, sandboxPath.split('/').pop() || 'file', data);
             break;
           } catch (error: any) { lastErr = String(error?.message || error).slice(0, 200); }
+        }
+        // A file a nested chatgpt_sandbox delegate wrote lives in that
+        // delegate's sandbox, not this conversation's, so the lookup answers
+        // file_not_found even though Prometheus already saved it (2026-10-07
+        // neon_survivor report). Reuse the copy saved moments ago.
+        if (!savedPath && this.deps.findRecentSandboxFile) {
+          try { savedPath = (await this.deps.findRecentSandboxFile(sandboxPath.split('/').pop() || '')) || ''; } catch { /* best effort */ }
         }
         if (savedPath) {
           finalText = finalText.split(`sandbox:${sandboxPath}`).join(savedPath.replace(/\\/g, '/'));
