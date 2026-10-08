@@ -6405,6 +6405,9 @@ Do not produce prose. Use the canonical thread tool now.` });
             });
           }
         },
+        workerPriority: executionMode === 'interactive'
+          && !/^(?:background_|subagent_|team_|brain_|auto_brain_|cron_)/i.test(String(sessionId || ''))
+          ? 'interactive' : 'background',
 	        abortSignal: abortSignal?.signal,
 	        usageContext: {
           sessionId,

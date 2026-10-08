@@ -5,6 +5,7 @@ import path from 'path';
 import type { MemoryEmbeddingProvider, MemoryEmbeddingResult, MemoryEmbeddingProviderStatus } from '../memory/embeddings/types.js';
 import {
   clearHybridMemoryAtomCache,
+  prewarmHybridMemoryAtoms,
   retrieveHybridMemoryAtoms,
 } from './memory-atoms-hybrid.js';
 
@@ -116,6 +117,8 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(root, 'MEMORY.md'), fixture, 'utf-8');
   clearHybridMemoryAtomCache(root);
   const provider = new FakeSemanticProvider();
+  // Bulk atom embedding is off the hot path now; warm it like the gateway does at boot.
+  await prewarmHybridMemoryAtoms(root, provider);
 
   // True semantic paraphrases: these deliberately avoid the fixture's important
   // literal nouns wherever possible so lexical overlap alone cannot carry them.
@@ -194,7 +197,8 @@ async function main(): Promise<void> {
   provider.batchCalls = 0;
   await retrieveHybridMemoryAtoms(root, 'How do handset chats stay the same?', { embeddingProvider: provider, semanticBudgetMs: 500 });
   await retrieveHybridMemoryAtoms(root, 'Which database setup keeps readers moving?', { embeddingProvider: provider, semanticBudgetMs: 500 });
-  assert.equal(provider.batchCalls, 1, 'atom embeddings should be cached across queries');
+  // Vectors are persisted per atom text, so a cleared in-process cache does not re-embed.
+  assert.ok(provider.batchCalls <= 1, 'atom embeddings should be cached across queries');
 
   // Changing MEMORY.md invalidates the source-hash cache and makes the new atom
   // retrievable without an explicit process restart.

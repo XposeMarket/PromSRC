@@ -33,6 +33,8 @@ export interface ModelCallCallbacks {
   /** Numeric/category-only lifecycle telemetry; never receives model payloads. */
   onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
   signal?: AbortSignal;
+  /** Interactive (user-facing) calls jump ahead of queued background calls. */
+  priority?: 'interactive' | 'background';
 }
 
 export class ModelCallWorkerError extends Error {
@@ -184,7 +186,9 @@ function abortError(reason?: unknown): Error {
 const enabled = String(process.env.PROMETHEUS_MODEL_CALL_WORKERS || '1').trim() !== '0';
 const workerCount = envInt('PROMETHEUS_MODEL_WORKER_COUNT', 3, 1, 4);
 const idleTtlMs = envInt('PROMETHEUS_MODEL_WORKER_IDLE_TTL_MS', 60_000, 0, 30 * 60_000);
-const warmSlotCount = envInt('PROMETHEUS_MODEL_WORKER_WARM_SLOTS', 1, 0, workerCount);
+// Two warm slots: one background call no longer forces the next user turn to
+// cold-boot a child process (~400-700ms before the provider request).
+const warmSlotCount = envInt('PROMETHEUS_MODEL_WORKER_WARM_SLOTS', Math.min(2, workerCount), 0, workerCount);
 const maxQueued = envInt('PROMETHEUS_MODEL_WORKER_MAX_QUEUE', 12, 0, 100);
 const defaultTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_TIMEOUT_MS', 15 * 60_000, 1_000, 60 * 60_000);
 const startupTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_STARTUP_TIMEOUT_MS', 20_000, 1_000, 120_000);
@@ -927,8 +931,15 @@ export async function dispatchModelCallWorker(
       }
       callbacks.signal.addEventListener('abort', onAbort, { once: true });
     }
-    queue.push(task);
-    noteWorkerStage(task, 'queue_enter', { requestBytes: bytes, queued: queue.length });
+    if (callbacks.priority === 'interactive') {
+      // Ahead of every queued background call, behind earlier interactive ones.
+      const firstBackground = queue.findIndex((queued) => queued.callbacks.priority !== 'interactive');
+      if (firstBackground < 0) queue.push(task);
+      else queue.splice(firstBackground, 0, task);
+    } else {
+      queue.push(task);
+    }
+    noteWorkerStage(task, 'queue_enter', { requestBytes: bytes, queued: queue.length, priority: callbacks.priority || 'background' });
     scheduleDrain();
   });
 }
