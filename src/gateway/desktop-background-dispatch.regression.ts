@@ -13,6 +13,7 @@ import {
   parseKeyCombo,
   backgroundUnavailableHint,
   backgroundHelper,
+  guardUserForeground,
 } from './desktop-background-dispatch';
 
 async function main() {
@@ -28,6 +29,9 @@ async function main() {
   assert.strictEqual(parseKeyCombo('Ctrl++').key, '+');
   assert.match(backgroundUnavailableHint('web_content'), /browser tools/);
   assert.match(backgroundUnavailableHint('drag'), /foreground/);
+  // guardUserForeground passes results through even without a helper.
+  const passthrough = await guardUserForeground(0, async () => 42, async () => true, { settleMs: 0 });
+  assert.strictEqual(passthrough.result, 42);
   console.log('PASS dispatch logic');
 
   if (process.platform !== 'win32' || process.env.PROM_BG_LIVE !== '1') {
