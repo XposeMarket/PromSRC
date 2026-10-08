@@ -13,6 +13,35 @@ import { getConfig } from '../../config/config';
 
 export const CHATGPT_FILES_DIR = 'chatgpt-files';
 
+/**
+ * Most recent saved copy of `fileName` under chatgpt-files/ written within
+ * `maxAgeMs`. Returns the workspace-relative path or null.
+ */
+export function findRecentChatGPTSandboxFile(fileName: string, maxAgeMs = 30 * 60_000, workspaceRoot?: string): string | null {
+  const name = String(fileName || '').trim();
+  if (!name || /[\\/]/.test(name)) return null;
+  const root = workspaceRoot || getConfig().getWorkspacePath();
+  const base = path.join(root, CHATGPT_FILES_DIR);
+  let best: { rel: string; mtime: number } | null = null;
+  let folders: string[] = [];
+  try { folders = fs.readdirSync(base); } catch { return null; }
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (const folder of folders) {
+    let files: string[] = [];
+    try { files = fs.readdirSync(path.join(base, folder)); } catch { continue; }
+    for (const file of files) {
+      if (file !== name && !(file.startsWith(`${stem}-`) && file.endsWith(ext))) continue;
+      try {
+        const st = fs.statSync(path.join(base, folder, file));
+        if (!st.isFile() || Date.now() - st.mtimeMs > maxAgeMs) continue;
+        if (!best || st.mtimeMs > best.mtime) best = { rel: [CHATGPT_FILES_DIR, folder, file].join('/'), mtime: st.mtimeMs };
+      } catch { /* skip */ }
+    }
+  }
+  return best ? best.rel : null;
+}
+
 function safeSegment(value: string, fallback: string): string {
   const cleaned = String(value || '')
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
