@@ -1371,6 +1371,14 @@ async function startGatewayListeners(): Promise<void> {
     // (usually a resumed one) does not pay a cold child boot before the
     // provider request is even sent.
     try { startupMark(`model workers prewarmed (${prewarmModelCallWorkers()})`); } catch {}
+    // Warm memory-atom vectors + embedding model so the first turn's semantic
+    // memory lookup is a single query embedding instead of a full re-embed.
+    setTimeout(() => {
+      import('./memory-index/memory-atoms-hybrid.js')
+        .then(({ prewarmHybridMemoryAtoms }) => prewarmHybridMemoryAtoms(getConfig().getWorkspacePath()))
+        .then((result) => { if (result) startupMark(`memory atoms prewarmed (${result.embedded}/${result.atoms})`); })
+        .catch(() => {});
+    }, 500).unref?.();
     const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
     try { startHandoffSyntheticRuntimeFixture(); } catch {}
     // Accepted peer turns can die before the chat runtime registers. Drain

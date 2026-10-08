@@ -401,39 +401,170 @@ function providerCacheKey(workspacePath: string, snapshot: HybridSnapshot, provi
   return `${path.resolve(workspacePath)}|${snapshot.hash}|${provider.id}|${provider.defaultModel}`;
 }
 
-async function atomEmbeddings(
+// Per-atom vectors keyed by the embedded text, persisted to disk. Editing one
+// MEMORY.md bullet used to invalidate every vector (49 atoms = ~6.5s on local
+// Ollama), so semantic retrieval timed out on almost every turn and silently
+// degraded to deterministic-only. Now only changed atoms are re-embedded, in
+// the background, and the hot path only pays for the query embedding.
+const atomVectorStores = new Map<string, { file: string; vectors: Map<string, number[]>; dirty: boolean }>();
+const inflightAtomEmbeds = new Map<string, Promise<AtomEmbeddingCache | null>>();
+
+function atomText(atom: MemoryAtom): string {
+  return `${atom.sourceSection}\n${atom.rawText}`;
+}
+
+function atomTextKey(text: string): string {
+  return crypto.createHash('sha1').update(text).digest('hex');
+}
+
+function vectorStoreFor(workspacePath: string, provider: MemoryEmbeddingProvider) {
+  const id = `${path.resolve(workspacePath)}|${provider.id}|${provider.defaultModel}`;
+  let store = atomVectorStores.get(id);
+  if (store) return store;
+  const safe = `${provider.id}_${provider.defaultModel}`.replace(/[^a-z0-9._-]+/gi, '_').slice(0, 80);
+  const file = path.join(path.resolve(workspacePath), '.prometheus', 'cache', `memory-atom-vectors.${safe}.json`);
+  const vectors = new Map<string, number[]>();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    for (const [k, v] of Object.entries(parsed?.vectors || {})) {
+      if (Array.isArray(v) && v.length) vectors.set(k, v as number[]);
+    }
+  } catch {}
+  store = { file, vectors, dirty: false };
+  atomVectorStores.set(id, store);
+  return store;
+}
+
+function persistVectorStore(store: { file: string; vectors: Map<string, number[]>; dirty: boolean }, liveKeys: Set<string>): void {
+  if (!store.dirty) return;
+  for (const key of [...store.vectors.keys()]) if (!liveKeys.has(key)) store.vectors.delete(key);
+  try {
+    fs.mkdirSync(path.dirname(store.file), { recursive: true });
+    const tmp = `${store.file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, vectors: Object.fromEntries(store.vectors) }), 'utf-8');
+    fs.renameSync(tmp, store.file);
+    store.dirty = false;
+  } catch {}
+}
+
+function cacheFromStore(snapshot: HybridSnapshot, provider: MemoryEmbeddingProvider, store: { vectors: Map<string, number[]> }): { cache: AtomEmbeddingCache; missing: MemoryAtom[] } {
+  const vectors = new Map<string, number[]>();
+  const missing: MemoryAtom[] = [];
+  for (const atom of snapshot.atoms) {
+    const vector = store.vectors.get(atomTextKey(atomText(atom)));
+    if (vector) vectors.set(atom.id, vector);
+    else missing.push(atom);
+  }
+  const first = vectors.values().next().value as number[] | undefined;
+  return {
+    cache: { sourceHash: snapshot.hash, providerId: provider.id, model: provider.defaultModel, dimensions: first?.length || 0, vectors },
+    missing,
+  };
+}
+
+async function embedMissingAtoms(
   workspacePath: string,
   snapshot: HybridSnapshot,
   provider: MemoryEmbeddingProvider,
-): Promise<AtomEmbeddingCache> {
+): Promise<AtomEmbeddingCache | null> {
+  const key = providerCacheKey(workspacePath, snapshot, provider);
+  const running = inflightAtomEmbeds.get(key);
+  if (running) return running;
+  const job = (async () => {
+    const store = vectorStoreFor(workspacePath, provider);
+    const { missing } = cacheFromStore(snapshot, provider, store);
+    for (let i = 0; i < missing.length; i += 16) {
+      const chunk = missing.slice(i, i + 16);
+      const texts = chunk.map(atomText);
+      const results = await provider.embedBatch(texts);
+      texts.forEach((text, index) => {
+        const vector = results[index]?.vector;
+        if (Array.isArray(vector) && vector.length) { store.vectors.set(atomTextKey(text), vector); store.dirty = true; }
+      });
+    }
+    persistVectorStore(store, new Set(snapshot.atoms.map((atom) => atomTextKey(atomText(atom)))));
+    const { cache, missing: still } = cacheFromStore(snapshot, provider, store);
+    if (!still.length) {
+      embeddingCache.set(key, cache);
+      trimCache(embeddingCache, MAX_WORKSPACE_CACHE * 3);
+    }
+    return cache;
+  })().catch(() => null).finally(() => { inflightAtomEmbeds.delete(key); });
+  inflightAtomEmbeds.set(key, job);
+  return job;
+}
+
+/**
+ * Hot-path atom vectors. Never waits on bulk atom embedding: returns whatever
+ * vectors exist (memory or disk) and backfills missing atoms in the background.
+ */
+function atomEmbeddings(
+  workspacePath: string,
+  snapshot: HybridSnapshot,
+  provider: MemoryEmbeddingProvider,
+): AtomEmbeddingCache {
   const key = providerCacheKey(workspacePath, snapshot, provider);
   const cached = embeddingCache.get(key);
   if (cached) return cached;
-  const results = await provider.embedBatch(snapshot.atoms.map((atom) => `${atom.sourceSection}\n${atom.rawText}`));
-  const vectors = new Map<string, number[]>();
-  for (let i = 0; i < snapshot.atoms.length; i += 1) {
-    const vector = results[i]?.vector;
-    if (Array.isArray(vector) && vector.length) vectors.set(snapshot.atoms[i].id, vector);
+  const store = vectorStoreFor(workspacePath, provider);
+  const { cache, missing } = cacheFromStore(snapshot, provider, store);
+  if (missing.length) void embedMissingAtoms(workspacePath, snapshot, provider);
+  else {
+    embeddingCache.set(key, cache);
+    trimCache(embeddingCache, MAX_WORKSPACE_CACHE * 3);
   }
-  const first = results.find((result) => Array.isArray(result?.vector) && result.vector.length);
-  const cache: AtomEmbeddingCache = {
-    sourceHash: snapshot.hash,
-    providerId: first?.providerId || provider.id,
-    model: first?.model || provider.defaultModel,
-    dimensions: first?.dimensions || first?.vector?.length || 0,
-    vectors,
-  };
-  embeddingCache.set(key, cache);
-  trimCache(embeddingCache, MAX_WORKSPACE_CACHE * 3);
   return cache;
+}
+
+// Provider resolution probes every candidate's status endpoint (OAuth token
+// load + Ollama /api/tags, ~200ms). Cache the answer briefly.
+const PROVIDER_CACHE_TTL_MS = 60_000;
+let providerCache: { at: number; provider: MemoryEmbeddingProvider | null } | null = null;
+let providerInflight: Promise<MemoryEmbeddingProvider | null> | null = null;
+
+async function resolveAutomaticProviderCached(): Promise<MemoryEmbeddingProvider | null> {
+  if (providerCache && Date.now() - providerCache.at < PROVIDER_CACHE_TTL_MS) return providerCache.provider;
+  if (!providerInflight) {
+    providerInflight = getAutomaticMemoryEmbeddingProvider()
+      .then((provider) => {
+        const usable = provider && provider.id !== 'hash' ? provider : null;
+        providerCache = { at: Date.now(), provider: usable };
+        return usable;
+      })
+      .catch(() => null)
+      .finally(() => { providerInflight = null; });
+  }
+  // Serve a stale answer instantly while refreshing.
+  if (providerCache) return providerCache.provider;
+  return providerInflight;
 }
 
 async function resolveProvider(options: HybridMemoryAtomOptions): Promise<MemoryEmbeddingProvider | null> {
   if (options.disableSemantic || options.embeddingProvider === null) return null;
   if (options.embeddingProvider) return options.embeddingProvider;
-  const provider = await getAutomaticMemoryEmbeddingProvider();
-  if (!provider || provider.id === 'hash') return null;
-  return provider;
+  return resolveAutomaticProviderCached();
+}
+
+/**
+ * Warm the snapshot, provider choice and on-disk atom vectors so the first
+ * turn after a restart or MEMORY.md edit does not pay for them. Safe to call
+ * repeatedly; never throws.
+ */
+export async function prewarmHybridMemoryAtoms(
+  workspacePath: string,
+  explicitProvider?: MemoryEmbeddingProvider,
+): Promise<{ atoms: number; embedded: number } | null> {
+  try {
+    const snapshot = loadSnapshot(workspacePath);
+    const provider = explicitProvider || await resolveAutomaticProviderCached();
+    if (!provider || !snapshot.atoms.length) return { atoms: snapshot.atoms.length, embedded: 0 };
+    const cache = await embedMissingAtoms(workspacePath, snapshot, provider);
+    // Prime the query path too (loads the embedding model into Ollama memory).
+    await provider.embedQuery('warmup').catch(() => null);
+    return { atoms: snapshot.atoms.length, embedded: cache?.vectors.size || 0 };
+  } catch {
+    return null;
+  }
 }
 
 function emptyResult(snapshot: HybridSnapshot, startedAt: number, hybrid: HybridMemoryAtomRetrievalResult['hybrid']): HybridMemoryAtomRetrievalResult {
@@ -484,10 +615,9 @@ export async function retrieveHybridMemoryAtoms(
       const semantic = await withBudget((async () => {
         const resolved = await resolveProvider(options);
         if (!resolved) return null;
-        const [queryEmbedding, atoms] = await Promise.all([
-          resolved.embedQuery(queryText),
-          atomEmbeddings(workspacePath, snapshot, resolved),
-        ]);
+        const atoms = atomEmbeddings(workspacePath, snapshot, resolved);
+        if (!atoms.vectors.size) throw new Error('Atom embeddings are still warming in the background.');
+        const queryEmbedding = await resolved.embedQuery(queryText);
         return { resolved, queryEmbedding, atoms };
       })(), budgetMs);
       if (semantic?.queryEmbedding?.vector?.length && semantic.atoms.vectors.size) {
