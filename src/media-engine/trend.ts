@@ -87,7 +87,7 @@ export async function trendTransfer(ws: string, projectId: string, args: {
     op: 'shot.add', title: `Trend part ${i + 1}${pt.look ? `: ${pt.look.slice(0, 40)}` : ''}`, prompt: args.prompt || `${character.name} performs the reference motion naturally.`,
     sourceVideo: pt.segment, startImage: pt.frame, modelId, durationSec: Math.max(1, Math.ceil((pt.endSec - pt.startSec) / pt.speed)),
     characterIds: [character.id], anchorMode: 'start',
-    notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s speed=${pt.speed} of ${args.sourcePath}${breakdown.parts[i]?.action ? ` | ${breakdown.parts[i].action}` : ''}`,
+    notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s speed=${pt.speed} of ${args.sourcePath}${breakdown.parts[i]?.action ? ` | ${String(breakdown.parts[i]?.action).replace(/\|/g, '/')}` : ''}${(pt.look || breakdown.parts[i]?.look) ? ` | look: ${String(pt.look || breakdown.parts[i]?.look).replace(/\|/g, '/')}` : ''}`,
   })) as any, 'agent');
   const added = loadProject(ws, projectId).shots.filter((s) => !before.has(s.id));
   added.forEach((s, i) => { parts[i].shotId = s.id; });
