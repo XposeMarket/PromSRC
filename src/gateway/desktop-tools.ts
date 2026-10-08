@@ -33,7 +33,9 @@ import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
 import {
   backgroundHelper,
   backgroundUnavailableHint,
+  defaultDesktopDispatch,
   describeBackgroundResult,
+  guardUserForeground,
   parseKeyCombo,
   resolveDesktopDispatch,
   restoreUserFocus,
@@ -4897,8 +4899,18 @@ try {
 }
 `;
   let parsed: any;
+  let focusRestored: boolean | undefined;
   try {
-    parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 20_000, sta: true, signal: input.signal }));
+    const runAction = async () => parseJsonMaybe(await runPowerShell(script, { timeoutMs: 20_000, sta: true, signal: input.signal }));
+    if (defaultDesktopDispatch() === 'background') {
+      // UIA invoke/toggle/select can make UWP apps activate themselves; give the
+      // user's window back so semantic actions stay background like clicks do.
+      const guarded = await guardUserForeground(Math.floor(state.handle), runAction, focusWindowHandle, { signal: input.signal });
+      parsed = guarded.result;
+      focusRestored = guarded.focusRestored;
+    } else {
+      parsed = await runAction();
+    }
   } catch (error: any) {
     if (isDesktopCancellationError(error) || error?.name === 'AbortError') return desktopFailure('DESKTOP_CANCELLED', 'UI Automation action was interrupted.');
     return desktopFailure('ACCESSIBILITY_FAILED', String(error?.message || error), { state_id: stateId, element_id: elementId, action });
@@ -4909,7 +4921,10 @@ try {
   markDesktopStateChanged();
   markDesktopWindowChanged(live.window, `accessibility_${action}`, { visual: true, accessibility: true });
   desktopAccessibilitySnapshots.delete(stateId);
-  return JSON.stringify({ ok: true, action, state_id: stateId, element_id: elementId, element: { role: node.role, name: node.name }, visited: parsed.visited }, null, 2);
+  return JSON.stringify({
+    ok: true, action, state_id: stateId, element_id: elementId, element: { role: node.role, name: node.name }, visited: parsed.visited,
+    ...(focusRestored === undefined ? {} : { focus_restored: focusRestored }),
+  }, null, 2);
 }
 
 // ─── desktop_pixel_watch ──────────────────────────────────────────────────────

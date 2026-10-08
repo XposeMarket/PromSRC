@@ -105,6 +105,44 @@ export async function waitForUserQuiet(
   }
 }
 
+/**
+ * Run a background action and give the user's foreground window back if the
+ * target app activated itself meanwhile (UWP Settings/Calculator do this from
+ * their own invoke handlers). Activation lands asynchronously, so we poll for a
+ * short window after the action returns.
+ */
+export async function guardUserForeground<T>(
+  targetHandle: number,
+  act: () => Promise<T>,
+  focusWindow: (handle: number) => Promise<boolean>,
+  options: { settleMs?: number; signal?: AbortSignal } = {},
+): Promise<{ result: T; focusRestored?: boolean }> {
+  const helper = await backgroundHelper();
+  let before = 0;
+  if (helper) {
+    try { before = Number((await helper.foregroundWindow(options.signal))?.handle) || 0; } catch { before = 0; }
+  }
+  const result = await act();
+  if (!helper || !before || before === targetHandle) return { result };
+  const settleMs = Math.max(0, options.settleMs ?? 200);
+  const deadline = Date.now() + settleMs;
+  let stolen = false;
+  for (;;) {
+    let now = 0;
+    try { now = Number((await helper.foregroundWindow())?.handle) || 0; } catch { now = 0; }
+    if (now && now !== before) { stolen = true; break; }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (!stolen) return { result };
+  let restored = false;
+  for (let i = 0; i < 4 && !restored; i += 1) {
+    restored = await focusWindow(before).catch(() => false);
+    if (!restored) await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  return { result, focusRestored: restored };
+}
+
 /** After a foreground action, hand the user's window and cursor back. */
 export async function restoreUserFocus(
   before: UserInputSnapshot | undefined,
