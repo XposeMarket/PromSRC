@@ -155,7 +155,7 @@ async function main() {
   //     connector + tool name and the tool output closes it.
   {
     const connectorFixture = fs.readFileSync(path.join(__dirname, '__fixtures__', 'connector-call-stream.sse'), 'utf8');
-    assert.deepStrictEqual(parseConnectorCall('{"path":"/Prometheus/link_x/read_file","args":{"path":"a"}}'), { connector: 'Prometheus', tool: 'read_file', args: { path: 'a' } });
+    assert.deepStrictEqual(parseConnectorCall('{"path":"/Prometheus/link_x/read_file","args":{"path":"a"}}'), { connector: 'Prometheus', tool: 'read_file', args: { path: 'a' }, segments: ['Prometheus', 'link_x', 'read_file'] });
     assert.strictEqual(parseConnectorCall('{"path":"/Prom'), null, 'partial payload is not parsed');
     for (const size of [connectorFixture.length, 5, 97]) {
       const chunks: string[] = [];
@@ -165,7 +165,7 @@ async function main() {
       const results = events.filter((e) => e.type === 'tool_result') as any[];
       assert.strictEqual(starts.length, 1, `one connector row (chunk ${size})`);
       assert.strictEqual(starts[0].name, 'chatgpt_app_prometheus_ping');
-      assert.deepStrictEqual(starts[0].connector, { connector: 'Prometheus', tool: 'prometheus_ping', args: { note: 'Retrieve the Prometheus word as requested.' } });
+      assert.deepStrictEqual(starts[0].connector, { connector: 'Prometheus', tool: 'prometheus_ping', args: { note: 'Retrieve the Prometheus word as requested.' }, segments: ['Prometheus', 'link_test', 'prometheus_ping'] });
       assert.strictEqual(results.length, 1);
       assert.match(results[0].result, /OBSIDIAN-FALCON-42/, 'connector output closes the row');
       assert.match(parser.getFinalText(), /OBSIDIAN-FALCON-42/);
@@ -350,6 +350,41 @@ async function main() {
     assert.strictEqual(last.content.parts[0].asset_pointer, 'file-service://file-123');
     assert.strictEqual(last.content.parts[1], 'what is this', 'the omitted-image note is stripped once images are attached');
     assert.strictEqual(last.metadata.attachments[0].id, 'file-123');
+  }
+
+  // Bridge-call detection: match by display name, connector id or link id
+  // (name-only matching rendered every bridge tool twice, 2026-10-07).
+  {
+    const { isBridgeCall } = await import('./chatgpt-web-adapter');
+    const bridge = { id: 'asdk_app_x', name: 'Prometheus', linkId: 'link_y' };
+    assert.ok(isBridgeCall(bridge, parseConnectorCall('{"path":"/Prometheus/link_y/read_file","args":{}}') || undefined));
+    assert.ok(isBridgeCall(bridge, parseConnectorCall('{"path":"/asdk_app_x/link_y/merge","args":{}}') || undefined));
+    assert.ok(isBridgeCall(bridge, parseConnectorCall('{"path":"/prometheus_2/link_y/x","args":{}}') || undefined), 'link id alone identifies the bridge');
+    assert.ok(!isBridgeCall(bridge, parseConnectorCall('{"path":"/Gmail/link_z/send","args":{}}') || undefined));
+    assert.ok(!isBridgeCall(null, parseConnectorCall('{"path":"/Prometheus/link_y/x","args":{}}') || undefined));
+  }
+
+  // Bridge note: tells ChatGPT every category is loaded, where deliverables go and how to send files.
+  {
+    const msgs = buildChatGPTWebMessages([{ role: 'user', content: 'make a game' }], { id: 'asdk_app_x', name: 'Prometheus', linkId: 'link_y' });
+    const sys = String((msgs[0] as any).content.parts[0]);
+    assert.ok(/Do not call request_tool_category/.test(sys));
+    assert.ok(/merge_pr/.test(sys));
+    assert.ok(/workspace_edit/.test(sys) && /never only in your python sandbox/.test(sys));
+    assert.ok(/delivery_send/.test(sys));
+  }
+
+  // Sandbox files a nested delegate already saved are reused instead of failing.
+  {
+    const os = await import('os');
+    const { findRecentChatGPTSandboxFile } = await import('./chatgpt-sandbox-files');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cgpt-files-'));
+    fs.mkdirSync(path.join(root, 'chatgpt-files', 'abc12345'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'chatgpt-files', 'abc12345', 'neon_survivor.html'), '<html></html>');
+    assert.strictEqual(findRecentChatGPTSandboxFile('neon_survivor.html', 60_000, root), 'chatgpt-files/abc12345/neon_survivor.html');
+    assert.strictEqual(findRecentChatGPTSandboxFile('missing.html', 60_000, root), null);
+    assert.strictEqual(findRecentChatGPTSandboxFile('../x.html', 60_000, root), null);
+    fs.rmSync(root, { recursive: true, force: true });
   }
 
   console.log('chatgpt-web regression: all checks passed');

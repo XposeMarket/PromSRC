@@ -40,6 +40,8 @@ export interface ConnectorCall {
   /** Tool name on that connector, e.g. "read_file". */
   tool: string;
   args: unknown;
+  /** Every path segment (connector name/id, link id, tool). */
+  segments?: string[];
 }
 
 /** api_tool.call_tool payload: {"path":"/<Connector>/<link_id>/<tool>","args":{...}}. */
@@ -48,7 +50,7 @@ export function parseConnectorCall(text: string): ConnectorCall | null {
   try { parsed = JSON.parse(String(text || '')); } catch { return null; }
   const segments = String(parsed?.path || '').split('/').filter(Boolean);
   if (segments.length < 2) return null;
-  return { connector: segments[0], tool: segments[segments.length - 1], args: parsed?.args ?? {} };
+  return { connector: segments[0], tool: segments[segments.length - 1], args: parsed?.args ?? {}, segments };
 }
 
 interface TrackedMessage {
@@ -192,6 +194,16 @@ export class ChatGPTWebStreamParser {
   /** Ids of the final-answer messages (the web client downloads sandbox files by message id). */
   getFinalMessageIds(): string[] {
     return [...this.messages.values()].filter((m) => this.isFinalText(m)).map((m) => m.id);
+  }
+
+  /** Final-answer ids first, then this turn's other assistant/tool messages (download fallbacks). */
+  getDownloadCandidateMessageIds(): string[] {
+    const finals = this.getFinalMessageIds();
+    const rest = [...this.messages.values()]
+      .filter((m) => !m.history && (m.role === 'assistant' || m.role === 'tool') && !finals.includes(m.id))
+      .map((m) => m.id)
+      .reverse();
+    return [...finals, ...rest].slice(0, 12);
   }
 
   /** Final answer text with citations rendered as markdown links. */
