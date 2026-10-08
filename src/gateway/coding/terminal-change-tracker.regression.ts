@@ -280,6 +280,44 @@ async function main(): Promise<void> {
   assert.equal(shouldTrackTerminalWorkspaceChanges('$raw=Get-Content README.md | Invoke-Expression; Write-Output $raw'), true, 'a read-prefixed PowerShell pipeline must not bypass workspace tracking');
   assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short\nInvoke-Expression $nextCommand'), true, 'a read-only first line must not suppress tracking for a later newline-separated command');
   assert.equal(shouldTrackTerminalWorkspaceChanges('npm run build'), true, 'unknown or potentially mutating commands stay tracked');
+  // Read-only pipelines (producer | pure filters) skip the snapshot.
+  for (const readOnly of [
+    'rg -n "foo" src | Select -First 20',
+    'rg -n "node|npx|Remove-Item" src -g "*.ts" | Select-Object -First 30',
+    'git status --short | Select -First 5',
+    'Get-Content src\\a.ts | Select -First 5',
+    '$x=1; "a $x" | Select -First 1',
+    'git log --oneline -1; git -C C:\\repo status --short 2>$null',
+    'rg foo src 2>$null | Select -First 3',
+    'Get-ChildItem src -Recurse | ? { $_.Length -gt 1000 } | Sort-Object Length | Select -Last 3',
+    'git status --short && git log --oneline -3',
+    '$j = Get-Content a.json -Raw | ConvertFrom-Json; $j | ConvertTo-Json -Depth 3',
+  ]) {
+    assert.equal(shouldTrackTerminalWorkspaceChanges(readOnly), false, `read-only pipeline must skip tracking: ${readOnly}`);
+  }
+  for (const mutating of [
+    'Get-Content a.txt | Out-File b.txt',
+    'rg foo | Set-Content x.txt',
+    'Get-ChildItem *.log | Remove-Item',
+    '"Remove-Item a" | iex',
+    'Get-Content a | % { & $_ }',
+    'Get-Content a | ForEach-Object { $_ }',
+    '"$(Remove-Item a)" | Select -First 1',
+    '"$(cmd /c del a)" | Select -First 1',
+    'git diff --output=patch.txt',
+    'rg --pre ./x.sh foo | Select -First 1',
+    'Get-Content a > b',
+    '"x" | Tee-Object out.txt',
+    'Get-Content a | & foo.exe',
+    'git status --short | Select -First 5; npm run build',
+    'rg foo | Select -First 1; cmd /c "echo x > y"',
+    'Get-ChildItem | ? { [IO.File]::Delete($_.FullName) }',
+    'Get-ChildItem | ? { $_.Delete() }',
+    '$x=1; . .\\evil.ps1',
+  ]) {
+    assert.equal(shouldTrackTerminalWorkspaceChanges(mutating), true, `possibly-mutating command must stay tracked: ${mutating}`);
+  }
+
   runGitWorkspaceCase();
   runNonGitWorkspaceCase();
   runFingerprintCacheCase();
