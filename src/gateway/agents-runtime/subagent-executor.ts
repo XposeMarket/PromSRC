@@ -192,7 +192,7 @@ import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
-import { addMessage, flushSession } from '../session';
+import { addMessage, flushSession, getChatModelRoute, setChatModelRoute } from '../session';
 
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
 const getBgAgentResults = () => getTeamDispatchRuntime()._bgAgentResults;
@@ -18814,6 +18814,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const current = cm.getConfig() as any;
             cm.updateConfig(mainChatRoutePatch(current, { provider: parsed.providerId, model: parsed.model }) as any);
             resetProvider();
+            // A per-chat route (mobile/desktop model selector) outranks the global
+            // Main Chat route. Without updating it, the switch reports success but
+            // this chat keeps running on its old model.
+            let chatRouteUpdated = false;
+            try {
+              if (sessionId && getChatModelRoute(sessionId)) {
+                setChatModelRoute(sessionId, { providerId: parsed.providerId, model: parsed.model } as any);
+                chatRouteUpdated = true;
+              }
+            } catch { /* no live session for this caller */ }
             return {
               name,
               args,
@@ -18823,6 +18833,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 provider: parsed.providerId,
                 model: parsed.model,
                 reason: reason || null,
+                chat_route_updated: chatRouteUpdated,
                 note: 'Main Chat Agent route updated; the next model call in this live chat will use it.',
               }, null, 2),
               error: false,
