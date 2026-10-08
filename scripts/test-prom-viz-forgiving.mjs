@@ -16,12 +16,13 @@ const r = await page.evaluate(() => {
   ui.table(root, { columns: ['PR', 'Change'], rows: [['#1', 'one'], ['#2', 'two']] });
   ui.table(root, [{ k: 'v' }]);
   ui.bars(root, {});
+  ui.chart(root, { series: [] });
   return {
     title: !!document.querySelector('.pv-h1'),
     bars: document.querySelectorAll('.pv-bars').length,
     donut: document.querySelectorAll('.pv-donut svg, .pv-donut path').length,
     cells: [...document.querySelectorAll('.pv-table td')].map(t => t.textContent),
-    empty: document.body.textContent.includes('Bars: no data to show'),
+    empty: document.body.textContent.includes('Bars: no data to show') && document.body.textContent.includes('Chart: no data to show'),
   };
 });
 await page.addScriptTag({ content: "setTimeout(function(){ throw new Error('boom'); }, 0)" });

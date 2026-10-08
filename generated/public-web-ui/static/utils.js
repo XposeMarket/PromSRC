@@ -230,7 +230,7 @@ const VISUAL_THEME_FALLBACKS = Object.freeze({
 // Cache-bust key for the Viz Kit script. /vendor is served with max-age=86400, so this
 // MUST change whenever prom-viz.js changes or clients keep running the old kit for a day
 // and new ui.* calls crash. scripts/test-prom-viz-version.mjs enforces it matches ui.version.
-const PROM_VIZ_VERSION = '1.1.2';
+const PROM_VIZ_VERSION = '1.2.0';
 
 function cleanVisualCssValue(value, fallback) {
   const cleaned = String(value || '').replace(/[<>{};\r\n]/g, '').trim();

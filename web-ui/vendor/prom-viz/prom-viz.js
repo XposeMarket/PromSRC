@@ -450,8 +450,7 @@
       if (onToggle) b.addEventListener('click', function () { hidden[i] = !hidden[i]; b.classList.toggle('off', !!hidden[i]); onToggle(hidden); });
       lg.appendChild(b);
     });
-    target.appendChild(lg);
-    return lg;
+    return mount(target, lg);
   }
 
   function segmented(target, o) {
@@ -510,7 +509,8 @@
   //  format, xFormat(label)->string, height, annotations:[{x, label}], band:{from,to,label}, legend:true,
   //  target:{value,label}, onClick(index,label)}
   function chart(target, o) {
-    o = o || {};
+    o = opts(o, 'series');
+    if (!(o.series || []).some(function (s) { return s && (s.values || []).length; })) return { el: emptyNote(target, 'Chart') };
     var wrap = h('div', 'pv-chart');
     mount(target, wrap);
     var type = o.type || 'line';
@@ -1426,10 +1426,48 @@
 
 
 
+  // ── Self-describing API ─────────────────────────────────────────────────
+  // Single source of truth for every view's call shape. Pure JSON between the markers:
+  // scripts/gen-prom-viz-reference.mjs turns it into the model prompt reference, and
+  // scripts/test-prom-viz-gallery.mjs renders every example and fails if any view draws blank.
+  // Adding a view to the public API without a HELP entry fails the gallery test.
+  var HELP = /*HELP_START*/{
+    "page": { "sig": "ui.page({title, subtitle, kicker, source})", "ex": "ui.page({kicker:'Ops',title:'Uptime held at 99.7%',subtitle:'Last 7 days',source:'Sample'})" },
+    "kpis": { "sig": "ui.kpis(t, [{label, value, format, delta, good:'up'|'down', deltaFormat, note, spark:[n], color}])", "ex": "ui.kpis(null,[{label:'Uptime',value:0.997,format:'pct',delta:0.004,spark:[.98,.99,.997]},{label:'Turns',value:1842,format:'int'}])" },
+    "section": { "sig": "s = ui.section(t, {title, subtitle, kicker, right, card})", "ex": "var s=ui.section(null,{title:'By area',subtitle:'PR count'}); ui.callout(s,'inside a section')" },
+    "grid": { "sig": "g = ui.grid(t, columns)", "ex": "var g=ui.grid(null,2); ui.callout(g,'left'); ui.callout(g,'right')" },
+    "card": { "sig": "c = ui.card(t)", "ex": "var c=ui.card(null); c.textContent='card body'" },
+    "callout": { "sig": "ui.callout(t, html)", "ex": "ui.callout(null,'<b>Heads up:</b> packaged build still has the sqlite ABI mismatch')" },
+    "badge": { "sig": "ui.badge(text, 'ok'|'warn'|'bad'|'accent') -> html string", "ex": "ui.callout(null, ui.badge('Merged','ok')+' '+ui.badge('Open','warn'))" },
+    "chart": { "sig": "ui.chart(t, {type:'line'|'area'|'stacked'|'bar'|'stackedBar', x:[labels], series:[{name, values:[n], color}], format, xFormat, min, max, annotations:[{x, label}], target:{value, label}, band, legend, height, ask, onClick})", "ex": "ui.chart(null,{type:'line',x:['Mon','Tue','Wed','Thu'],series:[{name:'p50',values:[2.9,2.8,2.4,2.2]},{name:'p95',values:[6.1,5.9,4.8,4.2]}],annotations:[{x:'Wed',label:'deploy'}],target:{value:5,label:'SLO'},format:'num'})" },
+    "bars": { "sig": "ui.bars(t, {items:[{label, value, color, note}], format, highlight:'max'|label, sort, limit, valueLabel, ask, onClick})", "ex": "ui.bars(null,{items:[{label:'Desktop',value:5},{label:'Teams',value:4},{label:'Docs',value:1}],format:'int',highlight:'max'})" },
+    "donut": { "sig": "ui.donut(t, {items:[{label, value}], format, center:{value, label}})", "ex": "ui.donut(null,{items:[{label:'Merged',value:7},{label:'Open',value:4}],format:'int',center:{value:11,label:'PRs'}})" },
+    "heatmap": { "sig": "ui.heatmap(t, {rows:[labels], cols:[labels], values:[[n]] (rows x cols), format, min, max, diverging, mark, colLabelEvery, legendLabel, ask, onClick})", "ex": "ui.heatmap(null,{rows:['Mon','Tue'],cols:['6a','2p','10p'],values:[[0,2,5],[1,3,6]],format:'int'})" },
+    "treemap": { "sig": "ui.treemap(t, {data:{name, children:[{name, value} | {name, children}]} | items:[{name, value}], format, height, ask, onClick})", "ex": "ui.treemap(null,{data:{name:'src',children:[{name:'gateway',value:420},{name:'tools',value:260},{name:'web-ui',children:[{name:'src',value:310},{name:'vendor',value:90}]}]},format:'int'})" },
+    "table": { "sig": "ui.table(t, {columns:[{key, label, format, render:(v,row)=>html}], rows:[{key:value}], sort, limit, ask, onRowClick})", "ex": "ui.table(null,{columns:[{key:'pr',label:'PR'},{key:'status',label:'Status',render:function(v){return ui.badge(v,v==='Open'?'warn':'ok')}}],rows:[{pr:'#577',status:'Open'},{pr:'#583',status:'Merged'}]})" },
+    "tabs": { "sig": "ui.tabs(t, {tabs:[{label, render:(panel)=>void} | {label, html}], active, key})", "ex": "ui.tabs(null,{tabs:[{label:'A',render:function(p){ui.bars(p,{items:[{label:'x',value:2},{label:'y',value:1}]})}},{label:'B',html:'<p>second tab</p>'}]})" },
+    "segmented": { "sig": "ui.segmented(t, {options:[string|{label,value}], value, onChange(v), key, fireInitial})", "ex": "ui.segmented(null,{options:['Day','Week','Month'],value:'Week',onChange:function(v){}})" },
+    "compare": { "sig": "ui.compare(t, {variants:[{name, html, css, render(stage), note}], pickPrompt, key})", "ex": "ui.compare(null,{variants:[{name:'Pill',html:'<span>Merged</span>',note:'loud'},{name:'Dot',html:'<span>● Merged</span>',note:'quiet'}]})" },
+    "timeline": { "sig": "ui.timeline(t, {items:[{lane, label, start, end, status:'ok'|'bad'|'warn'|'run', color, note}], format:'time'|'date'|'num', markers:[{at, label}], now, colorBy, title, ask, onClick}) start/end = Date | ISO | number", "ex": "ui.timeline(null,{format:'num',items:[{lane:'Desktop',label:'#579',start:14,end:17,status:'ok'},{lane:'Teams',label:'#577',start:18,end:24,status:'run'}],markers:[{at:20,label:'Restart'}],now:24})" },
+    "sankey": { "sig": "ui.sankey(t, {links:[{source, target, value}], format, height, valueLabel, title, ask, onClick})", "ex": "ui.sankey(null,{links:[{source:'Mobile',target:'Opus',value:620},{source:'Desktop',target:'Opus',value:900},{source:'Opus',target:'Done',value:1460},{source:'Opus',target:'Error',value:60}],format:'int'})" },
+    "slider": { "sig": "ui.slider(t, {label, min, max, step, value, format, note, key, onChange(v)}) -> {el, get, set}", "ex": "ui.slider(null,{label:'Rate',min:0,max:10,step:1,value:4,onChange:function(v){}})" },
+    "params": { "sig": "ui.params(t, {params:[{key, label, min, max, step, value, format, note}], onChange(values), card}) -> {values, el, set}", "ex": "ui.params(null,{params:[{key:'rate',label:'Monthly',min:500,max:5000,step:100,value:2400,format:'usd'}],onChange:function(v){}})" },
+    "loop": { "sig": "ui.loop(t, {step(dt, t, frame), autoplay, speed, speeds, controls:true, label, reset()}) -> {play, pause, reset, running}", "ex": "ui.loop(null,{step:function(dt){},controls:true,label:'Run'})" },
+    "form": { "sig": "ui.form(t, {title, subtitle, fields:[{key, label, type:'text'|'number'|'textarea'|'select'|'toggle'|'chips'|'slider', options, value, min, max, step, multiple, placeholder, required}], submit, prompt:'Template {key}' | fn(values), send, key, onSubmit(values)}) -> {el, values()}", "ex": "ui.form(null,{fields:[{key:'view',label:'View',type:'select',options:['bars','donut']},{key:'notes',label:'Notes',type:'textarea'}],submit:'Send',prompt:'Fix ui.{view}: {notes}'})" },
+    "exportBar": { "sig": "ui.exportBar(t, {png:true, x:true, csv:rows|fn, columns, name})", "ex": "ui.exportBar(null,{png:true,x:true,csv:[{pr:'#577',status:'Open'}],name:'prs'})" },
+    "legend": { "sig": "ui.legend(t, series:[{name}], colors:[css], onToggle(hiddenMap))", "ex": "ui.legend(null,[{name:'a'},{name:'b'}],['#c96','#69c'])" },
+    "data": { "sig": "ui.data(id='data') -> parsed JSON from <script type=\"application/json\" id=\"data\"> or window.PROM_DATA", "ex": null },
+    "fmt": { "sig": "ui.fmt(v, 'int'|'num'|'compact'|'usd'|'usd0'|'usd2'|'pct'|'pct1'|'pctRaw'|'delta'|'ms'|'dur'|'bytes'|'{v} units'|fn) -> string. Every format option accepts these.", "ex": null },
+    "state": { "sig": "ui.state.get(key, fallback) / ui.state.set(key, value) - persisted widget state", "ex": null },
+    "ask": { "sig": "ui.ask(prompt, title) - drop a follow-up into the chat composer. Views also take ask:'Why is {label} {value}?'", "ex": null },
+    "help": { "sig": "ui.help(name?) -> {sig, ex} for one view, or the full map", "ex": null }
+  }/*HELP_END*/;
+  function help(name) { return name ? HELP[name] || null : HELP; }
+
   // ── Public API ────────────────────────────────────────────────────────────
   readTheme();
   var api = {
-    version: '1.1.2',
+    version: '1.2.0', help: help,
     slider: slider, params: params, loop: loop, timeline: timeline, sankey: sankey, form: form,
     insert: insert, toast: toast, toPng: toPng, csv: csv, exportBar: exportBar,
     page: page, section: section, grid: grid, card: card, callout: callout, badge: badge,
