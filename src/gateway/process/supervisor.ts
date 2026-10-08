@@ -12,6 +12,7 @@ import type { TerminalWorkspaceChangeResult } from '../coding/terminal-change-tr
 import { createManagedTerminalWorkspaceTracker, type ManagedTerminalWorkspaceTracker } from './terminal-workspace-worker-client';
 import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
 import { ProcessOutputBatcher } from './output-batcher';
+import { claimWarmPowerShell, prewarmPowerShell, sendWarmScript } from './warm-powershell';
 import type {
   ManagedProcessRun,
   ProcessLogResult,
@@ -397,11 +398,22 @@ export class ProcessSupervisor {
       return this.spawnPty(input, record, invocation, workspaceTracker);
     }
 
-    const child = spawn(invocation.shell, invocation.args, {
+    // Warm path: a pre-started powershell.exe is already blocked on stdin, so
+    // the ~400 ms startup is off the critical path. Same wrapper, fresh process
+    // per command. Only for runs that don't need stdin themselves.
+    const wantsStdin = input.stdinMode === 'pipe' || input.input != null;
+    const warmChild = !directInvocation && !wantsStdin && invocation.shellKind === 'powershell' && process.platform === 'win32'
+      ? claimWarmPowerShell(invocation.shell, commandEnv, cwd)
+      : null;
+    if (warmChild) {
+      sendWarmScript(warmChild, cwd, buildWindowsPowerShellWrapper(command));
+      record.shellCommand = `${invocation.shell} [warm] ${command}`;
+    }
+    const child = warmChild || spawn(invocation.shell, invocation.args, {
       cwd,
       env: commandEnv,
       windowsHide: true,
-      stdio: [input.stdinMode === 'pipe' || input.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      stdio: [wantsStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
 
     const stdoutCapture = new BoundedOutputCapture();
@@ -889,6 +901,18 @@ export function getProcessSupervisor(): ProcessSupervisor {
   if (!supervisor) {
     const root = path.join(getConfig().getConfigDir(), 'processes');
     supervisor = new ProcessSupervisor(new ProcessRunStore(root));
+    // Have a warm powershell.exe ready before the first shell-path command.
+    if (process.platform === 'win32') {
+      setImmediate(() => {
+        try {
+          prewarmPowerShell(
+            process.env.PROMETHEUS_POWERSHELL_PATH || 'powershell.exe',
+            resolveCommandEnv(),
+            path.resolve(String(getConfig().getWorkspacePath() || process.cwd())),
+          );
+        } catch { /* best effort */ }
+      });
+    }
   }
   return supervisor;
 }
