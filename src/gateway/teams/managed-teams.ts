@@ -1440,7 +1440,9 @@ export function reconcileStaleTeamDispatches(
       let note = '';
       if (taskStatus === 'complete') { next = 'completed'; note = 'Reconciled: task completed.'; }
       else if (taskStatus === 'failed') { next = 'failed'; note = 'Reconciled: task failed.'; }
-      else if (!d.taskId && age > STALE_DISPATCH_NO_TASK_MS) {
+      // team_bg_* handles live only in this process; one the lookup cannot see
+      // was lost with a restart, so it settles on the short no-task clock.
+      else if ((!d.taskId || (/^team_bg_/.test(d.taskId) && !task)) && age > STALE_DISPATCH_NO_TASK_MS) {
         next = 'failed';
         note = 'Orphaned: no task id was recorded (lost in a gateway restart).';
       } else if (d.taskId && lookupTask && !task && age > STALE_DISPATCH_TASK_MISSING_MS) {
@@ -2815,6 +2817,30 @@ export function shareTeamArtifact(
   roomState.sharedArtifacts = [...(roomState.sharedArtifacts || []), artifact].slice(-100);
   saveManagedTeam(team);
   return artifact;
+}
+
+/** Live window for treating a running/queued dispatch as the member's active run. */
+const ACTIVE_DISPATCH_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The member's current running/queued dispatch on this team, if any. Used to
+ * refuse duplicate dispatches of the same member while a run is live.
+ */
+export function findActiveTeamDispatch(
+  team: ManagedTeam | null | undefined,
+  agentId: string,
+  now: number = Date.now(),
+): TeamDispatchRecord | null {
+  const dispatches = team?.roomState?.dispatches;
+  if (!Array.isArray(dispatches)) return null;
+  for (let i = dispatches.length - 1; i >= 0; i--) {
+    const d = dispatches[i];
+    if (d.agentId !== agentId) continue;
+    if (d.status !== 'running' && d.status !== 'queued') continue;
+    if (now - Number(d.startedAt || d.createdAt || 0) > ACTIVE_DISPATCH_WINDOW_MS) continue;
+    return d;
+  }
+  return null;
 }
 
 export function createTeamDispatchRecord(

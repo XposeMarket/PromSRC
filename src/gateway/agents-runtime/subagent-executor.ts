@@ -168,6 +168,7 @@ import {
   upsertTeamPlanItem,
   shareTeamArtifact,
   createTeamDispatchRecord,
+  findActiveTeamDispatch,
   updateTeamDispatchRecord,
   listTeamContextReferences,
   addTeamContextReference,
@@ -6925,13 +6926,43 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           return { name, args, result: `ERROR: Agent "${agentId}" is paused on team "${team.name}".`, error: true };
         }
 
+        // One live dispatch per member. Managers re-dispatched the same build
+        // when a running record showed no task id; refuse and point them at the
+        // live run instead (force:true overrides for a genuinely lost run).
+        const forceDispatch = args?.force === true || String(args?.force || '').toLowerCase() === 'true';
+        const activeSame = findActiveTeamDispatch(team, agentId);
+        if (activeSame && !forceDispatch) {
+          const memberName = String((getAgentById(agentId) as any)?.name || agentId);
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: false,
+              status: 'already_running',
+              team_id: teamId,
+              agent_id: agentId,
+              dispatch_id: activeSame.id,
+              task_id: activeSame.taskId || null,
+              running_task: activeSame.taskSummary,
+              note: `${memberName} is already working on this team (dispatch ${activeSame.id}). Do not re-dispatch: you will be woken with the result when it finishes. Pass force:true only if that run is confirmed lost.`,
+            }, null, 2),
+            error: true,
+          };
+        }
+
         deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'dispatch_team_agent');
         const dispatchPrompt = buildTeamDispatchTaskLazy({ agentId, task, teamId, context });
+        // Mint the background handle up front so the dispatch record carries it
+        // from the start (it used to stay taskId:null until the run finished).
+        const bgTaskId = background
+          ? `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+          : undefined;
         const dispatchRecord = createTeamDispatchRecord(teamId, {
           agentId,
           agentName: String((getAgentById(agentId) as any)?.name || agentId),
           taskSummary: task,
           requestedBy: inferTeamNoteContext(sessionId)?.authorId || 'manager',
+          taskId: bgTaskId,
         });
         updateTeamMemberState(teamId, agentId, {
           status: 'running',
@@ -6977,7 +7008,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             updateTeamDispatchRecord(teamId, dispatchRecord.id, {
               status: result.success ? 'completed' : result.admissionCode ? 'capacity_limited' : 'failed',
               finishedAt: Date.now(),
-              taskId: result.taskId,
+              // Keep the handle the manager was given; fall back to the run's task id.
+              taskId: bgTaskId || result.taskId,
               resultPreview: String(result.result || result.error || ''),
               admissionCode: result.admissionCode,
             });
@@ -7074,8 +7106,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           return result;
         };
 
-        if (background) {
-          const taskId = `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        if (background && bgTaskId) {
+          const taskId = bgTaskId;
           const promise = run()
             .then((result) => {
               const entry = getBgAgentResults().get(taskId);
