@@ -450,6 +450,16 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           if (!['file', 'task', 'scheduled_job', 'event_queue'].includes(targetType)) {
             return { name, args, result: 'internal_watch(create) requires target.type: file, task, scheduled_job, or event_queue', error: true };
           }
+          // Team managers are woken by dispatch completion events (team-event-router).
+          // This registry executor runs before subagent-executor, so the guard must live here.
+          if (targetType === 'task' && String(sessionId || '').startsWith('team_coord_')) {
+            return {
+              name,
+              args,
+              result: 'internal_watch(create task) is not used by team managers: a background dispatch_team_agent wakes you automatically when the member finishes, fails, shares an artifact, or messages you. End your turn and wait for that wake.',
+              error: true,
+            };
+          }
           const targetConfig: Record<string, any> = { ...targetRaw };
           delete targetConfig.type;
           if (targetType === 'file') {

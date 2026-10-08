@@ -1694,7 +1694,7 @@ export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: str
       'Durable personal memory for this manager agent.',
       '',
       'Keep management lessons, verification preferences, recurring coordination decisions, and manager-owned open threads here.',
-      'Shared accepted team truth belongs in the team workspace memory.json.',
+      'Shared accepted team truth lives in the team record: record finished work with manage_team_goal(action="log_completed").',
       ...legacyNotes,
     ].join('\n'), 'utf-8');
   }
