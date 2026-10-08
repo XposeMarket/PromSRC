@@ -77,6 +77,25 @@ async function main() {
   assert.deepEqual(byId, { d_orphan: 'failed', d_done: 'completed', d_fresh: 'running', d_live: 'running' });
   assert.equal(mt.reconcileStaleTeamDispatches(Date.now(), (id) => tasks[id] || null), 0, 'idempotent');
 
+  // 5) One live dispatch per member: d_fresh/d_live are running for agent 'a'.
+  const team5 = mt.getManagedTeam('team_stall')!;
+  assert.ok(mt.findActiveTeamDispatch(team5, 'a'), 'running dispatch is found for the member');
+  assert.equal(mt.findActiveTeamDispatch(team5, 'b'), null, 'other members are free');
+  assert.equal(mt.findActiveTeamDispatch(team5, 'a', Date.now() + 3 * 3600_000), null, 'ancient runs do not block');
+
+  // 6) A background handle created up front is stored on the record, and one
+  //    the process no longer knows (restart) settles as lost.
+  const rec = mt.createTeamDispatchRecord('team_stall', { agentId: 'c', taskSummary: 'bg', taskId: 'team_bg_abc_123' })!;
+  assert.equal(rec.taskId, 'team_bg_abc_123', 'dispatch record carries the team_bg handle at creation');
+  const t6 = mt.getManagedTeam('team_stall')!;
+  const r6 = t6.roomState!.dispatches.find((d: any) => d.id === rec.id)!;
+  r6.status = 'running';
+  r6.createdAt = Date.now() - 30 * 60_000;
+  mt.saveManagedTeam(t6);
+  assert.equal(mt.reconcileStaleTeamDispatches(Date.now(), () => null), 1, 'lost team_bg handle settles after 20 min');
+  const after = mt.getManagedTeam('team_stall')!.roomState!.dispatches.find((d: any) => d.id === rec.id)!;
+  assert.equal(after.status, 'failed');
+
   console.log('team-store-stall regression: PASS');
 }
 
