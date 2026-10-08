@@ -4,7 +4,7 @@ project(prometheus_desktop_helper LANGUAGES CXX)
 add_executable(prometheus-desktop-helper main.cpp)
 target_compile_features(prometheus-desktop-helper PRIVATE cxx_std_20)
 target_compile_definitions(prometheus-desktop-helper PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(prometheus-desktop-helper PRIVATE advapi32 bcrypt d3d11 dwmapi dxgi gdi32 iphlpapi user32 windowsapp windowscodecs ole32 shcore ws2_32)
+target_link_libraries(prometheus-desktop-helper PRIVATE advapi32 bcrypt d3d11 dwmapi dxgi gdi32 iphlpapi user32 windowsapp windowscodecs ole32 oleaut32 shcore ws2_32)
 
 if(MSVC)
   target_compile_options(prometheus-desktop-helper PRIVATE /W4 /EHsc /permissive- /utf-8)
