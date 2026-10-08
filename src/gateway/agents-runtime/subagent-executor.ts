@@ -15882,6 +15882,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const goalChanged = changed.includes('purpose') || changed.includes('team_context') || !!explicitFocus;
             if (goalChanged) {
               const newFocus = (explicitFocus || String(team.purpose || team.teamContext || '')).slice(0, 1000);
+              team.goalSetAt = Date.now();
               team.currentFocus = newFocus;
               team.roomState = team.roomState || {};
               team.roomState.runGoal = newFocus;

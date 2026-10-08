@@ -2,6 +2,7 @@ import { getAgentById } from '../../config/config';
 import {
   appendTeamRoomMessage,
   getManagedTeam,
+  isTeamGoalCompleted,
   queueAgentMessage,
   queueManagerMessage,
   type TeamMemberPresenceState,
@@ -143,6 +144,10 @@ function hasActivePlanWorkForTeam(teamId: string): boolean {
 
 export function shouldWakeManager(event: TeamEventRouterInput, membersWoken: string[]): boolean {
   if (event.type === 'member_failed_task' || event.type === 'member_blocked') return true;
+  // After the goal's completion review ran, straggler results (a late duplicate
+  // run, a shared file) only made the manager re-announce [GOAL_COMPLETE].
+  if ((event.type === 'member_completed_task' || event.type === 'member_shared_artifact')
+    && !event.warning && !event.error && isTeamGoalCompleted(event.teamId)) return false;
   if (event.type === 'member_shared_artifact') return true;
   if (event.warning || event.error || event.admissionCode) return true;
   if (membersWoken.length > 0) return true;

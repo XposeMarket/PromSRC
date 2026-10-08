@@ -96,6 +96,48 @@ async function main() {
   const after = mt.getManagedTeam('team_stall')!.roomState!.dispatches.find((d: any) => d.id === rec.id)!;
   assert.equal(after.status, 'failed');
 
+  // 7) [GOAL_COMPLETE] gate: unlogged work, a skipped proposal step and a member
+  //    still running all block completion; a finished goal swallows repeats.
+  mt.setTeamRunGoal('team_stall', 'goal C: build it, then Soren drafts a formal proposal');
+  const t7 = mt.getManagedTeam('team_stall')!;
+  t7.roomState!.dispatches = [];
+  mt.saveManagedTeam(t7);
+  const noProps = () => [] as Array<{ createdAt?: number }>;
+  let g = mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: noProps });
+  assert.equal(g.ok, false);
+  assert.equal(g.missing.length, 2, 'needs log_completed and the proposal');
+  mt.logCompletedWork('team_stall', 'built it');
+  g = mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: noProps });
+  assert.deepEqual(g.missing.length, 1, 'log satisfies the first gap');
+  assert.match(g.missing[0], /proposal/);
+  const old = () => [{ createdAt: Date.now() - 86_400_000 }];
+  assert.equal(mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: old }).ok, false, 'an older goal\'s proposal does not count');
+  const fresh = () => [{ createdAt: Date.now() + 1 }];
+  assert.equal(mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: fresh }).ok, true, 'proposal for this goal passes');
+  mt.createTeamDispatchRecord('team_stall', { agentId: 'tt_reviewer', agentName: 'TT Reviewer', taskSummary: 're-review', taskId: 'team_bg_live' });
+  const t7b = mt.getManagedTeam('team_stall')!;
+  t7b.roomState!.dispatches[t7b.roomState!.dispatches.length - 1].status = 'running';
+  mt.saveManagedTeam(t7b);
+  g = mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: fresh });
+  assert.deepEqual(g.waitForMembers, ['TT Reviewer'], 'a member still working blocks completion');
+  // A goal without a proposal step does not demand one.
+  mt.setTeamRunGoal('team_stall', 'goal D: just build it');
+  mt.logCompletedWork('team_stall', 'built D');
+  const t7c = mt.getManagedTeam('team_stall')!;
+  t7c.roomState!.dispatches = [];
+  t7c.purpose = 'p';
+  mt.saveManagedTeam(t7c);
+  assert.equal(mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: noProps }).ok, true);
+  assert.equal(mt.isTeamGoalCompleted('team_stall'), false);
+  assert.ok(mt.claimTeamGoalCompletionReview('team_stall'));
+  assert.equal(mt.isTeamGoalCompleted('team_stall'), true, 'reviewed goal reads as completed');
+  const { shouldWakeManager } = await import('./team-event-router');
+  assert.equal(shouldWakeManager({ type: 'member_completed_task', teamId: 'team_stall', agentId: 'x', source: 'background_dispatch' }, []), false,
+    'a straggler result after the review does not wake the manager');
+  assert.equal(shouldWakeManager({ type: 'member_failed_task', teamId: 'team_stall', agentId: 'x' }, []), true, 'failures still wake it');
+  mt.setTeamRunGoal('team_stall', 'goal E');
+  assert.equal(mt.isTeamGoalCompleted('team_stall'), false, 'a new goal re-arms everything');
+
   console.log('team-store-stall regression: PASS');
 }
 
