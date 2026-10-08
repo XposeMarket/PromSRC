@@ -14,7 +14,9 @@ import {
   backgroundUnavailableHint,
   backgroundHelper,
   guardUserForeground,
+  isChromiumBackgroundMethod,
 } from './desktop-background-dispatch';
+import { withChromiumAccessibilityArgs, CHROMIUM_UIA_MIN_DEPTH } from './desktop-tools';
 
 async function main() {
   assert.strictEqual(normalizeDesktopDispatch('background'), 'background');
@@ -32,6 +34,14 @@ async function main() {
   // guardUserForeground passes results through even without a helper.
   const passthrough = await guardUserForeground(0, async () => 42, async () => true, { settleMs: 0 });
   assert.strictEqual(passthrough.result, 42);
+  // Electron/Chromium support (helper protocol 7).
+  assert.strictEqual(isChromiumBackgroundMethod('post_message_chromium'), true);
+  assert.strictEqual(isChromiumBackgroundMethod('post_char'), false);
+  assert.match(backgroundUnavailableHint('web_content'), /render widget/);
+  assert.strictEqual(withChromiumAccessibilityArgs(''), '--force-renderer-accessibility=complete --enable-features=UiaProvider');
+  assert.strictEqual(withChromiumAccessibilityArgs('--foo'), '--force-renderer-accessibility=complete --enable-features=UiaProvider --foo');
+  assert.strictEqual(withChromiumAccessibilityArgs('--force-renderer-accessibility x'), '--force-renderer-accessibility x');
+  assert.ok(CHROMIUM_UIA_MIN_DEPTH >= 12, 'Electron content sits ~9-11 levels deep');
   console.log('PASS dispatch logic');
 
   if (process.platform !== 'win32' || process.env.PROM_BG_LIVE !== '1') {

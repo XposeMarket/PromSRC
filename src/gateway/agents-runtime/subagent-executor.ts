@@ -16885,6 +16885,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           String(args.args || ''),
           Number(args.wait_ms || 6000),
           String(args.app_id || ''),
+          { enableAccessibility: args.enable_accessibility === true },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }

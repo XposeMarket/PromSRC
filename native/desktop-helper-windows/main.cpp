@@ -1005,6 +1005,42 @@ bool rect_contains(const RECT& r, POINT p) {
   return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
 }
 
+// Chromium hosts (Chrome, Electron, CEF, WebView2) draw page content into a
+// Chrome_RenderWidgetHostHWND child. Posted mouse/keyboard messages are ignored
+// by the top-level frame but are processed when sent to that render widget, so
+// background input is routed there instead of being refused.
+bool is_chromium_class(const std::string& cls) {
+  return cls.rfind("Chrome_", 0) == 0 || cls == "Intermediate D3D Window" || cls.find("CefBrowserWindow") != std::string::npos;
+}
+
+struct RenderWidgetSearch {
+  POINT pt{};
+  bool use_pt = false;
+  HWND hit = nullptr;
+  HWND any = nullptr;
+};
+
+BOOL CALLBACK find_render_widget_cb(HWND hwnd, LPARAM lp) {
+  auto* search = reinterpret_cast<RenderWidgetSearch*>(lp);
+  if (!IsWindowVisible(hwnd) || window_class(hwnd) != "Chrome_RenderWidgetHostHWND") return TRUE;
+  if (!search->any) search->any = hwnd;
+  RECT r{};
+  GetWindowRect(hwnd, &r);
+  if (search->use_pt && rect_contains(r, search->pt)) {
+    search->hit = hwnd;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+// The render widget under `pt` (or the first visible one when pt is null).
+HWND chromium_render_widget(HWND root, const POINT* pt) {
+  RenderWidgetSearch search;
+  if (pt) { search.pt = *pt; search.use_pt = true; }
+  EnumChildWindows(root, find_render_widget_cb, reinterpret_cast<LPARAM>(&search));
+  return search.hit ? search.hit : search.any;
+}
+
 template <typename T>
 ComPtr<T> uia_pattern(IUIAutomationElement* element, PATTERNID id) {
   ComPtr<T> pattern;
@@ -1345,12 +1381,20 @@ std::string background_click(const std::string& line) {
     if (strategy == "uia") return bg_unavailable("no_uia_pattern", "No invokable UI Automation element at the point.");
   }
   HWND target = child_window_at(root, pt);
-  const std::string cls = window_class(target);
-  const std::string extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
-  if (is_web_content_class(cls)) {
-    return bg_unavailable("web_content", "Chromium/Electron/Firefox content ignores posted mouse input. Use accessibility find_and_act, browser tools, or dispatch=\"foreground\".", extra);
+  std::string cls = window_class(target);
+  bool chromium = false;
+  if (is_chromium_class(cls) || is_chromium_class(window_class(root))) {
+    if (HWND widget = chromium_render_widget(root, &pt)) {
+      target = widget;
+      cls = window_class(widget);
+      chromium = true;
+    }
   }
-  if (is_modern_app_class(cls) || is_modern_app_class(window_class(root))) {
+  const std::string extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
+  if (!chromium && is_web_content_class(cls)) {
+    return bg_unavailable("web_content", "This web content (Firefox or a Chromium host without a render widget) ignores posted mouse input. Use accessibility find_and_act, browser tools, or dispatch=\"foreground\".", extra);
+  }
+  if (!chromium && (is_modern_app_class(cls) || is_modern_app_class(window_class(root)))) {
     return bg_unavailable("modern_app", "UWP/WinUI content ignores posted mouse input. Use accessibility actions or dispatch=\"foreground\".", extra);
   }
   POINT client = pt;
@@ -1360,6 +1404,7 @@ std::string background_click(const std::string& line) {
   const UINT up = right ? WM_RBUTTONUP : WM_LBUTTONUP;
   const UINT dbl = right ? WM_RBUTTONDBLCLK : WM_LBUTTONDBLCLK;
   const WPARAM key = right ? MK_RBUTTON : MK_LBUTTON;
+  ForegroundGuard guard;
   PostMessageW(target, WM_MOUSEMOVE, 0, pos);
   PostMessageW(target, down, key, pos);
   PostMessageW(target, up, 0, pos);
@@ -1367,18 +1412,31 @@ std::string background_click(const std::string& line) {
     PostMessageW(target, dbl, key, pos);
     PostMessageW(target, up, 0, pos);
   }
-  return std::string("{\"ok\":true,\"method\":\"post_message\",\"pending\":false,\"visited\":") + std::to_string(visited) + extra + "}";
+  // Page click handlers may call window.focus(); give the user's window back.
+  if (chromium) for (int i = 0; i < 6 && !guard.stolen(); ++i) Sleep(25);
+  const std::string focus_extra = guard.restore();
+  return std::string("{\"ok\":true,\"method\":\"") + (chromium ? "post_message_chromium" : "post_message") + "\",\"pending\":false,\"visited\":"
+      + std::to_string(visited) + extra + focus_extra + "}";
 }
 
-HWND keyboard_target(HWND root, std::string& cls, std::string& unavailable) {
+HWND keyboard_target(HWND root, std::string& cls, std::string& unavailable, bool& chromium) {
+  chromium = false;
   HWND target = focus_hwnd_for(root);
   if (target) remember_focus(root, target);
   else target = remembered_focus(root);
+  // Chromium keeps keyboard focus inside its render widget; the page decides
+  // which element receives characters, so the widget is the right target even
+  // when the background window's thread reports no focused HWND.
+  if (is_chromium_class(window_class(root)) || (target && is_chromium_class(window_class(target)))) {
+    if (target && window_class(target) == "Chrome_RenderWidgetHostHWND") chromium = true;
+    else if (HWND widget = chromium_render_widget(root, nullptr)) { target = widget; chromium = true; }
+  }
   if (!target) {
     unavailable = bg_unavailable("no_focus_target", "The window has no keyboard-focused control. Click or focus_element a field first.");
     return nullptr;
   }
   cls = window_class(target);
+  if (chromium) return target;
   if (is_web_content_class(cls) || is_modern_app_class(cls)) {
     unavailable = bg_unavailable(is_web_content_class(cls) ? "web_content" : "modern_app",
       "This content ignores posted keyboard input. Use accessibility set_value, browser tools, or dispatch=\"foreground\".",
@@ -1392,14 +1450,15 @@ std::string background_type(const std::string& line) {
   HWND root = checked_root(number_field(line, "handle", 0));
   std::string cls;
   std::string unavailable;
-  HWND target = keyboard_target(root, cls, unavailable);
+  bool chromium = false;
+  HWND target = keyboard_target(root, cls, unavailable, chromium);
   if (!target) return unavailable;
   const std::wstring text = utf16_from_utf8(decode_base64(string_field(line, "textBase64")));
   for (const wchar_t ch : text) {
     if (ch == L'\n') PostMessageW(target, WM_CHAR, L'\r', 1);
     else if (ch != L'\r') PostMessageW(target, WM_CHAR, ch, 1);
   }
-  return std::string("{\"ok\":true,\"method\":\"post_char\",\"chars\":") + std::to_string(text.size())
+  return std::string("{\"ok\":true,\"method\":\"") + (chromium ? "post_char_chromium" : "post_char") + "\",\"chars\":" + std::to_string(text.size())
       + ",\"targetClass\":\"" + json_escape(cls) + "\"}";
 }
 
@@ -1411,10 +1470,13 @@ std::string background_key(const std::string& line) {
   const bool alt = number_field(line, "alt", 0) != 0;
   std::string cls;
   std::string unavailable;
-  HWND target = keyboard_target(root, cls, unavailable);
+  bool chromium = false;
+  HWND target = keyboard_target(root, cls, unavailable, chromium);
   if (!target) return unavailable;
   const std::string target_extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
-  if (ctrl && !shift && !alt && key.size() == 1) {
+  // Chromium ignores EM_SETSEL/WM_COPY-style edit messages, so modifier combos
+  // fall through to the honest modifier_combo refusal below.
+  if (!chromium && ctrl && !shift && !alt && key.size() == 1) {
     // Posted modifiers do not change the target's key state, so map the
     // standard edit shortcuts to their exact window messages instead.
     const char k = static_cast<char>(std::tolower(static_cast<unsigned char>(key[0])));
@@ -1441,7 +1503,7 @@ std::string background_key(const std::string& line) {
   else if (vk == VK_SPACE) PostMessageW(target, WM_CHAR, L' ', down);
   else if (key.size() == 1 && std::isprint(static_cast<unsigned char>(key[0]))) PostMessageW(target, WM_CHAR, static_cast<WPARAM>(key[0]), down);
   PostMessageW(target, WM_KEYUP, vk, up);
-  return "{\"ok\":true,\"method\":\"post_key\"" + target_extra + "}";
+  return std::string("{\"ok\":true,\"method\":\"") + (chromium ? "post_key_chromium" : "post_key") + "\"" + target_extra + "}";
 }
 
 std::string background_scroll(const std::string& line) {
@@ -1479,15 +1541,25 @@ std::string background_scroll(const std::string& line) {
     element = parent;
   }
   HWND target = child_window_at(root, pt);
-  const std::string cls = window_class(target);
+  std::string cls = window_class(target);
+  bool chromium = false;
+  if (is_chromium_class(cls) || is_chromium_class(window_class(root))) {
+    if (HWND widget = chromium_render_widget(root, &pt)) {
+      target = widget;
+      cls = window_class(widget);
+      chromium = true;
+    }
+  }
   const std::string extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
-  if (is_web_content_class(cls) || is_modern_app_class(cls)) {
+  if (!chromium && (is_web_content_class(cls) || is_modern_app_class(cls))) {
     return bg_unavailable(is_web_content_class(cls) ? "web_content" : "modern_app", "No UIA scroll pattern and this content ignores posted wheel input.", extra);
   }
+  // WM_MOUSEWHEEL carries screen coordinates.
   const LPARAM pos = MAKELPARAM(pt.x, pt.y);
+  if (chromium) PostMessageW(target, WM_MOUSEMOVE, 0, [&] { POINT c = pt; ScreenToClient(target, &c); return MAKELPARAM(c.x, c.y); }());
   if (delta_y) PostMessageW(target, WM_MOUSEWHEEL, MAKEWPARAM(0, delta_y), pos);
   if (delta_x) PostMessageW(target, WM_MOUSEHWHEEL, MAKEWPARAM(0, delta_x), pos);
-  return "{\"ok\":true,\"method\":\"post_message\"" + extra + "}";
+  return std::string("{\"ok\":true,\"method\":\"") + (chromium ? "post_message_chromium" : "post_message") + "\"" + extra + "}";
 }
 
 std::string user_input_state() {
@@ -1537,7 +1609,7 @@ int wmain(int argc, wchar_t* argv[]) {
     const std::string method = string_field(line, "method");
     try {
       if (method == "ping") {
-        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"screenCaptureBackend\":\"GDI BitBlt\",\"inputBackend\":\"SendInput\",\"protocolVersion\":6,\"backgroundInput\":\"uia+post_message\","
+        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"screenCaptureBackend\":\"GDI BitBlt\",\"inputBackend\":\"SendInput\",\"protocolVersion\":7,\"backgroundInput\":\"uia+post_message+chromium\","
                          "\"captureKinds\":[\"window\",\"primary\",\"all\",\"monitor\",\"region\"],"
                          "\"methods\":[\"ping\",\"capture\",\"list_windows\",\"window_info\",\"foreground_window\",\"focus_window\",\"click\",\"move_pointer\",\"click_current\",\"scroll\",\"scroll_current\",\"drag\",\"type_text\",\"press_key\",\"desktop_context\",\"get_clipboard_text\",\"set_clipboard_text\",\"bg_click\",\"bg_type\",\"bg_key\",\"bg_scroll\",\"user_input_state\",\"show_cursor_overlay\"],"
                          "\"monitorOrder\":\"EnumDisplayMonitors\"}");
