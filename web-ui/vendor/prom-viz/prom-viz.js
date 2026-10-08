@@ -287,6 +287,12 @@
   // ui.loop frames) must not restart a fade from opacity 0 or the view never becomes visible.
   var bootAt = Date.now();
   function mount(target, el) { host(target).appendChild(el); if (Date.now() - bootAt < 1200) el.classList.add('pv-in'); return el; }
+  // Forgiving argument shapes: models often pass a bare array, or a target as the first arg of page().
+  // Normalize instead of rendering nothing, and show a visible notice when there is truly no data.
+  function opts(o, key) { if (Array.isArray(o)) { var r = {}; r[key || 'items'] = o; return r; } return o && typeof o === 'object' && o.nodeType !== 1 ? o : {}; }
+  function emptyNote(target, what) { return mount(target, h('div', 'pv-sub', esc(what + ': no data to show'))); }
+  function showError(msg) { try { var b = h('div', 'pv-callout', '<b>Visual error:</b> ' + esc(msg)); b.style.borderColor = 'var(--pv-bad, #d33)'; host(null).appendChild(b); } catch (e) {} }
+  if (!window.__pvErrHook) { window.__pvErrHook = 1; window.addEventListener('error', function (e) { showError((e && e.message) || 'script error'); }); window.addEventListener('unhandledrejection', function (e) { showError(String((e && e.reason && e.reason.message) || (e && e.reason) || 'promise rejected')); }); }
   function widthOf(el) { return Math.max(240, Math.floor(el.getBoundingClientRect().width || el.clientWidth || 600)); }
 
   // Re-render registry (resize + theme changes).
@@ -349,8 +355,9 @@
   }
 
   // ── Layout primitives ─────────────────────────────────────────────────────
-  function page(o) {
-    o = o || {};
+  function page(o, o2) {
+    if (o && (o.nodeType === 1 || typeof o === 'string') && o2 && typeof o2 === 'object') { if (o.nodeType === 1) pageRoot = pageRoot || o; o = o2; }
+    o = typeof o === 'string' ? { title: o } : opts(o);
     var p = host(null);
     if (o.kicker || o.title || o.subtitle) {
       var head = h('div', 'pv-head');
@@ -647,8 +654,9 @@
 
   // ── Ranked bars ───────────────────────────────────────────────────────────
   function bars(target, o) {
-    o = o || {};
-    var items = (o.items || []).slice();
+    o = opts(o);
+    var items = (o.items || o.data || []).slice();
+    if (!items.length) return { el: emptyNote(target, 'Bars') };
     if (o.sort !== false) items.sort(function (a, b) { return (b.value || 0) - (a.value || 0); });
     var limit = o.limit || items.length;
     var wrap = h('div', 'pv-bars');
@@ -799,8 +807,9 @@
 
   // ── Donut ─────────────────────────────────────────────────────────────────
   function donut(target, o) {
-    o = o || {};
-    var items = (o.items || []).filter(function (i) { return i.value > 0; });
+    o = opts(o);
+    var items = (o.items || o.data || []).filter(function (i) { return i.value > 0; });
+    if (!items.length) return { el: emptyNote(target, 'Donut') };
     var total = items.reduce(function (a, i) { return a + i.value; }, 0) || 1;
     var wrap = h('div', 'pv-donut');
     mount(target, wrap);
@@ -838,8 +847,10 @@
 
   // ── Sortable table ────────────────────────────────────────────────────────
   function table(target, o) {
-    o = o || {};
-    var cols = o.columns || Object.keys((o.rows || [])[0] || {}).map(function (k) { return { key: k, label: k }; });
+    o = opts(o, 'rows');
+    var arrRows = Array.isArray((o.rows || [])[0]);
+    var cols = (o.columns || Object.keys((o.rows || [])[0] || {})).map(function (c, i) { return typeof c === 'string' ? { key: arrRows ? String(i) : c, label: c } : c; });
+    if (!(o.rows || []).length) return { el: emptyNote(target, 'Table') };
     var rows = (o.rows || []).slice();
     var sort = o.sort || null;
     var wrap = h('div', 'pv-scroll');
@@ -1418,7 +1429,7 @@
   // ── Public API ────────────────────────────────────────────────────────────
   readTheme();
   var api = {
-    version: '1.1.1',
+    version: '1.1.2',
     slider: slider, params: params, loop: loop, timeline: timeline, sankey: sankey, form: form,
     insert: insert, toast: toast, toPng: toPng, csv: csv, exportBar: exportBar,
     page: page, section: section, grid: grid, card: card, callout: callout, badge: badge,
