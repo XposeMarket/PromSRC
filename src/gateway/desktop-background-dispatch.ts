@@ -3,8 +3,7 @@
 // Default dispatch is "background": the native helper drives the exact target
 // window through UI Automation patterns first, then posted window messages, and
 // never calls SetForegroundWindow / SetCursorPos / SendInput. When an app cannot
-// be driven that way (Chromium/Electron content, UWP/WinUI, modifier shortcuts,
-// drags) the action fails with BACKGROUND_UNAVAILABLE instead of silently taking
+// be driven that way (Firefox content, modifier shortcuts, drags) the action fails with BACKGROUND_UNAVAILABLE instead of silently taking
 // over the user's mouse and keyboard. dispatch="foreground" is the explicit
 // opt-in for real input; it waits for the user to pause and then restores their
 // foreground window and cursor afterwards.
@@ -166,8 +165,14 @@ export async function restoreUserFocus(
   return notes.length ? `Foreground dispatch: ${notes.join(', ')}.` : '';
 }
 
+/** Background methods that post into a Chromium render widget (verify the effect). */
+export function isChromiumBackgroundMethod(method: string | undefined): boolean {
+  return /_chromium$/.test(String(method || ''));
+}
+
 export function describeBackgroundResult(result: Win32BackgroundResult): string {
   const parts = [`method=${result.method || 'unknown'}`];
+  if (isChromiumBackgroundMethod(result.method)) parts.push('chromium_render_widget=true (posted input; confirm the effect with a screenshot)');
   if (result.element?.name || result.element?.automationId) {
     parts.push(`element="${result.element.name || result.element.automationId}"`);
   }
@@ -180,7 +185,7 @@ export function describeBackgroundResult(result: Win32BackgroundResult): string 
 export function backgroundUnavailableHint(reason: string | undefined): string {
   switch (reason) {
     case 'web_content':
-      return 'For web pages use browser tools. For Electron/Chromium apps try desktop_window(action="find_and_act") with an accessibility selector, or retry with dispatch="foreground" (takes the real mouse/keyboard).';
+      return 'For web pages use browser tools. Chromium/Electron apps take background input through their render widget (helper protocol 7+); for others try desktop_window(action="find_and_act") with an accessibility selector, or retry with dispatch="foreground" (takes the real mouse/keyboard).';
     case 'modern_app':
       return 'Use desktop_window(action="find_and_act" / "invoke" / "set_value") on an accessibility element, or retry with dispatch="foreground".';
     case 'modifier_combo':

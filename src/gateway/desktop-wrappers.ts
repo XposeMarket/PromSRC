@@ -270,6 +270,7 @@ export function getDesktopWrapperToolDefinitions(): any[] {
             app: { type: 'string' },
             args: { type: 'string' },
             wait_ms: { type: 'number' },
+            enable_accessibility: { type: 'boolean', description: 'launch_app only: start a Chromium/Electron app with the flags that expose its page to accessibility actions.' },
             name: { type: 'string' },
             force: { type: 'boolean' },
           },

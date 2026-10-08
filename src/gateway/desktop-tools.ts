@@ -4515,6 +4515,27 @@ function pruneDesktopAccessibilitySnapshots(): void {
   }
 }
 
+/** Minimum UIA walk depth for Chromium/Electron windows (content sits ~9-11 deep). */
+export const CHROMIUM_UIA_MIN_DEPTH = 14;
+
+/**
+ * Launch flags that make Chromium/Electron expose the full page through UI
+ * Automation. Plain --force-renderer-accessibility is not enough on Electron 33:
+ * the native UIA provider has to be enabled too.
+ */
+export const CHROMIUM_ACCESSIBILITY_FLAGS = '--force-renderer-accessibility=complete --enable-features=UiaProvider';
+
+export const CHROMIUM_CHROME_ONLY_HINT =
+  'Chromium/Electron app with its page hidden from UI Automation. Background clicks/typing/scroll by coordinates still work (they go to the render widget). '
+  + 'For named accessibility targeting, relaunch the app with desktop_apps(action="launch_app", enable_accessibility=true) (restarts the app; some packaged apps ignore the flags).';
+
+/** Append the Chromium accessibility flags to a launch argument string once. */
+export function withChromiumAccessibilityArgs(args: string): string {
+  const base = String(args || '').trim();
+  if (/--force-renderer-accessibility/i.test(base)) return base;
+  return [CHROMIUM_ACCESSIBILITY_FLAGS, base].filter(Boolean).join(' ');
+}
+
 /** Return flat, machine-readable UIA nodes with snapshot-scoped element IDs. */
 export async function desktopGetAccessibilityState(
   selector: DesktopWindowSelector,
@@ -4534,6 +4555,10 @@ export async function desktopGetAccessibilityState(
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $maxDepth = ${safeDepth}
+# Chromium/Electron nest page content ~9-11 levels below the frame, so the
+# default depth would stop above every button and field.
+$chromiumMinDepth = ${CHROMIUM_UIA_MIN_DEPTH}
+$chromium = $false
 $maxNodes = ${safeMax}
 $nodes = New-Object System.Collections.ArrayList
 $errors = New-Object System.Collections.ArrayList
@@ -4618,8 +4643,9 @@ try {
   $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]${Math.floor(target.handle)}))
   if (-not $root) { throw 'Could not resolve the target UI Automation root.' }
   $root = $root.GetUpdatedCache($cr)
+  try { if ([string]$root.Cached.ClassName -like 'Chrome_WidgetWin*') { $chromium = $true; if ($maxDepth -lt $chromiumMinDepth) { $maxDepth = $chromiumMinDepth } } } catch { }
   Add-UiaNode $root -1 0
-  [ordered]@{ ok = $true; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
+  [ordered]@{ ok = $true; chromium = $chromium; max_depth = $maxDepth; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
 } catch {
   [ordered]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
 }
@@ -4700,7 +4726,10 @@ try {
     partial: Array.isArray(parsed.errors) && parsed.errors.length > 0,
     capture_errors: Array.isArray(parsed.errors) ? [...new Set(parsed.errors.map(String))].slice(0, 5) : [],
     surface_classification: chromeOnly ? 'chrome_only' : 'structured',
-    ...(chromeOnly ? { routing_hint: 'This app exposes only window chrome through UI Automation. Prefer a native screenshot plus OCR/text targeting; avoid a second full accessibility_tree probe.' } : {}),
+    ...(parsed.chromium === true ? { chromium: true, walked_depth: Number(parsed.max_depth) || safeDepth } : {}),
+    ...(chromeOnly
+      ? { routing_hint: parsed.chromium === true ? CHROMIUM_CHROME_ONLY_HINT : 'This app exposes only window chrome through UI Automation. Prefer a native screenshot plus OCR/text targeting; avoid a second full accessibility_tree probe.' }
+      : {}),
     nodes: page.map((node) => options.compact !== false
       ? {
           element_id: node.elementId,
@@ -5210,11 +5239,12 @@ export async function desktopLaunchApp(
   appArgs: string = '',
   waitMs: number = 6000,
   appId?: string,
+  options: { enableAccessibility?: boolean } = {},
 ): Promise<string> {
   ensureWindows();
   const rawApp = String(app || '').trim();
   const rawAppId = String(appId || '').trim();
-  const rawArgs = String(appArgs || '').trim();
+  const rawArgs = options.enableAccessibility ? withChromiumAccessibilityArgs(String(appArgs || '')) : String(appArgs || '').trim();
   if (!rawApp && !rawAppId) return 'ERROR: app or app_id is required.';
 
   if (DELEGATE_TO_BACKEND) {
@@ -7650,6 +7680,7 @@ export function getDesktopToolDefinitions(): any[] {
             app: { type: 'string', description: 'Raw application name or full path, e.g. notepad, code, calc. Optional when app_id is provided.' },
             args: { type: 'string', description: 'Optional command-line arguments' },
             wait_ms: { type: 'number', description: 'Max ms to wait for window (default 6000)' },
+            enable_accessibility: { type: 'boolean', description: 'Chromium/Electron apps (Codex, Claude, Teams, VS Code, Discord): add --force-renderer-accessibility=complete --enable-features=UiaProvider so the page is visible to accessibility actions. Close the running instance first; a second instance usually just hands off to the first.' },
           },
         },
       },

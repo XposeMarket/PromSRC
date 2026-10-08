@@ -753,6 +753,7 @@ export const desktopLaunchAppTool: Tool = {
       app: { type: 'string', description: 'App name or path' },
       args: { type: 'string', description: 'Command-line arguments' },
       wait_ms: { type: 'number', description: 'Max wait ms for window (default 6000)' },
+      enable_accessibility: { type: 'boolean', description: 'Chromium/Electron apps: launch with the flags that expose the page to UI Automation' },
     },
     additionalProperties: false,
   },
@@ -765,6 +766,7 @@ export const desktopLaunchAppTool: Tool = {
           String(args?.args || ''),
           Number(args?.wait_ms || 6000),
           String(args?.app_id || ''),
+          { enableAccessibility: args?.enable_accessibility === true },
         ),
       );
     } catch (e: any) {
