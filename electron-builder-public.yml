@@ -22,6 +22,12 @@ files:
   - node_modules/**/*
   - runtime-dependencies.public.json
   - package.json
+  - "!dist/**/*.regression.js"
+  - "!dist/**/*.stress.js"
+  - "!dist/**/*.test.js"
+  - "!dist/**/*.d.ts"
+  - "!dist/**/*.map"
+  - "!dist/.tsbuildinfo"
   - "!generated/public-web-ui/**/*.map"
   - "!generated/public-web-ui/**/*.log"
   - "!src/**/*"
@@ -150,7 +156,13 @@ nsis:
   # in place — no manual uninstall needed between versions.
   deleteAppDataOnUninstall: false
 
-asar: true
+# The gateway runs on the bundled Node, which (unlike Electron) cannot read
+# files inside app.asar. Ship the app as real files in resources/app.
+asar: false
+
+# Native addons are loaded only by the gateway, which runs on the bundled Node
+# (resources/node). Rebuilding them for Electron's ABI broke them for that Node.
+npmRebuild: false
 
 # Native .node modules cannot be loaded from inside an asar archive.
 # These must be unpacked so Node can require() them from the real filesystem.
@@ -164,6 +176,10 @@ asarUnpack:
   - "node_modules/@ffprobe-installer/**/*"
 
 extraResources:
+  # The gateway runs on this Node (not Electron's) so native addons match the
+  # ABI they were built for. Staged by scripts/prepare-bundled-node.js.
+  - from: "build-resources/node"
+    to: "node"
   - from: "generated/bundled-skills"
     to: "bundled-skills"
     filter:

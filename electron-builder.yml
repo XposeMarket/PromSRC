@@ -72,6 +72,9 @@ win:
       arch:
         - x64
   icon: assets/Prometheus.ico
+  extraResources:
+    - from: "build-resources/node"
+      to: "node"
 
 # macOS developer/tester build.
 #
@@ -98,6 +101,8 @@ mac:
     NSMicrophoneUsageDescription: Prometheus uses the microphone when you start a voice conversation or dictation.
     NSCameraUsageDescription: Prometheus uses the camera only when you choose to capture or attach an image or video.
   extraResources:
+    - from: "build-resources/node"
+      to: "node"
     - from: "bin/prometheus-desktop-helper"
       to: "prometheus-desktop-helper"
 
@@ -117,6 +122,9 @@ nsis:
 # asar packaging — bundles source into a fast archive
 # Disabled so tsx can resolve .ts files at runtime inside the app
 asar: false
+
+# Gateway native addons target the bundled Node, not Electron.
+npmRebuild: false
 
 # Kept external even when a downstream build enables ASAR: Chrome's Load
 # unpacked cannot read an extension from app.asar.

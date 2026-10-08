@@ -17,7 +17,7 @@
     "sourceMap": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/**/*-legacy.ts"]

@@ -269,3 +269,7 @@ workspace/workspace/videos/**
 
 # Skill safety-scan caches written next to connector skills at runtime
 src/extensions/bundled/connectors/*/.cache/
+
+# Staged gateway Node runtime for packaged builds (scripts/prepare-bundled-node.js)
+/build-resources/
+

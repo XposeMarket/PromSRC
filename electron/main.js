@@ -169,6 +169,23 @@ function getGatewayWorkingDirectory() {
     : APP_ROOT;
 }
 
+// Packaged builds ship the exact Node runtime that compiled node_modules
+// (scripts/prepare-bundled-node.js). Running the gateway on it instead of
+// Electron's embedded Node (ELECTRON_RUN_AS_NODE) means source, `prom` and the
+// installed app all run the gateway on the same Node ABI, so native addons such
+// as better-sqlite3 load everywhere and no Electron-specific rebuild is needed.
+function getBundledGatewayNodePath() {
+  const name = process.platform === 'win32' ? 'node.exe' : 'node';
+  return path.join(process.resourcesPath, 'node', name);
+}
+
+function resolvePackagedGatewayNode() {
+  const bundled = getBundledGatewayNodePath();
+  if (fs.existsSync(bundled)) return { command: bundled, electronRunAsNode: false };
+  // Older installers predate the bundled runtime. Keep them bootable.
+  return { command: process.execPath, electronRunAsNode: true };
+}
+
 function resolveSourceGatewayNode() {
   const configured = String(process.env.PROMETHEUS_NODE_EXECUTABLE || '').trim();
   if (configured && fs.existsSync(configured)) return configured;
@@ -289,9 +306,10 @@ function runStorageLayoutV2Migration() {
     if (IS_PACKAGED_RUNTIME) {
       const migrationEntry = path.join(getPackagedAppRoot(), 'dist', 'runtime', 'storage-migration-cli.js');
       if (!fs.existsSync(migrationEntry)) throw new Error(`Storage migration entry is missing: ${migrationEntry}`);
-      execFileSync(process.execPath, [migrationEntry, ...commonArgs], {
+      const migrationNode = resolvePackagedGatewayNode();
+      execFileSync(migrationNode.command, [migrationEntry, ...commonArgs], {
         cwd: getGatewayWorkingDirectory(),
-        env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+        env: { ...env, ...(migrationNode.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
         encoding: 'utf8',
         windowsHide: true,
         timeout: 120_000,
@@ -2091,13 +2109,14 @@ async function startGateway() {
 
   if (IS_PACKAGED_RUNTIME) {
     const gatewayEntry = getGatewayEntryPath();
+    const gatewayNode = resolvePackagedGatewayNode();
     writeGatewayLog(`[main] Entry: ${gatewayEntry}\n`);
-    writeGatewayLog(`[main] Exec: ${process.execPath}\n`);
-    gatewayProcess = spawn(process.execPath, [gatewayEntry], {
+    writeGatewayLog(`[main] Exec: ${gatewayNode.command}${gatewayNode.electronRunAsNode ? ' (ELECTRON_RUN_AS_NODE fallback: bundled Node runtime missing)' : ' (bundled Node runtime)'}\n`);
+    gatewayProcess = spawn(gatewayNode.command, [gatewayEntry], {
       cwd: getGatewayWorkingDirectory(),
       env: {
         ...gatewayEnv,
-        ELECTRON_RUN_AS_NODE: '1',
+        ...(gatewayNode.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
       },
       // stdin carries the vault key; the IPC channel carries the warm-handoff
       // notice a restarting gateway sends before it starts draining.
