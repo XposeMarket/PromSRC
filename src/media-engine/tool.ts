@@ -6,6 +6,7 @@ import {
   getModel, importModelManifests, listModels, removeUserManifest, saveUserManifest, type MediaModelManifest,
 } from './catalog.js';
 import { providerKeyHint, providerStatus, setProviderKey } from './providers.js';
+import { clearVideoApprovalsForProject, recordVideoApproval } from '../gateway/video-pending-approvals.js';
 import { liveFalPrice, syncFalModels } from './fal-catalog.js';
 import {
   applyOps, createProject, deleteProject, historyDepth, listProjects, loadProject, OP_NAMES,
@@ -308,6 +309,9 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'generate': {
       const pid = need(args.projectId, 'projectId');
       const r: any = await generateShots(ws, pid, { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution, approved: args.approved === true });
+      if (r.needsApproval && ctx.sessionId) {
+        recordVideoApproval({ workspacePath: ws, sessionId: ctx.sessionId, projectId: pid, action: 'generate', args: { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution }, shotIds: Array.isArray(args.shotIds) ? args.shotIds : undefined, quotedUsd: Number(r.estimate?.total) || 0, summary: String(r.reason || 'Generate needs approval') });
+      } else if (args.approved === true) clearVideoApprovalsForProject(ws, pid);
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Shots generated.', args.notify === true);
       return wake ? { ...r, wake } : r;
     }
@@ -387,8 +391,12 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       const p = loadProject(ws, pid);
       if (!runArgs.approved && cost.usd > p.budget.autoApproveUsd + 1e-9) {
         const r = await studio.runAutopilot(ws, pid, runArgs);
+        if (r.needsApproval && ctx.sessionId) {
+          recordVideoApproval({ workspacePath: ws, sessionId: ctx.sessionId, projectId: pid, action: 'run', args: { storyboard: args.storyboard, qa: args.qa, maxRerolls: args.maxRerolls, aspects: args.aspects, steps: args.steps }, runId: r.lastRun?.id ? String(r.lastRun.id) : undefined, quotedUsd: Number(r.needsApproval.usd ?? cost.usd) || 0, summary: `Autopilot run for ${p.title || pid}: ${(r.needsApproval.breakdown || []).slice(0, 4).map((b: any) => `${b.item} $${Number(b.usd || 0).toFixed(2)}`).join('; ') || `~$${cost.usd.toFixed(2)}`}` });
+        }
         return { ...r, next: 'Show the cost breakdown; call run again with approved:true once the user says yes.' };
       }
+      clearVideoApprovalsForProject(ws, pid);
       if (args.wait === true) return await studio.runAutopilot(ws, pid, { ...runArgs, approved: true });
       return { ...startRunInBackground(ctx, pid, { ...runArgs, approved: true }), costUsd: cost.usd };
     }
