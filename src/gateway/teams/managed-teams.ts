@@ -1482,6 +1482,22 @@ export function evaluateTeamGoalCompletionGate(
   return { ok: waitForMembers.length === 0 && missing.length === 0, waitForMembers, missing };
 }
 
+/**
+ * True when the current goal has every step done (outcome logged, any asked-for
+ * proposal submitted, no member still running) but its completion review has not
+ * run. Managers sometimes park on [WAITING_MAIN_AGENT] to report finished work,
+ * which left the goal open forever.
+ */
+export function isTeamGoalReadyToClose(
+  teamId: string,
+  opts: { now?: number; listTeamProposals?: (teamId: string) => Array<{ createdAt?: number }> } = {},
+): boolean {
+  const team = getManagedTeam(teamId);
+  if (!team || !Number(team.goalSetAt || 0)) return false;
+  if (isTeamGoalCompleted(teamId)) return false;
+  return evaluateTeamGoalCompletionGate(teamId, opts).ok;
+}
+
 const STALE_DISPATCH_NO_TASK_MS = 20 * 60 * 1000;
 const STALE_DISPATCH_TASK_MISSING_MS = 2 * 60 * 60 * 1000;
 

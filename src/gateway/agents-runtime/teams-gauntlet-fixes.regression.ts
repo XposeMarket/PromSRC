@@ -31,6 +31,20 @@ async function main(): Promise<void> {
   const st = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'status', team_id: 't1' });
   assert.equal(st?.args.action, 'status');
 
+  // Teams v6: the manager sent manage + team_action:"log_completed" and team_manage
+  // rejected it as unsupported. Goal sub-actions route to manage_team_goal.
+  const logViaManage = normalizeAgentTeamWrapperTool('team_ops_wrapper', {
+    action: 'manage', team_action: 'log_completed', team_id: 't1', value: 'built wc-cli', agent_id: '', subagent_ids: [],
+  });
+  assert.equal(logViaManage?.name, 'manage_team_goal');
+  assert.equal(logViaManage?.args.action, 'log_completed');
+  assert.equal(logViaManage?.args.value, 'built wc-cli');
+  const pauseViaManage = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'pause_agent', team_id: 't1', agent_id: 'a1' });
+  assert.equal(pauseViaManage?.name, 'manage_team_goal');
+  assert.equal(pauseViaManage?.args.agent_id, 'a1');
+  const pauseTeam = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'pause', team_id: 't1' });
+  assert.equal(pauseTeam?.name, 'team_manage', 'team-level pause stays on team_manage');
+
   // share_artifact: Lyra sent artifact:{name,path,...} nested; it was dropped.
   const nested = normalizeShareArtifactArgs({ artifact: { name: 'habit-cli', path: 'habit-cli', description: 'CLI' } });
   assert.equal(nested.name, 'habit-cli');
