@@ -168,6 +168,7 @@ import {
   upsertTeamPlanItem,
   shareTeamArtifact,
   createTeamDispatchRecord,
+  findActiveTeamDispatch,
   updateTeamDispatchRecord,
   listTeamContextReferences,
   addTeamContextReference,
@@ -192,7 +193,7 @@ import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
-import { addMessage, flushSession } from '../session';
+import { addMessage, flushSession, getChatModelRoute, setChatModelRoute } from '../session';
 
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
 const getBgAgentResults = () => getTeamDispatchRuntime()._bgAgentResults;
@@ -2889,6 +2890,12 @@ export function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { n
   return { name: target, args: name === 'vercel_ops' ? normalizeVercelWrapperArgs(action, args) : args };
 }
 
+const TEAM_GOAL_SUBACTIONS = new Set([
+  'set_focus', 'update_focus', 'set_goal',
+  'log_completed', 'log_completion', 'log_complete', 'log_completed_work',
+  'pause_agent', 'unpause_agent',
+]);
+
 export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
   const actionMaps: Record<string, Record<string, string>> = {
     agent_ops: {
@@ -2944,7 +2951,7 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   const action = String(args.action || '').trim().toLowerCase();
   if (!action) return { name, args, error: `${name} requires action` };
   delete args.action;
-  const target = map[action];
+  let target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
   // Strict-schema models fill every optional field with "" or []. Treat those as
   // absent; otherwise `team_action: ""` overrode real values (manager goal calls
@@ -2957,6 +2964,11 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
       const value = args[key];
       if (value === '' || value === null || (Array.isArray(value) && value.length === 0)) delete args[key];
     }
+  }
+  // Managers send goal actions through manage (team_action:"log_completed"),
+  // which team_manage rejected as unsupported. Route them to manage_team_goal.
+  if (target === 'team_manage' && TEAM_GOAL_SUBACTIONS.has(String(args.team_action ?? '').trim().toLowerCase())) {
+    target = 'manage_team_goal';
   }
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
@@ -6925,13 +6937,43 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           return { name, args, result: `ERROR: Agent "${agentId}" is paused on team "${team.name}".`, error: true };
         }
 
+        // One live dispatch per member. Managers re-dispatched the same build
+        // when a running record showed no task id; refuse and point them at the
+        // live run instead (force:true overrides for a genuinely lost run).
+        const forceDispatch = args?.force === true || String(args?.force || '').toLowerCase() === 'true';
+        const activeSame = findActiveTeamDispatch(team, agentId);
+        if (activeSame && !forceDispatch) {
+          const memberName = String((getAgentById(agentId) as any)?.name || agentId);
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: false,
+              status: 'already_running',
+              team_id: teamId,
+              agent_id: agentId,
+              dispatch_id: activeSame.id,
+              task_id: activeSame.taskId || null,
+              running_task: activeSame.taskSummary,
+              note: `${memberName} is already working on this team (dispatch ${activeSame.id}). Do not re-dispatch: you will be woken with the result when it finishes. Pass force:true only if that run is confirmed lost.`,
+            }, null, 2),
+            error: true,
+          };
+        }
+
         deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'dispatch_team_agent');
         const dispatchPrompt = buildTeamDispatchTaskLazy({ agentId, task, teamId, context });
+        // Mint the background handle up front so the dispatch record carries it
+        // from the start (it used to stay taskId:null until the run finished).
+        const bgTaskId = background
+          ? `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+          : undefined;
         const dispatchRecord = createTeamDispatchRecord(teamId, {
           agentId,
           agentName: String((getAgentById(agentId) as any)?.name || agentId),
           taskSummary: task,
           requestedBy: inferTeamNoteContext(sessionId)?.authorId || 'manager',
+          taskId: bgTaskId,
         });
         updateTeamMemberState(teamId, agentId, {
           status: 'running',
@@ -6977,7 +7019,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             updateTeamDispatchRecord(teamId, dispatchRecord.id, {
               status: result.success ? 'completed' : result.admissionCode ? 'capacity_limited' : 'failed',
               finishedAt: Date.now(),
-              taskId: result.taskId,
+              // Keep the handle the manager was given; fall back to the run's task id.
+              taskId: bgTaskId || result.taskId,
               resultPreview: String(result.result || result.error || ''),
               admissionCode: result.admissionCode,
             });
@@ -7074,8 +7117,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           return result;
         };
 
-        if (background) {
-          const taskId = `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        if (background && bgTaskId) {
+          const taskId = bgTaskId;
           const promise = run()
             .then((result) => {
               const entry = getBgAgentResults().get(taskId);
@@ -15850,6 +15893,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const goalChanged = changed.includes('purpose') || changed.includes('team_context') || !!explicitFocus;
             if (goalChanged) {
               const newFocus = (explicitFocus || String(team.purpose || team.teamContext || '')).slice(0, 1000);
+              team.goalSetAt = Date.now();
               team.currentFocus = newFocus;
               team.roomState = team.roomState || {};
               team.roomState.runGoal = newFocus;
@@ -16885,6 +16929,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           String(args.args || ''),
           Number(args.wait_ms || 6000),
           String(args.app_id || ''),
+          { enableAccessibility: args.enable_accessibility === true },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17025,6 +17070,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             verify: args.verify,
             focus_first: args.focus_first !== false,
             signal: deps.abortSignal?.signal,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
           },
           sessionId,
         );
@@ -17042,6 +17088,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           String(args.text || ''),
           args.raw === true,
           deps.abortSignal?.signal,
+          { dispatch: args.dispatch == null ? undefined : String(args.dispatch), verify: args.verify == null ? undefined : String(args.verify) },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17061,6 +17108,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           },
           String(args.key || 'Enter'),
           deps.abortSignal?.signal,
+          { dispatch: args.dispatch == null ? undefined : String(args.dispatch), verify: args.verify == null ? undefined : String(args.verify) },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17082,6 +17130,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
             focus_first: args.focus_first !== false,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
+            verify: args.verify == null ? undefined : String(args.verify),
           },
           sessionId,
           deps.abortSignal?.signal,
@@ -17106,6 +17156,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
             focus_first: args.focus_first !== false,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
           },
           sessionId,
           deps.abortSignal?.signal,
@@ -18808,6 +18859,16 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             const current = cm.getConfig() as any;
             cm.updateConfig(mainChatRoutePatch(current, { provider: parsed.providerId, model: parsed.model }) as any);
             resetProvider();
+            // A per-chat route (mobile/desktop model selector) outranks the global
+            // Main Chat route. Without updating it, the switch reports success but
+            // this chat keeps running on its old model.
+            let chatRouteUpdated = false;
+            try {
+              if (sessionId && getChatModelRoute(sessionId)) {
+                setChatModelRoute(sessionId, { providerId: parsed.providerId, model: parsed.model } as any);
+                chatRouteUpdated = true;
+              }
+            } catch { /* no live session for this caller */ }
             return {
               name,
               args,
@@ -18817,6 +18878,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 provider: parsed.providerId,
                 model: parsed.model,
                 reason: reason || null,
+                chat_route_updated: chatRouteUpdated,
                 note: 'Main Chat Agent route updated; the next model call in this live chat will use it.',
               }, null, 2),
               error: false,

@@ -2,36 +2,47 @@
   "id": "tiktok",
   "kind": "connector",
   "name": "TikTok",
-  "description": "Connect TikTok through the Prometheus browser session for performance, audience, and trend analysis.",
+  "description": "Official TikTok Content Posting and Display APIs: upload videos as drafts or direct posts, and read profile and video performance. No browser automation.",
   "category": "Social",
   "enabledByDefault": true,
-  "docsUrl": "https://www.tiktok.com/",
-  "tags": ["tiktok", "social", "browser session"],
+  "docsUrl": "https://developers.tiktok.com/doc/content-posting-api-get-started",
+  "tags": ["tiktok", "social", "publishing", "oauth", "official api"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:tiktok",
+    "binding": "integrations/connectors/tiktok",
     "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#010101",
     "permissions": [
-      { "icon": "[]", "label": "Read video views, watch time, and shares" },
-      { "icon": "=", "label": "Read follower growth and profile analytics" },
-      { "icon": "#", "label": "Read hashtag and sound performance" }
+      { "icon": "->", "label": "Upload videos as drafts or direct posts (with approval)" },
+      { "icon": "=", "label": "Read video views, likes, comments, and shares" },
+      { "icon": "@", "label": "Read profile and follower stats" }
     ]
   },
   "ownership": {
     "toolNamespaces": ["connector_tiktok"],
-    "tools": ["connector_tiktok_api_request"],
-    "capabilities": ["social", "analytics", "browser_session"]
+    "tools": [
+      "connector_tiktok_publish_video",
+      "connector_tiktok_get_user",
+      "connector_tiktok_list_videos",
+      "connector_tiktok_get_creator_info",
+      "connector_tiktok_get_publish_status",
+      "connector_tiktok_api_request"
+    ],
+    "capabilities": ["social", "analytics", "publishing"]
   },
   "setup": {
-    "authType": "browser_session",
-    "statusMode": "generic",
-    "docsHint": "Browser login does not authorize the API. API tools require a provider access_token saved in secure credentials or TIKTOK_ACCESS_TOKEN; refresh externally when expired.",
-    "fields": [{ "key": "access_token", "label": "Optional TikTok API access token", "input": "password", "secret": true, "required": false }],
-    "browserLogin": {
-      "url": "https://www.tiktok.com/login",
-      "checkUrl": "https://www.tiktok.com/"
-    }
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://developers.tiktok.com/apps/",
+    "docsHint": "TikTok for Developers -> Manage apps -> Create app (Desktop). Add Login Kit + Content Posting API (enable Direct Post) with scopes user.info.basic, user.info.profile, user.info.stats, video.list, video.upload, video.publish. Login Kit redirect URI: http://localhost:19431/auth/callback/tiktok. Until TikTok audits the app, direct posts are private (SELF_ONLY); draft uploads work right away.",
+    "callback": {
+      "port": 19431,
+      "path": "/auth/callback/tiktok"
+    },
+    "fields": [
+      { "key": "clientId", "label": "Client Key", "input": "text", "required": true, "placeholder": "aw..." },
+      { "key": "clientSecret", "label": "Client Secret", "input": "password", "required": true, "secret": true }
+    ]
   }
 }

@@ -381,6 +381,8 @@ export interface ManagedTeam {
 
   // Key of the goal whose [GOAL_COMPLETE] review already ran (see claimTeamGoalCompletionReview).
   goalCompletionReviewKey?: string;
+  // When the current goal/focus was set; the completion gate only counts work after it.
+  goalSetAt?: number;
 
   // ── Structured Goal Model ──────────────────────────────────────────────────
   // `teamContext` is retained for backward compatibility but is now secondary.
@@ -1400,12 +1402,100 @@ export function claimTeamGoalCompletionReview(teamId: string): string | null {
   invalidateCache();
   const team = getManagedTeam(teamId);
   if (!team) return null;
-  const goal = String(team.roomState?.runGoal || team.currentFocus || team.purpose || '').trim();
-  const key = `${teamId}:${crypto.createHash('sha1').update(goal).digest('hex').slice(0, 16)}`;
+  const key = teamGoalKey(team);
   if (team.goalCompletionReviewKey === key) return null;
   team.goalCompletionReviewKey = key;
   saveManagedTeam(team);
   return key;
+}
+
+function teamGoalText(team: ManagedTeam): string {
+  return String(team.roomState?.runGoal || team.currentFocus || team.purpose || '').trim();
+}
+
+function teamGoalKey(team: ManagedTeam): string {
+  return `${team.id}:${crypto.createHash('sha1').update(teamGoalText(team)).digest('hex').slice(0, 16)}`;
+}
+
+/** True once the current goal's completion review has run (until the goal changes). */
+export function isTeamGoalCompleted(teamId: string): boolean {
+  const team = getManagedTeam(teamId);
+  return !!team?.goalCompletionReviewKey && team.goalCompletionReviewKey === teamGoalKey(team);
+}
+
+export interface TeamGoalCompletionGate {
+  ok: boolean;
+  /** Members whose dispatch for this goal is still running/queued. */
+  waitForMembers: string[];
+  /** Steps the manager still owes before [GOAL_COMPLETE] is accepted. */
+  missing: string[];
+}
+
+const GOAL_ASKS_FOR_PROPOSAL = /\bproposals?\b|write_proposal/i;
+
+/**
+ * Server-side check behind [GOAL_COMPLETE]. The manager's marker used to be taken
+ * on its word: on 2026-10-08 it declared case-cli complete while the goal's
+ * proposal step (Soren -> manager write_proposal) had never run.
+ */
+export function evaluateTeamGoalCompletionGate(
+  teamId: string,
+  opts: { now?: number; listTeamProposals?: (teamId: string) => Array<{ createdAt?: number }> } = {},
+): TeamGoalCompletionGate {
+  const team = getManagedTeam(teamId);
+  if (!team) return { ok: true, waitForMembers: [], missing: [] };
+  const now = opts.now ?? Date.now();
+  const since = Number(team.goalSetAt || 0);
+  const goal = `${teamGoalText(team)}\n${String(team.purpose || '')}`;
+
+  const waitForMembers: string[] = [];
+  for (const d of team.roomState?.dispatches || []) {
+    if (d.status !== 'running' && d.status !== 'queued') continue;
+    const started = Number(d.startedAt || d.createdAt || 0);
+    if (started < since || now - started > ACTIVE_DISPATCH_WINDOW_MS) continue;
+    const label = String(d.agentName || d.agentId);
+    if (!waitForMembers.includes(label)) waitForMembers.push(label);
+  }
+
+  const missing: string[] = [];
+  const loggedThisGoal = (team.completedWork || []).some((entry) => {
+    const m = /^\[([^\]]+)\]/.exec(String(entry));
+    const at = m ? Date.parse(m[1]) : NaN;
+    return Number.isFinite(at) ? at >= since : since === 0;
+  });
+  if (!loggedThisGoal) {
+    missing.push('Log the outcome: manage_team_goal(action="log_completed", value="<outcome + key file paths>").');
+  }
+
+  if (GOAL_ASKS_FOR_PROPOSAL.test(goal)) {
+    let proposals: Array<{ createdAt?: number }> = [];
+    try {
+      proposals = opts.listTeamProposals
+        ? opts.listTeamProposals(teamId)
+        : (require('../proposals/proposal-store').listProposals() as any[]).filter((p) => p?.sourceTeamId === teamId);
+    } catch { proposals = []; }
+    if (!proposals.some((p) => Number(p?.createdAt || 0) >= since)) {
+      missing.push('The goal asks for a proposal and none was submitted for it: get the proposal content from the member who owns it, then submit it yourself with write_proposal.');
+    }
+  }
+
+  return { ok: waitForMembers.length === 0 && missing.length === 0, waitForMembers, missing };
+}
+
+/**
+ * True when the current goal has every step done (outcome logged, any asked-for
+ * proposal submitted, no member still running) but its completion review has not
+ * run. Managers sometimes park on [WAITING_MAIN_AGENT] to report finished work,
+ * which left the goal open forever.
+ */
+export function isTeamGoalReadyToClose(
+  teamId: string,
+  opts: { now?: number; listTeamProposals?: (teamId: string) => Array<{ createdAt?: number }> } = {},
+): boolean {
+  const team = getManagedTeam(teamId);
+  if (!team || !Number(team.goalSetAt || 0)) return false;
+  if (isTeamGoalCompleted(teamId)) return false;
+  return evaluateTeamGoalCompletionGate(teamId, opts).ok;
 }
 
 const STALE_DISPATCH_NO_TASK_MS = 20 * 60 * 1000;
@@ -1440,7 +1530,9 @@ export function reconcileStaleTeamDispatches(
       let note = '';
       if (taskStatus === 'complete') { next = 'completed'; note = 'Reconciled: task completed.'; }
       else if (taskStatus === 'failed') { next = 'failed'; note = 'Reconciled: task failed.'; }
-      else if (!d.taskId && age > STALE_DISPATCH_NO_TASK_MS) {
+      // team_bg_* handles live only in this process; one the lookup cannot see
+      // was lost with a restart, so it settles on the short no-task clock.
+      else if ((!d.taskId || (/^team_bg_/.test(d.taskId) && !task)) && age > STALE_DISPATCH_NO_TASK_MS) {
         next = 'failed';
         note = 'Orphaned: no task id was recorded (lost in a gateway restart).';
       } else if (d.taskId && lookupTask && !task && age > STALE_DISPATCH_TASK_MISSING_MS) {
@@ -1694,7 +1786,7 @@ export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: str
       'Durable personal memory for this manager agent.',
       '',
       'Keep management lessons, verification preferences, recurring coordination decisions, and manager-owned open threads here.',
-      'Shared accepted team truth belongs in the team workspace memory.json.',
+      'Shared accepted team truth lives in the team record: record finished work with manage_team_goal(action="log_completed").',
       ...legacyNotes,
     ].join('\n'), 'utf-8');
   }
@@ -2817,6 +2909,30 @@ export function shareTeamArtifact(
   return artifact;
 }
 
+/** Live window for treating a running/queued dispatch as the member's active run. */
+const ACTIVE_DISPATCH_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The member's current running/queued dispatch on this team, if any. Used to
+ * refuse duplicate dispatches of the same member while a run is live.
+ */
+export function findActiveTeamDispatch(
+  team: ManagedTeam | null | undefined,
+  agentId: string,
+  now: number = Date.now(),
+): TeamDispatchRecord | null {
+  const dispatches = team?.roomState?.dispatches;
+  if (!Array.isArray(dispatches)) return null;
+  for (let i = dispatches.length - 1; i >= 0; i--) {
+    const d = dispatches[i];
+    if (d.agentId !== agentId) continue;
+    if (d.status !== 'running' && d.status !== 'queued') continue;
+    if (now - Number(d.startedAt || d.createdAt || 0) > ACTIVE_DISPATCH_WINDOW_MS) continue;
+    return d;
+  }
+  return null;
+}
+
 export function createTeamDispatchRecord(
   teamId: string,
   input: {
@@ -2891,7 +3007,9 @@ export function setTeamRunGoal(teamId: string, runGoal: string): boolean {
   const team = getManagedTeam(teamId);
   if (!team) return false;
   const roomState = ensureTeamRoomState(team);
-  roomState.runGoal = String(runGoal || '').trim().slice(0, 2000);
+  const next = String(runGoal || '').trim().slice(0, 2000);
+  if (next !== roomState.runGoal) team.goalSetAt = Date.now();
+  roomState.runGoal = next;
   team.currentFocus = roomState.runGoal;
   saveManagedTeam(team);
   return true;
@@ -3115,7 +3233,9 @@ export function updateTeamFocus(teamId: string, newFocus: string): boolean {
   const team = getManagedTeam(teamId);
   if (!team) return false;
   const roomState = ensureTeamRoomState(team);
-  roomState.runGoal = String(newFocus || '').trim().slice(0, 2000);
+  const next = String(newFocus || '').trim().slice(0, 2000);
+  if (next !== roomState.runGoal) team.goalSetAt = Date.now();
+  roomState.runGoal = next;
   team.currentFocus = roomState.runGoal;
   saveManagedTeam(team);
   return true;

@@ -244,6 +244,48 @@ export class Win32DesktopHelperClient {
     return result?.focused === true;
   }
 
+  // ─── Background input (protocol v6) ──────────────────────────────────────
+  // These never call SetForegroundWindow/SetCursorPos/SendInput. They return
+  // { ok:false, backgroundUnavailable:true, reason } when the target cannot be
+  // driven without real input, instead of falling back silently.
+
+  async backgroundClick(
+    handle: number, x: number, y: number,
+    opts: { button?: 'left' | 'right'; repeat?: number; strategy?: 'auto' | 'uia' | 'message'; overlay?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<Win32BackgroundResult> {
+    return this.call<Win32BackgroundResult>('bg_click', {
+      handle: Math.floor(handle), x: Math.round(x), y: Math.round(y),
+      button: opts.button || 'left', repeat: Math.max(1, Math.min(2, Math.floor(opts.repeat || 1))),
+      strategy: opts.strategy || 'auto', overlay: opts.overlay === false ? 0 : 1,
+    }, signal);
+  }
+
+  async backgroundType(handle: number, text: string, signal?: AbortSignal): Promise<Win32BackgroundResult> {
+    return this.call<Win32BackgroundResult>('bg_type', {
+      handle: Math.floor(handle), textBase64: Buffer.from(String(text || ''), 'utf8').toString('base64'),
+    }, signal);
+  }
+
+  async backgroundKey(handle: number, key: string, modifiers: { ctrl?: boolean; shift?: boolean; alt?: boolean } = {}, signal?: AbortSignal): Promise<Win32BackgroundResult> {
+    return this.call<Win32BackgroundResult>('bg_key', {
+      handle: Math.floor(handle), key: String(key || 'enter'),
+      ctrl: modifiers.ctrl ? 1 : 0, shift: modifiers.shift ? 1 : 0, alt: modifiers.alt ? 1 : 0,
+    }, signal);
+  }
+
+  async backgroundScroll(handle: number, x: number, y: number, deltaX: number, deltaY: number, signal?: AbortSignal): Promise<Win32BackgroundResult> {
+    return this.call<Win32BackgroundResult>('bg_scroll', {
+      handle: Math.floor(handle), x: Math.round(x), y: Math.round(y),
+      deltaX: Math.round(deltaX || 0), deltaY: Math.round(deltaY || 0),
+    }, signal);
+  }
+
+  /** Physical-input idle time (GetLastInputInfo), real cursor and foreground HWND. */
+  async userInputState(signal?: AbortSignal): Promise<{ idleMs: number; cursor: { x: number; y: number }; foreground: number }> {
+    return this.call('user_input_state', {}, signal);
+  }
+
   async clickAt(x: number, y: number, button: 'left' | 'right' | 'middle' = 'left', repeat: number = 1, signal?: AbortSignal): Promise<void> {
     await this.call('click', {
       x: Math.floor(x), y: Math.floor(y), button,
@@ -311,6 +353,21 @@ export class Win32DesktopHelperClient {
 }
 
 let sharedClient: Win32DesktopHelperClient | null = null;
+
+export interface Win32BackgroundResult {
+  ok: boolean;
+  /** uia_invoke | uia_toggle | uia_select | uia_expand_collapse | uia_scroll | post_message | post_char | post_key | edit_message */
+  method?: string;
+  /** UIA call still running after 2.5s (typically opened a modal dialog). */
+  pending?: boolean;
+  backgroundUnavailable?: boolean;
+  reason?: string;
+  detail?: string;
+  targetClass?: string;
+  visited?: number;
+  chars?: number;
+  element?: { name?: string; automationId?: string; frameworkId?: string; controlType?: number; bounds?: { x: number; y: number; width: number; height: number } } | null;
+}
 
 export function getWin32DesktopHelperClient(): Win32DesktopHelperClient {
   if (!sharedClient) sharedClient = new Win32DesktopHelperClient();

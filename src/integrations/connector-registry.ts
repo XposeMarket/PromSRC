@@ -14,6 +14,9 @@ import { HubSpotConnector } from './connectors/hubspot.js';
 import { SalesforceConnector } from './connectors/salesforce.js';
 import { StripeConnector } from './connectors/stripe.js';
 import { GoogleAnalyticsConnector } from './connectors/google-analytics.js';
+import { InstagramConnector } from './connectors/instagram.js';
+import { TikTokConnector } from './connectors/tiktok.js';
+import { LinkedInConnector } from './connectors/linkedin.js';
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +34,9 @@ export function initConnectorRegistry(configDir: string): void {
     new SalesforceConnector(configDir),
     new StripeConnector(configDir),
     new GoogleAnalyticsConnector(configDir),
+    new InstagramConnector(configDir),
+    new TikTokConnector(configDir),
+    new LinkedInConnector(configDir),
   ];
   for (const c of registry) connectors.set(c.id, c);
   console.log(`[Connectors] Registry loaded: ${[...connectors.keys()].join(', ')}`);
@@ -173,6 +179,21 @@ export function saveConnectorCredentials(id: string, clientId: string, clientSec
 }
 
 /**
+ * Connect with a provider-generated access token (no OAuth popup). The
+ * connector validates the token against the provider before saving it.
+ */
+export async function saveConnectorManualToken(id: string, accessToken: string): Promise<{ account?: string }> {
+  const connector = connectors.get(id);
+  if (!connector) throw new Error(`Unknown connector: ${id}`);
+  return connector.saveManualAccessToken(accessToken);
+}
+
+/** Redirect URI to register in the provider app for this connector. */
+export function getConnectorRedirectUri(id: string): string | undefined {
+  return connectors.get(id)?.redirectUri();
+}
+
+/**
  * Return credential and connection status for all connectors — used by the UI.
  */
 export function getConnectorStatuses(): Record<string, {
@@ -183,6 +204,7 @@ export function getConnectorStatuses(): Record<string, {
   grantedScopes?: string[];
   expiresAt?: number;
   refreshAvailable?: boolean;
+  redirectUri?: string;
 }> {
   const result: Record<string, {
     connected: boolean;
@@ -192,6 +214,7 @@ export function getConnectorStatuses(): Record<string, {
     grantedScopes?: string[];
     expiresAt?: number;
     refreshAvailable?: boolean;
+    redirectUri?: string;
   }> = {};
   for (const [id, c] of connectors.entries()) {
     const metadata = c.getOAuthMetadata();
@@ -203,6 +226,7 @@ export function getConnectorStatuses(): Record<string, {
       grantedScopes: metadata.grantedScopes,
       expiresAt: metadata.expiresAt,
       refreshAvailable: metadata.refreshAvailable,
+      redirectUri: c.redirectUri(),
     };
   }
   return result;

@@ -763,8 +763,16 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     try {
       const { reconcileStaleTeamDispatches } = require('../teams/managed-teams.js');
       const { loadTask } = require('../tasks/task-store.js');
+      const { _bgAgentResults } = require('../teams/team-dispatch-runtime.js');
+      const lookup = (id: string) => {
+        if (/^team_bg_/.test(id)) {
+          const entry = _bgAgentResults?.get?.(id);
+          return entry ? { status: entry.status === 'capacity_limited' ? 'failed' : entry.status } : null;
+        }
+        return loadTask(id);
+      };
       const settle = () => {
-        const n = reconcileStaleTeamDispatches(Date.now(), (id: string) => loadTask(id));
+        const n = reconcileStaleTeamDispatches(Date.now(), lookup);
         if (n > 0) console.log(`[TeamRegistry] Settled ${n} stale team dispatch record(s).`);
       };
       settle();

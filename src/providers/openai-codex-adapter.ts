@@ -24,7 +24,7 @@ import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabiliti
 import { ChatGPTWebAdapter } from './chatgpt-web/chatgpt-web-adapter';
 import { isChatGPTWebModel, CHATGPT_WEB_MODEL, resolveChatGPTWebMode } from './chatgpt-web/chatgpt-web-models';
 import { getChatGPTBridgeSource, logBridgeEvent } from './chatgpt-web/chatgpt-bridge-registry';
-import { saveChatGPTSandboxFile } from './chatgpt-web/chatgpt-sandbox-files';
+import { saveChatGPTSandboxFile, findRecentChatGPTSandboxFile } from './chatgpt-web/chatgpt-sandbox-files';
 import { chatGPTBridgeCatalogSignature, currentChatGPTBridgeCatalogSignature, hasActiveChatGPTBridgeTurn } from './chatgpt-web/chatgpt-bridge-sessions';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
@@ -275,6 +275,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           return cfg.temporary_chats !== false;
         },
         saveSandboxFile: (conversationId, fileName, data) => saveChatGPTSandboxFile(conversationId, fileName, data),
+        findRecentSandboxFile: async (fileName) => findRecentChatGPTSandboxFile(fileName),
       });
       try {
         const result = await adapter.chat(messages, model, options);

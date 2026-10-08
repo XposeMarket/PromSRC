@@ -180,7 +180,6 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
                `     (e.g. a project folder), write there instead of the team workspace.`]
             : []),
           `  -> Check existing files here before creating new ones.`,
-          `  -> Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')
       : '',
     (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
@@ -234,7 +233,7 @@ function workingDirectoryLines(team: any, teamId: string, teamWorkspacePath: str
       ``,
       `This is the project directory for "${team?.name || teamId}". Relative paths in file tools resolve here,`,
       `so write all task outputs (code, tests, specs, reviews) here. Do NOT write to your own agent workspace.`,
-      `Team workspace (shared state, memory.json/last_run.json/pending.json): ${teamWorkspacePath}`,
+      `Team workspace (shared team files): ${teamWorkspacePath}`,
     ];
   }
   return [
@@ -539,7 +538,6 @@ async function runTeamAgentViaChatInternal(
                `    (e.g. a project folder), write there instead of the team workspace.`]
             : []),
           `  → Check existing files here before creating new ones.`,
-          `  → Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')
       : '',
     (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
@@ -564,7 +562,7 @@ async function runTeamAgentViaChatInternal(
     planRequirementBlock,
     ``,
     `[ESCALATION]`,
-    `Post blockers or errors to the team workspace (pending.json) so the coordinator can act on them.`,
+    `Report blockers or errors with talk_to_teammate("manager") or request_manager_help so the manager can act on them.`,
   ].filter(Boolean).join('\n');
 
   if (pendingMessages.length > 0) {
@@ -1268,8 +1266,6 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
         focusedPaths.push(`  - Team workspace (your working directory): ${twp}`);
         const pipelineFile = path.join(twp, 'PIPELINE_STATUS.md');
         if (fs.existsSync(pipelineFile)) focusedPaths.push(`  - Pipeline status:   ${pipelineFile}`);
-        const memFile = path.join(twp, 'memory.json');
-        if (fs.existsSync(memFile)) focusedPaths.push(`  - Prior run memory:  ${memFile}`);
       }
     } catch { /* non-fatal */ }
   } else {

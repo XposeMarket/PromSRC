@@ -28,10 +28,10 @@ const CONNECTOR_CATALOG = [
   { id: 'stripe',       name: 'Stripe',       category: 'Finance',   authType: 'oauth'   },
   { id: 'vercel',       name: 'Vercel',       category: 'Dev',       authType: 'apikey'  },
   { id: 'ga4',          name: 'Google Analytics', category: 'Analytics', authType: 'oauth' },
-  { id: 'instagram',    name: 'Instagram',    category: 'Social',    authType: 'browser' },
-  { id: 'tiktok',       name: 'TikTok',       category: 'Social',    authType: 'browser' },
+  { id: 'instagram',    name: 'Instagram',    category: 'Social',    authType: 'oauth'   },
+  { id: 'tiktok',       name: 'TikTok',       category: 'Social',    authType: 'oauth'   },
   { id: 'x',            name: 'X / Twitter',  category: 'Social',    authType: 'browser' },
-  { id: 'linkedin',     name: 'LinkedIn',     category: 'Social',    authType: 'browser' },
+  { id: 'linkedin',     name: 'LinkedIn',     category: 'Social',    authType: 'oauth'   },
   { id: 'reddit',       name: 'Reddit',       category: 'Social',    authType: 'oauth'   },
   { id: 'google_drive', name: 'Google Drive', category: 'Storage',   authType: 'oauth'   },
 ];

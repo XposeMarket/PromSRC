@@ -206,7 +206,7 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       `Durable personal memory for ${displayName} inside team ${teamId}.`,
       '',
       'Keep role-specific lessons, decisions, corrections, preferences, and open threads here.',
-      'Shared team truth belongs in the team workspace memory.json, not in this private file.',
+      'Shared team truth lives in the team record (manager: manage_team_goal log_completed), not in this private file.',
     ].join('\n'), 'utf-8');
   }
 
@@ -300,95 +300,32 @@ function saveWorkspaceMetadata(teamId: string, meta: WorkspaceMetadata): void {
 
 // ─── Workspace Initialization ─────────────────────────────────────────────────
 
-// ─── Team Memory Files (purpose→task workflow) ────────────────────────────────
-// Three lightweight JSON files in the team workspace that give the coordinator
-// cross-run persistence without any schema changes.
-//   memory.json    — accumulated knowledge across all runs
-//   last_run.json  — what the most recent run did
-//   pending.json   — items found but not yet acted on
-
-export function initTeamMemoryFiles(teamId: string): void {
-  const wsPath = getTeamWorkspacePath(teamId);
-  fs.mkdirSync(wsPath, { recursive: true });
-
-  const memoryPath = path.join(wsPath, 'memory.json');
-  if (!fs.existsSync(memoryPath)) {
-    fs.writeFileSync(memoryPath, JSON.stringify({
-      _note: 'Cross-run accumulated team knowledge and structured manager/subagent notes.',
-      updatedAt: null,
-      entries: [],
-      events: [],
-      runSummaries: [],
-      acceptedOutputs: [],
-      decisions: [],
-    }, null, 2), 'utf-8');
-  }
-
-  const lastRunPath = path.join(wsPath, 'last_run.json');
-  if (!fs.existsSync(lastRunPath)) {
-    fs.writeFileSync(lastRunPath, JSON.stringify({
-      _note: 'What happened in the most recent manager run. Overwrite this at the end of each run.',
-      runId: null,
-      timestamp: null,
-      runAt: null,
-      task: null,
-      managerSummary: null,
-      dispatchesMade: [],
-      subagentResults: [],
-      verificationDecisions: [],
-      filesCreatedOrModified: [],
-      writeNotes: [],
-      unresolvedItems: [],
-      agentsUsed: [],
-    }, null, 2), 'utf-8');
-  }
-
-  const pendingPath = path.join(wsPath, 'pending.json');
-  if (!fs.existsSync(pendingPath)) {
-    fs.writeFileSync(pendingPath, JSON.stringify({
-      _note: 'Unresolved blockers, incomplete work, follow-up dispatches, questions, and verification failures.',
-      items: [],
-      blockers: [],
-      followUpDispatches: [],
-      awaitingMainAgentOrUser: [],
-      verificationFailures: [],
-    }, null, 2), 'utf-8');
-  }
-}
+// ─── Team context for completion review ───────────────────────────────────────
+// The team record (purpose, focus, completedWork, room state) is the source of
+// truth. This only surfaces team_info.md plus the latest team notes.
 
 export function readTeamMemoryContext(teamId: string): string {
   const wsPath = getTeamWorkspacePath(teamId);
-  const totalBudget = 12000;
-  let usedChars = 0;
-  const parts: string[] = [
-    `The following file snapshots were read by the system before this manager turn.`,
-    `Treat them as the current contents of the memory files; do not call file_stats or read_file on these files just to inspect them.`,
-    `If you need to update memory.json, last_run.json, or pending.json, use these snapshots as your base and write the updated file directly.`,
-  ];
-  for (const filename of ['team_info.md', 'memory.json', 'last_run.json', 'pending.json'] as const) {
-    const filePath = path.join(wsPath, filename);
-    if (!fs.existsSync(filePath)) continue;
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8').trim();
-      const lineCount = content ? content.split(/\r?\n/).length : 0;
-      const bytes = Buffer.byteLength(content, 'utf-8');
-      const remaining = Math.max(0, totalBudget - usedChars);
-      if (remaining <= 0) break;
-      const perFileBudget = filename === 'memory.json' ? 4500 : filename === 'team_info.md' ? 3500 : 2500;
-      const sliceChars = Math.min(remaining, perFileBudget);
-      const truncated = content.length > sliceChars;
-      const excerpt = content.slice(0, sliceChars);
-      usedChars += excerpt.length;
-      parts.push([
-        `[${filename}]`,
-        `path: ${filePath}`,
-        `lines: ${lineCount}, bytes: ${bytes}${truncated ? `, truncated to first ${sliceChars} chars` : ''}`,
-        excerpt,
-      ].join('\n'));
-    } catch { /* skip unreadable */ }
-  }
+  const parts: string[] = [];
+  const info = readTextIfExists(path.join(wsPath, 'team_info.md'), 3500);
+  if (info) parts.push(`[team_info.md]\n${info}`);
+  try {
+    const notesPath = path.join(wsPath, 'team-notes.jsonl');
+    if (fs.existsSync(notesPath)) {
+      const recent = fs.readFileSync(notesPath, 'utf-8').split('\n').filter(Boolean).slice(-15)
+        .map((line) => {
+          try {
+            const n = JSON.parse(line);
+            return `- ${n.timestamp} [${n.authorId}${n.tag ? `/${n.tag}` : ''}] ${String(n.content || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+          } catch { return ''; }
+        })
+        .filter(Boolean);
+      if (recent.length) parts.push(`[recent team notes]\n${recent.join('\n')}`);
+    }
+  } catch { /* non-fatal */ }
   return parts.join('\n\n');
 }
+
 
 function readTextIfExists(filePath: string, maxChars = 12000): string {
   try {
@@ -455,16 +392,15 @@ export function buildTeamInfoContent(team: ManagedTeam): string {
     `- Dispatch only the agents relevant to the current task.`,
     `- Check existing files and memory before doing new work.`,
     `- Verify created/modified files when relevant.`,
-    `- Update memory.json, last_run.json, and pending.json at the end of meaningful runs.`,
+    `- Record finished work with manage_team_goal(action="log_completed"); the team record is the single source of truth.`,
     ``,
     `## Quality Bar / Definition of Done`,
     `- Outputs are specific, evidence-backed, and usable by the team owner.`,
     `- Incomplete, vague, or placeholder subagent outputs are re-dispatched with a specific correction.`,
-    `- [GOAL_COMPLETE] is used only after the current task is substantively complete and team memory files are updated.`,
+    `- [GOAL_COMPLETE] is used only after the current task is substantively complete and logged with log_completed.`,
     ``,
     `## Target Outputs`,
-    `- Durable artifacts in this workspace.`,
-    `- Structured run memory in memory.json, last_run.json, and pending.json.`,
+    `- Durable artifacts in this workspace or the team's project folder.`,
     `- Concise manager status in team chat.`,
     ``,
     `## Known Constraints`,
@@ -478,18 +414,26 @@ export function buildTeamInfoContent(team: ManagedTeam): string {
     ``,
     `## Important Workspace Files`,
     `- team_info.md: durable team mandate and operating context.`,
-    `- memory.json: cumulative team knowledge and structured note events.`,
-    `- last_run.json: latest manager-run summary and verification decisions.`,
-    `- pending.json: unresolved blockers, follow-ups, and questions.`,
+    `- team-notes.jsonl: append-only notes written by write_note in team sessions (system-managed).`,
     setupBlocks.length ? `\n## Migrated Setup Material\n${setupBlocks.map((b) => `### ${b.name}\n${b.content}`).join('\n\n')}` : '',
     ``,
   ].filter((part) => part !== '').join('\n');
 }
 
+const LEGACY_TEAM_INFO_RE = /Update memory\.json, last_run\.json, and pending\.json|Structured run memory in memory\.json/;
+
 export function ensureTeamInfoFile(team: ManagedTeam): string {
   const wsPath = ensureTeamWorkspace(team.id);
   const teamInfoPath = path.join(wsPath, 'team_info.md');
-  if (!fs.existsSync(teamInfoPath)) {
+  let needsWrite = !fs.existsSync(teamInfoPath);
+  if (!needsWrite) {
+    // Older team_info.md files told the manager to maintain memory.json / last_run.json /
+    // pending.json. Regenerate those so stale instructions don't survive the cleanup.
+    try {
+      needsWrite = LEGACY_TEAM_INFO_RE.test(fs.readFileSync(teamInfoPath, 'utf-8'));
+    } catch { needsWrite = false; }
+  }
+  if (needsWrite) {
     fs.writeFileSync(teamInfoPath, buildTeamInfoContent(team), 'utf-8');
   }
   return teamInfoPath;
@@ -501,21 +445,14 @@ export function initTeamWorkspaceArtifacts(team: ManagedTeam): void {
   ensureTeamInfoFile(team);
 }
 
-function safeJsonRead(filePath: string, fallback: any): any {
-  try {
-    if (!fs.existsSync(filePath)) return fallback;
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return fallback;
-  }
-}
+const TEAM_NOTES_FILE = 'team-notes.jsonl';
+const TEAM_NOTES_MAX_BYTES = 512 * 1024;
 
-function safeJsonWrite(filePath: string, value: any): void {
-  const tmp = `${filePath}.tmp-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8');
-  fs.renameSync(tmp, filePath);
-}
-
+/**
+ * Append a write_note from a team session to an append-only team-notes.jsonl.
+ * Replaces the old memory.json read-modify-write (which also recreated
+ * last_run.json / pending.json on every note).
+ */
 export function appendTeamMemoryEvent(
   teamId: string,
   event: {
@@ -528,33 +465,31 @@ export function appendTeamMemoryEvent(
   },
 ): boolean {
   try {
-    initTeamMemoryFiles(teamId);
-    const filePath = path.join(getTeamWorkspacePath(teamId), 'memory.json');
-    const memory = safeJsonRead(filePath, {
-      _note: 'Cross-run accumulated team knowledge and structured manager/subagent notes.',
-      updatedAt: null,
-      entries: [],
-      events: [],
-    });
-    const timestamp = event.timestamp || new Date().toISOString();
+    const wsPath = getTeamWorkspacePath(teamId);
+    fs.mkdirSync(wsPath, { recursive: true });
+    const filePath = path.join(wsPath, TEAM_NOTES_FILE);
     const record = {
-      timestamp,
+      timestamp: event.timestamp || new Date().toISOString(),
       authorType: event.authorType,
       authorId: event.authorId,
       taskId: event.taskId || undefined,
       tag: event.tag || undefined,
       content: String(event.content || '').slice(0, 4000),
     };
-    memory.updatedAt = timestamp;
-    memory.events = Array.isArray(memory.events) ? [...memory.events, record].slice(-500) : [record];
-    memory.entries = Array.isArray(memory.entries) ? memory.entries : [];
-    safeJsonWrite(filePath, memory);
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, 'utf-8');
+    // Keep the file bounded: once it passes the cap, keep the newest half.
+    const size = fs.statSync(filePath).size;
+    if (size > TEAM_NOTES_MAX_BYTES) {
+      const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(Boolean);
+      fs.writeFileSync(filePath, `${lines.slice(Math.floor(lines.length / 2)).join('\n')}\n`, 'utf-8');
+    }
     return true;
   } catch (err: any) {
     console.warn(`[TeamWorkspace] appendTeamMemoryEvent failed for ${teamId}: ${err?.message || err}`);
     return false;
   }
 }
+
 
 export function ensureTeamWorkspace(teamId: string): string {
   const wsPath = getTeamWorkspacePath(teamId);

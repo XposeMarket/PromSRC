@@ -1,3 +1,4 @@
+import { getChatModelRoute, setChatModelRoute } from '../../session';
 import fs from 'fs';
 import path from 'path';
 import { getAgentById, getAgents, getConfig } from '../../../config/config';
@@ -1643,6 +1644,13 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           const current = cm.getConfig() as any;
           cm.updateConfig(mainChatRoutePatch(current, { provider: parsed.providerId, model: parsed.model }) as any);
           resetProvider();
+          let chatRouteUpdated = false;
+          try {
+            if (sessionId && getChatModelRoute(sessionId)) {
+              setChatModelRoute(sessionId, { providerId: parsed.providerId, model: parsed.model } as any);
+              chatRouteUpdated = true;
+            }
+          } catch { /* no live session for this caller */ }
           return {
             name,
             args,
@@ -1652,6 +1660,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               provider: parsed.providerId,
               model: parsed.model,
               reason: reason || null,
+              chat_route_updated: chatRouteUpdated,
               note: 'Main Chat Agent route updated.',
             }, null, 2),
             error: false,

@@ -167,6 +167,7 @@ import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
 import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
+import { router as connectorOAuthCallbackRouter } from './routes/connector-oauth-callback.router';
 import { router as chatgptBridgeRouter, setChatGPTBridgeFallbackCatalog } from './routes/chatgpt-bridge.router';
 import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
@@ -1003,6 +1004,7 @@ startupMark('routers initialized');
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
 app.use('/', mcpOAuthCallbackRouter);
+app.use('/', connectorOAuthCallbackRouter);
 // Trigger webhooks are called by external services (GitHub, Zapier, local
 // scripts) that cannot present a gateway token. Each endpoint authenticates
 // with its own per-endpoint secret (HMAC or URL token); see triggers.router.ts.
@@ -1371,6 +1373,14 @@ async function startGatewayListeners(): Promise<void> {
     // (usually a resumed one) does not pay a cold child boot before the
     // provider request is even sent.
     try { startupMark(`model workers prewarmed (${prewarmModelCallWorkers()})`); } catch {}
+    // Warm memory-atom vectors + embedding model so the first turn's semantic
+    // memory lookup is a single query embedding instead of a full re-embed.
+    setTimeout(() => {
+      import('./memory-index/memory-atoms-hybrid.js')
+        .then(({ prewarmHybridMemoryAtoms }) => prewarmHybridMemoryAtoms(getConfig().getWorkspacePath()))
+        .then((result) => { if (result) startupMark(`memory atoms prewarmed (${result.embedded}/${result.atoms})`); })
+        .catch(() => {});
+    }, 500).unref?.();
     const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
     try { startHandoffSyntheticRuntimeFixture(); } catch {}
     // Accepted peer turns can die before the chat runtime registers. Drain

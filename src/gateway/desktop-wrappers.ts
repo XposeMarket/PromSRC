@@ -156,7 +156,10 @@ export function normalizeDesktopWrapperTool(
   // Strict-schema clients routinely populate verify:"auto" even when the
   // model did not request verification. Keep ordinary wrapper pointer actions
   // on the fast path; strict remains an explicit opt-in contract.
-  if (['desktop_window_click', 'desktop_click', 'desktop_window_scroll', 'desktop_scroll', 'desktop_window_drag', 'desktop_drag'].includes(mappedName)
+  // Background window actions keep verify:auto: their cheap exact-window hash
+  // check is what detects apps that silently ignore posted input.
+  const backgroundWindowAction = mappedName.startsWith('desktop_window_') && String(args.dispatch || 'background').toLowerCase() !== 'foreground';
+  if (!backgroundWindowAction && ['desktop_window_click', 'desktop_click', 'desktop_window_scroll', 'desktop_scroll', 'desktop_window_drag', 'desktop_drag'].includes(mappedName)
     && String(args.verify || '').toLowerCase() === 'auto') {
     args.verify = 'off';
   }
@@ -267,6 +270,7 @@ export function getDesktopWrapperToolDefinitions(): any[] {
             app: { type: 'string' },
             args: { type: 'string' },
             wait_ms: { type: 'number' },
+            enable_accessibility: { type: 'boolean', description: 'launch_app only: start a Chromium/Electron app with the flags that expose its page to accessibility actions.' },
             name: { type: 'string' },
             force: { type: 'boolean' },
           },
@@ -292,6 +296,7 @@ export function getDesktopWrapperToolDefinitions(): any[] {
             include_screenshot: { type: 'boolean' },
             include_text: { type: 'boolean' },
             focus_first: { type: 'boolean' },
+            dispatch: { type: 'string', enum: ['background', 'foreground'], description: 'Input dispatch for click/type/key/scroll/drag. background (default) acts on this exact window via UI Automation/window messages without moving the user cursor or stealing focus, and returns BACKGROUND_UNAVAILABLE when the app needs real input. foreground uses the real mouse/keyboard (waits for the user to pause, then restores their window and cursor).' },
             padding: { type: 'number' },
             region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'For region_screenshot/screenshot: [x1,y1,x2,y2] relative to the target window top-left. Cropped from the native window image before scaling/OCR.' },
             mode: { type: 'string', enum: ['normal', 'som'] },

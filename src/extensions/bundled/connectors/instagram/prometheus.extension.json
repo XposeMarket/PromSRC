@@ -2,37 +2,54 @@
   "id": "instagram",
   "kind": "connector",
   "name": "Instagram",
-  "description": "Connect Instagram through the Prometheus browser session for analytics, engagement, and social coaching workflows.",
+  "description": "Official Instagram API (Instagram Login): publish photos, reels, stories and carousels, read insights, and manage comments and DMs on your professional account. No browser automation.",
   "category": "Social",
   "enabledByDefault": true,
-  "docsUrl": "https://www.instagram.com/",
-  "tags": ["instagram", "social", "browser session"],
+  "docsUrl": "https://developers.facebook.com/docs/instagram-platform/content-publishing/",
+  "tags": ["instagram", "social", "publishing", "reels", "oauth", "official api"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:instagram",
+    "binding": "integrations/connectors/instagram",
     "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#E1306C",
     "permissions": [
-      { "icon": "[]", "label": "Read posts, reels, and stories analytics" },
-      { "icon": "=", "label": "Read reach, impressions, and engagement" },
-      { "icon": "@", "label": "Read follower count and growth trends" },
-      { "icon": "#", "label": "Read comments on your posts" }
+      { "icon": "->", "label": "Publish photos, reels, stories, and carousels (with approval)" },
+      { "icon": "=", "label": "Read reach, views, and engagement insights" },
+      { "icon": "@", "label": "Read profile, followers, and media" },
+      { "icon": "#", "label": "Read, reply to, and moderate comments and DMs" }
     ]
   },
   "ownership": {
     "toolNamespaces": ["connector_instagram"],
-    "tools": ["connector_instagram_api_request"],
-    "capabilities": ["social", "analytics", "browser_session"]
+    "tools": [
+      "connector_instagram_publish",
+      "connector_instagram_get_profile",
+      "connector_instagram_list_media",
+      "connector_instagram_get_insights",
+      "connector_instagram_get_publishing_limit",
+      "connector_instagram_list_comments",
+      "connector_instagram_reply_comment",
+      "connector_instagram_moderate_comment",
+      "connector_instagram_list_conversations",
+      "connector_instagram_send_message",
+      "connector_instagram_api_request"
+    ],
+    "capabilities": ["social", "analytics", "publishing"]
   },
   "setup": {
-    "authType": "browser_session",
-    "statusMode": "generic",
-    "docsHint": "Browser login does not authorize the API. API tools require an Instagram Login access_token saved in secure credentials or INSTAGRAM_ACCESS_TOKEN; refresh externally when expired.",
-    "fields": [{ "key": "access_token", "label": "Optional Instagram API access token", "input": "password", "secret": true, "required": false }],
-    "browserLogin": {
-      "url": "https://www.instagram.com/accounts/login/",
-      "checkUrl": "https://www.instagram.com/"
-    }
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://developers.facebook.com/apps/",
+    "docsHint": "Needs a Professional (Creator or Business) account. Meta App Dashboard -> Create app -> Instagram -> API setup with Instagram login. Fastest: Generate token for your account and paste it as Access Token. Or paste the Instagram App ID + App Secret and add the Redirect URI shown below to Business login settings. Your own accounts need no App Review.",
+    "callback": {
+      "port": 19430,
+      "path": "/auth/callback/instagram"
+    },
+    "fields": [
+      { "key": "accessToken", "label": "Access Token (from Generate token)", "input": "password", "required": false, "secret": true, "placeholder": "IGAA...", "help": "Paste this alone to connect immediately. Prometheus refreshes it before the 60-day expiry." },
+      { "key": "clientId", "label": "Instagram App ID (for Authorize flow)", "input": "text", "required": false, "placeholder": "1234567890" },
+      { "key": "clientSecret", "label": "Instagram App Secret", "input": "password", "required": false, "secret": true }
+    ]
   }
 }

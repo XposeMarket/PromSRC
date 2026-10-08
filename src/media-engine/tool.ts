@@ -211,7 +211,33 @@ function startRunInBackground(ctx: { workspacePath: string; sessionId?: string }
   return { started: true, note: 'Autopilot started in the background. The chat card shows live progress, and this chat is woken when it finishes, so end your turn now.' };
 }
 
+/** Normalize scalar/array arguments double-encoded by model tool calls.
+ * Derive known keys from the tool schema so new parameters are covered too.
+ * Invalid values are left for the action's existing validation to reject.
+ */
+export function coerceVideoProjectArgs(args: any): any {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const normalized = { ...args };
+  const properties = getVideoProjectToolDef().function.parameters.properties;
+  for (const [key, schema] of Object.entries(properties) as Array<[string, { type: string }]>) {
+    const value = normalized[key];
+    if (typeof value !== 'string') continue;
+    const text = value.trim();
+    if (schema.type === 'array' && text.startsWith('[')) {
+      try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) normalized[key] = parsed; }
+      catch { /* Preserve malformed input for action-level validation. */ }
+    } else if (schema.type === 'boolean' && (text === 'true' || text === 'false')) {
+      normalized[key] = text === 'true';
+    } else if ((schema.type === 'number' || schema.type === 'integer') && text && Number.isFinite(Number(text))) {
+      const number = Number(text);
+      if (schema.type !== 'integer' || Number.isInteger(number)) normalized[key] = number;
+    }
+  }
+  return normalized;
+}
+
 export async function executeVideoProject(args: any, ctx: { workspacePath: string; sessionId?: string }): Promise<any> {
+  args = coerceVideoProjectArgs(args);
   const ws = ctx.workspacePath;
   if (!resumedFor.has(ws)) { resumedFor.add(ws); try { resumeJobs(ws); } catch { /* ignore */ } }
   const action = String(args?.action || '').trim();

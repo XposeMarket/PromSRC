@@ -297,6 +297,7 @@ const BUILTIN: MediaModelManifest[] = [
     endpoint: 'fal-ai/kling-video/v3/pro/motion-control',
     map: { prompt: 'prompt', sourceVideo: 'video_url', startImage: 'image_url' }, requires: ['sourceVideo', 'startImage'],
     defaults: { character_orientation: 'video', keep_original_sound: true },
+    limits: { minDurationSec: 3, maxDurationSec: 30 },
     pricing: { perSecondUsd: 0.168, source: 'published' }, output: 'video.url', tags: ['motion-transfer', 'premium-motion', 'trend-transfer'],
   },
   {
@@ -304,6 +305,7 @@ const BUILTIN: MediaModelManifest[] = [
     endpoint: 'fal-ai/kling-video/v3/standard/motion-control',
     map: { prompt: 'prompt', sourceVideo: 'video_url', startImage: 'image_url' }, requires: ['sourceVideo', 'startImage'],
     defaults: { character_orientation: 'video', keep_original_sound: true },
+    limits: { minDurationSec: 3, maxDurationSec: 30 },
     pricing: { perSecondUsd: 0.112, source: 'estimate' }, output: 'video.url', tags: ['motion-transfer', 'trend-transfer'],
   },
   {

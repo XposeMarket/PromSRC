@@ -19,6 +19,9 @@ import {
   getMainAgentThread,
   drainManagerMessages,
   ensureManagedTeamManagerAgent,
+  evaluateTeamGoalCompletionGate,
+  isTeamGoalCompleted,
+  isTeamGoalReadyToClose,
 } from './managed-teams';
 import { notifyMainAgent } from './notify-bridge';
 import { getAgentById, getConfig } from '../../config/config';
@@ -161,6 +164,48 @@ function getTeamManagerTerminalMarker(text: string): 'goal_complete' | 'needs_in
     if (markers.includes('needs_input')) return 'needs_input';
   }
   return markers[0];
+}
+
+type GoalCompleteDecision =
+  | { action: 'accept'; note: string }
+  | { action: 'already_done' }
+  | { action: 'wait'; message: string }
+  | { action: 'retry'; message: string };
+
+const WAITING_BUT_DONE_NUDGE = [
+  'Every step of this goal checks out: the outcome is logged, any requested proposal is submitted, and no member is still running.',
+  'If the goal is finished, end with [GOAL_COMPLETE] now (that triggers the completion review; do not report finished work with [WAITING_MAIN_AGENT]).',
+  'Only if you genuinely need a decision from the main agent, restate that one question and end with [WAITING_MAIN_AGENT].',
+].join('\n');
+
+/** Rejections per manager run before [GOAL_COMPLETE] is let through (with the gaps attached for the review). */
+const GOAL_GATE_MAX_REJECTIONS = 2;
+
+/**
+ * Check a manager's [GOAL_COMPLETE] against team state instead of taking it on
+ * its word. Repeats after the review already ran are swallowed quietly.
+ */
+export function decideTeamGoalComplete(teamId: string, rejectionsSoFar: number): GoalCompleteDecision {
+  if (isTeamGoalCompleted(teamId)) return { action: 'already_done' };
+  const gate = evaluateTeamGoalCompletionGate(teamId);
+  if (gate.ok) return { action: 'accept', note: '' };
+  if (gate.waitForMembers.length > 0) {
+    return {
+      action: 'wait',
+      message: `[GOAL_COMPLETE] not accepted yet: ${gate.waitForMembers.join(', ')} still running for this goal. You will be woken with the result; decide then.`,
+    };
+  }
+  if (rejectionsSoFar < GOAL_GATE_MAX_REJECTIONS) {
+    return {
+      action: 'retry',
+      message: [
+        '[GOAL_COMPLETE] was not accepted. The goal still has unfinished steps:',
+        ...gate.missing.map((m) => `- ${m}`),
+        'Do these now (dispatch the owning member if needed), then end with [GOAL_COMPLETE]. If one is genuinely impossible, say why and end with [NEEDS_INPUT].',
+      ].join('\n'),
+    };
+  }
+  return { action: 'accept', note: `\n\n[Completion gate] Accepted after ${rejectionsSoFar} rejection(s) with gaps still open:\n${gate.missing.map((m) => `- ${m}`).join('\n')}` };
 }
 
 function pushTeamManagerProcessEntry(
@@ -601,7 +646,7 @@ function buildTeamCallerContext(teamId: string): string {
     `9. You are the ONLY bridge between this team and the main Prometheus agent. Use message_main_agent(team_id="${team.id}", message="...") to communicate.`,
     `10. NEVER pause or give up before first messaging the main agent. Errors, blockers, missing credentials — all go to the main agent first.`,
     `11. Do NOT create new teams. Explain to the main agent what team would help and why.`,
-    `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. Send one clear message_main_agent escalation; do not repeat equivalent escalations in later turns unless new evidence appears. You will auto-resume when their reply arrives.`,
+    `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. Send one clear message_main_agent escalation; do not repeat equivalent escalations in later turns unless new evidence appears. You will auto-resume when their reply arrives. Never use [WAITING_MAIN_AGENT] to report finished work: once every step is done and logged, end with [GOAL_COMPLETE].`,
     `13. manage_team_goal supports set_focus, log_completed, pause_agent, unpause_agent. Use set_focus/log_completed only during real execution runs, not because the owner sent a chat message. Change the team purpose with team_manage(update).`,
     `15. request_team_member_turn and dispatch_team_agent are available in this coordinator session. A background dispatch wakes you automatically when the member finishes, fails, shares an artifact, or messages you: end your turn instead of creating internal_watch watches or polling get_agent_result. Do NOT claim a tool is unavailable unless you received an explicit tool error in this turn.`,
     `17. PROPOSALS: You are the only team actor allowed to create proposals with write_proposal.`,
@@ -653,6 +698,8 @@ export async function runCoordinatorConversation(
   const maxTurns = autoContinue ? SAFETY_MAX_TURNS : 1;
   const runStartedAt = Date.now();
   let consecutiveIdleTurns = 0; // turns without any member-room or dispatch activity
+  let goalGateRejections = 0;
+  let waitingDoneNudged = false;
   const abortSignal = { aborted: false };
   const runtimeId = registerLiveRuntime({
     kind: 'team_manager',
@@ -812,12 +859,32 @@ export async function runCoordinatorConversation(
     // Check for explicit stop signals from the coordinator
     const terminalMarker = getTeamManagerTerminalMarker(responseText);
     if (terminalMarker === 'goal_complete') {
+      const decision = decideTeamGoalComplete(teamId, goalGateRejections);
+      if (decision.action === 'already_done') {
+        console.log(`[TeamCoordinator] Goal already reviewed for team ${teamId}; repeat [GOAL_COMPLETE] ignored.`);
+        bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'already_complete', turns: turn + 1 });
+        break;
+      }
+      if (decision.action === 'wait') {
+        const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'System', content: decision.message });
+        broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
+        bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_members', turns: turn + 1 });
+        break;
+      }
+      if (decision.action === 'retry' && turn < maxTurns - 1) {
+        goalGateRejections++;
+        console.log(`[TeamCoordinator] [GOAL_COMPLETE] rejected by completion gate (${goalGateRejections}) for team ${teamId}.`);
+        const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'System', content: decision.message });
+        broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
+        currentMessage = decision.message;
+        continue;
+      }
       console.log(`[TeamCoordinator] Goal complete signal — stopping. (${turn + 1} turn(s))`);
       const doneEvent = {
         teamId,
         reason: 'goal_complete',
         turns: turn + 1,
-        managerMessage: responseText,
+        managerMessage: responseText + (decision.action === 'accept' ? decision.note : ''),
       } as const;
       bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'goal_complete', turns: turn + 1 });
       notifyMainAgent(workspacePath, teamId, 'team_task_complete', {
@@ -844,6 +911,12 @@ export async function runCoordinatorConversation(
       break;
     }
     if (terminalMarker === 'waiting_main_agent') {
+      if (!waitingDoneNudged && turn < maxTurns - 1 && isTeamGoalReadyToClose(teamId)) {
+        waitingDoneNudged = true;
+        console.log(`[TeamCoordinator] Goal steps done but manager parked on [WAITING_MAIN_AGENT]; nudging to close (team ${teamId}).`);
+        currentMessage = WAITING_BUT_DONE_NUDGE;
+        continue;
+      }
       console.log(`[TeamCoordinator] Waiting for main agent reply — suspending. (${turn + 1} turn(s))`);
       bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_main_agent', turns: turn + 1 });
       break;
@@ -925,6 +998,8 @@ export async function runCoordinatorConversationDetailed(
   let currentMessage = userMessage;
   const maxTurns = autoContinue ? SAFETY_MAX_TURNS : 1;
   let consecutiveIdleTurns = 0;
+  let goalGateRejections = 0;
+  let waitingDoneNudged = false;
   let turnsCompleted = 0;
   let finalReason = autoContinue ? 'natural_stop' : 'single_turn';
   let lastManagerMessage = '';
@@ -1096,13 +1171,35 @@ export async function runCoordinatorConversationDetailed(
 
       const terminalMarker = getTeamManagerTerminalMarker(responseText);
       if (terminalMarker === 'goal_complete') {
+        const decision = decideTeamGoalComplete(teamId, goalGateRejections);
+        if (decision.action === 'already_done') {
+          console.log(`[TeamCoordinator] Goal already reviewed for team ${teamId}; repeat [GOAL_COMPLETE] ignored.`);
+          finalReason = 'already_complete';
+          bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'already_complete', turns: turn + 1 });
+          break;
+        }
+        if (decision.action === 'wait') {
+          finalReason = 'waiting_members';
+          const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'System', content: decision.message });
+          broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
+          bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_members', turns: turn + 1 });
+          break;
+        }
+        if (decision.action === 'retry' && turn < maxTurns - 1) {
+          goalGateRejections++;
+          console.log(`[TeamCoordinator] [GOAL_COMPLETE] rejected by completion gate (${goalGateRejections}) for team ${teamId}.`);
+          const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'System', content: decision.message });
+          broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
+          currentMessage = decision.message;
+          continue;
+        }
         console.log(`[TeamCoordinator] Goal complete signal - stopping. (${turn + 1} turn(s))`);
         finalReason = 'goal_complete';
         const doneEvent = {
           teamId,
           reason: 'goal_complete',
           turns: turn + 1,
-          managerMessage: responseText,
+          managerMessage: responseText + (decision.action === 'accept' ? decision.note : ''),
         } as const;
         bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'goal_complete', turns: turn + 1 });
         notifyMainAgent(workspacePath, teamId, 'team_task_complete', {
@@ -1130,6 +1227,12 @@ export async function runCoordinatorConversationDetailed(
         break;
       }
       if (terminalMarker === 'waiting_main_agent') {
+        if (!waitingDoneNudged && turn < maxTurns - 1 && isTeamGoalReadyToClose(teamId)) {
+          waitingDoneNudged = true;
+          console.log(`[TeamCoordinator] Goal steps done but manager parked on [WAITING_MAIN_AGENT]; nudging to close (team ${teamId}).`);
+          currentMessage = WAITING_BUT_DONE_NUDGE;
+          continue;
+        }
         console.log(`[TeamCoordinator] Waiting for main agent reply - suspending. (${turn + 1} turn(s))`);
         finalReason = 'waiting_main_agent';
         bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_main_agent', turns: turn + 1 });

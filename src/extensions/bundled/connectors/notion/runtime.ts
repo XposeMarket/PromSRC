@@ -1,18 +1,21 @@
 // Native Notion connector runtime. See §23B. Auth stays in NotionConnector.
 import type { NotionConnector } from '../../../../integrations/connectors/notion.js';
+import { NOTION_VERSION } from '../../../../integrations/connectors/notion.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
 
 const ID = 'notion';
 const NAME = 'Notion';
-const tools = ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database', 'connector_notion_api_request'];
+const tools = ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database', 'connector_notion_append_content', 'connector_notion_update_page', 'connector_notion_create_database_entry', 'connector_notion_add_comment', 'connector_notion_list_comments', 'connector_notion_api_request'];
+const READ = { readOnly: true, localWrite: false, externalWrite: false, destructive: false, credentialUse: true, known: true } as const;
+const WRITE = { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true } as const;
 
 async function withConn(fn: (c: NotionConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
   const c = getLiveConnector<NotionConnector>(ID);
   if (!c) return toolError(`${NAME} is unavailable.`);
-  return fn(c);
+  try { return await fn(c); } catch (err: any) { return toolError(err?.message || String(err)); }
 }
 
 const ext: PrometheusExtensionDefinition = {
@@ -27,7 +30,7 @@ const ext: PrometheusExtensionDefinition = {
     registerConnectorApiRequestTool<NotionConnector>(api, {
       connectorId: 'notion', displayName: 'Notion',
       bases: { notion: 'https://api.notion.com' },
-      headers: { 'Notion-Version': '2022-06-28' },
+      headers: { 'Notion-Version': NOTION_VERSION },
       examplePath: '/v1/blocks/BLOCK_ID/children',
       coverageHint: 'append/update blocks, update pages and properties, databases, comments, users',
     });
@@ -58,6 +61,57 @@ const ext: PrometheusExtensionDefinition = {
         const title = (page as any).properties?.title?.title?.[0]?.plain_text || '(untitled)';
         const content = blocks.map((b: any) => b[b.type]?.rich_text?.map((t: any) => t.plain_text).join('') || '').filter(Boolean).join('\n');
         return toolOk(`# ${title}\n\n${content || '(no text content)'}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_notion_append_content',
+      description: '[Notion] Append content to an existing page (or block). Markdown-style lines become blocks: # headings, - bullets, 1. numbered, - [ ] todos, > quotes, ``` code.',
+      parameters: { type: 'object', required: ['page_id', 'content'], properties: { page_id: { type: 'string', description: 'Page or block id' }, content: { type: 'string' } } },
+      connectorId: ID, capability: 'drive', sideEffects: WRITE,
+      execute: (args: any) => withConn(async (c) => { const r = await c.appendText(args.page_id, args.content); return toolOk(`Appended ${(r as any)?.results?.length ?? 0} block(s) to ${args.page_id}.`); }),
+    });
+
+    api.registerTool({
+      name: 'connector_notion_update_page',
+      description: '[Notion] Update a page: rename (title), set database properties (Notion property-value objects), set an emoji icon, or archive/restore it.',
+      parameters: { type: 'object', required: ['page_id'], properties: { page_id: { type: 'string' }, title: { type: 'string' }, properties: { type: 'object', description: 'e.g. {"Status":{"select":{"name":"Done"}}}' }, icon_emoji: { type: 'string' }, archived: { type: 'boolean' } } },
+      connectorId: ID, capability: 'drive', sideEffects: WRITE,
+      execute: (args: any) => withConn(async (c) => {
+        const page = await c.updatePage(args.page_id, { title: args.title, properties: args.properties, archived: args.archived, icon: args.icon_emoji ? { type: 'emoji', emoji: args.icon_emoji } : undefined });
+        return toolOk(`Updated ${(page as any).id}${args.archived ? ' (archived)' : ''}.`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_notion_create_database_entry',
+      description: '[Notion] Add a row to a database. properties uses Notion property-value objects keyed by column name, e.g. {"Name":{"title":[{"text":{"content":"Lead"}}]},"Status":{"select":{"name":"New"}}}. Optional content becomes the row page body.',
+      parameters: { type: 'object', required: ['database_id', 'properties'], properties: { database_id: { type: 'string' }, properties: { type: 'object' }, content: { type: 'string' } } },
+      connectorId: ID, capability: 'drive', sideEffects: WRITE,
+      execute: (args: any) => withConn(async (c) => {
+        const page = await c.createDatabaseEntry(args.database_id, args.properties);
+        if (args.content) await c.appendText((page as any).id, args.content);
+        return toolOk(`Row created: ${(page as any).id}\n${(page as any).url || ''}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_notion_add_comment',
+      description: '[Notion] Add a comment to a page (integration needs the Insert comments capability).',
+      parameters: { type: 'object', required: ['page_id', 'text'], properties: { page_id: { type: 'string' }, text: { type: 'string' } } },
+      connectorId: ID, capability: 'drive', sideEffects: WRITE,
+      execute: (args: any) => withConn(async (c) => toolOk(`Comment added: ${(await c.addComment(args.page_id, args.text) as any).id}`)),
+    });
+
+    api.registerTool({
+      name: 'connector_notion_list_comments',
+      description: '[Notion] List unresolved comments on a page or block.',
+      parameters: { type: 'object', required: ['block_id'], properties: { block_id: { type: 'string' } } },
+      connectorId: ID, capability: 'drive', sideEffects: READ,
+      execute: (args: any) => withConn(async (c) => {
+        const rows = await c.listComments(args.block_id);
+        if (!rows.length) return toolOk('No comments.');
+        return toolOk(rows.map((r: any) => `${r.created_time?.slice(0, 16)} ${r.created_by?.id}: ${(r.rich_text || []).map((t: any) => t.plain_text).join('')}`).join('\n'));
       }),
     });
 

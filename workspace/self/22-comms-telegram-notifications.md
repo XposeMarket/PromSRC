@@ -23,7 +23,7 @@
 | Team room bridge | `src/gateway/comms/telegram-team-room-bridge.ts` | Team event mirror and room/topic integration. |
 | Telegram streaming | `src/gateway/comms/telegram-streaming-message.ts` | Edit/stream reply transport. |
 | Telegram tool log | `src/gateway/comms/telegram-tool-log.ts` | Tool/runtime activity presentation. |
-| Shared chunking/coalescing | `src/gateway/comms/block-chunker.ts`, `message-coalescer.ts` | Channel-safe payload splitting and update aggregation. |
+| Shared coalescing | `src/gateway/comms/message-coalescer.ts` | Channel-safe update aggregation. |
 | Shared reply handling | `src/gateway/comms/reply-processor.ts` | Normalize/handle inbound reply content. |
 | Webhook dispatch/security | `src/gateway/comms/webhook-handler.ts`, `webhook-security.ts` | Provider webhook ingress and verification. |
 | Gateway bridge wiring | `src/gateway/server-v2.ts` | Constructs Telegram channel/managers and connects bridges. |

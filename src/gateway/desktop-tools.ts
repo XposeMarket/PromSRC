@@ -30,6 +30,19 @@ import { normalizeScreenshotBuffer, readImageSize, cropImageBuffer } from './scr
 import { isDesktopPowerShellHostEnabled, runPowerShellInHost, PowerShellHostBusyError, warmDesktopPowerShellHosts } from './desktop-powershell-host.js';
 import { pathToFileURL } from 'url';
 import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
+import {
+  backgroundHelper,
+  backgroundUnavailableHint,
+  defaultDesktopDispatch,
+  describeBackgroundResult,
+  guardUserForeground,
+  parseKeyCombo,
+  resolveDesktopDispatch,
+  restoreUserFocus,
+  waitForUserQuiet,
+  type DesktopDispatchMode,
+} from './desktop-background-dispatch.js';
+import type { Win32BackgroundResult } from './desktop-platform-win32-helper.js';
 import { getPlatformDesktopBackend, hasDesktopBackend } from './desktop-platform.js';
 import type { DesktopCaptureRequest } from './desktop-backend.js';
 import {
@@ -189,6 +202,8 @@ export interface DesktopCoordinateTarget extends DesktopPointerMonitorOptions {
   prepared_window?: DesktopWindowInfo;
   /** Internal: point came from a confidence-scored visual locator, not a model guess. */
   allow_broad_grounded?: boolean;
+  /** Internal: background dispatch does not require the target to be the active window. */
+  background_dispatch?: boolean;
 }
 
 export interface DesktopResolvedActionPoint {
@@ -2474,7 +2489,7 @@ export async function resolveDesktopActionPoint(
       return { ok: false, message: `${label}: target window is no longer visible. Capture a fresh desktop_window_screenshot.` };
     }
     // macOS: background input doesn't require the window to be active (Hermes model).
-    if (!DELEGATE_TO_BACKEND && !sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
+    if (!DELEGATE_TO_BACKEND && !target.background_dispatch && !sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
       return {
         ok: false,
         message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
@@ -4500,6 +4515,27 @@ function pruneDesktopAccessibilitySnapshots(): void {
   }
 }
 
+/** Minimum UIA walk depth for Chromium/Electron windows (content sits ~9-11 deep). */
+export const CHROMIUM_UIA_MIN_DEPTH = 14;
+
+/**
+ * Launch flags that make Chromium/Electron expose the full page through UI
+ * Automation. Plain --force-renderer-accessibility is not enough on Electron 33:
+ * the native UIA provider has to be enabled too.
+ */
+export const CHROMIUM_ACCESSIBILITY_FLAGS = '--force-renderer-accessibility=complete --enable-features=UiaProvider';
+
+export const CHROMIUM_CHROME_ONLY_HINT =
+  'Chromium/Electron app with its page hidden from UI Automation. Background clicks/typing/scroll by coordinates still work (they go to the render widget). '
+  + 'For named accessibility targeting, relaunch the app with desktop_apps(action="launch_app", enable_accessibility=true) (restarts the app; some packaged apps ignore the flags).';
+
+/** Append the Chromium accessibility flags to a launch argument string once. */
+export function withChromiumAccessibilityArgs(args: string): string {
+  const base = String(args || '').trim();
+  if (/--force-renderer-accessibility/i.test(base)) return base;
+  return [CHROMIUM_ACCESSIBILITY_FLAGS, base].filter(Boolean).join(' ');
+}
+
 /** Return flat, machine-readable UIA nodes with snapshot-scoped element IDs. */
 export async function desktopGetAccessibilityState(
   selector: DesktopWindowSelector,
@@ -4519,6 +4555,10 @@ export async function desktopGetAccessibilityState(
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $maxDepth = ${safeDepth}
+# Chromium/Electron nest page content ~9-11 levels below the frame, so the
+# default depth would stop above every button and field.
+$chromiumMinDepth = ${CHROMIUM_UIA_MIN_DEPTH}
+$chromium = $false
 $maxNodes = ${safeMax}
 $nodes = New-Object System.Collections.ArrayList
 $errors = New-Object System.Collections.ArrayList
@@ -4603,8 +4643,9 @@ try {
   $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]${Math.floor(target.handle)}))
   if (-not $root) { throw 'Could not resolve the target UI Automation root.' }
   $root = $root.GetUpdatedCache($cr)
+  try { if ([string]$root.Cached.ClassName -like 'Chrome_WidgetWin*') { $chromium = $true; if ($maxDepth -lt $chromiumMinDepth) { $maxDepth = $chromiumMinDepth } } } catch { }
   Add-UiaNode $root -1 0
-  [ordered]@{ ok = $true; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
+  [ordered]@{ ok = $true; chromium = $chromium; max_depth = $maxDepth; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
 } catch {
   [ordered]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
 }
@@ -4685,7 +4726,10 @@ try {
     partial: Array.isArray(parsed.errors) && parsed.errors.length > 0,
     capture_errors: Array.isArray(parsed.errors) ? [...new Set(parsed.errors.map(String))].slice(0, 5) : [],
     surface_classification: chromeOnly ? 'chrome_only' : 'structured',
-    ...(chromeOnly ? { routing_hint: 'This app exposes only window chrome through UI Automation. Prefer a native screenshot plus OCR/text targeting; avoid a second full accessibility_tree probe.' } : {}),
+    ...(parsed.chromium === true ? { chromium: true, walked_depth: Number(parsed.max_depth) || safeDepth } : {}),
+    ...(chromeOnly
+      ? { routing_hint: parsed.chromium === true ? CHROMIUM_CHROME_ONLY_HINT : 'This app exposes only window chrome through UI Automation. Prefer a native screenshot plus OCR/text targeting; avoid a second full accessibility_tree probe.' }
+      : {}),
     nodes: page.map((node) => options.compact !== false
       ? {
           element_id: node.elementId,
@@ -4884,8 +4928,18 @@ try {
 }
 `;
   let parsed: any;
+  let focusRestored: boolean | undefined;
   try {
-    parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 20_000, sta: true, signal: input.signal }));
+    const runAction = async () => parseJsonMaybe(await runPowerShell(script, { timeoutMs: 20_000, sta: true, signal: input.signal }));
+    if (defaultDesktopDispatch() === 'background') {
+      // UIA invoke/toggle/select can make UWP apps activate themselves; give the
+      // user's window back so semantic actions stay background like clicks do.
+      const guarded = await guardUserForeground(Math.floor(state.handle), runAction, focusWindowHandle, { signal: input.signal });
+      parsed = guarded.result;
+      focusRestored = guarded.focusRestored;
+    } else {
+      parsed = await runAction();
+    }
   } catch (error: any) {
     if (isDesktopCancellationError(error) || error?.name === 'AbortError') return desktopFailure('DESKTOP_CANCELLED', 'UI Automation action was interrupted.');
     return desktopFailure('ACCESSIBILITY_FAILED', String(error?.message || error), { state_id: stateId, element_id: elementId, action });
@@ -4896,7 +4950,10 @@ try {
   markDesktopStateChanged();
   markDesktopWindowChanged(live.window, `accessibility_${action}`, { visual: true, accessibility: true });
   desktopAccessibilitySnapshots.delete(stateId);
-  return JSON.stringify({ ok: true, action, state_id: stateId, element_id: elementId, element: { role: node.role, name: node.name }, visited: parsed.visited }, null, 2);
+  return JSON.stringify({
+    ok: true, action, state_id: stateId, element_id: elementId, element: { role: node.role, name: node.name }, visited: parsed.visited,
+    ...(focusRestored === undefined ? {} : { focus_restored: focusRestored }),
+  }, null, 2);
 }
 
 // ─── desktop_pixel_watch ──────────────────────────────────────────────────────
@@ -5182,11 +5239,12 @@ export async function desktopLaunchApp(
   appArgs: string = '',
   waitMs: number = 6000,
   appId?: string,
+  options: { enableAccessibility?: boolean } = {},
 ): Promise<string> {
   ensureWindows();
   const rawApp = String(app || '').trim();
   const rawAppId = String(appId || '').trim();
-  const rawArgs = String(appArgs || '').trim();
+  const rawArgs = options.enableAccessibility ? withChromiumAccessibilityArgs(String(appArgs || '')) : String(appArgs || '').trim();
   if (!rawApp && !rawAppId) return 'ERROR: app or app_id is required.';
 
   if (DELEGATE_TO_BACKEND) {
@@ -6183,7 +6241,8 @@ export type DesktopFailureCode =
   | 'HELPER_UNAVAILABLE'
   | 'DESKTOP_CANCELLED'
   | 'BACKGROUND_TIMEOUT'
-  | 'BACKGROUND_FAILED';
+  | 'BACKGROUND_FAILED'
+  | 'BACKGROUND_UNAVAILABLE';
 
 /** Machine-readable failure envelope that preserves the legacy ERROR prefix. */
 export function desktopFailure(
@@ -6683,6 +6742,107 @@ export async function desktopFocusWindowCanonical(
     : `Focused ${shortWindowLabel(resolved.window)}.\n${screenshot}`;
 }
 
+// ─── Background dispatch helpers ────────────────────────────────────────────
+
+/** Resolve + identity-validate the target window without focusing it. */
+async function prepareWindowForBackground(selector: DesktopWindowSelector, signal?: AbortSignal) {
+  return prepareWindowForInput(selector, signal, false);
+}
+
+/** Exact-window WGC fingerprint (occlusion-safe) for background verification. */
+async function backgroundWindowFingerprint(handle: number, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const helper = await backgroundHelper();
+    if (!helper) return null;
+    const capture = await helper.capture({ kind: 'window', handle: Math.floor(handle) } as DesktopCaptureRequest, signal);
+    return crypto.createHash('sha1').update(capture.png).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function backgroundUnavailableFailure(result: Win32BackgroundResult, window: DesktopWindowInfo, action: string): string {
+  return desktopFailure('BACKGROUND_UNAVAILABLE', `${action} cannot run in the background for ${shortWindowLabel(window)}: ${result.detail || result.reason || 'unsupported target'}`, {
+    reason: result.reason,
+    target_class: result.targetClass,
+    dispatch: 'background',
+    next_step: backgroundUnavailableHint(result.reason),
+    retry_with: { dispatch: 'foreground' },
+  });
+}
+
+/**
+ * Run one background helper action against an exact window and verify that the
+ * window actually changed (WGC frame hash before/after). Posted messages report
+ * success even when an app ignores them, so verification is what makes
+ * background mode honest. verify='off' skips the before/after capture.
+ */
+async function runBackgroundWindowAction(
+  window: DesktopWindowInfo,
+  action: string,
+  run: () => Promise<Win32BackgroundResult>,
+  options: { verify?: DesktopVerificationMode | string; signal?: AbortSignal; settleMs?: number } = {},
+): Promise<string> {
+  const startedAt = performance.now();
+  const verifyMode = String(options.verify || 'auto').toLowerCase();
+  const verify = verifyMode !== 'off';
+  const before = verify ? await backgroundWindowFingerprint(window.handle, options.signal) : null;
+  throwIfDesktopCancelled(options.signal);
+  let result: Win32BackgroundResult;
+  try {
+    result = await run();
+  } catch (error: any) {
+    return desktopFailure('BACKGROUND_FAILED', `${action} failed in background dispatch: ${String(error?.message || error)}`, { dispatch: 'background' });
+  }
+  if (!result?.ok) {
+    if (result?.backgroundUnavailable) return backgroundUnavailableFailure(result, window, action);
+    return desktopFailure('BACKGROUND_FAILED', `${action} failed in background dispatch.`, { result });
+  }
+  const actedAt = performance.now();
+  markDesktopWindowChanged(window, `background_${action}`);
+  let verification = 'not_checked';
+  if (verify && before) {
+    await new Promise((resolve) => setTimeout(resolve, Math.max(80, options.settleMs ?? 220)));
+    let after = await backgroundWindowFingerprint(window.handle, options.signal);
+    if (after === before) {
+      // Some apps repaint on their next frame; give one more short chance.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      after = await backgroundWindowFingerprint(window.handle, options.signal);
+    }
+    verification = after == null ? 'capture_unavailable' : after !== before ? 'window_changed' : 'no_visible_change';
+  }
+  const posted = String(result.method || '').startsWith('post_') || result.method === 'edit_message';
+  if (verification === 'no_visible_change' && posted && verifyMode === 'strict') {
+    return desktopFailure('BACKGROUND_UNAVAILABLE', `${action} was posted to ${shortWindowLabel(window)} but the window did not visibly change; the app probably ignores background input.`, {
+      reason: 'ignored_posted_input', method: result.method, target_class: result.targetClass,
+      next_step: backgroundUnavailableHint('ignored'), retry_with: { dispatch: 'foreground' },
+    });
+  }
+  const lines = [
+    `Background ${action} on ${shortWindowLabel(window)} (${describeBackgroundResult(result)}). Your cursor and focus were not touched.`,
+    `Verification: ${verification}${verification === 'no_visible_change' ? (posted ? ' - the app may have ignored posted input; check state or retry with dispatch="foreground".' : ' - the UIA action succeeded but nothing visibly changed yet.') : ''}`,
+    `Timing: action=${Math.round(actedAt - startedAt)}ms, total=${Math.round(performance.now() - startedAt)}ms.`,
+  ];
+  return lines.join('\n');
+}
+
+/** Foreground opt-in: wait for the user to pause, act, then hand focus/cursor back. */
+async function withForegroundArbitration(
+  targetHandle: number,
+  signal: AbortSignal | undefined,
+  act: () => Promise<string>,
+): Promise<string> {
+  const quiet = await waitForUserQuiet(undefined, undefined, signal);
+  if (!quiet.ok) {
+    return desktopFailure('FOCUS_FAILED', `You are actively using the mouse/keyboard (waited ${quiet.waitedMs}ms). Foreground input was not sent so it would not fight you.`, {
+      dispatch: 'foreground', retryable_after_ms: 1500,
+    });
+  }
+  const result = await act();
+  const restore = await restoreUserFocus(quiet.snapshot, targetHandle, focusWindowHandle);
+  return restore && !result.startsWith('ERROR') ? `${result}\n${restore}` : result;
+}
+
 async function prepareWindowForInput(
   selector: DesktopWindowSelector,
   signal?: AbortSignal,
@@ -6791,10 +6951,50 @@ try {
   }
 }
 
+type DesktopWindowClickOptions = { button?: 'left' | 'right'; double_click?: boolean; modifier?: 'shift' | 'ctrl' | 'alt'; verify?: DesktopVerificationMode; focus_first?: boolean; signal?: AbortSignal; allow_broad_grounded?: boolean; dispatch?: DesktopDispatchMode | string };
+
 export async function desktopWindowClick(
   selector: DesktopWindowSelector,
   point: { x: number; y: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
-  options: { button?: 'left' | 'right'; double_click?: boolean; modifier?: 'shift' | 'ctrl' | 'alt'; verify?: DesktopVerificationMode; focus_first?: boolean; signal?: AbortSignal; allow_broad_grounded?: boolean } = {},
+  options: DesktopWindowClickOptions = {},
+  sessionId: string = '__reactor__',
+): Promise<string> {
+  const dispatch = await resolveDesktopDispatch(options.dispatch);
+  if (dispatch.mode === 'foreground') {
+    const target = await prepareWindowForBackground(selector, options.signal);
+    const run = () => desktopWindowClickForeground(selector, point, options, sessionId);
+    const result = target.ok ? await withForegroundArbitration(target.window.handle, options.signal, run) : await run();
+    return dispatch.note && !result.startsWith('ERROR') ? `${result}\nNote: ${dispatch.note}` : result;
+  }
+  const prep = await prepareWindowForBackground(selector, options.signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  if (options.modifier) {
+    return backgroundUnavailableFailure({ ok: false, backgroundUnavailable: true, reason: 'modifier_combo', detail: `${options.modifier}+click needs the real modifier key state.` }, prep.window, 'click');
+  }
+  const resolved = await resolveDesktopActionPoint(sessionId, {
+    x: Number(point.x),
+    y: Number(point.y),
+    coordinate_space: resolveDesktopWindowClickCoordinateSpace(point),
+    screenshot_id: point.screenshot_id,
+    window_handle: prep.window.handle,
+    window_name: prep.window.title,
+    prepared_window: prep.window,
+    allow_broad_grounded: options.allow_broad_grounded,
+    background_dispatch: true,
+  }, 'desktop_window_click');
+  if (!resolved.ok) return `ERROR: ${resolved.message}`;
+  const helper = await backgroundHelper();
+  if (!helper) return desktopFailure('HELPER_UNAVAILABLE', 'Background dispatch needs the native desktop helper.', {});
+  return runBackgroundWindowAction(prep.window, 'click', () => helper.backgroundClick(prep.window.handle, resolved.point.x, resolved.point.y, {
+    button: options.button === 'right' ? 'right' : 'left',
+    repeat: options.double_click ? 2 : 1,
+  }, options.signal), { verify: options.verify, signal: options.signal });
+}
+
+async function desktopWindowClickForeground(
+  selector: DesktopWindowSelector,
+  point: { x: number; y: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  options: DesktopWindowClickOptions = {},
   sessionId: string = '__reactor__',
 ): Promise<string> {
   const startedAt = performance.now();
@@ -6892,6 +7092,27 @@ export async function desktopWindowType(
   text: string,
   raw: boolean = false,
   signal?: AbortSignal,
+  options: { dispatch?: DesktopDispatchMode | string; verify?: DesktopVerificationMode | string } = {},
+): Promise<string> {
+  const dispatch = await resolveDesktopDispatch(options.dispatch);
+  if (dispatch.mode === 'foreground') {
+    const target = await prepareWindowForBackground(selector, signal);
+    const run = () => desktopWindowTypeForeground(selector, text, raw, signal);
+    const result = target.ok ? await withForegroundArbitration(target.window.handle, signal, run) : await run();
+    return dispatch.note && !result.startsWith('ERROR') ? `${result}\nNote: ${dispatch.note}` : result;
+  }
+  const prep = await prepareWindowForBackground(selector, signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  const helper = await backgroundHelper();
+  if (!helper) return desktopFailure('HELPER_UNAVAILABLE', 'Background dispatch needs the native desktop helper.', {});
+  return runBackgroundWindowAction(prep.window, 'type', () => helper.backgroundType(prep.window.handle, String(text || ''), signal), { verify: options.verify, signal });
+}
+
+async function desktopWindowTypeForeground(
+  selector: DesktopWindowSelector,
+  text: string,
+  raw: boolean = false,
+  signal?: AbortSignal,
 ): Promise<string> {
   const prep = await prepareWindowForInput(selector, signal);
   if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
@@ -6914,6 +7135,30 @@ export async function desktopWindowPressKey(
   selector: DesktopWindowSelector,
   key: string,
   signal?: AbortSignal,
+  options: { dispatch?: DesktopDispatchMode | string; verify?: DesktopVerificationMode | string } = {},
+): Promise<string> {
+  const dispatch = await resolveDesktopDispatch(options.dispatch);
+  if (dispatch.mode === 'foreground') {
+    const target = await prepareWindowForBackground(selector, signal);
+    const run = () => desktopWindowPressKeyForeground(selector, key, signal);
+    const result = target.ok ? await withForegroundArbitration(target.window.handle, signal, run) : await run();
+    return dispatch.note && !result.startsWith('ERROR') ? `${result}\nNote: ${dispatch.note}` : result;
+  }
+  const prep = await prepareWindowForBackground(selector, signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  const combo = parseKeyCombo(key);
+  if (combo.win) {
+    return backgroundUnavailableFailure({ ok: false, backgroundUnavailable: true, reason: 'modifier_combo', detail: 'Windows-key shortcuts are system-wide and need real input.' }, prep.window, 'key');
+  }
+  const helper = await backgroundHelper();
+  if (!helper) return desktopFailure('HELPER_UNAVAILABLE', 'Background dispatch needs the native desktop helper.', {});
+  return runBackgroundWindowAction(prep.window, 'key', () => helper.backgroundKey(prep.window.handle, combo.key, combo, signal), { verify: options.verify, signal });
+}
+
+async function desktopWindowPressKeyForeground(
+  selector: DesktopWindowSelector,
+  key: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const prep = await prepareWindowForInput(selector, signal);
   if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
@@ -6925,9 +7170,54 @@ export async function desktopWindowPressKey(
   return `${result}\n${JSON.stringify({ focused_control: after, target_known: after.available }, null, 2)}${prep.hint ? `\nNote: ${prep.hint}` : ''}`;
 }
 
+type DesktopWindowScrollArgs = { direction: 'up' | 'down' | 'left' | 'right'; amount?: number; x?: number; y?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean; dispatch?: DesktopDispatchMode | string; verify?: DesktopVerificationMode | string };
+
 export async function desktopWindowScroll(
   selector: DesktopWindowSelector,
-  args: { direction: 'up' | 'down' | 'left' | 'right'; amount?: number; x?: number; y?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean },
+  args: DesktopWindowScrollArgs,
+  sessionId: string = '__reactor__',
+  signal?: AbortSignal,
+): Promise<string> {
+  const dispatch = await resolveDesktopDispatch(args.dispatch);
+  if (dispatch.mode === 'foreground') {
+    const target = await prepareWindowForBackground(selector, signal);
+    const run = () => desktopWindowScrollForeground(selector, args, sessionId, signal);
+    const result = target.ok ? await withForegroundArbitration(target.window.handle, signal, run) : await run();
+    return dispatch.note && !result.startsWith('ERROR') ? `${result}\nNote: ${dispatch.note}` : result;
+  }
+  const prep = await prepareWindowForBackground(selector, signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  let px = Number(prep.window.left) + Math.floor(Number(prep.window.width) / 2);
+  let py = Number(prep.window.top) + Math.floor(Number(prep.window.height) / 2);
+  if (args.x !== undefined && args.y !== undefined) {
+    const resolved = await resolveDesktopActionPoint(sessionId, {
+      x: Number(args.x),
+      y: Number(args.y),
+      coordinate_space: args.coordinate_space || (args.screenshot_id ? 'capture' : 'window'),
+      screenshot_id: args.screenshot_id,
+      window_handle: prep.window.handle,
+      window_name: prep.window.title,
+      prepared_window: prep.window,
+      background_dispatch: true,
+    }, 'desktop_window_scroll');
+    if (!resolved.ok) return `ERROR: ${resolved.message}`;
+    px = resolved.point.x;
+    py = resolved.point.y;
+  }
+  const ticks = Math.max(1, Math.min(50, Math.floor(Number(args.amount) || 3)));
+  const dir = args.direction;
+  const delta = (dir === 'up' || dir === 'left' ? 120 : -120) * ticks;
+  // Horizontal wheel convention: positive = right.
+  const deltaX = dir === 'left' ? -120 * ticks : dir === 'right' ? 120 * ticks : 0;
+  const deltaY = dir === 'up' || dir === 'down' ? delta : 0;
+  const helper = await backgroundHelper();
+  if (!helper) return desktopFailure('HELPER_UNAVAILABLE', 'Background dispatch needs the native desktop helper.', {});
+  return runBackgroundWindowAction(prep.window, 'scroll', () => helper.backgroundScroll(prep.window.handle, px, py, deltaX, deltaY, signal), { verify: args.verify, signal });
+}
+
+async function desktopWindowScrollForeground(
+  selector: DesktopWindowSelector,
+  args: DesktopWindowScrollArgs,
   sessionId: string = '__reactor__',
   signal?: AbortSignal,
 ): Promise<string> {
@@ -6979,9 +7269,29 @@ export async function desktopWindowScroll(
   return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
 }
 
+type DesktopWindowDragArgs = { from_x: number; from_y: number; to_x: number; to_y: number; steps?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean; dispatch?: DesktopDispatchMode | string };
+
 export async function desktopWindowDrag(
   selector: DesktopWindowSelector,
-  args: { from_x: number; from_y: number; to_x: number; to_y: number; steps?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean },
+  args: DesktopWindowDragArgs,
+  sessionId: string = '__reactor__',
+  signal?: AbortSignal,
+): Promise<string> {
+  const dispatch = await resolveDesktopDispatch(args.dispatch);
+  const target = await prepareWindowForBackground(selector, signal);
+  if (dispatch.mode === 'background') {
+    if (!target.ok) return desktopFailure(target.code, target.message, { selector });
+    // Drags depend on real button-held mouse capture; posted messages are unreliable.
+    return backgroundUnavailableFailure({ ok: false, backgroundUnavailable: true, reason: 'drag', detail: 'Drag-and-drop needs real mouse input.' }, target.window, 'drag');
+  }
+  const run = () => desktopWindowDragForeground(selector, args, sessionId, signal);
+  const result = target.ok ? await withForegroundArbitration(target.window.handle, signal, run) : await run();
+  return dispatch.note && !result.startsWith('ERROR') ? `${result}\nNote: ${dispatch.note}` : result;
+}
+
+async function desktopWindowDragForeground(
+  selector: DesktopWindowSelector,
+  args: DesktopWindowDragArgs,
   sessionId: string = '__reactor__',
   signal?: AbortSignal,
 ): Promise<string> {
@@ -7370,6 +7680,7 @@ export function getDesktopToolDefinitions(): any[] {
             app: { type: 'string', description: 'Raw application name or full path, e.g. notepad, code, calc. Optional when app_id is provided.' },
             args: { type: 'string', description: 'Optional command-line arguments' },
             wait_ms: { type: 'number', description: 'Max ms to wait for window (default 6000)' },
+            enable_accessibility: { type: 'boolean', description: 'Chromium/Electron apps (Codex, Claude, Teams, VS Code, Discord): add --force-renderer-accessibility=complete --enable-features=UiaProvider so the page is visible to accessibility actions. Close the running instance first; a second instance usually just hands off to the first.' },
           },
         },
       },

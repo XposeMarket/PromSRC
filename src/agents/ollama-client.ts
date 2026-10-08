@@ -107,6 +107,7 @@ export class OllamaClient {
       onReasoningSummary?: (chunk: string) => void;
       onModelEvent?: (event: ModelStreamEvent) => void;
       onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
+      workerPriority?: 'interactive' | 'background';
       abortSignal?: AbortSignal;
       omitIntradayNotes?: boolean;
     },
@@ -155,6 +156,7 @@ export class OllamaClient {
         onReasoningSummary: options?.onReasoningSummary,
         onModelEvent: options?.onModelEvent,
         onWorkerStage: options?.onWorkerStage,
+        priority: options?.workerPriority,
         signal: options?.abortSignal,
       });
     } catch (error: any) {
@@ -245,6 +247,7 @@ export class OllamaClient {
       onReasoningSummary?: (chunk: string) => void;
       onModelEvent?: (event: ModelStreamEvent) => void;
       onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
+      workerPriority?: 'interactive' | 'background';
       abortSignal?: AbortSignal;
       /** Per-call provider override — used by switch_model tool for turn-scoped routing. Does NOT mutate global config. */
       provider?: LLMProvider;

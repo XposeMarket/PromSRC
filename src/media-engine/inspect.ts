@@ -94,23 +94,44 @@ export function lengthDefects(shot: Shot, takeDurationSec: number | undefined, s
   return out;
 }
 
-const DENSE_PROMPT = (shot: Shot, p: VideoProject, opts: { hasAnchor: boolean; hasStart: boolean; grids: number; intervalSec: number; expect?: string }) => {
+/**
+ * What a trend shot is expected to contain, recovered from its notes:
+ * "trend tr_x 2.2-3.7s speed=0.49 of a.mp4 | puts on a white button-up | look: white tee, open white button-up".
+ */
+export function expectedFromNotes(notes?: string): { action?: string; look?: string } {
+  const segs = String(notes || '').split('|').map((s) => s.trim()).slice(1).filter(Boolean);
+  const look = segs.find((s) => /^look:/i.test(s))?.replace(/^look:\s*/i, '');
+  const action = segs.find((s) => !/^look:/i.test(s));
+  return { action: action || undefined, look: look || undefined };
+}
+
+interface PromptOpts { hasAnchor: boolean; hasStart: boolean; refGrids: number; refCells: number; grids: number; intervalSec: number; takeDurSec: number; expect?: string; look?: string }
+
+const DENSE_PROMPT = (shot: Shot, p: VideoProject, opts: PromptOpts) => {
   const chars = shot.characterIds.map((id) => p.characters.find((c) => c.id === id)?.name).filter(Boolean).join(', ');
-  const lead = [opts.hasAnchor ? `image 1 is the identity reference for ${chars || 'the subject'}` : '', opts.hasStart ? `image ${opts.hasAnchor ? 2 : 1} is the approved start frame (outfit + scene the clip must keep)` : '']
-    .filter(Boolean).join('; ');
-  const first = (opts.hasAnchor ? 1 : 0) + (opts.hasStart ? 1 : 0) + 1;
+  let n = 0;
+  const lead: string[] = [];
+  if (opts.hasAnchor) lead.push(`image ${++n} is the identity reference for ${chars || 'the subject'}`);
+  if (opts.hasStart) lead.push(`image ${++n} is the approved start frame (outfit + scene the clip starts from)`);
+  const refFirst = n + 1; n += opts.refGrids;
+  const first = n + 1;
+  const refStep = opts.refCells ? opts.takeDurSec / opts.refCells : 0;
   return [
     `You are the final quality gate for one AI-generated video clip before a client sees it. Be strict: one visible defect is a fail.`,
-    lead ? `${lead}.` : '',
-    `Images ${first}-${first + opts.grids - 1} are contact sheets of the clip: each sheet is a ${GRID_COLS}x${GRID_ROWS} grid read left-to-right, top-to-bottom; consecutive cells are ${opts.intervalSec.toFixed(2)}s apart and sheets continue each other (cell index k counts across all sheets from 0).`,
-    `The clip was meant to show: "${String(shot.prompt || '').slice(0, 300)}".${opts.expect ? ` Expected inside this clip: ${opts.expect}.` : ''}`,
-    'Check EVERY cell for: clothing that tears, splits, opens or fuses unnaturally; garments changing type/color/pattern without a real action; identity drift (face, glasses, hairstyle, hair length/color) versus the reference; extra/missing/fused fingers or limbs; melting or morphing body parts; objects popping in/out; text garbling; severe blur/artifacts.',
-    'Natural garment actions that the reference motion performs (putting on a shirt, opening a jacket) are fine ONLY when the garment exists and moves physically.',
-    'Answer ONLY JSON: {"score": 1-10, "verdict": "pass"|"reroll", "defects": [{"cell": <k>, "issue": "short description", "severity": "minor"|"major"}]}. verdict is "reroll" if any major defect or score < 7.',
+    lead.length ? `${lead.join('; ')}.` : '',
+    opts.refGrids ? `Images ${refFirst}-${refFirst + opts.refGrids - 1} are contact sheets of the ORIGINAL REFERENCE performance this clip copies (a different person, same motion and same garments). Reference cell j shows the same moment as clip time ~${refStep.toFixed(2)}*j s.` : '',
+    `Images ${first}-${first + opts.grids - 1} are contact sheets of the GENERATED clip: each sheet is a ${GRID_COLS}x${GRID_ROWS} grid read left-to-right, top-to-bottom; consecutive cells are ${opts.intervalSec.toFixed(2)}s apart and sheets continue each other (cell index k counts across all sheets from 0, clip time = k*${opts.intervalSec.toFixed(2)}s).`,
+    `The clip was meant to show: "${String(shot.prompt || '').slice(0, 300)}".${opts.expect ? ` Action in the reference: ${opts.expect}.` : ''}${opts.look ? ` Outfit the generated person must wear: ${opts.look}.` : ''}`,
+    opts.refGrids || opts.look
+      ? 'GARMENT CHECK (most important): list every garment the reference performer wears or handles (e.g. "open white button-up shirt", "blue tee", "grey wide-leg trousers") and, for each generated cell, confirm the generated person has the SAME garment type behaving the same way at the matching moment. A garment that turns into a different type of garment (an open button-up shirt that becomes a shrug, wrap, scarf, cape, bolero or two separate fabric panels), a garment that splits down the middle so the layer underneath shows through where the reference shows one continuous garment, a garment that appears/disappears where the reference keeps it, or missing collar/buttons/sleeves the reference garment clearly has, is a MAJOR defect even when it looks plausible as fashion on its own.'
+      : '',
+    'Also check EVERY cell for: clothing that tears, splits, opens or fuses unnaturally; garments changing type/color/pattern without a real action; identity drift (face, glasses, hairstyle, hair length/color) versus the identity reference; extra/missing/fused fingers or limbs; melting or morphing body parts; objects popping in/out; text garbling; severe blur/artifacts.',
+    'Natural garment actions that the reference motion performs (putting on a shirt, opening a jacket) are fine ONLY when the same garment exists and moves physically like in the reference.',
+    'Answer ONLY JSON: {"garments": ["reference garments you identified"], "score": 1-10, "verdict": "pass"|"reroll", "defects": [{"cell": <k generated-clip cell>, "issue": "short description", "severity": "minor"|"major"}]}. verdict is "reroll" if any major defect or score < 7.',
   ].filter(Boolean).join(' ');
 };
 
-export async function denseTakeCheck(ws: string, p: VideoProject, shot: Shot, take: Take, opts: { workDir: string; expect?: string } ): Promise<DenseCheck> {
+export async function denseTakeCheck(ws: string, p: VideoProject, shot: Shot, take: Take, opts: { workDir: string; expect?: string; look?: string } ): Promise<DenseCheck> {
   const takeAbs = fromWorkspaceRel(ws, take.path);
   if (!fs.existsSync(takeAbs)) throw new Error(`take file missing: ${take.path}`);
   const dur = take.durationSec || (await mediaDurationSec(takeAbs)) || shot.durationSec;
@@ -122,12 +143,35 @@ export async function denseTakeCheck(ws: string, p: VideoProject, shot: Shot, ta
   const anchor = shot.characterIds.map((id) => p.characters.find((c) => c.id === id)?.anchors?.[0]).find(Boolean);
   if (anchor) { try { const a = fromWorkspaceRel(ws, anchor); if (fs.existsSync(a)) { images.push(toDataUrl(a)); hasAnchor = true; } } catch { /* optional */ } }
   if (shot.startImage) { try { const s = fromWorkspaceRel(ws, shot.startImage); if (fs.existsSync(s)) { images.push(toDataUrl(s)); hasStart = true; } } catch { /* optional */ } }
-  const sheets = grids.slice(0, 8 - images.length);
+  // The motion reference (what the model copied) is the ground truth for garments: a judge that only
+  // sees the face + start frame passed an open button-up that morphed into a split shrug (2026-10-07).
+  const MAX_IMAGES = 8;
+  let refGrids: string[] = []; let refCells = 0;
+  if (shot.sourceVideo) {
+    try {
+      const refAbs = fromWorkspaceRel(ws, shot.sourceVideo);
+      const refDur = fs.existsSync(refAbs) ? await mediaDurationSec(refAbs) : 0;
+      if (refDur) {
+        // 1-2 reference sheets, but never squeeze the take below 4 sheets of coverage.
+        const want = Math.max(1, Math.min(2, grids.length, MAX_IMAGES - images.length - Math.min(grids.length, 4)));
+        refCells = want * PER_GRID;
+        const ref = await contactGrids(refAbs, opts.workDir, { intervalSec: +(refDur / refCells).toFixed(3), prefix: `ref_${take.id}`, durationSec: refDur });
+        refGrids = ref.grids.slice(0, want);
+        refCells = Math.min(refCells, ref.frames || refCells);
+      }
+    } catch { refGrids = []; refCells = 0; /* reference optional: fall back to anchor/start only */ }
+  }
+  images.push(...refGrids.map(toDataUrl));
+  const sheets = grids.slice(0, MAX_IMAGES - images.length);
   images.push(...sheets.map(toDataUrl));
 
+  const fromNotes = expectedFromNotes(shot.notes);
   const win = trendWindow(shot);
   const length = lengthDefects(shot, dur, win ? win.endSec - win.startSec : undefined);
-  const r = await judge(DENSE_PROMPT(shot, p, { hasAnchor, hasStart, grids: sheets.length, intervalSec, expect: opts.expect }), images, 700);
+  const r = await judge(DENSE_PROMPT(shot, p, {
+    hasAnchor, hasStart, refGrids: refGrids.length, refCells, grids: sheets.length, intervalSec, takeDurSec: dur,
+    expect: opts.expect || fromNotes.action, look: opts.look || fromNotes.look,
+  }), images, 900);
   if (!r.success || !r.text) throw new Error(`dense QA vision failed: ${r.error || 'no response'}`);
   const j = parseJson(r.text) || {};
   const defects: TakeDefect[] = (Array.isArray(j.defects) ? j.defects : []).slice(0, 10).map((d: any) => {
@@ -176,7 +220,7 @@ export function planParts(total: number, cuts: number[], minPartSec: number, max
   const parts = b.slice(1).map((e, i) => ({ startSec: +b[i].toFixed(2), endSec: +e.toFixed(2), speed: 1 }));
   for (const pt of parts) {
     const len = pt.endSec - pt.startSec;
-    if (len < minPartSec) pt.speed = +(Math.max(0.33, len / (minPartSec + 0.05))).toFixed(3);
+    if (len < minPartSec) pt.speed = Math.max(0.001, Math.floor(len / (minPartSec + 0.05) * 1000) / 1000);
   }
   return parts;
 }

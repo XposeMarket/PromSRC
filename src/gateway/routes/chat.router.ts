@@ -2080,6 +2080,8 @@ import {
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../providers/chatgpt-web/chatgpt-web-models';
+import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
+import { PROM_VIZ_REFERENCE } from '../prom-viz-reference';
 import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey, waitForChatGPTBridgeSlot } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 // â”€â”€â”€ Injected singletons (set by initChatRouter in server-v2.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -4868,7 +4870,7 @@ async function handleChat(
     'Generated visuals run in a sandbox. They may use HTML, CSS, vanilla JavaScript, local state, and the Prometheus visual state bridge, but must never receive credentials or directly access Electron/Node, the filesystem, cookies, browser permissions, external accounts, arbitrary iframes, or unrestricted networking. External actions must go through an explicitly registered Prometheus tool and policy check.',
     'Theme contract: visual roots and controls must be transparent unless the visual itself intentionally creates an internal surface. Never hardcode a light/dark canvas or a fixed outer panel. Use Prometheus tokens such as --prom-bg, --prom-surface, --prom-surface-secondary, --prom-border, --prom-text, --prom-muted, --prom-accent, --prom-success, --prom-warning, and --prom-danger; charts and diagrams should inherit the host theme.',
     'Native interactive cards are fenced JSON blocks you write yourself (no tool call): ```quiz {"title","questions":[{"question","options":[..],"answer":<index>,"hint"?,"explanation"?}]}```; ```flashcards {"title","cards":[{"front","back"}]}```; ```poll {"question","options":[..],"multiple"?}```; ```writing {"kind":"Email"|"Post"|"Draft","subject"?,"text"}``` for any draft the user will copy; ```followups ["next question 1","next question 2"]``` (2-4 short items, last thing in a reply, only when genuinely useful); ```reminder {"title","when"}``` to offer a reminder; ```convert {"value":5,"from":"mi","to":"km"}``` for a live unit converter; ```calculator {"expression":"(12.5*4)+3^2"}``` for a live calculator. Live data (currency, clocks, sports, news, images, video, places, single products) comes from show_ui_card instead. Each show_ui_card result gives a ref: put {{card:REF}} on its own line in the final reply to place that card mid-answer (like an inline image); cards you do not place render after the reply.',
-    'Viz kit: every ```html visual preloads window.ui (Prometheus Viz Kit) with ui.page, ui.kpis, ui.section, ui.chart (line/area/stacked/bar/stackedBar with crosshair tooltips, annotations, target lines), ui.bars, ui.heatmap, ui.treemap (zoomable), ui.donut, ui.table (sortable), ui.tabs, ui.segmented, ui.compare (design variants with a Pick button), ui.timeline, ui.sankey, ui.slider/ui.params + ui.loop (what-if sims), ui.form (returns JSON to chat), ui.exportBar (PNG/X post/CSV), ui.callout, ui.badge, ui.fmt and ui.state. Pass ask:\'Why is {label} {value}?\' to views so tapping a data point drops a question into the composer. Build data visuals and UI-variant mocks with it instead of hand-rolled divs: lead with an insight headline (the finding, not the topic), a KPI strip, then 2-4 linked views over real data. Read the interactive-visuals skill before composing a non-trivial html visual.',
+    'Viz kit: every ```html visual preloads window.ui (Prometheus Viz Kit) with ui.page, ui.kpis, ui.section, ui.chart (line/area/stacked/bar/stackedBar with crosshair tooltips, annotations, target lines), ui.bars, ui.heatmap, ui.treemap (zoomable), ui.donut, ui.table (sortable), ui.tabs, ui.segmented, ui.compare (design variants with a Pick button), ui.timeline, ui.sankey, ui.slider/ui.params + ui.loop (what-if sims), ui.form (returns JSON to chat), ui.exportBar (PNG/X post/CSV), ui.callout, ui.badge, ui.fmt and ui.state. ' + PROM_VIZ_REFERENCE + ' Pass ask:\'Why is {label} {value}?\' to views so tapping a data point drops a question into the composer. Build data visuals and UI-variant mocks with it instead of hand-rolled divs: lead with an insight headline (the finding, not the topic), a KPI strip, then 2-4 linked views over real data. Read the interactive-visuals skill before composing a non-trivial html visual.',
     'Inline visuals may sit between prose and should be one complete fenced chart, mermaid, svg, or html block when emitted. Keep surrounding explanation short. Use a larger artifact surface only when the experience is genuinely long-lived, multi-view, editing-heavy, or the deliverable itself should live independently of the message. Never generate a visual merely for decoration.',
   ].join('\n');
 const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';
@@ -6255,6 +6257,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           }
           if (nativeType !== 'chatgpt.tool_start' && nativeType !== 'chatgpt.tool_result') return;
           const data = event.data && typeof event.data === 'object' ? event.data : {};
+          // Prometheus-connector calls already render as real tool rows from
+          // the bridge executor; a second chatgpt_app_* row duplicated each one.
+          if ((data as any).viaBridge) return;
           const action = String((data as any).name || 'chatgpt_tool').slice(0, 120);
           const toolCallId = String((data as any).id || '').slice(0, 240);
           if (nativeType === 'chatgpt.tool_start') {
@@ -6294,6 +6299,17 @@ Do not produce prose. Use the canonical thread tool now.` });
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
       const providerToolSurface = buildProviderToolSurface(generationOverride);
       tools = providerToolSurface.provider;
+      // ChatGPT (openai_codex/chatgpt) reaches Prometheus tools through its
+      // connector, whose catalog is a snapshot taken when the message is sent:
+      // request_tool_category cannot add tools mid-turn there. Serve the full
+      // runtime surface instead, so file/GitHub/browser tools are always
+      // callable and the catalog stays stable across turns. chatgpt_sandbox is
+      // dropped: ChatGPT already has its own python, and delegating to a second
+      // ChatGPT left deliverables in a foreign sandbox (2026-10-07 game report).
+      if (String(generationOverride.providerId || '') === 'openai_codex' && isChatGPTWebModel(generationOverride.model)) {
+        tools = buildCurrentTurnTools(new Set<string>(getRuntimeToolCategoryIds().map(String)))
+          .filter((tool: any) => String(tool?.function?.name || '') !== 'chatgpt_sandbox');
+      }
       currentModelSystemBlock = formatCurrentModelSystemBlock(generationOverride);
       if (generationOverride.source === 'turn_override') {
         // â”€â”€ Local primary switch_model promotion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -6389,6 +6405,9 @@ Do not produce prose. Use the canonical thread tool now.` });
             });
           }
         },
+        workerPriority: executionMode === 'interactive'
+          && !/^(?:background_|subagent_|team_|brain_|auto_brain_|cron_)/i.test(String(sessionId || ''))
+          ? 'interactive' : 'background',
 	        abortSignal: abortSignal?.signal,
 	        usageContext: {
           sessionId,

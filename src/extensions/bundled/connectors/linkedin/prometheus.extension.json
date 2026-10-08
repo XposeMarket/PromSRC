@@ -2,36 +2,44 @@
   "id": "linkedin",
   "kind": "connector",
   "name": "LinkedIn",
-  "description": "Connect LinkedIn through the Prometheus browser session for feed, audience, and publishing workflows.",
+  "description": "Official LinkedIn APIs (Sign In with OpenID Connect + Share on LinkedIn): publish text, image, video, and article posts as yourself. No browser automation.",
   "category": "Social",
   "enabledByDefault": true,
-  "docsUrl": "https://www.linkedin.com/",
-  "tags": ["linkedin", "social", "browser session"],
+  "docsUrl": "https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/share-on-linkedin",
+  "tags": ["linkedin", "social", "publishing", "oauth", "official api"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:linkedin",
+    "binding": "integrations/connectors/linkedin",
     "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#0A66C2",
     "permissions": [
-      { "icon": "[]", "label": "Read posts and engagement metrics" },
-      { "icon": "@", "label": "Read connections and profile views" },
-      { "icon": "->", "label": "Post content with approval" }
+      { "icon": "->", "label": "Publish text, image, video, and article posts (with approval)" },
+      { "icon": "@", "label": "Read your name, email, and member id" }
     ]
   },
   "ownership": {
     "toolNamespaces": ["connector_linkedin"],
-    "tools": ["connector_linkedin_api_request"],
-    "capabilities": ["social", "publishing", "browser_session"]
+    "tools": [
+      "connector_linkedin_create_post",
+      "connector_linkedin_delete_post",
+      "connector_linkedin_get_profile",
+      "connector_linkedin_api_request"
+    ],
+    "capabilities": ["social", "publishing"]
   },
   "setup": {
-    "authType": "browser_session",
-    "statusMode": "generic",
-    "docsHint": "Browser login does not authorize the API. API tools require a provider access_token saved in secure credentials or LINKEDIN_ACCESS_TOKEN; refresh externally when expired.",
-    "fields": [{ "key": "access_token", "label": "Optional LinkedIn API access token", "input": "password", "secret": true, "required": false }],
-    "browserLogin": {
-      "url": "https://www.linkedin.com/login",
-      "checkUrl": "https://www.linkedin.com/feed/"
-    }
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://www.linkedin.com/developers/apps",
+    "docsHint": "LinkedIn Developers -> Create app -> Products: add \"Sign In with LinkedIn using OpenID Connect\" and \"Share on LinkedIn\" (instant, no review). Auth tab: add redirect URL http://localhost:19432/auth/callback/linkedin. Tokens last 60 days.",
+    "callback": {
+      "port": 19432,
+      "path": "/auth/callback/linkedin"
+    },
+    "fields": [
+      { "key": "clientId", "label": "Client ID", "input": "text", "required": true },
+      { "key": "clientSecret", "label": "Client Secret", "input": "password", "required": true, "secret": true }
+    ]
   }
 }

@@ -1613,8 +1613,20 @@ export class ResourceStore {
       this.migratedThreads.add(safeThreadId);
       return { attached: 0, skipped: 0 };
     }
-    this.sanitizePersistedState();
     fs.mkdirSync(this.migrationDir, { recursive: true });
+    // Nothing to migrate (new threads, plain-text chats): skip the registry
+    // sanitize pass entirely. It parses and rewrites the whole 18+ MB registry
+    // and cost ~350-500ms of time-to-first-token on every new thread.
+    const recent = Array.isArray(history) ? history.slice(-500) : [];
+    const hasMigratable = recent.some((message) => /https?:\/\//i.test(String(message?.content || ''))
+      || (Array.isArray(message?.attachmentPreviews) && message.attachmentPreviews.length > 0));
+    if (!hasMigratable) {
+      // Only mark done once a thread has real history; a brand-new thread must
+      // still migrate later if a legacy import lands in it.
+      if (recent.length >= 2) fs.writeFileSync(markerPath, JSON.stringify({ migratedAt: nowIso(), threadId: safeThreadId, attached: 0, skipped: 0 }), 'utf8');
+      return { attached: 0, skipped: 0 };
+    }
+    this.sanitizePersistedState();
     let attached = 0;
     let skipped = 0;
     for (const message of Array.isArray(history) ? history.slice(-500) : []) {

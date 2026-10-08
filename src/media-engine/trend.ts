@@ -15,6 +15,7 @@ import { generateShots, mediaDurationSec, runFfmpeg, type GenerateResult } from 
 import { applyOps, fromWorkspaceRel, loadProject, mediaDir, mutateProject, newId, selectedTake, toWorkspaceRel } from './project.js';
 import { generateImage } from '../image-generation/registry.js';
 import { breakdownReel, trendWindow, type ReelBreakdown } from './inspect.js';
+import { characterRefs, OPENAI_REF_LIMIT } from './refs.js';
 
 export const TREND_DEFAULT_MODEL = 'fal/kling-v3-pro-motion-control';
 
@@ -52,6 +53,9 @@ export async function trendTransfer(ws: string, projectId: string, args: {
   const breakdown = await breakdownReel(srcAbs, { workDir: path.join(dir, 'bd'), cuts: args.cuts, maxParts: args.maxParts, minPartSec: model.limits?.minDurationSec ?? 0 });
   const img = getModel(p.defaults.imageModel?.startsWith('openai/') ? p.defaults.imageModel : 'openai/gpt-image');
 
+  // Full identity pack (scene frame takes the last slot of the GPT Image reference limit).
+  const packRefs = characterRefs(ws, character, OPENAI_REF_LIMIT - 1).map((r) => abs(ws, r));
+  if (!packRefs.length) packRefs.push(abs(ws, face));
   const parts: Array<TrendPart & { shotId: string; segment: string; frame: string; speed: number }> = [];
   for (const [i, bp] of breakdown.parts.entries()) {
     const { startSec, endSec, speed } = bp;
@@ -68,8 +72,8 @@ export async function trendTransfer(ws: string, projectId: string, args: {
     if (!frame) {
       if (!img) throw new Error('No OpenAI image model in the catalog for matched start frames.');
       const r: any = await generateImage({
-        prompt: `Replace the person in the second reference image with the exact person from the first reference image (identical face, hair, glasses, body proportions and age${character.notes ? `; ${character.notes}` : ''}). Keep the second image's exact framing, camera angle, room, lighting and pose.${look ? ` Outfit: ${look}.` : ''} Photorealistic phone photo, natural skin texture.`,
-        reference_images: [abs(ws, face), firstAbs], aspect_ratio: p.target.aspect === '16:9' ? 'landscape' : 'portrait',
+        prompt: `The LAST reference image is the scene. Every other reference image shows the same person from different angles, expressions, outfits and full-body views (her identity pack). Replace the person in the scene with exactly that person (identical face, hair, glasses, body proportions, height and age${character.notes ? `; ${character.notes}` : ''}). Keep the scene's exact framing, camera angle, room, lighting and pose.${look ? ` Outfit: ${look}.` : ''} Photorealistic phone photo, natural skin texture.`,
+        reference_images: [...packRefs, firstAbs], aspect_ratio: p.target.aspect === '16:9' ? 'landscape' : 'portrait',
         size: p.target.aspect === '16:9' ? '1536x1024' : '1024x1536', provider: 'openai_codex', model: img.endpoint, output_dir: dir,
       } as any);
       const out = r?.images?.[0]?.path || r?.image?.path;
@@ -87,7 +91,7 @@ export async function trendTransfer(ws: string, projectId: string, args: {
     op: 'shot.add', title: `Trend part ${i + 1}${pt.look ? `: ${pt.look.slice(0, 40)}` : ''}`, prompt: args.prompt || `${character.name} performs the reference motion naturally.`,
     sourceVideo: pt.segment, startImage: pt.frame, modelId, durationSec: Math.max(1, Math.ceil((pt.endSec - pt.startSec) / pt.speed)),
     characterIds: [character.id], anchorMode: 'start',
-    notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s speed=${pt.speed} of ${args.sourcePath}${breakdown.parts[i]?.action ? ` | ${breakdown.parts[i].action}` : ''}`,
+    notes: `trend ${path.basename(dir)} ${pt.startSec}-${pt.endSec}s speed=${pt.speed} of ${args.sourcePath}${breakdown.parts[i]?.action ? ` | ${String(breakdown.parts[i]?.action).replace(/\|/g, '/')}` : ''}${(pt.look || breakdown.parts[i]?.look) ? ` | look: ${String(pt.look || breakdown.parts[i]?.look).replace(/\|/g, '/')}` : ''}`,
   })) as any, 'agent');
   const added = loadProject(ws, projectId).shots.filter((s) => !before.has(s.id));
   added.forEach((s, i) => { parts[i].shotId = s.id; });

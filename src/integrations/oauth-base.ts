@@ -8,6 +8,7 @@ import path from 'path';
 import http from 'http';
 import crypto from 'crypto';
 import { getVault } from '../security/vault.js';
+import { GATEWAY_OAUTH_CALLBACK_PREFIX, awaitGatewayOAuthCallback, gatewayPublicOrigin } from './gateway-oauth-callback.js';
 
 export interface OAuthConnectorConfig {
   id: string;
@@ -26,6 +27,14 @@ export interface OAuthConnectorConfig {
   useNonce?: boolean;
   /** OAuth token endpoint client authentication method. Most connectors use body; Notion requires Basic. */
   tokenAuthMethod?: 'body' | 'basic';
+  /**
+   * Receive the provider redirect on the gateway's public HTTPS origin
+   * (gateway.remoteAccess.publicUrl, e.g. the Tailscale Funnel URL) instead of
+   * a localhost listener. Needed by providers that reject http://localhost
+   * redirect URIs (Instagram Business Login). Falls back to localhost when no
+   * public URL is configured.
+   */
+  gatewayCallback?: boolean;
 }
 
 export interface ConnectorTokens {
@@ -194,6 +203,7 @@ export abstract class OAuthConnector {
     });
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
     this.applyClientAuthentication(body, headers);
+    this.decorateTokenBody(body);
     const res = await fetch(this.cfg.tokenUrl, {
       method: 'POST',
       headers,
@@ -225,8 +235,33 @@ export abstract class OAuthConnector {
   }
 
   private generateVerifier(): string { return crypto.randomBytes(32).toString('base64url'); }
-  private generateChallenge(v: string): string {
+  /** PKCE S256 challenge. TikTok desktop deviates from RFC 7636 and wants hex. */
+  protected generateChallenge(v: string): string {
     return crypto.createHash('sha256').update(v).digest('base64url');
+  }
+
+  /** Provider-specific authorize URL tweaks (e.g. TikTok's client_key). */
+  protected decorateAuthParams(_params: URLSearchParams): void { /* default: none */ }
+
+  /** Provider-specific token-endpoint body tweaks (code exchange and refresh). */
+  protected decorateTokenBody(_body: URLSearchParams): void { /* default: none */ }
+
+  /**
+   * Save a provider access token the user generated directly (Meta App
+   * Dashboard "Generate token", Notion internal integration secret, TikTok/
+   * LinkedIn token generators). Skips the browser OAuth round trip.
+   */
+  async saveManualAccessToken(accessToken: string): Promise<{ account?: string }> {
+    const token = String(accessToken || '').trim();
+    if (!token) throw new Error('Access token is empty.');
+    const tokens = await this.buildManualTokens(token);
+    this.saveTokens(tokens);
+    return { account: tokens.account_email || tokens.account_id };
+  }
+
+  /** Default manual token: no expiry known. Connectors override to validate and enrich. */
+  protected async buildManualTokens(accessToken: string): Promise<ConnectorTokens> {
+    return { access_token: accessToken, expires_at: Number.MAX_SAFE_INTEGER };
   }
 
   // Load credentials from vault if env vars weren't set at startup time.
@@ -335,6 +370,7 @@ export abstract class OAuthConnector {
       params.set('code_challenge', this.generateChallenge(verifier));
       params.set('code_challenge_method', 'S256');
     }
+    this.decorateAuthParams(params);
 
     activeFlows.set(this.cfg.id, flowState);
     const authUrl = `${this.cfg.authUrl}?${params.toString()}`;
@@ -363,6 +399,7 @@ export abstract class OAuthConnector {
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
     this.applyClientAuthentication(body, headers);
     if (flow.verifier) body.set('code_verifier', flow.verifier);
+    this.decorateTokenBody(body);
 
     const res = await fetch(this.cfg.tokenUrl, {
       method: 'POST',
@@ -400,6 +437,12 @@ export abstract class OAuthConnector {
   }
 
   listenForCallback(): Promise<OAuthCallbackResult> {
+    if (this.cfg.gatewayCallback && gatewayPublicOrigin()) {
+      return awaitGatewayOAuthCallback(this.cfg.id, FLOW_TTL_MS, async (code, state, error) => {
+        if (error || !code) return { success: false, error: error || 'No authorization code' };
+        return this.handleCallback(code, state);
+      });
+    }
     return new Promise((resolve) => {
       let finished = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -467,8 +510,13 @@ export abstract class OAuthConnector {
   }
 
   protected callbackUrl(): string {
+    const origin = this.cfg.gatewayCallback ? gatewayPublicOrigin() : '';
+    if (origin) return `${origin}${GATEWAY_OAUTH_CALLBACK_PREFIX}${this.cfg.id}`;
     return `http://localhost:${this.cfg.callbackPort}${this.cfg.callbackPath}`;
   }
+
+  /** Redirect URI the user must register in the provider app. */
+  public redirectUri(): string { return this.callbackUrl(); }
 
   private applyClientAuthentication(body: URLSearchParams, headers: Record<string, string>): void {
     if (this.cfg.tokenAuthMethod === 'basic') {

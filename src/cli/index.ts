@@ -32,6 +32,7 @@ import {
   type SupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request.js';
 import { isGatewayHandoffLauncherNotice } from '../gateway/runtime/gateway-handoff-protocol.js';
+import { getInjectedMasterKey } from '../security/vault-key-bootstrap.js';
 import { HANDOFF_RESTART_RESULT, handoffRestartTarget, isHandoffRestartRequest, isHandoffRestartResult } from '../gateway/runtime/handoff-restart-forward.js';
 import {
   readCanonicalUpdateStatus,
@@ -87,6 +88,8 @@ const GATEWAY_STARTUP_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_GATEW
 const GATEWAY_START_ATTEMPTS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_START_ATTEMPTS, 3);
 const GATEWAY_BUSY_RESTART_GRACE_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_BUSY_GRACE_MS, 45_000);
 const GATEWAY_HEALTH_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_TIMEOUT_MS, 5_000);
+// Gateway exit code asking the desktop app to relaunch itself (see lifecycle.ts).
+const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
 const GATEWAY_HEALTH_FAILURE_LIMIT = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_FAILURE_LIMIT, 2);
 
 let gatewayPortOverride: number | undefined;
@@ -678,6 +681,12 @@ async function runSupervisedGateway(): Promise<void> {
   };
   const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
     || path.join(getGatewayStateRoot(), '.prometheus');
+  // The desktop app (electron/main.js) launches this same supervisor.
+  const desktopManaged = process.env.PROMETHEUS_ELECTRON_MANAGED === '1';
+  const injectedVaultKey = desktopManaged ? getInjectedMasterKey() : null;
+  const electronVaultKeyLine: string | null = desktopManaged
+    ? `${injectedVaultKey ? injectedVaultKey.toString('hex') : ''}\n`
+    : null;
 
   const launchReplacementSupervisor = async (request: SupervisorRestartRequest): Promise<boolean> => {
     try {
@@ -759,12 +768,17 @@ async function runSupervisedGateway(): Promise<void> {
         ...(explicitQuickRestart ? { PROMETHEUS_HOT_RESTART: '1' } : {}),
       },
       // The IPC channel carries the warm-handoff notice; everything else the
-      // gateway prints still goes to this terminal.
-      stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+      // gateway prints still goes to this terminal. When the desktop app owns
+      // this supervisor, stdin already delivered the vault key to this process;
+      // forward it to each child the same way instead of sharing stdin.
+      stdio: [electronVaultKeyLine === null ? 'inherit' : 'pipe', 'inherit', 'inherit', 'ipc'],
       // A failed child may be relaunched several times while the supervisor
       // resolves ownership. Never surface each attempt as a new console on Windows.
       windowsHide: true,
     });
+    if (electronVaultKeyLine !== null) {
+      try { launched.stdin?.end(electronVaultKeyLine); } catch {}
+    }
     child = launched;
     activeGatewayProcessStartedAt = launchedGatewayProcessStartedAt;
     launched.on('message', (message) => {
@@ -810,11 +824,27 @@ async function runSupervisedGateway(): Promise<void> {
         activeGatewayProcessStartedAt = null;
       }
       console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}).`);
+      if (desktopManaged && code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
+        // electron/ changed or a full restart was requested: the desktop app
+        // relaunches itself and starts a fresh supervisor.
+        console.error('[GatewaySupervisor] Gateway asked the desktop app to relaunch; handing off to Electron.');
+        stopping = true;
+        setTimeout(() => process.exit(GATEWAY_APP_RELAUNCH_EXIT_CODE), 50).unref?.();
+        return;
+      }
+      if (desktopManaged && code === 0) {
+        // A clean exit (quit, update install, /api/internal/shutdown) is an
+        // intentional stop, not a crash. Never resurrect it behind the app.
+        console.error('[GatewaySupervisor] Gateway shut down cleanly; stopping the desktop supervisor.');
+        stopping = true;
+        setTimeout(() => process.exit(0), 50).unref?.();
+        return;
+      }
       const now = Date.now();
       const probe = await probeGatewayHealth(1200);
       const portOwnerPids = getGatewayPortOwnerPids();
       const runtimeStatus = readGatewayRuntimeStatus();
-      const progressLease = readGatewayProgressLease(path.join(resolveInstallRoot(), '.prometheus'));
+      const progressLease = readGatewayProgressLease(getGatewayStateRoot());
       const decision = classifyGatewaySupervisorObservation({
         now,
         healthOk: probe.healthy,
@@ -831,7 +861,7 @@ async function runSupervisedGateway(): Promise<void> {
         progressLease,
       });
       appendGatewaySupervisorEvidence(
-        path.join(resolveInstallRoot(), '.prometheus'),
+        getGatewayStateRoot(),
         buildGatewaySupervisorEvidence({
           now,
           supervisorPid: process.pid,
@@ -915,7 +945,7 @@ async function runSupervisedGateway(): Promise<void> {
     const probe = await probeGatewayHealth();
     consecutiveFailures = probe.healthy ? 0 : consecutiveFailures + 1;
     const runtimeStatus = readGatewayRuntimeStatus();
-    const progressLease = readGatewayProgressLease(path.join(resolveInstallRoot(), '.prometheus'));
+    const progressLease = readGatewayProgressLease(getGatewayStateRoot());
     // PID inspection shells out on supported platforms. Keep the healthy path
     // cheap; ownership is required only before a failed probe may cause a kill.
     const portOwnerPids = probe.healthy ? [] : getGatewayPortOwnerPids();
@@ -941,7 +971,7 @@ async function runSupervisedGateway(): Promise<void> {
     });
 
     appendGatewaySupervisorEvidence(
-      path.join(resolveInstallRoot(), '.prometheus'),
+      getGatewayStateRoot(),
       buildGatewaySupervisorEvidence({
         now,
         supervisorPid: process.pid,
