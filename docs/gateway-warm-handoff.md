@@ -4,12 +4,12 @@
 
 Every lane in Prometheus (main chat, background tasks, subagents, teams, cron,
 heartbeat, Brain) executes through `handleChat` inside the gateway process.
-Until now a *planned* restart — self-edit apply, self-update, proposal apply,
-manual/voice quick restart, stall or memory recovery — interrupted every live
+Until now a *planned* restart � self-edit apply, self-update, proposal apply,
+manual/voice quick restart, stall or memory recovery � interrupted every live
 runtime, exited, and relied on checkpoint recovery on the next boot. Recovery
 pauses tasks and asks before resuming; long work was effectively lost.
 
-Between 2026‑09‑01 and 2026‑09‑19 the gateway exited with code 42 (planned
+Between 2026-09-01 and 2026-09-19 the gateway exited with code 42 (planned
 restart) 42 times and crashed 0 times. The drops were all self-inflicted.
 
 ## What changes
@@ -18,7 +18,7 @@ A planned restart now becomes a **warm handoff** when there is live work to
 protect:
 
 1. The restarting gateway ("host") interrupts **only the runtime(s) that asked
-   for the restart** — the turn inside `gateway_restart` /
+   for the restart** � the turn inside `gateway_restart` /
    `prom_apply_dev_changes`, the task named in the restart context, or the
    sessions of a dev-edit continuation/apply batch. Those checkpoint exactly as
    before and resume on the replacement's new code through BOOT.
@@ -31,13 +31,11 @@ protect:
 3. The host opens a local socket (`\\.\pipe\prometheus-handoff-<hash>-<pid>` on
    Windows, a temp-dir socket elsewhere) and writes a manifest under
    `<state>/runtimes/handoff-hosts/<pid>.json`.
-4. The launcher starts the replacement: the CLI supervisor or the Electron
-   desktop app receives a `gateway_handoff` IPC message and spawns the new
-   child immediately without killing the host; an unsupervised
-   `prom gateway start` host spawns the replacement itself. Under Electron the
-   public relay enters a handoff state that keeps the host's established
-   streams (chat SSE, tool output) piped to the UI while new requests wait for
-   the replacement; the backend port is reused once the host releases it.
+4. The launcher starts the replacement: the CLI supervisor receives a
+   `gateway_handoff` IPC message and spawns the new child immediately without
+   killing the host; an unsupervised `prom gateway start` host spawns the
+   replacement itself. The desktop app runs this same CLI supervisor
+   (`prom gateway start --port <port>`), so there is one launcher everywhere.
 5. The replacement adopts every live host at boot (before interrupted-runtime
    recovery): it mirrors the host's running runtimes as **remote records**
    (`remoteHostPid`), relays the host's WebSocket broadcasts to its own
@@ -71,7 +69,7 @@ host from the manifests.
   does this: keeping the bloated process alive would defeat the purpose);
 - `restartScope: 'supervisor'` (full supervisor replacement);
 - the launcher (CLI supervisor or Electron main) has no IPC channel to the
-  gateway — i.e. it is running a build from before this change and has not
+  gateway � i.e. it is running a build from before this change and has not
   itself been restarted;
 - there is no live runtime to carry other than the restart-initiating one.
 
@@ -88,7 +86,7 @@ host from the manifests.
 | Hooks `stopSchedulersForHandoff` / `closeListenersForHandoff`, adoption at boot | `src/gateway/server-v2.ts` |
 | Recovery skip for hosted runtimes, initiating-runtime checkpoint | `src/gateway/runtime-recovery.ts`, `src/gateway/core/startup.ts` |
 | Supervisor IPC + draining children | `src/cli/index.ts` |
-| Electron IPC, draining children, relay handoff state | `electron/main.js`, `electron/gateway-reverse-proxy.js` |
+| Desktop app launch (Electron runs the same CLI supervisor) | `electron/main.js`, `src/cli/index.ts` |
 | Task pause/cancel forwarding | `src/gateway/tasks/background-task-runner.ts` |
 
 ## Operational notes

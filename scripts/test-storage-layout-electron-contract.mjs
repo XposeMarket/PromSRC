@@ -20,17 +20,16 @@ assert.ok(source.includes('Canonical copy verification failed; continuing on leg
 assert.equal(source.includes('v2 migration did not activate; continuing on legacy state'), false);
 assert.ok(source.includes('runStorageLayoutV2Migration();'));
 assert.ok(source.includes('refreshStorageLayoutState();'));
-assert.ok(source.includes("PROMETHEUS_STORAGE_LAYOUT:  'canonical'"));
-assert.ok(source.includes('PROMETHEUS_RUNTIME_DIR:     RUNTIME_STATE_DIR'));
+assert.ok(/PROMETHEUS_STORAGE_LAYOUT:\s+'canonical'/.test(source));
+assert.ok(/PROMETHEUS_RUNTIME_DIR:\s+RUNTIME_STATE_DIR/.test(source));
 assert.ok(source.includes("const vaultDir = path.join(RUNTIME_STATE_DIR, 'vault');"));
 assert.ok(source.includes("const statusPath = path.join(RUNTIME_STATE_DIR, 'gateway-runtime-status.json');"));
-assert.ok(source.includes('return readSharedGatewayProgressLease(RUNTIME_STATE_DIR);'));
 assert.equal(source.includes("path.join(CANONICAL_UPDATE_CONFIG_DIR, 'config.json')"), false);
 assert.equal(source.includes("path.join(USER_DATA_DIR, '.prometheus', 'vault')"), false);
 assert.equal(source.includes("path.join(USER_DATA_DIR, '.prometheus', 'gateway-runtime-status.json')"), false);
 
 const migrationIndex = source.indexOf('runStorageLayoutV2Migration();');
-const gatewayEnvIndex = source.indexOf('const gatewayEnv = {');
+const gatewayEnvIndex = source.indexOf('...buildGatewayEnvironment()');
 assert.ok(migrationIndex >= 0 && gatewayEnvIndex > migrationIndex, 'verified migration must run before canonical gateway environment is constructed');
 
 console.log('electron storage layout contract passed');

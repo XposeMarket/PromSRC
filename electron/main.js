@@ -33,7 +33,6 @@ const net        = require('net');
 const fs         = require('fs');
 const { pathToFileURL } = require('url');
 const crypto     = require('crypto');
-const { createGatewayReverseProxy } = require('./gateway-reverse-proxy');
 const {
   isLocalGatewayUrl,
   isTrustedRendererUrl,
@@ -61,13 +60,6 @@ const {
   getNativeBrowserOSProcessId,
   normalizeElectronProcessMetrics,
 } = require('./native-browser-resource-policy');
-const {
-  appendGatewaySupervisorEvidence,
-  buildGatewaySupervisorEvidence,
-  classifyGatewaySupervisorObservation,
-  readGatewayProgressLease: readSharedGatewayProgressLease,
-} = require('./gateway-supervisor-policy');
-
 // ─── Config ────────────────────────────────────────────────────────────────
 function parseGatewayPort(value) {
   const parsed = Number(value);
@@ -81,14 +73,6 @@ const requestedGatewayPort = parseGatewayPort(
 // own profile rather than depending on the historic 18789 default.
 let gatewayPort = requestedGatewayPort;
 let GATEWAY_URL = `http://127.0.0.1:${gatewayPort || 0}`;
-// Electron holds gatewayPort for its entire lifetime. The gateway child uses a
-// private loopback port so it can be replaced without making Tailscale Funnel
-// lose the public listener that paired mobile devices know.
-let gatewayBackendPort = null;
-// Draining warm-handoff hosts may remain alive for hours. Never give a new
-// gateway a backend port used by an earlier generation in this Electron run.
-const usedGatewayBackendPorts = new Set();
-let gatewayRelay = null;
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(
@@ -102,26 +86,13 @@ const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
 // ~20s and a cold boot after a rebuild (~45s import+listen) was declared dead
 // while it was still starting (2026-09-29 video-engine restart).
 const GATEWAY_READY_TIMEOUT_MS = 150_000;
-const MAX_RETRIES  = 500;  // safety cap only; GATEWAY_READY_TIMEOUT_MS governs
-const RETRY_DELAY  = 300;
 // Keep the renderer header and the native Windows/Linux caption controls on
 // the same physical row. This value is also mirrored by --window-chrome-height
 // in web-ui/src/styles/base.css.
 const ELECTRON_TITLEBAR_HEIGHT = 30;
 const DEFAULT_TITLEBAR_COLOR = '#1f1f1f';
 const DEFAULT_TITLEBAR_SYMBOL_COLOR = '#d8c9a8';
-const GATEWAY_HEALTH_INTERVAL_MS = 15_000;
 const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
-const GATEWAY_HEALTH_FAILURE_LIMIT = 2;
-const GATEWAY_BUSY_RECOVERY_GRACE_MS = 45_000;
-const GATEWAY_PROGRESS_MAX_AGE_MS = 120_000;
-const GATEWAY_RECOVERY_WINDOW_MS = 10 * 60_000;
-const GATEWAY_RECOVERY_MAX_ATTEMPTS = 3;
-const GATEWAY_RECOVERY_BASE_DELAY_MS = 5_000;
-const GATEWAY_RECOVERY_MAX_DELAY_MS = 60_000;
-// The gateway can briefly pause under a scheduled team run. Keep an HTTP
-// request open long enough for it to resume or for the stall handoff to start.
-const GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS = 30_000;
 const GATEWAY_QUIT_GRACE_MS = 12_000;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
@@ -155,12 +126,6 @@ function getPackagedAppRoot() {
   const asarRoot = path.join(process.resourcesPath, 'app.asar');
   const unpackedRoot = path.join(process.resourcesPath, 'app');
   return fs.existsSync(asarRoot) ? asarRoot : unpackedRoot;
-}
-
-function getGatewayEntryPath() {
-  return IS_PACKAGED_RUNTIME
-    ? path.join(getPackagedAppRoot(), 'dist', 'gateway', 'server-v2.js')
-    : path.join(APP_ROOT, 'src', 'gateway', 'server-v2.ts');
 }
 
 function getGatewayWorkingDirectory() {
@@ -444,49 +409,6 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
 // ─── State ─────────────────────────────────────────────────────────────────
 let mainWindow          = null;
 let gatewayProcess      = null;
-// Warm handoff: gateways that released the backend port but are still
-// finishing the turns they own. They are no longer the managed child; they
-// exit on their own and must never be treated as a crash or be port-cleaned.
-const drainingGatewayProcesses = new Map();
-
-const HANDOFF_RESTART_REQUEST = 'gateway_handoff_restart_request';
-const HANDOFF_RESTART_RESULT = 'gateway_handoff_restart_result';
-const pendingHandoffRestarts = new Map();
-
-function relayHandoffRestart(source, message) {
-  if (!message || message.type !== HANDOFF_RESTART_REQUEST || message.forwarded !== true || !message.id) return false;
-  const target = gatewayProcess;
-  const accepted = drainingGatewayProcesses.get(source.pid) === source
-    && target && target !== source && target.exitCode == null && target.signalCode == null && !isQuitting;
-  if (!accepted) {
-    try { source.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: 'No active replacement gateway is available' }); } catch {}
-    return true;
-  }
-  pendingHandoffRestarts.set(message.id, { source, target });
-  target.send(message, (error) => {
-    if (!error) return;
-    pendingHandoffRestarts.delete(message.id);
-    try { source.send({ type: HANDOFF_RESTART_RESULT, id: message.id, accepted: false, error: error.message }); } catch {}
-  });
-  return true;
-}
-
-function isGatewayHandoffNotice(message) {
-  return !!message
-    && typeof message === 'object'
-    && message.type === 'gateway_handoff'
-    && Number.isInteger(message.hostPid)
-    && message.hostPid > 0
-    && typeof message.socketPath === 'string';
-}
-
-function killDrainingGatewayProcesses(reason) {
-  for (const [pid, child] of drainingGatewayProcesses) {
-    writeGatewayLog(`[main] Terminating draining gateway ${pid} (${reason})\n`);
-    try { killManagedGatewayProcessTree(child); } catch {}
-  }
-  drainingGatewayProcesses.clear();
-}
 let nativeBrowserRpcServer = null;
 let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
@@ -509,13 +431,6 @@ let updaterRestartValidated = false;
 let updaterBackupId = '';
 let updaterInstallerPath = '';
 let isGatewayRestarting = false;
-let gatewayHealthTimer = null;
-let gatewayHealthCheckInFlight = false;
-let gatewayHealthFailures = 0;
-let gatewayProcessStartedAt = 0;
-const gatewayRecoveryAttempts = [];
-let gatewayRecoveryGeneration = 0;
-const GATEWAY_RESTART_EXIT_CODE = 42;
 // Gateway asks for a full app relaunch (electron/ changed or supervisor-scope restart).
 const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -1150,7 +1065,6 @@ async function selectGatewayPort() {
     writeGatewayLog(`[main] Selected gateway relay port ${gatewayPort}\n`);
   }
   GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
-  if (gatewayRelay?.server?.listening) return;
   if (!(await isGatewayPortAvailable(gatewayPort))) {
     assertGatewayPortAvailable(gatewayPort);
     throw new Error(
@@ -1219,75 +1133,6 @@ function synchronizeTailscaleFunnelTarget() {
   }
 }
 
-async function selectGatewayBackendPort({ rotate = false } = {}) {
-  if (gatewayBackendPort != null && !rotate) {
-    if (await isGatewayPortAvailable(gatewayBackendPort)) return gatewayBackendPort;
-    throw new Error(
-      `Prometheus gateway backend port ${gatewayBackendPort} is still in use after the previous worker stopped. ` +
-      'Wait for the previous worker to exit, then restart Prometheus.',
-    );
-  }
-
-  // Keep the public port and potential built-in HTTPS listener out of the
-  // backend range. The backend is selected once per Electron lifetime and is
-  // retained for every worker replacement.
-  const configuredHttpsPort = getConfiguredGatewayHttpsPort();
-  for (let offset = 1; offset <= 512; offset += 1) {
-    const candidate = gatewayPort + offset;
-    if (candidate > 65_535 || candidate === configuredHttpsPort || usedGatewayBackendPorts.has(candidate)) continue;
-    if (await isGatewayPortAvailable(candidate)) {
-      const previousPort = gatewayBackendPort;
-      gatewayBackendPort = candidate;
-      usedGatewayBackendPorts.add(candidate);
-      if (previousPort != null) {
-        writeGatewayLog(`[main] Rotated gateway backend port ${previousPort} -> ${candidate} for warm handoff\n`);
-      }
-      return gatewayBackendPort;
-    }
-  }
-  throw new Error(`Prometheus could not reserve a private backend port near ${gatewayPort}.`);
-}
-
-function getConfiguredGatewayHttpsPort() {
-  const enabledByEnvironment = ['1', 'true'].includes(String(process.env.GATEWAY_HTTPS_ENABLED || '').trim().toLowerCase());
-  try {
-    const configPath = path.join(USER_DATA_DIR, '.prometheus', 'config.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const https = config?.gateway?.https || {};
-    const enabled = https.enabled === true || enabledByEnvironment;
-    if (!enabled) return 0;
-    const port = Number(https.port || process.env.GATEWAY_HTTPS_PORT || 18790);
-    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
-  } catch {
-    if (!enabledByEnvironment) return 0;
-    const port = Number(process.env.GATEWAY_HTTPS_PORT || 18790);
-    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
-  }
-}
-
-async function startGatewayRelay() {
-  if (gatewayRelay?.server?.listening) return;
-  if (!(await isGatewayPortAvailable(gatewayPort))) {
-    assertGatewayPortAvailable(gatewayPort);
-    throw new Error(`Prometheus cannot start the stable gateway relay because port ${gatewayPort} is already in use.`);
-  }
-  const relay = createGatewayReverseProxy({
-    port: gatewayPort,
-    getTargetPort: () => gatewayBackendPort,
-    initialState: 'starting',
-    upstreamTimeoutMs: GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS,
-    log: writeGatewayLog,
-  });
-  try {
-    await relay.listen();
-    gatewayRelay = relay;
-    writeGatewayLog(`[main] Stable gateway relay listening on ${gatewayPort}\n`);
-  } catch (error) {
-    try { await relay.close(); } catch {}
-    throw error;
-  }
-}
-
 // Preserve the detailed Windows owner message for explicitly requested ports.
 function assertGatewayPortAvailable(port) {
   if (process.platform !== 'win32') return;
@@ -1326,7 +1171,7 @@ function getGatewayPortOwnerPids(port = gatewayPort) {
 function forceCleanupOwnedGatewayPort(
   expectedPid,
   expectedRuntimePid = 0,
-  port = gatewayBackendPort || gatewayPort,
+  port = gatewayPort,
 ) {
   const status = readGatewayRuntimeStatus();
   const statusPid = Number(status?.pid || 0);
@@ -1490,51 +1335,6 @@ function resolveVaultMasterKey() {
 }
 
 // ─── Gateway ───────────────────────────────────────────────────────────────
-function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
-  return checkGatewayGenerationHealth(gatewayBackendPort, gatewayProcessStartedAt, timeoutMs);
-}
-
-// Readiness must belong to the gateway we just spawned. A draining host can
-// briefly answer on its old port; a plain 200 would mark the relay ready for
-// the wrong generation and allow the actual replacement to fail its bind.
-function checkGatewayGenerationHealth(
-  port = gatewayBackendPort,
-  expectedStartedAt = gatewayProcessStartedAt,
-  timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS,
-) {
-  return new Promise((resolve) => {
-    const backendPort = parseGatewayPort(port);
-    if (!backendPort || !Number.isFinite(expectedStartedAt)) return resolve(false);
-    let settled = false;
-    const done = (healthy) => {
-      if (settled) return;
-      settled = true;
-      resolve(healthy);
-    };
-    const req = http.request({
-      hostname: '127.0.0.1', port: backendPort, path: '/api/health', method: 'GET',
-      headers: { Connection: 'close' },
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => {
-        if (body.length < 4096) body += String(chunk).slice(0, 4096 - body.length);
-      });
-      res.once('end', () => {
-        try {
-          const health = JSON.parse(body);
-          done(res.statusCode === 200 && health.ok === true
-            && Number(health.processStartedAt) === expectedStartedAt);
-        } catch { done(false); }
-      });
-      res.once('close', () => done(false));
-      res.once('error', () => done(false));
-    });
-    req.setTimeout(timeoutMs, () => { req.destroy(); done(false); });
-    req.once('error', () => done(false));
-    req.end();
-  });
-}
-
 function readGatewayRuntimeStatus() {
   try {
     const statusPath = path.join(RUNTIME_STATE_DIR, 'gateway-runtime-status.json');
@@ -1545,31 +1345,15 @@ function readGatewayRuntimeStatus() {
   }
 }
 
-function readGatewayProgressLease() {
-  return readSharedGatewayProgressLease(RUNTIME_STATE_DIR);
-}
-
 // Electron can still be torn down by a renderer crash, an OS close request,
 // or an explicit process exit before the async before-quit handshake finishes.
 // Make the final process boundary synchronous so a managed gateway cannot be
 // left behind holding the desktop port.
 process.on('exit', () => {
-  killDrainingGatewayProcesses('electron exit');
   if (!gatewayProcess || !gatewayProcess.pid) return;
   if (gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
   killManagedGatewayProcessTree(gatewayProcess);
 });
-
-async function waitForGatewayPortRelease(timeoutMs = 10_000) {
-  const port = gatewayBackendPort || gatewayPort;
-  const deadline = Date.now() + timeoutMs;
-  while (!(await isGatewayPortAvailable(port))) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Prometheus gateway backend port ${port} remained occupied after process cleanup.`);
-    }
-    await sleep(100);
-  }
-}
 
 function waitForGatewayProcessExit(child, timeoutMs = 10_000) {
   if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
@@ -1865,174 +1649,97 @@ async function completePendingCanonicalValidation() {
   canonicalUpdatePendingValidation = null;
 }
 
-function pruneGatewayRecoveryAttempts(now = Date.now()) {
-  while (gatewayRecoveryAttempts.length > 0
-    && now - gatewayRecoveryAttempts[0] >= GATEWAY_RECOVERY_WINDOW_MS) {
-    gatewayRecoveryAttempts.shift();
+// Electron no longer supervises the gateway itself. It starts the exact
+// launcher a terminal user gets from `prom gateway start` (the CLI supervisor
+// in src/cli/index.ts) and is just a window around it. The CLI supervisor owns
+// health checks, stall recovery, warm handoff, restart exit codes and
+// supervisor replacement; Electron only:
+//   - hands the OS-sealed vault key to the supervisor on stdin,
+//   - waits for the gateway to answer before showing the window,
+//   - relaunches the whole app when the supervisor exits with code 43,
+//   - restarts the supervisor if the supervisor process itself dies.
+const GATEWAY_SUPERVISOR_MAX_RESTARTS = 3;
+const GATEWAY_SUPERVISOR_RESTART_WINDOW_MS = 10 * 60_000;
+const gatewaySupervisorRestarts = [];
+
+function getGatewayCliEntryPath() {
+  return IS_PACKAGED_RUNTIME
+    ? path.join(getPackagedAppRoot(), 'dist', 'cli', 'index.js')
+    : path.join(APP_ROOT, 'src', 'cli', 'index.ts');
+}
+
+function resolveGatewayLauncherCommand() {
+  const cliEntry = getGatewayCliEntryPath();
+  const cliArgs = ['gateway', 'start', '--port', String(gatewayPort)];
+  if (IS_PACKAGED_RUNTIME) {
+    const node = resolvePackagedGatewayNode();
+    return { command: node.command, args: [cliEntry, ...cliArgs], electronRunAsNode: node.electronRunAsNode, cliEntry };
   }
-}
-
-// A planned restart and a watchdog recovery can become visible to Electron at
-// nearly the same time. Invalidate delayed recovery decisions whenever a newer
-// restart owns the handoff so an old timer cannot restart the replacement too.
-function invalidateGatewayRecoverySchedule() {
-  gatewayRecoveryGeneration += 1;
-}
-
-function markGatewayRecoveryDegraded(reason) {
-  gatewayRelay?.setState('failed');
-  const target = gatewayProcess;
-  if (target && target.exitCode == null && target.signalCode == null) {
-    writeGatewayLog(
-      '[main] Automatic gateway recovery paused after '
-      + GATEWAY_RECOVERY_MAX_ATTEMPTS
-      + ' attempts in '
-      + (GATEWAY_RECOVERY_WINDOW_MS / 60_000)
-      + ' minutes: '
-      + reason
-      + '\n',
-    );
-    killManagedGatewayProcessTree(target);
-    forceCleanupOwnedGatewayPort(target.pid || 0, Number(readGatewayRuntimeStatus()?.pid || 0));
-  } else {
-    writeGatewayLog('[main] Automatic gateway recovery paused: ' + reason + '\n');
+  // Source runs load tsx as a loader in the CLI process. The CLI forwards its
+  // execArgv to the gateway child, so the child gets the same loader.
+  const tsxPreflight = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'preflight.cjs');
+  const tsxLoader = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+  if (!fs.existsSync(tsxPreflight) || !fs.existsSync(tsxLoader)) {
+    throw new Error(`The local tsx runtime is missing under ${path.join(APP_ROOT, 'node_modules', 'tsx')}. Run npm install.`);
   }
-  gatewayProcess = null;
-  gatewayHealthFailures = 0;
-  try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('gateway-degraded', {
-        reason: String(reason).slice(0, 240),
-        retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
-      });
-    }
-  } catch {}
+  return {
+    command: resolveSourceGatewayNode(),
+    args: ['--require', tsxPreflight, '--import', pathToFileURL(tsxLoader).href, cliEntry, ...cliArgs],
+    electronRunAsNode: false,
+    cliEntry,
+  };
 }
 
-async function requestAutomaticGatewayRecovery(options = {}) {
-  if (isQuitting || isGatewayRestarting) return false;
-  const now = Date.now();
-  pruneGatewayRecoveryAttempts(now);
-  if (gatewayRecoveryAttempts.length >= GATEWAY_RECOVERY_MAX_ATTEMPTS) {
-    markGatewayRecoveryDegraded(options.reason || 'automatic recovery budget exhausted');
-    return false;
-  }
-  const recoveryGeneration = ++gatewayRecoveryGeneration;
-  const attempt = gatewayRecoveryAttempts.length;
-  const delayMs = Math.min(
-    GATEWAY_RECOVERY_BASE_DELAY_MS * (2 ** attempt),
-    GATEWAY_RECOVERY_MAX_DELAY_MS,
-  );
-  gatewayRecoveryAttempts.push(now);
-  writeGatewayLog(
-    '[main] Scheduling automatic gateway recovery '
-    + (attempt + 1)
-    + '/'
-    + GATEWAY_RECOVERY_MAX_ATTEMPTS
-    + ' in '
-    + delayMs
-    + 'ms: '
-    + (options.reason || 'unknown reason')
-    + '\n',
-  );
-  if (delayMs > 0) await sleep(delayMs);
-  if (isQuitting || isGatewayRestarting || recoveryGeneration !== gatewayRecoveryGeneration) return false;
-  await restartGatewayFromElectron({
-    ...options,
-    automaticRecovery: true,
-  });
-  return true;
-}
-
-function observeGatewayHealth(healthOk, durationMs, outcome = healthOk ? 'ok' : 'timeout', statusCode) {
-  const now = Date.now();
-  pruneGatewayRecoveryAttempts(now);
-  const child = gatewayProcess;
-  const childPid = Number(child?.pid) || undefined;
-  const runtimeStatus = readGatewayRuntimeStatus();
-  const progressLease = readGatewayProgressLease();
-  const consecutiveFailures = healthOk ? 0 : gatewayHealthFailures + 1;
-  const portOwnerPids = healthOk
-    ? []
-    : getGatewayPortOwnerPids(gatewayBackendPort || gatewayPort);
-  const decision = classifyGatewaySupervisorObservation({
-    now,
-    healthOk,
-    childPid,
-    childExited: !child || child.exitCode != null || child.signalCode != null,
-    portOwnerPids,
-    consecutiveFailures,
-    failureLimit: GATEWAY_HEALTH_FAILURE_LIMIT,
-    restartEnabled: gatewayRecoveryAttempts.length < GATEWAY_RECOVERY_MAX_ATTEMPTS,
-    heartbeatFreshMs: 20_000,
-    legacyBusyGraceMs: GATEWAY_BUSY_RECOVERY_GRACE_MS,
-    maxProgressAgeMs: GATEWAY_PROGRESS_MAX_AGE_MS,
-    expectedProcessStartedAt: gatewayProcessStartedAt || undefined,
-    runtimeStatus,
-    progressLease,
-  });
-  appendGatewaySupervisorEvidence(
-    RUNTIME_STATE_DIR,
-    buildGatewaySupervisorEvidence({
-      now,
-      supervisorPid: process.pid,
-      childPid,
-      portOwnerPids,
-      probe: { healthy: healthOk, durationMs, outcome, statusCode },
-      consecutiveFailures,
-      decision,
-      runtimeStatus,
-      progressLease,
+function buildGatewayEnvironment() {
+  const bundledSkillsDir = IS_PACKAGED_RUNTIME
+    ? path.join(process.resourcesPath, 'bundled-skills')
+    : path.join(APP_ROOT, 'workspace', 'skills');
+  const env = {
+    ...process.env,
+    FORCE_COLOR:                   '0',
+    PROMETHEUS_DATA_DIR:           USER_DATA_DIR,
+    PROMETHEUS_APP_DATA_DIR:       USER_DATA_DIR,
+    PROMETHEUS_APP_ROOT:           APP_ROOT,
+    PROMETHEUS_WORKSPACE_DIR:      STORAGE_LAYOUT_V2_WORKSPACE_DIR,
+    ...(STORAGE_LAYOUT_V2_ACTIVE ? {
+      PROMETHEUS_STORAGE_LAYOUT:   'canonical',
+      PROMETHEUS_RUNTIME_DIR:      RUNTIME_STATE_DIR,
+    } : {}),
+    PROMETHEUS_GATEWAY_PORT:        String(gatewayPort),
+    PROMETHEUS_GATEWAY_PUBLIC_PORT: String(gatewayPort),
+    PROMETHEUS_VERSION:             CURRENT_VERSION,
+    PROMETHEUS_BUNDLED_SKILLS_DIR:  bundledSkillsDir,
+    // Same supervisor `prom gateway start` uses, with confirmed-stall restart on.
+    PROMETHEUS_SUPERVISOR:          '1',
+    PROMETHEUS_SUPERVISOR_RESTART:  '1',
+    PROMETHEUS_DISABLE_UPDATE_CHECK: '1',
+    PROMETHEUS_ELECTRON_MANAGED:    '1',
+    PROMETHEUS_ELECTRON_PID:        String(process.pid),
+    // Lets the gateway know exit 43 (full app relaunch) is understood here.
+    PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
+    PROMETHEUS_GATEWAY_STALL_AUTORESTART: process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART ?? '1',
+    PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
+    PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
+    PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
+    ...(IS_PACKAGED_RUNTIME ? {
+      PLAYWRIGHT_BROWSERS_PATH: path.join(process.resourcesPath, 'playwright-browsers'),
+    } : {
+      // Electron dev runs always serve the live source tree.
+      PROMETHEUS_GATEWAY_USE_SOURCE: '1',
     }),
-  );
-  return { decision, runtimeStatus, progressLease, consecutiveFailures };
-}
-
-function startGatewayHealthWatchdog() {
-  if (gatewayHealthTimer) return;
-  gatewayHealthTimer = setInterval(async () => {
-    if (isQuitting || isGatewayRestarting || gatewayHealthCheckInFlight || !gatewayProcess) return;
-    gatewayHealthCheckInFlight = true;
-    try {
-      const startedAt = Date.now();
-      const healthOk = await checkGatewayHealth();
-      const observed = observeGatewayHealth(
-        healthOk,
-        Date.now() - startedAt,
-        healthOk ? 'ok' : 'timeout',
-      );
-      if (healthOk) {
-        gatewayHealthFailures = 0;
-        gatewayRelay?.setState('ready');
-        return;
-      }
-      gatewayHealthFailures = observed.decision.resetFailures
-        ? 0
-        : observed.consecutiveFailures;
-      writeGatewayLog(
-        '[main] Gateway health failure '
-        + observed.consecutiveFailures
-        + '/'
-        + GATEWAY_HEALTH_FAILURE_LIMIT
-        + '; state='
-        + observed.decision.state
-        + '; action='
-        + observed.decision.action
-        + '; reason='
-        + observed.decision.reasonCode
-        + '\n',
-      );
-      if (observed.decision.action === 'restart' || observed.decision.action === 'relaunch') {
-        await requestAutomaticGatewayRecovery({
-          terminateExisting: true,
-          reason: 'health watchdog: ' + observed.decision.reasonCode,
-        });
-      }
-    } finally {
-      gatewayHealthCheckInFlight = false;
-    }
-  }, GATEWAY_HEALTH_INTERVAL_MS);
-  gatewayHealthTimer.unref?.();
+    ...(IS_PACKAGED_RUNTIME && process.platform === 'darwin' ? {
+      PROMETHEUS_DESKTOP_HELPER_PATH: path.join(process.resourcesPath, 'prometheus-desktop-helper'),
+    } : {}),
+    ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
+  };
+  // Older Electron builds moved the listener behind a private relay port.
+  delete env.PROMETHEUS_GATEWAY_INTERNAL_PORT;
+  delete env.PROMETHEUS_GATEWAY_INTERNAL_HOST;
+  delete env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
+  delete env.PROMETHEUS_HOT_RESTART;
+  delete env.PROMETHEUS_AUTO_INSTANCE;
+  delete env.PROMETHEUS_NEW_INSTANCE;
+  return env;
 }
 
 async function startGateway() {
@@ -2044,151 +1751,45 @@ async function startGateway() {
   console.log(`[Prometheus] Packaged runtime: ${IS_PACKAGED_RUNTIME ? 'yes' : 'no'}`);
 
   openGatewayLog();
-  writeGatewayLog(`[main] Gateway starting — pid will follow\n`);
+  writeGatewayLog(`[main] Gateway starting via the CLI supervisor (prom gateway start)\n`);
   writeGatewayLog(`[main] Data dir: ${USER_DATA_DIR}\n`);
   writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
   await selectGatewayPort();
-  await selectGatewayBackendPort();
-  await startGatewayRelay();
-  gatewayRelay?.setState('starting');
   synchronizeTailscaleFunnelTarget();
-  writeGatewayLog(`[main] Gateway public port ${gatewayPort} (${GATEWAY_URL}); private backend ${gatewayBackendPort}\n`);
+  writeGatewayLog(`[main] Gateway port ${gatewayPort} (${GATEWAY_URL})\n`);
 
-  // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
-  const bundledSkillsDir = IS_PACKAGED_RUNTIME
-    ? path.join(process.resourcesPath, 'bundled-skills')
-    : path.join(APP_ROOT, 'workspace', 'skills');
-
-  // Unseal the vault master key (or null if OS protection is unavailable). Handed
-  // to the child over stdin below — the child blocks on that read, so we MUST write
-  // a line in both cases (a hex key, or an empty sentinel for the file-fallback path).
+  // Unseal the vault master key (or null if OS protection is unavailable). The
+  // supervisor blocks on one stdin line, so always write one: a hex key or an
+  // empty sentinel for the file-fallback path. It forwards the key to every
+  // gateway child it launches.
   const vaultKeyHex = resolveVaultMasterKey();
-  gatewayProcessStartedAt = Date.now();
+  const launcher = resolveGatewayLauncherCommand();
+  writeGatewayLog(`[main] Launcher: ${launcher.command} ${launcher.cliEntry}${launcher.electronRunAsNode ? ' (ELECTRON_RUN_AS_NODE fallback: bundled Node runtime missing)' : ''}\n`);
 
-  const gatewayEnv = {
-    ...process.env,
-    FORCE_COLOR:                  '0',
-    PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
-    PROMETHEUS_APP_DATA_DIR:      USER_DATA_DIR,
-    PROMETHEUS_APP_ROOT:          APP_ROOT,
-    PROMETHEUS_WORKSPACE_DIR:     STORAGE_LAYOUT_V2_WORKSPACE_DIR,
-    ...(STORAGE_LAYOUT_V2_ACTIVE ? {
-      PROMETHEUS_STORAGE_LAYOUT:  'canonical',
-      PROMETHEUS_RUNTIME_DIR:     RUNTIME_STATE_DIR,
-    } : {}),
-    // The public port remains the gateway identity used by pairing, lifecycle
-    // restarts, Electron navigation, and Tailscale Funnel. Only the HTTP
-    // listener itself moves behind Electron's stable relay.
-    PROMETHEUS_GATEWAY_PORT:      String(gatewayPort),
-    PROMETHEUS_GATEWAY_PUBLIC_PORT: String(gatewayPort),
-    PROMETHEUS_GATEWAY_INTERNAL_PORT: String(gatewayBackendPort),
-    PROMETHEUS_GATEWAY_INTERNAL_HOST: '127.0.0.1',
-    PROMETHEUS_VERSION:            CURRENT_VERSION,
-    PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
-    PROMETHEUS_ELECTRON_MANAGED:  '1',
-    PROMETHEUS_ELECTRON_PID:      String(process.pid),
-    // Lets the gateway know exit 43 (full app relaunch) is understood here.
-    PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
-    PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(gatewayProcessStartedAt),
-    // Keep the gateway's own stall recovery aligned with the Electron
-    // watchdog. An unset value should use the production-safe default; an
-    // explicit 0/false remains available for diagnostics.
-    PROMETHEUS_GATEWAY_STALL_AUTORESTART: process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART ?? '1',
-    PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
-    PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
-    PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
-    ...(IS_PACKAGED_RUNTIME ? {
-      PLAYWRIGHT_BROWSERS_PATH: path.join(process.resourcesPath, 'playwright-browsers'),
-    } : {}),
-    ...(IS_PACKAGED_RUNTIME && process.platform === 'darwin' ? {
-      PROMETHEUS_DESKTOP_HELPER_PATH: path.join(process.resourcesPath, 'prometheus-desktop-helper'),
-    } : {}),
-    ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
-  };
-
-  if (IS_PACKAGED_RUNTIME) {
-    const gatewayEntry = getGatewayEntryPath();
-    const gatewayNode = resolvePackagedGatewayNode();
-    writeGatewayLog(`[main] Entry: ${gatewayEntry}\n`);
-    writeGatewayLog(`[main] Exec: ${gatewayNode.command}${gatewayNode.electronRunAsNode ? ' (ELECTRON_RUN_AS_NODE fallback: bundled Node runtime missing)' : ' (bundled Node runtime)'}\n`);
-    gatewayProcess = spawn(gatewayNode.command, [gatewayEntry], {
-      cwd: getGatewayWorkingDirectory(),
-      env: {
-        ...gatewayEnv,
-        ...(gatewayNode.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
-      },
-      // stdin carries the vault key; the IPC channel carries the warm-handoff
-      // notice a restarting gateway sends before it starts draining.
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-    });
-  } else {
-    // Do not spawn the Windows .cmd shim with shell:true. Electron would then
-    // track only cmd.exe while the real tsx/node gateway became a detached
-    // descendant, which is exactly how ports survived an app close. In source
-    // development, use the normal Node runtime for the gateway child so native
-    // addons (notably better-sqlite3) match the ABI installed by npm. The
-    // gateway remains a separate Electron-owned process and still receives the
-    // sealed vault key over stdin.
-    const tsxCli = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    if (!fs.existsSync(tsxCli)) {
-      throw new Error(`The local tsx runtime is missing: ${tsxCli}`);
-    }
-    const sourceGatewayNode = resolveSourceGatewayNode();
-    writeGatewayLog(`[main] Source gateway runtime: ${sourceGatewayNode}\n`);
-    // tsx relays the IPC channel to the real gateway child, so the handoff
-    // notice still reaches Electron through the wrapper.
-    // Load tsx as a loader in the gateway process itself. `tsx/dist/cli.mjs`
-    // spawns a second node child and relays IPC/stdio, which cost an extra
-    // process boot (~150ms) on every restart. Fall back to the CLI wrapper if
-    // the loader files are missing (older tsx layouts).
-    const tsxPreflight = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'preflight.cjs');
-    const tsxLoader = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs');
-    const directTsxArgs = fs.existsSync(tsxPreflight) && fs.existsSync(tsxLoader)
-      && String(process.env.PROMETHEUS_GATEWAY_TSX_CLI_WRAPPER || '') !== '1'
-      ? ['--require', tsxPreflight, '--import', pathToFileURL(tsxLoader).href, getGatewayEntryPath()]
-      : null;
-    gatewayProcess = spawn(sourceGatewayNode, directTsxArgs || [tsxCli, getGatewayEntryPath()], {
-      cwd:   getGatewayWorkingDirectory(),
-      env:   { ...gatewayEnv },
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-    });
-  }
-
-  const spawnedGatewayProcess = gatewayProcess;
-  writeGatewayLog(`[main] Gateway spawned (pid=${spawnedGatewayProcess.pid}, backend=${gatewayBackendPort})\n`);
-  spawnedGatewayProcess.on('message', (message) => {
-    if (message?.type === HANDOFF_RESTART_RESULT) {
-      const pending = pendingHandoffRestarts.get(message.id);
-      if (pending?.target === spawnedGatewayProcess) {
-        pendingHandoffRestarts.delete(message.id);
-        try { pending.source.send(message); } catch {}
-      }
-      return;
-    }
-    if (relayHandoffRestart(spawnedGatewayProcess, message)) return;
-    if (!isGatewayHandoffNotice(message)) return;
-    handoffGatewayFromElectron(spawnedGatewayProcess, message).catch((error) => {
-      writeGatewayLog('[main] Gateway warm handoff failed: ' + (error?.message || error) + '\n');
-    });
+  const supervisor = spawn(launcher.command, launcher.args, {
+    cwd: getGatewayWorkingDirectory(),
+    env: {
+      ...buildGatewayEnvironment(),
+      ...(launcher.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    detached: process.platform !== 'win32',
   });
+  gatewayProcess = supervisor;
+  writeGatewayLog(`[main] Gateway supervisor spawned (pid=${supervisor.pid})\n`);
 
-  // Hand off the master key (or an empty sentinel) as the first stdin line. The
-  // child's vault-key-bootstrap reads exactly one line, then stdin is left open.
   try {
-    spawnedGatewayProcess.stdin?.write((vaultKeyHex || '') + '\n');
+    supervisor.stdin?.write((vaultKeyHex || '') + '\n');
   } catch (err) {
     writeGatewayLog(`[main] Vault key handoff write failed: ${err && err.message ? err.message : err}\n`);
   }
 
-  spawnedGatewayProcess.stdout?.on('data', (d) => writeGatewayLog(d));
-  spawnedGatewayProcess.stderr?.on('data', (d) => writeGatewayLog(d));
+  supervisor.stdout?.on('data', (d) => writeGatewayLog(d));
+  supervisor.stderr?.on('data', (d) => writeGatewayLog(d));
 
-  spawnedGatewayProcess.on('error', (err) => {
+  supervisor.on('error', (err) => {
     writeGatewayLog(`[main] Spawn error: ${err.message}\n`);
     if (!isQuitting) {
       dialog.showErrorBox(
@@ -2199,26 +1800,14 @@ async function startGateway() {
     }
   });
 
-  spawnedGatewayProcess.on('exit', (code, signal) => {
-    if (spawnedGatewayProcess.pid && drainingGatewayProcesses.delete(spawnedGatewayProcess.pid)) {
-      // The replacement already owns the backend port and the runtime status
-      // file; a port cleanup here would target the live gateway.
-      writeGatewayLog(`[main] Drained gateway ${spawnedGatewayProcess.pid} exited (code=${code}, signal=${signal})\n`);
-      return;
-    }
-    writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
-    // A timed-out restart may have terminated the gateway before its worker
-    // descendants released the listener. Clean only the old Electron-owned
-    // port before attempting the replacement.
-    const exitedRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
-    forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
-    if (!isQuitting && isGatewayRestarting) return;
-    if (gatewayShuttingDown) return;
-    if (!isQuitting && code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
+  supervisor.on('exit', (code, signal) => {
+    writeGatewayLog(`[main] Gateway supervisor exited (code=${code}, signal=${signal})\n`);
+    if (gatewayProcess === supervisor) gatewayProcess = null;
+    if (isQuitting || gatewayShuttingDown || isGatewayRestarting) return;
+    if (code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
       // The gateway already wrote its restart context and shut down; the
-      // relaunched app starts a fresh gateway that resumes from it.
+      // relaunched app starts a fresh supervisor that resumes from it.
       writeGatewayLog('[main] Gateway requested full app relaunch (code 43)\n');
-      invalidateGatewayRecoverySchedule();
       isQuitting = true;
       // Dev launches are `electron .`; a relative "." only works if the new
       // process inherits the same cwd, so pass the absolute app path instead.
@@ -2228,168 +1817,73 @@ async function startGateway() {
       app.quit();
       return;
     }
-    if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
-      // Code 42 is an intentional handoff from the Electron-managed gateway,
-      // not a failed health probe. Start the replacement immediately and
-      // cancel any watchdog recovery that was queued for the old process.
-      invalidateGatewayRecoverySchedule();
-      restartGatewayFromElectron({
-        terminateExisting: true,
-        reason: 'gateway requested restart (code 42)',
-      }).catch((error) => {
-        writeGatewayLog('[main] Electron gateway restart request failed: ' + (error?.message || error) + '\n');
-      });
-      return;
-    }
-    if (!isQuitting) {
-      gatewayRelay?.setState('failed');
-      void requestAutomaticGatewayRecovery({
-        terminateExisting: false,
-        reason: `gateway exited unexpectedly (code=${code}, signal=${signal})`,
-      }).catch((error) => {
-        writeGatewayLog(`[main] Automatic recovery after gateway exit failed: ${error?.message || error}\n`);
-      });
-    }
+    // The supervisor itself died (it normally outlives every gateway child).
+    void restartGatewayAfterSupervisorExit(`gateway supervisor exited unexpectedly (code=${code}, signal=${signal})`);
   });
 }
 
-// Warm handoff: the gateway has already checkpointed the restart-owning turn,
-// released the backend port, and keeps running everything else. Start the
-// replacement beside it, switch the relay when the replacement is healthy,
-// and leave the old process alone until it exits on its own.
-async function handoffGatewayFromElectron(hostProcess, notice) {
-  if (isQuitting) return false;
-  if (gatewayProcess !== hostProcess) {
-    writeGatewayLog(`[main] Ignoring handoff notice from non-current gateway ${notice.hostPid}\n`);
-    return false;
+// Recovery for the rare case where the supervisor process itself dies. Gateway
+// crashes and stalls never reach here; the supervisor handles those.
+async function restartGatewayAfterSupervisorExit(reason) {
+  const now = Date.now();
+  while (gatewaySupervisorRestarts.length && now - gatewaySupervisorRestarts[0] >= GATEWAY_SUPERVISOR_RESTART_WINDOW_MS) {
+    gatewaySupervisorRestarts.shift();
   }
-  if (isGatewayRestarting) {
-    writeGatewayLog(`[main] Ignoring handoff notice from gateway ${notice.hostPid}: a restart is already in progress\n`);
-    return false;
-  }
-  isGatewayRestarting = true;
-  const reason = String(notice.reason || 'gateway warm handoff');
-  writeGatewayLog(`[main] Gateway ${notice.hostPid} is handing off (${reason}); it keeps ${Number(notice.runtimeCount) || 0} runtime(s) running while the replacement starts\n`);
-  drainingGatewayProcesses.set(hostProcess.pid, hostProcess);
-  gatewayProcess = null;
-  gatewayHealthFailures = 0;
-  invalidateGatewayRecoverySchedule();
-  gatewayRelay?.beginHandoff(reason);
-  try {
-    // The host has released its listener but may keep active streams alive.
-    // Give the replacement a fresh port instead of racing another draining
-    // generation for the same one.
-    await selectGatewayBackendPort({ rotate: true });
-    await startGateway();
-    await waitForGateway();
-    gatewayRelay?.setState('ready');
-    gatewayRecoveryAttempts.length = 0;
-    writeGatewayLog(`[main] Warm handoff complete: replacement gateway is serving; ${notice.hostPid} continues draining\n`);
-    return true;
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    writeGatewayLog(`[main] Warm handoff replacement failed: ${message}\n`);
-    gatewayRelay?.setState('failed');
-    const pending = gatewayProcess;
-    if (pending && pending.exitCode == null && pending.signalCode == null) {
-      adoptLateGatewayReady(pending);
-    } else {
-      gatewayProcess = null;
-      setTimeout(() => {
-        void requestAutomaticGatewayRecovery({
-          terminateExisting: false,
-          reason: `warm handoff replacement failed: ${message}`,
-        });
-      }, 0);
-    }
+  if (gatewaySupervisorRestarts.length >= GATEWAY_SUPERVISOR_MAX_RESTARTS) {
+    writeGatewayLog(`[main] Gateway supervisor restart budget exhausted: ${reason}\n`);
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('gateway-degraded', {
-          reason: message.slice(0, 240),
-          retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
+          reason: String(reason).slice(0, 240),
+          retryAfterMs: GATEWAY_SUPERVISOR_RESTART_WINDOW_MS,
         });
       }
     } catch {}
     return false;
-  } finally {
-    isGatewayRestarting = false;
   }
+  gatewaySupervisorRestarts.push(now);
+  await sleep(1_000 * gatewaySupervisorRestarts.length);
+  if (isQuitting || gatewayProcess) return false;
+  return restartGatewayFromElectron({ terminateExisting: false, automaticRecovery: true, reason });
 }
 
 async function restartGatewayFromElectron(options = {}) {
   if (isGatewayRestarting) return false;
   isGatewayRestarting = true;
-  const restartRequestedAt = Date.now();
-  const terminateExisting = options.terminateExisting === true;
-  const automaticRecovery = options.automaticRecovery !== false;
   const reason = String(options.reason || 'gateway requested restart');
-  writeGatewayLog(`[main] Electron-managed gateway restart requested: ${reason}\n`);
-  gatewayRelay?.beginRestart(reason);
-
+  writeGatewayLog(`[main] Gateway restart requested: ${reason}\n`);
   try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('gateway-restarting');
-    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('gateway-restarting');
   } catch {}
-
   try {
-    if (terminateExisting && gatewayProcess) {
-      const staleProcess = gatewayProcess;
-      const staleRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
-      writeGatewayLog(`[main] Terminating unresponsive gateway tree (pid=${staleProcess.pid || 'unknown'})\n`);
-      killManagedGatewayProcessTree(staleProcess);
-      await waitForGatewayProcessExit(staleProcess);
-      forceCleanupOwnedGatewayPort(staleProcess.pid || 0, staleRuntimePid);
-      await waitForGatewayPortRelease();
+    const stale = gatewayProcess;
+    if (stale && stale.exitCode == null && stale.signalCode == null) {
+      if (options.terminateExisting === false) {
+        writeGatewayLog('[main] Gateway supervisor is still running; leaving it in place\n');
+        return true;
+      }
+      writeGatewayLog(`[main] Terminating gateway supervisor tree (pid=${stale.pid || 'unknown'})\n`);
+      killManagedGatewayProcessTree(stale);
+      await waitForGatewayProcessExit(stale);
+      forceCleanupOwnedGatewayPort(stale.pid || 0, Number(readGatewayRuntimeStatus()?.pid || 0));
     }
     gatewayProcess = null;
-    // If a stale listener claimed the previous generation's backend port,
-    // recover on a fresh one instead of repeating the same bind failure.
-    if (gatewayBackendPort && !(await isGatewayPortAvailable(gatewayBackendPort))) {
-      await selectGatewayBackendPort({ rotate: true });
-    }
-    const spawnAt = Date.now();
+    const deadline = Date.now() + 10_000;
+    while (!(await isGatewayPortAvailable(gatewayPort)) && Date.now() < deadline) await sleep(100);
     await startGateway();
-    const spawnedAt = Date.now();
     await waitForGateway();
-    gatewayRelay?.setState('ready');
-    gatewayRecoveryAttempts.length = 0;
-    writeGatewayLog(`[main] Electron-managed gateway restart complete (requested->spawn ${spawnAt - restartRequestedAt}ms, spawn setup ${spawnedAt - spawnAt}ms, spawn->healthy ${Date.now() - spawnedAt}ms, total ${Date.now() - restartRequestedAt}ms)\n`);
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.loadURL(GATEWAY_URL);
-    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL);
+    writeGatewayLog('[main] Gateway restart complete\n');
     return true;
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
-    writeGatewayLog(`[main] Electron-managed gateway restart failed: ${message}\n`);
-    gatewayRelay?.setState('failed');
-    // A slow boot is not a dead gateway. Keep ownership of a still-running
-    // child (dropping it orphaned a live gateway and let a second one spawn on
-    // the same port) and flip the relay back to ready once it answers.
-    const pending = gatewayProcess;
-    if (pending && pending.exitCode == null && pending.signalCode == null) {
-      adoptLateGatewayReady(pending);
-    } else {
-      gatewayProcess = null;
-      if (automaticRecovery && !isQuitting) {
-        setTimeout(() => {
-          void requestAutomaticGatewayRecovery({
-            terminateExisting: false,
-            reason: `retry after gateway restart failure: ${message}`,
-          });
-        }, 0);
-      }
-    }
+    writeGatewayLog(`[main] Gateway restart failed: ${message}\n`);
     try {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('gateway-degraded', {
-          reason: message.slice(0, 240),
-          retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
-        });
+        mainWindow.webContents.send('gateway-degraded', { reason: message.slice(0, 240), retryAfterMs: GATEWAY_SUPERVISOR_RESTART_WINDOW_MS });
       }
     } catch {}
-    if (!automaticRecovery && !isQuitting) {
+    if (options.automaticRecovery === false && !isQuitting) {
       dialog.showErrorBox(
         'Prometheus - Gateway Restart Failed',
         `Prometheus could not restart the gateway:\n\n${message}\n\nLog: ${GATEWAY_LOG_PATH}`
@@ -2401,74 +1895,48 @@ async function restartGatewayFromElectron(options = {}) {
   }
 }
 
-// Background follow-up for a gateway that missed the readiness deadline but is
-// still alive: keep probing and restore the relay (and reload the window) when
-// it finally answers, instead of leaving every client on a permanent 503.
-function adoptLateGatewayReady(child) {
-  writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} still starting; will adopt it when it becomes healthy\n`);
-  const startedAt = Date.now();
-  const backendPort = gatewayBackendPort;
-  const expectedStartedAt = gatewayProcessStartedAt;
-  const probe = async () => {
-    if (isQuitting || gatewayProcess !== child || child.exitCode != null || child.signalCode != null) return;
-    if (Date.now() - startedAt > 10 * 60_000) {
-      writeGatewayLog(`[main] Gateway pid=${child.pid || 'unknown'} never became healthy; leaving relay failed\n`);
-      return;
-    }
-    const ready = await checkGatewayGenerationHealth(backendPort, expectedStartedAt);
-    if (ready && gatewayProcess === child) {
-      gatewayRelay?.setState('ready');
-      gatewayRecoveryAttempts.length = 0;
-      writeGatewayLog(`[main] Late gateway pid=${child.pid || 'unknown'} became healthy after ${Math.round((Date.now() - startedAt) / 1000)}s; relay ready\n`);
-      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL); } catch {}
-      return;
-    }
-    setTimeout(probe, 1_000);
-  };
-  setTimeout(probe, 1_000);
+function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    if (!gatewayPort) return resolve(false);
+    let settled = false;
+    const done = (healthy) => { if (!settled) { settled = true; resolve(healthy); } };
+    const req = http.request({
+      hostname: '127.0.0.1', port: gatewayPort, path: '/api/health', method: 'GET',
+      headers: { Connection: 'close' },
+    }, (res) => {
+      res.resume();
+      res.once('end', () => done(res.statusCode === 200));
+      res.once('error', () => done(false));
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(); done(false); });
+    req.once('error', () => done(false));
+    req.end();
+  });
 }
 
-function waitForGateway(retries = MAX_RETRIES) {
-  // The relay answers 503 to every client until this probe flips it to ready,
-  // so the probe interval is pure dead time on each restart. A warm gateway
-  // listens ~2.5s after spawn: probe every 50ms for the first 8s, then fall
-  // back to the slow cadence for cold/dev boots.
+function waitForGateway() {
+  // Probe fast for the first 8s (a warm gateway listens in ~2.5s), then fall
+  // back to a slower cadence for cold/dev boots. Readiness is a wall-clock
+  // deadline; the supervisor keeps retrying a crashing child meanwhile.
   const waitStartedAt = Date.now();
-  const nextHealthDelay = () => (Date.now() - waitStartedAt < 8_000 ? 50 : RETRY_DELAY);
   const expectedProcess = gatewayProcess;
-  const expectedPort = gatewayBackendPort;
-  const expectedStartedAt = gatewayProcessStartedAt;
   return new Promise((resolve, reject) => {
     let settled = false;
-    const done = (fn) => { if (!settled) { settled = true; fn(); } };
-
-    // Abort immediately if the gateway process dies before becoming ready.
+    const done = (fn) => { if (!settled) { settled = true; expectedProcess?.removeListener('exit', onProcessExit); fn(); } };
     const onProcessExit = (code, signal) => {
       done(() => reject(new Error(
-        `Gateway process exited before becoming ready (code=${code}, signal=${signal}).\n` +
-        `Check that all dependencies are installed (npm install).`
+        `Gateway supervisor exited before the gateway became ready (code=${code}, signal=${signal}).\n` +
+        'Check that all dependencies are installed (npm install).'
       )));
     };
-    if (expectedProcess) {
-      expectedProcess.once('exit', onProcessExit);
-    }
-
+    expectedProcess?.once('exit', onProcessExit);
     const attempt = async () => {
       if (settled) return;
-      const ready = await checkGatewayGenerationHealth(expectedPort, expectedStartedAt);
-      if (settled) return;
-      if (ready && gatewayProcess === expectedProcess) {
-        expectedProcess?.removeListener('exit', onProcessExit);
-        gatewayRelay?.setState('ready');
-        done(resolve);
-      } else if (retries-- > 0 && Date.now() - waitStartedAt < GATEWAY_READY_TIMEOUT_MS) {
-        setTimeout(attempt, nextHealthDelay());
-      } else {
-        expectedProcess?.removeListener('exit', onProcessExit);
-        done(() => reject(new Error(
-          `Gateway did not become ready at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`
-        )));
+      if (await checkGatewayHealth(2_000)) return done(resolve);
+      if (Date.now() - waitStartedAt >= GATEWAY_READY_TIMEOUT_MS) {
+        return done(() => reject(new Error(`Gateway did not become ready at ${GATEWAY_URL} after ${Math.round((Date.now() - waitStartedAt) / 1000)}s`)));
       }
+      setTimeout(attempt, Date.now() - waitStartedAt < 8_000 ? 50 : 300);
     };
     attempt();
   });
@@ -4625,7 +4093,6 @@ handleTrustedMain('gateway:restart', async (_event, payload = {}) => {
   return {
     ok: ok === true,
     restarting: ok !== true,
-    state: gatewayRelay?.getState?.() || '',
   };
 });
 
@@ -4986,7 +4453,6 @@ app.whenReady().then(async () => {
     loader.close();
     setupAutoUpdater();
     startCanonicalUpdateWatcher();
-    startGatewayHealthWatchdog();
   } catch (err) {
     loader.close();
     const lastOutput = getLastGatewayOutput();
@@ -5005,11 +4471,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   isQuitting = true;
-  if (gatewayHealthTimer) {
-    clearInterval(gatewayHealthTimer);
-    gatewayHealthTimer = null;
-  }
-  killDrainingGatewayProcesses('app quit');
 
   // A safe update has already completed this handshake and cleared
   // gatewayProcess before quitAndInstall. For a normal quit, give the gateway
