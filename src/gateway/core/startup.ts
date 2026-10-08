@@ -57,7 +57,6 @@ import { startAuditMaterializer } from '../audit/materializer';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
 import { getProvider } from '../../providers/factory';
-import type { spawnAgent as SpawnAgentFn } from '../../agents/spawner';
 import { startAutoSettleScheduler } from '../auto-settle';
 import type { LiveRuntimeSnapshot } from '../live-runtime-registry';
 
@@ -232,9 +231,11 @@ function yieldStartup(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-const spawnAgentLazy: typeof SpawnAgentFn = (...args) => {
-  const { spawnAgent } = require('../../agents/spawner.js') as typeof import('../../agents/spawner');
-  return spawnAgent(...args);
+// Telegram agent dispatch and team schedule_job run_now run one-off agent tasks
+// through the shared chat runtime (the Reactor / node_call spawner is retired).
+const runAgentTaskLazy = (params: { agentId: string; task: string; context?: string }) => {
+  const { runAgentTaskOnce } = require('../routes/channels.router.js') as typeof import('../routes/channels.router');
+  return runAgentTaskOnce({ ...params, source: 'agent_dispatch' });
 };
 
 const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runner')['BackgroundTaskRunner'] =>
@@ -445,7 +446,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       listManagedTeams,
       broadcast: broadcastWS,
       cronScheduler,
-      spawnAgent: spawnAgentLazy,
+      spawnAgent: runAgentTaskLazy,
       listTeamContextReferences,
       addTeamContextReference,
       updateTeamContextReference,
@@ -569,7 +570,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       getManagedTeam,
       listManagedTeams,
       handleManagerConversation,
-      spawnAgent: spawnAgentLazy,
+      spawnAgent: runAgentTaskLazy,
       applyTeamChange: applyTeamChangeViaTelegram,
       rejectTeamChange: (teamId: string, changeId: string) => {
         const change = rejectTeamChange(teamId, changeId);

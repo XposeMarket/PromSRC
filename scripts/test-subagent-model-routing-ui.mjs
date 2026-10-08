@@ -5,7 +5,8 @@ import path from 'node:path';
 const root = process.cwd();
 const picker = fs.readFileSync(path.join(root, 'web-ui/src/components/agent-model-picker.js'), 'utf8');
 const modelRouting = fs.readFileSync(path.join(root, 'src/agents/model-routing.ts'), 'utf8');
-const spawner = fs.readFileSync(path.join(root, 'src/agents/spawner.ts'), 'utf8');
+const channels = fs.readFileSync(path.join(root, 'src/gateway/routes/channels.router.ts'), 'utf8');
+const dispatch = fs.readFileSync(path.join(root, 'src/gateway/chat/chat-helpers.ts'), 'utf8');
 const manager = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-manager.ts'), 'utf8');
 
 assert.match(picker, /id=\"\$\{prefix\}-provider-/);
@@ -19,8 +20,10 @@ assert.match(picker, /Reasoning cleared \(using Settings default\)/, 'reasoning 
 
 assert.match(modelRouting, /agent_model_defaults\.main_chat/, 'global Settings main-chat mirror must be a routing fallback');
 assert.match(modelRouting, /resolveConfiguredAgentRouting/, 'model routing must expose complete route resolution');
-assert.match(spawner, /fallbackToPrimary: true/, 'manual spawn must resolve the configured primary route');
-assert.match(spawner, /No model is configured for subagent/, 'no-model spawn failure must be actionable');
+assert.match(channels, /fallbackToPrimary: true/, 'manual agent runs must resolve the configured primary route');
+assert.match(channels, /export async function runAgentTaskOnce/, 'Run task must use the shared chat runtime');
+assert.doesNotMatch(channels, /agents\/spawner/, 'the retired Reactor spawner must stay gone');
+assert.match(dispatch, /No model is configured for subagent/, 'no-model dispatch failure must be actionable');
 assert.match(manager, /executorReasoningEffort: executorRouting\.reasoningEffort/, 'created subagent tasks must preserve inherited reasoning');
 
 console.log('PASS: dropdown-only subagent UI, clear serialization, inherited routing, and actionable spawn contracts');

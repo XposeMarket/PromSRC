@@ -37,7 +37,6 @@ type WhatsAppChannelConfig = any;
 export const router = Router();
 
 const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
-const getAgentSpawner = () => require('../../agents/spawner') as typeof import('../../agents/spawner');
 
 let _cronScheduler: any;
 let _telegramChannel: any;
@@ -1308,6 +1307,74 @@ export async function runSubagentChatTurnFromChannel(params: {
   );
 }
 
+/**
+ * One-off agent task: the "Run task" buttons (desktop + mobile), Telegram agent
+ * dispatch and team schedule_job run_now. Runs through the same shared
+ * runInteractiveTurn/handleChat runtime as direct subagent chat (same tools,
+ * policy, approvals, recovery and traces). Replaces the retired Reactor /
+ * node_call spawner. Each run gets its own fresh session; the user message and
+ * reply are recorded in the agent's chat thread so the run stays visible.
+ */
+export async function runAgentTaskOnce(params: {
+  agentId: string;
+  task: string;
+  context?: string;
+  timeoutMs?: number;
+  source?: string;
+}): Promise<{
+  agentId: string;
+  agentName: string;
+  success: boolean;
+  result: string;
+  error?: string;
+  durationMs: number;
+  stepCount?: number;
+  historyEntry?: any;
+}> {
+  const agentId = _sanitizeAgentId(params.agentId);
+  const agent = getAgentById(agentId);
+  const startedAt = Date.now();
+  if (!agent) {
+    return { agentId, agentName: agentId, success: false, result: '', error: `Agent "${agentId}" not found`, durationMs: 0 };
+  }
+  const agentName = String(agent.name || agentId);
+  try {
+    const run = await runSubagentChatTurnFromChannel({
+      agentId,
+      message: params.task,
+      source: params.source || 'agent_task',
+      timeoutMs: params.timeoutMs,
+      sessionId: `subagent_task_${agentId}_${startedAt}`,
+      seedFromSharedChatStore: false,
+      callerContextExtra: params.context,
+    });
+    return {
+      agentId,
+      agentName,
+      success: true,
+      result: String(run.result?.text || ''),
+      durationMs: Date.now() - startedAt,
+      historyEntry: run.historyEntry,
+    };
+  } catch (err: any) {
+    const finishedAt = Date.now();
+    const error = String(err?.message || err);
+    const historyEntry = recordAgentRun({
+      agentId,
+      agentName,
+      trigger: 'manual',
+      success: false,
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt - startedAt,
+      stepCount: undefined,
+      error,
+      resultPreview: undefined,
+    });
+    return { agentId, agentName, success: false, result: '', error, durationMs: finishedAt - startedAt, historyEntry };
+  }
+}
+
 router.get('/api/agents', (_req, res) => {
   const cfg = getConfig().getConfig() as any;
   const explicitAgents = Array.isArray(cfg.agents) ? cfg.agents : [];
@@ -2413,35 +2480,12 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
   const timeoutMs = Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0
     ? Math.floor(Number(timeoutRaw))
     : 120000;
-  const teamMemberIds = getTeamMemberAgentIds();
-  const allTeams = listManagedTeams();
-  const isManager = !!(agent as any)?.isTeamManager || allTeams.some((team: any) => String(team?.managerAgentId || '').trim() === agentId);
-  const agentType = inferAgentModelDefaultType(agent, {
-    isManager,
-    isTeamMember: teamMemberIds.has(agentId),
-  });
-
-  const startedAt = Date.now();
-  const { spawnAgent } = getAgentSpawner();
-  const result = await spawnAgent({
+  const { historyEntry, ...result } = await runAgentTaskOnce({
     agentId,
     task,
     context,
     timeoutMs,
-    agentType,
-  });
-  const finishedAt = Date.now();
-  const historyEntry = recordAgentRun({
-    agentId: result.agentId,
-    agentName: result.agentName,
-    trigger: 'manual',
-    success: result.success,
-    startedAt,
-    finishedAt,
-    durationMs: result.durationMs,
-    stepCount: result.stepCount,
-    error: result.error,
-    resultPreview: result.success ? String(result.result || '') : undefined,
+    source: 'agent_run_task',
   });
   res.json({ success: result.success, result, historyEntry });
 });

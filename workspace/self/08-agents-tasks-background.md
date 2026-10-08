@@ -5,7 +5,7 @@
 
 ## TL;DR
 
-- Persistent specialist agents live under `.prometheus/subagents/`; `SubagentManager` owns definitions, workspaces, identity and configured routing. `agents/spawner.ts` and `agents/model-routing.ts` resolve/run agent turns.
+- Persistent specialist agents live under `.prometheus/subagents/`; `SubagentManager` owns definitions, workspaces, identity and configured routing. `agents/model-routing.ts` resolves routing; every agent turn runs through the shared `runInteractiveTurn`/`handleChat` runtime.
 - One-off delegated runs are formal tasks; `background_ops` creates ephemeral background work coordinated by `src/gateway/tasks/task-runner.ts` and executed by `BackgroundTaskRunner`.
 - Background spawn is **explicit-tool-surface only**: give `tool_categories` up front; the worker can request more categories later. Prompt keyword auto-activation is deliberately skipped.
 - `tool_categories` is normalized/deduplicated and capped at `BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8` in `task-runner.ts`; core tools remain available.
@@ -22,7 +22,7 @@
 | Persistent agent records and paths | `src/gateway/agents-runtime/subagent-manager.ts` → `SubagentManager`, `SubagentDefinition` | Persists definitions under `.prometheus/subagents`; create/update/run/status entrypoints. |
 | Identity/persona generation | `src/agents/identity-generator.ts` → exported identity helpers; `src/agents/agent-prompt-file.ts` | Per-agent identity files and prompt composition. |
 | Provider/model selection | `src/agents/model-routing.ts` → `resolveConfiguredAgentRouting`, `parseProviderModelRef` | Resolves role/agent/global route and provider-aware effort/speed. |
-| Agent turn orchestration | `src/agents/spawner.ts` → spawn/run helpers; `src/agents/reactor.ts` | Persistent standalone agent execution. |
+| Agent turn orchestration | `src/gateway/routes/channels.router.ts` → `runSubagentChatTurn`, `runAgentTaskOnce` | Persistent standalone agent chat and one-off "Run task" / Telegram / `schedule_job run_now` dispatch, all on the shared chat runtime. The old Reactor / `node_call` engine is retired. |
 | Executor dispatch | `src/gateway/agents-runtime/subagent-executor.ts` → `executeToolCall` background action branch | Dispatches agent/team capability tools, including `background_ops`. |
 | Background spawn tool categories | `src/gateway/tasks/spawn-tool-categories-arg.ts` → `normalizeSpawnToolCategoriesArg`; `src/gateway/tasks/task-runner.ts` → `normalizeBackgroundSpawnToolCategories` | Stable category filtering plus hard cap 8 (`BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES`). |
 | Ephemeral task state + wait/steer | `src/gateway/tasks/task-runner.ts` → `EphemeralBackgroundStatus`, `backgroundSpawn`, `backgroundSteer`, `backgroundWait`, `backgroundJoin` | Public task lifecycle, records, completion wake, join merge policy. |
@@ -92,7 +92,7 @@ Persistent subagent identity/configuration is not the same store as task run sta
 
 1. Trace the tool schema and `subagent-executor.ts` action branch, then `task-runner.ts` state transition and `BackgroundTaskRunner` executor route. Keep capability validation centralized.
 2. Preserve the distinction among persistent agent definitions, formal subagent task runs, ephemeral background tasks, team member dispatch, and detached peer sessions.
-3. Run the targeted regressions in [generated tests](generated/tests.md): `src/agents/model-routing.regression.ts`, `src/agents/provider-reactor-worker-routing.regression.ts`, `src/gateway/tasks/background-spawn-continuity.regression.ts`, `background-spawn-tool-surface.regression.ts`, `background-spawn-speed.regression.ts`, `task-continuity.regression.ts`, and `task-completion-protocol.regression.ts`. Run related agent/background UI contracts when touching presentation or lifecycle.
+3. Run the targeted regressions in [generated tests](generated/tests.md): `src/agents/model-routing.regression.ts`, `src/gateway/tasks/background-spawn-continuity.regression.ts`, `background-spawn-tool-surface.regression.ts`, `background-spawn-speed.regression.ts`, `task-continuity.regression.ts`, and `task-completion-protocol.regression.ts`. Run related agent/background UI contracts when touching presentation or lifecycle.
 4. Check restart recovery, timeout/abort, completion wake, tool categories, model-effort gate, fast-mode handling, and join merge result. Avoid a live worker smoke test that creates uncontrolled external side effects.
 5. Generated inventories are authoritative for tool/test lists: [tools](generated/tools.md), [categories](generated/tool-categories.md), [tests](generated/tests.md), [changelog](generated/changelog.md).
 

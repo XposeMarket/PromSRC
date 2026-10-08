@@ -8,7 +8,6 @@ const root = path.resolve(import.meta.dirname, '..');
 const promptContext = fs.readFileSync(path.join(root, 'src', 'gateway', 'prompt-context.ts'), 'utf-8');
 const chatRouter = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf-8');
 const channelsRouter = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'channels.router.ts'), 'utf-8');
-const reactor = fs.readFileSync(path.join(root, 'src', 'agents', 'reactor.ts'), 'utf-8');
 
 function branch(startMarker, endMarker) {
   const start = promptContext.indexOf(startMarker);
@@ -57,7 +56,7 @@ assert.ok(
   'skill_read results must bypass generic tool-result clipping so the complete SKILL.md reaches the next reasoning round',
 );
 assert.ok(promptContext.includes('buildSubagentIdentityMemoryContext'), 'gateway subagent paths must use the canonical identity/memory helper');
-assert.ok(reactor.includes('buildSubagentIdentityMemoryContext'), 'Reactor subagent paths must use the canonical identity/memory helper');
+assert.ok(!fs.existsSync(path.join(root, 'src', 'agents', 'reactor.ts')), 'the retired Reactor must not return as a second subagent context path');
 assert.ok(channelsRouter.includes("/api/agents/:id/memory-md"), 'per-agent memory API must be registered');
 assert.match(
   promptContext,
