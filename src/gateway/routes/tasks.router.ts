@@ -22,6 +22,18 @@ import { getErrorAudit } from '../../security/error-audit';
 import { handleTaskRecoveryMessage, isImmutableCompletedAgentTask, steerTask } from '../tasks/task-router';
 import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-recovery';
 import { isStorageBoundaryError } from '../storage/storage-paths';
+import { collectNeedsYouItems } from '../needs-you-collect';
+import { notifyNeedsYouChanged } from '../comms/broadcaster';
+
+// Server push: fingerprint the needs-you set every 5s and broadcast needs_you_changed on change.
+// The desktop Tasks page debounces this into a re-fetch of /api/needs-you.
+const needsYouWatch = setInterval(() => {
+  try {
+    const items = collectNeedsYouItems();
+    notifyNeedsYouChanged(items.map((item) => item.id).sort().join('|'));
+  } catch { /* best-effort push */ }
+}, 5_000);
+(needsYouWatch as any).unref?.();
 
 
 export const router = Router();
@@ -362,6 +374,17 @@ router.post('/api/heartbeat/agents/:agentId/tick', async (req, res) => {
     res.status(500).json({ success: false, error: err?.message });
   }
 });
+// Needs-you inbox: every pending record that is blocked on Raul, normalized for the Tasks page.
+router.get('/api/needs-you', (_req, res) => {
+  try {
+    const items = collectNeedsYouItems();
+    notifyNeedsYouChanged(items.map((item) => item.id).sort().join('|'));
+    res.json({ success: true, items, count: items.length, generatedAt: new Date().toISOString() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load needs-you items' });
+  }
+});
+
 router.get('/api/bg-tasks', (req, res) => {
   const requestedLimit = Number(req.query.limit || 0);
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : undefined;
