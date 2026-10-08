@@ -29,6 +29,7 @@
     "test:connector-api-request": "tsx src/extensions/bundled/connectors/_runtime/api-request.regression.ts",
     "test:github-connector": "tsx src/extensions/bundled/connectors/github/runtime.regression.ts",
     "test:vercel-connector": "tsx src/gateway/vercel-wrapper.regression.ts && tsx src/gateway/connector-tool-capabilities.regression.ts",
+    "test:needs-you-video": "tsx src/gateway/needs-you-video-approval.regression.ts",
     "sync:web-ui": "npm run build:thinking-orb && node scripts/prepare-public-build.js --web-only && npm run check:web-ui",
     "sync:hyperframes": "node scripts/sync-hyperframes-catalog.js",
     "test:image-size": "tsx src/image-generation/image-size.regression.ts",

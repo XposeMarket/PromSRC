@@ -579,6 +579,18 @@ export function isUnfocusedProgressFrame(frame: any, focus: ReadonlySet<string> 
   return false;
 }
 
+/**
+ * Needs-you change feed. Fingerprints the /api/needs-you item ids and pushes
+ * `needs_you_changed` over the existing /ws broadcast when the set changes.
+ * The desktop Tasks page and the mobile app both re-fetch on this event.
+ */
+let needsYouFingerprint: string | null = null;
+export function notifyNeedsYouChanged(fingerprint: string): void {
+  if (fingerprint === needsYouFingerprint) return;
+  needsYouFingerprint = fingerprint;
+  broadcastWS({ type: 'needs_you_changed', timestamp: Date.now() });
+}
+
 export function broadcastWS(data: object): void {
   if (_drainBroadcastRelay) {
     try { _drainBroadcastRelay(data); } catch {}

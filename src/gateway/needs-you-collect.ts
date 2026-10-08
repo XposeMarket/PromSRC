@@ -5,6 +5,12 @@ import { listProposals } from './proposals/proposal-store';
 import { listThreadSupervisions } from './threads/thread-supervision';
 import { listTasks } from './tasks/task-store';
 import { listManagedTeams } from './teams/managed-teams';
+import { listVideoApprovalsAcrossWorkspaces } from './video-pending-approvals';
+import { getConfig } from '../config/config';
+
+function safeWorkspace(): string[] {
+  try { return [getConfig().getWorkspacePath()]; } catch { return []; }
+}
 
 /** Reads the same live stores the chat/approval/proposal endpoints use, then normalizes them. */
 export function collectNeedsYouItems(): NeedsYouItem[] {
@@ -29,8 +35,10 @@ export function collectNeedsYouItems(): NeedsYouItem[] {
   const supervisions = safe(() => listThreadSupervisions({ status: 'blocked', includeTerminal: false, limit: 200 }) as any[], [] as any[]);
   const teams = safe(() => listManagedTeams() as any[], [] as any[]);
   const tasks = safe(() => listTasks({ status: ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] as any }) as any[], [] as any[]);
+  const videoApprovals = safe(() => listVideoApprovalsAcrossWorkspaces(safeWorkspace()), [] as any[]);
   return buildNeedsYouItems({
     questions,
+    videoApprovals,
     approvals: approvals.filter((record) => record.status === 'pending'),
     proposals,
     supervisions,

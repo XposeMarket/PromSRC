@@ -6,7 +6,8 @@ export type NeedsYouKind =
   | 'dev_source_edit_proposal'
   | 'needs_user_supervision'
   | 'team_escalation'
-  | 'paused_agent_run';
+  | 'paused_agent_run'
+  | 'video_approval';
 
 export interface NeedsYouItem {
   id: string;
@@ -33,8 +34,16 @@ export function buildNeedsYouItems(sources: {
   teams?: any[];
   tasks?: any[];
   proposalsNeedApproval?: any[];
+  videoApprovals?: any[];
 }): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
+  for (const record of sources.videoApprovals || []) {
+    if (!record || !record.id || !record.projectId) continue;
+    items.push({
+      id: `video-approval:${record.id}`, kind: 'video_approval', source: 'Video project',
+      sessionId: text(record.sessionId), createdAt: iso(record.createdAt), payload: record,
+    });
+  }
   for (const record of sources.questions || []) {
     if (!record || record.status !== 'pending') continue;
     const login = !!record.loginHandoff;
