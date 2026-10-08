@@ -239,6 +239,17 @@ export async function estimate(workspacePath: string, projectId: string, args: {
       // A line is auto-voiced (TTS) at generate time for audio-driven models.
       const missing = missingRequiredFields(model, input).filter((f) => !(f === 'audio' && shot.line?.trim()) && !(f === 'sourceVideo' && args.sourceFromSelectedTake && selectedTake(shot)?.kind === 'video'));
       if (missing.length) problems.push(missingFieldsMessage(model, missing));
+      // Validate the actual reference clip, not the requested output duration.
+      // Post passes use the selected take instead of shot.sourceVideo.
+      const take = args.sourceFromSelectedTake ? selectedTake(shot) : undefined;
+      const sourceVideo = model.map.sourceVideo && take?.kind === 'video'
+        ? fromWorkspaceRel(workspacePath, take.path) : input.sourceVideo;
+      const minDurationSec = model.limits?.minDurationSec;
+      if (sourceVideo && minDurationSec && minDurationSec > 0) {
+        const duration = await mediaDurationSec(sourceVideo);
+        if (duration === undefined) problems.push(`${model.id}: cannot verify sourceVideo duration (minimum ${minDurationSec}s)`);
+        else if (duration < minDurationSec) problems.push(`${model.id}: sourceVideo duration ${duration}s is below the ${minDurationSec}s minimum; slow or extend the reference clip before generating`);
+      }
     } catch (e: any) { problems.push(String(e?.message || e)); }
     if (priceForModel(model, { durationSec: shot.durationSec, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd && !model.pricing?.includedInSubscription) problems.push('model has no pricing; cost is unknown');
     if (model.source === 'fal-sync') {
