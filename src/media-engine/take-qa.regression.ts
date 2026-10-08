@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { breakdownReel, denseTakeCheck, lengthDefects, planParts, setVisionJudgeForTests, trendWindow } from './inspect.js';
+import { breakdownReel, denseTakeCheck, expectedFromNotes, lengthDefects, planParts, setVisionJudgeForTests, trendWindow } from './inspect.js';
 import { trendSpeed } from './trend.js';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 
@@ -50,6 +50,34 @@ async function main() {
     assert.equal(d.defects[0].atSec, 0.75);
     assert.match(d.issues[0], /^@0\.75s white shirt splits/);
     console.log('ok dense-qa', d.framesChecked, 'frames');
+
+    // Garment-vs-reel (2026-10-07 part 2 miss): the judge must SEE the reference performance and
+    // know the expected outfit, so an open button-up that morphs into a split shrug is a major defect.
+    assert.deepEqual(expectedFromNotes('trend tr_x 2.18-3.68s speed=0.49 of a.mp4 | puts on a white button-up | look: white tee, open white button-up shirt'),
+      { action: 'puts on a white button-up', look: 'white tee, open white button-up shirt' });
+    assert.deepEqual(expectedFromNotes('trend tr_x 0-2s of a.mp4'), { action: undefined, look: undefined });
+    calls.length = 0;
+    setVisionJudgeForTests(async (prompt, images) => {
+      calls.push({ prompt, images: images.length });
+      const garmentAware = /ORIGINAL REFERENCE/.test(prompt) && /open white button-up/.test(prompt) && /GARMENT CHECK/.test(prompt);
+      return { success: true, model: 'fake', text: garmentAware
+        ? '{"garments":["open white button-up shirt","blue tee"],"score":8,"verdict":"pass","defects":[{"cell":4,"issue":"open button-up turns into a split shrug wrapped around the neck","severity":"major"}]}'
+        : '{"score":8,"verdict":"pass","defects":[]}' };
+    });
+    const garmentShot: any = { ...shot, sourceVideo: path.relative(ws, clip).split(path.sep).join('/'), notes: 'trend tr_x 2.18-3.68s speed=0.49 of a.mp4 | puts on a white button-up | look: white tee, open white button-up shirt' };
+    const g = await denseTakeCheck(ws, p, garmentShot, { ...take, id: 'take_2' }, { workDir: path.join(ws, 'qa2') });
+    assert.equal(calls[0].images, 4, 'two reference sheets + two take sheets');
+    assert.match(calls[0].prompt, /Images 1-2 are contact sheets of the ORIGINAL REFERENCE/);
+    assert.match(calls[0].prompt, /Images 3-4 are contact sheets of the GENERATED clip/);
+    assert.match(calls[0].prompt, /Outfit the generated person must wear: white tee, open white button-up shirt/);
+    assert.equal(g.verdict, 'reroll', 'garment morph forces a reroll');
+    assert.equal(g.defects[0].atSec, 1);
+    assert.match(g.issues[0], /^@1\.00s open button-up turns into a split shrug/);
+    // No reference video: no reference sheets, no garment block unless a look is known.
+    calls.length = 0;
+    await denseTakeCheck(ws, p, shot, { ...take, id: 'take_3' }, { workDir: path.join(ws, 'qa3') });
+    assert.doesNotMatch(calls[0].prompt, /ORIGINAL REFERENCE|GARMENT CHECK/);
+    console.log('ok garment-vs-reel');
 
     // Breakdown: garment change + look flow back per part; vision failure degrades, never throws.
     setVisionJudgeForTests(async () => ({ success: true, model: 'fake', text: '{"subject":"tall slim dancer","parts":[{"action":"spins","garmentChange":false,"risks":["fast spin"]},{"action":"puts on a button-up","garmentChange":true,"look":"white tee, open blue button-up on the shoulders","risks":["garment change","hands on clothing"]}]}' }));
