@@ -48,6 +48,10 @@ function wrapResult(raw: string): ToolResult {
   return raw.startsWith('ERROR') ? fail(raw) : ok(raw);
 }
 
+function dispatchOf(args: any): string | undefined {
+  return args?.dispatch == null ? undefined : String(args.dispatch);
+}
+
 function windowSelector(args: any) {
   return {
     window_token: args?.window_token == null ? undefined : String(args.window_token),
@@ -64,6 +68,7 @@ const windowSelectorSchema = {
   window_handle: { type: 'number', description: 'Exact native window handle.' },
   app_id: { type: 'string', description: 'Target app_id.' },
   title: { type: 'string', description: 'Partial window title/process name.' },
+  dispatch: { type: 'string', enum: ['background', 'foreground'], description: 'background (default): act without moving the cursor or stealing focus. foreground: real mouse/keyboard.' },
 };
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
@@ -1430,7 +1435,7 @@ export const desktopClickTextTool: Tool = {
 
 export const desktopWindowClickTool: Tool = {
   name: 'desktop_window_click',
-  description: 'Click inside a specific window (window_id preferred). Focuses the window first; coordinates default to window-space.',
+  description: 'Click inside a specific window (window_id preferred). Background by default (no cursor/focus steal; BACKGROUND_UNAVAILABLE if the app needs real input); dispatch=foreground for real input. Coordinates default to window-space.',
   schema: {},
   jsonSchema: {
     type: 'object',
@@ -1464,6 +1469,7 @@ export const desktopWindowClickTool: Tool = {
           double_click: args?.double_click === true,
           modifier: args?.modifier === 'shift' || args?.modifier === 'ctrl' || args?.modifier === 'alt' ? args.modifier : undefined,
           verify: args?.verify,
+          dispatch: dispatchOf(args),
         },
         DESKTOP_SESSION,
       ));
@@ -1475,7 +1481,7 @@ export const desktopWindowClickTool: Tool = {
 
 export const desktopWindowTypeTool: Tool = {
   name: 'desktop_window_type',
-  description: 'Type text into a specific window (window_id preferred). Focuses first, then types via clipboard paste (raw=true for key events).',
+  description: 'Type text into a specific window (window_id preferred). Background by default (posts characters to the focused control without stealing focus); dispatch=foreground pastes with real input.',
   schema: {},
   jsonSchema: {
     type: 'object',
@@ -1486,7 +1492,7 @@ export const desktopWindowTypeTool: Tool = {
   execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopWindowType } = await dt();
-      return wrapResult(await desktopWindowType(windowSelector(args), String(args?.text || ''), args?.raw === true));
+      return wrapResult(await desktopWindowType(windowSelector(args), String(args?.text || ''), args?.raw === true, undefined, { dispatch: dispatchOf(args) }));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -1495,7 +1501,7 @@ export const desktopWindowTypeTool: Tool = {
 
 export const desktopWindowPressKeyTool: Tool = {
   name: 'desktop_window_press_key',
-  description: 'Press a key/combo in a specific window (window_id preferred). Focuses first. Examples: Enter, Ctrl+S, Alt+Tab.',
+  description: 'Press a key/combo in a specific window (window_id preferred). Background by default (plain keys + Ctrl+A/C/V/X/Z); other modifier combos need dispatch=foreground. Examples: Enter, Tab, Ctrl+V.',
   schema: {},
   jsonSchema: {
     type: 'object',
@@ -1506,7 +1512,7 @@ export const desktopWindowPressKeyTool: Tool = {
   execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopWindowPressKey } = await dt();
-      return wrapResult(await desktopWindowPressKey(windowSelector(args), String(args?.key || 'Enter')));
+      return wrapResult(await desktopWindowPressKey(windowSelector(args), String(args?.key || 'Enter'), undefined, { dispatch: dispatchOf(args) }));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -1544,6 +1550,7 @@ export const desktopWindowScrollTool: Tool = {
           y: args?.y == null ? undefined : Number(args.y),
           coordinate_space: args?.coordinate_space,
           screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
+          dispatch: dispatchOf(args),
         },
         DESKTOP_SESSION,
       ));
@@ -1585,6 +1592,7 @@ export const desktopWindowDragTool: Tool = {
           steps: args?.steps == null ? undefined : Number(args.steps),
           coordinate_space: args?.coordinate_space,
           screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
+          dispatch: dispatchOf(args),
         },
         DESKTOP_SESSION,
       ));
