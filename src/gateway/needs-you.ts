@@ -32,6 +32,7 @@ export function buildNeedsYouItems(sources: {
   supervisions?: any[];
   teams?: any[];
   tasks?: any[];
+  proposalsNeedApproval?: any[];
 }): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const record of sources.questions || []) {
@@ -54,8 +55,12 @@ export function buildNeedsYouItems(sources: {
     });
   }
   for (const record of sources.proposals || []) {
-    if (!record || record.status !== 'pending' || !(record.requiresSrcEdit || record.type === 'src_edit' || record.executionMode === 'code_change')) continue;
-    items.push({ id: `proposal:${record.id}`, kind: 'dev_source_edit_proposal', source: text(record.sourceLabel, 'Dev source edit'), sessionId: text(record.sourceSessionId), createdAt: iso(record.createdAt), payload: record });
+    if (!record || record.status !== 'pending' || !record.requiresSrcEdit) continue;
+    items.push({ id: `proposal:${record.id}`, kind: 'dev_source_edit_proposal', source: text(record.sourceAgentId || 'Dev source edit'), sessionId: text(record.sourceSessionId), createdAt: iso(record.createdAt), payload: record });
+  }
+  for (const record of sources.proposalsNeedApproval || []) {
+    if (!record || record.status !== 'pending') continue;
+    items.push({ id: `proposal-approval:${record.id}`, kind: 'tool_approval', source: text(record.originLabel, text(record.toolName, 'Chat')), sessionId: text(record.sessionId), createdAt: iso(record.createdAt), payload: record });
   }
   for (const record of sources.supervisions || []) {
     if (!record || record.status !== 'blocked' || record.lastDecision !== 'needs_user') continue;
@@ -64,13 +69,18 @@ export function buildNeedsYouItems(sources: {
   for (const team of sources.teams || []) {
     const room = team?.roomState || {};
     for (const blocker of room.blockers || []) {
-      if (!blocker || blocker.resolvedAt || !['needs_user', 'blocked', 'open', 'pending'].includes(text(blocker.status || 'open').toLowerCase())) continue;
+      if (!blocker || blocker.resolvedAt || !text(blocker.content || blocker.message || blocker.reason)) continue;
       const memberId = text(blocker.agentId || blocker.memberId || blocker.targetId);
       items.push({ id: `team:${team.id}:blocker:${blocker.id}`, kind: 'team_escalation', source: text(team.name, 'Team'), sessionId: text(team.originatingSessionId), createdAt: iso(blocker.createdAt || blocker.timestamp), payload: { ...blocker, teamId: team.id, teamName: team.name, memberId } });
     }
     for (const entry of room.managerInbox || []) {
-      if (!entry || entry.resolvedAt || !['needs_user', 'blocked', 'open', 'pending'].includes(text(entry.status || 'open').toLowerCase())) continue;
+      if (!entry || entry.drainedAt || !(entry.pendingMessages && Object.keys(entry.pendingMessages).length)) continue;
       items.push({ id: `team:${team.id}:inbox:${entry.id}`, kind: 'team_escalation', source: text(team.name, 'Team'), sessionId: text(team.originatingSessionId), createdAt: iso(entry.createdAt || entry.timestamp), payload: { ...entry, teamId: team.id, teamName: team.name } });
+    }
+    for (const thread of Object.values(room.directThreads || {})) {
+      const messages = Array.isArray((thread as any)?.pendingUserMessages) ? (thread as any).pendingUserMessages : [];
+      if (!thread || !messages.length) continue;
+      items.push({ id: `team:${team.id}:thread:${(thread as any).id}`, kind: 'team_escalation', source: text(team.name, 'Team'), sessionId: text((thread as any).sessionId || team.originatingSessionId), createdAt: iso(messages[messages.length - 1]?.createdAt || (thread as any).lastMessageAt), payload: { ...(thread as any), teamId: team.id, teamName: team.name, pendingUserMessages: messages } });
     }
   }
   for (const task of sources.tasks || []) {
