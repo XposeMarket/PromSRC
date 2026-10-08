@@ -33,6 +33,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -1012,32 +1013,46 @@ ComPtr<T> uia_pattern(IUIAutomationElement* element, PATTERNID id) {
 }
 
 // Descend from the target window's own UIA root (never the screen point), so
-// an occluding window can never be hit. Picks the top-most containing sibling.
+// an occluding window can never be hit. Several siblings can contain the point
+// (UWP frames expose the real CoreWindow content plus an empty overlay Pane on
+// top of it), so every containing sibling is explored, top-most first, and the
+// deepest element wins. Ties keep the top-most (later) sibling.
+void deepest_element_search(IUIAutomationTreeWalker* walker, IUIAutomationElement* node, POINT pt, int depth,
+                            int& visited, int& best_depth, ComPtr<IUIAutomationElement>& best) {
+  if (depth > best_depth) {
+    best_depth = depth;
+    best = node;
+  }
+  if (depth >= 48 || visited >= 3000) return;
+  std::vector<ComPtr<IUIAutomationElement>> containing;
+  ComPtr<IUIAutomationElement> child;
+  if (FAILED(walker->GetFirstChildElement(node, &child))) return;
+  while (child && visited < 3000) {
+    ++visited;
+    RECT r{};
+    BOOL offscreen = FALSE;
+    if (SUCCEEDED(child->get_CurrentBoundingRectangle(&r)) && rect_contains(r, pt)) {
+      child->get_CurrentIsOffscreen(&offscreen);
+      if (!offscreen) containing.push_back(child);
+    }
+    ComPtr<IUIAutomationElement> next;
+    if (FAILED(walker->GetNextSiblingElement(child.Get(), &next))) break;
+    child = next;
+  }
+  for (auto it = containing.rbegin(); it != containing.rend() && visited < 3000; ++it) {
+    deepest_element_search(walker, it->Get(), pt, depth + 1, visited, best_depth, best);
+  }
+}
+
 ComPtr<IUIAutomationElement> deepest_element_at(HWND root, POINT pt, int& visited) {
   ComPtr<IUIAutomationElement> current;
   check_hresult(uia()->ElementFromHandle(root, &current));
   ComPtr<IUIAutomationTreeWalker> walker;
   check_hresult(uia()->get_ControlViewWalker(&walker));
-  for (int depth = 0; depth < 48 && visited < 3000; ++depth) {
-    ComPtr<IUIAutomationElement> child;
-    ComPtr<IUIAutomationElement> best;
-    if (FAILED(walker->GetFirstChildElement(current.Get(), &child))) break;
-    while (child && visited < 3000) {
-      ++visited;
-      RECT r{};
-      BOOL offscreen = FALSE;
-      if (SUCCEEDED(child->get_CurrentBoundingRectangle(&r)) && rect_contains(r, pt)) {
-        child->get_CurrentIsOffscreen(&offscreen);
-        if (!offscreen) best = child;
-      }
-      ComPtr<IUIAutomationElement> next;
-      if (FAILED(walker->GetNextSiblingElement(child.Get(), &next))) break;
-      child = next;
-    }
-    if (!best) break;
-    current = best;
-  }
-  return current;
+  ComPtr<IUIAutomationElement> best = current;
+  int best_depth = 0;
+  deepest_element_search(walker.Get(), current.Get(), pt, 0, visited, best_depth, best);
+  return best;
 }
 
 std::string element_json(IUIAutomationElement* element, std::string* framework_out = nullptr) {
@@ -1115,6 +1130,28 @@ HWND focus_hwnd_for(HWND root) {
   return nullptr;
 }
 
+// Last keyboard-focus child seen per top-level window. When a background invoke
+// makes the app activate itself and the guard hands activation back to the
+// user, Windows clears that thread's focus, so later background keys fall back
+// to the control that had focus before.
+std::mutex g_last_focus_mutex;
+std::map<HWND, HWND> g_last_focus;
+
+void remember_focus(HWND root, HWND focus) {
+  if (!root || !focus) return;
+  std::lock_guard<std::mutex> lock(g_last_focus_mutex);
+  if (g_last_focus.size() > 256) g_last_focus.clear();
+  g_last_focus[root] = focus;
+}
+
+HWND remembered_focus(HWND root) {
+  std::lock_guard<std::mutex> lock(g_last_focus_mutex);
+  auto it = g_last_focus.find(root);
+  if (it == g_last_focus.end()) return nullptr;
+  HWND focus = it->second;
+  return IsWindow(focus) && (focus == root || IsChild(root, focus)) ? focus : nullptr;
+}
+
 // ─── Agent cursor overlay: click-through, never activates, excluded from capture
 std::atomic<HWND> g_overlay{nullptr};
 constexpr UINT WM_PROM_OVERLAY = WM_APP + 41;
@@ -1185,6 +1222,29 @@ void show_overlay(POINT pt) {
   if (HWND h = g_overlay.load()) PostMessageW(h, WM_PROM_OVERLAY, static_cast<WPARAM>(static_cast<intptr_t>(pt.x)), static_cast<LPARAM>(pt.y));
 }
 
+// Some apps (UWP Calculator, Settings) activate their own window when a
+// control is invoked through UI Automation. Background actions must not keep
+// the user's focus away, so a guard snapshots the foreground window and gives
+// it back if the target (or its process) grabbed activation meanwhile.
+struct ForegroundGuard {
+  HWND before = GetForegroundWindow();
+  bool restored = false;
+  bool stolen() const {
+    HWND now = GetForegroundWindow();
+    return before && now && now != before && IsWindow(before);
+  }
+  // Returns a JSON fragment (",\"focusRestored\":true") when focus was given back.
+  std::string restore() {
+    if (!stolen()) return {};
+    for (int i = 0; i < 4 && GetForegroundWindow() != before; ++i) {
+      focus_window(before);
+      if (GetForegroundWindow() != before) Sleep(30);
+    }
+    restored = GetForegroundWindow() == before;
+    return restored ? std::string(",\"focusRestored\":true") : std::string(",\"focusRestored\":false");
+  }
+};
+
 std::string bg_unavailable(const std::string& reason, const std::string& detail, const std::string& extra = "") {
   return std::string("{\"ok\":false,\"backgroundUnavailable\":true,\"reason\":\"") + json_escape(reason)
       + "\",\"detail\":\"" + json_escape(detail) + "\"" + extra + "}";
@@ -1247,12 +1307,16 @@ std::string try_uia_click(HWND root, POINT pt, int& visited, bool& handled) {
       };
     }
     if (fn) {
+      ForegroundGuard guard;
       bool timed_out = false;
       const HRESULT hr = call_uia_bounded(fn, 2500, timed_out);
+      // Activation from the app's invoke handler lands asynchronously.
+      for (int i = 0; i < 6 && !guard.stolen(); ++i) Sleep(25);
+      const std::string focus_extra = guard.restore();
       if (FAILED(hr)) return {};
       handled = true;
       return std::string("{\"ok\":true,\"method\":\"") + method + "\",\"pending\":" + (timed_out ? "true" : "false")
-          + ",\"visited\":" + std::to_string(visited) + ",\"element\":" + element_json(candidate.Get()) + "}";
+          + ",\"visited\":" + std::to_string(visited) + focus_extra + ",\"element\":" + element_json(candidate.Get()) + "}";
     }
     ComPtr<IUIAutomationElement> parent;
     if (FAILED(walker->GetParentElement(candidate.Get(), &parent))) break;
@@ -1263,6 +1327,7 @@ std::string try_uia_click(HWND root, POINT pt, int& visited, bool& handled) {
 
 std::string background_click(const std::string& line) {
   HWND root = checked_root(number_field(line, "handle", 0));
+  remember_focus(root, focus_hwnd_for(root));
   const POINT pt{static_cast<LONG>(number_field(line, "x", 0)), static_cast<LONG>(number_field(line, "y", 0))};
   const std::string button = string_field(line, "button");
   const int repeat = static_cast<int>(std::clamp<long long>(number_field(line, "repeat", 1), 1, 2));
@@ -1307,6 +1372,8 @@ std::string background_click(const std::string& line) {
 
 HWND keyboard_target(HWND root, std::string& cls, std::string& unavailable) {
   HWND target = focus_hwnd_for(root);
+  if (target) remember_focus(root, target);
+  else target = remembered_focus(root);
   if (!target) {
     unavailable = bg_unavailable("no_focus_target", "The window has no keyboard-focused control. Click or focus_element a field first.");
     return nullptr;
@@ -1399,10 +1466,12 @@ std::string background_scroll(const std::string& line) {
       scroll->get_CurrentVerticallyScrollable(&vertical);
       scroll->get_CurrentHorizontallyScrollable(&horizontal);
       if ((steps_y && vertical) || (steps_x && horizontal)) {
+        ForegroundGuard guard;
         HRESULT hr = S_OK;
         for (int i = 0; i < steps_y && SUCCEEDED(hr); ++i) hr = scroll->Scroll(ScrollAmount_NoAmount, delta_y > 0 ? ScrollAmount_SmallDecrement : ScrollAmount_SmallIncrement);
         for (int i = 0; i < steps_x && SUCCEEDED(hr); ++i) hr = scroll->Scroll(delta_x > 0 ? ScrollAmount_SmallIncrement : ScrollAmount_SmallDecrement, ScrollAmount_NoAmount);
-        if (SUCCEEDED(hr)) return std::string("{\"ok\":true,\"method\":\"uia_scroll\",\"visited\":") + std::to_string(visited) + ",\"element\":" + element_json(element.Get()) + "}";
+        const std::string focus_extra = guard.restore();
+        if (SUCCEEDED(hr)) return std::string("{\"ok\":true,\"method\":\"uia_scroll\",\"visited\":") + std::to_string(visited) + focus_extra + ",\"element\":" + element_json(element.Get()) + "}";
       }
     }
     ComPtr<IUIAutomationElement> parent;
