@@ -10,6 +10,8 @@
 #include <wrl/client.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
+#include <UIAutomation.h>
+#include <oleauto.h>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -18,6 +20,10 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 
 #include <algorithm>
+#include <atomic>
+#include <functional>
+#include <memory>
+#include <thread>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -962,6 +968,469 @@ std::string window_info_json(HWND hwnd) {
   return window_json(hwnd, GetForegroundWindow());
 }
 
+// ─── Background input: no focus change, no real cursor movement ─────────────
+// Router order: UI Automation pattern -> posted window messages -> explicit
+// "background unavailable". Nothing here calls SetForegroundWindow, SetCursorPos
+// or SendInput, so the user's focus, cursor and keyboard stay untouched.
+ComPtr<IUIAutomation> g_uia;
+
+IUIAutomation* uia() {
+  if (!g_uia) {
+    const HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_uia));
+    if (FAILED(hr) || !g_uia) throw std::runtime_error("UI Automation is unavailable");
+  }
+  return g_uia.Get();
+}
+
+std::string bstr_utf8(BSTR value) {
+  if (!value) return {};
+  const std::wstring wide(value, SysStringLen(value));
+  SysFreeString(value);
+  return utf8(wide);
+}
+
+std::string window_class(HWND hwnd) {
+  wchar_t buf[256]{};
+  if (hwnd) GetClassNameW(hwnd, buf, 255);
+  return utf8(buf);
+}
+
+bool is_web_content_class(const std::string& cls) {
+  return cls.rfind("Chrome_", 0) == 0 || cls == "Intermediate D3D Window" || cls == "MozillaWindowClass"
+      || cls.find("CefBrowserWindow") != std::string::npos;
+}
+
+bool rect_contains(const RECT& r, POINT p) {
+  return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
+}
+
+template <typename T>
+ComPtr<T> uia_pattern(IUIAutomationElement* element, PATTERNID id) {
+  ComPtr<T> pattern;
+  if (element) element->GetCurrentPatternAs(id, __uuidof(T), reinterpret_cast<void**>(pattern.GetAddressOf()));
+  return pattern;
+}
+
+// Descend from the target window's own UIA root (never the screen point), so
+// an occluding window can never be hit. Picks the top-most containing sibling.
+ComPtr<IUIAutomationElement> deepest_element_at(HWND root, POINT pt, int& visited) {
+  ComPtr<IUIAutomationElement> current;
+  check_hresult(uia()->ElementFromHandle(root, &current));
+  ComPtr<IUIAutomationTreeWalker> walker;
+  check_hresult(uia()->get_ControlViewWalker(&walker));
+  for (int depth = 0; depth < 48 && visited < 3000; ++depth) {
+    ComPtr<IUIAutomationElement> child;
+    ComPtr<IUIAutomationElement> best;
+    if (FAILED(walker->GetFirstChildElement(current.Get(), &child))) break;
+    while (child && visited < 3000) {
+      ++visited;
+      RECT r{};
+      BOOL offscreen = FALSE;
+      if (SUCCEEDED(child->get_CurrentBoundingRectangle(&r)) && rect_contains(r, pt)) {
+        child->get_CurrentIsOffscreen(&offscreen);
+        if (!offscreen) best = child;
+      }
+      ComPtr<IUIAutomationElement> next;
+      if (FAILED(walker->GetNextSiblingElement(child.Get(), &next))) break;
+      child = next;
+    }
+    if (!best) break;
+    current = best;
+  }
+  return current;
+}
+
+std::string element_json(IUIAutomationElement* element, std::string* framework_out = nullptr) {
+  if (!element) return "null";
+  BSTR name = nullptr;
+  BSTR automation_id = nullptr;
+  BSTR framework = nullptr;
+  CONTROLTYPEID control_type = 0;
+  RECT r{};
+  element->get_CurrentName(&name);
+  element->get_CurrentAutomationId(&automation_id);
+  element->get_CurrentFrameworkId(&framework);
+  element->get_CurrentControlType(&control_type);
+  element->get_CurrentBoundingRectangle(&r);
+  const std::string fw = bstr_utf8(framework);
+  if (framework_out) *framework_out = fw;
+  std::ostringstream out;
+  out << "{\"name\":\"" << json_escape(bstr_utf8(name)) << "\",\"automationId\":\"" << json_escape(bstr_utf8(automation_id))
+      << "\",\"frameworkId\":\"" << json_escape(fw) << "\",\"controlType\":" << control_type
+      << ",\"bounds\":{\"x\":" << r.left << ",\"y\":" << r.top << ",\"width\":" << (r.right - r.left) << ",\"height\":" << (r.bottom - r.top) << "}}";
+  return out.str();
+}
+
+struct AsyncCall {
+  HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HRESULT hr = E_PENDING;
+  ~AsyncCall() { if (done) CloseHandle(done); }
+};
+
+// UIA Invoke on a control that opens a modal dialog can block until the dialog
+// closes. Run pattern calls on a worker and report "pending" instead of hanging.
+HRESULT call_uia_bounded(std::function<HRESULT()> fn, DWORD timeout_ms, bool& timed_out) {
+  auto call = std::make_shared<AsyncCall>();
+  std::thread([call, fn]() {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    call->hr = fn();
+    SetEvent(call->done);
+    CoUninitialize();
+  }).detach();
+  timed_out = WaitForSingleObject(call->done, timeout_ms) == WAIT_TIMEOUT;
+  return timed_out ? S_OK : call->hr;
+}
+
+HWND child_window_at(HWND root, POINT screen) {
+  HWND current = root;
+  for (int i = 0; i < 32; ++i) {
+    POINT client = screen;
+    ScreenToClient(current, &client);
+    HWND next = ChildWindowFromPointEx(current, client, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
+    if (!next || next == current) break;
+    current = next;
+  }
+  return current;
+}
+
+BOOL CALLBACK collect_child_threads(HWND hwnd, LPARAM lp) {
+  auto* threads = reinterpret_cast<std::vector<DWORD>*>(lp);
+  const DWORD tid = GetWindowThreadProcessId(hwnd, nullptr);
+  if (tid && std::find(threads->begin(), threads->end(), tid) == threads->end()) threads->push_back(tid);
+  return threads->size() < 16;
+}
+
+// The keyboard-focus child inside the target, read from the owning GUI thread
+// (focus is per-thread, so this works while the window is in the background).
+// UWP frames host their content on another thread, so child threads are tried too.
+HWND focus_hwnd_for(HWND root) {
+  std::vector<DWORD> threads{GetWindowThreadProcessId(root, nullptr)};
+  EnumChildWindows(root, collect_child_threads, reinterpret_cast<LPARAM>(&threads));
+  for (const DWORD tid : threads) {
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (!tid || !GetGUIThreadInfo(tid, &info) || !info.hwndFocus) continue;
+    if (info.hwndFocus == root || IsChild(root, info.hwndFocus)) return info.hwndFocus;
+  }
+  return nullptr;
+}
+
+// ─── Agent cursor overlay: click-through, never activates, excluded from capture
+std::atomic<HWND> g_overlay{nullptr};
+constexpr UINT WM_PROM_OVERLAY = WM_APP + 41;
+constexpr int OVERLAY_SIZE = 28;
+
+LRESULT CALLBACK overlay_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_PROM_OVERLAY: {
+      const int x = static_cast<int>(static_cast<intptr_t>(wp));
+      const int y = static_cast<int>(lp);
+      SetWindowPos(hwnd, HWND_TOPMOST, x - OVERLAY_SIZE / 2, y - OVERLAY_SIZE / 2, OVERLAY_SIZE, OVERLAY_SIZE, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+      KillTimer(hwnd, 1);
+      SetTimer(hwnd, 1, 1600, nullptr);
+      InvalidateRect(hwnd, nullptr, TRUE);
+      return 0;
+    }
+    case WM_TIMER:
+      KillTimer(hwnd, 1);
+      ShowWindow(hwnd, SW_HIDE);
+      return 0;
+    case WM_NCHITTEST:
+      return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+    case WM_PAINT: {
+      PAINTSTRUCT ps{};
+      HDC dc = BeginPaint(hwnd, &ps);
+      HBRUSH ring = CreateSolidBrush(RGB(255, 122, 26));
+      HBRUSH dot = CreateSolidBrush(RGB(255, 255, 255));
+      RECT all{0, 0, OVERLAY_SIZE, OVERLAY_SIZE};
+      FillRect(dc, &all, ring);
+      HRGN inner = CreateEllipticRgn(OVERLAY_SIZE / 2 - 4, OVERLAY_SIZE / 2 - 4, OVERLAY_SIZE / 2 + 5, OVERLAY_SIZE / 2 + 5);
+      FillRgn(dc, inner, dot);
+      DeleteObject(inner);
+      DeleteObject(ring);
+      DeleteObject(dot);
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+    default:
+      return DefWindowProcW(hwnd, msg, wp, lp);
+  }
+}
+
+void overlay_thread() {
+  WNDCLASSW wc{};
+  wc.lpfnWndProc = overlay_proc;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = L"PrometheusAgentCursor";
+  RegisterClassW(&wc);
+  HWND hwnd = CreateWindowExW(
+    WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+    wc.lpszClassName, L"Prometheus agent cursor", WS_POPUP, 0, 0, OVERLAY_SIZE, OVERLAY_SIZE,
+    nullptr, nullptr, wc.hInstance, nullptr);
+  if (!hwnd) return;
+  SetLayeredWindowAttributes(hwnd, 0, 215, LWA_ALPHA);
+  SetWindowRgn(hwnd, CreateEllipticRgn(0, 0, OVERLAY_SIZE + 1, OVERLAY_SIZE + 1), FALSE);
+  SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+  g_overlay = hwnd;
+  MSG msg{};
+  while (GetMessageW(&msg, nullptr, 0, 0) > 0) DispatchMessageW(&msg);
+}
+
+void show_overlay(POINT pt) {
+  static std::once_flag once;
+  std::call_once(once, [] { std::thread(overlay_thread).detach(); });
+  for (int i = 0; i < 60 && !g_overlay.load(); ++i) Sleep(5);
+  if (HWND h = g_overlay.load()) PostMessageW(h, WM_PROM_OVERLAY, static_cast<WPARAM>(static_cast<intptr_t>(pt.x)), static_cast<LPARAM>(pt.y));
+}
+
+std::string bg_unavailable(const std::string& reason, const std::string& detail, const std::string& extra = "") {
+  return std::string("{\"ok\":false,\"backgroundUnavailable\":true,\"reason\":\"") + json_escape(reason)
+      + "\",\"detail\":\"" + json_escape(detail) + "\"" + extra + "}";
+}
+
+bool is_modern_app_class(const std::string& cls) {
+  return cls == "ApplicationFrameWindow" || cls == "Windows.UI.Core.CoreWindow" || cls.rfind("Microsoft.UI.Content", 0) == 0;
+}
+
+HWND checked_root(long long raw) {
+  HWND root = reinterpret_cast<HWND>(static_cast<intptr_t>(raw));
+  if (raw <= 0 || !IsWindow(root)) throw std::runtime_error("background action requires a live window handle");
+  // Restore a minimized target WITHOUT activating it: the user's focus stays put.
+  if (IsIconic(root)) {
+    ShowWindowAsync(root, SW_SHOWNOACTIVATE);
+    Sleep(150);
+  }
+  return root;
+}
+
+bool control_type_is_clickable(CONTROLTYPEID type) {
+  switch (type) {
+    case UIA_ButtonControlTypeId: case UIA_MenuItemControlTypeId: case UIA_ListItemControlTypeId:
+    case UIA_HyperlinkControlTypeId: case UIA_TabItemControlTypeId: case UIA_CheckBoxControlTypeId:
+    case UIA_RadioButtonControlTypeId: case UIA_TreeItemControlTypeId: case UIA_SplitButtonControlTypeId:
+    case UIA_DataItemControlTypeId:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Try a semantic UIA action on the element under the point (or a clickable
+// ancestor up to two levels, e.g. a Text label inside a Button).
+std::string try_uia_click(HWND root, POINT pt, int& visited, bool& handled) {
+  handled = false;
+  ComPtr<IUIAutomationElement> element = deepest_element_at(root, pt, visited);
+  if (!element) return {};
+  ComPtr<IUIAutomationTreeWalker> walker;
+  check_hresult(uia()->get_ControlViewWalker(&walker));
+  ComPtr<IUIAutomationElement> candidate = element;
+  for (int level = 0; level < 3 && candidate; ++level) {
+    CONTROLTYPEID type = 0;
+    candidate->get_CurrentControlType(&type);
+    if (level > 0 && !control_type_is_clickable(type)) break;
+    std::string method;
+    std::function<HRESULT()> fn;
+    if (auto invoke = uia_pattern<IUIAutomationInvokePattern>(candidate.Get(), UIA_InvokePatternId)) {
+      method = "uia_invoke"; fn = [invoke]() { return invoke->Invoke(); };
+    } else if (auto toggle = uia_pattern<IUIAutomationTogglePattern>(candidate.Get(), UIA_TogglePatternId)) {
+      method = "uia_toggle"; fn = [toggle]() { return toggle->Toggle(); };
+    } else if (auto select = uia_pattern<IUIAutomationSelectionItemPattern>(candidate.Get(), UIA_SelectionItemPatternId)) {
+      method = "uia_select"; fn = [select]() { return select->Select(); };
+    } else if (auto expand = uia_pattern<IUIAutomationExpandCollapsePattern>(candidate.Get(), UIA_ExpandCollapsePatternId)) {
+      method = "uia_expand_collapse";
+      fn = [expand]() {
+        ExpandCollapseState state = ExpandCollapseState_Collapsed;
+        expand->get_CurrentExpandCollapseState(&state);
+        return state == ExpandCollapseState_Expanded ? expand->Collapse() : expand->Expand();
+      };
+    }
+    if (fn) {
+      bool timed_out = false;
+      const HRESULT hr = call_uia_bounded(fn, 2500, timed_out);
+      if (FAILED(hr)) return {};
+      handled = true;
+      return std::string("{\"ok\":true,\"method\":\"") + method + "\",\"pending\":" + (timed_out ? "true" : "false")
+          + ",\"visited\":" + std::to_string(visited) + ",\"element\":" + element_json(candidate.Get()) + "}";
+    }
+    ComPtr<IUIAutomationElement> parent;
+    if (FAILED(walker->GetParentElement(candidate.Get(), &parent))) break;
+    candidate = parent;
+  }
+  return {};
+}
+
+std::string background_click(const std::string& line) {
+  HWND root = checked_root(number_field(line, "handle", 0));
+  const POINT pt{static_cast<LONG>(number_field(line, "x", 0)), static_cast<LONG>(number_field(line, "y", 0))};
+  const std::string button = string_field(line, "button");
+  const int repeat = static_cast<int>(std::clamp<long long>(number_field(line, "repeat", 1), 1, 2));
+  const std::string strategy = string_field(line, "strategy");  // auto | uia | message
+  RECT wr{};
+  GetWindowRect(root, &wr);
+  if (!rect_contains(wr, pt)) return bg_unavailable("point_outside_window", "The point is outside the target window bounds.");
+  if (number_field(line, "overlay", 1) != 0) show_overlay(pt);
+  const bool right = button == "right";
+  int visited = 0;
+  if (strategy != "message" && !right && repeat == 1) {
+    bool handled = false;
+    const std::string result = try_uia_click(root, pt, visited, handled);
+    if (handled) return result;
+    if (strategy == "uia") return bg_unavailable("no_uia_pattern", "No invokable UI Automation element at the point.");
+  }
+  HWND target = child_window_at(root, pt);
+  const std::string cls = window_class(target);
+  const std::string extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
+  if (is_web_content_class(cls)) {
+    return bg_unavailable("web_content", "Chromium/Electron/Firefox content ignores posted mouse input. Use accessibility find_and_act, browser tools, or dispatch=\"foreground\".", extra);
+  }
+  if (is_modern_app_class(cls) || is_modern_app_class(window_class(root))) {
+    return bg_unavailable("modern_app", "UWP/WinUI content ignores posted mouse input. Use accessibility actions or dispatch=\"foreground\".", extra);
+  }
+  POINT client = pt;
+  ScreenToClient(target, &client);
+  const LPARAM pos = MAKELPARAM(client.x, client.y);
+  const UINT down = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
+  const UINT up = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+  const UINT dbl = right ? WM_RBUTTONDBLCLK : WM_LBUTTONDBLCLK;
+  const WPARAM key = right ? MK_RBUTTON : MK_LBUTTON;
+  PostMessageW(target, WM_MOUSEMOVE, 0, pos);
+  PostMessageW(target, down, key, pos);
+  PostMessageW(target, up, 0, pos);
+  if (repeat > 1) {
+    PostMessageW(target, dbl, key, pos);
+    PostMessageW(target, up, 0, pos);
+  }
+  return std::string("{\"ok\":true,\"method\":\"post_message\",\"pending\":false,\"visited\":") + std::to_string(visited) + extra + "}";
+}
+
+HWND keyboard_target(HWND root, std::string& cls, std::string& unavailable) {
+  HWND target = focus_hwnd_for(root);
+  if (!target) {
+    unavailable = bg_unavailable("no_focus_target", "The window has no keyboard-focused control. Click or focus_element a field first.");
+    return nullptr;
+  }
+  cls = window_class(target);
+  if (is_web_content_class(cls) || is_modern_app_class(cls)) {
+    unavailable = bg_unavailable(is_web_content_class(cls) ? "web_content" : "modern_app",
+      "This content ignores posted keyboard input. Use accessibility set_value, browser tools, or dispatch=\"foreground\".",
+      ",\"targetClass\":\"" + json_escape(cls) + "\"");
+    return nullptr;
+  }
+  return target;
+}
+
+std::string background_type(const std::string& line) {
+  HWND root = checked_root(number_field(line, "handle", 0));
+  std::string cls;
+  std::string unavailable;
+  HWND target = keyboard_target(root, cls, unavailable);
+  if (!target) return unavailable;
+  const std::wstring text = utf16_from_utf8(decode_base64(string_field(line, "textBase64")));
+  for (const wchar_t ch : text) {
+    if (ch == L'\n') PostMessageW(target, WM_CHAR, L'\r', 1);
+    else if (ch != L'\r') PostMessageW(target, WM_CHAR, ch, 1);
+  }
+  return std::string("{\"ok\":true,\"method\":\"post_char\",\"chars\":") + std::to_string(text.size())
+      + ",\"targetClass\":\"" + json_escape(cls) + "\"}";
+}
+
+std::string background_key(const std::string& line) {
+  HWND root = checked_root(number_field(line, "handle", 0));
+  const std::string key = string_field(line, "key");
+  const bool ctrl = number_field(line, "ctrl", 0) != 0;
+  const bool shift = number_field(line, "shift", 0) != 0;
+  const bool alt = number_field(line, "alt", 0) != 0;
+  std::string cls;
+  std::string unavailable;
+  HWND target = keyboard_target(root, cls, unavailable);
+  if (!target) return unavailable;
+  const std::string target_extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
+  if (ctrl && !shift && !alt && key.size() == 1) {
+    // Posted modifiers do not change the target's key state, so map the
+    // standard edit shortcuts to their exact window messages instead.
+    const char k = static_cast<char>(std::tolower(static_cast<unsigned char>(key[0])));
+    UINT msg = 0;
+    if (k == 'c') msg = WM_COPY; else if (k == 'v') msg = WM_PASTE; else if (k == 'x') msg = WM_CUT; else if (k == 'z') msg = WM_UNDO;
+    if (k == 'a') { PostMessageW(target, EM_SETSEL, 0, -1); return "{\"ok\":true,\"method\":\"edit_message\",\"message\":\"EM_SETSEL\"" + target_extra + "}"; }
+    if (msg) { PostMessageW(target, msg, 0, 0); return "{\"ok\":true,\"method\":\"edit_message\"" + target_extra + "}"; }
+  }
+  if (ctrl || shift || alt) {
+    return bg_unavailable("modifier_combo", "Apps read the real keyboard state for modifier shortcuts, so this combo cannot be sent in the background. Use dispatch=\"foreground\".", target_extra);
+  }
+  const WORD vk = virtual_key_for(key);
+  const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+  const bool extended = vk == VK_UP || vk == VK_DOWN || vk == VK_LEFT || vk == VK_RIGHT || vk == VK_HOME || vk == VK_END
+      || vk == VK_PRIOR || vk == VK_NEXT || vk == VK_INSERT || vk == VK_DELETE;
+  const LPARAM down = 1 | (static_cast<LPARAM>(scan) << 16) | (extended ? (1 << 24) : 0);
+  const LPARAM up = down | (static_cast<LPARAM>(1) << 30) | (static_cast<LPARAM>(1) << 31);
+  PostMessageW(target, WM_KEYDOWN, vk, down);
+  // TranslateMessage cannot synthesize characters for posted keys reliably, so
+  // emit the character for the keys that produce one.
+  if (vk == VK_RETURN) PostMessageW(target, WM_CHAR, L'\r', down);
+  else if (vk == VK_TAB) PostMessageW(target, WM_CHAR, L'\t', down);
+  else if (vk == VK_BACK) PostMessageW(target, WM_CHAR, L'\b', down);
+  else if (vk == VK_SPACE) PostMessageW(target, WM_CHAR, L' ', down);
+  else if (key.size() == 1 && std::isprint(static_cast<unsigned char>(key[0]))) PostMessageW(target, WM_CHAR, static_cast<WPARAM>(key[0]), down);
+  PostMessageW(target, WM_KEYUP, vk, up);
+  return "{\"ok\":true,\"method\":\"post_key\"" + target_extra + "}";
+}
+
+std::string background_scroll(const std::string& line) {
+  HWND root = checked_root(number_field(line, "handle", 0));
+  const POINT pt{static_cast<LONG>(number_field(line, "x", 0)), static_cast<LONG>(number_field(line, "y", 0))};
+  const int delta_x = static_cast<int>(number_field(line, "deltaX", 0));
+  const int delta_y = static_cast<int>(number_field(line, "deltaY", 0));
+  RECT wr{};
+  GetWindowRect(root, &wr);
+  if (!rect_contains(wr, pt)) return bg_unavailable("point_outside_window", "The scroll point is outside the target window bounds.");
+  if (number_field(line, "overlay", 1) != 0) show_overlay(pt);
+  int visited = 0;
+  ComPtr<IUIAutomationElement> element = deepest_element_at(root, pt, visited);
+  ComPtr<IUIAutomationTreeWalker> walker;
+  check_hresult(uia()->get_ControlViewWalker(&walker));
+  for (int level = 0; level < 14 && element; ++level) {
+    if (auto scroll = uia_pattern<IUIAutomationScrollPattern>(element.Get(), UIA_ScrollPatternId)) {
+      const int steps_y = std::clamp(std::abs(delta_y) / 120, delta_y ? 1 : 0, 20);
+      const int steps_x = std::clamp(std::abs(delta_x) / 120, delta_x ? 1 : 0, 20);
+      BOOL vertical = FALSE;
+      BOOL horizontal = FALSE;
+      scroll->get_CurrentVerticallyScrollable(&vertical);
+      scroll->get_CurrentHorizontallyScrollable(&horizontal);
+      if ((steps_y && vertical) || (steps_x && horizontal)) {
+        HRESULT hr = S_OK;
+        for (int i = 0; i < steps_y && SUCCEEDED(hr); ++i) hr = scroll->Scroll(ScrollAmount_NoAmount, delta_y > 0 ? ScrollAmount_SmallDecrement : ScrollAmount_SmallIncrement);
+        for (int i = 0; i < steps_x && SUCCEEDED(hr); ++i) hr = scroll->Scroll(delta_x > 0 ? ScrollAmount_SmallIncrement : ScrollAmount_SmallDecrement, ScrollAmount_NoAmount);
+        if (SUCCEEDED(hr)) return std::string("{\"ok\":true,\"method\":\"uia_scroll\",\"visited\":") + std::to_string(visited) + ",\"element\":" + element_json(element.Get()) + "}";
+      }
+    }
+    ComPtr<IUIAutomationElement> parent;
+    if (FAILED(walker->GetParentElement(element.Get(), &parent))) break;
+    element = parent;
+  }
+  HWND target = child_window_at(root, pt);
+  const std::string cls = window_class(target);
+  const std::string extra = ",\"targetClass\":\"" + json_escape(cls) + "\"";
+  if (is_web_content_class(cls) || is_modern_app_class(cls)) {
+    return bg_unavailable(is_web_content_class(cls) ? "web_content" : "modern_app", "No UIA scroll pattern and this content ignores posted wheel input.", extra);
+  }
+  const LPARAM pos = MAKELPARAM(pt.x, pt.y);
+  if (delta_y) PostMessageW(target, WM_MOUSEWHEEL, MAKEWPARAM(0, delta_y), pos);
+  if (delta_x) PostMessageW(target, WM_MOUSEHWHEEL, MAKEWPARAM(0, delta_x), pos);
+  return "{\"ok\":true,\"method\":\"post_message\"" + extra + "}";
+}
+
+std::string user_input_state() {
+  LASTINPUTINFO info{};
+  info.cbSize = sizeof(info);
+  GetLastInputInfo(&info);
+  POINT cursor{};
+  GetCursorPos(&cursor);
+  return std::string("{\"idleMs\":") + std::to_string(GetTickCount() - info.dwTime) + ",\"cursor\":{\"x\":" + std::to_string(cursor.x)
+      + ",\"y\":" + std::to_string(cursor.y) + "},\"foreground\":" + std::to_string(reinterpret_cast<intptr_t>(GetForegroundWindow())) + "}";
+}
+
 void write_result(long long id, const std::string& result_json) {
   std::cout << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":" << result_json << "}" << std::endl;
 }
@@ -999,9 +1468,9 @@ int wmain(int argc, wchar_t* argv[]) {
     const std::string method = string_field(line, "method");
     try {
       if (method == "ping") {
-        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"screenCaptureBackend\":\"GDI BitBlt\",\"inputBackend\":\"SendInput\",\"protocolVersion\":5,"
+        write_result(id, "{\"ok\":true,\"platform\":\"win32\",\"captureBackend\":\"Windows.Graphics.Capture\",\"screenCaptureBackend\":\"GDI BitBlt\",\"inputBackend\":\"SendInput\",\"protocolVersion\":6,\"backgroundInput\":\"uia+post_message\","
                          "\"captureKinds\":[\"window\",\"primary\",\"all\",\"monitor\",\"region\"],"
-                         "\"methods\":[\"ping\",\"capture\",\"list_windows\",\"window_info\",\"foreground_window\",\"focus_window\",\"click\",\"move_pointer\",\"click_current\",\"scroll\",\"scroll_current\",\"drag\",\"type_text\",\"press_key\",\"desktop_context\",\"get_clipboard_text\",\"set_clipboard_text\"],"
+                         "\"methods\":[\"ping\",\"capture\",\"list_windows\",\"window_info\",\"foreground_window\",\"focus_window\",\"click\",\"move_pointer\",\"click_current\",\"scroll\",\"scroll_current\",\"drag\",\"type_text\",\"press_key\",\"desktop_context\",\"get_clipboard_text\",\"set_clipboard_text\",\"bg_click\",\"bg_type\",\"bg_key\",\"bg_scroll\",\"user_input_state\",\"show_cursor_overlay\"],"
                          "\"monitorOrder\":\"EnumDisplayMonitors\"}");
       } else if (method == "list_windows") {
         write_result(id, list_windows_json());
@@ -1105,6 +1574,19 @@ int wmain(int argc, wchar_t* argv[]) {
         write_result(id, "{\"ok\":true}");
       } else if (method == "type_text") {
         type_unicode(utf16_from_utf8(decode_base64(string_field(line, "textBase64"))));
+        write_result(id, "{\"ok\":true}");
+      } else if (method == "bg_click") {
+        write_result(id, background_click(line));
+      } else if (method == "bg_type") {
+        write_result(id, background_type(line));
+      } else if (method == "bg_key") {
+        write_result(id, background_key(line));
+      } else if (method == "bg_scroll") {
+        write_result(id, background_scroll(line));
+      } else if (method == "user_input_state") {
+        write_result(id, user_input_state());
+      } else if (method == "show_cursor_overlay") {
+        show_overlay(POINT{static_cast<LONG>(number_field(line, "x", 0)), static_cast<LONG>(number_field(line, "y", 0))});
         write_result(id, "{\"ok\":true}");
       } else if (method == "press_key") {
         press_key(

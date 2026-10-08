@@ -17025,6 +17025,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             verify: args.verify,
             focus_first: args.focus_first !== false,
             signal: deps.abortSignal?.signal,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
           },
           sessionId,
         );
@@ -17042,6 +17043,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           String(args.text || ''),
           args.raw === true,
           deps.abortSignal?.signal,
+          { dispatch: args.dispatch == null ? undefined : String(args.dispatch), verify: args.verify == null ? undefined : String(args.verify) },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17061,6 +17063,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           },
           String(args.key || 'Enter'),
           deps.abortSignal?.signal,
+          { dispatch: args.dispatch == null ? undefined : String(args.dispatch), verify: args.verify == null ? undefined : String(args.verify) },
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17082,6 +17085,8 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
             focus_first: args.focus_first !== false,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
+            verify: args.verify == null ? undefined : String(args.verify),
           },
           sessionId,
           deps.abortSignal?.signal,
@@ -17106,6 +17111,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
             focus_first: args.focus_first !== false,
+            dispatch: args.dispatch == null ? undefined : String(args.dispatch),
           },
           sessionId,
           deps.abortSignal?.signal,
