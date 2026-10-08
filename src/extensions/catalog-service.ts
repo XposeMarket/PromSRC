@@ -122,6 +122,7 @@ function buildConnectorState(
     grantedScopes: status?.grantedScopes,
     expiresAt: status?.expiresAt,
     refreshAvailable: status?.refreshAvailable,
+    redirectUri: (status as { redirectUri?: string } | undefined)?.redirectUri,
     connectedAt:
       typeof (saved as { connectedAt?: number }).connectedAt === 'number'
         ? (saved as { connectedAt?: number }).connectedAt

@@ -167,6 +167,7 @@ import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
 import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
+import { router as connectorOAuthCallbackRouter } from './routes/connector-oauth-callback.router';
 import { router as chatgptBridgeRouter, setChatGPTBridgeFallbackCatalog } from './routes/chatgpt-bridge.router';
 import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
@@ -1003,6 +1004,7 @@ startupMark('routers initialized');
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
 app.use('/', mcpOAuthCallbackRouter);
+app.use('/', connectorOAuthCallbackRouter);
 // Trigger webhooks are called by external services (GitHub, Zapier, local
 // scripts) that cannot present a gateway token. Each endpoint authenticates
 // with its own per-endpoint secret (HMAC or URL token); see triggers.router.ts.

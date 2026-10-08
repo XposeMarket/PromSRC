@@ -45,6 +45,11 @@
       "connector_notion_get_page",
       "connector_notion_create_page",
       "connector_notion_query_database",
+      "connector_notion_append_content",
+      "connector_notion_update_page",
+      "connector_notion_create_database_entry",
+      "connector_notion_add_comment",
+      "connector_notion_list_comments",
       "connector_notion_api_request"
     ]
   },
@@ -52,24 +57,33 @@
     "authType": "oauth",
     "statusMode": "oauth_connector",
     "docsUrl": "https://www.notion.so/my-integrations",
-    "docsHint": "Notion -> My Integrations -> New public integration -> Redirect URI: http://localhost:19423/auth/callback/notion",
+    "docsHint": "Fastest: notion.so/profile/integrations -> New integration (Internal) -> copy the Internal Integration Secret and paste it below, then share pages with the integration (page ... menu -> Connections). Or create a Public integration with Redirect URI http://localhost:19423/auth/callback/notion and use Client ID + Secret.",
     "callback": {
       "port": 19423,
       "path": "/auth/callback/notion"
     },
     "fields": [
       {
+        "key": "accessToken",
+        "label": "Internal Integration Secret",
+        "input": "password",
+        "required": false,
+        "secret": true,
+        "placeholder": "ntn_...",
+        "help": "Paste this alone to connect immediately (no OAuth app needed)."
+      },
+      {
         "key": "clientId",
-        "label": "Client ID",
+        "label": "Public integration Client ID",
         "input": "text",
-        "required": true,
+        "required": false,
         "placeholder": "abc123..."
       },
       {
         "key": "clientSecret",
         "label": "Client Secret",
         "input": "password",
-        "required": true,
+        "required": false,
         "secret": true,
         "placeholder": "secret_..."
       }

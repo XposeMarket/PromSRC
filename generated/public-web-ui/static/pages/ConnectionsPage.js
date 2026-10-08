@@ -1353,6 +1353,7 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
         <div style="font-size:13px;font-weight:700;color:var(--text)">Enter ${escHtml(connector.name)} credentials</div>
         ${info.docsHint ? `<div style="font-size:11.5px;color:var(--muted);line-height:1.6">${escHtml(info.docsHint)}</div>` : ''}
         ${connector.id === 'x' ? `<div style="font-size:11.5px;color:var(--muted);line-height:1.6;background:rgba(255,106,0,.08);border:1px solid rgba(255,106,0,.18);border-radius:8px;padding:9px 11px">Use the OAuth 2.0 Client ID from X Developer Portal, not the API Key / Consumer Key. Add <code style="font-size:10.5px">http://localhost:8080/callback</code> to the app callback URLs, or enter the exact callback you configured below.</div>` : ''}
+        ${renderRedirectUriHint(connector)}
         ${docsLink}
       </div>
       ${errorMsg ? `<div style="font-size:12px;color:var(--err);background:rgba(224,109,109,.1);border:1px solid rgba(224,109,109,.25);border-radius:7px;padding:9px 12px">${escHtml(errorMsg)}</div>` : ''}
@@ -1367,6 +1368,21 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
       <div id="cred-status-${id}" style="display:none;font-size:11.5px;text-align:center;color:var(--muted)"></div>
     </div>
   `;
+}
+
+function renderRedirectUriHint(connector) {
+  if (!connector || connector.id === 'x' || connector.authType !== 'oauth') return '';
+  const uri = connector.state?.redirectUri || connectorStatuses[connector.id]?.redirectUri;
+  if (!uri) return '';
+  const insecure = connector.id === 'instagram' && !/^https:/i.test(uri);
+  return `<div style="font-size:11.5px;color:var(--muted);line-height:1.6;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:9px 11px">
+    Redirect URI to register in the provider app:
+    <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+      <code style="font-size:10.5px;word-break:break-all;flex:1">${escHtml(uri)}</code>
+      <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText(${escHtml(JSON.stringify(uri))})" style="padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:11px;cursor:pointer">Copy</button>
+    </div>
+    ${insecure ? '<div style="color:var(--err);margin-top:4px">Instagram needs an https redirect. Enable Remote Access (Tailscale Funnel) or connect with an Access Token instead.</div>' : ''}
+  </div>`;
 }
 
 async function saveConnectorCredentials(id) {
@@ -1398,10 +1414,21 @@ async function saveConnectorCredentials(id) {
   });
 
   if (!valid) return;
+  const hasToken = Boolean(body.accessToken);
+  if (!hasToken && info.fields.some((f) => f.key === 'accessToken') && !body.clientId) {
+    const tokenEl = document.getElementById(`cred-input-${id}-accessToken`);
+    if (tokenEl) tokenEl.style.borderColor = 'var(--err)';
+    if (statusEl) {
+      statusEl.style.display = '';
+      statusEl.textContent = 'Paste an access token, or enter the app Client ID and Secret to authorize.';
+      statusEl.style.color = 'var(--err)';
+    }
+    return;
+  }
 
   if (btn) {
     btn.disabled = true;
-    btn.textContent = 'Saving...';
+    btn.textContent = hasToken ? 'Verifying token...' : 'Saving...';
   }
   if (statusEl) {
     statusEl.style.display = '';
@@ -1423,6 +1450,13 @@ async function saveConnectorCredentials(id) {
       statusEl.textContent = 'Failed to save: ' + e.message;
       statusEl.style.color = 'var(--err)';
     }
+    return;
+  }
+
+  if (hasToken) {
+    await loadConnectionsState();
+    openConnectorView(id);
+    showToast('Connected!', `${connector.name} connected with your access token.`, 'success');
     return;
   }
 

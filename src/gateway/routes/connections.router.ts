@@ -16,6 +16,7 @@ import {
   getConnectorStatuses,
   pollOAuthResult,
   saveConnectorCredentials,
+  saveConnectorManualToken,
   startOAuthFlowForConnector,
 } from '../../integrations/connector-registry.js';
 import {
@@ -315,9 +316,30 @@ router.get('/api/connections/xurl/poll', (_req: any, res: any) => {
 });
 
 router.post('/api/connections/credentials', async (req: any, res: any) => {
-  const { id, clientId, clientSecret, apiKey, consumerKey, secretKey, bearerToken, redirectUri, scopes } = req.body || {};
+  const { id, clientId, clientSecret, apiKey, consumerKey, secretKey, bearerToken, redirectUri, scopes, accessToken } = req.body || {};
   if (!id) {
     res.status(400).json({ error: 'id required' });
+    return;
+  }
+
+  // A provider-generated access token (Meta "Generate token", Notion internal
+  // integration secret, ...) connects immediately without the OAuth popup.
+  const manualToken = String(accessToken || '').trim();
+  if (manualToken) {
+    try {
+      if (clientId) saveConnectorCredentials(id, String(clientId).trim(), String(clientSecret || '').trim());
+      const result = await saveConnectorManualToken(id, manualToken);
+      appendConnectionActivity(id, {
+        timestamp: Date.now(),
+        action: 'connected',
+        direction: 'out',
+        title: `Connected ${id} with an access token`,
+        summary: result.account ? `Account ${result.account}` : 'Access token verified',
+      });
+      res.json({ success: true, connected: true, account: result.account });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || String(err) });
+    }
     return;
   }
 
