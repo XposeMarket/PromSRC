@@ -78,6 +78,8 @@ window.normalizeProgressStatus = normalizeProgressStatus;
 
 let bgtTasks = [];           // all task records from server
 let bgtManagedThreads = [];  // Prometheus peer-session supervision records
+let bgtNeedsYouItems = [];
+let bgtNeedsYouAction = '';
 let bgtOpenTaskId = null;    // currently open panel task id
 window.bgtOpenTaskId = null;
 let bgtEditMode = false;
@@ -372,9 +374,10 @@ async function bgtHandleColumnDrop(e, targetStatus) {
 
 // --- Fetch & Render ----------------------------------------------------------
 async function refreshBgTasks() {
-  const [tasksResult, threadsResult] = await Promise.allSettled([
+  const [tasksResult, threadsResult, needsYouResult] = await Promise.allSettled([
     api('/api/bg-tasks', { timeoutMs: 8000 }),
     api('/api/thread-supervisions?includeTerminal=true&limit=100', { timeoutMs: 8000 }),
+    api('/api/needs-you', { timeoutMs: 8000 }),
   ]);
   if (tasksResult.status === 'fulfilled' && tasksResult.value?.success) {
     bgtTasks = tasksResult.value.tasks || [];
@@ -385,6 +388,11 @@ async function refreshBgTasks() {
     bgtManagedThreads = threadsResult.value.supervisions || [];
   } else if (threadsResult.status === 'rejected') {
     console.error('[BGT] managed threads refresh error:', threadsResult.reason);
+  }
+  if (needsYouResult.status === 'fulfilled' && needsYouResult.value?.success) {
+    bgtNeedsYouItems = Array.isArray(needsYouResult.value.items) ? needsYouResult.value.items : [];
+  } else if (needsYouResult.status === 'rejected') {
+    console.error('[BGT] needs-you refresh error:', needsYouResult.reason);
   }
   if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
   renderBgTasks();
@@ -528,6 +536,25 @@ function renderBgTasks() {
 
   updateBgtHeartbeatLabel();
   updateBgtSearchUI(visibleTasks.length + visibleManagedThreads.length);
+
+  // User-blocking work stays above the project/task board and keeps its source pending ID.
+  const needsYouSection = document.getElementById('bgt-needs-you');
+  if (needsYouSection) {
+    needsYouSection.innerHTML = bgtNeedsYouItems.length
+      ? bgtNeedsYouItems.map((item) => {
+        const id = String(item.id || '');
+        const origin = String(item.sessionId || '');
+        const payload = item.payload || {};
+        const question = payload.loginHandoff ? { ...payload, loginHandoff: payload.loginHandoff } : payload;
+        const content = item.kind === 'question' || item.kind === 'browser_login'
+          ? (typeof window.renderPrometheusQuestionForNeedsYou === 'function' ? window.renderPrometheusQuestionForNeedsYou(question) : '')
+          : ['final_action_approval', 'tool_approval'].includes(item.kind)
+            ? renderTaskApprovalCard({ ...payload, sourceSessionId: origin })
+            : `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${escHtml(String(payload.content || payload.reason || payload.prompt || payload.title || 'This item is waiting for your input.'))}</div><div class="chat-approval-actions">${item.kind === 'team_escalation' ? `<button class="chat-approval-btn chat-approval-approve" onclick="bgtNeedsYouReply('${escHtml(id)}')">Reply</button>` : item.kind === 'paused_agent_run' ? `<button class="chat-approval-btn chat-approval-approve" onclick="bgtOpenCardFromClick(null,'${escHtml(String(payload.id || ''))}')">Open run</button>` : ''}</div></div>`;
+        return `<article class="pm-card bgt-needs-you-card"><div class="bgt-needs-you-meta"><strong>${escHtml(String(item.kind || '').replace(/_/g, ' '))}</strong><span>From ${escHtml(String(item.source || 'Chat'))}</span>${origin ? `<a href="#" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')">Open origin chat</a>` : ''}</div>${content}<small data-needs-you-id="${escHtml(id)}">${escHtml(id)}</small></article>`;
+      }).join('')
+      : '<div class="pm-empty">Nothing is waiting on you.</div>';
+  }
 
   // Only render non-empty columns
   const byStatus = {};
@@ -1018,6 +1045,18 @@ async function bgtCreateSkillProposal(taskId) {
   } catch (err) {
     bgtToast('Skill draft failed', err?.message || 'Could not create draft skill');
   }
+}
+
+function bgtOpenOriginChat(e, sessionId) {
+  if (e) e.preventDefault();
+  if (!sessionId) return;
+  if (typeof window.openSession === 'function') window.openSession(sessionId);
+}
+
+async function bgtNeedsYouReply(itemId) {
+  const item = bgtNeedsYouItems.find((entry) => String(entry.id) === String(itemId));
+  if (!item) return;
+  bgtOpenOriginChat(null, item.sessionId);
 }
 
 async function bgtResolveApproval(approvalId, action, grantScope = '') {
@@ -1525,6 +1564,8 @@ window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
 window.bgtPauseResume = bgtPauseResume;
 window.bgtCreateSkillProposal = bgtCreateSkillProposal;
 window.bgtResolveApproval = bgtResolveApproval;
+window.bgtOpenOriginChat = bgtOpenOriginChat;
+window.bgtNeedsYouReply = bgtNeedsYouReply;
 window.bgtSendReply = bgtSendReply;
 window.bgtChatSend = bgtChatSend;
 window.bgtDeleteTask = bgtDeleteTask;

@@ -45444,6 +45444,9 @@ if (typeof window.loadSessionApprovals !== 'function') window.loadSessionApprova
 if (typeof window.resolveSessionApproval !== 'function') window.resolveSessionApproval = resolveSessionApproval;
 if (typeof window.resolveInlineApproval !== 'function') window.resolveInlineApproval = resolveInlineApproval;
 if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitInlinePrometheusQuestion = submitInlinePrometheusQuestion;
+if (typeof window.renderPrometheusQuestionForNeedsYou !== 'function') window.renderPrometheusQuestionForNeedsYou = renderInlinePrometheusQuestion;
+if (typeof window.submitPrometheusQuestionForNeedsYou !== 'function') window.submitPrometheusQuestionForNeedsYou = submitInlinePrometheusQuestion;
+
 if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
