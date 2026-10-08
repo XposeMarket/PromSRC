@@ -22,8 +22,60 @@ import {
 } from './mobile-teams-pages.js';
 
 import { wsEventBus } from '../ws.js';
+import {
+  approveMobileApproval,
+  denyMobileApproval,
+  loadMobileNeedsYou,
+  submitMobileQuestion,
+} from './mobile-api.js';
 
 /* ---------------- TASKS PAGE ---------------- */
+
+// Needs you: items blocked on Raul. Resolved through the same endpoints chat uses.
+function renderNeedsYouCard(item) {
+  const id = escapeHtml(String(item.id || ''));
+  const kind = String(item.kind || '');
+  const origin = escapeHtml(String(item.sessionId || ''));
+  const payload = item.payload || {};
+  const title = escapeHtml(String(item.source || 'Chat'));
+  const summary = escapeHtml(String(payload.content || payload.reason || payload.prompt || payload.toolName || payload.title || payload.targetTitle || 'Waiting for your input.'));
+  let actions = '';
+  if (kind === 'tool_approval' || kind === 'final_action_approval') {
+    actions = `<button class="pm-btn" data-ny-deny="${id}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${id}">Approve</button>`;
+  } else if (kind === 'question' || kind === 'browser_login') {
+    actions = `<button class="pm-btn" data-ny-skip="${id}">Cancel</button><button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Answer in chat</button>`;
+  } else {
+    actions = `<button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Open thread</button>`;
+  }
+  return `<div class="pm-card needs-you-card" data-needs-you-id="${id}"><div class="pm-card-head"><strong>${escapeHtml(kind.replace(/_/g, ' '))}</strong> <span>from ${title}</span></div><div class="pm-card-body">${summary}</div><div class="pm-card-actions">${actions}${origin ? `<a href="#" data-ny-link="${origin}">Source thread</a>` : ''}</div></div>`;
+}
+
+async function paintNeedsYouSection(page) {
+  const host = page.querySelector('#pm-needs-you');
+  if (!host) return;
+  let items = [];
+  try { items = await loadMobileNeedsYou(); } catch { items = []; }
+  host.innerHTML = items.length
+    ? `<h3 class="pm-section-title">Needs you</h3>${items.map(renderNeedsYouCard).join('')}`
+    : '';
+  host.querySelectorAll('[data-ny-approve]').forEach((el) => el.addEventListener('click', async () => {
+    await approveMobileApproval(el.dataset.nyApprove, '', { source: 'mobile' });
+    await paintNeedsYouSection(page);
+  }));
+  host.querySelectorAll('[data-ny-deny]').forEach((el) => el.addEventListener('click', async () => {
+    await denyMobileApproval(el.dataset.nyDeny, { source: 'mobile' });
+    await paintNeedsYouSection(page);
+  }));
+  host.querySelectorAll('[data-ny-skip]').forEach((el) => el.addEventListener('click', async () => {
+    await submitMobileQuestion(el.dataset.nySkip, [], '').catch(() => null);
+    await paintNeedsYouSection(page);
+  }));
+  host.querySelectorAll('[data-ny-open],[data-ny-link]').forEach((el) => el.addEventListener('click', (e) => {
+    e.preventDefault();
+    const sid = el.dataset.nyOpen || el.dataset.nyLink;
+    if (sid) window.location.hash = `#chat/${encodeURIComponent(sid)}`;
+  }));
+}
 
 const TASK_PILL = {
   running:           { label: 'running',   cls: 'running' },
@@ -306,6 +358,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
+      <div id="pm-needs-you"></div>
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;overflow-x:auto;justify-content:flex-start;">
         ${PM_TASK_FILTERS.map((f, i) => `<button class="${i === 0 ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
       </div>
@@ -571,6 +624,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }, 120);
   };
   taskEventNames.forEach((eventName) => wsEventBus.on(eventName, onTaskEvent));
+  const onNeedsYouChange = () => { paintNeedsYouSection(page).catch(() => {}); };
+  ['question_created', 'question_answered', 'question_cancelled', 'question_expired', 'approval_created', 'approval_resolved', 'proposal_created'].forEach((eventName) => wsEventBus.on(eventName, onNeedsYouChange));
+  paintNeedsYouSection(page).catch(() => {});
 
   page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true, force: true }); });
   const cachedTasks = getCachedMobilePageData('tasks', 21_600_000);

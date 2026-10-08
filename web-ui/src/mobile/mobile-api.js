@@ -459,6 +459,20 @@ export async function loadMobileQuestions(status = 'pending', sessionId = '') {
   return Array.isArray(r?.questions) ? r.questions : [];
 }
 
+/** Aggregated items blocked on the user (GET /api/needs-you). */
+export async function loadMobileNeedsYou() {
+  const r = await mfetch('/api/needs-you');
+  return Array.isArray(r?.items) ? r.items : [];
+}
+
+/** Answers a pending Prometheus question through the same submit endpoint chat uses. */
+export async function submitMobileQuestion(id, answers = [], generalOther = '') {
+  return mfetch(`/api/questions/${encodeURIComponent(id)}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ answers, generalOther, resolvedBy: 'mobile' }),
+  });
+}
+
 export async function approveMobileApproval(id, grantScope = '', options = {}) {
   const scope = String(grantScope || '').trim();
   const source = String(options?.source || options?.resolvedBy || '').trim();
