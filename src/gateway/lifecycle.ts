@@ -1087,7 +1087,9 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // shutdownGateway below; flushing the previous session here duplicated the
   // same synchronous writes on every restart.
   writeRestartContext(restartCtx);
-  if (externallySupervised && restartCtx.restartScope === 'supervisor') {
+  // A desktop-managed supervisor is replaced by relaunching the app (exit 43),
+  // never by spawning a detached supervisor outside Electron.
+  if (externallySupervised && !electronManaged && restartCtx.restartScope === 'supervisor') {
     const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
       || path.dirname(getRestartContextPath());
     try {

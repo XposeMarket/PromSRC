@@ -1,7 +1,7 @@
 {
   "name": "prometheus",
   "version": "1.0.17",
-  "description": "Prometheus â€” Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "engines": {
     "node": ">=20.20.0 <23"
   },
@@ -157,7 +157,6 @@
     "test:sqlite-memory-maintenance": "tsx src/gateway/memory-index/sqlite-store.maintenance.regression.ts",
     "test:process-hygiene": "tsx src/gateway/process-hygiene.regression.ts",
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
-    "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs && node scripts/test-mobile-restart-hold-policy.mjs",
     "test:mobile-stream-receipts": "node scripts/test-mobile-stream-receipts.mjs",
     "bench:mobile-multithread": "node scripts/bench-mobile-multithread.mjs replay",
