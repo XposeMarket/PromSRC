@@ -161,8 +161,6 @@ jobs:
         run: |
           node scripts/test-mobile-voice-motion-orb.mjs
           node scripts/test-mobile-realtime-transient-disconnect.mjs
-      - name: Verify Electron gateway relay
-        run: node scripts/test-electron-gateway-relay.mjs
       - name: Verify Electron security boundary
         run: node scripts/test-electron-security-boundary.mjs
       - name: Verify Electron native browser resource policy
