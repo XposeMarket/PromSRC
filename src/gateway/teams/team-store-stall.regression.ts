@@ -129,8 +129,12 @@ async function main() {
   mt.saveManagedTeam(t7c);
   assert.equal(mt.evaluateTeamGoalCompletionGate('team_stall', { listTeamProposals: noProps }).ok, true);
   assert.equal(mt.isTeamGoalCompleted('team_stall'), false);
+  // 8) Teams v6: every step done but the manager parked on [WAITING_MAIN_AGENT].
+  //    The goal reads as ready to close, so the coordinator nudges it once.
+  assert.equal(mt.isTeamGoalReadyToClose('team_stall', { listTeamProposals: noProps }), true, 'done + logged goal is ready to close');
   assert.ok(mt.claimTeamGoalCompletionReview('team_stall'));
   assert.equal(mt.isTeamGoalCompleted('team_stall'), true, 'reviewed goal reads as completed');
+  assert.equal(mt.isTeamGoalReadyToClose('team_stall', { listTeamProposals: noProps }), false, 'a reviewed goal is not nudged again');
   const { shouldWakeManager } = await import('./team-event-router');
   assert.equal(shouldWakeManager({ type: 'member_completed_task', teamId: 'team_stall', agentId: 'x', source: 'background_dispatch' }, []), false,
     'a straggler result after the review does not wake the manager');
