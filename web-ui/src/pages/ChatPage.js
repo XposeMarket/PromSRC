@@ -45441,13 +45441,11 @@ async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
 }
 
 if (typeof window.loadSessionApprovals !== 'function') window.loadSessionApprovals = loadSessionApprovals;
-if (typeof window.resolveSessionApproval !== 'function') window.resolveSessionApproval = resolveSessionApproval;
-if (typeof window.resolveInlineApproval !== 'function') window.resolveInlineApproval = resolveInlineApproval;
-if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitInlinePrometheusQuestion = submitInlinePrometheusQuestion;
-if (typeof window.renderPrometheusQuestionForNeedsYou !== 'function') window.renderPrometheusQuestionForNeedsYou = renderInlinePrometheusQuestion;
-if (typeof window.submitPrometheusQuestionForNeedsYou !== 'function') window.submitPrometheusQuestionForNeedsYou = submitInlinePrometheusQuestion;
-
-if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
+window.resolveSessionApproval ||= resolveSessionApproval;
+window.resolveInlineApproval ||= resolveInlineApproval;
+window.submitInlinePrometheusQuestion ||= submitInlinePrometheusQuestion;
+window.renderInlinePrometheusQuestion ||= renderInlinePrometheusQuestion;
+window.cancelInlinePrometheusQuestion ||= cancelInlinePrometheusQuestion;
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
 if (typeof window.handleDesktopQuestionOptionChange !== 'function') window.handleDesktopQuestionOptionChange = handleDesktopQuestionOptionChange;

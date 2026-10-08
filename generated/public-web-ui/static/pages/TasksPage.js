@@ -648,7 +648,7 @@ function renderBgTasks() {
         const payload = item.payload || {};
         const question = payload.loginHandoff ? { ...payload, loginHandoff: payload.loginHandoff } : payload;
         const content = item.kind === 'question' || item.kind === 'browser_login'
-          ? (typeof window.renderPrometheusQuestionForNeedsYou === 'function' ? window.renderPrometheusQuestionForNeedsYou(question) : '')
+          ? (typeof window.renderInlinePrometheusQuestion === 'function' ? window.renderInlinePrometheusQuestion(question) : '')
           : ['final_action_approval', 'tool_approval'].includes(item.kind)
             ? renderTaskApprovalCard({ ...payload, sourceSessionId: origin })
             : item.kind === 'video_approval'
