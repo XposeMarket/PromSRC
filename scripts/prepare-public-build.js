@@ -129,7 +129,7 @@ function listFiles(root) {
 
 function expectedPublicWebUiFiles() {
   const expected = new Set(['index.html', ...PUBLIC_WEB_VENDOR_FILES]);
-  for (const name of ['mobile.html', 'mobile-v2.html']) {
+  for (const name of ['mobile.html']) {
     if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
   }
   const sourceRoot = path.join(SRC_WEB_UI, 'src');
@@ -137,7 +137,7 @@ function expectedPublicWebUiFiles() {
     const relative = path.relative(sourceRoot, sourcePath).replace(/\\/g, '/');
     expected.add(`static/${relative}`);
   }
-  for (const name of ['manifest.webmanifest', 'service-worker.js', 'manifest-v2.webmanifest', 'service-worker-v2.js']) {
+  for (const name of ['manifest.webmanifest', 'service-worker.js', 'service-worker-v2.js']) {
     if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
   }
   const assetManifestPath = path.join(OUT_ROOT, 'asset-manifest.json');
@@ -387,7 +387,7 @@ function buildPublicWebUi() {
   // incremental and can leave the output tree half-deleted after EBUSY.
   mkdirp(OUT_STATIC);
 
-  for (const name of ['index.html', 'mobile.html', 'mobile-v2.html']) {
+  for (const name of ['index.html', 'mobile.html']) {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;
     let html = fs.readFileSync(sourcePath, 'utf-8');
@@ -411,7 +411,7 @@ function buildPublicWebUi() {
   // Root-level web-ui files that must be served at the site root (PWA contract).
   // The service worker must be at "/" to claim scope "/"; the manifest must be
   // at a stable path that <link rel="manifest"> can resolve.
-  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js', 'manifest-v2.webmanifest', 'service-worker-v2.js'];
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js', 'service-worker-v2.js'];
   for (const name of ROOT_LEVEL_FILES) {
     const srcFile = path.join(SRC_WEB_UI, name);
     if (fs.existsSync(srcFile)) {

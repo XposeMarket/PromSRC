@@ -1,4 +1,11 @@
-import { createTerminalWorkspaceTracker, type TerminalWorkspaceTracker } from '../coding/terminal-change-tracker';
+import {
+  createTerminalWorkspaceTracker,
+  isTerminalTrackerExcludedPath,
+  resolveTerminalGitRoot,
+  type TerminalFileMapCapture,
+  type TerminalWorkspaceTracker,
+} from '../coding/terminal-change-tracker';
+import { ensureWorkspaceWatch, workspaceWatchBarrier, workspaceWatchGeneration } from '../coding/workspace-watch';
 import {
   RUNTIME_WORKER_PROTOCOL_VERSION,
   boundedRuntimeWorkerError,
@@ -11,8 +18,62 @@ import {
   startRuntimeWorkerResourceHeartbeat,
 } from './runtime-worker-resources';
 
-const trackers = new Map<string, TerminalWorkspaceTracker>();
+interface ActiveTracker {
+  tracker: TerminalWorkspaceTracker;
+  /** Watcher generation observed (behind a barrier) when the baseline was taken; null = no watcher. */
+  generation: number | null;
+}
+
+const trackers = new Map<string, ActiveTracker>();
 let activeRequestId: string | undefined;
+
+// Last physical capture per non-Git workspace, valid while the watcher
+// generation is unchanged. Lets a begin skip the ~150 ms walk.
+const captureCache = new Map<string, { generation: number; capture: TerminalFileMapCapture }>();
+
+function watchKey(workspacePath: string): string {
+  return process.platform === 'win32' ? workspacePath.toLowerCase() : workspacePath;
+}
+
+/** Generation after all prior fs events are delivered, or null when unprovable. */
+async function settledGeneration(workspacePath: string): Promise<number | null> {
+  if (!ensureWorkspaceWatch(workspacePath, isTerminalTrackerExcludedPath)) return null;
+  if (!(await workspaceWatchBarrier(workspacePath))) return null;
+  return workspaceWatchGeneration(workspacePath);
+}
+
+async function beginTracker(runId: string, input: Parameters<typeof createTerminalWorkspaceTracker>[0]): Promise<{ active: boolean }> {
+  const workspacePath = String(input.workspacePath || '');
+  const gitRoot = workspacePath ? resolveTerminalGitRoot(workspacePath) : undefined;
+  const generation = workspacePath ? await settledGeneration(workspacePath) : null;
+  const cached = workspacePath && !gitRoot && generation !== null ? captureCache.get(watchKey(workspacePath)) : undefined;
+  const baseline = cached && cached.generation === generation ? cached.capture : undefined;
+  const tracker = createTerminalWorkspaceTracker(input, { gitRoot, baseline });
+  if (tracker) {
+    trackers.set(runId, { tracker, generation });
+    if (!tracker.isGit && generation !== null) {
+      captureCache.set(watchKey(tracker.workspacePath), { generation, capture: tracker.baselineCapture });
+    }
+  }
+  return { active: Boolean(tracker) };
+}
+
+async function finalizeTracker(runId: string): Promise<unknown> {
+  const entry = trackers.get(runId);
+  trackers.delete(runId);
+  if (!entry) return null;
+  const { tracker } = entry;
+  const generation = entry.generation === null ? null : await settledGeneration(tracker.workspacePath);
+  const unchanged = generation !== null && generation === entry.generation;
+  const result = tracker.finalize({ unchanged });
+  if (!tracker.isGit && generation !== null) {
+    const capture = unchanged ? tracker.baselineCapture : tracker.finalCapture;
+    // Keyed by the pre-walk generation: a write during the walk bumps the
+    // generation and invalidates this entry.
+    if (capture) captureCache.set(watchKey(tracker.workspacePath), { generation, capture });
+  }
+  return result;
+}
 
 function send(message: RuntimeWorkerChildMessage): void {
   if (process.connected && process.send) process.send(message);
@@ -24,7 +85,7 @@ process.once('disconnect', () => {
   process.exit(0);
 });
 
-process.on('message', (raw: unknown) => {
+process.on('message', async (raw: unknown) => {
   if (!isRuntimeWorkerProtocolMessage(raw)) return;
   const message = raw as RuntimeWorkerParentMessage;
   if (message.type === 'shutdown') {
@@ -52,13 +113,9 @@ process.on('message', (raw: unknown) => {
     let result: unknown;
     if (message.kind === 'begin') {
       if (!payload.input || trackers.has(runId)) throw new Error('Invalid or duplicate terminal baseline');
-      const tracker = createTerminalWorkspaceTracker(payload.input);
-      if (tracker) trackers.set(runId, tracker);
-      result = { active: Boolean(tracker) };
+      result = await beginTracker(runId, payload.input);
     } else if (message.kind === 'finalize') {
-      const tracker = trackers.get(runId);
-      trackers.delete(runId);
-      result = tracker ? tracker.finalize() : null;
+      result = await finalizeTracker(runId);
     } else {
       throw new Error(`Unsupported terminal workspace action: ${message.kind}`);
     }

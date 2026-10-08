@@ -20,6 +20,7 @@ import {
 } from './project.js';
 import { buildAss, buildCaptionCues } from './captions.js';
 import { getPreset } from './presets.js';
+import { characterRefs, refLimitFor } from './refs.js';
 
 // ── ffmpeg helpers ──────────────────────────────────────────────────────
 
@@ -147,7 +148,7 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
   const refs: string[] = [];
   for (const cid of shot.characterIds) {
     const c = p.characters.find((x) => x.id === cid);
-    if (c) refs.push(...c.anchors, ...c.refs);
+    if (c) refs.push(...characterRefs(workspacePath, c));
   }
   const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
   if (style) refs.push(...style.refs);
@@ -179,7 +180,7 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
     audio: model.map.audio ? resolveMediaRef(workspacePath, p, shot.audio) : undefined,
     startImage: abs(startImage),
     endImage: abs(shot.endImage),
-    referenceImages: model.map.referenceImages && !startImage ? Array.from(new Set(refs)).slice(0, 5).map((r) => abs(r)!) : undefined,
+    referenceImages: model.map.referenceImages && !startImage ? Array.from(new Set(refs)).slice(0, refLimitFor(model)).map((r) => abs(r)!) : undefined,
     durationSec: shot.durationSec,
     aspectRatio: p.target.aspect,
     resolution: p.target.resolution,
@@ -565,12 +566,12 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
   if (!args.approved && usd > p.budget.autoApproveUsd + 1e-9) {
     return { needsApproval: true, reason: `Anchor costs ~$${usd.toFixed(2)}, above auto-approve. Call again with approved:true after the user confirms.`, estimate: est, jobs: [] };
   }
-  const refs = [...(args.referenceImages || []), ...c.refs]
+  const refs = [...(args.referenceImages || []), ...characterRefs(workspacePath, c).filter((r) => !c.anchors.includes(r))]
     .map((r) => (/^(https?:|data:)/i.test(r) ? r : fromWorkspaceRel(workspacePath, r)));
   const input: ShotInput = {
     prompt: [anchorPrompt, c.notes].filter(Boolean).join(' '),
     startImage: model.map.startImage ? refs[0] : undefined,
-    referenceImages: model.map.referenceImages ? refs.slice(0, 5) : undefined,
+    referenceImages: model.map.referenceImages ? refs.slice(0, refLimitFor(model)) : undefined,
     aspectRatio: p.target.aspect,
   };
   const missing = missingRequiredFields(model, input);
@@ -626,7 +627,8 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
       const c = p.characters.find((x) => x.id === cid);
       if (!c) continue;
       if (c.kind === 'product') hasProduct = true;
-      refs.push(...c.anchors.slice(0, 2), ...c.refs.slice(0, 1));
+      // Full identity pack (cast-linked characters read the live library pack).
+      refs.push(...characterRefs(workspacePath, c));
     }
     const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
     if (style) refs.push(...style.refs.slice(0, 1));
@@ -641,7 +643,8 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
       refs.length ? 'Keep every person identical to the reference images.' : '',
       'Photorealistic, natural light, no on-screen text, no captions, no watermark.',
     ].filter(Boolean).join(' ');
-    const uniq = Array.from(new Set(refs)).slice(0, 5).map(abs);
+    // Sketch + product refs first, then the identity pack; the provider cap trims from the end.
+    const uniq = Array.from(new Set(refs)).slice(0, refLimitFor(model)).map(abs);
     const input: ShotInput = {
       prompt,
       referenceImages: model.map.referenceImages && uniq.length ? uniq : undefined,

@@ -164,9 +164,6 @@ scripts/test-*: **260**, src/**/*.regression.ts: **292**. Grep this list for the
 - `scripts/test-mobile-team-chat-ui.mjs`
 - `scripts/test-mobile-timeline-reconciliation.mjs`
 - `scripts/test-mobile-tool-approval-ui.mjs`
-- `scripts/test-mobile-v2-foundation.mjs`
-- `scripts/test-mobile-v2-integration.mjs`
-- `scripts/test-mobile-v2-stream-chat-markdown.mjs`
 - `scripts/test-mobile-voice-first-turn-transition.mjs`
 - `scripts/test-mobile-voice-fresh-session.mjs`
 - `scripts/test-mobile-voice-image-lifecycle.mjs`

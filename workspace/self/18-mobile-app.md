@@ -1,11 +1,11 @@
 # 18 — Mobile app
 
-> **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `web-ui/src/mobile/`, `web-ui/src/mobile-v2/`, `web-ui/mobile.html`, `src/gateway/pairing/`
+> **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `web-ui/src/mobile/`, `web-ui/mobile.html`, `src/gateway/pairing/`
 > **Read this when:** Changing Prometheus Mobile, its PWA entry, pairing, mobile route chunks, chat recovery, or phone-specific styling. Desktop specifics are in [17 Desktop web UI](17-desktop-web-ui.md).
 
 ## TL;DR
 - Mobile is a first-class web/PWA surface, not an Electron view; `web-ui/mobile.html` loads `/src/mobile/mobile-entry.js`.
-- Mobile source is mainly `web-ui/src/mobile/`; `mobile-v2/` is a separate evolving implementation. Inspect the current entry/router before assuming v2 owns a live page.
+- Mobile source is `web-ui/src/mobile/`. The parallel `mobile-v2` client was retired (legacy cleanup PR-4): `/mobile-v2` redirects to `/mobile`, and `web-ui/service-worker-v2.js` is a one-release stub that clears V2 caches and unregisters itself.
 - Routes are loaded by owner chunk from `mobile-router.js`; secondary screens are lazy-loaded to keep the initial mobile chat path lean.
 - `manifest.webmanifest`, the mobile service worker, and `/mobile/*` gateway document routing are part of the install/offline contract.
 - Pairing is a security handshake with a desktop approval step; a QR/deep link alone is not the trust grant. Backend state/auth lives in `src/gateway/pairing/` and pairing routes.
@@ -30,7 +30,6 @@
 | Pairing persistence/auth | `src/gateway/pairing/pairing-store.ts`, `pairing-admin-auth.ts`; `src/gateway/routes/pairing.router.ts` | Persistent paired-device store, challenge claims, desktop authority. |
 | PWA/cache | `web-ui/src/mobile/mobile-pwa.js`, `web-ui/manifest.webmanifest`, `web-ui/service-worker.js` | Check generated mirror/cache behavior after web changes. |
 | Liquid glass | `web-ui/src/mobile/mobile-hamburger-liquid-glass.js`, `web-ui/src/styles/mobile-hamburger-liquid-glass.css`, `web-ui/src/vendor/liquid-glass.js` | Intentional, accepted canvas/compositor treatment. |
-| v2 implementation | `web-ui/src/mobile-v2/{app,core,features,ui}/` | Keep its ownership and shipping status explicit; entry is `mobile-v2-entry.js`. |
 | Public mirror | `generated/public-web-ui/mobile.html` and generated assets | Built output; regenerate via `npm run sync:web-ui` in a safe tree. |
 
 ## How it works

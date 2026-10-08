@@ -132,7 +132,6 @@
 - `web-ui/src/legacy-desktop-bootstrap.js` — 1 files
 - `web-ui/src/link-router.js` — 1 files
 - `web-ui/src/mobile` — 43 files
-- `web-ui/src/mobile-v2` — 36 files
 - `web-ui/src/model-display.js` — 1 files
 - `web-ui/src/onboarding` — 7 files
 - `web-ui/src/pages` — 12 files

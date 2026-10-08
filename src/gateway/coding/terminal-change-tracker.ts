@@ -468,6 +468,66 @@ function uniqueSnapshots(files: FileFingerprint[]): WorkspaceSnapshotRef[] {
   return Array.from(new Map(refs.map((ref) => [ref.id, ref])).values());
 }
 
+export interface TerminalTrackerFastPath {
+  /** Pre-resolved Git root (null = not a repo); skips the `git rev-parse` spawn. */
+  gitRoot?: string | null;
+  /** Watcher-verified unchanged physical capture to reuse for a non-Git baseline. */
+  baseline?: FileMapCapture;
+}
+
+export type TerminalFileMapCapture = FileMapCapture;
+
+/** Same exclusion rule the captures use; the workspace watcher ignores these paths. */
+export function isTerminalTrackerExcludedPath(relativePath: string): boolean {
+  return excludedFilePath(relativePath);
+}
+
+const gitRootCache = new Map<string, { root: string | null; hasDotGit: boolean; at: number }>();
+const GIT_ROOT_CACHE_MS = 60_000;
+
+/** findGitRoot with a short cache, invalidated when `<root>/.git` appears or disappears. */
+export function resolveTerminalGitRoot(workspacePath: string): string | null {
+  const key = compareKey(workspacePath);
+  const hasDotGit = fs.existsSync(path.join(workspacePath, '.git'));
+  const cached = gitRootCache.get(key);
+  if (cached && cached.hasDotGit === hasDotGit && Date.now() - cached.at < GIT_ROOT_CACHE_MS) return cached.root;
+  const root = findGitRoot(workspacePath);
+  gitRootCache.set(key, { root, hasDotGit, at: Date.now() });
+  return root;
+}
+
+function cloneCapture(capture: FileMapCapture): FileMapCapture {
+  const files = new Map<string, FileFingerprint>();
+  for (const [key, file] of capture.files.entries()) {
+    files.set(key, {
+      absolutePath: file.absolutePath,
+      relativePath: file.relativePath,
+      size: file.size,
+      mtimeMs: file.mtimeMs,
+      fingerprint: file.fingerprint,
+      tracked: false,
+      baselineKind: 'none',
+    });
+  }
+  return { files, truncated: capture.truncated };
+}
+
+/**
+ * A capped walk captures command-addressed paths first. A cached capture from
+ * another command is only reusable if every existing, in-scope hint is a file
+ * it already contains; otherwise the fresh walk must prioritize it.
+ */
+function cachedCaptureCoversHints(capture: FileMapCapture, root: string, hints: string[]): boolean {
+  for (const hint of hints) {
+    const absolute = path.resolve(hint);
+    if (!isInside(root, absolute) || excludedFilePath(path.relative(root, absolute))) continue;
+    if (capture.files.has(compareKey(absolute))) continue;
+    if (!fs.existsSync(absolute)) continue;
+    return false;
+  }
+  return true;
+}
+
 export class TerminalWorkspaceTracker {
   readonly workspacePath: string;
   readonly cwd: string;
@@ -479,15 +539,23 @@ export class TerminalWorkspaceTracker {
   private readonly missingBaselines = new Map<string, FileFingerprint>();
   private readonly baseline: FileMapCapture;
   private finalized = false;
+  private afterCapture: FileMapCapture | null = null;
 
-  constructor(input: TerminalWorkspaceTrackerInput) {
+  /** True when the tracked scope is a Git work tree (baselines come from Git, not the cache). */
+  get isGit(): boolean { return Boolean(this.gitRoot); }
+  /** Physical file map captured at begin (reusable as a later baseline when nothing changed). */
+  get baselineCapture(): FileMapCapture { return this.baseline; }
+  /** Physical file map captured by finalize's after-walk, if one ran. */
+  get finalCapture(): FileMapCapture | null { return this.afterCapture; }
+
+  constructor(input: TerminalWorkspaceTrackerInput, fast: TerminalTrackerFastPath = {}) {
     this.workspacePath = path.resolve(String(input.workspacePath || process.cwd()));
     const rawCwd = String(input.cwd || '').trim();
     this.cwd = path.resolve(path.isAbsolute(rawCwd) ? rawCwd : path.join(this.workspacePath, rawCwd || '.'));
     this.runId = input.runId;
     this.command = input.command;
     this.commandPathHints = commandPathHints(this.command, this.cwd, this.workspacePath);
-    this.gitRoot = findGitRoot(this.workspacePath);
+    this.gitRoot = fast.gitRoot !== undefined ? fast.gitRoot : findGitRoot(this.workspacePath);
     this.baselineHead = this.gitRoot
       ? String(runGit(this.gitRoot, ['rev-parse', 'HEAD'], { maxBuffer: 64 * 1024 }) || '').trim()
       : '';
@@ -495,7 +563,10 @@ export class TerminalWorkspaceTracker {
     if (this.gitRoot) {
       this.baseline = captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, baselineStatus, this.commandPathHints);
     } else {
-      const capture = captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
+      const reusable = fast.baseline && cachedCaptureCoversHints(fast.baseline, this.workspacePath, this.commandPathHints)
+        ? cloneCapture(fast.baseline)
+        : null;
+      const capture = reusable || captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
       const capturedBytes = Array.from(capture.files.values()).reduce((sum, file) => sum + file.size, 0);
       const rootSnapshot = !capture.truncated && capturedBytes <= MAX_TOTAL_BYTES
         ? createWorkspaceSnapshot({
@@ -570,7 +641,11 @@ export class TerminalWorkspaceTracker {
 
   private baselineSnapshot?: WorkspaceSnapshotRecord;
 
-  finalize(): TerminalWorkspaceChangeResult {
+  /**
+   * `unchanged: true` is only valid when a workspace watcher proved (behind a
+   * barrier) that no non-excluded file under the scope changed since begin.
+   */
+  finalize(options: { unchanged?: boolean } = {}): TerminalWorkspaceChangeResult {
     if (this.finalized) {
       return {
         ...(this.runId ? { runId: this.runId } : {}),
@@ -581,9 +656,12 @@ export class TerminalWorkspaceTracker {
       };
     }
     this.finalized = true;
-    const after = this.gitRoot
-      ? captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, new Set<string>(), this.commandPathHints)
-      : captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
+    const after = options.unchanged
+      ? this.baseline
+      : this.gitRoot
+        ? captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, new Set<string>(), this.commandPathHints)
+        : captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
+    if (!options.unchanged) this.afterCapture = after;
     const changes: TerminalWorkspaceChange[] = [];
     const beforeByFingerprint = new Map<string, FileFingerprint[]>();
     const afterByFingerprint = new Map<string, FileFingerprint[]>();
@@ -680,11 +758,11 @@ export class TerminalWorkspaceTracker {
   }
 }
 
-export function createTerminalWorkspaceTracker(input: TerminalWorkspaceTrackerInput): TerminalWorkspaceTracker | null {
+export function createTerminalWorkspaceTracker(input: TerminalWorkspaceTrackerInput, fast: TerminalTrackerFastPath = {}): TerminalWorkspaceTracker | null {
   try {
     const workspacePath = path.resolve(String(input.workspacePath || '').trim() || process.cwd());
     if (!fs.existsSync(workspacePath) || !fs.statSync(workspacePath).isDirectory()) return null;
-    return new TerminalWorkspaceTracker({ ...input, workspacePath });
+    return new TerminalWorkspaceTracker({ ...input, workspacePath }, fast);
   } catch (error: any) {
     console.warn('[terminal-change-tracker] baseline capture skipped:', error?.message || error);
     return null;

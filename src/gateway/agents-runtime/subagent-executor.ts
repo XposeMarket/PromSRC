@@ -2890,6 +2890,12 @@ export function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { n
   return { name: target, args: name === 'vercel_ops' ? normalizeVercelWrapperArgs(action, args) : args };
 }
 
+const TEAM_GOAL_SUBACTIONS = new Set([
+  'set_focus', 'update_focus', 'set_goal',
+  'log_completed', 'log_completion', 'log_complete', 'log_completed_work',
+  'pause_agent', 'unpause_agent',
+]);
+
 export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
   const actionMaps: Record<string, Record<string, string>> = {
     agent_ops: {
@@ -2945,7 +2951,7 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   const action = String(args.action || '').trim().toLowerCase();
   if (!action) return { name, args, error: `${name} requires action` };
   delete args.action;
-  const target = map[action];
+  let target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
   // Strict-schema models fill every optional field with "" or []. Treat those as
   // absent; otherwise `team_action: ""` overrode real values (manager goal calls
@@ -2958,6 +2964,11 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
       const value = args[key];
       if (value === '' || value === null || (Array.isArray(value) && value.length === 0)) delete args[key];
     }
+  }
+  // Managers send goal actions through manage (team_action:"log_completed"),
+  // which team_manage rejected as unsupported. Route them to manage_team_goal.
+  if (target === 'team_manage' && TEAM_GOAL_SUBACTIONS.has(String(args.team_action ?? '').trim().toLowerCase())) {
+    target = 'manage_team_goal';
   }
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;

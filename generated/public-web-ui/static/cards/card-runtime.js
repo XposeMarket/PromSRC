@@ -1,6 +1,6 @@
 /**
  * Browser runtime for Prometheus chat cards: one delegated listener set for
- * every surface (desktop, mobile, mobile-v2, side chat). Cards are plain HTML
+ * every surface (desktop, mobile, side chat). Cards are plain HTML
  * from renderMd / rich-artifact renderers; this module makes them live.
  * - Interactive fenced cards re-render in place from (spec, state).
  * - State persists per card id in localStorage, so chat re-renders, reloads

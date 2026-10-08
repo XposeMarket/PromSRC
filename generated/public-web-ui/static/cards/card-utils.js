@@ -1,5 +1,5 @@
 /**
- * Shared helpers for Prometheus chat cards (desktop + mobile + mobile-v2).
+ * Shared helpers for Prometheus chat cards (desktop + mobile).
  * Pure functions only: importing this module must not touch the DOM, so the
  * renderers can be unit-tested in node.
  */

@@ -1,6 +1,6 @@
 /**
  * Prometheus chat cards: single entry used by utils.renderMd and every
- * rich-artifact dispatcher (desktop ChatPage, mobile, mobile-v2).
+ * rich-artifact dispatcher (desktop ChatPage, mobile).
  */
 import { INTERACTIVE_FENCES, renderInteractiveCard } from './cards-interactive.js';
 import { DATA_CARD_TYPES, renderDataCard } from './cards-data.js';
