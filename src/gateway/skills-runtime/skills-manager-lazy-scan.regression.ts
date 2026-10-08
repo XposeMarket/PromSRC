@@ -28,7 +28,9 @@ async function main() {
 
   const a = new SkillsManager(skillsDir);
   assert.equal(a.hasScanned(), false, 'constructor must not scan the catalog');
-  assert.equal(a.getAll().length, 2, 'first access must scan synchronously and return the full catalog');
+  // Bundled connector skills (connector-*) are appended to every catalog, so count fixtures only.
+  const fixtures = (m: { getAll(): Array<{ id: string }> }) => m.getAll().filter((s) => s.id.endsWith('-fixture')).length;
+  assert.equal(fixtures(a), 2, 'first access must scan synchronously and return the full catalog');
   assert.equal(a.hasScanned(), true);
   assert.ok(a.get('alpha-fixture'), 'get() must resolve after lazy scan');
 
@@ -42,7 +44,8 @@ async function main() {
   await new Promise((r) => setImmediate(r));
   await new Promise((r) => setImmediate(r));
   assert.equal(c.hasScanned(), true, 'warmInBackground must complete the scan off the caller path');
-  assert.equal(warmed, 2);
+  assert.equal(warmed, c.getAll().length);
+  assert.equal(fixtures(c), 2);
 
   console.log('skills-manager-lazy-scan regression: ok');
 }

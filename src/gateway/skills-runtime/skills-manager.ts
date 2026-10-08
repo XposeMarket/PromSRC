@@ -185,11 +185,23 @@ const SKILL_TRIGGER_STOPWORDS = new Set([
   'me', 'my', 'our', 'this', 'that', 'please',
 ]);
 
+// Pure and called per trigger x per skill on every ranking pass (skill_list,
+// composer routing, curator previews). Skill-side strings are stable across
+// calls, so a bounded memo turns repeated normalization into map lookups.
+const looseNormalizeCache = new Map<string, string>();
 function normalizeSkillMatchTextLoose(value: string): string {
-  return normalizeSkillMatchText(value)
+  const key = String(value ?? '');
+  const hit = looseNormalizeCache.get(key);
+  if (hit !== undefined) return hit;
+  const out = normalizeSkillMatchText(value)
     .split(' ')
     .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
     .join(' ');
+  if (key.length <= 4000) {
+    if (looseNormalizeCache.size >= 8000) looseNormalizeCache.clear();
+    looseNormalizeCache.set(key, out);
+  }
+  return out;
 }
 
 function skillTriggerMatchesText(trigger: string, rawText: string, words: string[]): boolean {
@@ -294,6 +306,37 @@ function composerWordSet(rawText: string): Set<string> {
   return new Set<string>(composerSkillWords(rawText));
 }
 
+/**
+ * Per-skill derived ranking data. Skill objects are replaced on every rescan,
+ * so a WeakMap keyed by the object can never serve stale metadata.
+ */
+interface SkillRankDerived {
+  skillDomains: Set<string>;
+  metadataWords: Set<string>;
+  descriptionWords: Set<string>;
+  networkOperationSkill: boolean;
+  restartLaunchSkill: boolean;
+}
+const skillRankDerivedCache = new WeakMap<object, SkillRankDerived>();
+function getSkillRankDerived(skill: Skill): SkillRankDerived {
+  const cached = skillRankDerivedCache.get(skill);
+  if (cached) return cached;
+  const categories = skill.categories.join(' ');
+  const requiredTools = skill.requiredTools.join(' ');
+  const skillText = [skill.id, skill.name, categories, requiredTools, skill.description].join(' ');
+  const derived: SkillRankDerived = {
+    skillDomains: detectSkillDomains(normalizeSkillMatchTextLoose(skillText)),
+    metadataWords: new Set(composerSkillWords(`${skill.id} ${skill.name} ${categories}`)),
+    descriptionWords: new Set(composerSkillWords(skill.description)),
+    networkOperationSkill: /\b(browser|fetch|publish|post media|web research|playwright)\b/i.test(
+      `${skill.id} ${skill.name} ${categories} ${requiredTools} ${skill.description}`,
+    ),
+    restartLaunchSkill: /restart|launch|open app/i.test(`${skill.id} ${skill.name} ${skill.description}`),
+  };
+  skillRankDerivedCache.set(skill, derived);
+  return derived;
+}
+
 function composerTriggerScore(trigger: string, rawText: string, queryWords: Set<string>): number {
   const triggerText = normalizeSkillMatchTextLoose(trigger);
   if (!triggerText || queryWords.size === 0) return 0;
@@ -380,12 +423,21 @@ function detectSkillDomains(value: string): Set<string> {
   return out;
 }
 
+const exactPhraseRegexCache = new Map<string, RegExp>();
 function exactPhraseInText(phrase: string, text: string): boolean {
   const normalizedPhrase = normalizeSkillMatchTextLoose(phrase);
-  const normalizedText = normalizeSkillMatchTextLoose(text);
   if (normalizedPhrase.length < 4) return false;
-  const escaped = normalizedPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(normalizedText);
+  const normalizedText = normalizeSkillMatchTextLoose(text);
+  // Cheap substring precheck: the boundary regex can only match if the phrase occurs.
+  if (!normalizedText.toLowerCase().includes(normalizedPhrase.toLowerCase())) return false;
+  let pattern = exactPhraseRegexCache.get(normalizedPhrase);
+  if (!pattern) {
+    const escaped = normalizedPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    pattern = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i');
+    if (exactPhraseRegexCache.size >= 4000) exactPhraseRegexCache.clear();
+    exactPhraseRegexCache.set(normalizedPhrase, pattern);
+  }
+  return pattern.test(normalizedText);
 }
 
 function explicitSkillMentionScore(skill: Skill, rawText: string): number {
@@ -437,6 +489,9 @@ export function rankSkillMatches(
   const queryWords = composerWordSet(text);
   const queryDomains = detectSkillDomains(normalized);
   const ranked: SkillRouteMatch[] = [];
+  // Query-only intents: computed once per ranking pass, not once per skill.
+  const sourceWorkIntent = /\b(prometheus\s+(?:source|src)|self[ -]?edit|source\s+code|fix(?:ing)?\s+(?:a\s+)?bug|live\s+ui\s+verification)\b/i.test(text);
+  const noBrowseIntent = /\b(draft only|write only|do not browse|don['’]?t browse|no research|do not publish|don['’]?t publish)\b/i.test(text);
 
   for (const skill of skills) {
     if (skill.lifecycle === 'deprecated' || skill.lifecycle === 'archived') continue;
@@ -466,14 +521,8 @@ export function rankSkillMatches(
     if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
     const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched;
 
-    const skillText = [
-      skill.id,
-      skill.name,
-      skill.categories.join(' '),
-      skill.requiredTools.join(' '),
-      skill.description,
-    ].join(' ');
-    const skillDomains = detectSkillDomains(normalizeSkillMatchTextLoose(skillText));
+    const derived = getSkillRankDerived(skill);
+    const skillDomains = derived.skillDomains;
     const matchedDomains = Array.from(queryDomains).filter((domain) => skillDomains.has(domain));
     const domainConflict = queryDomains.size > 0 && skillDomains.size > 0 && matchedDomains.length === 0;
     const specializedExtraDomains = Array.from(skillDomains).filter((domain) =>
@@ -485,26 +534,22 @@ export function rankSkillMatches(
     // coordinator's weak anyOf/allOf match (for example, "check process
     // status" should select the shell playbook over generic investigation).
     if (hasExactLegacyTrigger && !explicitMention) score += 60;
-    const metadataWords = new Set(composerSkillWords(`${skill.id} ${skill.name} ${skill.categories.join(' ')}`));
+    const metadataWords = derived.metadataWords;
     const metadataOverlap = Array.from(queryWords).filter((word) => metadataWords.has(word)).length;
     score += Math.min(24, metadataOverlap * 8);
-    const descriptionWords = new Set(composerSkillWords(skill.description));
+    const descriptionWords = derived.descriptionWords;
     const descriptionOverlap = Array.from(queryWords).filter((word) => descriptionWords.has(word)).length;
     score += Math.min(30, descriptionOverlap * 10);
     if (matchedDomains.length) score += 18 + Math.min(12, matchedDomains.length * 4);
     if (queryDomains.size > 0 && specializedExtraDomains.length && !explicitMention && !hasExactTrigger) score -= 60;
     if (domainConflict && !explicitMention && !hasExactTrigger) score -= 80;
 
-    const sourceWorkIntent = /\b(prometheus\s+(?:source|src)|self[ -]?edit|source\s+code|fix(?:ing)?\s+(?:a\s+)?bug|live\s+ui\s+verification)\b/i.test(text);
     // src-edit-proposal-rigor was merged into promsrc-pr-worktree (2026-10-01 skill cleanup).
     const sourceRigorSkill = /promsrc-pr-worktree|src-edit-proposal-rigor/i.test(skill.id);
     if (sourceWorkIntent && sourceRigorSkill) score += 95;
-    if (sourceWorkIntent && /restart|launch|open app/i.test(`${skill.id} ${skill.name} ${skill.description}`) && !sourceRigorSkill) score -= 85;
+    if (sourceWorkIntent && derived.restartLaunchSkill && !sourceRigorSkill) score -= 85;
 
-    const noBrowseIntent = /\b(draft only|write only|do not browse|don['’]?t browse|no research|do not publish|don['’]?t publish)\b/i.test(text);
-    const networkOperationSkill = /\b(browser|fetch|publish|post media|web research|playwright)\b/i.test(
-      `${skill.id} ${skill.name} ${skill.categories.join(' ')} ${skill.requiredTools.join(' ')} ${skill.description}`,
-    );
+    const networkOperationSkill = derived.networkOperationSkill;
     if (noBrowseIntent && networkOperationSkill && !explicitMention) score -= 100;
 
     const setupRestricted = skill.status === 'needs_setup' || skill.health.state === 'needs_setup' || skill.health.state === 'partial' || skill.eligibility.status === 'needs_setup';
@@ -603,6 +648,8 @@ export function resolveRealSkillsDir(dir: string): string {
   }
 }
 
+const SKILL_TREE_SAFETY_RECHECK_MS = 60_000;
+
 export class SkillsManager {
   private skillsDir: string;
   private skillsStore: Map<string, Skill> = new Map();
@@ -698,13 +745,55 @@ export class SkillsManager {
    */
   refreshSkillsIfChanged(): boolean {
     if (!this.scannedOnce) { this.scanSkills(); return true; }
+    // The tree signature stats ~600 paths (~130-160 ms on Windows/NTFS), which
+    // used to dominate every skill_list/skill_read call. A recursive fs.watch
+    // marks the tree dirty on any change, so a clean tree skips the stat walk.
+    // A periodic full check still runs as a safety net for missed events.
+    const now = Date.now();
+    if (this.treeWatcherActive && !this.treeDirty && now - this.lastSignatureCheckAt < SKILL_TREE_SAFETY_RECHECK_MS) {
+      return false;
+    }
+    this.treeDirty = false;
+    this.lastSignatureCheckAt = now;
     const signature = this.computeTreeSignature();
     if (signature === this.lastTreeSignature) return false;
     this.scanSkills(signature);
     return true;
   }
 
+  private treeWatcher: fs.FSWatcher | null = null;
+  private treeWatcherActive = false;
+  private treeDirty = true;
+  private lastSignatureCheckAt = 0;
+
+  private ensureTreeWatcher(): void {
+    if (this.treeWatcher || process.env.PROMETHEUS_DISABLE_SKILL_WATCH === '1') return;
+    try {
+      const watcher = fs.watch(this.skillsDir, { recursive: true, persistent: false }, (_event, filename) => {
+        const name = String(filename || '');
+        // Safety-scan cache writes and similar dot-dirs are not catalog changes,
+        // except the .manifests overlay, which the signature tracks.
+        if (name && /^[._]/.test(name) && !name.startsWith('.manifests')) return;
+        this.treeDirty = true;
+      });
+      watcher.on('error', () => {
+        this.treeWatcherActive = false;
+        this.treeDirty = true;
+        try { watcher.close(); } catch {}
+        this.treeWatcher = null;
+      });
+      this.treeWatcher = watcher;
+      this.treeWatcherActive = true;
+    } catch {
+      // Recursive watch unsupported (older Linux Node): fall back to the stat walk every call.
+      this.treeWatcherActive = false;
+    }
+  }
+
   scanSkills(knownSignature?: string): void {
+    this.ensureTreeWatcher();
+    this.treeDirty = false;
+    this.lastSignatureCheckAt = Date.now();
     this.lastTreeSignature = knownSignature || this.computeTreeSignature();
     this.scannedOnce = true;
     this.skillsStore.clear();
