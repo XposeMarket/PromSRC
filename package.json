@@ -241,6 +241,7 @@
     "postinstall": "node scripts/postinstall.js",
     "test:chat-selection-refresh": "node scripts/test-chat-selection-refresh-contract.mjs",
     "test:kling-min-duration": "tsx src/media-engine/kling-min-duration.regression.ts",
+    "test:fal-balance": "tsx src/media-engine/fal-balance.regression.ts",
     "test:gateway-handoff": "tsx src/gateway/runtime/gateway-handoff.regression.ts",
     "test:gateway-handoff-e2e": "npm run build:backend && node scripts/test-gateway-handoff-e2e.mjs"
   },

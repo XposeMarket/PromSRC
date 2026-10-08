@@ -5,7 +5,7 @@
  *  - generate(): cost gate -> persisted jobs -> provider submit -> poll -> takes
  *  - jobs survive gateway restarts for queue providers (fal / Higgsfield)
  *  - render(): layered FFmpeg export straight from the project (tracks stack,
- *    audio mixes) — no end-to-end concatenation
+ *    audio mixes) � no end-to-end concatenation
  */
 import fs from 'fs';
 import path from 'path';
@@ -21,8 +21,9 @@ import {
 import { buildAss, buildCaptionCues } from './captions.js';
 import { getPreset } from './presets.js';
 import { characterRefs, refLimitFor } from './refs.js';
+import { balanceShortfall, falBalance, type ProviderBalance } from './balance.js';
 
-// ── ffmpeg helpers ──────────────────────────────────────────────────────
+// -- ffmpeg helpers ------------------------------------------------------
 
 function ffmpeg(args: string[], timeoutMs = 15 * 60_000, cwd?: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -70,7 +71,7 @@ async function extractLastFrame(videoAbs: string, outAbs: string): Promise<strin
   return outAbs;
 }
 
-// ── shot -> provider input ──────────────────────────────────────────────
+// -- shot -> provider input ----------------------------------------------
 
 export function shotModel(p: VideoProject, shot: Shot, override?: string): MediaModelManifest {
   const id = override || shot.modelId || p.defaults.videoModel;
@@ -188,7 +189,7 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
   };
 }
 
-// ── estimate ────────────────────────────────────────────────────────────
+// -- estimate ------------------------------------------------------------
 
 /** Repair historical budget totals from completed jobs, using the current model price when known. */
 export async function reconcileProjectSpend(workspacePath: string, projectId: string, project = loadProject(workspacePath, projectId)): Promise<VideoProject> {
@@ -222,13 +223,22 @@ export async function reconcileProjectSpend(workspacePath: string, projectId: st
 
 export interface ShotEstimate { shotId: string; title: string; modelId: string; count: number; usd: number; problems: string[] }
 
-export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean; resolution?: string }): Promise<{ total: number; shots: ShotEstimate[]; budget: VideoProject['budget'] }> {
+export interface EstimateResult {
+  total: number; shots: ShotEstimate[]; budget: VideoProject['budget'];
+  /** fal account balance at quote time (undefined balanceUsd = could not be read). */
+  falBalance?: ProviderBalance;
+  /** Set when the known fal balance cannot cover the fal part of this quote. */
+  balanceProblem?: string;
+}
+
+export async function estimate(workspacePath: string, projectId: string, args: { shotIds?: string[]; count?: number; modelId?: string; sourceFromSelectedTake?: boolean; resolution?: string; skipBalance?: boolean }): Promise<EstimateResult> {
   let p = loadProject(workspacePath, projectId);
   if (args.modelId?.startsWith('fal/') || p.shots.some((s) => (s.modelId || p.defaults.videoModel).startsWith('fal/'))) await syncFalModels();
   p = await reconcileProjectSpend(workspacePath, projectId, p);
   const ids = args.shotIds?.length ? args.shotIds : p.shots.map((s) => s.id);
   const count = Math.max(1, Math.min(4, Number(args.count) || 1));
   const shots: ShotEstimate[] = [];
+  let falUsd = 0;
   for (const id of ids) {
     const shot = p.shots.find((s) => s.id === id);
     if (!shot) throw new Error(`Shot "${id}" not found.`);
@@ -258,13 +268,19 @@ export async function estimate(workspacePath: string, projectId: string, args: {
       if (model.unmappedRequired?.length) problems.push(`${model.id} requires ${model.unmappedRequired.join(', ')} which Prometheus cannot fill; add a curated manifest (add_model with defaults) first`);
       else problems.push('unverified synced model: inputs were guessed from the fal catalog; check models -> needs before approving a paid run');
     }
+    const shotUsd = estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect });
+    if (model.provider === 'fal') falUsd += shotUsd;
     shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }), problems });
   }
   const total = Math.round(shots.reduce((s, x) => s + x.usd, 0) * 1000) / 1000;
+  if (falUsd > 0 && !args.skipBalance) {
+    const bal = await falBalance();
+    return { total, shots, budget: p.budget, falBalance: bal, balanceProblem: balanceShortfall(bal, falUsd) };
+  }
   return { total, shots, budget: p.budget };
 }
 
-// ── job runner ──────────────────────────────────────────────────────────
+// -- job runner ----------------------------------------------------------
 
 const running = new Set<string>();
 const POLL_MS = 5000;
@@ -466,12 +482,12 @@ export function resumeJobs(workspacePath: string): number {
   return resumed;
 }
 
-// ── generate ────────────────────────────────────────────────────────────
+// -- generate ------------------------------------------------------------
 
 export interface GenerateResult {
   needsApproval?: boolean;
   reason?: string;
-  estimate: { total: number; shots: ShotEstimate[] };
+  estimate: { total: number; shots: ShotEstimate[] } & Partial<Omit<EstimateResult, 'total' | 'shots'>>;
   jobs: Array<{ id: string; target: Job['target']; modelId: string; estimateUsd: number }>;
 }
 
@@ -494,6 +510,10 @@ export async function generateShots(workspacePath: string, projectId: string, ar
   const blocking = est.shots.filter((s) => s.problems.some((x) => !x.startsWith('model has no pricing') && !x.startsWith('unverified synced model')));
   if (blocking.length) {
     throw new Error(`Cannot generate: ${blocking.map((s) => `${s.title}: ${s.problems.join('; ')}`).join(' | ')}`);
+  }
+  // Approval can't fix an empty provider account: block even with approved:true.
+  if (est.balanceProblem) {
+    return { needsApproval: true, reason: est.balanceProblem, estimate: est, jobs: [] };
   }
   const p0 = loadProject(workspacePath, projectId);
   const cap = p0.budget.capUsd;
@@ -687,7 +707,7 @@ export async function cancelJob(workspacePath: string, projectId: string, jobId:
   return true;
 }
 
-/** Wait (bounded) for jobs to settle — lets the agent block briefly in one call. */
+/** Wait (bounded) for jobs to settle � lets the agent block briefly in one call. */
 export async function waitForJobs(workspacePath: string, projectId: string, jobIds: string[] | undefined, timeoutMs: number): Promise<Job[]> {
   const deadline = Date.now() + Math.max(0, Math.min(timeoutMs, 10 * 60_000));
   for (;;) {
@@ -699,7 +719,7 @@ export async function waitForJobs(workspacePath: string, projectId: string, jobI
   }
 }
 
-// ── render ──────────────────────────────────────────────────────────────
+// -- render --------------------------------------------------------------
 
 const RES_HEIGHT: Record<string, number> = { '480p': 480, '720p': 720, '1080p': 1080 };
 
