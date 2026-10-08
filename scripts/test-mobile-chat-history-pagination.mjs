@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-import { ChatStore } from '../web-ui/src/mobile-v2/core/chat-store.js';
 
 const source = readFileSync(new URL('../web-ui/src/mobile/mobile-pages.js', import.meta.url), 'utf8');
 function section(start, end) {
@@ -217,33 +216,5 @@ assert.equal(legacy.mergePin('session', newTurn).length, 2,
   'a previous completed response must not be appended after a newer prompt');
 assert.equal(legacy.mergePin('session', []).length, 1,
   'the pin must still bridge a temporarily empty durable snapshot');
-
-const store = new ChatStore();
-const gateway = 'gateway';
-const session = 'session';
-const tail = {
-  history: [
-    { role: 'user', timestamp: 100_000, content: 'new prompt' },
-    { role: 'assistant', timestamp: 100_001, content: 'new answer' },
-  ],
-  historyPage: { olderCursor: 'before-tail', hasOlder: true },
-};
-store.hydrate(gateway, session, tail);
-store.prependHistory(gateway, session, {
-  items: [
-    { role: 'user', timestamp: 1_000, content: 'old prompt' },
-    { role: 'assistant', timestamp: 1_001, content: 'old answer' },
-  ],
-  pageInfo: { olderCursor: 'before-older', hasOlder: true },
-});
-assert.deepEqual(store.get(gateway, session).messages.map((message) => message.text),
-  ['old prompt', 'old answer', 'new prompt', 'new answer'],
-  'newer mobile route must prepend older rows without index collisions');
-store.hydrate(gateway, session, tail);
-assert.deepEqual(store.get(gateway, session).messages.map((message) => message.text),
-  ['old prompt', 'old answer', 'new prompt', 'new answer'],
-  'reconnection must retain previously unlocked history');
-assert.equal(store.get(gateway, session).olderCursor, 'before-older',
-  'reconnection must retain the cursor for the oldest loaded page');
 
 console.log('Mobile chat history pagination regression passed.');

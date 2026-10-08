@@ -209,7 +209,7 @@ function getRawStaticCacheControl(req: http.IncomingMessage, filePath: string): 
   try {
     pathname = new URL(rawUrl, 'http://localhost').pathname || '/';
   } catch {}
-  if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/') || pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {
+  if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
     return 'no-cache';
   }
   // Production /build filenames contain a content hash and are immutable. HTML,
@@ -349,9 +349,13 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
   } else if (pathname === '/' || pathname === '/index.html') {
     push(webUiRoot, 'index.html');
   } else if (pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {
-    // Mobile V2 is a parallel client. Keep it isolated from legacy /mobile so
-    // the existing app remains the rollback path until parity is proven.
-    push(webUiRoot, 'mobile-v2.html');
+    // Mobile V2 was retired; /mobile is the only mobile client. Send old
+    // bookmarks and installed V2 PWAs there instead of a 404.
+    res.statusCode = 302;
+    res.setHeader('Location', '/mobile');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end();
+    return true;
   } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
     // Mobile has a dedicated document so it never parses the desktop shell or
     // desktop styles. Keep index.html as a source/distribution rollback path.
