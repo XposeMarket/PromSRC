@@ -17,6 +17,7 @@
  */
 
 import { api } from '../api.js';
+import { buildTeamReplyPayload } from '../needs-you-team-reply.js';
 import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { installProcessRunCardHandlers, loadRecentProcessRuns, renderProcessRunsHTML } from '../components/ProcessRunCard.js';
@@ -78,6 +79,8 @@ window.normalizeProgressStatus = normalizeProgressStatus;
 
 let bgtTasks = [];           // all task records from server
 let bgtManagedThreads = [];  // Prometheus peer-session supervision records
+let bgtNeedsYouItems = [];
+let bgtNeedsYouAction = '';
 let bgtOpenTaskId = null;    // currently open panel task id
 window.bgtOpenTaskId = null;
 let bgtEditMode = false;
@@ -370,11 +373,112 @@ async function bgtHandleColumnDrop(e, targetStatus) {
   await bgtMoveTaskToStatus(taskId, targetStatus);
 }
 
+// --- Needs you: video approvals, team escalation replies, live refresh ---------
+function renderVideoApprovalCard(item) {
+  const p = item.payload || {};
+  const id = escHtml(String(p.id || item.id || ''));
+  const usd = Number(p.quotedUsd || 0).toFixed(2);
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">Paid video run: ~$${escHtml(usd)}</div><div class="chat-approval-body">${escHtml(String(p.summary || 'Approve the quoted cost to start generating.'))}</div><div class="chat-approval-actions"><button class="chat-approval-btn" onclick="bgtVideoApprovalDismiss('${id}')">Dismiss</button><button class="chat-approval-btn chat-approval-approve" onclick="bgtVideoApprovalApprove('${id}')">Approve</button></div></div>`;
+}
+
+function renderTeamEscalationCard(item) {
+  const p = item.payload || {};
+  const id = escHtml(String(item.id || ''));
+  const teamId = escHtml(String(p.teamId || ''));
+  const summary = escHtml(String(p.content || p.message || p.reason || 'Team needs your input.'));
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${summary}</div><form class="bgt-team-reply" onsubmit="event.preventDefault();bgtTeamEscalationReply('${id}', this)"><input type="text" name="reply" placeholder="Reply to the team…" autocomplete="off" aria-label="Reply to the team" /><div class="chat-approval-actions"><button type="submit" class="chat-approval-btn chat-approval-approve">Send reply</button>${teamId ? `<button type="button" class="chat-approval-btn" onclick="window.openTeamBoard&&window.openTeamBoard('${teamId}')">Open team</button>` : ''}</div></form></div>`;
+}
+
+async function bgtVideoApprovalApprove(approvalId) {
+  try {
+    await api(`/api/video-approvals/${encodeURIComponent(approvalId)}/approve`, { method: 'POST', body: JSON.stringify({}), timeoutMs: 120000 });
+    bgtToast('Video run approved', 'Generation started.');
+  } catch (err) {
+    bgtToast('Could not approve', String(err?.message || err));
+  }
+  await refreshNeedsYouNow();
+}
+
+async function bgtVideoApprovalDismiss(approvalId) {
+  try {
+    await api(`/api/video-approvals/${encodeURIComponent(approvalId)}/dismiss`, { method: 'POST', body: JSON.stringify({}), timeoutMs: 8000 });
+  } catch (err) {
+    bgtToast('Could not dismiss', String(err?.message || err));
+  }
+  await refreshNeedsYouNow();
+}
+
+async function bgtTeamEscalationReply(itemId, form) {
+  const item = bgtNeedsYouItems.find((entry) => String(entry.id || '') === String(itemId));
+  const p = (item && item.payload) || {};
+  const text = String(form?.elements?.reply?.value || '');
+  let body;
+  try {
+    body = buildTeamReplyPayload({ text, memberId: p.memberId, memberLabel: p.memberLabel || p.teamName });
+  } catch (err) {
+    bgtToast('Reply not sent', String(err?.message || err));
+    return;
+  }
+  const teamId = String(p.teamId || '');
+  if (!teamId) { bgtToast('Reply not sent', 'This escalation has no team id.'); return; }
+  try {
+    await api(`/api/teams/${encodeURIComponent(teamId)}/chat`, { method: 'POST', body: JSON.stringify(body), timeoutMs: 120000 });
+    bgtToast('Reply sent', `Posted to ${p.teamName || 'the team'}.`);
+    if (form?.elements?.reply) form.elements.reply.value = '';
+  } catch (err) {
+    bgtToast('Reply failed', String(err?.message || err));
+  }
+  await refreshNeedsYouNow();
+}
+
+let bgtNeedsYouRefreshTimer = null;
+let bgtNeedsYouPollTimer = null;
+let bgtNeedsYouSubscribed = false;
+
+async function refreshNeedsYouNow() {
+  try {
+    const r = await api('/api/needs-you', { timeoutMs: 8000 });
+    if (r?.success) {
+      bgtNeedsYouItems = Array.isArray(r.items) ? r.items : [];
+      renderBgTasks();
+    }
+  } catch (err) {
+    console.error('[BGT] needs-you refresh error:', err);
+  }
+}
+
+/** Debounced (300ms) re-fetch used by server pushes and manual actions. */
+function scheduleNeedsYouRefresh() {
+  clearTimeout(bgtNeedsYouRefreshTimer);
+  bgtNeedsYouRefreshTimer = setTimeout(() => { bgtNeedsYouRefreshTimer = null; refreshNeedsYouNow(); }, 300);
+}
+
+window.bgtVideoApprovalApprove = bgtVideoApprovalApprove;
+window.bgtVideoApprovalDismiss = bgtVideoApprovalDismiss;
+window.bgtTeamEscalationReply = bgtTeamEscalationReply;
+
+function startNeedsYouLive() {
+  if (!bgtNeedsYouSubscribed) {
+    bgtNeedsYouSubscribed = true;
+    wsEventBus.on('needs_you_changed', () => scheduleNeedsYouRefresh());
+  }
+  if (!bgtNeedsYouPollTimer) {
+    // Fallback while the Tasks page is visible; ws push covers the normal case.
+    bgtNeedsYouPollTimer = setInterval(() => {
+      if (document.hidden) return;
+      if (!document.getElementById('bgt-needs-you')) return;
+      refreshNeedsYouNow();
+    }, 20000);
+  }
+}
+
 // --- Fetch & Render ----------------------------------------------------------
 async function refreshBgTasks() {
-  const [tasksResult, threadsResult] = await Promise.allSettled([
+  startNeedsYouLive();
+  const [tasksResult, threadsResult, needsYouResult] = await Promise.allSettled([
     api('/api/bg-tasks', { timeoutMs: 8000 }),
     api('/api/thread-supervisions?includeTerminal=true&limit=100', { timeoutMs: 8000 }),
+    api('/api/needs-you', { timeoutMs: 8000 }),
   ]);
   if (tasksResult.status === 'fulfilled' && tasksResult.value?.success) {
     bgtTasks = tasksResult.value.tasks || [];
@@ -385,6 +489,11 @@ async function refreshBgTasks() {
     bgtManagedThreads = threadsResult.value.supervisions || [];
   } else if (threadsResult.status === 'rejected') {
     console.error('[BGT] managed threads refresh error:', threadsResult.reason);
+  }
+  if (needsYouResult.status === 'fulfilled' && needsYouResult.value?.success) {
+    bgtNeedsYouItems = Array.isArray(needsYouResult.value.items) ? needsYouResult.value.items : [];
+  } else if (needsYouResult.status === 'rejected') {
+    console.error('[BGT] needs-you refresh error:', needsYouResult.reason);
   }
   if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
   renderBgTasks();
@@ -528,6 +637,29 @@ function renderBgTasks() {
 
   updateBgtHeartbeatLabel();
   updateBgtSearchUI(visibleTasks.length + visibleManagedThreads.length);
+
+  // User-blocking work stays above the project/task board and keeps its source pending ID.
+  const needsYouSection = document.getElementById('bgt-needs-you');
+  if (needsYouSection) {
+    needsYouSection.innerHTML = bgtNeedsYouItems.length
+      ? bgtNeedsYouItems.map((item) => {
+        const id = String(item.id || '');
+        const origin = String(item.sessionId || '');
+        const payload = item.payload || {};
+        const question = payload.loginHandoff ? { ...payload, loginHandoff: payload.loginHandoff } : payload;
+        const content = item.kind === 'question' || item.kind === 'browser_login'
+          ? (typeof window.renderPrometheusQuestionForNeedsYou === 'function' ? window.renderPrometheusQuestionForNeedsYou(question) : '')
+          : ['final_action_approval', 'tool_approval'].includes(item.kind)
+            ? renderTaskApprovalCard({ ...payload, sourceSessionId: origin })
+            : item.kind === 'video_approval'
+              ? renderVideoApprovalCard(item)
+              : item.kind === 'team_escalation'
+                ? renderTeamEscalationCard(item)
+                : `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${escHtml(String(payload.content || payload.reason || payload.prompt || payload.title || 'This item is waiting for your input.'))}</div><div class="chat-approval-actions">${item.kind === 'paused_agent_run' ? `<button class="chat-approval-btn chat-approval-approve" onclick="bgtOpenCardFromClick(null,'${escHtml(String(payload.id || ''))}')">Open run</button>` : ''}</div></div>`;
+        return `<article class="pm-card bgt-needs-you-card"><div class="bgt-needs-you-meta"><strong>${escHtml(String(item.kind || '').replace(/_/g, ' '))}</strong><span>From ${escHtml(String(item.source || 'Chat'))}</span>${origin ? `<a href="#" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')">Open origin chat</a>` : ''}</div>${content}<small data-needs-you-id="${escHtml(id)}">${escHtml(id)}</small></article>`;
+      }).join('')
+      : '<div class="pm-empty">Nothing is waiting on you.</div>';
+  }
 
   // Only render non-empty columns
   const byStatus = {};
@@ -1018,6 +1150,18 @@ async function bgtCreateSkillProposal(taskId) {
   } catch (err) {
     bgtToast('Skill draft failed', err?.message || 'Could not create draft skill');
   }
+}
+
+function bgtOpenOriginChat(e, sessionId) {
+  if (e) e.preventDefault();
+  if (!sessionId) return;
+  if (typeof window.openSession === 'function') window.openSession(sessionId);
+}
+
+async function bgtNeedsYouReply(itemId) {
+  const item = bgtNeedsYouItems.find((entry) => String(entry.id) === String(itemId));
+  if (!item) return;
+  bgtOpenOriginChat(null, item.sessionId);
 }
 
 async function bgtResolveApproval(approvalId, action, grantScope = '') {
@@ -1525,6 +1669,8 @@ window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
 window.bgtPauseResume = bgtPauseResume;
 window.bgtCreateSkillProposal = bgtCreateSkillProposal;
 window.bgtResolveApproval = bgtResolveApproval;
+window.bgtOpenOriginChat = bgtOpenOriginChat;
+window.bgtNeedsYouReply = bgtNeedsYouReply;
 window.bgtSendReply = bgtSendReply;
 window.bgtChatSend = bgtChatSend;
 window.bgtDeleteTask = bgtDeleteTask;
