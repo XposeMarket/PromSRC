@@ -465,6 +465,11 @@ export async function loadMobileNeedsYou() {
   return Array.isArray(r?.items) ? r.items : [];
 }
 
+/** Cancels a pending Prometheus question through the same cancel endpoint chat uses. */
+export async function cancelMobileQuestion(id) {
+  return mfetch(`/api/questions/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ resolvedBy: 'mobile' }) });
+}
+
 /** Answers a pending Prometheus question through the same submit endpoint chat uses. */
 export async function submitMobileQuestion(id, answers = [], generalOther = '') {
   return mfetch(`/api/questions/${encodeURIComponent(id)}/submit`, {

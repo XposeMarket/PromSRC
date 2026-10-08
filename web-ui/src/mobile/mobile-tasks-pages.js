@@ -26,7 +26,7 @@ import {
   approveMobileApproval,
   denyMobileApproval,
   loadMobileNeedsYou,
-  submitMobileQuestion,
+  cancelMobileQuestion,
 } from './mobile-api.js';
 
 /* ---------------- TASKS PAGE ---------------- */
@@ -67,7 +67,7 @@ async function paintNeedsYouSection(page) {
     await paintNeedsYouSection(page);
   }));
   host.querySelectorAll('[data-ny-skip]').forEach((el) => el.addEventListener('click', async () => {
-    await submitMobileQuestion(el.dataset.nySkip, [], '').catch(() => null);
+    await cancelMobileQuestion(el.dataset.nySkip).catch(() => null);
     await paintNeedsYouSection(page);
   }));
   host.querySelectorAll('[data-ny-open],[data-ny-link]').forEach((el) => el.addEventListener('click', (e) => {
