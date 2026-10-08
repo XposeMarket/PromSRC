@@ -99,6 +99,46 @@ $f.Add_Shown({ $t.Focus() })
   } finally {
     try { process.kill(child.pid!); } catch {}
   }
+  await uwpCoordinateClickCheck(helper!);
+}
+
+// UWP/WinUI: a coordinate click must resolve to the XAML button under the point
+// (the frame exposes an empty overlay Pane above the real content, which the
+// old single-path hit-test stopped on) and must hand activation back to the
+// user's window when the app activates itself on invoke.
+async function uwpCoordinateClickCheck(helper: any) {
+  const { execFileSync } = await import('child_process');
+  const ps = (script: string) => execFileSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim();
+  const probe = `
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$w = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Calculator')))
+if (-not $w) { 'none'; exit }
+$o = @{ handle = $w.Current.NativeWindowHandle }
+foreach ($id in 'clearButton','num6Button','multiplyButton','num7Button','equalButton') {
+  $b = $w.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty, $id)))
+  $r = $b.Current.BoundingRectangle; $o[$id] = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+}
+$o | ConvertTo-Json -Compress`;
+  ps('if (-not (Get-Process CalculatorApp -EA SilentlyContinue)) { Start-Process calc; Start-Sleep 3 }');
+  const raw = ps(probe);
+  if (raw === 'none') { console.log('SKIP live UWP check (Calculator window not found)'); return; }
+  const calc = JSON.parse(raw);
+  const pre = await helper.userInputState();
+  for (const id of ['clearButton', 'num6Button', 'multiplyButton', 'num7Button', 'equalButton']) {
+    const [x, y] = calc[id];
+    const result = await helper.backgroundClick(calc.handle, x, y, { overlay: false });
+    assert.ok(result.ok, `UWP coordinate click on ${id} resolved: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.method, 'uia_invoke');
+    assert.strictEqual(result.element?.automationId, id, 'hit-test found the button under the point');
+  }
+  const display = ps(`Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$w = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Calculator')))
+$w.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty, 'CalculatorResults'))).Current.Name`);
+  assert.match(display, /42/, `Calculator shows 6x7=42 (got "${display}")`);
+  const post = await helper.userInputState();
+  assert.strictEqual(post.foreground, pre.foreground, 'UWP invoke did not keep the user focus');
+  assert.deepStrictEqual(post.cursor, pre.cursor, 'cursor unchanged by UWP coordinate clicks');
+  console.log('PASS live: UWP coordinate click -> UIA hit-test, focus restored');
 }
 
 // The persistent native helper child keeps the event loop alive; exit explicitly.
