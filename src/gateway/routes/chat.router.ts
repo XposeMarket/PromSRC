@@ -729,21 +729,27 @@ function extractTerminalWorkspaceChangesFromToolResult(result: any, workspacePat
   for (const source of sources) {
     const rawChanges = source.workspaceChanges || source.workspace_changes;
     if (!Array.isArray(rawChanges)) continue;
+    // The tracker reports the scope it actually watched (e.g. PromSRC or a PR
+    // worktree when the command ran there). Changes inside that scope are real
+    // even when it is outside the turn workspace.
+    const trackedScope = String(source.workspacePath || '').trim();
+    const inScope = (candidate: string) => isInsideTurnWorkspace(workspacePath, candidate)
+      || Boolean(trackedScope && isInsideTurnWorkspace(trackedScope, candidate));
     for (const raw of rawChanges) {
       if (!raw || typeof raw !== 'object') continue;
-      const absPath = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, workspacePath);
-      if (!absPath || !isInsideTurnWorkspace(workspacePath, absPath)) continue;
+      const absPath = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, trackedScope || workspacePath);
+      if (!absPath || !inScope(absPath)) continue;
       const status = String(raw.status || 'modified').toLowerCase();
       if (!['added', 'modified', 'deleted', 'renamed'].includes(status)) continue;
       const rawOldPath = String(raw.oldPath || raw.old_path || '').trim();
-      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, workspacePath) : '';
+      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, trackedScope || workspacePath) : '';
       changes.push({
         path: absPath,
         displayPath: String(raw.displayPath || normalizeDisplayPath(absPath, workspacePath)).replace(/\\/g, '/'),
         status: status as TurnFileChangeStatus,
         insertions: Math.max(0, Number(raw.insertions) || 0),
         deletions: Math.max(0, Number(raw.deletions) || 0),
-        ...(oldPath && isInsideTurnWorkspace(workspacePath, oldPath) ? { oldPath } : {}),
+        ...(oldPath && inScope(oldPath) ? { oldPath } : {}),
         ...(String(raw.diffPreview || '').trim() ? { diffPreview: String(raw.diffPreview).slice(0, 12_000) } : {}),
         ...(raw.binary === true ? { binary: true } : {}),
         ...(raw.baselineKind ? { baselineKind: raw.baselineKind } : {}),

@@ -253,12 +253,56 @@ function readFileContent(filePath: string): Buffer | null {
   }
 }
 
-function gitTrackedFiles(gitRoot: string): string[] {
-  const raw = runGit(gitRoot, ['ls-files', '-co', '--exclude-standard', '-z'], { maxBuffer: 8 * 1024 * 1024 });
-  return String(raw || '')
-    .split('\0')
-    .map(normalizeRelative)
-    .filter(Boolean);
+const historyExcludeChecked = new Set<string>();
+
+/**
+ * Dirty-file baselines are snapshotted into <repo>/.prometheus/history. Now
+ * that any repo a command runs in can be tracked, keep that folder out of the
+ * repo's `git status` via its local (never committed) info/exclude file.
+ */
+function ensurePrometheusHistoryExcluded(gitRoot: string): void {
+  const key = compareKey(gitRoot);
+  if (historyExcludeChecked.has(key)) return;
+  historyExcludeChecked.add(key);
+  try {
+    const rel = String(runGit(gitRoot, ['rev-parse', '--git-path', 'info/exclude'], { maxBuffer: 64 * 1024 }) || '').trim();
+    if (!rel) return;
+    const excludePath = path.resolve(gitRoot, rel);
+    const current = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf8') : '';
+    if (/^\/?\.prometheus\/?\s*$/m.test(current)) return;
+    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+    fs.appendFileSync(excludePath, `${current && !current.endsWith('\n') ? '\n' : ''}# Prometheus terminal-change snapshots\n/.prometheus/\n`);
+  } catch {}
+}
+
+function gitChangedSince(gitRoot: string, fromHead: string, toHead: string): string[] {
+  if (!fromHead || !toHead || fromHead === toHead) return [];
+  const raw = runGit(gitRoot, ['diff', '--name-only', '-z', '--no-renames', fromHead, toHead], { maxBuffer: 8 * 1024 * 1024 });
+  return String(raw || '').split('\0').map(normalizeRelative).filter(Boolean);
+}
+
+/**
+ * The directory a command's changes should be tracked in. A command whose cwd
+ * is inside a different Git repo than the configured workspace (PromSRC, a
+ * promsrc-pr worktree, any cloned repo) is tracked in that repo; otherwise the
+ * workspace stays the scope. Before this, every shell edit/commit in an
+ * out-of-workspace repo was invisible to the Source panel.
+ */
+export function resolveTerminalTrackingScope(workspacePath: string, cwd?: string): string {
+  const workspace = path.resolve(String(workspacePath || '').trim() || process.cwd());
+  const rawCwd = String(cwd || '').trim();
+  if (!rawCwd) return workspace;
+  const cwdPath = path.resolve(path.isAbsolute(rawCwd) ? rawCwd : path.join(workspace, rawCwd));
+  try {
+    if (!fs.existsSync(cwdPath) || !fs.statSync(cwdPath).isDirectory()) return workspace;
+  } catch {
+    return workspace;
+  }
+  const cwdRepo = resolveTerminalGitRoot(cwdPath);
+  if (!cwdRepo) return workspace;
+  const workspaceRepo = resolveTerminalGitRoot(workspace);
+  if (workspaceRepo && compareKey(workspaceRepo) === compareKey(cwdRepo)) return workspace;
+  return cwdRepo;
 }
 
 function gitStatusPaths(gitRoot: string): Set<string> {
@@ -334,7 +378,14 @@ function captureDirectoryFiles(root: string, relativeRoot = '', priorityPaths: s
   return { files, truncated };
 }
 
-function captureGitFiles(scopeRoot: string, gitRoot: string, baselineHead: string, baselineStatus: Set<string>, priorityPaths: string[] = []): FileMapCapture {
+/**
+ * Git scopes only fingerprint files Git reports as dirty (plus command-named
+ * paths). A clean tracked file is identical to HEAD, so the baseline for any
+ * file that turns dirty later is synthesized from HEAD at finalize. This keeps
+ * an 8k-file repo such as PromSRC cheap instead of hashing every tracked file
+ * (which also hit the 50 MB cap and silently truncated the capture).
+ */
+function captureGitFiles(scopeRoot: string, gitRoot: string, baselineHead: string, baselineStatus: Set<string>, priorityPaths: string[] = [], candidatePaths: Iterable<string> = baselineStatus): FileMapCapture {
   const files = new Map<string, FileFingerprint>();
   let totalBytes = 0;
   let truncated = false;
@@ -343,7 +394,7 @@ function captureGitFiles(scopeRoot: string, gitRoot: string, baselineHead: strin
     .filter((absolute) => isInside(scopeRoot, absolute) && isInside(gitRoot, absolute) && !excludedFilePath(path.relative(scopeRoot, absolute)))
     .map((absolute) => normalizeRelative(path.relative(gitRoot, absolute)))
     .filter(Boolean);
-  const relativePaths = Array.from(new Set([...priorityRelative, ...gitTrackedFiles(gitRoot)]));
+  const relativePaths = Array.from(new Set([...priorityRelative, ...Array.from(candidatePaths, normalizeRelative)]));
   for (const relativeToGit of relativePaths) {
     const absolute = path.resolve(gitRoot, relativeToGit);
     if (!isInside(scopeRoot, absolute) || excludedFilePath(path.relative(scopeRoot, absolute))) continue;
@@ -535,6 +586,7 @@ export class TerminalWorkspaceTracker {
   readonly command?: string;
   private readonly gitRoot: string | null;
   private readonly baselineHead: string;
+  private readonly baselineStatus: Set<string>;
   private readonly commandPathHints: string[];
   private readonly missingBaselines = new Map<string, FileFingerprint>();
   private readonly baseline: FileMapCapture;
@@ -560,7 +612,9 @@ export class TerminalWorkspaceTracker {
       ? String(runGit(this.gitRoot, ['rev-parse', 'HEAD'], { maxBuffer: 64 * 1024 }) || '').trim()
       : '';
     const baselineStatus = this.gitRoot ? gitStatusPaths(this.gitRoot) : new Set<string>();
+    this.baselineStatus = baselineStatus;
     if (this.gitRoot) {
+      ensurePrometheusHistoryExcluded(this.gitRoot);
       this.baseline = captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, baselineStatus, this.commandPathHints);
     } else {
       const reusable = fast.baseline && cachedCaptureCoversHints(fast.baseline, this.workspacePath, this.commandPathHints)
@@ -642,6 +696,35 @@ export class TerminalWorkspaceTracker {
   private baselineSnapshot?: WorkspaceSnapshotRecord;
 
   /**
+   * A file that was clean at begin was not fingerprinted. If it shows up as
+   * dirty (or changed by a commit) afterwards, its true baseline is the HEAD
+   * blob at begin, so add that entry with a content fingerprint compatible
+   * with fileFingerprint() (keeps rename pairing and no-op detection exact).
+   */
+  private synthesizeHeadBaselines(candidates: Set<string>): void {
+    if (!this.gitRoot || !this.baselineHead) return;
+    for (const relativeToGit of candidates) {
+      const absolute = path.resolve(this.gitRoot, relativeToGit);
+      const key = compareKey(absolute);
+      if (this.baseline.files.has(key) || this.missingBaselines.has(key)) continue;
+      if (!isInside(this.workspacePath, absolute) || excludedFilePath(path.relative(this.workspacePath, absolute))) continue;
+      const content = readGitHeadContent(this.gitRoot, this.baselineHead, normalizeRelative(relativeToGit));
+      if (!content) continue;
+      this.baseline.files.set(key, {
+        absolutePath: absolute,
+        relativePath: normalizeRelative(path.relative(this.workspacePath, absolute)),
+        size: content.length,
+        mtimeMs: 0,
+        fingerprint: content.length <= MAX_HASH_BYTES
+          ? `full:${content.length}:${hashBuffer(content)}`
+          : `head:${content.length}:${hashBuffer(content)}`,
+        tracked: true,
+        baselineKind: 'git-head',
+      });
+    }
+  }
+
+  /**
    * `unchanged: true` is only valid when a workspace watcher proved (behind a
    * barrier) that no non-excluded file under the scope changed since begin.
    */
@@ -656,11 +739,22 @@ export class TerminalWorkspaceTracker {
       };
     }
     this.finalized = true;
-    const after = options.unchanged
-      ? this.baseline
-      : this.gitRoot
-        ? captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, new Set<string>(), this.commandPathHints)
-        : captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
+    let after: FileMapCapture;
+    if (options.unchanged) {
+      after = this.baseline;
+    } else if (this.gitRoot) {
+      const afterStatus = gitStatusPaths(this.gitRoot);
+      const headNow = String(runGit(this.gitRoot, ['rev-parse', 'HEAD'], { maxBuffer: 64 * 1024 }) || '').trim();
+      const candidates = new Set<string>([
+        ...this.baselineStatus,
+        ...afterStatus,
+        ...gitChangedSince(this.gitRoot, this.baselineHead, headNow),
+      ]);
+      after = captureGitFiles(this.workspacePath, this.gitRoot, this.baselineHead, new Set<string>(), this.commandPathHints, candidates);
+      this.synthesizeHeadBaselines(candidates);
+    } else {
+      after = captureDirectoryFiles(this.workspacePath, '', this.commandPathHints);
+    }
     if (!options.unchanged) this.afterCapture = after;
     const changes: TerminalWorkspaceChange[] = [];
     const beforeByFingerprint = new Map<string, FileFingerprint[]>();

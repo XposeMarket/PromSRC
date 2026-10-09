@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { createTerminalWorkspaceTracker, type TerminalWorkspaceChangeResult } from './terminal-change-tracker';
+import { createTerminalWorkspaceTracker, resolveTerminalTrackingScope, type TerminalWorkspaceChangeResult } from './terminal-change-tracker';
 import { collectTurnFileChangesFromProcessEntries } from '../file-change-summary';
 import { ProcessSupervisor } from '../process/supervisor';
 import { ProcessRunStore } from '../process/store';
@@ -21,6 +21,49 @@ function write(root: string, relative: string, content: string): void {
 
 function changed(result: TerminalWorkspaceChangeResult, relative: string) {
   return result.workspaceChanges.find((file) => file.displayPath === relative);
+}
+
+// A command whose cwd is a repo outside the (non-Git) Prometheus workspace must
+// be tracked in that repo, and a clean file that is edited and then committed
+// in the same command must still be reported (it is clean in `git status` at
+// finalize, so only the HEAD diff can find it).
+function runOutOfWorkspaceRepoCase(): void {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-scope-'));
+  try {
+    const workspace = path.join(base, 'workspace');
+    const repo = path.join(base, 'repo');
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(repo, { recursive: true });
+    write(workspace, 'note.md', 'workspace file\n');
+    git(repo, ['init', '-q']);
+    git(repo, ['config', 'user.email', 'prometheus-tests@example.invalid']);
+    git(repo, ['config', 'user.name', 'Prometheus Tests']);
+    write(repo, 'src/a.ts', 'export const a = 1;\n');
+    write(repo, 'src/b.ts', 'export const b = 1;\n');
+    git(repo, ['add', '.']);
+    git(repo, ['commit', '-qm', 'baseline']);
+
+    const scope = resolveTerminalTrackingScope(workspace, repo);
+    assert.equal(path.resolve(scope).toLowerCase(), path.resolve(repo).toLowerCase(), 'cwd repo outside the workspace becomes the tracking scope');
+    assert.equal(resolveTerminalTrackingScope(workspace, workspace), path.resolve(workspace), 'cwd in the workspace keeps the workspace scope');
+    assert.equal(resolveTerminalTrackingScope(workspace, path.join(repo, 'src')).toLowerCase(), path.resolve(repo).toLowerCase(), 'a subdirectory cwd resolves to its repo root');
+
+    const tracker = createTerminalWorkspaceTracker({ workspacePath: scope, cwd: repo, command: 'edit and commit' });
+    assert.ok(tracker, 'repo tracker should initialize');
+    write(repo, 'src/a.ts', 'export const a = 2;\n');
+    write(repo, 'src/new.ts', 'export const n = 1;\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-qm', 'agent change']);
+    write(repo, 'src/b.ts', 'export const b = 2;\n');
+    const result = tracker!.finalize();
+    assert.equal(changed(result, 'src/a.ts')?.status, 'modified', 'committed edit to a clean file is reported');
+    assert.ok(String(changed(result, 'src/a.ts')?.diffPreview || '').includes('+export const a = 2;'), 'committed edit diffs against the begin HEAD');
+    assert.equal(changed(result, 'src/new.ts')?.status, 'added', 'committed new file is reported as added');
+    assert.equal(changed(result, 'src/b.ts')?.status, 'modified', 'uncommitted edit to a clean file is reported');
+    assert.equal(result.workspaceChanges.length, 3, 'untouched files are not reported');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 }
 
 function runGitWorkspaceCase(): void {
@@ -319,6 +362,7 @@ async function main(): Promise<void> {
   }
 
   runGitWorkspaceCase();
+  runOutOfWorkspaceRepoCase();
   runNonGitWorkspaceCase();
   runFingerprintCacheCase();
   runBoundedCommandHintCase();

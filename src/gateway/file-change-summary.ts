@@ -207,21 +207,26 @@ function extractExplicitTerminalChangesFromToolResult(result: any, workspacePath
   for (const source of sources) {
     const rawChanges = source.workspaceChanges || source.workspace_changes;
     if (!Array.isArray(rawChanges)) continue;
+    // Accept changes inside the scope the tracker actually watched (a repo the
+    // command ran in) as well as the turn workspace.
+    const trackedScope = String(source.workspacePath || '').trim();
+    const inScope = (candidate: string) => isInsideWorkspace(workspacePath, candidate)
+      || Boolean(trackedScope && isInsideWorkspace(trackedScope, candidate));
     for (const raw of rawChanges) {
       if (!raw || typeof raw !== 'object') continue;
-      const absolute = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, workspacePath);
-      if (!absolute || !isInsideWorkspace(workspacePath, absolute)) continue;
+      const absolute = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, trackedScope || workspacePath);
+      if (!absolute || !inScope(absolute)) continue;
       const status = String(raw.status || 'modified').trim().toLowerCase();
       if (!['added', 'modified', 'deleted', 'renamed'].includes(status)) continue;
       const rawOldPath = String(raw.oldPath || raw.old_path || '').trim();
-      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, workspacePath) : '';
+      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, trackedScope || workspacePath) : '';
       changes.push({
         path: absolute,
         displayPath: String(raw.displayPath || normalizeDisplayPath(absolute, workspacePath)).replace(/\\/g, '/'),
         status: status as TurnFileChangeStatus,
         insertions: Math.max(0, Number(raw.insertions) || 0),
         deletions: Math.max(0, Number(raw.deletions) || 0),
-        ...(oldPath && isInsideWorkspace(workspacePath, oldPath) ? { oldPath } : {}),
+        ...(oldPath && inScope(oldPath) ? { oldPath } : {}),
         ...(String(raw.diffPreview || '').trim() ? { diffPreview: String(raw.diffPreview).slice(0, 12_000) } : {}),
         ...(raw.binary === true ? { binary: true } : {}),
         ...(raw.baselineKind ? { baselineKind: raw.baselineKind } : {}),
