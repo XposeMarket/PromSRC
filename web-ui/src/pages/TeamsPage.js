@@ -2913,12 +2913,13 @@ async function openTeamBoard(teamId) {
     el.style.pointerEvents = isActive ? '' : 'none';
   });
 
-  // After canvas shrinks, show the new vertical panels
-  setTimeout(() => _showTeamPanels(teamId), 420);
-
-  // Load data
+  // Load data first so the side panels (members, workspace, recent runs) show
+  // the real team state instead of the empty cache from the previous team.
+  const panelsAfter = new Promise((resolve) => setTimeout(resolve, 420));
   await loadTeamBoardData(teamId);
   renderTeamBoard(teamId);
+  await panelsAfter;
+  if (activeTeamId === teamId) _showTeamPanels(teamId);
 }
 
 function _showTeamPanels(teamId) {
@@ -2940,6 +2941,8 @@ function _showTeamPanels(teamId) {
   panels.id = 'team-side-panels';
   panels.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:10px;padding:12px;overflow-y:auto;';
 
+  // Side panels render after the board data loads, so the workspace list and
+  // recent runs reflect the real team state (not the empty pre-load cache).
   panels.innerHTML = _buildHousePanel(team) + _buildWorkspacePanel(teamId) + _buildProgressPanel(teamId);
   canvasWrap.appendChild(panels);
 
@@ -2960,7 +2963,7 @@ function _buildHousePanel(team) {
   const allAgents = [{ id: '__manager__', label: 'Manager', emoji: '🧠', color: '#4c8dff' },
     ...agentIds.map((id, i) => {
       const agentObj = window._allAgentsForTeam?.find(a => a.id === id);
-      return { id, label: agentObj?.name || id, emoji: agentObj?.emoji || emojis[(i+1)%emojis.length], color: colors[(i+1)%colors.length] };
+      return { id, label: agentObj?.name || _teamMemberFallbackName(id), emoji: agentObj?.emoji || emojis[(i+1)%emojis.length], color: colors[(i+1)%colors.length] };
     })];
 
   return `
@@ -2972,24 +2975,46 @@ function _buildHousePanel(team) {
           ${allAgents.map(a => `
             <div style="display:flex;align-items:center;gap:5px;background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:3px 10px 3px 4px">
               <div style="width:22px;height:22px;border-radius:50%;background:${a.color};display:flex;align-items:center;justify-content:center;font-size:12px">${a.emoji}</div>
-              <span style="font-size:11px;font-weight:700;color:var(--text);max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.label)}</span>
+              <span title="${escHtml(a.label)}" style="font-size:11px;font-weight:700;color:var(--text);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.label)}</span>
             </div>`).join('')}
         </div>
       </div>
     </div>`;
 }
 
+// Readable fallback for an agent id when /api/agents has no display name yet:
+// "tt_planner_mux03hty" -> "tt planner" (drops the random suffix).
+function _teamMemberFallbackName(id) {
+  const raw = String(id || '').trim();
+  const parts = raw.split('_').filter(Boolean);
+  if (parts.length > 1 && /^[a-z0-9]{6,}$/i.test(parts[parts.length - 1]) && /\d/.test(parts[parts.length - 1])) parts.pop();
+  return parts.join(' ') || raw;
+}
+
+// Side-panel workspace list: newest project files first, Brain/runtime
+// bookkeeping hidden, capped so the panel stays a preview.
+function _teamWorkspacePreviewFiles() {
+  const files = Array.isArray(teamWorkspaceFiles) ? teamWorkspaceFiles : [];
+  const hidden = /^(Brain|audit|memory|temp)[\\/]|(^|[\\/])(tool_audit\.log|team-notes\.jsonl|last_run\.json|memory\.json|pending\.json)$/i;
+  return files
+    .filter((f) => !hidden.test(String(f.relativePath || f.name || '')))
+    .sort((a, b) => Number(b.modifiedAt || 0) - Number(a.modifiedAt || 0))
+    .slice(0, 8);
+}
+
 function _buildWorkspacePanel(teamId) {
-  const files = teamWorkspaceFiles || [];
+  const allFiles = Array.isArray(teamWorkspaceFiles) ? teamWorkspaceFiles : [];
+  const files = _teamWorkspacePreviewFiles();
   const fileRows = files.length === 0
-    ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:16px 8px">No workspace files yet.<br><span style="font-size:11px">Agents can read/write shared files here.</span></div>`
+    ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:16px 8px">${allFiles.length ? 'Only runtime files so far.' : 'No workspace files yet.'}<br><span style="font-size:11px">Agents can read/write shared files here.</span></div>`
     : files.map(f => {
         const ext = (f.name || '').split('.').pop().toLowerCase();
         const icon = { json:'📄', md:'📝', txt:'📝', csv:'📊', html:'🌐', js:'⚙️', py:'🐍' }[ext] || '📁';
         const size = f.size > 1024 ? (f.size/1024).toFixed(1)+'kb' : f.size+'b';
-        const agentTag = f.writtenBy ? `<span style="font-size:10px;background:#eaf2ff;color:#0d4faf;border-radius:4px;padding:1px 5px">${escHtml(f.writtenBy)}</span>` : '';
+        const agentTag = f.writtenBy ? `<span style="font-size:10px;background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 5px">${escHtml(f.writtenBy)}</span>` : '';
+        const rel = String(f.relativePath || f.name || '');
         return `
-          <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;background:var(--panel-2);border:1px solid var(--line)">
+          <div title="${escHtml(rel)}" onclick="switchTeamTab('workspace','${_escapeOnclickArg(teamId)}')" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;background:var(--panel-2);border:1px solid var(--line)">
             <span style="font-size:16px">${icon}</span>
             <div style="flex:1;min-width:0">
               <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.name)}</div>
@@ -3008,7 +3033,7 @@ function _buildWorkspacePanel(teamId) {
         <div style="display:flex;align-items:center;gap:7px">
           <span style="font-size:14px">🗂</span>
           <span style="font-size:12px;font-weight:800;letter-spacing:-0.01em">Workspace</span>
-          ${files.length > 0 ? `<span style="font-size:10px;background:#e8f5ed;color:#166534;border-radius:999px;padding:1px 8px;font-weight:700">${files.length} file${files.length!==1?'s':''}</span>` : ''}
+          ${allFiles.length > 0 ? `<span style="font-size:10px;background:var(--panel);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-weight:700">${allFiles.length} file${allFiles.length!==1?'s':''}</span>` : ''}
         </div>
         <button onclick="refreshTeamWorkspace('${teamId}')" title="Refresh workspace" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">↻</button>
       </div>
@@ -3134,7 +3159,7 @@ function _buildProgressPanel(teamId) {
   const recentRuns = _getTeamProgressEntries(teamId);
   const jsTeamId = _escapeOnclickArg(teamId);
   const rows = recentRuns.length === 0
-    ? `<div class="progress-empty">Progress - This panel will be used to make a short to-do list</div>`
+    ? `<div class="progress-empty">No runs yet. Start a run and each member's work shows up here.</div>`
     : `<div class="team-progress-runs">${recentRuns.map((run, idx) => {
         const runKey = _teamRunKey(run, idx);
         const expandKey = `${teamId}::${runKey}`;
@@ -3457,10 +3482,10 @@ function renderTeamBoard(teamId) {
     ? 'flex:1;min-height:0;overflow:hidden;padding:0;display:flex;flex-direction:column;gap:0;position:relative'
     : 'flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px';
   const tabNavHtml = teamBoardTab === 'chat' ? '' : `
-    <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2)">
+    <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2);overflow-x:auto;scrollbar-width:none">
       ${tabs.map(t => `
         <button onclick="switchTeamTab('${t}','${teamId}')"
-          style="border:none;background:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:${t===teamBoardTab?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${t===teamBoardTab?'var(--brand)':'transparent'};transition:all 0.15s">
+          style="border:none;background:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;color:${t===teamBoardTab?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${t===teamBoardTab?'var(--brand)':'transparent'};transition:all 0.15s">
           ${tabLabels[t]}${t==='memory'&&pendingCount>0?` <span style="background:#e05c5c;color:#fff;border-radius:999px;font-size:10px;padding:1px 6px">${pendingCount}</span>`:''}
         </button>`).join('')}
     </div>`;
@@ -3935,7 +3960,12 @@ function renderTeamContextTab(team) {
   });
   const purposeText = team.purpose || team.mission || team.teamContext || '';
   const currentTask = team.currentFocus || '';
-  const lastReviewAt = team.manager?.lastReviewAt;
+  // "Last run" = the newest real activity (member run or manager turn), not
+  // just the last forced review, which goes stale on hands-off teams.
+  const newestRunAt = Array.isArray(teamRuns) && teamRuns.length
+    ? Math.max(...teamRuns.map((r) => Number(r?.finishedAt || r?.startedAt || 0)))
+    : 0;
+  const lastReviewAt = Math.max(newestRunAt, Number(team.lastActivityAt || 0), Number(team.manager?.lastReviewAt || 0)) || null;
   const roomState = _teamRoomState();
 
   return `
@@ -3943,7 +3973,7 @@ function renderTeamContextTab(team) {
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Purpose</div>
       <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.6">${escHtml(purposeText || 'No purpose set.')}</div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Current Task / Goal</div>
         <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;line-height:1.6;min-height:56px;color:${currentTask ? 'var(--text)' : 'var(--muted)'}">
@@ -3959,7 +3989,7 @@ function renderTeamContextTab(team) {
         </div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Member States</div>
         ${_renderTeamMemberStatesCompact(roomState)}

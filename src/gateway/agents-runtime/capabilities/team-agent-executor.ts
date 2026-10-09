@@ -65,6 +65,31 @@ import {
   maybeStartTeamStatusTaskMirror,
 } from './team-agent-helpers';
 
+/**
+ * Human-readable team-chat line for a manage_team_goal update. The old line
+ * dumped raw JSON ({"team_id":...,"action":"log_completed","entry":...}) into
+ * the team chat on desktop and mobile.
+ */
+export function formatGoalUpdateChatLine(action: string, data: Record<string, any>): string {
+  const clip = (v: unknown, n = 400) => {
+    const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+    return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  };
+  switch (action) {
+    case 'log_completed': return `✅ Logged as done: ${clip(data?.entry ?? data?.completed ?? data?.text)}`;
+    case 'set_focus': return `🎯 Focus set: ${clip(data?.focus ?? data?.current_focus ?? data?.text)}`;
+    case 'pause_agent': return `⏸ Paused ${clip(data?.agent_id, 80)}`;
+    case 'unpause_agent': return `▶ Resumed ${clip(data?.agent_id, 80)}`;
+    default: {
+      const detail = Object.entries(data || {})
+        .filter(([k]) => k !== 'team_id' && k !== 'action')
+        .map(([k, v]) => `${k}: ${clip(v, 120)}`)
+        .join(', ');
+      return `Goal update (${action})${detail ? `: ${detail}` : ''}`;
+    }
+  }
+}
+
 const TEAM_AGENT_TOOL_NAMES = new Set([
   'agent_list',
   'agent_info',
@@ -1271,7 +1296,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         if (ok) {
           deps.broadcastTeamEvent({ type: 'team_goal_updated', teamId, teamName: team.name, action, data });
           if (shouldMirrorGoalUpdateToChat) {
-            const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Goal update (${action}): ${JSON.stringify(data).slice(0, 500)}` });
+            const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: formatGoalUpdateChatLine(action, data) });
             deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg });
           }
         }
