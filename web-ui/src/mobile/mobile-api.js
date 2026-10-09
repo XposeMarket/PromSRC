@@ -882,19 +882,46 @@ export async function loadMobileTeams({ force = false } = {}) {
     agents: Array.isArray(t.subagentIds) ? t.subagentIds.length : 0,
     house: i % 2 === 1 ? 'blue' : 'brown',
     featured: i === 0,
-    emoji: t.emoji || '🏠',
+    emoji: _teamEmoji(t),
   }));
+}
+
+// Readable fallback when an agent has no display name loaded yet:
+// "tt_planner_mux03hty" -> "tt planner" (drops the random id suffix).
+function _memberFallbackName(id) {
+  const raw = String(id || '').trim();
+  const parts = raw.split('_').filter(Boolean);
+  if (parts.length > 1 && /^[a-z0-9]{6,}$/i.test(parts[parts.length - 1]) && /\d/.test(parts[parts.length - 1])) parts.pop();
+  return parts.join(' ') || raw;
+}
+
+function _memberDisplayName(id) {
+  const cached = getCachedMobilePageData('subagents', 86_400_000, _mobileGatewayCacheScope());
+  const hit = Array.isArray(cached) ? cached.find((a) => a && a.id === id) : null;
+  return String(hit?.name || '').trim() || _memberFallbackName(id);
+}
+
+// "team" is a legacy placeholder value some teams were created with; never
+// render it as text in the house slot.
+function _teamEmoji(t) {
+  const e = String(t?.emoji || '').trim();
+  return !e || e.toLowerCase() === 'team' ? '🏠' : e;
 }
 
 function _normalizeTeam(t) {
   if (!t) return null;
   const subagentIds = Array.isArray(t.subagentIds) ? t.subagentIds : [];
+  const lastRunAt = Math.max(
+    Number(t.lastRunAt || 0),
+    Number(t.lastActivityAt || 0),
+    Number(t.manager?.lastReviewAt || 0),
+  ) || 0;
   const purpose = String(t.purpose || t.mission || t.teamContext || t.description || '').trim();
   const currentTask = String(t.currentFocus || t.currentTask || '').trim();
   return {
     id: t.id,
     name: t.name || t.id,
-    emoji: t.emoji || '🏠',
+    emoji: _teamEmoji(t),
     subagents: subagentIds.length,
     totalRuns: t.totalRuns || 0,
     runsDone: t.recentRunsDone ?? Math.min(t.totalRuns || 0, 7),
@@ -904,14 +931,14 @@ function _normalizeTeam(t) {
       { id: 'manager', name: 'Manager', color: '#7d6bd6', avatar: '🧠' },
       ...subagentIds.slice(0, 5).map((id, i) => ({
         id,
-        name: id.length > 14 ? id.slice(0, 12) + '…' : id,
+        name: _memberDisplayName(id),
         color: MEMBER_COLORS[i % MEMBER_COLORS.length],
         avatar: MEMBER_AVATARS[i % MEMBER_AVATARS.length],
       })),
     ],
     purpose:     purpose || 'No purpose set yet.',
     currentTask: currentTask || 'No current task.',
-    lastRun:     fmtDate(t.lastRunAt || t.manager?.lastReviewAt) || 'Never',
+    lastRun:     lastRunAt ? fmtDate(lastRunAt) : 'Never',
     memberStates: 'No member state updates yet.',
     dispatches:   'No active dispatches.',
     workspace:    t.workspaceFileCount ? `${t.workspaceFileCount} files` : 'No workspace files yet.',
@@ -919,6 +946,9 @@ function _normalizeTeam(t) {
 }
 
 export async function loadMobileTeamDetail(teamId, { force = false } = {}) {
+  // Warm the agents cache so member chips show display names (Rhea, Lyra)
+  // instead of raw ids. Best effort; a miss falls back to a cleaned id.
+  await loadMobileSubagents().catch(() => null);
   const list = await _fetchTeamsList(force);
   return _normalizeTeam(list.find(t => t.id === teamId));
 }

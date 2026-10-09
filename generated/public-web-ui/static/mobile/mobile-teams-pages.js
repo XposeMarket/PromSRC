@@ -199,7 +199,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   const tabs = ['Context','Subagents','Workspace','Memory','Runs','Team Chat'];
   body.innerHTML = `
     <div class="pm-detail-head">
-      <span class="pm-house-icon" style="color:#d8473a">${escapeHtml(t.emoji || '🎟️')}</span>
+      <span class="pm-house-icon">${escapeHtml(t.emoji || '🏠')}</span>
       <h1>${escapeHtml(t.name)}</h1>
       <button class="pm-icon-btn pm-overflow" aria-label="More">${ICONS.dots}</button>
     </div>
@@ -1772,18 +1772,26 @@ async function _renderWorkspaceTab(slot, teamId) {
     return;
   }
 
-  const files = ws.files || [];
-  if (!files.length) {
+  // Project files first (newest), runtime bookkeeping (Brain/, audit logs,
+  // team notes) behind a toggle so the list reads like the team's work.
+  const runtimeRe = /^(Brain|audit|memory|temp)[\\/]|(^|[\\/])(tool_audit\.log|team-notes\.jsonl|last_run\.json|memory\.json|pending\.json)$/i;
+  const relOf = (f) => String(f.relativePath || f.relpath || f.name || f.path || '');
+  const allFiles = (ws.files || []).slice().sort((a, b) => Number(b.modifiedAt || 0) - Number(a.modifiedAt || 0));
+  const projectFiles = allFiles.filter((f) => !runtimeRe.test(relOf(f)));
+  let showRuntime = projectFiles.length === 0;
+  if (!allFiles.length) {
     slot.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>Workspace is empty</h2><p>Files written by team subagents will appear here.</p></div>`;
     return;
   }
+  let files = showRuntime ? allFiles : projectFiles;
 
   slot.innerHTML = `
     <div class="pm-card" style="padding:10px 12px 12px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <strong style="font-size:13px;">${files.length} file${files.length === 1 ? '' : 's'}</strong>
-        ${ws.workspacePath ? `<span style="font-size:11px;color:var(--pm-muted);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">${escapeHtml(ws.workspacePath)}</span>` : ''}
+        <strong style="font-size:13px;" id="pm-ws-count"></strong>
+        ${allFiles.length > projectFiles.length && projectFiles.length ? `<button type="button" class="pm-show-more" id="pm-ws-runtime-toggle">Show runtime files</button>` : ''}
       </div>
+      ${ws.workspacePath ? `<div title="${escapeHtml(ws.workspacePath)}" style="font-size:11px;color:var(--pm-muted);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;margin-bottom:8px;">${escapeHtml(ws.workspacePath)}</div>` : ''}
       <div id="pm-ws-list" style="display:flex;flex-direction:column;gap:6px;"></div>
       <div id="pm-ws-preview" style="margin-top:12px;display:none;"></div>
     </div>
@@ -1791,8 +1799,16 @@ async function _renderWorkspaceTab(slot, teamId) {
   const listEl = slot.querySelector('#pm-ws-list');
   const previewEl = slot.querySelector('#pm-ws-preview');
 
+  const countEl = slot.querySelector('#pm-ws-count');
+  const toggleEl = slot.querySelector('#pm-ws-runtime-toggle');
+  const paintList = () => {
+  files = showRuntime ? allFiles : projectFiles;
+  if (countEl) countEl.textContent = showRuntime || !projectFiles.length
+    ? `${allFiles.length} file${allFiles.length === 1 ? '' : 's'}`
+    : `${projectFiles.length} project file${projectFiles.length === 1 ? '' : 's'}`;
+  if (toggleEl) toggleEl.textContent = showRuntime ? 'Hide runtime files' : `Show runtime files (${allFiles.length - projectFiles.length})`;
   listEl.innerHTML = files.map(f => {
-    const relpath = f.relpath || f.path || f.name || '';
+    const relpath = relOf(f);
     const size = f.size || 0;
     const updated = f.modifiedAt || f.updatedAt;
     return `
@@ -1806,7 +1822,10 @@ async function _renderWorkspaceTab(slot, teamId) {
       </button>
     `;
   }).join('');
-
+  bindFileRows();
+  };
+  toggleEl?.addEventListener('click', () => { showRuntime = !showRuntime; paintList(); });
+  function bindFileRows() {
   listEl.querySelectorAll('[data-rel]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const rel = btn.getAttribute('data-rel');
@@ -1829,12 +1848,56 @@ async function _renderWorkspaceTab(slot, teamId) {
       }
     });
   });
+  }
+  paintList();
 }
 
 /* ---------------- MEMORY TAB ---------------- */
 
 async function _renderMemoryTab(slot, teamId, team) {
   slot.innerHTML = `<div class="pm-card" style="text-align:center;padding:24px;color:var(--pm-muted);">Loading memory…</div>`;
+  // Team memory = this team's own room state (decisions, artifacts, blockers,
+  // recent events), matching the desktop Memory tab. The global memory graph
+  // was unrelated to the team (auto_memory_* transcripts from other chats).
+  let room = null;
+  try { room = await loadTeamRoomState(teamId); } catch {}
+  if (room) {
+    const strip = (s) => String(s || '').replace(/\[DURABLE_TURN_COMMENTARY\][\s\S]*$/, '').replace(/\*\*/g, '').trim();
+    const artifacts = (Array.isArray(room.artifacts) ? room.artifacts : []).slice().reverse().slice(0, 12);
+    const blockers = (Array.isArray(room.blockers) ? room.blockers : []).slice().reverse().slice(0, 8);
+    const events = (Array.isArray(room.recentEvents) ? room.recentEvents : [])
+      .filter((e) => e && e.category !== 'tool' && strip(e.content))
+      .slice().reverse().slice(0, 15);
+    if (artifacts.length || blockers.length || events.length) {
+      const section = (title, html) => html ? `<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--pm-muted);margin:14px 4px 6px;">${title}</div>${html}` : '';
+      const ago = (ts) => ts ? _formatTimeAgo(typeof ts === 'number' ? ts : new Date(ts).getTime()) : '';
+      slot.innerHTML = `
+        ${section(`Blockers (${blockers.length})`, blockers.map((b) => `
+          <article class="pm-card" style="padding:10px 12px;border-color:var(--pm-red);">
+            <div class="pm-card-body">${escapeHtml(strip(b.content || b.reason || b.title || 'Blocker'))}</div>
+            <div style="font-size:11px;color:var(--pm-muted);margin-top:4px;">${escapeHtml(b.agentName || b.agentId || '')} ${ago(b.createdAt || b.timestamp)}</div>
+          </article>`).join(''))}
+        ${section(`Artifacts (${artifacts.length})`, artifacts.map((a) => `
+          <article class="pm-card" style="padding:10px 12px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <strong style="flex:1;font-size:13px;line-height:1.3;">${escapeHtml(a.name || a.title || 'Artifact')}</strong>
+              <span style="font-size:11px;color:var(--pm-muted);white-space:nowrap;">${ago(a.createdAt || a.timestamp)}</span>
+            </div>
+            ${a.description ? `<div class="pm-card-body" style="font-size:13px;margin-top:4px;">${escapeHtml(String(a.description).slice(0, 220))}</div>` : ''}
+            ${a.path ? `<div title="${escapeHtml(a.path)}" style="font-size:11px;color:var(--pm-muted);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;margin-top:4px;">${escapeHtml(a.path)}</div>` : ''}
+          </article>`).join(''))}
+        ${section('Recent activity', events.map((e) => `
+          <article class="pm-card" style="padding:10px 12px;">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;">
+              <strong style="flex:1;font-size:13px;">${escapeHtml(e.actorName || e.actorType || 'Team')}</strong>
+              <span style="font-size:11px;color:var(--pm-muted);white-space:nowrap;">${ago(e.timestamp)}</span>
+            </div>
+            <div class="pm-card-body" style="font-size:13px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(strip(e.content).slice(0, 400))}</div>
+          </article>`).join(''))}
+      `;
+      return;
+    }
+  }
   let graph;
   try { graph = await loadMemoryGraph(); } catch (err) {
     slot.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.brain}</div><h2>Couldn’t load memory</h2><p>${escapeHtml(err.message || '')}</p></div>`;
