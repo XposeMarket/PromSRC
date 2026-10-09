@@ -62,6 +62,9 @@ const MAX_DIFF_BYTES = 512 * 1024;
 const MAX_DIFF_PREVIEW = 12_000;
 const PARTIAL_HASH_BYTES = 64 * 1024;
 const MAX_REPORTED_CHANGES = 200;
+// mtime/clock slack when deciding whether a file outside a truncated baseline
+// was created by the command.
+const TRUNCATED_ADD_MTIME_SLACK_MS = 2000;
 
 // These directories are either generated, dependency-owned, or Prometheus's
 // own history. Scanning them makes terminal tracking expensive and produces
@@ -592,6 +595,7 @@ export class TerminalWorkspaceTracker {
   private readonly baseline: FileMapCapture;
   private finalized = false;
   private afterCapture: FileMapCapture | null = null;
+  private readonly startedAtMs = Date.now();
 
   /** True when the tracked scope is a Git work tree (baselines come from Git, not the cache). */
   get isGit(): boolean { return Boolean(this.gitRoot); }
@@ -772,8 +776,29 @@ export class TerminalWorkspaceTracker {
 
     const removed = new Map<string, FileFingerprint>();
     const added = new Map<string, FileFingerprint>();
-    for (const [key, file] of this.baseline.files.entries()) if (!after.files.has(key)) removed.set(key, file);
-    for (const [key, file] of after.files.entries()) if (!this.baseline.files.has(key)) added.set(key, file);
+    // A capped walk (MAX_FILES / MAX_TOTAL_BYTES) only sees a prefix of a large
+    // workspace, and that prefix shifts when unrelated files appear or vanish
+    // earlier in walk order. Membership in one capture but not the other is
+    // then not evidence of a change: a file that fell out of the after-walk
+    // must really be gone to count as deleted, and a file that was outside a
+    // truncated baseline must have been written during the command (or be a
+    // command target) to count as added. Without this, truncated workspaces
+    // reported thousands of phantom deletes/adds (e.g. old Brain
+    // activity-package parts) for commands that never touched them.
+    const hintKeys = new Set(this.commandPathHints.map((hint) => compareKey(hint)));
+    for (const [key, file] of this.baseline.files.entries()) {
+      if (after.files.has(key)) continue;
+      if (after.truncated && fs.existsSync(file.absolutePath)) continue;
+      removed.set(key, file);
+    }
+    for (const [key, file] of after.files.entries()) {
+      if (this.baseline.files.has(key)) continue;
+      if (this.baseline.truncated
+        && !hintKeys.has(key)
+        && !this.missingBaselines.has(key)
+        && file.mtimeMs < this.startedAtMs - TRUNCATED_ADD_MTIME_SLACK_MS) continue;
+      added.set(key, file);
+    }
     const pairedRemoved = new Set<string>();
     const pairedAdded = new Set<string>();
     for (const [fingerprint, oldFiles] of beforeByFingerprint.entries()) {
