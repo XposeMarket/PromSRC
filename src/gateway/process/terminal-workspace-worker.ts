@@ -2,6 +2,7 @@ import {
   createTerminalWorkspaceTracker,
   isTerminalTrackerExcludedPath,
   resolveTerminalGitRoot,
+  resolveTerminalTrackingScope,
   type TerminalFileMapCapture,
   type TerminalWorkspaceTracker,
 } from '../coding/terminal-change-tracker';
@@ -42,7 +43,11 @@ async function settledGeneration(workspacePath: string): Promise<number | null> 
   return workspaceWatchGeneration(workspacePath);
 }
 
-async function beginTracker(runId: string, input: Parameters<typeof createTerminalWorkspaceTracker>[0]): Promise<{ active: boolean }> {
+async function beginTracker(runId: string, rawInput: Parameters<typeof createTerminalWorkspaceTracker>[0]): Promise<{ active: boolean; workspacePath?: string }> {
+  // Track the repo the command actually runs in (PromSRC, a PR worktree, a
+  // cloned repo), not always the configured Prometheus workspace.
+  const scopedPath = rawInput.workspacePath ? resolveTerminalTrackingScope(rawInput.workspacePath, rawInput.cwd) : '';
+  const input = scopedPath ? { ...rawInput, workspacePath: scopedPath } : rawInput;
   const workspacePath = String(input.workspacePath || '');
   const gitRoot = workspacePath ? resolveTerminalGitRoot(workspacePath) : undefined;
   const generation = workspacePath ? await settledGeneration(workspacePath) : null;
@@ -55,7 +60,7 @@ async function beginTracker(runId: string, input: Parameters<typeof createTermin
       captureCache.set(watchKey(tracker.workspacePath), { generation, capture: tracker.baselineCapture });
     }
   }
-  return { active: Boolean(tracker) };
+  return { active: Boolean(tracker), ...(tracker ? { workspacePath: tracker.workspacePath } : {}) };
 }
 
 async function finalizeTracker(runId: string): Promise<unknown> {
