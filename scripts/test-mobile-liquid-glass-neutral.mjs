@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const css = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+const css = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8') + '\n' + fs.readFileSync('web-ui/src/styles/mobile-shell.css', 'utf8');
 for (const variable of [
   '--pm-lg-header-saturate',
   '--pm-lg-pill-saturate',

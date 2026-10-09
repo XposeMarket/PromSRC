@@ -12,7 +12,7 @@ assert.deepEqual([...detectToolCategories('Great thanks')], []);
 // Timed requests without another scheduling keyword still need the schedule
 // category so the normal category activation path can make automation tools
 // available when appropriate.
-assert.equal(has('Start the report at 5:30 PM.', 'schedule'), true);
-assert.equal(has('Run it at noon.', 'schedule'), true);
+assert.equal(has('Start the report at 5:30 PM.', 'automation_scheduling'), true);
+assert.equal(has('Run it at noon.', 'automation_scheduling'), true);
 
 console.log('prompt-context tool-category regression passed');

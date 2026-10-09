@@ -4,12 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-runtime.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const chatRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 
 const state = mobile.slice(
-  mobile.indexOf('function _normalizeVoiceRoomState'),
-  mobile.indexOf('function _voiceRoomSetFocus'),
+  mobile.indexOf('function _normalizeVoiceRoomState(source = {})'),
+  // mobile-pages.js keeps a `_voiceRoomSetFocus(...args)` proxy; anchor on the real runtime definition.
+  mobile.indexOf('function _voiceRoomSetFocus(participant)'),
 );
 assert.match(state, /transcript: \[\]/, 'Voice Room state must own a shared transcript');
 assert.match(state, /slice\(-48\)/, 'the persisted room transcript must remain bounded');

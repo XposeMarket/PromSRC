@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const mobile = fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-voice-runtime.js', 'web-ui/src/mobile/mobile-chat-page-runtime.js'].map((rel) => fs.readFileSync(rel, 'utf8')).join('\n');
 
 assert.match(mobile, /workflowGroupId: exchangeId,[\s\S]{0,100}workflowPart: 'voice_user'/, 'voice user turns must carry an exchange identity');
 assert.match(mobile, /workflowGroupId: exchangeId,[\s\S]{0,100}workflowPart: 'voice_assistant'/, 'voice assistant turns must carry the same exchange identity');
 assert.match(mobile, /function _repairMobileRealtimeExchangeOrder\(/, 'mobile must repair delayed user/assistant transcript ordering');
-assert.match(mobile, /_dedupeMobileAssistantTurns\(list\);[\s\S]{0,1000}_repairMobileRealtimeExchangeOrder\(list\);/, 'history reconciliation must repair voice order after request-pair repair');
+assert.match(mobile, /_dedupeMobileAssistantTurns\(list\);[\s\S]{0,1600}_repairMobileRealtimeExchangeOrder\(list\);/, 'history reconciliation must repair voice order after request-pair repair');
 assert.match(mobile, /const _mobileThreadSnapshotWriteQueues = new Map\(\)/, 'voice history snapshots must be serialized per mobile session');
 
 assert.match(mobile, /realtime-agent-quiet-tool-call-suppressed/, 'quiet mode must suppress tool execution');
