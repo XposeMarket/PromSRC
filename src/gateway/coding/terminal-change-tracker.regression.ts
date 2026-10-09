@@ -195,6 +195,44 @@ function runBoundedCommandHintCase(): void {
   }
 }
 
+// A truncated (capped) non-Git walk must not turn "fell out of the capped
+// prefix" into deleted/added. New files early in walk order push existing
+// files out of the after-walk; deleting early files pulls old, untouched
+// files into it.
+function runTruncatedWalkPhantomCase(): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-tracker-phantom-'));
+  try {
+    for (let index = 0; index < 5010; index += 1) {
+      write(root, `mm-noise/${String(index).padStart(5, '0')}.txt`, 'noise\n');
+    }
+    const old = new Date(Date.now() - 3_600_000);
+    for (const name of fs.readdirSync(path.join(root, 'mm-noise'))) {
+      fs.utimesSync(path.join(root, 'mm-noise', name), old, old);
+    }
+
+    // 1) New files sort first -> the after-walk hits the cap earlier.
+    const pushOut = createTerminalWorkspaceTracker({ workspacePath: root, cwd: root, command: 'node build.js' });
+    assert.ok(pushOut, 'truncated tracker should initialize');
+    for (let index = 0; index < 25; index += 1) write(root, `aa-new/${index}.txt`, 'fresh\n');
+    const pushResult = pushOut!.finalize();
+    const phantomDeletes = pushResult.workspaceChanges.filter((file) => file.status === 'deleted');
+    assert.equal(phantomDeletes.length, 0, `files still on disk must not be reported deleted (got ${phantomDeletes.slice(0, 3).map((f) => f.displayPath).join(', ')})`);
+    assert.ok(pushResult.workspaceChanges.some((file) => file.status === 'added' && file.displayPath.startsWith('aa-new/')), 'genuinely new files are still reported');
+
+    // 2) Early files removed -> the after-walk reaches old files the baseline never saw.
+    const pullIn = createTerminalWorkspaceTracker({ workspacePath: root, cwd: root, command: 'node clean.js' });
+    assert.ok(pullIn, 'second truncated tracker should initialize');
+    fs.rmSync(path.join(root, 'aa-new'), { recursive: true, force: true });
+    const pullResult = pullIn!.finalize();
+    const phantomAdds = pullResult.workspaceChanges.filter((file) => file.status === 'added');
+    assert.equal(phantomAdds.length, 0, `old untouched files must not be reported added (got ${phantomAdds.slice(0, 3).map((f) => f.displayPath).join(', ')})`);
+    const realDeletes = pullResult.workspaceChanges.filter((file) => file.status === 'deleted');
+    assert.ok(realDeletes.length > 0 && realDeletes.every((file) => file.displayPath.startsWith('aa-new/')), 'real deletions are still reported, and only those');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function nodeCommand(code: string): string {
   const encoded = Buffer.from(code, 'utf8').toString('base64');
   if (process.platform === 'win32') {
@@ -366,6 +404,7 @@ async function main(): Promise<void> {
   runNonGitWorkspaceCase();
   runFingerprintCacheCase();
   runBoundedCommandHintCase();
+  runTruncatedWalkPhantomCase();
   await runProcessSupervisorCase();
   console.log('[terminal-change-tracker] Git, read-only classification, dirty-baseline, failed-edit, revert, rename, ignored, non-Git, bounded command hints, and process lifecycle cases passed');
 }
