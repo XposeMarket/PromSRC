@@ -14,7 +14,10 @@ assert.equal(falUnitCost(0.04, 'per image', { durationSec: 3 }), 0.04);
 assert.equal(falUnitCost(3, 'unknown-billing-unit', {}), undefined);
 const seedance = getModel('fal/seedance-v1-pro-i2v');
 assert.ok(seedance);
-assert.equal(estimateCostUsd(seedance, { count: 5, durationSec: 3, resolution: '480p' }), 0.45);
+// Static (non-live) rate path. Live fal prices from the synced cache (fal-video-catalog.json, #535/#561)
+// override the manifest estimate for the real seedance endpoint and vary per machine, so pin an endpoint
+// that is never in the live cache to keep this assertion about the static $0.03/s estimate.
+assert.equal(estimateCostUsd({ ...seedance, endpoint: 'fal-ai/bytedance/seedance/v1/pro/image-to-video/static-rate-fixture' }, { count: 5, durationSec: 3, resolution: '480p' }), 0.45);
 assert.equal(estimateCostUsd({ ...seedance, endpoint: 'fal-ai/minimax/h3-max/text-to-video', pricing: { unit: 'seconds', unitPriceUsd: 0.03, source: 'live' } }, { durationSec: 5, count: 1 }), 0.15);
 assert.ok(estimateCostUsd(seedance, { count: 5, durationSec: 3, resolution: '1080p' }) > 0.45);
 console.log('fal catalog unit-pricing regression passed');

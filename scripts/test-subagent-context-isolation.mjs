@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 const root = path.resolve(import.meta.dirname, '..');
 const promptContext = fs.readFileSync(path.join(root, 'src', 'gateway', 'prompt-context.ts'), 'utf-8');
 const chatRouter = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf-8');
+const toolResultContext = fs.readFileSync(path.join(root, 'src', 'gateway', 'tool-result-model-context.ts'), 'utf-8');
 const channelsRouter = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'channels.router.ts'), 'utf-8');
 
 function branch(startMarker, endMarker) {
@@ -52,7 +53,7 @@ assert.match(
   'Subagent voice must not inherit main or voice-agent memory',
 );
 assert.ok(
-  chatRouter.includes("if (toolName === 'skill_read') return content;"),
+  toolResultContext.includes("if (toolName === 'skill_read') return content;"),
   'skill_read results must bypass generic tool-result clipping so the complete SKILL.md reaches the next reasoning round',
 );
 assert.ok(promptContext.includes('buildSubagentIdentityMemoryContext'), 'gateway subagent paths must use the canonical identity/memory helper');

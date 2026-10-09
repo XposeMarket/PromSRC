@@ -4,7 +4,7 @@ import path from 'node:path';
 import { appendFinalResponseDelta, reconcileFinalResponse } from '../web-ui/src/chat-final-response.js';
 
 const root = process.cwd();
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-chat-page-runtime.js', 'web-ui/src/mobile/mobile-chat-renderer-runtime.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const desktop = fs.readFileSync(path.join(root, 'web-ui/src/pages/ChatPage.js'), 'utf8');
 const subagents = fs.readFileSync(path.join(root, 'web-ui/src/pages/SubagentsPage.js'), 'utf8');
 const gateway = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');

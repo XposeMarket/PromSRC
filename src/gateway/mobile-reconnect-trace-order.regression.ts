@@ -52,4 +52,6 @@ async function main() {
   assert.equal(target.liveTraceEntries.length, 5, 'repeat merge must not duplicate rows');
   console.log('mobile-reconnect-trace-order regression: ok');
 }
-main().catch((err) => { console.error(err); process.exit(1); });
+// The bundled mobile module starts approval/model polling timers on import, so
+// the event loop never drains on its own: exit explicitly once main settles.
+main().then(() => process.exit(0), (err) => { console.error(err); process.exit(1); });

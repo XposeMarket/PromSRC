@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const mobile = fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-voice-runtime.js'].map((rel) => fs.readFileSync(rel, 'utf8')).join('\n');
 const chatRouter = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
 
 assert.match(mobile, /filter\(\(item\) => item && typeof item === 'object'\)\.slice\(-8\)/, 'the offline cache must retain every rich-card type');
 assert.doesNotMatch(mobile, /richArtifacts\.filter\(\(item\) => item\?\.type === 'visual' \|\| item\?\.type === 'thread_links'\)/, 'the offline cache must not discard show_ui cards');
-assert.match(mobile, /msg\.content\.trim\(\) \|\| \(Array\.isArray\(msg\.richArtifacts\) && msg\.richArtifacts\.length\)/, 'artifact-only Voice turns must be written to session history');
+assert.match(mobile, /msg\.content\.trim\(\)\s*\|\|\s*\(Array\.isArray\(msg\.richArtifacts\)/, 'artifact-only Voice turns must be written to session history');
 assert.match(mobile, /function _mergeMobileRichArtifacts\(/, 'recovery must merge rich cards instead of replacing them');
 assert.match(mobile, /messageKind: 'voice_show_ui_card'/, 'Voice show_ui cards must have a distinct stable turn kind');
 assert.match(mobile, /isVoiceShowUiCard[\s\S]{0,200}\|\| isVoiceShowUiCard/, 'server reconciliation must preserve artifact-only Voice cards');

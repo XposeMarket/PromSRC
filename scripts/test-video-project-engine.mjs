@@ -58,9 +58,17 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
-    requests.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: body ? JSON.parse(body) : null });
+    requests.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: String(req.headers['content-type'] || '').includes('application/json') && body ? JSON.parse(body) : null });
     const base = `http://127.0.0.1:${server.address().port}`;
-    if (req.method === 'POST' && req.url.startsWith('/fal-ai/')) {
+    // fal CDN storage upload (providers.uploadToFalStorage, added in 039fafada #545) and the
+    // balance preflight (balance.ts, c64214fbc #601) are served locally too: no real fal host, no key check.
+    if (req.url.startsWith('/storage/upload/initiate')) {
+      res.end(JSON.stringify({ upload_url: `${base}/storage/put/up1`, file_url: `${base}/storage/files/up1.png` }));
+    } else if (req.method === 'PUT' && req.url.startsWith('/storage/put/')) {
+      res.end('');
+    } else if (req.url.startsWith('/v1/account/billing')) {
+      res.end(JSON.stringify({ credits: { current_balance: 50 } }));
+    } else if (req.method === 'POST' && req.url.startsWith('/fal-ai/')) {
       const id = `req${requests.length}`;
       res.end(JSON.stringify({ request_id: id, status_url: `${base}/status/${id}`, response_url: `${base}/result/${id}` }));
     } else if (req.url.startsWith('/status/')) {
@@ -81,7 +89,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 // endpoint is served by the fake: we monkeypatch QUEUE via env-free approach —
 // the transport builds `${QUEUE_BASE}/${endpoint}`, so use fetch interception.
 const realFetch = globalThis.fetch;
-globalThis.fetch = (url, init) => realFetch(String(url).replace('https://queue.fal.run', base), init);
+globalThis.fetch = (url, init) => realFetch(String(url).replace(/^https:\/\/(queue\.fal\.run|rest\.alpha\.fal\.ai|api\.fal\.ai)/, base), init);
 process.env.FAL_KEY = 'test-key-123';
 
 // ── project ops + undo ──
@@ -120,10 +128,10 @@ const gen = await engine.generateShots(ws, pid, { shotIds: ['shot_one'], approve
 assert.equal(gen.jobs.length, 1);
 const settled = await engine.waitForJobs(ws, pid, [gen.jobs[0].id], 60_000);
 assert.equal(settled[0].state, 'done', settled[0].error);
-const submitReq = requests.find((x) => x.method === 'POST');
+const submitReq = requests.find((x) => x.method === 'POST' && x.url.startsWith('/fal-ai/'));
 assert.equal(submitReq.auth, 'Key test-key-123');
 assert.equal(submitReq.url, '/fal-ai/kling-video/v2.1/master/image-to-video');
-assert.match(submitReq.body.image_url, /^data:image\/png;base64,/, 'character anchor is sent as the identity start frame');
+assert.match(submitReq.body.image_url, /^http:\/\/127\.0\.0\.1:\d+\/storage\/files\//, 'character anchor is uploaded to fal storage and sent as the identity start frame');
 assert.equal(submitReq.body.duration, '5');
 assert.match(submitReq.body.prompt, /barista with green apron/);
 let p = project.loadProject(ws, pid);
@@ -138,7 +146,8 @@ const gen2 = await engine.generateShots(ws, pid, { shotIds: ['shot_two'], approv
 const s2 = await engine.waitForJobs(ws, pid, [gen2.jobs[0].id], 60_000);
 assert.equal(s2[0].state, 'done', s2[0].error);
 const chainReq = requests.filter((x) => x.method === 'POST')[1];
-assert.match(chainReq.body.image_url, /^data:image\/jpeg;base64,/, 'previous shot last frame used');
+// The last frame is now uploaded to fal storage (providers.toFalMedia, #545) and sent as an https URL, not a data URI.
+assert.match(chainReq.body.image_url, /^http:\/\/127\.0\.0\.1:\d+\/storage\/files\//, 'previous shot last frame used');
 ok('chainFromPrevious extracts the previous take last frame as the start image');
 
 // ── undo does not delete paid takes ──

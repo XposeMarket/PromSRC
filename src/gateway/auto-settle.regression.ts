@@ -149,7 +149,11 @@ async function main(): Promise<void> {
     // Activation baselines prevent old chats from being immediately eligible.
     const baselineId = 'regression_settle_activation_baseline';
     addOldSession(baselineId);
-    const baselineSettings = { ...settings, activationAt: now };
+    // runAutoSettleSweep computes its cutoff from the real clock, so the
+    // activation baseline must be "now" on that clock too (the fixed `now`
+    // above is a past date and turned this into a time bomb once it was more
+    // than afterDays in the past).
+    const baselineSettings = { ...settings, activationAt: Date.now() };
     const baselineRun = await autoApi.runAutoSettleSweep({ settingsOverride: baselineSettings, reason: 'baseline', maxBatches: 1 });
     assert.equal(baselineRun.settled, 0);
     assert.equal(baselineRun.skipped.recent_activity || 0, 0);

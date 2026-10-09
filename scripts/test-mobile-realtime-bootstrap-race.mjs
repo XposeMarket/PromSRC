@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-voice-runtime.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-pages.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const voice = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8');
 
 const errorHelpers = mobile.slice(
@@ -42,7 +42,7 @@ const listenStart = voice.slice(
 );
 assert.ok(
   listenStart.indexOf('context._isMobileRealtimeBootstrapSupersededError(err)')
-    < listenStart.indexOf('context.pmToast(`Realtime agent failed:'),
+    < listenStart.indexOf('presentRealtimeVoiceError(err)'),
   'expected supersession must be handled before the fatal Realtime toast',
 );
 

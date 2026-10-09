@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const mobile = ['web-ui/src/mobile/mobile-voice-runtime.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-chat-page-runtime.js', 'web-ui/src/mobile/mobile-voice-page.js', 'web-ui/src/mobile/mobile-pages.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const router = fs.readFileSync(path.join(root, 'src/gateway/routes/realtime.router.ts'), 'utf8');
 const chatRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 const bridge = fs.readFileSync(path.join(root, 'src/gateway/realtime/codex-app-server-bridge.ts'), 'utf8');
@@ -154,7 +154,7 @@ assert.match(route, /return \{ handled: false, participant, text: routedText, ta
 assert.match(router, /\/api\/realtime\/codex-bridge\/append-text[\s\S]*?appendRealtimeText\(sessionId, text\)/, 'gateway must expose AVAS-native append-text handoff endpoint');
 assert.match(bridge, /async appendRealtimeText\(sessionId: string, text: string\)/, 'bridge must append text to one explicit live AVAS session');
 assert.match(chatRouter, /name: 'voice_room_handoff'/, 'room bootstrap must expose an explicit tool fallback for missed host handoffs');
-assert.match(chatRouter, /buildRealtimeVoiceAgentTools\(voiceTarget, contextPacket\.voiceRoom \|\| null\)/, 'room bootstrap must give the dynamic handoff tool its participant roster');
+assert.match(chatRouter, /buildRealtimeVoiceAgentTools\(voiceTarget, contextPacket\.voiceRoom \|\| null(?:, sessionId)?\)/, 'room bootstrap must give the dynamic handoff tool its participant roster');
 assert.match(chatRouter, /call voice_room_handoff immediately with that participant/, 'room participants must be told to use the fallback instead of narrating a missed switch');
 assert.match(mobile, /async function _executeMobileVoiceRoomHandoffTool/, 'mobile must execute Voice Room fallback handoff calls');
 assert.match(mobile, /if \(name === 'voice_room_handoff'\)[\s\S]*?_executeMobileVoiceRoomHandoffTool/, 'mobile tool dispatch must route fallback handoff calls before normal voice tools');
