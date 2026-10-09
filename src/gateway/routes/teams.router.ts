@@ -38,6 +38,7 @@ import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
 import { teamExecutionQueue } from '../teams/team-execution-queue';
 import { listTeamRunReceipts } from '../teams/team-run-receipts';
+import { summarizeTeamForList } from '../teams/team-list-summary';
 
 export const router = Router();
 
@@ -676,9 +677,11 @@ function _resumeManagedTeamInternal(teamId: string): { success: boolean; team?: 
   return { success: true, team };
 }
 
-router.get('/api/teams', (_req, res) => {
+router.get('/api/teams', (req, res) => {
+  // List payload stays small; see summarizeTeamForList.
   try {
-    const teams = listManagedTeams();
+    const full = String(req.query.full || '') === '1';
+    const teams = listManagedTeams().map((t: any) => (full ? t : summarizeTeamForList(t)));
     const teamMemberIds = getTeamMemberAgentIds();
     res.json({ success: true, teams, teamMemberIds: Array.from(teamMemberIds) });
   } catch (err: any) {

@@ -630,6 +630,18 @@ export async function streamVoiceAgentInputMobile(payload = {}, onChunk) {
 
 /* ---------------- helpers ---------------- */
 
+function fmtAgo(value) {
+  const ts = typeof value === 'number' ? value : new Date(value).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
 function fmtDate(value) {
   if (!value) return null;
   try {
@@ -938,7 +950,7 @@ function _normalizeTeam(t) {
     ],
     purpose:     purpose || 'No purpose set yet.',
     currentTask: currentTask || 'No current task.',
-    lastRun:     lastRunAt ? fmtDate(lastRunAt) : 'Never',
+    lastRun:     lastRunAt ? (fmtAgo(lastRunAt) || fmtDate(lastRunAt)) : 'Never',
     memberStates: 'No member state updates yet.',
     dispatches:   'No active dispatches.',
     workspace:    t.workspaceFileCount ? `${t.workspaceFileCount} files` : 'No workspace files yet.',

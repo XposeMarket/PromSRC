@@ -124,7 +124,7 @@ export async function renderTeamsPage(page, { navigate }) {
           ${detail.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:${m.color}">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
         </div>
         <div class="pm-divider"></div>
-        <div class="pm-row"><span>🗂️ Workspace</span><span style="color:var(--pm-muted)">${escapeHtml(detail.workspace)} ${ICONS.chev}</span></div>
+        <button type="button" class="pm-row pm-row-link" data-go-ws="${escapeHtml(detail.id)}"><span>🗂️ Workspace</span><span style="color:var(--pm-muted);display:inline-flex;align-items:center;gap:4px;">Open ${ICONS.chev}</span></button>
         <div class="pm-divider"></div>
         <div class="pm-row" style="flex-direction:column;align-items:stretch;gap:4px;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -145,6 +145,9 @@ export async function renderTeamsPage(page, { navigate }) {
     });
     body.querySelectorAll('[data-go]').forEach(btn => {
       btn.addEventListener('click', () => navigate(`#mobile/teams/${btn.getAttribute('data-go')}`));
+    });
+    body.querySelectorAll('[data-go-ws]').forEach(btn => {
+      btn.addEventListener('click', () => navigate(`#mobile/teams/${encodeURIComponent(btn.getAttribute('data-go-ws'))}/workspace`));
     });
   }
 
@@ -249,11 +252,11 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
       </div>
       <div class="pm-card">
         <div class="pm-card-head">${ICONS.users} Member States</div>
-        <div class="pm-card-body">${escapeHtml(t.memberStates)}</div>
+        <div class="pm-card-body" data-member-states>${escapeHtml(t.memberStates)}</div>
       </div>
       <div class="pm-card">
         <div class="pm-card-head">${ICONS.send} Active Dispatches</div>
-        <div class="pm-card-body">${escapeHtml(t.dispatches)}</div>
+        <div class="pm-card-body" data-dispatches>${escapeHtml(t.dispatches)}</div>
       </div>
     </div>
 
@@ -263,7 +266,6 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
       <input class="pm-input" id="pm-ref-title" placeholder="Reference title (e.g. Brand Voice, API URL, Posting Rules)" />
       <textarea class="pm-textarea" id="pm-ref-body" placeholder="Reference content…"></textarea>
       <div class="pm-row-buttons">
-        <button class="pm-btn ghost" disabled title="Upload coming soon">${ICONS.upload} Upload File</button>
         <button class="pm-btn primary" data-save-ref>${ICONS.check} Save</button>
       </div>
     </div>
@@ -310,6 +312,23 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   body.querySelectorAll('.pm-tabs button').forEach(b => {
     b.addEventListener('click', () => selectTab(b.getAttribute('data-tab')));
   });
+  // Fill the Member States / Active Dispatches cards from live room state
+  // (they used to be static placeholders).
+  loadTeamRoomState(teamId).then((rs) => {
+    if (!rs) return;
+    const nameOf = (id) => (t.members || []).find(m => m.id === id)?.name || id;
+    const msEl = body.querySelector('[data-member-states]');
+    const states = Object.entries(rs.memberStates || {});
+    if (msEl && states.length) {
+      msEl.innerHTML = states.map(([id, s]) => `<div style="display:flex;justify-content:space-between;gap:8px;"><span>${escapeHtml(nameOf(id))}</span><span style="color:var(--pm-muted)">${escapeHtml(String(s?.status || 'idle'))}</span></div>`).join('');
+    }
+    const dEl = body.querySelector('[data-dispatches]');
+    const ds = Array.isArray(rs.activeDispatches) ? rs.activeDispatches : [];
+    if (dEl) dEl.textContent = ds.length
+      ? `${ds.map(d => nameOf(String(d.agentId || d.subagentId || ''))).join(', ')} working`
+      : 'No active dispatches.';
+  }).catch(() => {});
+
   const initialTabName = tabs.find(tab => tab.toLowerCase().replace(/\s+/g, '-') === String(initialTab || '').toLowerCase());
   if (initialTabName && initialTabName !== 'Context') selectTab(initialTabName);
 
@@ -420,6 +439,23 @@ const PRESENCE_PILL = {
 
 
 
+// Older team chat lines stored the raw manage_team_goal JSON. Render them
+// the same way the server formats new ones.
+function _prettyGoalUpdate(text) {
+  const m = /^Goal update \(([a-z_]+)\):\s*(\{[\s\S]*\})\s*$/.exec(String(text || '').trim());
+  if (!m) return text;
+  let data;
+  try { data = JSON.parse(m[2]); } catch { return text; }
+  const v = (x) => String(x ?? '').replace(/\s+/g, ' ').trim();
+  switch (m[1]) {
+    case 'log_completed': return `✅ Logged as done: ${v(data.entry ?? data.completed ?? data.text)}`;
+    case 'set_focus': return `🎯 Focus set: ${v(data.focus ?? data.current_focus ?? data.text)}`;
+    case 'pause_agent': return `⏸ Paused ${v(data.agent_id)}`;
+    case 'unpause_agent': return `▶ Resumed ${v(data.agent_id)}`;
+    default: return `Goal update (${m[1]})`;
+  }
+}
+
 function _formatDuration(ms) {
   if (!ms || ms < 0) return '—';
   const s = Math.floor(ms / 1000);
@@ -466,7 +502,7 @@ async function _renderSubagentsTab(slot, team) {
           <span>${active ? `📡 dispatched` : 'Last update'}</span>
           <span>${_formatTimeAgo(s.lastUpdateAt || active?.startedAt)}</span>
         </div>
-        ${agent ? _renderAgentModelPicker(agent, pickerScope) : ''}
+        ${agent ? `<details class="pm-model-details"><summary>Model settings</summary>${_renderAgentModelPicker(agent, pickerScope)}</details>` : ''}
       </article>
     `;
   }).join('');
@@ -1326,7 +1362,7 @@ async function _renderTeamChatTab(slot, teamId, { standalone = false, team = nul
     const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
     const from = String(message?.from || message?.role || '').toLowerCase();
     const fromUser = from === 'user' || from === 'you' || from === 'human';
-    const content = String(message?.content || message?.message || message?.text || body.text || '');
+    const content = _prettyGoalUpdate(String(message?.content || message?.message || message?.text || body.text || ''));
     return {
       ...message,
       role: fromUser ? 'user' : 'agent',
@@ -1812,7 +1848,7 @@ async function _renderWorkspaceTab(slot, teamId) {
     const size = f.size || 0;
     const updated = f.modifiedAt || f.updatedAt;
     return `
-      <button type="button" data-rel="${escapeHtml(relpath)}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--pm-bg-soft);border:1px solid var(--pm-border);border-radius:12px;padding:10px 12px;cursor:pointer;font-family:inherit;">
+      <button type="button" data-rel="${escapeHtml(relpath)}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;color:var(--pm-text);background:var(--pm-bg-soft);border:1px solid var(--pm-border);border-radius:12px;padding:10px 12px;cursor:pointer;font-family:inherit;">
         <span style="font-size:18px;">${_fileIcon(relpath)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;">
           <span style="display:block;font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(relpath)}</span>

@@ -11511,7 +11511,6 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-pill.builtin  { background: rgba(125,107,214,.12); color: var(--pm-purple); }
 .pm-pill.gray     { background: rgba(80,60,40,.08); color: var(--pm-text-soft); }
 .pm-pill.orange   { background: var(--pm-orange-soft); color: var(--pm-orange); }
-.pm-tag-row { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
 .pm-schedule-desc { font-size: 14px; color: var(--pm-text-soft); margin: 10px 0 12px; line-height: 1.45; }
 .pm-schedule-meta {
   display: grid;
@@ -11549,13 +11548,6 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-schedule-foot-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .pm-schedule-foot-copy strong { overflow: hidden; color: var(--pm-text-soft); font-size: 12px; font-weight: 700; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .pm-schedule-foot-copy small { overflow: hidden; color: var(--pm-muted); font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.pm-assign-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--pm-orange-soft); color: var(--pm-orange);
-  font-size: 11px; font-weight: 700;
-  padding: 5px 10px; border-radius: var(--pm-radius-pill);
-  max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .pm-run-btn {
   background: transparent; color: var(--pm-orange);
   border: 1px solid color-mix(in srgb, var(--pm-orange) 40%, transparent);
@@ -11682,6 +11674,7 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   margin: 8px 0 16px;
 }
 .pm-team-tile {
+  color: var(--pm-text);
   background: var(--pm-surface); border: 1px solid var(--pm-border);
   border-radius: var(--pm-radius-lg);
   padding: 16px 14px 18px;
@@ -11745,6 +11738,11 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   padding: 6px 0; font-size: 13px;
 }
 .pm-team-preview .pm-row strong { font-weight: 700; }
+.pm-team-preview .pm-row svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.pm-row-link { width: 100%; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.pm-model-details { margin-top: 10px; }
+.pm-model-details > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--pm-muted); padding: 4px 0; }
+.pm-model-details[open] > summary { margin-bottom: 8px; }
 .pm-progress {
   height: 8px; border-radius: 999px;
   background: rgba(80,60,40,.10);
@@ -11757,7 +11755,6 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
 }
 
 /* ---------- team detail ---------- */
-.pm-detail-back { padding: 4px 6px; }
 .pm-detail-head {
   display: flex; align-items: flex-start; gap: 12px;
   padding: 0 6px;
