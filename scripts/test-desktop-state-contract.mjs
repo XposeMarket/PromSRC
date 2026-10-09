@@ -106,9 +106,11 @@ const ocrWindowScreenshot = wrappers.normalizeDesktopWrapperTool('desktop_window
 assert.equal(ocrWindowScreenshot.args.skip_ocr, true, 'model-facing screenshots must stay on the vision fast path');
 assert.equal(ocrWindowScreenshot.args.ocr, undefined, 'wrapper-only OCR option must not leak to the compatibility handler');
 const fastAutoClick = wrappers.normalizeDesktopWrapperTool('desktop_window', {
-  action: 'click', window_token: token, x: 10, y: 10, verify: 'auto', focus_first: false,
+  action: 'click', window_token: token, x: 10, y: 10, verify: 'auto', dispatch: 'foreground', focus_first: false,
 });
-assert.equal(fastAutoClick.args.verify, 'off', 'schema-filled auto verification must use the wrapper fast path');
+const backgroundAutoClick = wrappers.normalizeDesktopWrapperTool('desktop_window', { action: 'click', window_token: token, x: 10, y: 10, verify: 'auto' });
+assert.equal(backgroundAutoClick.args.verify, 'auto', 'background window actions keep verify auto on purpose (#579)');
+assert.equal(fastAutoClick.args.verify, 'off', 'foreground schema-filled auto verification must use the wrapper fast path');
 assert.equal(fastAutoClick.args.focus_first, false, 'explicit focus preservation must survive wrapper normalization');
 const missingWindowRegion = wrappers.normalizeDesktopWrapperTool('desktop_window', {
   action: 'region_screenshot', window_token: token,

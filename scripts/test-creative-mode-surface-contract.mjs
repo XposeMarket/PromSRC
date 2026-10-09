@@ -28,9 +28,11 @@ assert.match(imageRegression, /web-media capability must own generate_image exec
 assert.doesNotMatch(imageRegression, /read\('src\/gateway\/routes\/chat\.router\.ts'\)/, 'Image regression must not depend on the retired chat.router implementation');
 assert.doesNotMatch(imageRegression, /read\('src\/gateway\/agents-runtime\/subagent-executor\.ts'\)/, 'Image regression must not depend on the retired monolithic subagent executor');
 
-assert.equal(chatRouter.trim(), '', 'chat.router.ts is currently only an empty compatibility shell; update this contract if it becomes an execution owner again');
-assert.doesNotMatch(promptContext, /creative_design|creative_image|creative_canvas|creative_video/, 'named legacy creative prompt profiles must not silently reappear without updating the Creative architecture contract');
+assert.match(chatRouter, /final_response_start/, 'chat.router.ts is a live execution owner and must publish the final-response boundary');
+// creative_image / creative_video are live tool categories now (creative_image_ops / creative_video_ops
+// wrappers), so only the retired prompt-profile names are forbidden.
+assert.doesNotMatch(promptContext, /creative_design|creative_canvas/, 'named legacy creative prompt profiles must not silently reappear without updating the Creative architecture contract');
 assert.doesNotMatch(overview, /isolated Creative Runtime uses|Creative prompt profiles exist/, 'Creative overview must not describe retired isolated-runtime/prompt-profile ownership');
-assert.match(overview, /Design[\s\S]*Image[\s\S]*Video/, 'Creative overview must cover all three active user-facing mode families');
+assert.match(overview, /design[\s\S]*image[\s\S]*video/i, 'Creative overview must cover all three active user-facing mode families');
 
 console.log('[creative-mode-surface-contract] Design, Image, and Video ownership boundaries are current');

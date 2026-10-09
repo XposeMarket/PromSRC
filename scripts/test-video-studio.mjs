@@ -46,7 +46,12 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const base = `http://127.0.0.1:${server.address().port}`;
     const u = req.url;
-    if (req.method === 'POST' && u.startsWith('/fal-ai/')) {
+    // fal CDN storage upload (providers.uploadToFalStorage, 039fafada #545) and the balance
+    // preflight (c64214fbc #601) are served locally: no real fal host, no key check.
+    if (u.startsWith('/storage/upload/initiate')) res.end(JSON.stringify({ upload_url: `${base}/storage/put/up1`, file_url: `${base}/media/still.png` }));
+    else if (req.method === 'PUT' && u.startsWith('/storage/put/')) res.end('');
+    else if (u.startsWith('/v1/account/billing')) res.end(JSON.stringify({ credits: { current_balance: 50 } }));
+    else if (req.method === 'POST' && u.startsWith('/fal-ai/')) {
       const isImg = /flux|image/i.test(u);
       if (isImg) hits.falImg += 1; else { hits.falVid += 1; try { vidPrompts.push(String(JSON.parse(body).prompt || '')); } catch { /* ignore */ } }
       const id = `${isImg ? 'img' : 'vid'}${hits.falImg + hits.falVid}`;
@@ -69,7 +74,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (url, init) => {
   const s = String(url);
-  if (s.startsWith('https://queue.fal.run')) return realFetch(s.replace('https://queue.fal.run', base), init);
+  if (/^https:\/\/(queue\.fal\.run|rest\.alpha\.fal\.ai|api\.fal\.ai)/.test(s)) return realFetch(s.replace(/^https:\/\/(queue\.fal\.run|rest\.alpha\.fal\.ai|api\.fal\.ai)/, base), init);
   if (s.startsWith('https://api.openai.com')) return realFetch(s.replace('https://api.openai.com', base), init);
   if (/x\.ai\/|chatgpt\.com|auth\.openai\.com/.test(s)) return Promise.resolve(new Response('{"error":"blocked in test"}', { status: 401 }));
   if (/^https?:\/\/(?!127\.0\.0\.1)/.test(s)) throw new Error(`unexpected network call in test: ${s}`);
@@ -142,8 +147,11 @@ await project.applyOps(ws, pid, [
 
 // ── storyboard + approval gate ──
 {
+  // Budget policy 2 defaults autoApproveUsd to $0 (quote-first, b1f1246aa #565). Set an explicit
+  // auto-approve threshold so the ~$0.06 two-still storyboard runs without an approval round-trip.
+  await project.applyOps(ws, pid, [{ op: 'project.update', budget: { autoApproveUsd: 1 } }]);
   const sb = await tool.executeVideoProject({ action: 'storyboard', projectId: pid, shotIds: [p.shots[0].id, p.shots[1].id] }, { workspacePath: ws });
-  assert.ok(!sb.needsApproval, '2 stills under auto-approve');
+  assert.ok(!sb.needsApproval, `2 stills under auto-approve: ${sb.reason || ''}`);
   await engine.waitForJobs(ws, pid, sb.jobs.map((j) => j.id), 30_000);
   p = project.loadProject(ws, pid);
   assert.equal(p.shots[0].storyboardCandidates.length, 1);

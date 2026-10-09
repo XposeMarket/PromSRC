@@ -93,6 +93,11 @@ function transcriptCandidates(text: string, mode: Exclude<VideoSocialCutSelectio
     const signals: string[] = [];
     let score = 0;
     terms.forEach((pattern, termIndex) => { if (pattern.test(excerpt)) { score += termIndex < 2 ? 5 : 3; signals.push(`mode_signal_${termIndex + 1}`); } });
+    // Several distinct primary-signal hits (e.g. "unpopular", "wrong",
+    // "overrated") mark a much stronger match than one incidental word
+    // ("truth"); without this a single weak hit plus length bonuses won.
+    const primaryHits = new Set((excerpt.match(new RegExp(terms[0].source, 'gi')) || []).map((hit) => hit.toLowerCase())).size;
+    if (primaryHits > 1) score += Math.min(2, primaryHits - 1) * 2;
     if (/^(but|and|so|because|then|also)\b/i.test(excerpt)) score -= 2;
     if (/\b(I|we|you)\b/i.test(excerpt)) score += 1;
     if (wordCount >= 28 && wordCount <= 70) score += 3; else if (wordCount >= 16) score += 1;

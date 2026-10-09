@@ -37,6 +37,7 @@ runInNewContext([
   section('_mobileHistoryTurnsRepresentSameTurn', '_mobileCanonicalTextIsTrailingFragment'),
   section('_mobileCanonicalTextIsTrailingFragment', '_mergeMobileHistoryRecords'),
   section('_mergeMobileHistoryRecords', '_mobileHistoryPageIsPartial'),
+  section('_isMobileGatewayRestartCheckpointMessage', '_isMobileGatewayRestartTerminalMessage'),
   section('_mergeMobilePinnedCompletedTurn', '_mergeMobileAssistantTurnDetails'),
   'globalThis.mergeHistory = _mergeMobileHistoryRecords;',
   'globalThis.sameTurn = _mobileHistoryTurnsRepresentSameTurn;',
@@ -116,6 +117,7 @@ const artifactMerge = {
   _mobileAssistantWorkStartedAt: () => 1,
 };
 runInNewContext([
+  section('_isMobileGatewayRestartCheckpointMessage', '_isMobileGatewayRestartTerminalMessage'),
   section('_mergeMobileAssistantTurnDetails', '_isMobileGatewayRestartContinuityCandidate'),
   'globalThis.mergeDetails = _mergeMobileAssistantTurnDetails;',
 ].join('\n'), artifactMerge);

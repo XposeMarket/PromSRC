@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const picker = fs.readFileSync(path.join(root, 'web-ui/src/components/agent-voice-picker.js'), 'utf8');
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+// Mobile voice logic was split from mobile-pages.js; the Codex fallback guard lives in mobile-voice-realtime-runtime.js.
+const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js']
+  .map((rel) => fs.readFileSync(path.join(root, rel), 'utf8'))
+  .join('\n');
 const chatRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 
 assert.match(
@@ -72,7 +75,8 @@ assert.match(
 );
 assert.match(
   chatRouter,
-  /!identity\.isSubagent \|\| String\(tool\?\.function\?\.name[\s\S]*?!== 'voice_thread_ops'/,
+  // Guard was rewritten as `if (identity.isSubagent && name === 'voice_thread_ops') return false;` in buildRealtimeVoiceAgentTools.
+  /identity\.isSubagent && name === 'voice_thread_ops'\) return false/,
   'subagent Voice/Live must not receive Prometheus-only thread operations',
 );
 assert.match(

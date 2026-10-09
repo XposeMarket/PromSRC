@@ -4,11 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+// Generated copies are written with LF; source files may be checked out with CRLF.
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8').replace(/\r\n/g, '\n');
 
 const mobileCss = read('web-ui/src/styles/mobile.css');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
 const mobileShell = read('web-ui/src/mobile/mobile-shell.js');
+// Rename Chat sheet styles moved out of mobile.css into mobile-shell.css.
+const mobileShellCss = read('web-ui/src/styles/mobile-shell.css');
 const generatedShell = read('generated/public-web-ui/static/mobile/mobile-shell.js');
 
 assert.equal(generatedCss, mobileCss, 'generated mobile.css must stay synchronized with source');
@@ -30,10 +33,10 @@ assert.match(borderlessBlock, /\.pm-msheet:not\(\.is-reasoning\):not\(\.is-model
 assert.match(borderlessBlock, /border-width:\s*0\s*!important;/, 'outer mobile popover rims must be removed');
 assert.match(borderlessBlock, /border-color:\s*transparent\s*!important;/, 'outer mobile popover rim color must be transparent');
 
-const renameStart = mobileCss.indexOf('.pm-msheet-rename {');
-const renameEnd = mobileCss.indexOf('.pm-sess-rename-wrap', renameStart);
+const renameStart = mobileShellCss.indexOf('.pm-msheet-rename {');
+const renameEnd = mobileShellCss.indexOf('.pm-sess-rename-wrap', renameStart);
 assert.ok(renameStart >= 0 && renameEnd > renameStart, 'rename sheet style block must exist');
-const renameBlock = mobileCss.slice(renameStart, renameEnd);
+const renameBlock = mobileShellCss.slice(renameStart, renameEnd);
 assert.match(renameBlock, /left:\s*50%\s*!important;/, 'rename dialog must be horizontally centered');
 assert.match(renameBlock, /width:\s*min\(360px,\s*calc\(100vw\s*-\s*32px\)\)/, 'rename dialog must use compact phone-safe width');
 assert.match(renameBlock, /height:\s*auto;/, 'rename dialog must size to its content');
@@ -50,6 +53,6 @@ assert.match(
   /sheet\.style\.bottom\s*=\s*isOpen\s*\?\s*\(offset\s*\+\s*8\)\s*\+\s*['"]px['"]\s*:\s*['"]['"];/,
   'rename dialog must continue to follow the keyboard bottom offset',
 );
-assert.match(mobileCss, /\.pm-sess-rename-input:focus\s*\{[^}]*border-color:\s*var\(--pm-accent/s, 'rename input focus border must remain intact');
+assert.match(mobileShellCss, /\.pm-sess-rename-input:focus\s*\{[^}]*border-color:\s*var\(--pm-accent/s, 'rename input focus border must remain intact');
 
 console.log('[test-mobile-popover-polish] passed: mobile popover shells are borderless and Rename Chat remains compact above the keyboard');

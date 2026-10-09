@@ -34,7 +34,7 @@ assert.ok(pages.includes("document.body.classList.add('pm-mobile-subagent-chat-l
 assert.ok(renderer.includes('function _normalizeCollapsedAgentMarkdown') && renderer.includes('_renderMobileMarkdown(markdownText)'), 'subagent responses must recover flattened Markdown headings and lists before rendering');
 assert.ok(pages.includes("window.addEventListener('prometheus:markdown-ready', onMarkdownReady)") && pages.includes("window.removeEventListener('prometheus:markdown-ready', onMarkdownReady)"), 'subagent history must re-render after the Markdown library becomes available');
 assert.ok(renderer.includes('function _mobileAgentTurnPresentation') && renderer.includes('_renderMobileFileChanges(_mobileAgentMessageFileChanges(turnPresentation))'), 'subagent bubbles must rehydrate persisted touched-file cards');
-assert.ok(renderer.includes('_renderMobileRichArtifacts(turnPresentation)') && renderer.includes('_renderMobileMediaGallery(_collectMessageMedia({'), 'subagent bubbles must render the same finalized artifacts and media as main chat');
+assert.ok(renderer.includes('_renderMobileRichArtifacts({ ...turnPresentation') && renderer.includes('_renderMobileMediaGallery(_collectMessageMedia({'), 'subagent bubbles must render the same finalized artifacts and media as main chat');
 assert.ok(pages.includes('attachStream?.(null);'), 'completed or aborted streams must be detached before route cleanup');
 
 const normalizerStart = renderer.indexOf('function _normalizeCollapsedAgentMarkdown');

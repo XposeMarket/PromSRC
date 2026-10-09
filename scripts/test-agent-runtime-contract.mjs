@@ -144,7 +144,7 @@ assert.match(executorSource, /args\?\.include_history === true/);
 assert.match(executorSource, /messages: args\?\.include_history === true/);
 assert.match(executorSource, /reasoning_effort/);
 assert.match(executorSource, /Object\.assign\(args, nestedPatch\)/);
-assert.match(executorSource, /resolved_target_type: 'standalone_subagent'/);
+assert.match(executorSource, /target_type: 'standalone_subagent'/);
 assert.match(executorSource, /success: completed/);
 assert.match(executorSource, /chat: 'chat_with_subagent'/);
 assert.match(executorSource, /delegate: 'message_subagent'/);

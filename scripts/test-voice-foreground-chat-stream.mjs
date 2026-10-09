@@ -4,13 +4,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
-const desktop = fs.readFileSync(path.join(root, 'web-ui/src/pages/ChatPage.js'), 'utf8');
+// Voice foreground worker logic was split from mobile-pages.js across these mobile modules.
+const mobile = [
+  'web-ui/src/mobile/mobile-pages.js',
+  'web-ui/src/mobile/mobile-voice-page.js',
+  'web-ui/src/mobile/mobile-chat-page-runtime.js',
+  'web-ui/src/mobile/mobile-voice-realtime-runtime.js',
+]
+  .map((rel) => fs.readFileSync(path.join(root, rel), 'utf8'))
+  .join('\n');
+// Desktop send path moved from pages/ChatPage.js into the desktop send runtime.
+const desktop = ['web-ui/src/pages/ChatPage.js', 'web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js']
+  .map((rel) => fs.readFileSync(path.join(root, rel), 'utf8'))
+  .join('\n');
 
-assert.match(mobile, /const workerClientRequestId = String\(options\.clientRequestId \|\| ''\)\.trim\(\) \|\| _newMobileClientRequestId\(targetSessionId\)/);
+// The worker request id now comes from context._newMobileClientRequestId in mobile-voice-page.js.
+assert.match(mobile, /const workerClientRequestId = String\(options\.clientRequestId \|\| ''\)\.trim\(\) \|\| (?:context\.)?_newMobileClientRequestId\(targetSessionId\)/);
 assert.match(mobile, /_voiceWorkerLocalTurn: true,\s*_clientRequestId: workerClientRequestId,/s);
 assert.match(mobile, /streamChat\(\{ message: finalText, sessionId: targetSessionId, callerContext, clientRequestId: workerClientRequestId \}/);
-assert.match(mobile, /clientRequestId: workerClientRequestId,\s*\};\s*__pmChat\.busy = true;/s);
+assert.match(mobile, /clientRequestId: workerClientRequestId,\s*\};\s*(?:context\.)?__pmChat\.busy = true;/s);
 assert.match(mobile, /String\(msg\._clientRequestId \|\| ''\)\.trim\(\) === candidateRequestId/);
 assert.match(mobile, /\['voice_foreground_worker', 'internal_watch_review'\]\.includes\(String\(msg\.messageKind \|\| ''\)\.trim\(\)\)/);
 assert.match(mobile, /if \(\(msgRequestId \|\| previousRequestId\) && \(!msgRequestId \|\| msgRequestId !== previousRequestId\)\) continue/);
