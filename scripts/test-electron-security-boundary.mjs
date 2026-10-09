@@ -71,7 +71,6 @@ const telegramSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'comms'
 const settingsRouterSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'settings.router.ts'), 'utf8');
 const serverSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'server-v2.ts'), 'utf8');
 const gatewayPortSource = fs.readFileSync(path.join(root, 'src', 'config', 'gateway-port.ts'), 'utf8');
-const selfUpdateSource = fs.readFileSync(path.join(root, 'src', 'tools', 'self-update.ts'), 'utf8');
 const canonicalUpdaterSource = fs.readFileSync(path.join(root, 'src', 'update', 'canonical-updater.ts'), 'utf8');
 const publicBuilderSource = fs.readFileSync(path.join(root, 'electron-builder-public.yml'), 'utf8');
 function FakeWebContentsView() {}
@@ -167,8 +166,11 @@ assert.doesNotMatch(cliSource, /git fetch --quiet/);
 assert.doesNotMatch(cliSource, /npm view .* version/);
 assert.match(telegramSource, /requestCanonicalUpdate/);
 assert.doesNotMatch(telegramSource, /git pull|npm install/i, 'Telegram update must not run source checkout/package-manager updates');
-assert.match(selfUpdateSource, /requestCanonicalUpdate/);
-assert.doesNotMatch(selfUpdateSource, /cmd\.exe|spawn\(|fs\.existsSync/i, 'legacy self-update must not launch or probe a detached script');
+// The Reactor-only self_update tool (src/tools/self-update.ts) was retired with the second
+// tool registry; updates now come from Settings, Telegram and the CLI, all via the canonical updater.
+assert.equal(fs.existsSync(path.join(root, 'src', 'tools', 'self-update.ts')), false, 'legacy self-update tool must stay retired');
+assert.match(settingsRouterSource, /requestCanonicalUpdate\(/, 'Settings update must use the canonical updater');
+assert.doesNotMatch(settingsRouterSource, /cmd\.exe/i, 'Settings update must not launch a detached script');
 assert.match(mainSource, /event\.sender !== mainWindow\.webContents/);
 assert.match(mainSource, /event\.senderFrame !== event\.sender\.mainFrame/);
 assert.match(mainSource, /view\.webContents !== event\.sender/);
