@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readAllToolObservations, type ToolObservation } from '../src/gateway/tool-observations.js';
-import { getToolRegistry } from '../src/tools/registry.js';
+import { ALL_TOOL_CATEGORIES, buildTools } from '../src/gateway/tool-builder.js';
 import { inferToolPerformanceFamily } from '../src/gateway/chat/tool-performance-telemetry.js';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
@@ -167,7 +167,11 @@ function outputPath(): string | undefined {
 
 ensurePrometheusExtensionRuntimeLoaded();
 const extensionNames = new Set(getExtensionRuntimeRegistry().listTools().map((tool) => tool.name));
-const currentToolNames = new Set(getToolRegistry().list().map((tool) => tool.name));
+const currentToolNames = new Set<string>(
+  buildTools({ getMCPManager: () => ({ getAllTools: () => [] }) } as any, new Set(ALL_TOOL_CATEGORIES as readonly string[]))
+    .map((definition: any) => String(definition?.function?.name || ''))
+    .filter(Boolean),
+);
 const observations = readAllToolObservations(configuredLimit());
 const report = {
   schemaVersion: 1,

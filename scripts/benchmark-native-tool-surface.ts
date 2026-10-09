@@ -1,14 +1,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { getToolRegistry, type Tool, type ToolProfile } from '../src/tools/registry.js';
+import { ALL_TOOL_CATEGORIES, buildTools } from '../src/gateway/tool-builder.js';
 import { estimateTextTokensForModel } from '../src/gateway/context/model-context.js';
 import { inferToolPerformanceFamily } from '../src/gateway/chat/tool-performance-telemetry.js';
 import { capabilityPolicyTier, resolveToolCapabilityMetadata } from '../src/gateway/tool-capabilities.js';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 
-const PROFILES: ToolProfile[] = ['minimal', 'coding', 'web', 'full', 'desktop'];
+// Surfaces of the live tool-builder (the retired ToolRegistry profiles are gone):
+// core = no categories activated, full = every category activated.
+type ToolProfile = 'core' | 'full';
+const PROFILES: ToolProfile[] = ['core', 'full'];
+const SURFACE_DEPS = { getMCPManager: () => ({ getAllTools: () => [] }) } as any;
+
+function surfaceFor(profile: ToolProfile): any[] {
+  return buildTools(SURFACE_DEPS, profile === 'core' ? new Set() : new Set(ALL_TOOL_CATEGORIES as readonly string[]));
+}
+
+type Tool = { name: string; description: string; jsonSchema: any; schema: any; capabilities?: any };
+
+function liveSurfaceRegistry() {
+  return {
+    list(): Tool[] {
+      return surfaceFor('full').map((definition: any) => ({
+        name: String(definition?.function?.name || ''),
+        description: String(definition?.function?.description || ''),
+        jsonSchema: definition?.function?.parameters,
+        schema: definition?.function?.parameters,
+      }));
+    },
+  };
+}
 const DEFAULT_SAMPLES = 20;
 
 type Distribution = {
@@ -82,15 +105,15 @@ function schemaFieldCount(tool: Tool): number {
   return Object.keys(tool.schema || {}).length;
 }
 
-function measureProfile(registry: ReturnType<typeof getToolRegistry>, profile: ToolProfile, repetitions: number): ProfileSurface {
+function measureProfile(_registry: unknown, profile: ToolProfile, repetitions: number): ProfileSurface {
   const firstStartedAt = performance.now();
-  const firstDefinitions = registry.getToolDefinitionsForChat(profile);
+  const firstDefinitions = surfaceFor(profile);
   const firstBuildMs = performance.now() - firstStartedAt;
   const warmTimings: number[] = [];
   let definitions = firstDefinitions;
   for (let index = 0; index < repetitions; index += 1) {
     const startedAt = performance.now();
-    definitions = registry.getToolDefinitionsForChat(profile);
+    definitions = surfaceFor(profile);
     warmTimings.push(performance.now() - startedAt);
   }
   const serialized = JSON.stringify(definitions);
@@ -110,7 +133,7 @@ function measureProfile(registry: ReturnType<typeof getToolRegistry>, profile: T
 function buildReport() {
   const registryAccessStartedAt = performance.now();
   ensurePrometheusExtensionRuntimeLoaded();
-  const registry = getToolRegistry();
+  const registry = liveSurfaceRegistry();
   const registryAccessMs = performance.now() - registryAccessStartedAt;
   const extensionNames = new Set(
     getExtensionRuntimeRegistry().listTools().map((tool) => String(tool.name || '').trim()).filter(Boolean),
@@ -125,7 +148,7 @@ function buildReport() {
   const definitionsByName = new Map<string, { bytes: number; tokens: number }>();
   const visibleProfilesByName = new Map<string, Set<ToolProfile>>();
   for (const profile of PROFILES) {
-    const definitions = registry.getToolDefinitionsForChat(profile);
+    const definitions = surfaceFor(profile);
     for (const definition of definitions) {
       const name = String(definition?.function?.name || '').trim();
       if (!name) continue;
@@ -177,7 +200,7 @@ function buildReport() {
       arch: process.arch,
     },
     measurementContract: {
-      scope: 'Every tool currently returned by ToolRegistry.list().',
+      scope: 'Every tool in the live tool-builder surface with all categories active (MCP excluded).',
       execution: 'Surface-only. No tool execute() function is called.',
       tokenMethod: 'estimateTextTokensForModel(..., openai) over serialized provider definitions; estimates, not billing usage.',
       privacy: 'Only names, categories, capability flags, sizes, timings, and counts are emitted; argument/result contents are excluded.',

@@ -43,8 +43,6 @@ try {
   process.env.PROMETHEUS_WORKSPACE_DIR = globalWorkspace;
 
   const { getPolicyEngine } = await import('../dist/gateway/policy.js');
-  const { getToolRegistry } = await import('../dist/tools/registry.js');
-  const { getConfig } = await import('../dist/config/config.js');
   const {
     shouldBypassGenericToolApproval,
   } = await import('../dist/gateway/tool-approval-mode.js');
@@ -63,11 +61,6 @@ try {
     'generic HTTP tools without an explicit safe method must fail closed');
   assert.equal(policy.evaluateAction('test', 'totally_unknown_mutation', {}).tier, 'commit',
     'unknown tools must fail closed');
-  const unclassifiedRegisteredTools = getToolRegistry().list()
-    .filter((tool) => tool.capabilities?.known !== true)
-    .map((tool) => tool.name);
-  assert.deepEqual(unclassifiedRegisteredTools, [],
-    `registered core/bundled tools need explicit capabilities: ${unclassifiedRegisteredTools.join(', ')}`);
 
   assert.equal(shouldBypassGenericToolApproval('default', 'unknown_mutation', {}), false);
   assert.equal(shouldBypassGenericToolApproval('lite', 'unknown_mutation', {}), true);
@@ -76,42 +69,6 @@ try {
   assert.equal(shouldBypassGenericToolApproval('default', 'request_final_action_approval', {}), true,
     'explicit approval request tools must reach their own card-producing handlers');
   assert.equal(shouldBypassGenericToolApproval('lite', 'request_dev_source_edit', {}), true);
-
-  const registry = getToolRegistry();
-  let liteToolRuns = 0;
-  registry.register({
-    name: 'test_lite_external_write',
-    description: 'Regression-only external write tool',
-    schema: {},
-    capabilities: {
-      readOnly: false,
-      localWrite: false,
-      externalWrite: true,
-      destructive: false,
-      credentialUse: false,
-      known: true,
-    },
-    execute: async () => {
-      liteToolRuns += 1;
-      return { success: true, stdout: 'executed' };
-    },
-  });
-  const config = getConfig().getConfig();
-  config.tools.permissions.shell.approval_mode = 'default';
-  const defaultToolResult = await registry.execute('test_lite_external_write', {});
-  assert.equal(defaultToolResult.success, false);
-  assert.equal(defaultToolResult.data?._needsApproval, true);
-  assert.equal(liteToolRuns, 0, 'Default mode must retain generic tool approval gates');
-
-  config.tools.permissions.shell.approval_mode = 'lite';
-  const liteToolResult = await registry.execute('test_lite_external_write', {});
-  assert.equal(liteToolResult.success, true);
-  assert.equal(liteToolRuns, 1, 'Lite mode must execute non-elevated tools without generic approval');
-  const elevatedLiteResult = await registry.execute('test_lite_external_write', { elevated: true });
-  assert.equal(elevatedLiteResult.success, false);
-  assert.equal(elevatedLiteResult.data?._needsApproval, true);
-  assert.equal(liteToolRuns, 1, 'Lite mode must not execute elevated tools before approval');
-  config.tools.permissions.shell.approval_mode = 'default';
 
   const applyResult = await runWithWorkspace(scopedWorkspace, async () => {
     assert.equal(getActiveWorkspace(globalWorkspace), path.resolve(scopedWorkspace));

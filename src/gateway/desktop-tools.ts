@@ -7319,9 +7319,9 @@ async function desktopWindowDragForeground(
 }
 
 /**
- * Single source of truth for the desktop tool name set. Used by registry
+ * Single source of truth for the desktop tool name set. Used by the desktop
  * parity checks so the gateway definitions, the chat dispatch, and the
- * ToolRegistry wrappers can never silently drift apart.
+ * wrapper action map can never silently drift apart.
  */
 export function getDesktopToolNames(): string[] {
   return getDesktopToolDefinitions().map((d: any) => d?.function?.name).filter(Boolean);

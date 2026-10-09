@@ -437,26 +437,6 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     console.warn('[Teams] Could not set team run agent fn:', e.message);
   }
 
-  // Inject team tool dependencies into the tool registry
-  try {
-    const { injectTeamToolDeps } = require('../../tools/team-tools.js');
-    injectTeamToolDeps({
-      handleManagerConversation,
-      getManagedTeam,
-      listManagedTeams,
-      broadcast: broadcastWS,
-      cronScheduler,
-      spawnAgent: runAgentTaskLazy,
-      listTeamContextReferences,
-      addTeamContextReference,
-      updateTeamContextReference,
-      deleteTeamContextReference,
-    });
-    console.log('[TeamTools] Team tool deps injected (talk_to_manager, get_team_logs, schedule_job, manage_team_goal, manage_team_context_ref).');
-  } catch (e: any) {
-    console.warn('[TeamTools] Could not inject team tool deps:', e.message);
-  }
-  startupMark('team tools deps injected');
   await yieldStartup();
 
   // CIS Phase 2: Inject analysis team deps

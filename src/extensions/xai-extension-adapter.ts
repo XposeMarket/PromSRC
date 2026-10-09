@@ -25,13 +25,6 @@ export function hasXAIConfiguredCredentials(): boolean {
   return !!process.env.XAI_API_KEY || !!getEffectiveXaiApiKey();
 }
 
-function refreshToolRegistrySnapshot(): void {
-  try {
-    const registryModule = require('../tools/registry.js') as typeof import('../tools/registry.js');
-    registryModule.refreshExtensionTools?.();
-  } catch {}
-}
-
 export function refreshXAITools(): void {
   const registry = getExtensionRuntimeRegistry();
   const hasXaiCredentials = hasXAIConfiguredCredentials();
@@ -61,5 +54,7 @@ export function refreshXAITools(): void {
     }
   }
 
-  if (changed) refreshToolRegistrySnapshot();
+  // tool-builder reads the extension runtime registry live (keyed by its revision),
+  // so no separate registry snapshot needs refreshing after a change.
+  void changed;
 }

@@ -2,7 +2,7 @@
 
 This baseline has two deliberately separate layers:
 
-1. **Surface baseline** covers every tool returned by the live `ToolRegistry`, including dynamically loaded extension tools. It records provider-definition size, estimated provider tokens, schema size, capability/policy tier, family, source, and visibility by profile. It does not execute tools.
+1. **Surface baseline** covers every tool in the live `tool-builder` surface (`buildTools`), measured for the `core` surface (no categories active) and the `full` surface (every category active). It records provider-definition size, estimated provider tokens, schema size, capability/policy tier, family, source, and visibility. It does not execute tools. (The older `ToolRegistry` profiles were retired with the Reactor; snapshots before 2026-10-09 used them and are not directly comparable.)
 2. **Execution baseline** uses explicit, safe fixtures for live calls. Mutating, destructive, credential-using, desktop-input, browser-input, and external-write tools must be opt-in and fixture-scoped before they are run.
 
 The surface layer is the complete inventory and makes tool coverage drift visible. The execution layer is where runtime latency, input/output bytes and token estimates, model-round delay, retries, errors, and process resource usage are compared before and after a change.

@@ -10,7 +10,6 @@ export { JobDatabase, getDatabase } from './db/database.js';
 export { OllamaClient, getOllamaClient } from './agents/ollama-client.js';
 
 // Tools
-export { getToolRegistry } from './tools/registry.js';
 export { shellTool } from './tools/shell.js';
 export { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool } from './tools/files.js';
 
