@@ -128,10 +128,17 @@ async function main(): Promise<void> {
       fetchCalls += 1;
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
-    const unboundedEvents = await eventsTool.execute({ deployment: 'dpl_test', limit: -1 }, vercelContext);
-    assert.equal(unboundedEvents.error, true);
-    assert.match(unboundedEvents.result, /positive number/);
-    assert.equal(fetchCalls, 0);
+    let clampedUrl = '';
+    globalThis.fetch = (async (input: any) => {
+      fetchCalls += 1;
+      clampedUrl = String(input);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    const clampedEvents = await eventsTool.execute({ deployment: 'dpl_test', limit: -1 }, vercelContext);
+    assert.ok(!clampedEvents.error, 'events limit -1 must clamp via normalizeLimit instead of failing');
+    assert.equal(fetchCalls, 1);
+    assert.match(clampedUrl, /limit=1/);
+    fetchCalls = 0;
 
     const invalidApiPath = await apiTool.execute({ path: '/projects' }, vercelContext);
     assert.equal(invalidApiPath.error, true);

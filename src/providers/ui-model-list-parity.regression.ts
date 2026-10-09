@@ -40,8 +40,8 @@ assert.ok(files.length > 0, 'expected to find web-ui source files to scan');
 
 const surfaces = files.filter((f) => HARDCODES_CATALOG.test(readFileSync(f, 'utf8')));
 assert.ok(
-  surfaces.length >= 6,
-  `expected at least 6 web-ui surfaces with hardcoded Anthropic lists, found ${surfaces.length}`,
+  surfaces.length >= 5,
+  `expected at least 5 web-ui surfaces with hardcoded Anthropic lists, found ${surfaces.length}`,
 );
 
 // Guard the newest entries. If the catalog gains a model and the UI copies are

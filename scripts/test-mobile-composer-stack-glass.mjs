@@ -8,6 +8,7 @@ const mobileCss = read('web-ui/src/styles/mobile.css');
 const generatedMobileCss = read('generated/public-web-ui/static/styles/mobile.css');
 const data = read('web-ui/src/mobile/mobile-data.js');
 const generatedData = read('generated/public-web-ui/static/mobile/mobile-data.js');
+const generatedChatPageRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js');
 const dataBase = read('web-ui/src/mobile/mobile-data-base.js');
 const generatedDataBase = read('generated/public-web-ui/static/mobile/mobile-data-base.js');
 const owners = read('web-ui/src/mobile/mobile-style-owners.js');
@@ -26,7 +27,9 @@ assert.doesNotMatch(dataBase, /stylesheet|mobile-composer-stack|mobile-liquid-gl
 assert.match(owners, /chat:\s*Object\.freeze\(\[[\s\S]*?mobile-composer-stack\.css/, 'chat must own the composer-stack stylesheet');
 assert.match(owners, /ensureMobileChatStyles\(\)/, 'chat route must expose an explicit stylesheet owner entry point');
 assert.match(pages, /import \{ ensureMobileChatStyles \} from '\.\/mobile-style-owners\.js';/, 'chat renderer must import its stylesheet owner');
-assert.match(pages, /ensureMobileChatStyles\(\);/, 'chat renderer must activate its stylesheet owner');
+// ensureMobileChatStyles() activation moved from mobile-pages.js into the chat page runtime.
+const chatPageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+assert.match(chatPageRuntime, /ensureMobileChatStyles\(\);/, 'chat renderer must activate its stylesheet owner');
 
 for (const token of [
   '--pm-composer-stack-gap',
@@ -105,13 +108,15 @@ assert.match(
   /body\.pm-mobile-active \.pm-background-spawn-dock\.is-open\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?bottom:\s*var\(--pm-composer-stack-base-bottom\);[\s\S]*?margin:\s*0;[\s\S]*?transform:\s*none;/,
   'expanded background docks must remain fixed to the composer anchor',
 );
+// overlayDockHeight geometry moved from mobile-pages.js into the chat page runtime.
 assert.match(
-  pages,
+  chatPageRuntime,
   /const overlayDockHeight = dockHeight;/,
   'chat geometry must reserve the fixed expanded background dock height',
 );
+// Generated copy of the chat geometry moved with the chat page runtime.
 assert.match(
-  generatedPages,
+  generatedChatPageRuntime,
   /const overlayDockHeight = dockHeight;/,
   'generated chat geometry must keep the fixed background dock contract',
 );

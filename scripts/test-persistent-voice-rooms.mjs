@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -8,10 +8,11 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const session = read('src/gateway/session.ts');
 const chatRouter = read('src/gateway/routes/chat.router.ts');
 const mobileApi = read('web-ui/src/mobile/mobile-api.js');
-const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
+const mobilePages = read('web-ui/src/mobile/mobile-pages.js') + '\n' + read('web-ui/src/mobile/mobile-voice-page.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
 const mobileShell = read('web-ui/src/mobile/mobile-shell.js');
-const desktop = read('web-ui/src/pages/ChatPage.js');
+// The desktop codex-bridge append-text call moved into the send-chat runtime.
+const desktop = read('web-ui/src/pages/ChatPage.js') + '\n' + read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js');
 const index = read('web-ui/index.html');
 
 assert.match(session, /interface VoiceRoomMetadata/);
@@ -33,7 +34,7 @@ assert.match(mobilePages, /pm-voice-room-file-input/);
 assert.match(mobileRouter, /#mobile\/voice\/\$\{encodeURIComponent\(openSessionId\)\}/);
 assert.match(mobileShell, /data-session-channel/);
 
-assert.match(index, /key: 'voice_room', label: 'Voice Rooms'/);
+assert.match(read('web-ui/src/legacy-desktop-bootstrap.js'), /key: 'voice_room', label: 'Voice Rooms'/);
 assert.match(desktop, /source === 'voice_room'.*startVoiceAgentRealtimeSession/s);
 assert.match(desktop, /\/api\/realtime\/codex-bridge\/append-text/);
 assert.match(desktop, /voice-room-speaker/);

@@ -183,7 +183,8 @@ function assertShippedFoldKeepsFallback(): void {
   );
   const start = source.indexOf('function foldDesktopGatewayRestartCheckpoints');
   assert.ok(start > 0, 'foldDesktopGatewayRestartCheckpoints must exist');
-  const body = source.slice(start, start + 2500);
+  const bodyEnd = source.indexOf('\nfunction ', start + 10);
+  const body = source.slice(start, bodyEnd > 0 ? bodyEnd : undefined);
   assert.ok(
     /out\.push\(checkpoint\)[\s\S]{0,80}\n\s*\}\s*\n\s*return out;/.test(body)
     || (body.match(/out\.push\(checkpoint\)/g) || []).length >= 2,

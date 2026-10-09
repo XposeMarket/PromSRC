@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 
-const source = fs.readFileSync('web-ui/index.html', 'utf8');
+const source = fs.readFileSync('web-ui/src/legacy-desktop-bootstrap.js', 'utf8');
 
 const getSessionSortTime = source.match(/function getSessionSortTime\(s\)\s*\{[\s\S]*?\n\}/)?.[0] || '';
 if (!/const sidebarOrder = Number\(s\?\.sidebarOrder\)/.test(getSessionSortTime)

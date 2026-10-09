@@ -78,7 +78,12 @@ const normalized = normalizeProductArtifactItems([
 ]);
 assert.equal(normalized.length, 3);
 assert.equal(isUsableProductArtifactItem(normalized[0]), true);
-assert.equal(isUsableProductArtifactItem(normalized[1]), false);
-assert.equal(isUsableProductArtifactItem(normalized[2]), false);
+// Since d32d766a0 (#529) a product tile needs a title + http(s) URL + any one piece of product
+// metadata, and the image itself counts: priced-but-imageless and image-only items both render.
+assert.equal(isUsableProductArtifactItem(normalized[1]), true);
+assert.equal(isUsableProductArtifactItem(normalized[2]), true);
+// Fail closed is still enforced for a bare title+link with nothing to show.
+assert.equal(isUsableProductArtifactItem({ title: 'Bare link', productUrl: 'https://shop.example/bare' }), false);
+assert.equal(normalized.some((item) => item.title === 'Invalid URL'), false, 'non-http product URLs are dropped');
 
 console.log('Phase 3 fail-closed regression tests passed.');

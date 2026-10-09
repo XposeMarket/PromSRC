@@ -17,6 +17,7 @@
     "clean:dist": "node scripts/prune-dist.js --all",
     "check:dist": "node scripts/prune-dist.js --check",
     "test:prune-dist": "node scripts/test-prune-dist.mjs",
+    "test:unwired": "node scripts/run-unwired-tests.mjs",
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",
     "build:web-production": "node scripts/build-web-ui-production.mjs",
     "build:web": "npm run check:web-ui",

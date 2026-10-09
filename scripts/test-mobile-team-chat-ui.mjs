@@ -6,6 +6,7 @@ const pages = [
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8'),
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-teams-pages.js'), 'utf8'),
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-subagent-pages.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-chat-page-runtime.js'), 'utf8'),
 ].join('\n');
 const api = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-api.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8');

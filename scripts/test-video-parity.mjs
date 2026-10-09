@@ -40,7 +40,10 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     const base = `http://127.0.0.1:${server.address().port}`;
     const u = req.url;
-    if (req.method === 'POST' && (u.startsWith('/fal-ai/') || u.startsWith('/decart/'))) {
+    if (u.startsWith('/storage/upload/initiate')) res.end(JSON.stringify({ upload_url: `${base}/storage/put/up1`, file_url: `${base}/storage/files/up1.png` }));
+    else if (req.method === 'PUT' && u.startsWith('/storage/put/')) res.end('');
+    else if (u.startsWith('/v1/account/billing')) res.end(JSON.stringify({ credits: { current_balance: 50 } }));
+    else if (req.method === 'POST' && (u.startsWith('/fal-ai/') || u.startsWith('/decart/'))) {
       let parsed = {}; try { parsed = JSON.parse(body); } catch { /* ignore */ }
       bodies.push({ endpoint: u.slice(1), body: parsed });
       const isImg = /flux|image/i.test(u);
@@ -67,7 +70,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (url, init) => {
   const s = String(url);
-  if (s.startsWith('https://queue.fal.run')) return realFetch(s.replace('https://queue.fal.run', base), init);
+  // fal storage upload (#545) + balance preflight (#601) hit rest.alpha / api.fal: serve locally, never the network.
+  if (/^https:\/\/(rest\.alpha|api)\.fal\.(ai|run)|^https:\/\/queue\.fal\.run/.test(s)) return realFetch(s.replace(/^https:\/\/(queue\.fal\.run|rest\.alpha\.fal\.ai|api\.fal\.ai)/, base), init);
   if (s.startsWith('https://api.openai.com')) return realFetch(s.replace('https://api.openai.com', base), init);
   if (/x\.ai\/|chatgpt\.com|auth\.openai\.com/.test(s)) return Promise.resolve(new Response('{"error":"blocked in test"}', { status: 401 }));
   if (/^https?:\/\/(?!127\.0\.0\.1)/.test(s)) throw new Error(`unexpected network call in test: ${s}`);
@@ -135,12 +139,16 @@ const pid = await mkProject();
   const sw = await run({ action: 'recast', projectId: pid, sourcePath: imp.assetPath, prompt: 'swap the jacket for a red one', mode: 'swap', characterId: 'char_hero', approved: true });
   await engine.waitForJobs(ws, pid, sw.jobs.map((j) => j.id), 30_000);
   const b = lastBody(/kling-video\/o1\/video-to-video\/edit/).body;
-  assert.ok(isMedia(b.video_url) && b.video_url.startsWith('data:video/mp4'), 'video_url data URI');
+  // Local footage is uploaded to fal storage and sent as an https URL (providers.toFalMedia, 039fafada #545),
+  // not a base64 data URI. The fake storage stub returns a 127.0.0.1 file_url.
+  assert.ok(isMedia(b.video_url) && /^https?:\/\//.test(b.video_url), 'video_url fal storage URL');
   assert.ok(Array.isArray(b.image_urls) && isMedia(b.image_urls[0]), 'image_urls ref');
   const mo = await run({ action: 'recast', projectId: pid, shotId: sw.shotId, prompt: 'same dance, new character', mode: 'motion', characterId: 'char_hero', approved: true });
   await engine.waitForJobs(ws, pid, mo.jobs.map((j) => j.id), 30_000);
-  const m = lastBody(/wan-vace-14b\/pose/).body;
-  assert.ok(isMedia(m.video_url) && isMedia(m.ref_image_urls[0]));
+  // Motion transfer default is now Kling 3 Pro motion-control (parity.ts DEFAULT_MODELS.recastMotion),
+  // which takes the character as image_url, not the Wan VACE ref_image_urls (stale expectation, 14ea2abd4 era).
+  const m = lastBody(/kling-video\/v3\/pro\/motion-control/).body;
+  assert.ok(isMedia(m.video_url) && isMedia(m.image_url));
   const p = project.loadProject(ws, pid);
   assert.ok(p.shots.find((s) => s.id === mo.shotId).takes.length === 1);
   const def = await run({ action: 'recast', projectId: pid, sourcePath: imp.assetPath, prompt: 'x' });
@@ -154,13 +162,14 @@ const pid = await mkProject();
   const ls = await run({ action: 'lipsync', projectId: pid, shotId, line: 'Hello there, this is synced.', approved: true });
   await engine.waitForJobs(ws, pid, ls.jobs.map((j) => j.id), 30_000);
   const b = lastBody(/sync-lipsync\/v2/).body;
-  assert.ok(b.video_url.startsWith('data:video/mp4') && b.audio_url.startsWith('data:audio/'), 'lipsync video_url + audio_url');
+  // Media now goes through fal storage (providers.toFalMedia, 039fafada #545): URLs, not data URIs.
+  assert.ok(isMedia(b.video_url) && isMedia(b.audio_url), 'lipsync video_url + audio_url');
   const s = project.loadProject(ws, pid).shots.find((x) => x.id === shotId);
   assert.equal(s.selectedTakeId, s.takes[s.takes.length - 1].id, 'lipsync take selected');
   const tp = await run({ action: 'talking_photo', projectId: pid, imagePath: 'uploads/face.png', line: 'Hi, I am a talking photo.', approved: true });
   await engine.waitForJobs(ws, pid, tp.jobs.map((j) => j.id), 30_000);
   const t = lastBody(/omnihuman\/v1\.5/).body;
-  assert.ok(t.image_url.startsWith('data:image/png') && t.audio_url.startsWith('data:audio/'));
+  assert.ok(isMedia(t.image_url) && isMedia(t.audio_url), 'talking photo image_url + audio_url');
   await assert.rejects(run({ action: 'talking_photo', projectId: pid, imagePath: 'uploads/face.png' }), /line/);
   ok('lipsync (video_url+audio_url, auto-TTS line, new take selected) + talking photo (image_url+audio_url)');
 }
@@ -175,7 +184,7 @@ const pid = await mkProject();
   const fo = await run({ action: 'foley', projectId: pid, shotIds, approved: true });
   await engine.waitForJobs(ws, pid, fo.jobs.map((j) => j.id), 30_000);
   const fb = lastBody(/mmaudio-v2/).body;
-  assert.ok(fb.video_url.startsWith('data:video/mp4') && /foley/i.test(fb.prompt));
+  assert.ok(isMedia(fb.video_url) && /foley/i.test(fb.prompt));
   const i = project.loadProject(ws, pid).shots.findIndex((s) => s.id === shotIds[0]);
   assert.equal(project.loadProject(ws, pid).shots[i].takes.length, before[i] + 2);
   ok('upscale (topaz factor) + foley (mmaudio) add new selected takes');
