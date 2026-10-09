@@ -40,7 +40,7 @@ import { executeDownloadMedia, executeDownloadUrl } from '../../tools/download-t
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-analysis';
 import { executeGenerateImage } from '../../tools/generate-image';
 import { executeGenerateVideo } from '../../tools/generate-video';
-import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
+import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope, isPathInWorkspace } from '../../tools/workspace-context';
 import { isCanonicalPathInsideSync } from '../../tools/workspace-boundary';
 import { jsonEditGuardError } from '../../tools/json-edit-guard';
 import { createWorkspaceSnapshot, listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot, toSnapshotRef } from '../../workspace-history';
@@ -340,8 +340,9 @@ import {
 } from '../memory-index/index';
 import { searchMemoryInWorker } from '../memory-index/search-worker-client';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
-import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait, listBackgroundStatuses } from '../tasks/task-runner';
+import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from '../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from '../tasks/spawn-tool-categories-arg';
+import { resolveBackgroundWorkDirArg } from './background-work-dir';
 import { saveSiteShortcut } from '../site-shortcuts';
 import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
@@ -4195,12 +4196,19 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         .replace(/[^a-z0-9_-]+/gi, '-')
         .replace(/^-+|-+$/g, '')
         .slice(0, 48) || 'default';
-      const dir = path.resolve(workspacePath, 'temp', 'tool-results');
+      // Spool into the Prometheus workspace even when this run is scoped to a
+      // different work dir (a background agent in a repo worktree), so overflow
+      // files never show up as untracked changes in that repo.
+      const spoolRoot = hasActiveWorkspaceScope()
+        ? path.resolve(getConfig().getWorkspacePath() || workspacePath)
+        : path.resolve(workspacePath);
+      const dir = path.resolve(spoolRoot, 'temp', 'tool-results');
       fs.mkdirSync(dir, { recursive: true });
       const file = `${Date.now()}-${safeSession}-${safeTool}.txt`;
       const absPath = path.join(dir, file);
       fs.writeFileSync(absPath, output, 'utf-8');
-      return path.relative(workspacePath, absPath).replace(/\\/g, '/');
+      const rel = path.relative(path.resolve(workspacePath), absPath);
+      return (rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : absPath).replace(/\\/g, '/');
     } catch {
       return null;
     }
@@ -14764,9 +14772,12 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           const requestedResourceIds = Array.isArray(args.resource_ids || args.resourceIds)
             ? (args.resource_ids || args.resourceIds).map((value: unknown) => String(value || '').trim()).filter(Boolean).slice(0, 100)
             : [];
+          const workDirScope = resolveBackgroundWorkDirArg(args.work_dir ?? args.workDir ?? args.cwd, workspacePath);
+          if (workDirScope.error) return { name, args, result: `background_spawn error: ${workDirScope.error}`, error: true };
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
+            ...(workDirScope.workDir ? { workDir: workDirScope.workDir, allowedWorkPaths: workDirScope.allowedWorkPaths } : {}),
             resourceIds: getResourceStore(workspacePath)
               .listThreadResources(sessionId, { limit: 100, resourceIds: requestedResourceIds })
               .map((resource) => resource.id),
@@ -14798,7 +14809,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         }
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
-        return { name, args, result: JSON.stringify(status), error: false };
+        return { name, args, result: JSON.stringify(compactBackgroundToolPayload(status)), error: false };
       }
 
       case 'background_steer': {
@@ -14822,7 +14833,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             spawnerSessionId: sessionId,
             timeoutMs: args.timeout_ms ?? args.wait_ms,
           });
-          return { name, args, result: JSON.stringify(result), error: false };
+          return { name, args, result: JSON.stringify(compactBackgroundToolPayload(result)), error: false };
         } catch (err: any) {
           return { name, args, result: `background_wait error: ${err.message}`, error: true };
         }

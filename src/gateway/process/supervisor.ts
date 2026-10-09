@@ -12,6 +12,7 @@ import type { TerminalWorkspaceChangeResult } from '../coding/terminal-change-tr
 import { createManagedTerminalWorkspaceTracker, type ManagedTerminalWorkspaceTracker } from './terminal-workspace-worker-client';
 import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
 import { ProcessOutputBatcher } from './output-batcher';
+import { withNpmShimsOnPath } from './npm-shims';
 import { claimWarmPowerShell, prewarmPowerShell, sendWarmScript } from './warm-powershell';
 import type {
   ManagedProcessRun,
@@ -123,8 +124,12 @@ export function resolveCommandEnv(): NodeJS.ProcessEnv {
   const extra = readPersistedWindowsPath().split(';')
     .map((entry) => entry.trim())
     .filter((entry) => entry && !seen.has(entry.toLowerCase()) && (seen.add(entry.toLowerCase()), true));
-  if (!extra.length) return process.env;
-  return { ...process.env, [pathKey]: [current, ...extra].filter(Boolean).join(';') };
+  const merged = [current, ...extra].filter(Boolean).join(';');
+  // Absolute-path npx/npm shims first, so `"npx.cmd"` spawned by name works
+  // from any cwd (stock shims resolve npm via %~dp0, which breaks there).
+  const withShims = withNpmShimsOnPath(merged);
+  if (withShims === current) return process.env;
+  return { ...process.env, [pathKey]: withShims };
 }
 
 // ---------------------------------------------------------------------------

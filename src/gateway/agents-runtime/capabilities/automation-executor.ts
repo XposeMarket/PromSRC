@@ -1,6 +1,7 @@
 import path from 'path';
-import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait, listBackgroundStatuses } from '../../tasks/task-runner';
+import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait, compactBackgroundToolPayload, listBackgroundStatuses } from '../../tasks/task-runner';
 import { normalizeSpawnToolCategoriesArg } from '../../tasks/spawn-tool-categories-arg';
+import { resolveBackgroundWorkDirArg } from '../background-work-dir';
 import {
   automationDashboardTool,
   scheduleJobDetailTool,
@@ -102,9 +103,12 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           const resourceIds = getResourceStore(workspacePath)
             .listThreadResources(sessionId, { limit: 100, resourceIds: requestedResourceIds })
             .map((resource) => resource.id);
+          const workDirScope = resolveBackgroundWorkDirArg(args.work_dir ?? args.workDir ?? args.cwd, workspacePath);
+          if (workDirScope.error) return { name, args, result: `background_spawn error: ${workDirScope.error}`, error: true };
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
+            ...(workDirScope.workDir ? { workDir: workDirScope.workDir, allowedWorkPaths: workDirScope.allowedWorkPaths } : {}),
             resourceIds,
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
@@ -134,7 +138,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         }
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
-        return { name, args, result: JSON.stringify(status), error: false };
+        return { name, args, result: JSON.stringify(compactBackgroundToolPayload(status)), error: false };
       }
 
       case 'background_steer': {
@@ -158,7 +162,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             spawnerSessionId: sessionId,
             timeoutMs: args.timeout_ms ?? args.wait_ms,
           });
-          return { name, args, result: JSON.stringify(result), error: false };
+          return { name, args, result: JSON.stringify(compactBackgroundToolPayload(result)), error: false };
         } catch (err: any) {
           return { name, args, result: `background_wait error: ${err.message}`, error: true };
         }

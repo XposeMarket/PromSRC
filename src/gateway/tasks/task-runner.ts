@@ -21,6 +21,7 @@ import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { addMessage, getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { normalizeToolCategory } from '../tool-builder';
+import { runWithWorkspace } from '../../tools/workspace-context';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -87,6 +88,8 @@ export interface EphemeralBackgroundStatus {
   spawnerSessionId?: string;
   backgroundSessionId?: string;
   resourceIds?: string[];
+  /** Absolute working directory the worker resolves relative paths against, when set. */
+  workDir?: string;
   /** Full prompt is only returned from the spawn call; polls carry promptPreview. */
   prompt?: string;
   promptPreview?: string;
@@ -129,6 +132,14 @@ export interface EphemeralBackgroundSpawnInput {
    * the worker needs up front. The worker can still call request_tool_category.
    */
   toolCategories?: string[];
+  /**
+   * Absolute working directory for the worker (for example a promsrc-pr
+   * worktree). Relative file paths and workspace_run's default cwd resolve
+   * here instead of the spawner's workspace. Validated by the caller.
+   */
+  workDir?: string;
+  /** Extra roots the worker may still read/write besides workDir (spawner workspace, configured allowed paths). */
+  allowedWorkPaths?: string[];
 }
 
 export interface EphemeralBackgroundJoinResult {
@@ -170,6 +181,8 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promptPreview?: string;
   fileChanges?: any;
   resourceIds?: string[];
+  workDir?: string;
+  allowedWorkPaths?: string[];
   backgroundStream: BackgroundAgentStreamState;
 }
 
@@ -596,6 +609,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
+          // An explicit work_dir (e.g. a promsrc-pr worktree) overrides the
+          // inherited workspace so relative paths and default cwd land there.
+          if (record.workDir) setWorkspace(sessionId, record.workDir);
           try {
             getResourceStore(parentWorkspace || getConfig().getWorkspacePath()).copyThreadResources(
               spawnerSessionId,
@@ -724,14 +740,21 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         ? `Pre-activated tool categories for this run: ${grantedToolCategories.join(', ')}. Any other category is NOT loaded.`
         : 'No optional tool categories are pre-activated for this run: you have CORE TOOLS ONLY (file read/search/web). Terminal/shell (workspace_run), file writing, browser, and desktop tools are NOT loaded.';
 
+      const workDirNotice = record.workDir
+        ? ` WORKING DIRECTORY: ${record.workDir}. Relative file paths and workspace_run's default cwd resolve there (not the main Prometheus workspace). Use absolute paths only for files outside it.`
+        : '';
+      const runHandleChat = (fn: () => Promise<any>): Promise<any> => record.workDir
+        ? runWithWorkspace(record.workDir, fn, record.allowedWorkPaths)
+        : fn();
+
       try {
-        const chatResult = await handleChat(
+        const chatResult = await runHandleChat(() => handleChat(
           prompt,
           sessionId,
           sendSSE,
           undefined,   // extra
           abortSignal,
-          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}, speed=${record.speed || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.`,
+          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}, speed=${record.speed || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.${workDirNotice}`,
           record.model,   // modelOverride
           'background_task',
           undefined,   // toolFilter — full tool access
@@ -742,7 +765,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.providerId,
           undefined,
           { admissionLease: runtimeAdmissionLease || undefined, skipAutomaticToolCategoryActivation: true, ...(record.speed ? { speedOverride: record.speed } : {}) },
-        );
+        ));
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
@@ -864,6 +887,10 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
+  record.workDir = String(input?.workDir || '').trim() || undefined;
+  record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
+    ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
+    : undefined;
   record.resourceIds = Array.isArray(input?.resourceIds)
     ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
     : undefined;
@@ -881,6 +908,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     spawnerSessionId: record.spawnerSessionId,
     backgroundSessionId: backgroundRuntimeSessionId(record),
     resourceIds: record.resourceIds,
+    ...(record.workDir ? { workDir: record.workDir } : {}),
     prompt,
     promptPreview: record.promptPreview,
     fileChanges: record.fileChanges,
@@ -927,6 +955,47 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
 }
 
 export const backgroundProgress = backgroundStatus;
+
+const TOOL_PAYLOAD_MAX_FILE_CHANGES = 40;
+
+/**
+ * Tool-facing view of a background agent's file changes: counts and paths only.
+ * The full `fileChanges` (with per-file `diffPreview`) stays on the record and
+ * the HTTP/UI status endpoints; inlining it into a model tool result put ~40 KB
+ * of diffs into the parent context on a single wait.
+ */
+export function compactBackgroundFileChanges(fileChanges: any): any {
+  if (!fileChanges || typeof fileChanges !== 'object') return fileChanges;
+  const files = Array.isArray(fileChanges.files) ? fileChanges.files : [];
+  const compactFiles = files.slice(0, TOOL_PAYLOAD_MAX_FILE_CHANGES).map((file: any) => ({
+    path: String(file?.displayPath || file?.path || ''),
+    status: file?.status,
+    insertions: Number(file?.insertions) || 0,
+    deletions: Number(file?.deletions) || 0,
+    ...(file?.oldPath ? { oldPath: String(file.oldPath) } : {}),
+    ...(file?.binary ? { binary: true } : {}),
+  }));
+  return {
+    summary: fileChanges.summary || {
+      fileCount: files.length,
+      insertions: files.reduce((n: number, f: any) => n + (Number(f?.insertions) || 0), 0),
+      deletions: files.reduce((n: number, f: any) => n + (Number(f?.deletions) || 0), 0),
+    },
+    files: compactFiles,
+    ...(files.length > compactFiles.length ? { omittedFiles: files.length - compactFiles.length } : {}),
+    note: 'Diffs omitted from tool results; read the files or run git diff for details.',
+  };
+}
+
+/** Strip diff bodies from any background status/wait/join payload before it is returned to a model. */
+export function compactBackgroundToolPayload<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object') return payload;
+  const value: any = Array.isArray(payload) ? payload.map((entry) => compactBackgroundToolPayload(entry)) : { ...(payload as any) };
+  if (Array.isArray(payload)) return value;
+  if (value.fileChanges) value.fileChanges = compactBackgroundFileChanges(value.fileChanges);
+  if (Array.isArray(value.statuses)) value.statuses = value.statuses.map((entry: any) => compactBackgroundToolPayload(entry));
+  return value;
+}
 
 export function backgroundAgentStreamReplay(backgroundId: string, after = 0): {
   id: string;

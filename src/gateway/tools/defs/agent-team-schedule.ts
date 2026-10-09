@@ -1529,6 +1529,10 @@ export function getAgentTeamScheduleTools(): any[] {
               items: { type: 'string' },
               description: 'For spawn: tool categories the worker starts with (e.g. ["workspace_write"], ["browser_automation"]). Workers get core tools only plus these; the task prompt is NOT keyword-scanned for categories, so declare what the job needs. The worker can still call request_tool_category.',
             },
+            work_dir: {
+              type: 'string',
+              description: 'For spawn: absolute working directory for the worker, e.g. a git worktree (C:\\Users\\...\\promsrc-pr\\my-fix). Relative paths and workspace_run default cwd resolve there; the worker keeps access to your workspace for reports. Must be inside a directory you can already access.',
+            },
           },
         },
       },
@@ -1562,6 +1566,7 @@ export function getAgentTeamScheduleTools(): any[] {
             timeout_ms: { type: 'number', description: 'Optional wait cap used by timeout-based policies. Default 120000.' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for tracking/grouping.' },
             resource_ids: { type: 'array', items: { type: 'string' }, description: 'Optional explicit resource IDs to authorize for this worker. If omitted, no thread resources are inherited.' },
+            work_dir: { type: 'string', description: 'Optional absolute working directory for the worker (e.g. a git worktree). Relative paths and workspace_run default cwd resolve there.' },
             model: { type: 'string', description: 'Optional provider model ID, for example gpt-5.6-sol or gpt-5.6-luna.' },
             provider: { type: 'string', description: 'Optional provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },
