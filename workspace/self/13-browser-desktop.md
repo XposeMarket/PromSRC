@@ -9,7 +9,7 @@
 - Browser interaction modes include agent, copilot, and teach. Teach captures steps for later verification; copilot is collaborative rather than silently taking over the user's workflow.
 - For a login wall, navigate to the site's login page, hand control to the user through `request_browser_login`, then re-observe after they confirm. Never ask them to type credentials into chat.
 - Browser sessions are shared for subagents and the open chat panel follows the active thread (recent source change); avoid creating duplicate unrelated profiles.
-- Desktop automation is a distinct native surface: `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, and `desktop_macro` are backed by `src/gateway/desktop-wrappers.ts` and `src/tools/desktop.ts`.
+- Desktop automation is a distinct native surface: `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, and `desktop_macro` are backed by `src/gateway/desktop-wrappers.ts` and `src/gateway/desktop-tools.ts`.
 - Desktop window focus, coordinates, keyboard input, and macro replay are stateful. Capture a fresh screen before acting on a changed screen; use small, verifiable action batches.
 - Direct media work uses `download_url`/`download_media` and `analyze_image`/`analyze_video`. Use browser automation for a download initiated by a webpage; use media-assets tools for a known URL/file.
 - Browser, desktop, and media-assets categories are separately provisioned. Do not assume that a tool available in one category is present in another.
@@ -25,7 +25,7 @@
 | User login handoff | `request_browser_login` runtime card | User types secrets directly into the browser and confirms; never transcribe them. |
 | Browser-backed integrations | `src/connections/adapters/browser-session.ts` | Connection setup may rely on the in-app browser session. |
 | Desktop gateway surface | `src/gateway/desktop-wrappers.ts` → `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro` | Prometheus wrappers dispatch to native desktop helpers. |
-| Desktop implementation | `src/tools/desktop.ts` | Native OS input/screen/window/app/macro capabilities. |
+| Desktop implementation | `src/gateway/desktop-tools.ts` | Native OS input/screen/window/app/macro capabilities (granular handlers behind the wrappers). |
 | Desktop native helper | `src/gateway/desktop-tools.ts` | Helper/process integration, distinct from browser automation. |
 | Download URL | `src/gateway/tools/defs/file-web-memory.ts` → `download_url` | Direct remote file download; GitHub blob URLs are rewritten to raw files. |
 | Download supported-page media | `src/gateway/tools/defs/file-web-memory.ts` → `download_media` | Uses yt-dlp for supported media pages. |
@@ -99,7 +99,7 @@ Use `browser_extract` for page content, not for actions. Use a screenshot when e
 ## How to change it safely
 - Search [`generated/tests.md`](generated/tests.md) for browser, desktop, media-analysis, download, and tool-category regressions before editing.
 - Browser changes: inspect `src/gateway/browser-tools.ts` and its targeted browser-session/continuity regressions. Test session selection, page observation, navigation, and login continuation in a fresh in-app browser session.
-- Desktop changes: inspect `src/gateway/desktop-wrappers.ts`, `src/gateway/desktop-tools.ts`, and `src/tools/desktop.ts`; run focused desktop regressions and verify screen/window/input behavior with a non-destructive app.
+- Desktop changes: inspect `src/gateway/desktop-wrappers.ts` and `src/gateway/desktop-tools.ts`; run focused desktop regressions and verify screen/window/input behavior with a non-destructive app.
 - Media asset changes: inspect `src/gateway/tools/defs/file-web-memory.ts`, `src/tools/media-analysis.ts`, or `src/tools/download-tools.ts` as relevant; test known URL, supported media page and local analysis separately.
 - Keep source edits in an isolated PR worktree. Do not rebuild or modify the dirty live PromSRC checkout while documenting or changing this surface.
 - Live verification should use a fresh screenshot, explicit active target, and harmless action first. Confirm the resulting visual state before claiming a workflow completed.

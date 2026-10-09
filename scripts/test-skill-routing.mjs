@@ -6,7 +6,12 @@ import path from 'node:path';
 process.env.PROMETHEUS_SKILL_ROUTING_MODE = 'legacy';
 
 const { SkillsManager, rankSkillMatches } = await import('../dist/gateway/skills-runtime/skills-manager.js');
-const { executeSkillRead } = await import('../dist/tools/skills.js');
+const { skillsCapabilityExecutor } = await import('../dist/gateway/agents-runtime/capabilities/skills-executor.js');
+// skill_read through the live capability executor (the old src/tools/skills.ts copy is retired).
+const executeSkillRead = async (args, skillsManager) => {
+  const r = await skillsCapabilityExecutor.execute({ name: 'skill_read', args, workspacePath: '', deps: { skillsManager }, sessionId: 'skill_routing_test' });
+  return { success: !r.error, stdout: String(r.result || '') };
+};
 const { submitSkillGardenerCandidate } = await import('../dist/gateway/brain/skill-episodes.js');
 const { runSkillCurator, listSkillCuratorSuggestions, getSkillCuratorStatus } = await import('../dist/gateway/skills-runtime/skill-curator.js');
 

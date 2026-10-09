@@ -1,48 +1,48 @@
 import assert from 'node:assert/strict';
-import { getToolRegistry, type ToolProfile } from '../src/tools/registry.js';
+import { ALL_TOOL_CATEGORIES, buildTools } from '../src/gateway/tool-builder.js';
 import { capabilityPolicyTier, resolveToolCapabilityMetadata } from '../src/gateway/tool-capabilities.js';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
-import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 
-const profiles: ToolProfile[] = ['minimal', 'coding', 'web', 'full', 'desktop'];
-
+// Validates the live model-facing tool surface built by tool-builder.buildTools
+// (the one main chat, subagents, teams and automations all use). The retired
+// src/tools/registry.ts profiles no longer exist.
 ensurePrometheusExtensionRuntimeLoaded();
-const registry = getToolRegistry();
-const tools = registry.list();
-const names = tools.map((tool) => tool.name);
-
-assert.ok(tools.length > 0, 'the native tool registry must not be empty');
-assert.equal(new Set(names).size, names.length, 'registered tool names must be unique');
-
-for (const tool of tools) {
-  assert.match(tool.name, /^[^\s]+$/, `tool name must be non-empty: ${tool.name}`);
-  assert.equal(typeof tool.description, 'string', `description must be a string: ${tool.name}`);
-  assert.equal(typeof tool.execute, 'function', `execute must be callable: ${tool.name}`);
-  assert.equal(typeof tool.schema, 'object', `schema must be an object: ${tool.name}`);
-  const capabilities = resolveToolCapabilityMetadata(tool.name, tool.capabilities);
-  assert.ok(['read', 'propose', 'commit'].includes(capabilityPolicyTier(capabilities)));
+const deps = { getMCPManager: () => ({ getAllTools: () => [] }) } as any;
+const surfaces: Record<string, any[]> = {
+  core: buildTools(deps, new Set()),
+  all: buildTools(deps, new Set(ALL_TOOL_CATEGORIES as readonly string[])),
+};
+for (const category of ALL_TOOL_CATEGORIES) {
+  surfaces[`category:${category}`] = buildTools(deps, new Set([category]));
 }
 
-const extensionNames = getExtensionRuntimeRegistry().listTools().map((tool) => tool.name);
-for (const extensionName of extensionNames) {
-  assert.ok(names.includes(extensionName), `extension tool is missing from ToolRegistry: ${extensionName}`);
-}
+assert.ok(surfaces.core.length > 0, 'the core tool surface must not be empty');
+assert.ok(surfaces.all.length > surfaces.core.length, 'categories must add tools beyond core');
 
-for (const profile of profiles) {
-  const definitions = registry.getToolDefinitionsForChat(profile);
-  const definitionNames = definitions.map((definition: any) => String(definition?.function?.name || ''));
-  assert.equal(new Set(definitionNames).size, definitionNames.length, `duplicate provider names in ${profile}`);
+for (const [label, definitions] of Object.entries(surfaces)) {
+  const names = definitions.map((definition: any) => String(definition?.function?.name || ''));
+  assert.equal(new Set(names).size, names.length, `duplicate provider names in ${label}`);
   for (const definition of definitions) {
-    assert.equal(definition?.type, 'function', `provider definition type missing in ${profile}`);
-    assert.match(String(definition?.function?.name || ''), /^[^\s]+$/, `provider name missing in ${profile}`);
-    assert.equal(typeof definition?.function?.description, 'string', `provider description missing in ${profile}`);
-    assert.equal(typeof definition?.function?.parameters, 'object', `provider parameters missing in ${profile}`);
+    const name = String(definition?.function?.name || '');
+    assert.equal(definition?.type, 'function', `provider definition type missing in ${label}`);
+    assert.match(name, /^[^\s]+$/, `provider name missing in ${label}`);
+    assert.equal(typeof definition?.function?.description, 'string', `description missing: ${name}`);
+    assert.equal(typeof definition?.function?.parameters, 'object', `parameters missing: ${name}`);
+    const tier = capabilityPolicyTier(resolveToolCapabilityMetadata(name));
+    assert.ok(['read', 'propose', 'commit'].includes(tier), `bad policy tier for ${name}: ${tier}`);
+  }
+}
+
+const coreNames = new Set(surfaces.core.map((definition: any) => definition.function.name));
+for (const [label, definitions] of Object.entries(surfaces)) {
+  for (const name of coreNames) {
+    assert.ok(definitions.some((definition: any) => definition.function.name === name), `${label} dropped core tool ${name}`);
   }
 }
 
 console.log(JSON.stringify({
   ok: true,
-  registeredToolCount: tools.length,
-  extensionToolCount: extensionNames.length,
-  profiles: Object.fromEntries(profiles.map((profile) => [profile, registry.getToolDefinitionsForChat(profile).length])),
+  coreToolCount: surfaces.core.length,
+  allToolCount: surfaces.all.length,
+  categories: ALL_TOOL_CATEGORIES.length,
 }));

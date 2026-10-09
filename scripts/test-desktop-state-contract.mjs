@@ -9,7 +9,6 @@ const desktop = await load('dist/gateway/desktop-tools.js');
 const wrappers = await load('dist/gateway/desktop-wrappers.js');
 const cancellation = await load('dist/gateway/desktop-cancellation.js');
 const background = await load('dist/gateway/desktop-background.js');
-const desktopToolDefs = await load('dist/tools/desktop.js');
 
 const sampleWindow = { handle: 987654, pid: 4321, processStartTime: 1_725_000_123_456 };
 const token = desktop.createDesktopWindowToken(sampleWindow);
@@ -67,10 +66,11 @@ const closeByApp = wrappers.normalizeDesktopWrapperTool('desktop_apps', {
 });
 assert.equal(closeByApp.args.name, 'Calculator');
 
-const atomicSchema = desktopToolDefs.desktopAccessibilityActionTool.jsonSchema;
-assert.ok(atomicSchema.properties.atomic, 'compatibility schema must preserve atomic routing marker');
-assert.ok(atomicSchema.properties.automation_id, 'compatibility schema must preserve semantic selectors');
-assert.ok(atomicSchema.properties.match_mode, 'compatibility schema must preserve visible-text matching mode');
+const atomicSchema = wrappers.getDesktopWrapperToolDefinitions()
+  .find((def) => def?.function?.name === 'desktop_window')?.function?.parameters;
+assert.ok(atomicSchema?.properties?.atomic, 'desktop_window schema must preserve atomic routing marker');
+assert.ok(atomicSchema.properties.automation_id, 'desktop_window schema must preserve semantic selectors');
+assert.ok(atomicSchema.properties.match_mode, 'desktop_window schema must preserve visible-text matching mode');
 assert.ok(!atomicSchema.required?.includes('state_id'), 'atomic action must not require a preexisting state_id');
 
 const invalidKeyStarted = performance.now();

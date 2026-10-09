@@ -4,7 +4,12 @@ import path from 'node:path';
 
 const repo = path.resolve(import.meta.dirname, '..');
 const { SkillsManager } = await import('../dist/gateway/skills-runtime/skills-manager.js');
-const { executeSkillRead } = await import('../dist/tools/skills.js');
+const { skillsCapabilityExecutor } = await import('../dist/gateway/agents-runtime/capabilities/skills-executor.js');
+// skill_read through the live capability executor (the old src/tools/skills.ts copy is retired).
+const executeSkillRead = async (args, skillsManager) => {
+  const r = await skillsCapabilityExecutor.execute({ name: 'skill_read', args, workspacePath: '', deps: { skillsManager }, sessionId: 'self_repair_boundary_test' });
+  return { success: !r.error, stdout: String(r.result || '') };
+};
 const manager = new SkillsManager(path.join(repo, 'workspace', 'skills'));
 manager.scanSkills();
 

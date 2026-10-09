@@ -30,8 +30,12 @@ for (const retired of ['src/agents/reactor.ts', 'src/agents/spawner.ts', 'src/ag
 }
 const startupSrc = fs.readFileSync(path.join(root, 'src/gateway/core/startup.ts'), 'utf8');
 assert.doesNotMatch(startupSrc, /agents\/spawner/, 'startup must not load the Reactor spawner');
-assert.equal((startupSrc.match(/spawnAgent: runAgentTaskLazy/g) || []).length, 2,
-  'Telegram dispatch and team schedule_job run_now must both use runAgentTaskOnce');
+assert.equal((startupSrc.match(/spawnAgent: runAgentTaskLazy/g) || []).length, 1,
+  'Telegram dispatch must use runAgentTaskOnce');
+// team-tools.ts (Reactor-only team tools) was retired with the second tool registry;
+// live schedule_job run_now goes through automation-executor instead.
+assert.doesNotMatch(startupSrc, /tools\/team-tools|injectTeamToolDeps/, 'startup must not load the retired team-tools module');
+assert.equal(fs.existsSync(path.join(root, 'src/tools/registry.ts')), false, 'the second tool registry must stay retired');
 
 try {
   const { getConfig } = await load('dist/config/config.js');

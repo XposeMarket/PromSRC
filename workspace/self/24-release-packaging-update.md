@@ -10,7 +10,7 @@
 - `release` runs the public Windows build then Electron Builder's publish operation; publishing is externally visible and requires the release owner/process.
 - Public desktop prep includes backend compilation, extension descriptors, public web UI preparation/sync, Electron native patching and helper build.
 - `npm run sync:web-ui` syncs/checks UI sources but does not itself package a desktop application.
-- **The auto-update path is live:** `src/update/canonical-updater.ts` (compiled to `dist/update/canonical-updater.js`) holds a file-based update request/status/lock protocol that `electron/main.js` loads and drives with `electron-updater`'s `autoUpdater`. Requests come from the `self_update` tool (`src/tools/self-update.ts`), the Telegram channel, and the CLI. `server-v2.ts` runs `evaluateUpdatePreflight()`.
+- **The auto-update path is live:** `src/update/canonical-updater.ts` (compiled to `dist/update/canonical-updater.js`) holds a file-based update request/status/lock protocol that `electron/main.js` loads and drives with `electron-updater`'s `autoUpdater`. Requests come from Settings (`settings.router.ts`), the Telegram channel, and the CLI. `server-v2.ts` runs `evaluateUpdatePreflight()`.
 - The read-only source checkout had unrelated dirty generated public-web files. Never clean/build over those without an explicitly owned clean tree.
 - Use `verify:public-release` and platform-specific verifiers after packaging; check metadata/artifacts rather than only trusting builder exit code.
 
