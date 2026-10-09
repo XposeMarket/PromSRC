@@ -43,8 +43,10 @@ export async function createManagedTerminalWorkspaceTracker(
 ): Promise<ManagedTerminalWorkspaceTracker | null> {
   const runId = String(input.runId || '').trim();
   if (!runId) return null;
+  let scopedWorkspacePath = path.resolve(input.workspacePath);
   try {
-    const result = await runSerial<{ active: boolean }>('begin', { runId, input });
+    const result = await runSerial<{ active: boolean; workspacePath?: string }>('begin', { runId, input });
+    if (result?.active && result.workspacePath) scopedWorkspacePath = path.resolve(result.workspacePath);
     if (!result?.active) {
       if (activeTrackers === 0) broker.unref();
       return null;
@@ -57,7 +59,7 @@ export async function createManagedTerminalWorkspaceTracker(
   }
   let finalized = false;
   return {
-    workspacePath: path.resolve(input.workspacePath),
+    workspacePath: scopedWorkspacePath,
     async finalize() {
       if (finalized) return null;
       finalized = true;

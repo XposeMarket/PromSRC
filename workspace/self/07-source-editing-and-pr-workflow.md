@@ -58,7 +58,8 @@ The following repository workflow is the owner's standing local process. Tool im
 
 ### Build and sync scripts (verified in `package.json`)
 - `npm run build` = `npm run build:backend && npm run build:web`.
-- `npm run build:backend` runs `tsc`, then `scripts/copy-creative-renderers.js`, `scripts/copy-runtime-prompt-assets.js`, and `scripts/copy-extension-descriptors.js`.
+- `npm run build:backend` first runs `scripts/prune-dist.js` (removes `dist/` files whose source no longer exists, keeping tsc's incremental state), then `tsc`, then `scripts/copy-creative-renderers.js`, `scripts/copy-runtime-prompt-assets.js`, and `scripts/copy-extension-descriptors.js`.
+- Release builds (`build:win`, `build:mac`, `prepare:public:desktop`) start with `npm run clean:dist` (deletes `dist/` entirely) so packages never ship compiled copies of retired modules. `npm run check:dist` reports orphaned `dist/` files without changing anything.
 - `npm run build:web` is currently `npm run check:web-ui`.
 - `npm run sync:web-ui` runs `build:thinking-orb`, `scripts/prepare-public-build.js --web-only`, then `check:web-ui`.
 - `npm run check:web-ui` runs `scripts/check-public-web-ui-sync.js` and `scripts/check-web-ui-module-globals.mjs`.

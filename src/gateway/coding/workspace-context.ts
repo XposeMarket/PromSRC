@@ -10,6 +10,7 @@ import { listProposals } from '../proposals/proposal-store';
 import { getSession, sessionExists } from '../session';
 import { listTaskSummaries } from '../tasks/task-store';
 import { getProcessSupervisor } from '../process/supervisor';
+import { readBackgroundSpawnReceipts } from '../tasks/background-spawn-continuity';
 import { getCodingRepositorySnapshot, resolveCodingRoot } from './workspace-session';
 
 export type CodingScope = 'thread' | 'project';
@@ -328,8 +329,36 @@ type SessionFileChange = {
   diffPreview?: string;
 };
 
-function readSessionFileChanges(sessionId: string, workspaceRoot: string, targetPath = ''): SessionFileChange[] {
+/**
+ * Sessions whose file changes belong to this thread: background agents it
+ * spawned (background_<id>) and tasks/subagents it started. Coding work is
+ * mostly done by those workers, so without this roll-up the parent thread's
+ * Source panel stayed empty while an agent edited a whole repo.
+ */
+export function childSessionIdsForThread(sessionId: string): string[] {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return [];
+  const ids = new Set<string>();
+  try {
+    for (const receipt of readBackgroundSpawnReceipts()) {
+      if (receipt.spawnerSessionId === sid && receipt.id) ids.add(`background_${receipt.id}`);
+    }
+  } catch {}
+  try {
+    for (const task of listTaskSummaries({ limit: 500 })) {
+      const child = String(task.sessionId || '').trim();
+      if (child && child !== sid && String(task.originatingSessionId || '') === sid) ids.add(child);
+    }
+  } catch {}
+  ids.delete(sid);
+  return Array.from(ids).slice(0, 40);
+}
+
+function readSessionFileChanges(sessionId: string, workspaceRoot: string, targetPath = '', includeChildren = true): SessionFileChange[] {
   if (!sessionId || !sessionExists(sessionId)) return [];
+  const childRows = includeChildren
+    ? childSessionIdsForThread(sessionId).flatMap((child) => readSessionFileChanges(child, workspaceRoot, targetPath, false))
+    : [];
   const session = getSession(sessionId);
   const rows: SessionFileChange[] = [];
   for (const message of Array.isArray(session.history) ? session.history : []) {
@@ -371,7 +400,10 @@ function readSessionFileChanges(sessionId: string, workspaceRoot: string, target
           const raw = String(file?.path || file?.absPath || file?.displayPath || '').trim();
           if (!raw) continue;
           const absolute = path.resolve(path.isAbsolute(raw) ? raw : path.join(run.workspacePath || workspaceRoot, raw));
-          if (!isInside(workspaceRoot, absolute)) continue;
+          // run.workspacePath is the scope the tracker watched (the repo the
+          // command ran in), so a change there belongs to this thread even
+          // when it is outside the thread's default workspace.
+          if (!isInside(workspaceRoot, absolute) && !(run.workspacePath && isInside(run.workspacePath, absolute))) continue;
           rows.push({
             path: absolute,
             displayPath: String(file?.displayPath || displayPath(workspaceRoot, absolute)).replace(/\\/g, '/'),
@@ -387,7 +419,11 @@ function readSessionFileChanges(sessionId: string, workspaceRoot: string, target
       }
     } catch {}
   }
-  return Array.from(new Map(rows.map((row) => [comparePath(row.path), row])).values());
+  // Own rows win over a child's row for the same file; otherwise newest wins.
+  const merged = new Map<string, SessionFileChange>();
+  for (const row of childRows.sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0))) merged.set(comparePath(row.path), row);
+  for (const row of rows) merged.set(comparePath(row.path), row);
+  return Array.from(merged.values());
 }
 
 function readSnapshotManifest(workspaceRoot: string, snapshotId: string, targetPath?: string): any | null {
