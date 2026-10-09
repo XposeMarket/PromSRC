@@ -1,7 +1,9 @@
 // Native Gmail connector runtime. See §23B. Auth stays in GmailConnector.
 // The email-composer artifact helpers (previously in connector-handlers.ts) live
 // here now since Gmail is their only consumer.
-import type { GmailConnector } from '../../../../integrations/connectors/gmail.js';
+import type { GmailConnector, GmailSendOptions } from '../../../../integrations/connectors/gmail.js';
+import { loadGmailAttachments } from '../../../../integrations/connectors/gmail-mime.js';
+import { getConfig } from '../../../../config/config.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorStatusLabel, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 import { registerConnectorApiRequestTool } from '../_runtime/api-request.js';
@@ -72,6 +74,8 @@ function buildEmailComposerArtifact(gmail: GmailConnector, args: any, state: { m
     to, cc, bcc, subject, body,
     htmlBody: args.html_body ? String(args.html_body) : undefined,
     attachments: normalizeEmailAttachments(args.attachments),
+    replyToMessageId: args.reply_to_message_id ? String(args.reply_to_message_id) : undefined,
+    replyThreadId: args.thread_id ? String(args.thread_id) : undefined,
     messageId: state.sent?.id, threadId: state.sent?.threadId,
     createdAt: now, sentAt: state.mode === 'sent' ? now : undefined, error: state.error,
   };
@@ -79,6 +83,29 @@ function buildEmailComposerArtifact(gmail: GmailConnector, args: any, state: { m
 
 function emailComposerResult(summary: string, artifact: any): PrometheusToolExecutionResult {
   return { result: summary, error: false, extra: { richArtifacts: [artifact] }, data: { richArtifacts: [artifact] } };
+}
+
+const SEND_PROPS = {
+  to: { type: 'string', description: 'Recipient email address (or comma-separated for multiple)' },
+  subject: { type: 'string', description: 'Email subject line (Unicode/emoji safe)' },
+  body: { type: 'string', description: 'Plain text email body (also the text/plain fallback when html_body is set)' },
+  html_body: { type: 'string', description: 'Optional HTML body. Sent as multipart/alternative with the plain body as fallback.' },
+  cc: { type: 'string', description: 'CC recipients (comma-separated)' },
+  bcc: { type: 'string', description: 'BCC recipients (comma-separated)' },
+  attachments: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', description: 'Workspace-relative or absolute file path' }, name: { type: 'string', description: 'Optional filename shown to the recipient' }, mimeType: { type: 'string' } }, required: ['path'] }, description: 'Files to attach (25 MB total max).' },
+  reply_to_message_id: { type: 'string', description: 'Gmail message id to reply to. Sets In-Reply-To/References and keeps it in the same thread.' },
+  thread_id: { type: 'string', description: 'Gmail thread id to send into (usually set automatically by reply_to_message_id).' },
+} as const;
+
+/** Map tool/composer args to GmailSendOptions (loads attachments from the workspace). */
+export function gmailSendOptionsFromArgs(args: any): GmailSendOptions {
+  const root = getConfig().getWorkspacePath();
+  return {
+    html: args?.html_body ? String(args.html_body) : undefined,
+    attachments: loadGmailAttachments(args?.attachments, root),
+    threadId: args?.thread_id ? String(args.thread_id) : undefined,
+    replyToMessageId: args?.reply_to_message_id ? String(args.reply_to_message_id) : undefined,
+  };
 }
 
 const ext: PrometheusExtensionDefinition = {
@@ -133,7 +160,7 @@ const ext: PrometheusExtensionDefinition = {
     api.registerTool({
       name: 'connector_gmail_prepare_email',
       description: '[Gmail] Prepare an editable email draft composer in chat. Use this by default when the user asks to draft, write, compose, or prepare an email, so they can review/edit and click Send.',
-      parameters: { type: 'object', required: ['to', 'subject', 'body'], properties: { to: { type: 'string', description: 'Recipient email address (or comma-separated for multiple)' }, subject: { type: 'string', description: 'Email subject line' }, body: { type: 'string', description: 'Plain text email body' }, cc: { type: 'string', description: 'CC recipients (comma-separated)' }, bcc: { type: 'string', description: 'BCC recipients (comma-separated)' }, attachments: { type: 'array', items: { type: 'object' }, description: 'Optional attachment metadata. Sending attachments is not yet supported by Gmail delivery.' } } },
+      parameters: { type: 'object', required: ['to', 'subject', 'body'], properties: { ...SEND_PROPS } },
       connectorId: ID, capability: 'email',
       execute: (args: any) => withConn(async (c) => {
         const artifact = buildEmailComposerArtifact(c, args, { mode: 'draft', status: 'draft' });
@@ -143,13 +170,15 @@ const ext: PrometheusExtensionDefinition = {
 
     api.registerTool({
       name: 'connector_gmail_send_email',
-      description: '[Gmail] Send an email from the connected Gmail account. Use only when the user clearly asked to send now; otherwise use connector_gmail_prepare_email.',
-      parameters: { type: 'object', required: ['to', 'subject', 'body'], properties: { to: { type: 'string', description: 'Recipient email address (or comma-separated for multiple)' }, subject: { type: 'string', description: 'Email subject line' }, body: { type: 'string', description: 'Plain text email body' }, cc: { type: 'string', description: 'CC recipients (comma-separated)' }, bcc: { type: 'string', description: 'BCC recipients (comma-separated)' } } },
+      description: '[Gmail] Send an email from the connected Gmail account: plain text plus optional HTML body, workspace-file attachments, CC/BCC, and replies threaded into an existing conversation. Use only when the user clearly asked to send now; otherwise use connector_gmail_prepare_email.',
+      parameters: { type: 'object', required: ['to', 'subject', 'body'], properties: { ...SEND_PROPS } },
       connectorId: ID, capability: 'email',
       execute: (args: any) => withConn(async (c) => {
-        const sent = await c.sendEmail(args.to, args.subject, args.body, args.cc, args.bcc);
+        const sent = await c.sendEmail(args.to, args.subject, args.body, args.cc, args.bcc, gmailSendOptionsFromArgs(args));
         const artifact = buildEmailComposerArtifact(c, args, { mode: 'sent', status: 'sent', sent });
-        return emailComposerResult(`Email sent successfully. Message ID: ${sent.id}, Thread ID: ${sent.threadId}`, artifact);
+        const attachCount = Array.isArray(args.attachments) ? args.attachments.length : 0;
+        const extras = [args.html_body ? 'HTML body' : '', attachCount ? `${attachCount} attachment(s)` : '', args.reply_to_message_id || args.thread_id ? 'threaded reply' : ''].filter(Boolean).join(', ');
+        return emailComposerResult(`Email sent successfully${extras ? ` (${extras})` : ''}. Message ID: ${sent.id}, Thread ID: ${sent.threadId}`, artifact);
       }),
     });
 

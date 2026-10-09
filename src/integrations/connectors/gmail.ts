@@ -11,6 +11,19 @@
 //   OR add to .prometheus/config.json under integrations.gmail
 
 import { OAuthConnector, OAuthConnectorConfig, ConnectorTokens } from '../oauth-base.js';
+import { buildGmailRaw, type GmailMimeAttachment } from './gmail-mime.js';
+
+export interface GmailSendOptions {
+  /** Optional HTML alternative; the plain body stays as the text/plain fallback. */
+  html?: string;
+  attachments?: GmailMimeAttachment[];
+  /** Reply in an existing conversation. */
+  threadId?: string;
+  /** Gmail message id being replied to; fills In-Reply-To/References/threadId automatically. */
+  replyToMessageId?: string;
+  inReplyTo?: string;
+  references?: string;
+}
 
 const CALLBACK_PORT = 19420;
 
@@ -127,27 +140,62 @@ export class GmailConnector extends OAuthConnector {
     return '';
   }
 
-  async sendEmail(to: string, subject: string, body: string, cc?: string, bcc?: string): Promise<{ id: string; threadId: string }> {
+  async sendEmail(
+    to: string,
+    subject: string,
+    body: string,
+    cc?: string,
+    bcc?: string,
+    options: GmailSendOptions = {},
+  ): Promise<{ id: string; threadId: string }> {
     const token = await this.getValidAccessToken();
     const profile = await this.getProfile();
-    const headers = [
-      `To: ${to}`,
-      `From: ${profile.email}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset=utf-8',
-    ];
-    if (cc) headers.push(`Cc: ${cc}`);
-    if (bcc) headers.push(`Bcc: ${bcc}`);
 
-    const message = `${headers.join('\r\n')}\r\n\r\n${body || ''}`;
-    const raw = Buffer.from(message).toString('base64url');
+    let inReplyTo = options.inReplyTo;
+    let references = options.references;
+    let threadId = options.threadId;
+    if (options.replyToMessageId) {
+      const meta = await this.getMessageHeaders(options.replyToMessageId, ['Message-Id', 'References']);
+      inReplyTo = inReplyTo || meta.headers['message-id'];
+      references = references || [meta.headers['references'], meta.headers['message-id']].filter(Boolean).join(' ');
+      threadId = threadId || meta.threadId;
+    }
+
+    const raw = buildGmailRaw({
+      to,
+      from: profile.email,
+      cc,
+      bcc,
+      subject,
+      text: body || '',
+      html: options.html,
+      attachments: options.attachments,
+      inReplyTo,
+      references,
+    });
+    const payload: Record<string, string> = { raw };
+    if (threadId) payload.threadId = threadId;
     const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) throw await this.gmailError(res, 'send');
     return res.json() as any;
+  }
+
+  async getMessageHeaders(messageId: string, names: string[]): Promise<{ threadId?: string; headers: Record<string, string> }> {
+    const token = await this.getValidAccessToken();
+    const params = new URLSearchParams({ format: 'metadata' });
+    for (const n of names) params.append('metadataHeaders', n);
+    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw await this.gmailError(res, 'get message headers');
+    const data = await res.json() as any;
+    const headers: Record<string, string> = {};
+    for (const h of data.payload?.headers || []) headers[String(h.name).toLowerCase()] = String(h.value);
+    return { threadId: data.threadId, headers };
   }
 
   async getThread(threadId: string): Promise<any> {
