@@ -105,6 +105,7 @@
         "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/userinfo.email", "openid"],
         "capabilityScopes": {
           "email.send": ["https://www.googleapis.com/auth/gmail.send"],
+          "email.draft": ["https://www.googleapis.com/auth/gmail.compose"],
           "email.modify": ["https://www.googleapis.com/auth/gmail.modify"]
         },
         "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
@@ -123,6 +124,7 @@
       { "id": "inbox.read", "label": "Search inbox", "description": "Search messages and labels.", "risk": "read" },
       { "id": "attachments.read", "label": "Read attachments", "description": "Read attachment metadata and message content.", "risk": "read" },
       { "id": "email.send", "label": "Send email", "description": "Sending email is an explicit external write.", "risk": "write" },
+      { "id": "email.draft", "label": "Gmail drafts", "description": "Create, update and send drafts in the Gmail Drafts folder (gmail.compose).", "risk": "write" },
       { "id": "email.modify", "label": "Modify mailbox", "description": "Mailbox changes require explicit approval and a separate scope grant.", "risk": "write" }
     ],
     "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
