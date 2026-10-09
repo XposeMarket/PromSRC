@@ -173,6 +173,8 @@ jobs:
         run: node scripts/test-hub-goals-contract.mjs
       - name: Verify design preview contract
         run: node scripts/test-design-preview-contract.mjs
+      - name: Verify turn-loop replay scenarios
+        run: npm run test:replay
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
       - name: Verify desktop reasoning summary streaming
