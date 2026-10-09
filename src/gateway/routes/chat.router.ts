@@ -32,7 +32,7 @@ import { normalizeManifestToolCategory } from '../../runtime/tool-category-manif
 import { getRuntimeToolCategories as getVoiceRuntimeToolCategories } from '../tool-builder';
 import { getWorkspaceToolMode } from '../../runtime/workspace-tool-mode';
 import { buildOperatingInstructions } from '../../runtime/operating-instructions';
-import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
+import { digestCanonicalToolArgs, digestPollResult, isPollingToolCall, POLL_LOOP_CRITICAL_THRESHOLD, POLL_LOOP_WARNING_THRESHOLD, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
 import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
@@ -4275,11 +4275,32 @@ async function handleChat(
   const loopContinueAllowed = new Set<string>();
   const recentToolCalls: Array<{ name: string; argsDigest: string }> = [];
   const hashArgs = (args: any): string => digestCanonicalToolArgs(args);
+  const pollStaleCounts = new Map<string, number>();
+  const pollLastResultDigest = new Map<string, string>();
+  const notePollResult = (toolName: string, args: any, resultText: unknown): void => {
+    if (!isPollingToolCall(toolName, args)) return;
+    const sig = `${toolName}:${hashArgs(args)}`;
+    const digest = digestPollResult(resultText);
+    if (pollLastResultDigest.get(sig) === digest) {
+      pollStaleCounts.set(sig, (pollStaleCounts.get(sig) ?? 0) + 1);
+    } else {
+      pollLastResultDigest.set(sig, digest);
+      pollStaleCounts.set(sig, 0);
+    }
+  };
   const checkLoopDetection = (toolName: string, args: any): { state: 'ok' | 'warn' | 'block'; repeats: number } => {
     if (!loopDetectionEnabled) return { state: 'ok', repeats: 1 };
     const argsDigest = hashArgs(args);
     const loopSig = `${toolName}:${argsDigest}`;
     if (loopContinueAllowed.has(loopSig)) return { state: 'ok', repeats: 1 };
+    // Polling (workspace_run wait/status/log on a runId, background waits) repeats
+    // identical args by design. Count only polls whose result did not change.
+    if (isPollingToolCall(toolName, args)) {
+      const staleRepeats = (pollStaleCounts.get(loopSig) ?? 0) + 1;
+      if (staleRepeats >= POLL_LOOP_CRITICAL_THRESHOLD) return { state: 'block', repeats: staleRepeats };
+      if (staleRepeats >= POLL_LOOP_WARNING_THRESHOLD) return { state: 'warn', repeats: staleRepeats };
+      return { state: 'ok', repeats: staleRepeats };
+    }
     // Count includes this current attempt so thresholds are exact:
     // warning at 5th identical call, gate at 8th.
     const repeats = recentToolCalls.filter((t) => t.name === toolName && t.argsDigest === argsDigest).length + 1;
@@ -7733,7 +7754,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       // browser_* and desktop_* tools are always allowed to repeat â€” the browser page
       // and the desktop screen change on every call so caching/blocking makes no sense.
       const allowRepeatedTool =
-        toolName.startsWith('browser_') || toolName.startsWith('desktop_');
+        toolName.startsWith('browser_') || toolName.startsWith('desktop_') || isPollingToolCall(toolName, toolArgs);
       const callKey = `${toolName}:${JSON.stringify(toolArgs)}`;
       if (!allowRepeatedTool) {
         const callCount = (seenToolCalls.get(callKey) ?? 0) + 1;
@@ -8185,6 +8206,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
 	      if (!parallelToolResults.has(call)) await runLazyParallelGroupFor(call);
 	      const toolResult = parallelToolResults.get(call) || await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
+      notePollResult(toolName, toolArgs, toolResult?.result);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.
