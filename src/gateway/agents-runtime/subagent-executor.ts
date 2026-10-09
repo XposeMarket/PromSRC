@@ -2970,6 +2970,16 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
   if (target === 'team_manage' && TEAM_GOAL_SUBACTIONS.has(String(args.team_action ?? '').trim().toLowerCase())) {
     target = 'manage_team_goal';
   }
+  // Teams v7: manage + team_action:"get_agent_result" (or another wrapper action)
+  // hit team_manage and failed. Route known wrapper actions to their own tool.
+  if (target === 'team_manage' && name === 'team_ops_wrapper') {
+    const sub = String(args.team_action ?? '').trim().toLowerCase();
+    const passthrough = sub && sub !== 'manage' && sub !== 'delete' ? map[sub] : undefined;
+    if (passthrough && passthrough !== 'team_manage') {
+      target = passthrough;
+      delete args.team_action;
+    }
+  }
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
     if (args.assignment == null && args.task_prompt != null) args.assignment = args.task_prompt;
@@ -15700,7 +15710,13 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               ).slice(0, 2000),
               managerModel: args.manager_model ? String(args.manager_model) : undefined,
               allowedWorkPaths,
-              workDir: String(args.work_dir ?? args.workDir ?? '').trim() || undefined,
+              workDir: String(args.work_dir ?? args.workDir ?? '').trim()
+                || (() => {
+                  // eslint-disable-next-line @typescript-eslint/no-var-requires
+                  const { inferTeamWorkDirFromText, resolveTeamWorkDir } = require('../teams/team-dispatch-runtime');
+                  const inferred = inferTeamWorkDirFromText(`${purposeStr || ''}\n${teamContext}`);
+                  return (inferred && resolveTeamWorkDir({ allowedWorkPaths, workDir: inferred })) || undefined;
+                })(),
               reviewTrigger,
 	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
 	            });
@@ -15871,6 +15887,15 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               team.workDir = resolvedWorkDir; changed.push('work_dir');
             } else if (args.clear_work_dir === true) { delete team.workDir; changed.push('work_dir'); }
             else if (args.clear_allowed_work_paths === true) { team.allowedWorkPaths = []; changed.push('allowed_work_paths'); }
+            else if (has(args.purpose) || has(args.focus ?? args.goal ?? args.current_focus)) {
+              // A new goal that names its project folder sets workDir, so members run
+              // from that folder instead of the team workspace.
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const { inferTeamWorkDirFromText, resolveTeamWorkDir } = require('../teams/team-dispatch-runtime');
+              const inferred = inferTeamWorkDirFromText(`${String(args.purpose ?? '')}\n${String(args.focus ?? args.goal ?? args.current_focus ?? '')}`);
+              const resolvedInferred = inferred ? resolveTeamWorkDir({ ...team, workDir: inferred }) : null;
+              if (resolvedInferred && resolvedInferred !== team.workDir) { team.workDir = resolvedInferred; changed.push('work_dir'); }
+            }
             const addIds: string[] = Array.isArray(args.add_subagent_ids) ? args.add_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const removeIds: string[] = Array.isArray(args.remove_subagent_ids) ? args.remove_subagent_ids.map((v: any) => String(v).trim()).filter(Boolean) : [];
             const unknown = addIds.filter((id) => !getAgentById(id));
@@ -18242,21 +18267,28 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                 let sourceTeamId: string | undefined = undefined;
                 if (teamNoteForProposal?.authorType === 'manager') {
                   const teamId = String(teamNoteForProposal.teamId || '').trim();
-                  const executorAgentId = String(args.executor_agent_id || '').trim();
-                  if (!executorAgentId) {
-                    return {
-                      name,
-                      args,
-                      result: 'BLOCKED: Team manager proposals must assign executor_agent_id to a subagent on this team.',
-                      error: true,
-                    };
-                  }
+                  let executorAgentId = String(args.executor_agent_id || '').trim();
                   try {
                     const { getManagedTeam } = require('../teams/managed-teams');
                     const { getAgentById } = require('../../config/config');
                     const team = getManagedTeam(teamId);
                     if (!team) {
                       return { name, args, result: `write_proposal error: team not found: ${teamId}`, error: true };
+                    }
+                    // Teams v7: the manager stalled on "which executor is authorized?".
+                    // The proposal is approval-gated either way, so default to a team member
+                    // (the original proposer when forwarded, else the first member).
+                    if (!executorAgentId && Array.isArray(team.subagentIds) && team.subagentIds.length) {
+                      executorAgentId = String(team.subagentIds[0]);
+                      args.executor_agent_id = executorAgentId;
+                    }
+                    if (!executorAgentId) {
+                      return {
+                        name,
+                        args,
+                        result: 'BLOCKED: Team manager proposals must assign executor_agent_id to a subagent on this team.',
+                        error: true,
+                      };
                     }
                     if (!Array.isArray(team.subagentIds) || !team.subagentIds.includes(executorAgentId)) {
                       return {
@@ -18266,6 +18298,28 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
                         error: true,
                       };
                     }
+                    // Teams v7: a post-completion manager wake re-submitted the same
+                    // proposal (two pending copies). Same team + same title since the
+                    // current goal was set returns the existing proposal instead.
+                    try {
+                      const { listProposals } = require('../proposals/proposal-store');
+                      const wantTitle = String(args.title || '').trim().slice(0, 120).toLowerCase();
+                      const since = Number((team as any).goalSetAt || 0);
+                      const dup = wantTitle
+                        ? (listProposals(['pending', 'approved', 'executing']) as any[]).find((p: any) =>
+                          (p.sourceTeamId === teamId || p.teamExecution?.teamId === teamId)
+                          && String(p.title || '').trim().toLowerCase() === wantTitle
+                          && Number(p.createdAt || 0) >= since)
+                        : undefined;
+                      if (dup) {
+                        return {
+                          name,
+                          args,
+                          result: `Proposal already submitted for this goal: ${dup.id} ("${dup.title}", ${dup.status}). Not creating a duplicate.`,
+                          error: false,
+                        };
+                      }
+                    } catch { /* dedupe is best-effort */ }
                     const executorAgent = getAgentById(executorAgentId);
                     sourceTeamId = teamId;
                     teamExecution = {

@@ -277,6 +277,20 @@ export function resolveTeamWorkDir(team: any): string | null {
   return resolved;
 }
 
+/**
+ * Pull a project folder out of goal text such as "Project folder C:\\x\\roman-cli (create it)".
+ * Teams v7: the goal named the folder but workDir stayed null, so members ran from the
+ * team workspace (relative reads missed the project, Soren's PROPOSAL.md landed in the
+ * wrong tree). Returns the raw path; callers validate it with resolveTeamWorkDir.
+ */
+export function inferTeamWorkDirFromText(text: string): string | null {
+  const src = String(text || '');
+  const m = src.match(/project\s+(?:folder|dir(?:ectory)?|root)\s*[:=]?\s*[`"']?([A-Za-z]:[\\/][^\s`"'();,]+|\/[^\s`"'();,]+)/i);
+  if (!m) return null;
+  const raw = m[1].replace(/[.\\/]+$/, '');
+  return raw || null;
+}
+
 /** Execution root for team turns: team.workDir when valid, else the team workspace. */
 export function resolveTeamExecutionRoot(team: any, teamWorkspacePath?: string | null): string | null {
   return resolveTeamWorkDir(team) || teamWorkspacePath || null;
