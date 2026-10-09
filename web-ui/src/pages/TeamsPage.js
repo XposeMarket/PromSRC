@@ -1897,12 +1897,29 @@ function renderTeamActorLine(label, status = '', agentId = '') {
   return `<div class="team-chat-actor-line" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);font-weight:600">${icon}<span>${escHtml(cleanLabel)}${status ? ` · ${escHtml(status)}` : ''}</span></div>`;
 }
 
+// Older team chat lines stored the raw manage_team_goal JSON. Render them the
+// way the server formats new ones (formatGoalUpdateChatLine).
+function prettyLegacyGoalUpdate(text) {
+  const m = /^Goal update \(([a-z_]+)\):\s*(\{[\s\S]*\})\s*$/.exec(String(text || '').trim());
+  if (!m) return text;
+  let data;
+  try { data = JSON.parse(m[2]); } catch { return text; }
+  const v = (x) => String(x ?? '').replace(/\s+/g, ' ').trim();
+  switch (m[1]) {
+    case 'log_completed': return `✅ Logged as done: ${v(data.entry ?? data.completed ?? data.text)}`;
+    case 'set_focus': return `🎯 Focus set: ${v(data.focus ?? data.current_focus ?? data.text)}`;
+    case 'pause_agent': return `⏸ Paused ${v(data.agent_id)}`;
+    case 'unpause_agent': return `▶ Resumed ${v(data.agent_id)}`;
+    default: return `Goal update (${m[1]})`;
+  }
+}
+
 function renderTeamChatMessageBubble(message) {
   const isUser = message.from === 'user';
   const label = String(message.fromName || (isUser ? 'You' : message.from === 'manager' ? 'Manager' : 'Subagent'));
   const timeLabel = timeAgo(message.timestamp);
   const attachments = Array.isArray(message?.metadata?.attachmentPreviews) ? message.metadata.attachmentPreviews : [];
-  const content = stripTeamChatUploadNote(message.content || '', attachments);
+  const content = prettyLegacyGoalUpdate(stripTeamChatUploadNote(message.content || '', attachments));
   const renderedContent = renderTeamChatTextWithMentions(content, activeTeamId, { markdown: !isUser });
   const processHtml = !isUser ? renderTeamChatProcessPill(message.metadata?.processEntries || [], 'team_msg_proc') : '';
   const runMetaBits = [];
@@ -3456,7 +3473,7 @@ function renderTeamBoard(teamId) {
   const teamEmoji = String(team.emoji || '').trim().toLowerCase() === 'team' ? '' : (team.emoji || '🏠');
 
   header.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
+    <div style="display:flex;align-items:center;gap:10px;flex:1 1 200px;min-width:0">
       ${teamEmoji ? `<div style="font-size:22px" aria-hidden="true">${escHtml(teamEmoji)}</div>` : ''}
       <div style="min-width:0">
         <div id="team-name-display-${teamId}" style="font-size:15px;font-weight:800;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Click to rename" onclick="startTeamRename('${teamId}')">${escHtml(team.name)}<span style="font-size:11px;opacity:0;transition:opacity 0.15s" class="team-rename-hint">✏️</span></div>
@@ -3464,7 +3481,7 @@ function renderTeamBoard(teamId) {
         <div style="font-size:11px;color:var(--muted)">${(team.subagentIds||[]).length} subagents · ${team.totalRuns||0} total runs${team.manager?.paused ? ' · ? paused' : ''}</div>
       </div>
     </div>
-    <div style="display:flex;gap:6px;align-items:center">
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
       <button onclick="toggleTeamRunPause('${teamId}')" title="${team.manager?.paused ? 'Resume and let the manager coordinate this run' : 'Start a manager-coordinated run'}" style="border:1px solid ${team.manager?.paused ? 'var(--line)' : 'var(--brand)'};background:${team.manager?.paused ? 'var(--panel-2)' : 'var(--brand)'};color:${team.manager?.paused ? 'var(--muted)' : '#fff'};border-radius:8px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:5px">${team.manager?.paused ? '▶ Resume & Start' : '▶ Start Run'}</button>
       <button onclick="${team.manager?.paused ? '' : `pauseTeam('${teamId}')`}" title="Pause all team schedules and manager reviews" ${team.manager?.paused ? 'disabled' : ''} style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:600;cursor:${team.manager?.paused ? 'not-allowed' : 'pointer'};color:${team.manager?.paused ? '#c0c8d8' : 'var(--muted)'}">⏸ Pause</button>
       <button onclick="triggerManagerReview('${teamId}')" ${team.manager?.paused ? 'disabled' : ''} title="${team.manager?.paused ? 'Team is paused' : 'Force manager review'}" style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:600;cursor:${team.manager?.paused ? 'not-allowed' : 'pointer'};color:${team.manager?.paused ? '#9ba8be' : 'var(--muted)'}">🧠 Review</button>

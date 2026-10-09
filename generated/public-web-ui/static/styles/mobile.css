@@ -11682,6 +11682,7 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   margin: 8px 0 16px;
 }
 .pm-team-tile {
+  color: var(--pm-text);
   background: var(--pm-surface); border: 1px solid var(--pm-border);
   border-radius: var(--pm-radius-lg);
   padding: 16px 14px 18px;
@@ -11745,6 +11746,11 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   padding: 6px 0; font-size: 13px;
 }
 .pm-team-preview .pm-row strong { font-weight: 700; }
+.pm-team-preview .pm-row svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.pm-row-link { width: 100%; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.pm-model-details { margin-top: 10px; }
+.pm-model-details > summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--pm-muted); padding: 4px 0; }
+.pm-model-details[open] > summary { margin-bottom: 8px; }
 .pm-progress {
   height: 8px; border-radius: 999px;
   background: rgba(80,60,40,.10);
