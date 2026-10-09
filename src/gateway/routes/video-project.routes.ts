@@ -30,6 +30,7 @@ import {
   summarizeProject, undoRedo,
 } from '../../media-engine/project.js';
 import { cancelJob, estimate, generateCharacterAnchor, generateShots, renderFrame, renderProject, resumeJobs } from '../../media-engine/engine.js';
+import { clearVideoApproval, getVideoApproval } from '../video-pending-approvals.js';
 
 function workspaceFor(req: any): string {
   const sessionId = String(req.query?.sessionId || req.body?.sessionId || '').trim();
@@ -194,6 +195,26 @@ export function registerVideoProjectRoutes(router: IRouter): void {
   router.post('/api/video-projects/:id/frame', async (req, res) => {
     try { res.json({ success: true, path: await renderFrame(workspaceFor(req), req.params.id, Number(req.body?.atSec) || 0) }); }
     catch (e) { sendError(res, e); }
+  });
+
+  // Needs-you: approve a paused paid quote. Re-runs the same tool action with approved:true.
+  router.post('/api/video-approvals/:approvalId/approve', async (req, res) => {
+    try {
+      const ws = getConfig().getWorkspacePath();
+      const record = getVideoApproval(ws, req.params.approvalId);
+      if (!record) return res.status(404).json({ success: false, error: 'Approval not found or already handled.' });
+      const { executeVideoProject } = await import('../../media-engine/tool.js');
+      const result = await executeVideoProject({ ...record.args, action: record.action, projectId: record.projectId, approved: true }, { workspacePath: record.workspacePath, sessionId: record.sessionId });
+      clearVideoApproval(ws, record.id);
+      res.json({ success: true, approvalId: record.id, result });
+    } catch (e) { sendError(res, e); }
+  });
+  router.post('/api/video-approvals/:approvalId/dismiss', (req, res) => {
+    try {
+      const ws = getConfig().getWorkspacePath();
+      const removed = clearVideoApproval(ws, req.params.approvalId);
+      res.json({ success: true, removed });
+    } catch (e) { sendError(res, e); }
   });
 
   router.delete('/api/video-projects/:id', (req, res) => {

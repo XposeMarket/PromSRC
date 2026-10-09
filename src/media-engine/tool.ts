@@ -6,6 +6,7 @@ import {
   getModel, importModelManifests, listModels, removeUserManifest, saveUserManifest, type MediaModelManifest,
 } from './catalog.js';
 import { providerKeyHint, providerStatus, setProviderKey } from './providers.js';
+import { clearVideoApprovalsForProject, recordVideoApproval } from '../gateway/video-pending-approvals.js';
 import { liveFalPrice, syncFalModels } from './fal-catalog.js';
 import {
   applyOps, createProject, deleteProject, historyDepth, listProjects, loadProject, OP_NAMES,
@@ -210,7 +211,33 @@ function startRunInBackground(ctx: { workspacePath: string; sessionId?: string }
   return { started: true, note: 'Autopilot started in the background. The chat card shows live progress, and this chat is woken when it finishes, so end your turn now.' };
 }
 
+/** Normalize scalar/array arguments double-encoded by model tool calls.
+ * Derive known keys from the tool schema so new parameters are covered too.
+ * Invalid values are left for the action's existing validation to reject.
+ */
+export function coerceVideoProjectArgs(args: any): any {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const normalized = { ...args };
+  const properties = getVideoProjectToolDef().function.parameters.properties;
+  for (const [key, schema] of Object.entries(properties) as Array<[string, { type: string }]>) {
+    const value = normalized[key];
+    if (typeof value !== 'string') continue;
+    const text = value.trim();
+    if (schema.type === 'array' && text.startsWith('[')) {
+      try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) normalized[key] = parsed; }
+      catch { /* Preserve malformed input for action-level validation. */ }
+    } else if (schema.type === 'boolean' && (text === 'true' || text === 'false')) {
+      normalized[key] = text === 'true';
+    } else if ((schema.type === 'number' || schema.type === 'integer') && text && Number.isFinite(Number(text))) {
+      const number = Number(text);
+      if (schema.type !== 'integer' || Number.isInteger(number)) normalized[key] = number;
+    }
+  }
+  return normalized;
+}
+
 export async function executeVideoProject(args: any, ctx: { workspacePath: string; sessionId?: string }): Promise<any> {
+  args = coerceVideoProjectArgs(args);
   const ws = ctx.workspacePath;
   if (!resumedFor.has(ws)) { resumedFor.add(ws); try { resumeJobs(ws); } catch { /* ignore */ } }
   const action = String(args?.action || '').trim();
@@ -282,6 +309,9 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
     case 'generate': {
       const pid = need(args.projectId, 'projectId');
       const r: any = await generateShots(ws, pid, { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution, approved: args.approved === true });
+      if (r.needsApproval && ctx.sessionId) {
+        recordVideoApproval({ workspacePath: ws, sessionId: ctx.sessionId, projectId: pid, action: 'generate', args: { shotIds: args.shotIds, count: args.count, modelId: args.modelId, resolution: args.resolution }, shotIds: Array.isArray(args.shotIds) ? args.shotIds : undefined, quotedUsd: Number(r.estimate?.total) || 0, summary: String(r.reason || 'Generate needs approval') });
+      } else if (args.approved === true) clearVideoApprovalsForProject(ws, pid);
       const wake = await maybeWatch(ctx, pid, r.jobs?.map((j: any) => j.id), 'Shots generated.', args.notify === true);
       return wake ? { ...r, wake } : r;
     }
@@ -361,8 +391,12 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
       const p = loadProject(ws, pid);
       if (!runArgs.approved && cost.usd > p.budget.autoApproveUsd + 1e-9) {
         const r = await studio.runAutopilot(ws, pid, runArgs);
+        if (r.needsApproval && ctx.sessionId) {
+          recordVideoApproval({ workspacePath: ws, sessionId: ctx.sessionId, projectId: pid, action: 'run', args: { storyboard: args.storyboard, qa: args.qa, maxRerolls: args.maxRerolls, aspects: args.aspects, steps: args.steps }, runId: r.lastRun?.id ? String(r.lastRun.id) : undefined, quotedUsd: Number(r.needsApproval.usd ?? cost.usd) || 0, summary: `Autopilot run for ${p.title || pid}: ${(r.needsApproval.breakdown || []).slice(0, 4).map((b: any) => `${b.item} $${Number(b.usd || 0).toFixed(2)}`).join('; ') || `~$${cost.usd.toFixed(2)}`}` });
+        }
         return { ...r, next: 'Show the cost breakdown; call run again with approved:true once the user says yes.' };
       }
+      clearVideoApprovalsForProject(ws, pid);
       if (args.wait === true) return await studio.runAutopilot(ws, pid, { ...runArgs, approved: true });
       return { ...startRunInBackground(ctx, pid, { ...runArgs, approved: true }), costUsd: cost.usd };
     }
