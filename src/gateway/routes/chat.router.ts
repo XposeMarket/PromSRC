@@ -92,6 +92,7 @@ import {
 } from '../rich-artifacts';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
 import type { GmailConnector } from '../../integrations/connectors/gmail.js';
+import { gmailSendOptionsFromArgs } from '../../extensions/bundled/connectors/gmail/runtime.js';
 import { executeMarketLookup } from '../../tools/market';
 import { executeStockLookup } from '../../tools/stocks';
 import { executeWeatherLookup } from '../../tools/weather';
@@ -20584,6 +20585,21 @@ function splitComposerEmailList(value: any): string[] {
     .filter(Boolean);
 }
 
+function findStoredEmailComposerArtifact(sessionId: unknown, artifactId: unknown): any | null {
+  const sid = String(sessionId || '').trim();
+  const aid = String(artifactId || '').trim();
+  if (!sid || !aid) return null;
+  try {
+    const history = getSession(assertSafeStorageId(sid, 'session id'))?.history || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const artifacts = Array.isArray((history[i] as any)?.richArtifacts) ? (history[i] as any).richArtifacts : [];
+      const hit = artifacts.find((a: any) => a && a.type === 'email_composer' && String(a.id || '') === aid);
+      if (hit) return hit;
+    }
+  } catch {}
+  return null;
+}
+
 function buildSentEmailComposerArtifact(args: any, sent: { id?: string; threadId?: string }, gmail: GmailConnector) {
   const now = new Date().toISOString();
   let accountEmail = '';
@@ -20634,18 +20650,28 @@ router.post('/api/connectors/gmail/send-composer', async (req, res) => {
       return;
     }
     const gmail = getConnector('gmail') as unknown as GmailConnector;
+    // The composer card only posts the editable text fields. Attachments, HTML body and
+    // reply threading come from the server-stored draft artifact so they are not dropped.
+    const draft = findStoredEmailComposerArtifact(body.sessionId, body.artifactId);
+    const draftArgs = {
+      html_body: draft?.htmlBody,
+      attachments: Array.isArray(draft?.attachments) ? draft.attachments.filter((a: any) => a?.path) : [],
+      reply_to_message_id: draft?.replyToMessageId,
+      thread_id: draft?.replyThreadId,
+    };
     const sent = await gmail.sendEmail(
       to,
       subject,
       emailBody,
       splitComposerEmailList(body.cc).join(', ') || undefined,
       splitComposerEmailList(body.bcc).join(', ') || undefined,
+      gmailSendOptionsFromArgs(draftArgs),
     );
     res.json({
       success: true,
       messageId: sent.id,
       threadId: sent.threadId,
-      artifact: buildSentEmailComposerArtifact(body, sent, gmail),
+      artifact: buildSentEmailComposerArtifact({ ...body, attachments: draft?.attachments || body.attachments }, sent, gmail),
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err || 'Failed to send email.') });
