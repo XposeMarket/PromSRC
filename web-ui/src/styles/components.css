@@ -3237,15 +3237,6 @@ button.chat-context-window-row {
 .ccw-plan-gauge-fill.ok { background: linear-gradient(90deg, #38a3ff, #7dd3fc); }
 .ccw-plan-gauge-fill.warn { background: linear-gradient(90deg, #f0b54f, #e08a2f); }
 .ccw-plan-gauge-fill.crit { background: linear-gradient(90deg, #f0744f, #e0402f); }
-.ccw-plan-credit {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.ccw-plan-credit strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .ccw-plan-tokens { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 #model-switcher-popover,
@@ -3886,17 +3877,6 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
   overflow: visible;
   z-index: 1;
   clip-path: inset(0 -2px 34px -2px round 16px 16px 0 0);
-}
-.queued-prompts-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--line);
-  font-size: 9px;
-  color: var(--muted);
-  font-weight: 800;
 }
 .queued-prompts-list { padding: 3px 6px 4px; display: flex; flex-direction: column; gap: 2px; }
 .queued-item {
@@ -5377,7 +5357,6 @@ select.settings-input {
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 .chat-hint { color: var(--muted); font-size: 11px; }
-.chat-hint .switch-link { color: var(--brand); cursor: pointer; text-decoration: underline; }
 
 .thinking { display: flex; align-items: center; gap: 6px; padding-top: 4px; }
 .thinking-dot {
@@ -8727,15 +8706,6 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
 }
 
-/* Embedded subagent chat uses the regular desktop composer visual system, while
-   remaining flow-positioned inside the split detail panel. */
-.subagent-panel-chat-shell {
-  min-height: 0;
-  overflow: hidden;
-}
-.subagent-panel-chat-messages {
-  min-height: 0;
-}
 .subagent-panel-chat-composer.chat-input-area {
   position: relative !important;
   left: auto !important;
@@ -8952,13 +8922,6 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 }
 .source-panel-body::-webkit-scrollbar { width: 7px; }
 .source-panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 8px; }
-.source-panel-kicker {
-  margin: 0 0 8px;
-  color: #9da2ac;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: .01em;
-}
 .source-panel-subtitle {
   margin: 0 0 15px;
   color: #777e8a;
@@ -9018,12 +8981,6 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   font-size: 11px;
   font-weight: 650;
 }
-.source-panel-section-note {
-  margin: -3px 0 10px;
-  color: #717782;
-  font-size: 10px;
-  line-height: 1.4;
-}
 .source-panel-list {
   display: flex;
   flex-direction: column;
@@ -9050,8 +9007,6 @@ button.source-panel-row:hover {
   background: #20252d;
   transform: translateY(-1px);
 }
-.source-panel-row--static { cursor: default; }
-.source-panel-row--static:hover { transform: none; }
 .source-item-icon {
   display: inline-flex;
   align-items: center;
@@ -9419,24 +9374,6 @@ button.source-panel-row:hover {
 .source-panel-computer-row--mini,
 .source-panel-browser-row--mini { min-height: 30px; }
 .source-panel-sources-section .source-mini-list { padding: 0; }
-.source-panel-activity-title { margin-bottom: 9px; }
-.source-panel-activity-row { align-items: flex-start; }
-.source-panel-activity-row .source-item-icon { margin-top: 1px; }
-.source-panel-activity-time {
-  flex: 0 0 auto;
-  color: #7f8691;
-  font-size: 10px;
-  white-space: nowrap;
-}
-.source-panel-activity-message {
-  display: block;
-  margin-top: 4px;
-  overflow: hidden;
-  color: #7f8691;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .sources-minimized-panel {
   position: fixed;
   top: 14px;
@@ -9492,39 +9429,7 @@ button.source-panel-row:hover {
 .sources-minimized-card::-webkit-scrollbar-thumb { background: rgba(255,255,255,.13); border-radius: 999px; }
 .source-panel-add-btn { color: #aeb3bd; font-size: 18px; }
 .source-panel-add-btn:hover { color: #d0baff; }
-.source-mini-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 0 12px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
-}
-.source-mini-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 43px;
-  padding: 0;
-  border: 0;
-  color: #8d939e;
-  background: transparent;
-  cursor: pointer;
-}
-.source-mini-tab svg { width: 18px; height: 18px; }
-.source-mini-tab:hover,
-.source-mini-tab.is-active { color: #d2b5ff; }
-.source-mini-tab.is-active { box-shadow: inset 0 -2px #a970ff; }
 .source-mini-list { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
-.source-mini-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 56px;
-  padding: 9px 10px;
-  border: 1px solid rgba(255,255,255,.045);
-  border-radius: 11px;
-  background: #191d23;
-}
-.source-mini-row .source-item-icon { width: 31px; height: 31px; flex-basis: 31px; }
 .sources-minimized-footer {
   display: block;
   width: 100%;
