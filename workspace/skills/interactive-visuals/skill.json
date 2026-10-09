@@ -1,4 +1,4 @@
-﻿{
+{
     "schemaVersion":  "prometheus-skill-bundle-v1",
     "id":  "interactive-visuals",
     "name":  "interactive-visuals",
@@ -14,7 +14,6 @@
                      "make a diagram",
                      "/visual",
                      "make a dashboard",
-                     "break this down visually",
                      "show me design variants",
                      "mock up this ui",
                      "visualize my usage",
