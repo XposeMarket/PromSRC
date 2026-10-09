@@ -45,6 +45,14 @@ async function main(): Promise<void> {
   const pauseTeam = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'pause', team_id: 't1' });
   assert.equal(pauseTeam?.name, 'team_manage', 'team-level pause stays on team_manage');
 
+  // Teams v7: manage + team_action:"get_agent_result" failed on team_manage.
+  const resViaManage = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'get_agent_result', team_id: 't1', task_id: 'team_bg_x' });
+  assert.equal(resViaManage?.name, 'get_agent_result');
+  assert.equal(resViaManage?.args.task_id, 'team_bg_x');
+  assert.equal(resViaManage?.args.team_action, undefined);
+  const dispViaManage = normalizeAgentTeamWrapperTool('team_ops_wrapper', { action: 'manage', team_action: 'dispatch', team_id: 't1', agent_id: 'a1', task: 'x' });
+  assert.equal(dispViaManage?.name, 'dispatch_team_agent');
+
   // share_artifact: Lyra sent artifact:{name,path,...} nested; it was dropped.
   const nested = normalizeShareArtifactArgs({ artifact: { name: 'habit-cli', path: 'habit-cli', description: 'CLI' } });
   assert.equal(nested.name, 'habit-cli');

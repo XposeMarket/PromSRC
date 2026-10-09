@@ -26,6 +26,14 @@ async function main() {
   assert.ok(paths.some((p) => path.resolve(p) === path.resolve(path.join(ws, 'teams', 't1', 'workspace'))), 'team workspace stays allowed');
   assert.ok(paths.some((p) => path.resolve(p) === wd), 'workDir is allowed');
 
+  // 1b) Teams v7: a goal that names its project folder yields that folder.
+  const { inferTeamWorkDirFromText } = await import('./team-dispatch-runtime');
+  const v7 = `Teams v7 live test. Project folder ${path.join(allowed, 'roman-cli')} (create it; absolute paths). Build...`;
+  assert.equal(inferTeamWorkDirFromText(v7), path.join(allowed, 'roman-cli'));
+  assert.equal(inferTeamWorkDirFromText(`Project folder: \`${path.join(allowed, 'x-cli')}\`.`), path.join(allowed, 'x-cli'));
+  assert.equal(inferTeamWorkDirFromText('Build a tiny CLI with tests.'), null);
+  assert.equal(resolveTeamWorkDir({ allowedWorkPaths: [allowed], workDir: inferTeamWorkDirFromText(v7) }), path.resolve(allowed, 'roman-cli'));
+
   // 2) Relative workDir resolves against the main workspace.
   assert.equal(resolveTeamWorkDir({ workDir: 'teams-test/rel-cli', allowedWorkPaths: [] }), path.resolve(ws, 'teams-test/rel-cli'));
 
