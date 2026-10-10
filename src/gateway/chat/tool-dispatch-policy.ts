@@ -48,12 +48,40 @@ export interface ToolDispatchRequest {
 /** Names whose arguments may legitimately arrive as a bare (non-JSON) string. */
 const SHORTHAND_ARGUMENT_TOOLS = new Set(['request_tool_category']);
 
-export function resolveToolSurfaceEnforcementMode(config: any): ToolSurfaceEnforcementMode {
-  const env = String(process.env.PROMETHEUS_TOOL_SURFACE_ENFORCEMENT || '').trim().toLowerCase();
+/**
+ * Resolves enforce | warn | off. The relaxed modes exist only to recover from a
+ * false refusal on a developer machine: in a public distribution build they are
+ * ignored and enforcement stays on, so a shipped app can never run with the
+ * model choosing its own tools.
+ */
+export function resolveToolSurfaceEnforcementMode(
+  config: any,
+  options: { publicBuild?: boolean; env?: NodeJS.ProcessEnv } = {},
+): ToolSurfaceEnforcementMode {
+  const envSource = options.env || process.env;
+  const env = String(envSource.PROMETHEUS_TOOL_SURFACE_ENFORCEMENT || '').trim().toLowerCase();
   const raw = env || String(config?.runtime?.toolSurfaceEnforcement ?? config?.runtime?.tool_surface_enforcement ?? '').trim().toLowerCase();
-  if (raw === 'off' || raw === 'false' || raw === '0') return 'off';
-  if (raw === 'warn' || raw === 'log') return 'warn';
-  return 'enforce';
+  let mode: ToolSurfaceEnforcementMode = 'enforce';
+  if (raw === 'off' || raw === 'false' || raw === '0') mode = 'off';
+  else if (raw === 'warn' || raw === 'log') mode = 'warn';
+  if (mode !== 'enforce' && options.publicBuild) {
+    noteRelaxedModeIgnored(mode);
+    return 'enforce';
+  }
+  if (mode !== 'enforce') noteRelaxedModeActive(mode);
+  return mode;
+}
+
+let relaxedModeNoticeLogged = false;
+function noteRelaxedModeActive(mode: ToolSurfaceEnforcementMode): void {
+  if (relaxedModeNoticeLogged) return;
+  relaxedModeNoticeLogged = true;
+  console.warn(`[tool-dispatch-policy] tool surface enforcement is "${mode}" (PROMETHEUS_TOOL_SURFACE_ENFORCEMENT). Un-offered tools are not refused. Developer recovery mode only.`);
+}
+function noteRelaxedModeIgnored(mode: ToolSurfaceEnforcementMode): void {
+  if (relaxedModeNoticeLogged) return;
+  relaxedModeNoticeLogged = true;
+  console.warn(`[tool-dispatch-policy] ignoring tool surface enforcement "${mode}" in a public build; enforcement stays on.`);
 }
 
 export function toolNameSetOf(toolDefs: unknown): Set<string> {
