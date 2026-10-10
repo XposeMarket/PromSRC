@@ -577,6 +577,11 @@ function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
       detail: typeof cp.detail === 'string' ? cp.detail.slice(0, MAX_DURABLE_CHECKPOINT_TEXT) : cp.detail,
       pendingSteerCount: cp.pendingSteerCount,
       updatedAt: cp.updatedAt,
+      // Replay-safety facts read by decideExecutionReplay after a crash. Dropping
+      // them made a committed, non-idempotent side effect look replayable.
+      effectClass: typeof cp.effectClass === 'string' ? cp.effectClass : undefined,
+      sideEffectCommitted: cp.sideEffectCommitted === true ? true : undefined,
+      idempotencyKey: typeof cp.idempotencyKey === 'string' ? cp.idempotencyKey.slice(0, 240) : undefined,
       ...(typeof cp.narrationTail === 'string' && cp.narrationTail.trim()
         ? { narrationTail: cp.narrationTail.slice(-2_400) }
         : {}),
