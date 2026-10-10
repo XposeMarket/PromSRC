@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { getMainChatGoal } from '../session';
+import { listLiveRuntimes } from '../live-runtime-registry';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -100,6 +102,11 @@ export function createMainChatTimer(input: {
   delivery?: Record<string, any>;
 }): MainChatTimer {
   const instruction = String(input.instruction || '').trim();
+  const goal = getMainChatGoal(input.sessionId);
+  const goalRuntime = listLiveRuntimes().some(runtime => runtime.kind === 'main_chat_goal'
+    && runtime.sessionId === input.sessionId && runtime.status === 'running');
+  const origin = goalRuntime && goal?.status === 'active'
+    ? { ...input.origin, goalId: goal.id } : input.origin;
   const sessionId = String(input.sessionId || '').trim();
   if (!sessionId) throw new Error('sessionId is required');
   if (!instruction) throw new Error('instruction is required');
@@ -115,7 +122,7 @@ export function createMainChatTimer(input: {
     status: 'pending',
     createdAt: now,
     updatedAt: now,
-    origin: input.origin && typeof input.origin === 'object' ? input.origin : undefined,
+    origin: origin && typeof origin === 'object' ? origin : undefined,
     delivery: input.delivery && typeof input.delivery === 'object' ? input.delivery : undefined,
   };
   const store = loadStore();
@@ -147,6 +154,8 @@ export function updateMainChatTimer(id: string, patch: Partial<MainChatTimer>): 
   const store = loadStore();
   const idx = store.timers.findIndex((timer) => timer.id === timerId);
   if (idx < 0) return null;
+  // A settling async timer turn must not undo an owner's cancellation.
+  if (store.timers[idx].status === 'cancelled' && patch.status && patch.status !== 'cancelled') return store.timers[idx];
   store.timers[idx] = {
     ...store.timers[idx],
     ...patch,
@@ -162,4 +171,18 @@ export function cancelMainChatTimer(id: string): MainChatTimer | null {
     status: 'cancelled',
     completedAt: new Date().toISOString(),
   });
+}
+
+/** Cancel only timers with explicit goal ownership, never ordinary reminders. */
+export function cancelMainChatGoalTimers(sessionId: string, goalId: string): void {
+  const store = loadStore();
+  let changed = false;
+  for (const timer of store.timers) {
+    if (timer.sessionId !== sessionId || timer.origin?.goalId !== goalId
+      || !['pending', 'due_waiting', 'running'].includes(timer.status)) continue;
+    timer.status = 'cancelled';
+    timer.updatedAt = new Date().toISOString();
+    changed = true;
+  }
+  if (changed) saveStore(store);
 }

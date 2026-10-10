@@ -1783,6 +1783,8 @@ import {
   buildMainChatGoalContinuationPrompt,
   getAllMainChatGoalRecords,
   handleMainChatGoalCommand,
+  stopMainChatGoalByUser,
+  canAutomaticallyResumeMainChatGoal,
   isMainChatGoalContinuation,
   maybeSummarizeMainChatGoal,
   recordMainChatGoalTurnPlanProgress,
@@ -8970,6 +8972,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const abortSignal = { aborted: false, signal: abortController.signal };
         (abortSignal as any).abort = (reason?: string) => {
           const normalizedReason = String(reason || 'operator_abort').slice(0, 160);
+          if (normalizedReason === 'operator_abort') stopMainChatGoalByUser(sid);
           abortSignal.aborted = true;
           if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
         };
@@ -9185,6 +9188,7 @@ export function resumeMainChatGoalsInterruptedForRestart(targetSessionIds?: stri
     if ((record as any)?.current === false) continue;
     const sessionId = String((record as any)?.sessionId || goal?.sessionId || '').trim();
     if (requested.size > 0 && !requested.has(sessionId)) continue;
+    if (!canAutomaticallyResumeMainChatGoal(goal)) continue;
     if (!sessionId || !['restarting', 'paused'].includes(String(goal?.status || ''))) continue;
     const pausedReason = String(goal?.pausedReason || goal?.paused_reason || '').toLowerCase();
     const checkpointReason = String(goal?.restartCheckpoint?.reason || '').toLowerCase();
@@ -18656,6 +18660,7 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
       ? listActiveBackgroundIdsForSession(sessionId).filter((id) => backgroundAbort(id).ok)
       : [];
 
+    if (sessionId) stopMainChatGoalByUser(sessionId);
     if (!target) {
       if (abortedBackgroundIds.length > 0) {
         res.json({
@@ -21560,6 +21565,7 @@ router.post('/api/chat', async (req, res) => {
   const abortSignal: { aborted: boolean; signal: AbortSignal; reason?: string; abort?: (reason?: string) => void } = { aborted: false, signal: abortController.signal };
   abortSignal.abort = (reason?: string) => {
     const normalizedReason = String(reason || 'operator_abort').slice(0, 160);
+    if (normalizedReason === 'operator_abort') stopMainChatGoalByUser(resolvedSessionId);
     abortSignal.aborted = true;
     abortSignal.reason = normalizedReason;
     if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
