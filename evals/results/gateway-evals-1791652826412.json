@@ -1,0 +1,325 @@
+{
+  "version": 2,
+  "mode": "gateway",
+  "runnerCommit": "17fda754503f56dd6fa02122177b1d41ae61b6d0",
+  "runtime": {
+    "commit": "17fda754503f56dd6fa02122177b1d41ae61b6d0",
+    "repo": "C:\\Users\\rafel\\PromSRC",
+    "buildSha256": "6e6359f85768411b72d9995817a1989f43a1d99bd458c89c694d28b98af20c25",
+    "attestation": "checkout-and-dist; loaded process commit not exposed by gateway"
+  },
+  "gateway": "http://127.0.0.1:32466",
+  "startedAt": "2026-10-10T17:20:26.410Z",
+  "finishedAt": "2026-10-10T17:28:10.344Z",
+  "repeats": 2,
+  "tasks": [
+    {
+      "id": "file-create",
+      "area": "files"
+    },
+    {
+      "id": "read-and-answer",
+      "area": "retrieval"
+    },
+    {
+      "id": "bugfix-off-by-one",
+      "area": "coding"
+    },
+    {
+      "id": "multi-file-rename",
+      "area": "coding"
+    }
+  ],
+  "summary": {
+    "openai_codex:gpt-6.1-sol:low": {
+      "runs": 8,
+      "passed": 8,
+      "failed": 0,
+      "blocked": 0,
+      "medianMs": 58078.5,
+      "passRate": 1
+    }
+  },
+  "rows": [
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "file-create",
+      "area": "files",
+      "repeat": 1,
+      "status": "pass",
+      "pass": true,
+      "detail": "\"Hello, Prometheus\"",
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "93b6729c-7433-4ef2-a4d6-f098f7bfc019",
+      "doneSeen": true,
+      "sessionId": "eval_a3c22da3c37c49f7954d148325fedf30",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791652826526
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 20918,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "file-create",
+      "area": "files",
+      "repeat": 2,
+      "status": "pass",
+      "pass": true,
+      "detail": "\"Hello, Prometheus\"",
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "10186b9a-b118-422c-99ed-7aac127dfb4f",
+      "doneSeen": true,
+      "sessionId": "eval_3716e7cee0694901a50303f54c22d801",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791652847608
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 32385,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "read-and-answer",
+      "area": "retrieval",
+      "repeat": 1,
+      "status": "pass",
+      "pass": true,
+      "detail": "read via tool; answer=\"Blocked: no implementation or edit was specified, and the original request prohi\"",
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "c4b2b2a6-b3b5-4204-93b1-706b2dfca9bb",
+      "doneSeen": true,
+      "sessionId": "eval_e3061fd169e44832b10c2f829d6ea16d",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791652884480
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 58928,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "read-and-answer",
+      "area": "retrieval",
+      "repeat": 2,
+      "status": "pass",
+      "pass": true,
+      "detail": "read via tool; answer=\"Blocked: no build/edit deliverable or requested change was specified. The origin\"",
+      "toolCalls": 1,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "8fba4034-90bc-4afe-86b9-11e32fb6f449",
+      "doneSeen": true,
+      "sessionId": "eval_32244295a83b413c8a50ffae0d4bc487",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791652939324
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 34988,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "bugfix-off-by-one",
+      "area": "coding",
+      "repeat": 1,
+      "status": "pass",
+      "pass": true,
+      "detail": "PASS",
+      "toolCalls": 5,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "595cb572-f321-4dab-89f0-f322bef0191d",
+      "doneSeen": true,
+      "sessionId": "eval_a39c43e58aa9437e93a3874df219318a",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791652974676
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 57229,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "bugfix-off-by-one",
+      "area": "coding",
+      "repeat": 2,
+      "status": "pass",
+      "pass": true,
+      "detail": "PASS",
+      "toolCalls": 5,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "d77b4e49-2a41-4ade-b7a3-2b03ebc0191b",
+      "doneSeen": true,
+      "sessionId": "eval_6982701262344634b6d0069dc1ac1ffa",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791653031855
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 80010,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "multi-file-rename",
+      "area": "coding",
+      "repeat": 1,
+      "status": "pass",
+      "pass": true,
+      "detail": "out=\"Ada Lovelace\" leftovers=none",
+      "toolCalls": 3,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "81e591b0-4f31-43cb-bfa0-d1d30a536fe5",
+      "doneSeen": true,
+      "sessionId": "eval_a78aadbebc9b4a229aebc17055349218",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791653112076
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 60990,
+      "cleanupSafe": true
+    },
+    {
+      "model": "openai_codex:gpt-6.1-sol:low",
+      "task": "multi-file-rename",
+      "area": "coding",
+      "repeat": 2,
+      "status": "pass",
+      "pass": true,
+      "detail": "out=\"Ada Lovelace\" leftovers=none",
+      "toolCalls": 3,
+      "toolErrors": 0,
+      "timedOut": false,
+      "traceId": "afe2015a-4976-4aee-b032-bed11f4c5565",
+      "doneSeen": true,
+      "sessionId": "eval_b424c2a7b4874b628ffb86cc915fbe02",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "updatedAt": 1791653177994
+        },
+        "effective": {
+          "providerId": "openai_codex",
+          "model": "gpt-6.1-sol",
+          "reasoningEffort": "low",
+          "speed": "standard",
+          "accountId": "default"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 116816,
+      "cleanupSafe": true
+    }
+  ]
+}
