@@ -45,6 +45,7 @@
     "test:runtime-prompt-manifest": "tsx src/runtime/prompt-manifest.regression.ts",
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
+    "test:mediation": "tsx src/testing/replay/mediation.regression.ts",
     "test:tool-dispatch-policy": "tsx src/gateway/chat/tool-dispatch-policy.regression.ts",
     "test:terminal-exit-and-tool-args": "tsx src/gateway/terminal-exit-and-tool-args.regression.ts",
     "test:workspace-tool-mode": "tsx src/runtime/workspace-tool-mode.regression.ts",

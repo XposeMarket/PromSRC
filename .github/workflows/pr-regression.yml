@@ -177,6 +177,8 @@ jobs:
         run: npm run test:tool-dispatch-policy
       - name: Verify turn-loop replay scenarios
         run: npm run test:replay
+      - name: Verify complete mediation across execution paths
+        run: npm run test:mediation
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
       - name: Verify desktop reasoning summary streaming
