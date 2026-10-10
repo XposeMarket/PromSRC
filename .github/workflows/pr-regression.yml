@@ -179,6 +179,8 @@ jobs:
         run: npm run test:approval-stale-expiry
       - name: Verify turn-loop replay scenarios
         run: npm run test:replay
+      - name: Verify web-ui build id ignores npm script changes
+        run: npm run test:webui-build-id-stability
       - name: Verify security controls (final-action grants, public build, secret scrubbing)
         run: npm run test:security-controls
       - name: Verify evidence docs cite real paths and scripts
