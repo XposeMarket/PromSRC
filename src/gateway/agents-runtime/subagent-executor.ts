@@ -3621,6 +3621,18 @@ export function setToolExecutionOverrideForTesting(override: ToolExecutionOverri
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  // Trace span on the current turn (no-op outside a traced turn).
+  const { withSpan } = require('../observability/turn-trace') as typeof import('../observability/turn-trace');
+  return withSpan(
+    'tool',
+    String(name || ''),
+    { action: typeof args?.action === 'string' ? args.action : undefined },
+    () => executeToolUntraced(name, args, workspacePath, deps, sessionId),
+    (result) => (result?.error ? 'error' : 'ok'),
+  );
+}
+
+async function executeToolUntraced(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   if (toolExecutionOverrideForTesting) {
     const overridden = await toolExecutionOverrideForTesting(name, args, sessionId);
     if (overridden) return overridden;
