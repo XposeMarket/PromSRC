@@ -46,14 +46,22 @@ export function falUnitCost(unitPrice: number, unit: string, input: { durationSe
   if (/\b(audio|compute|gpu|credit)\b/.test(label)) return undefined;
   if (/\bimages?\b/.test(label) && !/\b(video )?tokens?\b/.test(label)) return unitPrice;
   const duration = Math.max(1, Number(input.durationSec) || 5);
-  const height = Number(String(input.resolution || '720p').match(/(\d{3,4})/)?.[1]) || 720;
+  // "720p" names the SHORT side: 1280x720 landscape, 720x1280 portrait, 720x720 square.
+  const short = Number(String(input.resolution || '720p').match(/(\d{3,4})/)?.[1]) || 720;
   const aspect = String(input.aspectRatio || '16:9');
-  const ratio = aspect === '9:16' || aspect === 'portrait' ? 9 / 16 : aspect === '1:1' || aspect === 'square' ? 1 : 16 / 9;
-  const width = Math.round(height * ratio);
+  const square = aspect === '1:1' || aspect === 'square';
+  const height = short;
+  const width = square ? short : Math.round(short * 16 / 9);
   const frames = duration * 24;
   const megapixels = height * width / 1_000_000;
-  if (/million.*(video )?tokens?|\b1m\s*(video )?tokens?|\bm\s*(video )?tokens?|tokens?.*million/.test(label)) return unitPrice * (height * width * frames / 1024) / 1_000_000;
-  if (/\b(video )?tokens?\b/.test(label)) return unitPrice * (height * width * frames / 1024);
+  if (/\btokens?\b/.test(label)) {
+    // fal token units carry a block size: "1M video tokens", "1000 tokens", "1k tokens", "token".
+    const tokens = height * width * frames / 1024;
+    const block = /million|\b1?\s*m\b|\d\s*m\s*(video )?tokens?/.test(label) ? 1_000_000
+      : /\b1?\s*k\b|\d\s*k\s*(video )?tokens?|thousand/.test(label) ? 1_000
+      : Number(label.match(/(\d[\d,]*)\s*(video )?tokens?/)?.[1]?.replace(/,/g, '')) || 1;
+    return unitPrice * tokens / block;
+  }
   if (/million.*pixels?|megapixels?|\bmp\b/.test(label)) return unitPrice * megapixels * frames;
   if (/\bframe\b/.test(label)) return unitPrice * frames;
   if (/\b(seconds?|secs?|s)\b/.test(label)) return unitPrice * duration;
@@ -220,17 +228,22 @@ export async function syncFalModels(force = false): Promise<FalSyncResult> {
       if (!categoriesSucceeded) throw new Error('fal model listing failed for all video categories');
       const endpoints = [...new Set([...found.keys(), ...listCuratedModels().filter((m) => m.provider === 'fal' && m.kind !== 'image').map((m) => m.endpoint)])].filter(validEndpoint);
       let priceFailed = false;
-      for (let i = 0; key && i < endpoints.length; i += 50) {
+      // One bad endpoint id fails its whole batch, so split failed batches until the bad id is isolated.
+      const priceBatch = async (batch: string[]): Promise<void> => {
         const url = new URL('https://api.fal.ai/v1/models/pricing');
-        for (const endpoint of endpoints.slice(i, i + 50)) url.searchParams.append('endpoint_id', endpoint);
+        for (const endpoint of batch) url.searchParams.append('endpoint_id', endpoint);
         try {
           const body = await api(url, key);
           for (const row of body.prices || []) {
             if (!validEndpoint(row.endpoint_id) || row.currency !== 'USD' || !Number.isFinite(Number(row.unit_price)) || Number(row.unit_price) < 0) continue;
             pricing.set(row.endpoint_id, { unit: String(row.unit), unitPriceUsd: Number(row.unit_price), source: 'live', fetchedAt: new Date().toISOString() });
           }
-        } catch { priceFailed = true; /* retain previous prices for individual failed batches */ }
-      }
+        } catch {
+          if (batch.length > 1) { const mid = Math.ceil(batch.length / 2); await priceBatch(batch.slice(0, mid)); await priceBatch(batch.slice(mid)); }
+          else priceFailed = true; /* retain previous price for this endpoint */
+        }
+      };
+      for (let i = 0; key && i < endpoints.length; i += 50) await priceBatch(endpoints.slice(i, i + 50));
       for (const model of found.values()) model.pricing = pricing.get(model.endpoint) || model.pricing;
       const models = [...found.values()];
       setSyncedFalModels(models);
