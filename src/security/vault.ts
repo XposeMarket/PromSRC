@@ -103,8 +103,17 @@ export class SecretValue {
 const SECRET_PATTERNS: RegExp[] = [
   // Bearer tokens
   /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
+  // Provider keys with dashed prefixes (Anthropic sk-ant-…, OpenAI sk-proj-…/sk-svcacct-…)
+  /sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{16,}/g,
   // OpenAI-style keys
   /sk-[A-Za-z0-9]{20,}/g,
+  // GitHub tokens (classic, fine-grained, OAuth, app)
+  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
+  // xAI, Google and Slack keys
+  /\bxai-[A-Za-z0-9]{30,}/g,
+  /\bAIza[0-9A-Za-z_-]{35}/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
   // AWS access key IDs
   /AKIA[A-Z0-9]{16}/g,
   // JWTs
