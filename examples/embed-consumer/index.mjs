@@ -1,13 +1,26 @@
 // A separate Node project embedding Prometheus. It only touches the public
 // entry point `prometheus/embed` (dist/embed/index.js) and its documented API.
 //
-//   cd examples/embed-consumer && npm install && node index.mjs
+//   Install a locally packed Prometheus tarball, then npm test (see README.md).
 //
 // It uses a tiny offline "model" so it runs anywhere (CI included) without an
 // API key. Swap `provider` out (or omit it and configure a real provider in
 // dataDir) to run against a real model.
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import tls from 'node:tls';
+
+// Fail deterministically if any runtime path attempts outbound networking.
+const denyNetwork = () => { throw new Error('embed-consumer: network access forbidden'); };
+for (const transport of [http, https]) {
+  transport.request = denyNetwork;
+  transport.get = denyNetwork;
+}
+net.connect = net.createConnection = tls.connect = denyNetwork;
+globalThis.fetch = denyNetwork;
 
 const require = createRequire(import.meta.url);
 const { createPrometheusRuntime, EMBED_API_VERSION } = require('prometheus/embed');

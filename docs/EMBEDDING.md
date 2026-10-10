@@ -31,9 +31,15 @@ console.log(run.text, run.toolResults);
 await rt.close();
 ```
 
-A complete, runnable consumer lives in `examples/embed-consumer/`. CI runs it
-as a separate project on every pull request (`npm run test:embed`): it links
-this repo as its `prometheus` dependency and uses only the public export.
+A complete, separately installable consumer lives in `examples/embed-consumer/`.
+`npm run test:embed` builds the backend, packs this repository, installs the
+actual tarball into a fresh temporary consumer with `npm install --offline`,
+and runs its scripted provider through only `prometheus/embed`. There is no
+source-relative import or node_modules/prometheus source junction. The example
+rejects outbound HTTP, HTTPS, TCP, TLS and fetch calls during verification.
+The offline installation requires dependency tarballs already in npm's cache;
+a missing cache entry fails explicitly instead of silently accessing a registry.
+See the example README for manual pack/install commands.
 
 ## API
 

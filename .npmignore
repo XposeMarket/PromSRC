@@ -1,0 +1,286 @@
+# ============================================================
+# Prometheus - .gitignore
+# ============================================================
+
+# --- DOCKER / ENV ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# --- SECRETS & CONFIG (NEVER COMMIT) ---
+.localclaw/config.json
+.localclaw/credentials/
+.localclaw/vault/
+/.prometheus/
+/.prometheus-dev-*/
+/.prometheus-instances/
+/.agents/
+/.claude/
+/Brain/
+
+# --- RUNTIME DATA ---
+.localclaw/sessions/
+.localclaw/logs/
+.localclaw/memory/
+.localclaw/facts.json
+.localclaw/self_learning.json
+.localclaw/jobs.db
+.localclaw/update_state.json
+.localclaw/tasks/
+.localclaw/jobs/
+.localclaw/ocr-cache/
+.localclaw/heartbeat/
+.localclaw/task-heartbeat.json
+.localclaw/cron/runs/
+
+# --- DASHBOARD RUNTIME STATE ---
+ai-dashboard/dashboard-state.json
+ai-dashboard/dashboard-requests.json
+
+# --- LOGS ---
+gateway.log
+gateway.err.log
+*.log
+
+# --- TEMP FILES ---
+tmp_payload.json
+mnt/
+/.claude/settings.local.json
+/.vscode/settings.json
+/.npmrc
+/.gateway-*.cjs
+/.pip-cache/
+/.pip-tmp/
+/.tmp-py/
+__pycache__/
+*.pyc
+.tmp_*
+.tmp_*/
+.tmp_openclaw_*/
+.tmp_codex_*
+tmp_*
+fix_log_line.py
+
+# --- LOCAL PLANNING / HANDOFF ARTIFACTS ---
+/CIS.docx
+/Prometheus_CIS_Plan.docx
+/Prometheus_Teams_CIS_Master_Plan.docx
+/prometheus_browser_intelligence.docx
+/skills.zip
+/Context.md
+/PROPOSALS_ANALYSIS.md
+/Prometheus_Teams_CIS_Master_Plan.md
+/apply-local-llm-patch.js
+/b5-server-v2.js
+/write-chat-helpers.js
+/patch-server-v2.js
+/rebrand-html.js
+/rebrand-src.js
+/test-ollama.mjs
+/check-build.bat
+/start-gateway.bat
+/HEARTBEAT.md
+/PROMETHEUS_HTML_MOTION_BACKEND_HANDOFF.md
+/PROMETHEUS_VIDEO_CREATIVE_UPGRADE_PLAN.md
+/Prometheus_Team_Room_Refinement_Plan.md
+/prometheus_creative_suite_plan.md
+/hook-library.skill
+/-Context
+/*.docx
+/*.mp4
+/*.png
+/eng.traineddata
+
+# --- LOCAL BINARY / MODEL ARTIFACTS ---
+/bin/ffmpeg/
+*.onnx
+*.gguf
+*.safetensors
+
+# --- RUNTIME FILES THAT MUST NEVER ENTER SOURCE ---
+src/**/*.log
+src/**/*.md.bak
+src/**/memory/*.md
+
+# --- NODE ---
+node_modules/
+/dist/
+native/desktop-helper-macos/.build/
+native/desktop-helper-windows/build/
+bin/prometheus-desktop-helper.exe
+*.js.map
+/package/
+*.tgz
+
+# --- TEST ARTIFACTS ---
+tests/.golden-progress.log
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- ELECTRON BUILD OUTPUT ---
+/release/
+/release-public/
+/output/
+/tmp/
+
+# --- PERSONAL WORKSPACE SYNC ---
+# Workspace contents are intentionally Git-visible for private workspace synchronization.
+# The public Electron package excludes workspace via electron-builder-public.yml.
+!workspace/
+!workspace/**
+!workspace/**/
+
+# Bulky workspace projects/runtime folders are kept local and rebuilt/redone as needed.
+oss-agents/
+workspace/oss agents/
+workspace/oss-agents/
+workspace/Prometheus Website/
+workspace/xposemarket-site/
+workspace/xpose-market/
+workspace/teams/
+workspace/.prometheus/**
+workspace/.prometheus/subagents/
+workspace/hyperframes/
+workspace/hyperframes-promo-test/
+workspace/fitpulse-real-hyperframes/
+workspace/assets/
+workspace/video-debug/
+workspace/opportunity-radar/
+workspace/signal-radar/
+workspace/Brain/
+workspace/Brain/**
+workspace/audit/**
+workspace/downloads/**
+workspace/uploads/**
+workspace/entities/**
+workspace/events/**
+workspace/integrations/**
+workspace/projects/**
+workspace/proposals/**
+workspace/tasks/**
+workspace/node_modules/
+workspace/logs/
+workspace/tmp/
+workspace/creative-projects/
+workspace/generated/**
+
+# Private self docs are intentionally tracked in full.
+!workspace/self/
+!workspace/self/**
+
+# Keep skeleton folders in clones while excluding their bulky contents.
+!workspace/.prometheus/
+!workspace/.prometheus/**/
+!workspace/.prometheus/**/.gitkeep
+!workspace/oss agents/
+!workspace/oss agents/**/
+!workspace/oss agents/**/.gitkeep
+!workspace/oss-agents/.gitkeep
+!workspace/Prometheus Website/.gitkeep
+!workspace/xposemarket-site/.gitkeep
+!workspace/xpose-market/.gitkeep
+!workspace/teams/.gitkeep
+!workspace/.prometheus/subagents/.gitkeep
+!workspace/hyperframes/.gitkeep
+!workspace/hyperframes-promo-test/.gitkeep
+!workspace/fitpulse-real-hyperframes/.gitkeep
+!workspace/assets/.gitkeep
+!workspace/video-debug/.gitkeep
+!workspace/opportunity-radar/.gitkeep
+!workspace/signal-radar/.gitkeep
+!workspace/Brain/
+!workspace/Brain/**/
+!workspace/Brain/**/.gitkeep
+!workspace/Brain/thoughts/**
+!workspace/Brain/dreams/**
+!workspace/audit/
+!workspace/audit/**/
+!workspace/audit/**/.gitkeep
+!workspace/downloads/
+!workspace/downloads/**/
+!workspace/downloads/**/.gitkeep
+!workspace/uploads/
+!workspace/uploads/**/
+!workspace/uploads/**/.gitkeep
+!workspace/entities/
+!workspace/entities/**/
+!workspace/entities/**/.gitkeep
+!workspace/events/
+!workspace/events/**/
+!workspace/events/**/.gitkeep
+!workspace/integrations/
+!workspace/integrations/**/
+!workspace/integrations/**/.gitkeep
+!workspace/projects/
+!workspace/projects/**/
+!workspace/projects/**/.gitkeep
+!workspace/proposals/
+!workspace/proposals/**/
+!workspace/proposals/**/.gitkeep
+!workspace/tasks/
+!workspace/tasks/**/
+!workspace/tasks/**/.gitkeep
+!workspace/node_modules/.gitkeep
+!workspace/logs/.gitkeep
+!workspace/tmp/.gitkeep
+!workspace/creative-projects/.gitkeep
+!workspace/generated/
+!workspace/generated/**/
+!workspace/generated/.gitkeep
+# prom_repo_sync: auto-ignored exclude-matched noise
+*.tmp
+*.bak
+*.mp4
+*.mov
+*.webm
+
+# Final workspace safety guards. The broad workspace re-includes above are
+# intentional, but must never pull nested dependencies, compiler output, or
+# live diagnostic/runtime logs into repository checkpoints.
+workspace/**/node_modules/
+workspace/**/build/
+workspace/**/logs/
+workspace/temp/
+workspace/**/*.log
+workspace/**/*.cpuprofile
+workspace/**/*.obj
+workspace/**/__pycache__/
+workspace/**/*.pyc
+
+# External reference checkouts are independent repositories. Keep their local
+# working trees out of the parent repo rather than recording unusable gitlinks.
+workspace/repos/
+workspace/scratch/
+workspace/games/prometheus-vita/vendor/
+workspace/oss agents/hermes-agent/
+workspace/oss agents/openclaw/
+
+# Personal runtime records stay local. They are not part of PromSRC source
+# synchronization or public releases.
+workspace/Brain/**
+workspace/memory/**
+workspace/audit/**
+workspace/workspace/memory/**
+workspace/workspace/videos/**
+
+# Skill safety-scan caches written next to connector skills at runtime
+src/extensions/bundled/connectors/*/.cache/
+
+# Staged gateway Node runtime for packaged builds (scripts/prepare-bundled-node.js)
+/build-resources/
+
+
+# local eval output (published results live in evals/RESULTS.md)
+evals/results/
+
+# Public embedding export must ship its compiled implementation.
+!/dist/
+!/dist/**
+# Runtime/test receipts are never package payloads.
+/audit/
+/memory/
+/reviews/
