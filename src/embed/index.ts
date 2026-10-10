@@ -259,7 +259,12 @@ export async function createPrometheusRuntime(options: CreateRuntimeOptions = {}
           turnOptions.allowedTools && turnOptions.allowedTools.length ? turnOptions.allowedTools : undefined,
         );
         const toolResults = Array.isArray(result?.toolResults)
-          ? result.toolResults.map((r: any) => ({ name: String(r?.name || ''), result: String(r?.result ?? ''), error: r?.error === true }))
+          ? result.toolResults.map((r: any) => ({
+            name: String(r?.name || ''),
+            // Strip the model-facing timing banner the loop prepends for the model.
+            result: String(r?.result ?? '').replace(/^\[TOOL_STOPWATCH\][^\n]*\n/, ''),
+            error: r?.error === true,
+          }))
           : [];
         return {
           sessionId,

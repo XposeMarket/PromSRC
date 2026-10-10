@@ -31,7 +31,7 @@ const provider = {
         stopReason: 'tool_use',
       };
     }
-    const text = `Order status: ${String(toolMsg.content)}`;
+    const text = `Order status: ${String(toolMsg.content).replace(/^\[TOOL_STOPWATCH\][^\n]*\n/, '')}`;
     options.onToken?.(text);
     return { message: { role: 'assistant', content: text }, stopReason: 'end_turn' };
   },
@@ -56,6 +56,7 @@ try {
   assert.equal(EMBED_API_VERSION, 1);
   assert.match(run.text, /order 42 shipped on Oct 9/);
   assert.deepEqual(run.toolResults.map((r) => r.name), ['lookup_order']);
+  assert.equal(run.toolResults[0].result, 'order 42 shipped on Oct 9', 'hosts get the raw tool output');
   assert.equal(run.aborted, false);
   assert.ok(events.includes('tool_call') && events.includes('tool_result'), `events streamed: ${[...new Set(events)].join(',')}`);
 
