@@ -267,6 +267,15 @@ class ApprovalQueue {
       createdAt: new Date().toISOString(),
       status: 'pending',
     };
+    // Bind the approval to the turn that raised it, so it shows on that turn's trace.
+    try {
+      const trace = require('./observability/turn-trace') as typeof import('./observability/turn-trace');
+      const ctx = trace.currentTrace();
+      if (ctx) {
+        (record as any).traceId = ctx.traceId;
+        trace.recordSpan({ kind: 'approval', name: String(record.toolName || ''), startedAt: Date.now(), status: 'pending', attrs: { approvalId: id, kind: record.approvalKind, risk: record.riskScore } });
+      }
+    } catch { /* tracing is optional */ }
     this.records.set(id, record);
     this.persistDurableRecords();
     console.log(`[ApprovalQueue] Created approval ${id} for "${record.toolName}" (${record.policyTier}, risk=${record.riskScore})`);
@@ -296,6 +305,23 @@ class ApprovalQueue {
     record.status = approved ? 'approved' : 'rejected';
     record.resolvedAt = new Date().toISOString();
     record.resolvedBy = resolvedBy;
+    try {
+      const traceId = (record as any).traceId;
+      if (traceId) {
+        const trace = require('./observability/turn-trace') as typeof import('./observability/turn-trace');
+        const created = Date.parse(record.createdAt);
+        trace.recordSpan({
+          traceId,
+          sessionId: record.sessionId,
+          kind: 'approval',
+          name: String(record.toolName || ''),
+          startedAt: Number.isFinite(created) ? created : Date.now(),
+          durationMs: Number.isFinite(created) ? Date.now() - created : undefined,
+          status: approved ? 'approved' : 'rejected',
+          attrs: { approvalId: id, resolvedBy },
+        });
+      }
+    } catch { /* tracing is optional */ }
 
     // Fire callback if one was registered (used by commit-tier tool execution)
     const cb = this.callbacks.get(id);

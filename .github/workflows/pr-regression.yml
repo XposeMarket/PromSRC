@@ -177,6 +177,8 @@ jobs:
         run: npm run test:tool-dispatch-policy
       - name: Verify turn-loop replay scenarios
         run: npm run test:replay
+      - name: Verify end-to-end turn tracing
+        run: npm run test:turn-trace
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
       - name: Verify desktop reasoning summary streaming

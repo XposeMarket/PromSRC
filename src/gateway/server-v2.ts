@@ -243,6 +243,10 @@ assertSupportedNodeRuntime('gateway');
 const configManager = getConfig();
 const config = configManager.getConfig();
 const CONFIG_DIR_PATH = configManager.getConfigDir();
+// Persist turn traces under <configDir>/traces (bounded daily JSONL).
+try {
+  require('./observability/turn-trace').setTraceDirectory(path.join(CONFIG_DIR_PATH, 'traces'));
+} catch { /* tracing is optional */ }
 // Electron may retain the configured/public gateway port in a stable relay
 // while this worker is restarted behind it. The internal listener override is
 // deliberately separate from PROMETHEUS_GATEWAY_PORT so pairing, lifecycle,
