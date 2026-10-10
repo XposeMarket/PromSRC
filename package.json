@@ -47,6 +47,7 @@
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
     "test:mediation": "tsx src/testing/replay/mediation.regression.ts",
     "test:tool-dispatch-policy": "tsx src/gateway/chat/tool-dispatch-policy.regression.ts",
+    "test:approval-stale-expiry": "tsx src/gateway/approval-stale-expiry.regression.ts",
     "test:security-controls": "tsx src/security/security-controls.regression.ts",
     "test:docs-evidence": "node scripts/test-docs-evidence.mjs",
     "test:terminal-exit-and-tool-args": "tsx src/gateway/terminal-exit-and-tool-args.regression.ts",

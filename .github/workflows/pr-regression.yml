@@ -175,6 +175,8 @@ jobs:
         run: node scripts/test-design-preview-contract.mjs
       - name: Verify tool dispatch policy
         run: npm run test:tool-dispatch-policy
+      - name: Verify stale approvals expire
+        run: npm run test:approval-stale-expiry
       - name: Verify turn-loop replay scenarios
         run: npm run test:replay
       - name: Verify complete mediation across execution paths
