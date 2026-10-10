@@ -46,6 +46,7 @@
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
     "test:tool-dispatch-policy": "tsx src/gateway/chat/tool-dispatch-policy.regression.ts",
+    "test:approval-stale-expiry": "tsx src/gateway/approval-stale-expiry.regression.ts",
     "test:terminal-exit-and-tool-args": "tsx src/gateway/terminal-exit-and-tool-args.regression.ts",
     "test:workspace-tool-mode": "tsx src/runtime/workspace-tool-mode.regression.ts",
     "test:path-permissions": "tsx src/gateway/path-permissions.regression.ts",
