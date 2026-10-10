@@ -61,7 +61,8 @@ const packagedPath = relayRuntime.resolveUserChromeExtensionPath({
 });
 assert.match(packagedPath, /app\.asar\.unpacked/, 'packaged onboarding must resolve the real unpacked extension directory');
 assert.doesNotMatch(packagedPath, /app\.asar[\\/]dist/, 'packaged onboarding must never return the virtual ASAR path');
-const executorSource = await import('node:fs').then((fs) => fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8'));
+const { readExecutorSource } = await import('./lib/executor-source.mjs');
+const executorSource = readExecutorSource(root);
 assert.match(executorSource, /const nativeText = \['button','a','summary','option'\]/, 'a11y audit must honor native button/link text');
 assert.match(executorSource, /browserRunSmokeSteps/, 'smoke tests must execute declarative steps');
 
