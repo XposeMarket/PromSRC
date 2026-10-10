@@ -273,3 +273,6 @@ src/extensions/bundled/connectors/*/.cache/
 # Staged gateway Node runtime for packaged builds (scripts/prepare-bundled-node.js)
 /build-resources/
 
+
+# local eval output (published results live in evals/RESULTS.md)
+evals/results/

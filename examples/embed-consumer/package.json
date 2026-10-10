@@ -1,0 +1,12 @@
+{
+  "name": "prometheus-embed-consumer-example",
+  "private": true,
+  "type": "module",
+  "description": "A separate Node project that embeds the Prometheus agent runtime through its public API.",
+  "dependencies": {
+    "prometheus": "file:../.."
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  }
+}
