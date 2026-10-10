@@ -56,6 +56,8 @@
     "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs",
     "test:small-context-fit": "tsx src/gateway/tools/small-context-fit.regression.ts",
     "test:evals-selftest": "npm run build:backend && node evals/run-evals.mjs --model scripted:oracle --timeout-ms 60000 --out .tmp/evals-selftest",
+    "test:turn-trace": "tsx src/gateway/observability/turn-trace.regression.ts",
+    "test:crash-recovery": "tsx src/gateway/runtime/crash-fault-injection.regression.ts",
     "test:webui-build-id-stability": "node scripts/test-webui-build-id-stability.mjs",
     "test:mediation": "tsx src/testing/replay/mediation.regression.ts",
     "test:tool-dispatch-policy": "tsx src/gateway/chat/tool-dispatch-policy.regression.ts",

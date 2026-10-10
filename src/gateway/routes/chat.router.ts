@@ -26,6 +26,7 @@ import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../tools/schema-compaction';
+import { currentTrace, getTrace, listRecentTraces, recordSpan, runInTrace, withSpan } from '../observability/turn-trace';
 import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../chat/tool-dispatch-policy';
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
@@ -2137,6 +2138,17 @@ export function initChatRouter(deps: ChatRouterDeps): void {
 
 export const router = express.Router();
 
+// End-to-end turn traces: one trace per agent turn, child agents linked by parentTraceId.
+router.get('/api/traces', (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+  res.json({ traces: listRecentTraces(limit) });
+});
+router.get('/api/traces/:traceId', (req, res) => {
+  const trace = getTrace(String(req.params.traceId || ''));
+  if (!trace.spans.length) return res.status(404).json({ error: 'trace not found' });
+  res.json(trace);
+});
+
 function requireSafeSessionParam(req: express.Request, res: express.Response, next: express.NextFunction): void {
   const key = Object.prototype.hasOwnProperty.call(req.params, 'sessionId') ? 'sessionId' : 'id';
   try {
@@ -2638,7 +2650,37 @@ async function maybeRunMidWorkflowCompaction(input: {
   }
 }
 
-async function handleChat(
+/**
+ * Every agent turn runs inside a trace (src/gateway/observability/turn-trace.ts):
+ * model calls, dispatch decisions, tool executions, approvals and child agents
+ * on this turn's async path record spans against one trace id, returned on the
+ * result and readable at GET /api/traces/:traceId.
+ */
+async function handleChat(...args: Parameters<typeof handleChatUntraced>): ReturnType<typeof handleChatUntraced> {
+  const [message, sessionId, , , abortSignal, , , executionMode] = args;
+  return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive') }, async () => {
+    const startedAt = Date.now();
+    const trace = currentTrace();
+    try {
+      const result = await handleChatUntraced(...args);
+      recordSpan({
+        kind: 'turn',
+        name: String(executionMode || 'interactive'),
+        startedAt,
+        durationMs: Date.now() - startedAt,
+        status: abortSignal?.aborted ? 'aborted' : 'ok',
+        attrs: { message: String(message || '').slice(0, 120), toolCalls: Array.isArray(result?.toolResults) ? result.toolResults.length : 0 },
+      });
+      if (result && typeof result === 'object' && trace) (result as any).traceId = trace.traceId;
+      return result;
+    } catch (err: any) {
+      recordSpan({ kind: 'turn', name: String(executionMode || 'interactive'), startedAt, durationMs: Date.now() - startedAt, status: 'error', attrs: { error: String(err?.message || err) } });
+      throw err;
+    }
+  });
+}
+
+async function handleChatUntraced(
   message: string,
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
@@ -6597,7 +6639,12 @@ Do not produce prose. Use the canonical thread tool now.` });
         : null;
       const generationPromise = (async () => {
         try {
-          return await ollama.chatWithThinking(messages, 'executor', generationOptions);
+          return await withSpan(
+            'model_call',
+            'executor',
+            { provider: String((generationOptions as any)?.provider || ''), model: String((generationOptions as any)?.model || ''), messages: messages.length },
+            () => ollama.chatWithThinking(messages, 'executor', generationOptions),
+          );
         } catch (helperErr: any) {
           if (isUsageLimitError(helperErr)) {
             try { recordProviderUsageExhausted(String(generationOverride.providerId || '')); } catch {}
@@ -7568,6 +7615,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         const dispatchDecision = evaluateTurnToolDispatch(toolName, call.function?.arguments);
         if (!dispatchDecision.ok) {
           console.warn(`[v2] DISPATCH REFUSED (${dispatchDecision.code}): ${toolName}`);
+          recordSpan({ kind: 'tool_dispatch', name: toolName, startedAt: Date.now(), status: 'refused', attrs: { code: dispatchDecision.code } });
           allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, dispatchDecision.message, true));
           logToolCall(workspacePath, toolName, toolArgs, dispatchDecision.message, true);
           markProgressStepStart(toolName);
