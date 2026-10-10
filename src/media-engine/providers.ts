@@ -255,7 +255,7 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   const set = (field: NeutralField, value: unknown) => {
     const key = model.map[field];
     if (!key || value === undefined || value === null || value === '') return;
-    body[key] = value;
+    body[key] = model.arrayFields?.includes(field) && !Array.isArray(value) ? [value] : value;
   };
   set('prompt', input.prompt);
   set('negativePrompt', input.negativePrompt);
@@ -265,7 +265,7 @@ export async function buildRequestBody(model: MediaModelManifest, input: ShotInp
   set('audio', await toRemoteMedia(input.audio));
   if (input.referenceImages?.length && model.map.referenceImages) {
     const refs: string[] = [];
-    for (const r of input.referenceImages.slice(0, 7)) {
+    for (const r of input.referenceImages.slice(0, model.limits?.maxRefs ?? 16)) {
       const url = await toRemoteMedia(r);
       if (url) refs.push(url);
     }

@@ -56,7 +56,11 @@ export interface MediaModelManifest {
     maxDurationSec?: number;
     aspects?: string[];
     resolutions?: string[];
+    /** Max reference images the endpoint accepts (OpenAPI maxItems). */
+    maxRefs?: number;
   };
+  /** Neutral fields whose provider key is an array (e.g. fal image_urls / video_urls): the value is wrapped. */
+  arrayFields?: NeutralField[];
   /** How to express aspect ratios for this endpoint. */
   aspectFormat?: 'ratio' | 'prometheus';
   /** Duration value type expected by the endpoint. */
@@ -494,9 +498,14 @@ function resolutionRate(rates: Record<string, number>, resolution: string | unde
   return rates[(keys.find((x) => x.n >= want) || keys[keys.length - 1]).k];
 }
 
-/** Curated (built-in or hand-added) manifests are verified; fal-sync entries only have guessed inputs. */
+/**
+ * Curated (built-in or hand-added) manifests are verified. A fal-sync entry is verified once its
+ * real OpenAPI input schema has been loaded and every required field maps to something Prometheus fills.
+ */
 export function isVerifiedModel(model: MediaModelManifest | undefined): boolean {
-  return !!model && model.source !== 'fal-sync';
+  if (!model) return false;
+  if (model.source !== 'fal-sync') return true;
+  return !!model.schemaLoaded && !model.unmappedRequired?.length;
 }
 
 /** Snap a requested duration onto what the model accepts. */

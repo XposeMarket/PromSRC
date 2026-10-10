@@ -5,6 +5,8 @@ import { getProviderKey } from './providers.js';
 import { listCuratedModels, listModels, setSyncedFalModels, type MediaModelManifest } from './catalog.js';
 
 const TTL_MS = 24 * 60 * 60 * 1000;
+/** Bump when the sync filter/mapping changes so stale caches (missing models) are rebuilt. */
+const CACHE_VERSION = 2;
 const CATEGORIES = ['text-to-video', 'image-to-video', 'video-to-video', 'video-upscaling', 'lip-sync', 'lipsync', 'audio-to-video'];
 const pricing = new Map<string, MediaModelManifest['pricing']>();
 let cacheLoaded = false;
@@ -14,22 +16,27 @@ export interface FalSyncResult { count: number; fetchedAt?: string; stale?: bool
 
 function cacheFile(): string { return path.join(getConfig().getConfigDir(), 'cache', 'fal-video-catalog.json'); }
 function validEndpoint(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z\d][a-z\d-]*\/[a-z\d][a-z\d/_-]*$/i.test(value) && !value.includes('..');
+  // fal ids carry version dots (bytedance/seedance-2.5/..., fal-ai/veo3.1, kling-video/v2.6). Rejecting
+  // dots silently dropped every current-generation model from the catalog.
+  return typeof value === 'string' && /^[a-z\d][a-z\d.-]*\/[a-z\d][a-z\d/._-]*$/i.test(value) && !value.includes('..') && !value.includes('//');
 }
 function loadCache(): void {
   if (cacheLoaded) return;
   cacheLoaded = true;
   try {
     const cache = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'));
-    lastSync = Number(cache.fetchedAt) || 0;
+    lastSync = cache.version === CACHE_VERSION ? Number(cache.fetchedAt) || 0 : 0;
     for (const item of cache.prices || []) if (validEndpoint(item[0]) && item[1]?.source === 'live') pricing.set(item[0], item[1]);
     setSyncedFalModels((cache.models || []).filter((m: MediaModelManifest) => validEndpoint(m.endpoint) && m.kind !== 'image'));
   } catch { /* missing/corrupt cache: retry API */ }
 }
 async function api(url: URL, key?: string): Promise<any> {
-  const response = await fetch(url, { headers: key ? { Authorization: `Key ${key}` } : {}, signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`fal ${url.pathname} returned HTTP ${response.status}`);
-  return response.json();
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, { headers: key ? { Authorization: `Key ${key}` } : {}, signal: AbortSignal.timeout(15_000) });
+    if (response.status === 429 && attempt < 4) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+    if (!response.ok) throw new Error(`fal ${url.pathname} returned HTTP ${response.status}`);
+    return response.json();
+  }
 }
 
 /** Convert fal's raw billing units without ever treating a video/token as a second. */
@@ -89,8 +96,31 @@ export async function hydrateFalModelSchema(model: MediaModelManifest): Promise<
           if (model.map[field] && !Object.hasOwn(props, model.map[field]!)) model.map[field] = undefined;
         }
         // The sync only guesses inputs from the category; add media fields the schema really has.
-        const ADD: Array<[keyof typeof model.map, string]> = [['startImage', 'image_url'], ['sourceVideo', 'video_url'], ['audio', 'audio_url'], ['endImage', 'end_image_url']];
+        const ADD: Array<[keyof typeof model.map, string]> = [
+          ['startImage', 'image_url'], ['startImage', 'first_frame_url'], ['startImage', 'start_image_url'],
+          ['sourceVideo', 'video_url'], ['audio', 'audio_url'],
+          ['endImage', 'end_image_url'], ['endImage', 'last_frame_url'],
+        ];
         for (const [field, key] of ADD) if (!model.map[field] && Object.hasOwn(props, key)) (model.map as any)[field] = key;
+        // Reference-style endpoints (Seedance 2.x, Veo 3.1, Wan 3.0, Grok ref-to-video...) take arrays.
+        const ARRAYS: Array<[keyof typeof model.map, string[]]> = [
+          ['referenceImages', ['image_urls', 'reference_image_urls', 'reference_images']],
+          ['sourceVideo', ['video_urls', 'reference_video_urls']],
+          ['audio', ['audio_urls', 'reference_audio_urls']],
+        ];
+        const arrayFields = new Set<keyof typeof model.map>();
+        for (const [field, keys] of ARRAYS) {
+          const key = keys.find((k) => Object.hasOwn(props, k) && schemaRef(root, props[k])?.type === 'array');
+          if (!key) continue;
+          if (field === 'referenceImages') {
+            if (!model.map.referenceImages) model.map.referenceImages = key;
+            const max = Number(schemaRef(root, props[key])?.maxItems);
+            if (Number.isFinite(max) && max > 0) limits.maxRefs = max;
+          } else if (!model.map[field]) { (model.map as any)[field] = key; arrayFields.add(field); }
+        }
+        model.arrayFields = arrayFields.size ? [...arrayFields] as any : undefined;
+        // Inputs the category guess marked required but the schema doesn't require are optional.
+        if (!Array.isArray(schema?.required)) model.requires = (model.requires || []).filter((f) => f === 'prompt' && Object.hasOwn(props, 'prompt')) as any;
         const required: string[] = Array.isArray(schema?.required) ? schema.required.map(String) : [];
         const mapped = new Set(Object.values(model.map).filter(Boolean) as string[]);
         model.requires = Array.from(new Set([
@@ -207,7 +237,7 @@ export async function syncFalModels(force = false): Promise<FalSyncResult> {
       lastSync = Date.now();
       const file = cacheFile(); fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ fetchedAt: lastSync, models, prices: [...pricing] })); fs.renameSync(tmp, file);
+      fs.writeFileSync(tmp, JSON.stringify({ version: CACHE_VERSION, fetchedAt: lastSync, models, prices: [...pricing] })); fs.renameSync(tmp, file);
       const visible = listModels({ provider: 'fal' }).filter((m) => m.source === 'fal-sync');
       return { count: visible.length, fetchedAt: new Date(lastSync).toISOString(), ...(!key || priceFailed ? { error: !key ? 'fal pricing requires a vault key; model listing is public and uses static estimates' : 'Some fal pricing batches failed; retained cached prices or static estimates' } : {}), examples: visible.slice(0, 5).map((m) => m.id) };
     } catch (error: any) {
