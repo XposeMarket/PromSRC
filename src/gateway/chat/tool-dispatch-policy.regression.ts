@@ -71,6 +71,10 @@ assert.equal(resolveToolSurfaceEnforcementMode({ runtime: { tool_surface_enforce
 process.env.PROMETHEUS_TOOL_SURFACE_ENFORCEMENT = 'off';
 assert.equal(resolveToolSurfaceEnforcementMode({ runtime: { toolSurfaceEnforcement: 'enforce' } }), 'off');
 delete process.env.PROMETHEUS_TOOL_SURFACE_ENFORCEMENT;
+// A public distribution build ignores the relaxed modes: enforcement cannot be switched off in a shipped app.
+assert.equal(resolveToolSurfaceEnforcementMode({ runtime: { toolSurfaceEnforcement: 'off' } }, { publicBuild: true }), 'enforce');
+assert.equal(resolveToolSurfaceEnforcementMode({}, { publicBuild: true, env: { PROMETHEUS_TOOL_SURFACE_ENFORCEMENT: 'warn' } as any }), 'enforce');
+assert.equal(resolveToolSurfaceEnforcementMode({}, { publicBuild: false, env: { PROMETHEUS_TOOL_SURFACE_ENFORCEMENT: 'warn' } as any }), 'warn');
 assert.equal(resolveIdleRoundLimit({}), 8);
 assert.equal(resolveIdleRoundLimit({ runtime: { idleRoundLimit: 4 } }), 4);
 assert.equal(resolveIdleRoundLimit({ runtime: { idleRoundLimit: 1 } }), 8);
