@@ -72,6 +72,21 @@ function walkFiles(directory) {
   return output.sort((left, right) => compareText(toPosix(left), toPosix(right)));
 }
 
+function packageBuildFingerprint(pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))) {
+  const sortKeys = (value) => (value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort(compareText).map((key) => [key, sortKeys(value[key])]))
+    : value);
+  return JSON.stringify(sortKeys({
+    name: pkg.name,
+    version: pkg.version,
+    type: pkg.type,
+    dependencies: pkg.dependencies || {},
+    devDependencies: pkg.devDependencies || {},
+    overrides: pkg.overrides || {},
+    browserslist: pkg.browserslist,
+  }));
+}
+
 function computeSourceDigest() {
   const hash = crypto.createHash('sha256');
   hash.update(`${BUILD_DESCRIPTOR}|esbuild-${esbuild.version}\n`);
@@ -80,10 +95,14 @@ function computeSourceDigest() {
     const relative = toPosix(path.relative(WEB_UI_ROOT, filePath));
     return relative !== 'service-worker-v2.js';
   }),
-    path.join(ROOT, 'package.json'),
     path.join(ROOT, 'package-lock.json'),
     fileURLToPath(import.meta.url),
   ].sort((left, right) => compareText(toPosix(left), toPosix(right)));
+  // package.json contributes only the fields that can change the web build.
+  // Hashing the whole file meant every new npm script (test:*, bench:*)
+  // changed the build id, forcing a web-ui resync on every open PR whenever
+  // any other PR merged.
+  hash.update(`package.json#build-fields\0${packageBuildFingerprint()}\0`);
   for (const filePath of buildInputs) {
     const relative = toPosix(path.relative(ROOT, filePath));
     hash.update(`${relative}\0`);
