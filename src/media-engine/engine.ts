@@ -266,7 +266,7 @@ export async function estimate(workspacePath: string, projectId: string, args: {
       const { hydrateFalModelSchema } = await import('./fal-catalog.js');
       await hydrateFalModelSchema(model);
       if (model.unmappedRequired?.length) problems.push(`${model.id} requires ${model.unmappedRequired.join(', ')} which Prometheus cannot fill; add a curated manifest (add_model with defaults) first`);
-      else problems.push('unverified synced model: inputs were guessed from the fal catalog; check models -> needs before approving a paid run');
+      else if (!model.schemaLoaded) problems.push('unverified synced model: fal input schema could not be loaded; check models -> needs before approving a paid run');
     }
     const shotUsd = estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect });
     if (model.provider === 'fal') falUsd += shotUsd;

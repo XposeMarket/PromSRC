@@ -45,7 +45,7 @@
     "test:needs-you-video": "tsx src/gateway/needs-you-video-approval.regression.ts",
     "sync:web-ui": "npm run build:thinking-orb && node scripts/prepare-public-build.js --web-only && npm run check:web-ui",
     "sync:hyperframes": "node scripts/sync-hyperframes-catalog.js",
-    "test:image-size": "tsx src/image-generation/image-size.regression.ts",
+    "test:fal-full-catalog": "tsx src/media-engine/fal-full-catalog.regression.ts",`n    "test:image-size": "tsx src/image-generation/image-size.regression.ts",
     "test:subagent-browser-profile": "tsx src/gateway/subagent-browser-profile.regression.ts",
     "test:codex-oauth-realtime": "npm run build:backend && node scripts/test-codex-oauth-realtime-bridge.mjs",
     "test:hyperframes-roundtrip": "node scripts/test-hyperframes-roundtrip.mjs",

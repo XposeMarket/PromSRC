@@ -82,7 +82,10 @@ try {
   const unknown = { ...model, id: 'fal/unknown-test', endpoint: 'fal-ai/unknown-test', pricing: { source: 'estimate' as const } };
   setSyncedFalModels([model, unknown]);
   await mutateProject(ws, project.id, 'regression.unknown', (p) => { p.shots[0].modelId = unknown.id; });
-  const approval = await generateShots(ws, project.id, {});
+  // Stay offline: a live sync would replace the fixture models with fal's real catalog.
+  const liveFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error('offline regression'); }) as typeof fetch;
+  const approval = await generateShots(ws, project.id, {}).finally(() => { globalThis.fetch = liveFetch; });
   assert.equal(approval.needsApproval, true);
   assert.match(approval.reason || '', /unknown pricing/);
 } finally { fs.rmSync(ws, { recursive: true, force: true }); }

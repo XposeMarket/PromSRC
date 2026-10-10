@@ -3,7 +3,7 @@
  * engine. Every edit goes through project ops (undoable, shared with the UI).
  */
 import {
-  getModel, importModelManifests, listModels, removeUserManifest, saveUserManifest, type MediaModelManifest,
+  getModel, importModelManifests, listModels, removeUserManifest, saveUserManifest, isVerifiedModel, type MediaModelManifest,
 } from './catalog.js';
 import { providerKeyHint, providerStatus, setProviderKey } from './providers.js';
 import { clearVideoApprovalsForProject, recordVideoApproval } from '../gateway/video-pending-approvals.js';
@@ -280,7 +280,7 @@ export async function executeVideoProject(args: any, ctx: { workspacePath: strin
         models: models.map((m: MediaModelManifest) => ({
           id: m.id, label: m.label, kind: m.kind, provider: m.provider, tags: m.tags,
           needs: m.requires, durations: m.limits?.durations || (m.limits?.maxDurationSec ? `${m.limits.minDurationSec ?? 1}-${m.limits.maxDurationSec}s` : undefined),
-          price: liveFalPrice(m) || m.pricing, builtin: m.builtin, source: m.source, verified: m.source !== 'fal-sync',
+          price: liveFalPrice(m) || m.pricing, builtin: m.builtin, source: m.source, verified: isVerifiedModel(m),
         })),
       };
     }

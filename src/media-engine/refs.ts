@@ -16,8 +16,9 @@ import type { MediaModelManifest } from './catalog.js';
 export const OPENAI_REF_LIMIT = 16;
 export const DEFAULT_REF_LIMIT = 5;
 
-export function refLimitFor(model: Pick<MediaModelManifest, 'provider' | 'id'> | undefined): number {
+export function refLimitFor(model: Pick<MediaModelManifest, 'provider' | 'id'> & { limits?: MediaModelManifest['limits'] } | undefined): number {
   if (!model) return DEFAULT_REF_LIMIT;
+  if (model.limits?.maxRefs && model.limits.maxRefs > 0) return model.limits.maxRefs;
   return model.provider === 'openai' || /^openai\//.test(model.id) ? OPENAI_REF_LIMIT : DEFAULT_REF_LIMIT;
 }
 
