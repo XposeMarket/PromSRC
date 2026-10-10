@@ -19,6 +19,25 @@ import {
   type MainChatGoalTurnPlan,
 } from './session';
 import type { ModelUsageEvent } from '../providers/model-usage';
+import { cancelMainChatGoalTimers } from './timers/timer-store';
+
+export function stopMainChatGoalByUser(sessionId: string, reason = 'user-stopped'): MainChatGoalState | null {
+  const next = updateMainChatGoal(sessionId, goal => goal && !['done', 'cleared'].includes(goal.status) ? {
+    ...startPause(goal, reason, Date.now()),
+    userStoppedAt: Date.now(),
+    nextStepDirective: undefined,
+  } : goal);
+  if (next) {
+    flushSession(sessionId);
+    cancelMainChatGoalTimers(sessionId, next.id);
+  }
+  return next;
+}
+
+export function canAutomaticallyResumeMainChatGoal(goal: MainChatGoalState | null | undefined): boolean {
+  return !!goal && !goal.userStoppedAt && goal.lastVerdict !== 'stopped'
+    && !/^user[-_ ](?:paused|stopped)/i.test(String(goal.pausedReason || ''));
+}
 
 export interface MainChatGoalPolicy {
   enabled: boolean;
@@ -303,10 +322,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
 
   if (sub === 'pause') {
     const note = arg.replace(/^pause\b/i, '').trim();
-    const next = updateMainChatGoal(sessionId, (goal) => {
-      if (!goal) return null;
-      return startPause(goal, note || 'user-paused', Date.now());
-    });
+    const next = stopMainChatGoalByUser(sessionId, note || 'user-paused');
     return { handled: true, message: next ? statusLine(next) : 'No main-chat goal to pause.', shouldStartRunner: false, goal: next };
   }
 
@@ -315,12 +331,15 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
       if (!goal) return null;
       const now = Date.now();
       const status = String(goal.status || '').toLowerCase();
-      if (!['restarting', 'paused', 'blocked', 'failed'].includes(status) && !goalPauseStartedAt(goal) && String(goal.lastVerdict || '') !== 'failed') {
+      if (!['restarting', 'paused', 'blocked', 'failed'].includes(status) && !goalPauseStartedAt(goal) && String(goal.lastVerdict || '') !== 'failed' && !goal.userStoppedAt && goal.lastVerdict !== 'stopped') {
         return goal;
       }
       return {
         ...endPause({ ...goal, status: 'active' }, now),
         status: 'active',
+        userStoppedAt: undefined,
+        lastVerdict: 'continue',
+        completedAt: undefined,
         pausedReason: undefined,
         blockedReason: undefined,
         failureReason: undefined,
@@ -337,6 +356,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
   }
 
   if (sub === 'clear') {
+    if (current) cancelMainChatGoalTimers(sessionId, current.id);
     const note = arg.replace(/^clear\b/i, '').trim();
     const now = Date.now();
     if (current) {
@@ -353,6 +373,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
   }
 
   if (sub === 'done') {
+    stopMainChatGoalByUser(sessionId);
     const note = arg.replace(/^done\b/i, '').trim();
     const next = updateMainChatGoal(sessionId, (goal) => {
       if (!goal) return null;
@@ -405,7 +426,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
     if (!revised) return { handled: true, message: 'Usage: /goal revise <new objective>', shouldStartRunner: false, goal: current };
     const next = updateMainChatGoal(sessionId, (goal) => {
       const base = goal || nowGoal(sessionId, revised);
-      return { ...base, goal: revised, status: 'active', updatedAt: Date.now() };
+      return { ...base, goal: revised, status: 'active', userStoppedAt: undefined, lastVerdict: 'continue', updatedAt: Date.now() };
     });
     return { handled: true, message: next ? `Revised and resumed main-chat goal.\n${statusLine(next)}` : 'Could not revise goal.', shouldStartRunner: !!next, goal: next };
   }
@@ -1210,7 +1231,7 @@ export function recordMainChatGoalInterruptedForRestart(
     // work and needs the same durable restart checkpoint as an active goal.
     // Intentionally paused goals have no live runtime caller and are therefore
     // unaffected by this broader transition.
-    if (!goal || !['active', 'paused'].includes(String(goal.status || ''))) return goal;
+    if (!goal || !canAutomaticallyResumeMainChatGoal(goal) || !['active', 'paused'].includes(String(goal.status || ''))) return goal;
     const now = Date.now();
     const resumablePlan = findResumableGoalTurnPlan(goal)
       || [...(goal.turnPlans || [])].reverse().find((plan) => isOpenGoalTurnPlan(plan));
@@ -1325,7 +1346,7 @@ export function finalizeMainChatGoalRestartRecovery(
   } = {},
 ): MainChatGoalState | null {
   return updateMainChatGoal(sessionId, (goal) => {
-    if (!goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    if (!canAutomaticallyResumeMainChatGoal(goal) || !goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
     // Boot recovery can be replayed by reconnecting lifecycle observers. Its
     // plan transition and durable progress entry are exactly-once effects.
     if (goal.restartCheckpoint.phase === 'boot_finalized') return goal;
@@ -1394,7 +1415,7 @@ export function finalizeMainChatGoalCrashRecovery(
   } = {},
 ): MainChatGoalState | null {
   return updateMainChatGoal(sessionId, (goal) => {
-    if (!goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    if (!canAutomaticallyResumeMainChatGoal(goal) || !goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
     const now = Number(input.recoveredAt || Date.now()) || Date.now();
     const reason = String(input.reason || 'gateway_crash').trim() || 'gateway_crash';
     const devEditId = goal.restartCheckpoint.devEditId;
