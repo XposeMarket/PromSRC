@@ -40,6 +40,8 @@ export interface ReplayTurnInput {
   providerOptions?: ScriptedProviderOptions;
   sessionId?: string;
   executionMode?: string;
+  /** Agent allowlist (subagent/team allowed_tools), passed to handleChat as its tool filter. */
+  toolFilter?: string[];
   approvals?: ApprovalPolicy;
   /**
    * Stubbed tools. A stub replaces execution entirely (it runs before policy,
@@ -84,6 +86,12 @@ export interface ReplayHarness {
   root: string;
   workspace: string;
   runTurn(input: ReplayTurnInput): Promise<ReplayTurnRun>;
+  /**
+   * Calls a non-loop tool entry point (voice) with the same side-effect
+   * blocking as runTurn. Returns the raw entry-point output and what reached
+   * executeTool.
+   */
+  runEntry(sessionId: string, fn: (router: any) => Promise<string>, tools?: Record<string, ToolStub>): Promise<{ output: string; dispatched: string[] }>;
   shutdown(): void;
 }
 
@@ -189,6 +197,7 @@ export async function bootReplayHarness(options: { quiet?: boolean } = {}): Prom
         undefined,
         undefined,
         input.executionMode || 'interactive',
+        input.toolFilter,
       );
       const ceiling = new Promise<'timeout'>((resolve) => {
         timers.push(setTimeout(() => resolve('timeout'), timeoutMs));
@@ -232,10 +241,34 @@ export async function bootReplayHarness(options: { quiet?: boolean } = {}): Prom
     };
   }
 
+  async function runEntry(sessionId: string, fn: (router: any) => Promise<string>, tools: Record<string, ToolStub> = {}) {
+    const dispatched: string[] = [];
+    executor.setToolExecutionOverrideForTesting(async (name, args, toolSessionId) => {
+      if (toolSessionId !== sessionId) return null;
+      dispatched.push(name);
+      const stub = tools[name];
+      if (stub) {
+        const out = await stub(args, 0);
+        return { name, args, result: out.result, error: out.error === true };
+      }
+      if (SIDE_EFFECT_TOOL.test(name)) return { name, args, result: `[replay] ${name} is blocked in the replay harness (no stub provided).`, error: true };
+      return null;
+    });
+    const restore = silenceConsole();
+    try {
+      const output = await fn(router);
+      return { output, dispatched };
+    } finally {
+      restore();
+      executor.setToolExecutionOverrideForTesting(null);
+    }
+  }
+
   return {
     root,
     workspace,
     runTurn,
+    runEntry,
     shutdown() {
       try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); } catch {}
     },

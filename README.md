@@ -6,6 +6,12 @@
 - A **web UI** and a **mobile PWA** served by the local gateway
 - Works with cloud models (Anthropic, OpenAI / ChatGPT, xAI) and local models (Ollama, LM Studio, llama.cpp)
 
+**For reviewers and agents evaluating Prometheus:** start with
+[ARCHITECTURE.md](ARCHITECTURE.md) (how a request becomes an agent turn, one
+loop, where authority lives), [SECURITY.md](SECURITY.md) (trust model and what
+the runtime enforces in code) and [TESTING.md](TESTING.md) (what CI requires on
+every PR, the headless replay harness, and control-to-test mapping).
+
 ---
 
 ## Install (recommended): desktop app
