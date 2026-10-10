@@ -179,6 +179,12 @@ jobs:
         run: npm run test:approval-stale-expiry
       - name: Verify turn-loop replay scenarios
         run: npm run test:replay
+      - name: Verify embedding API from a separate consumer project
+        run: npm run test:embed
+      - name: Verify eval harness self-test (oracle must score 7/7)
+        run: npm run test:evals-selftest
+      - name: Verify small-context tool schema fitting
+        run: npm run test:small-context-fit
       - name: Verify end-to-end turn tracing
         run: npm run test:turn-trace
       - name: Verify crash recovery (hard-killed gateway, no blind replay of committed side effects)

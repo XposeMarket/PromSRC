@@ -22,8 +22,22 @@ The `verify` job runs, in order:
    window, Electron security boundary, and more).
 3. **Turn-loop replay scenarios** (`npm run test:replay`) and the **tool
    dispatch policy** unit (`npm run test:tool-dispatch-policy`).
-4. **Security controls** (`npm run test:security-controls`) and the
-   **docs-evidence** check (`npm run test:docs-evidence`).
+4. **Complete mediation** (`npm run test:mediation`): the dispatch policy holds
+   in every execution mode (interactive, background agent/task, team member and
+   manager, cron, heartbeat, proposal execution), for allowlisted agents, and on
+   the voice entry point.
+5. **Crash recovery** (`npm run test:crash-recovery`): a child gateway is
+   hard-killed mid-work and a fresh process classifies every runtime; committed
+   non-idempotent side effects are never replayed.
+6. **Turn tracing** (`npm run test:turn-trace`) and **stale approval expiry**
+   (`npm run test:approval-stale-expiry`).
+7. **Embedding** (`npm run test:embed`): a separate Node project runs a turn
+   through the public `prometheus/embed` export. **Eval harness self-test**
+   (`npm run test:evals-selftest`): the oracle must score 7/7.
+8. **Security controls** (`npm run test:security-controls`), **small-context
+   fitting** (`npm run test:small-context-fit`), web-UI build id stability
+   (`npm run test:webui-build-id-stability`) and the **docs-evidence** check
+   (`npm run test:docs-evidence`).
 
 `storage-layout-contract.yml` additionally pins the on-disk data layout.
 
@@ -70,6 +84,9 @@ Each control in [SECURITY.md](SECURITY.md) maps to a test:
 | Control | Test |
 |---|---|
 | Offered-surface authority, allowlists, malformed calls | `src/gateway/chat/tool-dispatch-policy.regression.ts`, replay scenarios |
+| The same policy on every execution path | `src/testing/replay/mediation.regression.ts` (23 checks) |
+| Stale approvals expire; parked turns wake | `src/gateway/approval-stale-expiry.regression.ts` |
+| No blind replay of committed side effects after a crash | `src/gateway/runtime/crash-fault-injection.regression.ts` |
 | Approvals bind to the action; stop releases them | replay scenarios, `src/gateway/tasks/task-approval-control.regression.ts`, `src/gateway/proposals/proposal-approval-flow.regression.ts` |
 | Final-action one-shot grants | `src/security/security-controls.regression.ts` |
 | Shell deny patterns | `src/gateway/tool-deny-policy-quoted.regression.ts` |
@@ -86,6 +103,10 @@ Each control in [SECURITY.md](SECURITY.md) maps to a test:
 npm install
 npx tsc --noEmit             # type-check
 npm run test:replay          # agent-loop contracts, headless
+npm run test:mediation       # policy on every execution path
+npm run test:crash-recovery  # hard-kill fault injection
+npm run test:embed           # public embedding API from a separate project
+node evals/run-evals.mjs --model ollama:qwen3.5:9b   # live-model task evals (see evals/README.md)
 npm run test:tool-dispatch-policy
 npm run test:security-controls
 npm run test:docs-evidence
@@ -101,10 +122,12 @@ workspace indexes them by area.
 
 Stated so reviewers do not have to infer it:
 
-- **Live-model task evaluations** (coding success rate, small-model
-  reliability) are not yet published; CI is deterministic and never calls a
-  real provider.
+- **Live-model task results.** The eval suite (`evals/`) and its CI
+  self-test exist; real-model pass rates are published in `evals/RESULTS.md`
+  as runs complete. Small-model task runs need a GPU host (the reference CPU
+  machine prefills a 9B model at ~13 tokens/s). CI itself is deterministic and
+  never calls a real provider.
 - **End-to-end UI** is covered by contract tests plus manual device checks,
   not by full browser automation of every flow.
-- **Crash fault-injection** exists for restart continuity and goal recovery,
-  not yet for every tool mid-execution.
+- **Crash fault-injection** covers runtime classification after a hard kill;
+  it does not yet kill inside each individual tool implementation.

@@ -95,10 +95,23 @@ from coming back into `dist/`.
 
 Stated plainly so reviewers do not have to discover it:
 
-- `chat.router.ts` (~22.7k lines) and `subagent-executor.ts` (~21.4k lines)
-  are still the largest files. The loop is unified but not yet extracted into a
-  standalone, independently importable module.
-- The harness can be run headless only through the replay harness
-  (`src/testing/replay/`), not yet through a public embedding API.
+- `chat.router.ts` (~22.8k lines) is still the largest file. The loop is
+  unified and importable (see `docs/EMBEDDING.md`), but its body has not yet
+  been split into smaller modules.
+- `subagent-executor.ts` (~20.4k lines) is being split by tool family into
+  `src/gateway/agents-runtime/handlers/`; browser and desktop handlers moved
+  first (-1.1k lines). Source-contract tests read executor and handlers
+  together (`scripts/lib/executor-source.mjs`).
 
 Both are tracked work, not hidden assumptions.
+
+## Embedding and observability
+
+- **Embedding:** `prometheus/embed` (`src/embed/index.ts`) runs this loop in
+  any Node process with a pluggable provider and host tools. See
+  `docs/EMBEDDING.md`; `examples/embed-consumer/` runs in CI.
+- **Tracing:** every turn has a trace id across model calls, tools, dispatch
+  refusals, approvals and child agents (`src/gateway/observability/turn-trace.ts`,
+  `GET /api/traces/:traceId`). See `docs/OBSERVABILITY.md`.
+- **Evals:** `evals/` runs on-disk-verified tasks against real models through
+  the embedding API; results in `evals/RESULTS.md`.
