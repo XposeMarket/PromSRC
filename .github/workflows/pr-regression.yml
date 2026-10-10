@@ -9,7 +9,9 @@ on:
       - main
 
 permissions:
-  contents: write
+  # Regression checks only read the repository. No step pushes, comments or
+  # writes releases, so the workflow token is read-only (least privilege).
+  contents: read
 
 concurrency:
   group: pr-regression-${{ github.event.pull_request.number || github.ref }}
@@ -181,6 +183,8 @@ jobs:
         run: npm run test:replay
       - name: Verify embedding API from a separate consumer project
         run: npm run test:embed
+      - name: Verify gateway eval runner safety and metrics
+        run: node evals/gateway-runner.regression.mjs
       - name: Verify eval harness self-test (oracle must score 7/7)
         run: npm run test:evals-selftest
       - name: Verify small-context tool schema fitting
