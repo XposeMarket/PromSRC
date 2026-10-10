@@ -79,3 +79,57 @@ export function compactToolDefinitionForModel(definition: any): any {
 export function compactToolDefinitionsForModel(definitions: any[]): any[] {
   return Array.isArray(definitions) ? definitions.map(compactToolDefinitionForModel) : definitions;
 }
+
+// ── Small-context fitting ────────────────────────────────────────────────────
+// Local models run with small windows (often 8k). The full tool surface can be
+// larger than the whole window, so the prompt is silently truncated before the
+// model sees the user's request. fitToolDefinitionsToBudget shrinks schemas in
+// steps until they fit a token budget, without ever dropping a tool, a
+// property, an enum or a required list: the model can still call everything,
+// it just sees shorter prose.
+
+export function estimateToolSchemaTokens(definitions: any[]): number {
+  return Math.ceil(JSON.stringify(definitions || []).length / 4);
+}
+
+function firstSentence(text: string, max: number): string {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const dot = clean.search(/[.!?](\s|$)/);
+  const sentence = dot > 0 ? clean.slice(0, dot + 1) : clean;
+  return sentence.length > max ? `${sentence.slice(0, max).replace(/\s+\S*$/, '')}…` : sentence;
+}
+
+function stripPropertyDescriptions(schema: any): any {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  const out: any = { ...schema };
+  delete out.description;
+  delete out.examples;
+  delete out.default;
+  if (out.properties && typeof out.properties === 'object') {
+    out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, stripPropertyDescriptions(v)]));
+  }
+  if (out.items && typeof out.items === 'object') out.items = stripPropertyDescriptions(out.items);
+  return out;
+}
+
+export type ToolFitLevel = 'full' | 'short_descriptions' | 'no_property_descriptions' | 'minimal';
+
+export function fitToolDefinitionsToBudget(definitions: any[], budgetTokens: number): { tools: any[]; level: ToolFitLevel; beforeTokens: number; afterTokens: number } {
+  const beforeTokens = estimateToolSchemaTokens(definitions);
+  if (!Array.isArray(definitions) || beforeTokens <= budgetTokens) {
+    return { tools: definitions, level: 'full', beforeTokens, afterTokens: beforeTokens };
+  }
+  const levels: Array<[ToolFitLevel, (fn: any) => any]> = [
+    ['short_descriptions', (fn) => ({ ...fn, description: firstSentence(fn.description, 200) })],
+    ['no_property_descriptions', (fn) => ({ ...fn, description: firstSentence(fn.description, 160), parameters: stripPropertyDescriptions(fn.parameters) })],
+    ['minimal', (fn) => ({ ...fn, description: firstSentence(fn.description, 80), parameters: stripPropertyDescriptions(fn.parameters) })],
+  ];
+  let tools = definitions;
+  let level: ToolFitLevel = 'full';
+  for (const [name, shrink] of levels) {
+    tools = definitions.map((d) => (d?.function ? { ...d, function: shrink(d.function) } : d));
+    level = name;
+    if (estimateToolSchemaTokens(tools) <= budgetTokens) break;
+  }
+  return { tools, level, beforeTokens, afterTokens: estimateToolSchemaTokens(tools) };
+}

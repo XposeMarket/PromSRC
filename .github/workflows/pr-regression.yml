@@ -179,6 +179,10 @@ jobs:
         run: npm run test:replay
       - name: Verify embedding API from a separate consumer project
         run: npm run test:embed
+      - name: Verify eval harness self-test (oracle must score 7/7)
+        run: npm run test:evals-selftest
+      - name: Verify small-context tool schema fitting
+        run: npm run test:small-context-fit
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
       - name: Verify desktop reasoning summary streaming

@@ -232,7 +232,7 @@ export async function createPrometheusRuntime(options: CreateRuntimeOptions = {}
         for (const record of queue.listPending()) {
           if (record.sessionId !== sessionId || handled.has(record.id)) continue;
           handled.add(record.id);
-          Promise.resolve(approve({ id: record.id, toolName: record.toolName, sessionId, action: (record as any).action, args: (record as any).args }))
+          Promise.resolve(approve({ id: record.id, toolName: record.toolName, sessionId, action: record.action, args: record.toolArgs }))
             .then((ok) => queue.resolve(record.id, ok === true, 'embed-host'))
             .catch(() => queue.resolve(record.id, false, 'embed-host'));
         }

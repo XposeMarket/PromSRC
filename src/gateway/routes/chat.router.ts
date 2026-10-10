@@ -25,6 +25,7 @@ import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
+import { fitToolDefinitionsToBudget } from '../tools/schema-compaction';
 import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../chat/tool-dispatch-policy';
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
@@ -4978,6 +4979,8 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   ].join('\n');
 
   const buildBaseSystemPrompt = (): string => {
+    const smallContextPrompt = Number(activeGenerationRouteSnapshot?.contextProfile?.contextWindowTokens || 0) > 0
+      && Number(activeGenerationRouteSnapshot?.contextProfile?.contextWindowTokens || 0) <= 16_384;
     if (isBrainThoughtRuntime) {
       return [
         'You are Thought, an internal supervisory cognition process inside Prometheus.',
@@ -5035,9 +5038,13 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       buildOperatingInstructions({ executionMode, hasDurableTaskPlan, activeGoal: turnOwnsActiveGoal }),
       buildModelCapabilitySystemBlock(),
       visualGroundingPolicy,
-      visualPresentationInstruction,
+      // Small-context models (<= 16k, typically local) skip the rich-output,
+      // Viz Kit and creative guidance (~9k chars). It cannot fit next to the
+      // tool surface in an 8k window, and those models do not drive the
+      // interactive renderers anyway. Behavioral rules above are kept.
+      smallContextPrompt ? 'Answer in plain text or markdown. Use tools to act; keep replies short.' : visualPresentationInstruction,
       teamRoutingBlock,
-      creativeBlock,
+      smallContextPrompt ? '' : creativeBlock,
       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
       executionMode === 'interactive' && !isBootStartupTurn
         ? 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, write commentary only for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. Every later update must contain new evidence plus what it changes or what you will do next; if nothing materially changed, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls, paraphrasing an earlier update, or repeating information already visible in the tool activity UI.'
@@ -5058,6 +5065,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       currentModelCapabilities.provider,
       currentModelCapabilities.model,
       currentModelCapabilities.source,
+      String(activeGenerationRouteSnapshot?.contextProfile?.contextWindowTokens || 0),
       switchModelPersonalityCtx ? String(switchModelPersonalityCtx.length) : '0',
       resourceContextBlock ? `${resourceContext.resourceIds.join(',')}:${resourceContextBlock.length}` : '0',
     ].join('|');
@@ -6469,10 +6477,23 @@ Do not produce prose. Use the canonical thread tool now.` });
         if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
       }
 
+      // Small-context models (local 8k-16k windows): the full tool surface can
+      // be bigger than the whole window, which truncates the prompt before the
+      // model sees the request. Fit schemas into a third of the window by
+      // shortening prose only; every tool and argument stays callable.
+      const roundContextWindow = Number(activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192);
+      let roundTools = tools;
+      if (roundContextWindow > 0 && roundContextWindow <= 16_384 && Array.isArray(tools) && tools.length) {
+        const fitted = fitToolDefinitionsToBudget(tools, Math.floor(roundContextWindow / 3));
+        if (fitted.level !== 'full') {
+          roundTools = fitted.tools;
+          if (round === 0) console.log(`[v2] small context (${roundContextWindow}): tool schemas ${fitted.beforeTokens} -> ${fitted.afterTokens} tokens (${fitted.level})`);
+        }
+      }
       const generationOptions: any = {
-        tools,
+        tools: roundTools,
         temperature: 0.3,
-        num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
+        num_ctx: roundContextWindow,
         num_predict: grokGreetingLikeTurn ? 256 : modelResponseRecovery.outputBudget(generationOverride.providerId || '', generationOverride.model || ''),
 	        think: primaryThinkMode,
 	        speed: runtimeOptions?.speedOverride || activeGenerationRouteSnapshot?.speed,

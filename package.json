@@ -54,6 +54,8 @@
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
     "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs",
+    "test:small-context-fit": "tsx src/gateway/tools/small-context-fit.regression.ts",
+    "test:evals-selftest": "npm run build:backend && node evals/run-evals.mjs --model scripted:oracle --timeout-ms 60000 --out .tmp/evals-selftest",
     "test:tool-dispatch-policy": "tsx src/gateway/chat/tool-dispatch-policy.regression.ts",
     "test:terminal-exit-and-tool-args": "tsx src/gateway/terminal-exit-and-tool-args.regression.ts",
     "test:workspace-tool-mode": "tsx src/runtime/workspace-tool-mode.regression.ts",
