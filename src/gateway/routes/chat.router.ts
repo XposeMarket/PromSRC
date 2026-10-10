@@ -3461,7 +3461,7 @@ async function handleChat(
   // tool, the runtime decides whether it runs.
   let toolDispatchCount = 0;
   let idleToolRounds = 0;
-  const toolSurfaceEnforcementMode = resolveToolSurfaceEnforcementMode(getConfig().getConfig());
+  const toolSurfaceEnforcementMode = resolveToolSurfaceEnforcementMode(getConfig().getConfig(), { publicBuild: isPublicDistributionBuild() });
   const idleRoundLimit = resolveIdleRoundLimit(getConfig().getConfig());
   const dispatchRestricted = Boolean(effectiveToolFilter && effectiveToolFilter.length > 0 && !isSupervisionLoop);
   const LOOP_HANDLED_TOOL_NAMES = new Set([
@@ -6556,6 +6556,15 @@ Do not produce prose. Use the canonical thread tool now.` });
               .map((fn: any) => ({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters })),
             executeTool: async (toolName: string, toolArgs: Record<string, unknown>) => {
               const toolCallId = `chatgpt_bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+              // Bridge calls skip the provider tool_calls path, so apply the same
+              // dispatch policy here: no un-offered, unknown or allowlist-breaking tool runs.
+              const bridgeDecision = evaluateTurnToolDispatch(toolName, toolArgs);
+              if (!bridgeDecision.ok) {
+                console.warn(`[v2] DISPATCH REFUSED (${bridgeDecision.code}) via chatgpt_bridge: ${toolName}`);
+                allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, bridgeDecision.message, true));
+                sendSSE('tool_result', { action: toolName, result: bridgeDecision.message, error: true, stepNum: allToolResults.length, toolCallId, origin: 'chatgpt_bridge', dispatchRefused: bridgeDecision.code });
+                return { result: bridgeDecision.message, error: true };
+              }
               sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, toolCallId, origin: 'chatgpt_bridge' });
               const toolResult = await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
               allToolResults.push(toolResult);
@@ -14761,6 +14770,50 @@ function buildVoicePrometheusExecuteDeps(sessionId: string, trace: string[]): an
   };
 }
 
+let voiceKnownToolNames: { at: number; names: Set<string> } | null = null;
+function isKnownVoiceRuntimeTool(name: string): boolean {
+  if (!name) return false;
+  if (isSchemaHiddenCompatToolName(name) || name.startsWith('mcp__')) return true;
+  if (!voiceKnownToolNames || Date.now() - voiceKnownToolNames.at > 60_000) {
+    let names = new Set<string>();
+    try {
+      names = toolNameSetOf(_buildTools({ getMCPManager }, new Set<string>(getRuntimeToolCategoryIds().map(String)), { allowNativeWorkspaceTools: true }));
+    } catch { /* fall through to the catalog */ }
+    voiceKnownToolNames = { at: Date.now(), names };
+  }
+  if (voiceKnownToolNames.names.has(name)) return true;
+  try {
+    const { buildToolCatalog } = require('../tool-search');
+    return (buildToolCatalog() as Array<{ name: string }>).some((entry) => entry?.name === name);
+  } catch {
+    return false;
+  }
+}
+
+/** Dispatch policy for voice tool calls: same rules as handleChat's evaluateTurnToolDispatch. */
+function evaluateVoiceToolDispatch(sessionId: string, toolName: string, rawArguments: unknown, offered: ReadonlySet<string>): ToolDispatchDecision {
+  const runtimeCategoryIds = new Set<string>(getRuntimeToolCategoryIds().map(String));
+  return evaluateToolDispatch({
+    name: toolName,
+    rawArguments,
+    offered,
+    mode: resolveToolSurfaceEnforcementMode(getConfig().getConfig(), { publicBuild: isPublicDistributionBuild() }),
+    restricted: false,
+    isKnownTool: isKnownVoiceRuntimeTool,
+    categoryOf: (name) => {
+      const category = getToolCategory(name);
+      return category && runtimeCategoryIds.has(String(category)) ? String(category) : null;
+    },
+    isCategoryActive: (category) => getActivatedToolCategories(sessionId).has(category),
+  });
+}
+
+/** Test seam: voice tool entry points, used by the replay mediation scenarios. */
+export const __voiceToolEntryForTesting = {
+  call: (sessionId: string, tool: string, args: Record<string, any> = {}) => executeVoiceCoreTool(sessionId, tool, args),
+  prometheusTools: (sessionId: string, args: Record<string, any>) => executeVoicePrometheusTools(sessionId, args),
+};
+
 async function executeVoicePrometheusTools(sessionId: string, args: Record<string, any>): Promise<string> {
   const action = String(args?.action || '').trim().toLowerCase();
   const workspacePath = getConfig().getWorkspacePath();
@@ -14815,6 +14868,14 @@ async function executeVoicePrometheusTools(sessionId: string, args: Record<strin
     if (VOICE_PROMETHEUS_TOOL_BLOCKLIST.has(toolName)) return voiceToolResult(false, `${toolName} is not available from voice.`);
     if (!byName.has(toolName) && args?.bypassSurfaceCheck !== true) {
       return voiceToolResult(false, `${toolName} is not in the active tool surface. Call list, or activate_category first.`, { inactiveCategories });
+    }
+    // Same dispatch policy as the turn loop. The direct voice path skips the
+    // list check above (Codex voice keeps a fixed function list), so this is the
+    // gate that stops unknown tools and tools from inactive categories.
+    const voiceDecision = evaluateVoiceToolDispatch(sessionId, toolName, args?.args, new Set(byName.keys()));
+    if (!voiceDecision.ok) {
+      console.warn(`[voice] DISPATCH REFUSED (${voiceDecision.code}): ${toolName}`);
+      return voiceToolResult(false, voiceDecision.message, { inactiveCategories, dispatchRefused: voiceDecision.code });
     }
     const toolArgs = args?.args && typeof args.args === 'object' ? args.args : {};
     const trace: string[] = [];
