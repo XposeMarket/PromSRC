@@ -42,7 +42,7 @@ import { runBootMd } from './boot';
 import { setupErrorResponseEndpoint } from './errors/error-response-endpoint-integrated';
 import { isStorageBoundaryError } from './storage/storage-paths';
 import { initCredentialHandler, getCredentialHandler } from '../security/credential-handler';
-import { getVerificationFlowManager } from './verification-flow';
+import { getVerificationFlowManager, expireStaleApprovals } from './verification-flow';
 import { getErrorAnalyzer } from './errors/error-analyzer';
 import { getErrorHistory } from './errors/error-history';
 import { getRetryStrategy } from './retry-strategy';
@@ -1360,6 +1360,16 @@ async function startGatewayListeners(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     startupMark('server listen callback');
+    // Pending approvals from turns that died long ago never resolve on their own.
+    // Expire them at startup and hourly (unref'd so it never holds the process open).
+    try {
+      expireStaleApprovals();
+      setInterval(() => {
+        try { expireStaleApprovals(); } catch (err: any) { console.warn('[ApprovalQueue] stale sweep failed:', err?.message || err); }
+      }, 60 * 60 * 1000).unref();
+    } catch (err: any) {
+      console.warn('[ApprovalQueue] stale sweep setup failed:', err?.message || err);
+    }
     skillsManager.warmInBackground((count, ms) => startupMark(`skills warmed after listen (${count} in ${ms}ms)`));
     // The mobile model picker's first open after a restart used to pay a
     // ~1.5s cold build of the provider catalog. Build it once off the

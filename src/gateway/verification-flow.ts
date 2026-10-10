@@ -387,6 +387,27 @@ class ApprovalQueue {
     return count;
   }
 
+  /**
+   * Reject every pending approval older than maxAgeMs (by createdAt). Goes
+   * through resolve(), so a turn parked on one wakes exactly like a user Deny.
+   * Records without a parsable createdAt are skipped. Returns the count.
+   */
+  expireStale(opts: { maxAgeMs: number; now?: number; resolvedBy?: string }): number {
+    const maxAgeMs = Number(opts.maxAgeMs);
+    if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return 0;
+    const nowRaw = Number(opts.now);
+    const now = Number.isFinite(nowRaw) && nowRaw > 0 ? nowRaw : Date.now();
+    const cutoff = now - maxAgeMs;
+    let count = 0;
+    for (const record of Array.from(this.records.values())) {
+      if (record.status !== 'pending') continue;
+      const createdAt = Date.parse(String(record.createdAt || ''));
+      if (!Number.isFinite(createdAt) || createdAt > cutoff) continue;
+      if (this.resolve(record.id, false, opts.resolvedBy || 'policy:stale-expired')) count++;
+    }
+    return count;
+  }
+
   hasResolveCallback(id: string): boolean {
     return this.callbacks.has(id);
   }
@@ -577,6 +598,25 @@ export function getVerificationFlowManager(): VerificationFlowManager {
 }
 
 let approvalQueueInstance: ApprovalQueue | null = null;
+
+export const DEFAULT_APPROVAL_MAX_AGE_HOURS = 24;
+
+/** Max age for pending approvals. PROMETHEUS_APPROVAL_MAX_AGE_HOURS must be a number > 0; anything else uses the default. */
+export function resolveApprovalMaxAgeMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(String(env.PROMETHEUS_APPROVAL_MAX_AGE_HOURS ?? '').trim());
+  const hours = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_APPROVAL_MAX_AGE_HOURS;
+  return hours * 60 * 60 * 1000;
+}
+
+/** Expire pending approvals older than the configured max age. Returns the count. */
+export function expireStaleApprovals(log: (msg: string) => void = console.log): number {
+  const maxAgeMs = resolveApprovalMaxAgeMs();
+  const count = getApprovalQueue().expireStale({ maxAgeMs });
+  if (count > 0) {
+    log(`[ApprovalQueue] Expired ${count} stale pending approval(s) older than ${Math.round(maxAgeMs / 3600000 * 100) / 100}h`);
+  }
+  return count;
+}
 
 export function getApprovalQueue(): ApprovalQueue {
   if (!approvalQueueInstance) approvalQueueInstance = new ApprovalQueue();
