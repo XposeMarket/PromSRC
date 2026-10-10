@@ -425,6 +425,11 @@ const BUSINESS_TOOL_NAMES = new Set([
   'append_entity_event',
 ]);
 
+/** Raw primitives kept dispatchable but hidden from model schemas (see SCHEMA_HIDDEN_COMPAT_TOOL_NAMES). */
+export function isSchemaHiddenCompatToolName(name: string): boolean {
+  return SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(name || ''));
+}
+
 /** Direct connector tools the model reaches through a wrapper instead. */
 export function isWrapperCoveredConnectorTool(name: string): boolean {
   return /^x_api_/.test(name) || /^connector_vercel_/.test(name);

@@ -23,6 +23,7 @@ export function describeTurnCutoffCause(reason: string, cause?: string): string 
     return `the response stream kept dropping${detail && detail !== 'incomplete_stream' ? ` (${detail})` : ''}`;
   }
   if (reason === 'provider_failure') return `the provider call failed${detail ? `: ${detail}` : ''}`;
+  if (reason === 'idle_round_limit') return `the model kept requesting calls that were not run${detail ? ` (${detail})` : ''}`;
   return `the model did not finish its response${reason ? ` (${oneLine(reason, 90)})` : ''}`;
 }
 
