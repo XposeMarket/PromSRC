@@ -340,6 +340,27 @@ class ApprovalQueue {
     }
   }
 
+  /**
+   * Reject every pending approval a turn raised, so an aborted turn never
+   * stays parked on an approval card nobody will answer. `sinceMs` limits it to
+   * approvals created during that turn.
+   */
+  rejectPendingForSession(sessionId: string, opts: { sinceMs?: number; resolvedBy?: string } = {}): number {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return 0;
+    const since = Number(opts.sinceMs || 0);
+    let count = 0;
+    for (const record of Array.from(this.records.values())) {
+      if (record.status !== 'pending' || record.sessionId !== sid) continue;
+      if (since > 0) {
+        const createdAt = Date.parse(String(record.createdAt || ''));
+        if (Number.isFinite(createdAt) && createdAt < since) continue;
+      }
+      if (this.resolve(record.id, false, opts.resolvedBy || 'policy:turn_aborted')) count++;
+    }
+    return count;
+  }
+
   hasResolveCallback(id: string): boolean {
     return this.callbacks.has(id);
   }

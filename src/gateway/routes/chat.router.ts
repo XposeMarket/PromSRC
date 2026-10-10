@@ -25,6 +25,7 @@ import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
+import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../chat/tool-dispatch-policy';
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
@@ -1833,6 +1834,7 @@ import {
 import {
 	  buildTools as _buildTools,
 	  getToolCategory,
+	  isSchemaHiddenCompatToolName,
 	  type BuildToolsDeps,
   type ToolResult,
   type TaskControlResponse,
@@ -3454,6 +3456,57 @@ async function handleChat(
   let tools: any[] = [];
   let currentProviderCallIteration: number | null = null;
   const allToolResults: ToolResult[] = [];
+  // ── Dispatch-time tool policy (src/gateway/chat/tool-dispatch-policy.ts) ──
+  // The provider-facing surface is the authority: a model can only request a
+  // tool, the runtime decides whether it runs.
+  let toolDispatchCount = 0;
+  let idleToolRounds = 0;
+  const toolSurfaceEnforcementMode = resolveToolSurfaceEnforcementMode(getConfig().getConfig());
+  const idleRoundLimit = resolveIdleRoundLimit(getConfig().getConfig());
+  const dispatchRestricted = Boolean(effectiveToolFilter && effectiveToolFilter.length > 0 && !isSupervisionLoop);
+  const LOOP_HANDLED_TOOL_NAMES = new Set([
+    'complete_goal', 'block_goal', 'tool_loop_continue', 'complete_plan_step', 'step_complete',
+    'bg_plan_declare', 'bg_plan_advance', 'declare_plan', 'request_secondary_assist',
+  ]);
+  let fullRuntimeToolNames: Set<string> | null = null;
+  const isKnownRuntimeToolName = (name: string): boolean => {
+    if (!name) return false;
+    if (LOOP_HANDLED_TOOL_NAMES.has(name) || isSchemaHiddenCompatToolName(name) || name.startsWith('mcp__')) return true;
+    if (!fullRuntimeToolNames) {
+      try {
+        fullRuntimeToolNames = toolNameSetOf(_buildTools({ getMCPManager }, new Set<string>(getRuntimeToolCategoryIds().map(String)), { allowNativeWorkspaceTools: true }));
+      } catch {
+        fullRuntimeToolNames = new Set<string>();
+      }
+      try {
+        const { getBrainThoughtToolDefinitions } = require('../brain/brain-thought-runtime');
+        for (const n of toolNameSetOf(getBrainThoughtToolDefinitions())) fullRuntimeToolNames.add(n);
+      } catch { /* brain runtime optional */ }
+    }
+    if (fullRuntimeToolNames.has(name)) return true;
+    try {
+      const { buildToolCatalog } = require('../tool-search');
+      return (buildToolCatalog() as Array<{ name: string }>).some((entry) => entry?.name === name);
+    } catch {
+      return false;
+    }
+  };
+  const evaluateTurnToolDispatch = (toolName: string, rawArguments: unknown): ToolDispatchDecision => {
+    const runtimeCategoryIds = new Set<string>(getRuntimeToolCategoryIds().map(String));
+    return evaluateToolDispatch({
+      name: toolName,
+      rawArguments,
+      offered: toolNameSetOf(tools),
+      mode: toolSurfaceEnforcementMode,
+      restricted: dispatchRestricted,
+      isKnownTool: isKnownRuntimeToolName,
+      categoryOf: (name) => {
+        const category = getToolCategory(name);
+        return category && runtimeCategoryIds.has(String(category)) ? String(category) : null;
+      },
+      isCategoryActive: (category) => getActivatedToolCategories(sessionId).has(category),
+    });
+  };
   let midWorkflowCompactionsThisTurn = 0;
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
@@ -4461,6 +4514,7 @@ async function handleChat(
   };
 
   const executeToolWithTelemetry = async (toolName: string, toolArgs: any, toolCallId = ''): Promise<ToolResult> => {
+    toolDispatchCount += 1;
     const startedAt = Date.now();
     const performanceRecord = toolPerformance.find(toolCallId, undefined, toolName);
     toolPerformance.dispatch(performanceRecord);
@@ -5959,6 +6013,20 @@ Do not produce prose. Use the canonical thread tool now.` });
     return steers.length;
   };
 
+  // Stop must never leave the turn parked on an approval card: reject the
+  // approvals this turn raised so the executor's wait resolves immediately.
+  {
+    const turnApprovalsSince = Date.now() - 1000;
+    const releaseTurnApprovals = () => {
+      try {
+        const released = getApprovalQueue().rejectPendingForSession(sessionId, { sinceMs: turnApprovalsSince, resolvedBy: 'policy:turn_aborted' });
+        if (released > 0) console.log(`[v2] Abort released ${released} pending approval(s) for ${sessionId}`);
+      } catch { /* approval queue unavailable */ }
+    };
+    const turnSignal: any = abortSignal?.signal;
+    if (turnSignal?.aborted) releaseTurnApprovals();
+    else turnSignal?.addEventListener?.('abort', releaseTurnApprovals, { once: true });
+  }
   for (let round = 0; ; round++) {
     currentProviderCallIteration = round;
     if (abortSignal?.aborted) {
@@ -7355,8 +7423,14 @@ Do not produce prose. Use the canonical thread tool now.` });
         parallelCall: { id: toolCallId, name: toolName, args: toolArgs } as ParallelToolCall,
       };
     });
+    // A batch with any call the dispatch policy would refuse skips the parallel
+    // paths; the ordered loop evaluates each call at its own dispatch moment
+    // (so request_tool_category earlier in the batch can unlock a later call).
+    const parallelBatchHasRefusal = parallelCallEntries.length > 1
+      && parallelCallEntries.some((entry: ParallelCallEntry) => !evaluateTurnToolDispatch(entry.toolName, entry.sourceCall?.function?.arguments).ok);
     const canRunParallelBatch =
       parallelCallEntries.length > 1
+      && !parallelBatchHasRefusal
       && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
       && !isBootStartupTurn
       && !isHotRestartTurn
@@ -7372,6 +7446,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     const lazyParallelGroupByCall = new Map<any, ParallelCallEntry[]>();
     const lazyParallelGroupsRun = new Set<ParallelCallEntry[]>();
     const lazyParallelAllowed = !canRunParallelBatch
+      && !parallelBatchHasRefusal
       && parallelCallEntries.length > 1
       && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
       && !isBootStartupTurn
@@ -7448,6 +7523,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 
     const batchCreatedFiles = new Set<string>();
     let roundHadProgress = false;
+    const toolDispatchCountAtRoundStart = toolDispatchCount;
     resetProgressRoundStats();
 
     for (const call of toolCalls) {
@@ -7456,6 +7532,34 @@ Do not produce prose. Use the canonical thread tool now.` });
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
       if (!preDispatchedCalls.has(call)) {
         toolPerformance.start(toolName, toolCallId, round);
+      }
+
+      if (!preDispatchedCalls.has(call)) {
+        const dispatchDecision = evaluateTurnToolDispatch(toolName, call.function?.arguments);
+        if (!dispatchDecision.ok) {
+          console.warn(`[v2] DISPATCH REFUSED (${dispatchDecision.code}): ${toolName}`);
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, dispatchDecision.message, true));
+          logToolCall(workspacePath, toolName, toolArgs, dispatchDecision.message, true);
+          markProgressStepStart(toolName);
+          markProgressStepResult(false, toolName);
+          sendSSE('tool_result', {
+            action: toolName,
+            result: dispatchDecision.message,
+            error: true,
+            stepNum: allToolResults.length,
+            dispatchRefused: dispatchDecision.code,
+          });
+          messages.push({
+            role: 'tool',
+            tool_name: toolName,
+            tool_call_id: toolCallId || undefined,
+            content: dispatchDecision.message,
+          });
+          continue;
+        }
+        if (dispatchDecision.warning) {
+          console.log(`[v2] DISPATCH WARN (${dispatchDecision.warning.code}): ${dispatchDecision.warning.message}`);
+        }
       }
 
       if (toolName === 'desktop_click') {
@@ -8482,6 +8586,22 @@ Do not produce prose. Use the canonical thread tool now.` });
     }
 
     finalizeProgressRound();
+
+    // Runaway ceiling: rounds where the runtime dispatched nothing (every call
+    // refused, loop-blocked or skipped as a duplicate) do no work. Failing tools
+    // still count as work. Enough idle rounds in a row ends the turn.
+    if (toolDispatchCount === toolDispatchCountAtRoundStart) idleToolRounds += 1;
+    else idleToolRounds = 0;
+    if (idleToolRounds >= idleRoundLimit) {
+      console.warn(`[v2] IDLE ROUND LIMIT: ${idleToolRounds} consecutive rounds dispatched no tool; ending turn at round ${round + 1}`);
+      sendSSE('info', { message: `Stopped: the model requested ${idleToolRounds} rounds of calls that were not run.` });
+      return {
+        type: 'execute',
+        text: await finishDegradedTurn('idle_round_limit', `${idleToolRounds} rounds in a row`, '', true),
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length ? allToolResults : undefined,
+      };
+    }
 
     // Every tool result from this turn is re-sent on the next provider round.
     // Shorten the ones older rounds already consumed so input tokens stop

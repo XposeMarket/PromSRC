@@ -196,17 +196,29 @@ export const scenarios: ReplayScenario[] = [
     id: 'harness-blocks-unstubbed-side-effects',
     kind: 'contract',
     contract: 'Replay safety: a side-effect tool with no stub is blocked and never touches the machine.',
-    input: { message: 'Run a command', script: [{ toolCalls: [{ name: 'run_command', args: { command: 'echo hi' } }] }, { text: 'Ok.' }] },
+    input: {
+      message: 'Run a command',
+      script: [
+        // run_command is outside the core surface; activate its category first
+        // so the call is offered and reaches the harness interception.
+        { toolCalls: [{ name: 'request_tool_category', args: { category: 'workspace_write' } }] },
+        { toolCalls: [{ name: 'run_command', args: { command: 'echo hi' } }] },
+        { text: 'Ok.' },
+      ],
+    },
     check(run) {
       assert.deepEqual(run.blockedTools, ['run_command']);
-      assert.match(String(resultsOf(run)[0]?.result), /blocked in the replay harness/);
+      const runResult = resultsOf(run).find((entry: any) => entry?.name === 'run_command');
+      assert.match(String(runResult?.result), /blocked in the replay harness/);
     },
   },
 
-  // ── Known gaps: intended behaviour, expected to fail until fixed ──────────
+  // ── Dispatch policy (src/gateway/chat/tool-dispatch-policy.ts) ───────────────
+  // These five started as known gaps in #615 and were fixed by enforcing the
+  // tool surface, approval release and an idle-round ceiling at dispatch.
   {
     id: 'unknown-tool-needs-no-approval',
-    kind: 'known_gap',
+    kind: 'contract',
     contract: 'A tool that does not exist fails immediately; the user is never asked to approve it.',
     input: {
       message: 'Do it',
@@ -215,15 +227,15 @@ export const scenarios: ReplayScenario[] = [
       script: [{ toolCalls: [{ name: 'definitely_not_a_tool', args: {} }] }, { text: 'Recovered.' }],
     },
     check(run) {
-      // Today an approval card is raised for the nonexistent tool first; with
-      // nobody to approve it the turn hangs until the user answers.
       assert.deepEqual(run.approvals, [], 'no approval for a nonexistent tool');
       assert.match(String(resultsOf(run)[0]?.result), /Unknown tool/);
+      assert.deepEqual(run.dispatched, []);
+      assert.equal(run.result?.text, 'Recovered.');
     },
   },
   {
     id: 'tool-outside-surface-is-refused',
-    kind: 'known_gap',
+    kind: 'contract',
     contract: 'The runtime only executes tools that were offered to the model this turn.',
     input: {
       message: 'Take a screenshot',
@@ -233,13 +245,34 @@ export const scenarios: ReplayScenario[] = [
     },
     check(run) {
       assert.ok(!run.provider.requests[0].toolNames.includes('desktop_screenshot'), 'precondition: not offered');
-      // Today it is dispatched and executes anyway (a real screenshot without the harness stub).
       assert.ok(!run.dispatched.includes('desktop_screenshot'), 'un-offered tool reached executeTool');
+      // The model is told how to get the tool legitimately.
+      assert.match(lastToolResultText(run.provider.requests[1]), /request_tool_category\(\{"category":"desktop_automation"\}\)/);
+    },
+  },
+  {
+    id: 'category-request-unlocks-tool-same-turn',
+    kind: 'contract',
+    contract: 'After request_tool_category succeeds, a tool from that category is offered and dispatched in the same turn.',
+    input: {
+      message: 'Take a screenshot',
+      tools: { desktop_screen: () => ({ result: 'captured (stub)' }) },
+      script: [
+        { toolCalls: [{ name: 'request_tool_category', args: { category: 'desktop_automation' } }] },
+        { toolCalls: [{ name: 'desktop_screen', args: { action: 'screenshot' } }] },
+        { text: 'Done.' },
+      ],
+    },
+    check(run) {
+      assert.ok(!run.provider.requests[0].toolNames.includes('desktop_screen'), 'precondition: not offered before the request');
+      assert.ok(run.provider.requests[1].toolNames.includes('desktop_screen'), 'category surface reached the provider');
+      assert.ok(run.dispatched.includes('desktop_screen'), 'offered tool was dispatched');
+      assert.equal(run.result?.text, 'Done.');
     },
   },
   {
     id: 'abort-releases-pending-approval',
-    kind: 'known_gap',
+    kind: 'contract',
     contract: 'Stopping a turn that is waiting on an approval ends it promptly.',
     input: {
       message: 'Write a note',
@@ -256,7 +289,7 @@ export const scenarios: ReplayScenario[] = [
   },
   {
     id: 'runaway-turn-has-a-ceiling',
-    kind: 'known_gap',
+    kind: 'contract',
     contract: 'A model that keeps repeating a blocked call is stopped by the runtime, not by running out of script.',
     input: {
       message: 'Keep listing',
@@ -267,19 +300,37 @@ export const scenarios: ReplayScenario[] = [
     check(run) {
       assert.ok(run.provider.requests.length <= 30, `turn made ${run.provider.requests.length} model calls`);
       assert.equal(run.error, null);
+      assert.match(String(run.result?.text), /Turn cut off: the model kept requesting calls that were not run/);
     },
   },
   {
     id: 'malformed-tool-args-are-reported',
-    kind: 'known_gap',
+    kind: 'contract',
     contract: 'Truncated/invalid tool-call JSON is reported to the model instead of running the tool with {}.',
     input: {
       message: 'List skills',
       script: [{ toolCalls: [{ name: 'skill_list', rawArguments: '{"query": "cod' }] }, { text: 'Retried.' }],
     },
     check(run) {
-      const reported = /invalid|malformed|parse|json/i.test(lastToolResultText(run.provider.requests[1] || run.provider.requests[0]));
-      assert.ok(reported || !run.dispatched.includes('skill_list'), 'tool ran with dropped arguments and the model was not told');
+      assert.ok(!run.dispatched.includes('skill_list'), 'tool ran with dropped arguments');
+      assert.match(lastToolResultText(run.provider.requests[1]), /not valid JSON/, 'the model was told why');
+    },
+  },
+  {
+    id: 'failing-tools-are-not-idle-rounds',
+    kind: 'contract',
+    contract: 'Rounds whose tools ran but failed are real work: the idle-round ceiling does not cut them off.',
+    input: {
+      message: 'Fetch until it works',
+      tools: { web_fetch: (_args, index) => (index < 11 ? { result: `fetch failed (${index})`, error: true } : { result: 'ok' }) },
+      script: [
+        ...Array.from({ length: 12 }, (_, i) => ({ toolCalls: [{ name: 'web_fetch', args: { url: `https://example.com/${i}` } }] })),
+        { text: 'Got it.' },
+      ],
+    },
+    check(run) {
+      assert.equal(run.result?.text, 'Got it.');
+      assert.equal(run.dispatched.filter((name) => name === 'web_fetch').length, 12);
     },
   },
 ];
