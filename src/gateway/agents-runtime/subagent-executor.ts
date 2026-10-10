@@ -3599,7 +3599,32 @@ function preflightDirectSubagentDelegation(name: string, args: any): ToolResult 
   };
 }
 
+/**
+ * Test-only tool interception used by the replay harness (src/testing/replay/).
+ * The override runs before policy/approval and real execution. Returning a
+ * ToolResult short-circuits the call; returning null/undefined falls through to
+ * the normal path. Refuses to arm in production unless explicitly allowed.
+ */
+export type ToolExecutionOverride = (
+  name: string,
+  args: any,
+  sessionId: string,
+) => ToolResult | null | undefined | Promise<ToolResult | null | undefined>;
+
+let toolExecutionOverrideForTesting: ToolExecutionOverride | null = null;
+
+export function setToolExecutionOverrideForTesting(override: ToolExecutionOverride | null): void {
+  if (override && process.env.NODE_ENV === 'production' && process.env.PROMETHEUS_ALLOW_PROVIDER_OVERRIDE !== '1') {
+    throw new Error('setToolExecutionOverrideForTesting is disabled in production.');
+  }
+  toolExecutionOverrideForTesting = override;
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  if (toolExecutionOverrideForTesting) {
+    const overridden = await toolExecutionOverrideForTesting(name, args, sessionId);
+    if (overridden) return overridden;
+  }
   // Reject deterministic malformed delegation inputs before generic policy approval.
   // Valid spawn/delegate operations remain approval-gated exactly as before.
   if (name === 'spawn_subagent') {

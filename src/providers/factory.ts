@@ -193,7 +193,27 @@ export function getProviderRuntimeIdentity(
   return providerRuntimeIdentity.get(provider as object) || null;
 }
 
+/**
+ * Test-only provider override used by the replay harness
+ * (src/testing/replay/). When set, every factory entry point returns this
+ * provider instead of building a real adapter, so the full handleChat loop runs
+ * against a scripted model. The override has no runtime identity, so
+ * model-call workers fall back to the in-process path. Refuses to arm in a
+ * packaged/production gateway unless PROMETHEUS_ALLOW_PROVIDER_OVERRIDE=1.
+ */
+let providerOverrideForTesting: LLMProvider | null = null;
+
+export function setProviderOverrideForTesting(provider: LLMProvider | null): void {
+  if (provider && process.env.NODE_ENV === 'production' && process.env.PROMETHEUS_ALLOW_PROVIDER_OVERRIDE !== '1') {
+    throw new Error('setProviderOverrideForTesting is disabled in production.');
+  }
+  providerOverrideForTesting = provider;
+  cachedProvider = null;
+  cachedProviderKey = null;
+}
+
 export function getProvider(): LLMProvider {
+  if (providerOverrideForTesting) return providerOverrideForTesting;
   const { active, providers, accountId } = getProviderConfig();
   const selectedAccountId = readAccountId(active, providers, accountId);
   const cacheKey = `${active}:${selectedAccountId || ''}`;
@@ -221,6 +241,7 @@ export function resetProvider(): void {
 }
 
 export function buildProviderById(providerId: string, accountId?: string): LLMProvider {
+  if (providerOverrideForTesting) return providerOverrideForTesting;
   const raw = getConfig().getConfig() as any;
   const providers = raw.llm?.providers || {};
   const selectedAccountId = readAccountId(providerId, providers, accountId);
@@ -232,6 +253,7 @@ export function buildProviderById(providerId: string, accountId?: string): LLMPr
 }
 
 export function buildProviderForLLM(llm: any): LLMProvider {
+  if (providerOverrideForTesting) return providerOverrideForTesting;
   const active = String(llm?.provider || 'ollama');
   const providers = llm?.providers || {};
   const selectedAccountId = readAccountId(active, providers, llm?.accountId);
