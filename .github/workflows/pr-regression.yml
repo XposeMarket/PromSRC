@@ -179,6 +179,10 @@ jobs:
         run: npm run test:replay
       - name: Verify crash recovery (hard-killed gateway, no blind replay of committed side effects)
         run: npm run test:crash-recovery
+      - name: Verify security controls (final-action grants, public build, secret scrubbing)
+        run: npm run test:security-controls
+      - name: Verify evidence docs cite real paths and scripts
+        run: npm run test:docs-evidence
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
       - name: Verify desktop reasoning summary streaming
