@@ -33,6 +33,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify durable main-chat goal user stop
+        run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression
         run: npm run test:thread-handoff
       - name: Verify Brain provider diagnostics and bounded failures

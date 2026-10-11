@@ -268,6 +268,8 @@ export interface MainChatGoalState {
   lastEvidence?: string[];
   blockedReason?: string;
   pausedReason?: string;
+  /** Durable owner stop; only an explicit goal resume/revision may clear it. */
+  userStoppedAt?: number;
   failureReason?: string;
   progressSummary?: string;
   /** Durable user-owned acceptance criteria/amendments; never rely on compacted chat alone. */
@@ -1082,6 +1084,7 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
     lastVerificationGaps: normalizeTextArray(input.lastVerificationGaps ?? input.last_verification_gaps),
     lastEvidence: normalizeTextArray(input.lastEvidence ?? input.last_evidence),
     blockedReason: typeof input.blockedReason === 'string' ? input.blockedReason : (typeof input.blocked_reason === 'string' ? input.blocked_reason : undefined),
+    userStoppedAt: Number(input.userStoppedAt || input.user_stopped_at) || undefined,
     pausedReason: typeof input.pausedReason === 'string' ? input.pausedReason : (typeof input.paused_reason === 'string' ? input.paused_reason : undefined),
     failureReason: typeof input.failureReason === 'string' ? input.failureReason : (typeof input.failure_reason === 'string' ? input.failure_reason : undefined),
     progressSummary: typeof input.progressSummary === 'string' ? input.progressSummary : (typeof input.progress_summary === 'string' ? input.progress_summary : undefined),

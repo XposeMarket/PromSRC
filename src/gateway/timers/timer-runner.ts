@@ -3,6 +3,7 @@ import {
   updateMainChatTimer,
   type MainChatTimer,
 } from './timer-store';
+import { getMainChatGoal } from '../session';
 import {
   broadcastWS,
   setModelBusy,
@@ -64,6 +65,11 @@ export class MainChatTimerRunner {
   }
 
   private async fireTimer(timer: MainChatTimer): Promise<void> {
+    const goal = timer.origin?.goalId ? getMainChatGoal(timer.sessionId) : null;
+    if (timer.origin?.goalId && (!goal || goal.id !== timer.origin.goalId || goal.userStoppedAt || goal.status !== 'active')) {
+      updateMainChatTimer(timer.id, { status: 'cancelled' });
+      return;
+    }
     this.runningTimerId = timer.id;
     const firedAt = new Date().toISOString();
     updateMainChatTimer(timer.id, { status: 'running', firedAt });
