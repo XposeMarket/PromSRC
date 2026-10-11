@@ -34,6 +34,7 @@ export type RuntimePromptRole =
   | 'unknown';
 
 export interface RuntimePromptManifestContext {
+  retrieval?: import('./retrieval-provenance').RetrievalTrace[];
   runtimeRole?: RuntimePromptRole | string;
   executionMode?: string;
   personalityProfile?: string;

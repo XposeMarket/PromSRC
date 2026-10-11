@@ -691,6 +691,7 @@ export async function buildPersonalityContext(
   options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[]; memoryMode?: 'full' | 'compact' },
   signal?: AbortSignal,
   timing?: TurnTimingRecorder,
+  onRetrieval?: (trace: import('../../runtime/retrieval-provenance').RetrievalTrace) => void,
 ): Promise<string> {
   return buildPersonalityContextIsolated(
     sessionId,
@@ -705,6 +706,7 @@ export async function buildPersonalityContext(
     options,
     signal,
     timing,
+    onRetrieval,
   );
 }
 

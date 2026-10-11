@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { boundRetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'fs';
 import path from 'path';
 import { getAutomaticMemoryEmbeddingProvider } from '../memory/embeddings/registry.js';
@@ -662,6 +663,7 @@ export async function retrieveHybridMemoryAtoms(
   const selected = capSelection([...direct, ...related], snapshot, options);
 
   return {
+    retrieval: boundRetrievalTrace({ source: 'atomic', state: 'available', reason: semanticError || undefined, thresholds: { deterministicFloor: 0.20, semanticFloor: 0.54, combinedSemanticFloor: 0.48, combinedDeterministicFloor: 0.08, semanticMinimumTerms: 3, semanticUsed, semanticTimedOut, maxCandidates, mmrLambda: 0.82, maxAtoms: options.maxAtoms || 'source_relative', maxChars: options.maxChars || 'source_relative' }, candidateCount: scored.length, truncated: false, candidates: [...scored].sort((a,b) => b.score - a.score).map((e,index) => ({ sourceId: e.atom.id, source: e.atom.sourcePath, rank: index + 1, score: e.score, matchedTerms: e.matchedTerms, selected: selected.some(s => s.atom.id === e.atom.id), reason: selected.some(s => s.atom.id === e.atom.id) ? 'injected_hybrid' : direct.some(s => s.atom.id === e.atom.id) || related.some(s => s.atom.id === e.atom.id) ? 'atom_or_character_budget' : directCandidates.includes(e) ? 'candidate_pool_limit' : 'below_direct_and_relation_gates' })) }),
     direct,
     related,
     selected,

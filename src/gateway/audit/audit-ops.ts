@@ -3,7 +3,7 @@ import path from 'path';
 import { getConfig } from '../../config/config';
 import { safeAuditSessionId, scrubAuditValue } from './continuity';
 import { getSkillRoutingEvidence, computeSkillRoutingStats } from '../learning/turn-recorder';
-import { readContextReceipts, contextReceiptSettings } from '../../runtime/context-receipt';
+import { readContextReceipts, contextReceiptSettings, reviewContextReceipt, configureContextReceipts } from '../../runtime/context-receipt';
 
 const MAX_FILE_READ = 512 * 1024;
 const PREVIEW_FILE_READ = 24 * 1024;
@@ -125,8 +125,10 @@ function validateRawIssued(ref: { kind: 'raw'; sessionId: string; observationId:
 }
 
 export function executePrometheusAuditOps(_ownerSessionId: string, args: any): Record<string, any> {
-  const action = String(args?.action || '').trim().toLowerCase(); const max = limit(args?.limit, 30, MAX_RESULTS); if (!['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact', 'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings'].includes(action)) throw new Error('Unsupported prometheus_audit_ops action.');
+  const action = String(args?.action || '').trim().toLowerCase(); const max = limit(args?.limit, 30, MAX_RESULTS); if (!['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact', 'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings', 'context_receipt_review', 'context_receipt_configure'].includes(action)) throw new Error('Unsupported prometheus_audit_ops action.');
   const provenance = mirrorProvenance();
+  if (action === 'context_receipt_review') return reviewContextReceipt(args.receipt_id, { relevance: args.relevance, reason: args.reason }, getConfig().getWorkspacePath());
+  if (action === 'context_receipt_configure') return { settings: configureContextReceipts({ enabled: args.enabled, retentionDays: args.retention_days }, getConfig().getWorkspacePath()) };
   if (action === 'context_receipts') {
     return readContextReceipts({ id: args.receipt_id, sessionId: args.session_id, days: args.days, limit: max, detail: args.detail === true }, getConfig().getWorkspacePath());
   }

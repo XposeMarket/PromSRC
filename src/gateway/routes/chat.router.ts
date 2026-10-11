@@ -137,6 +137,8 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { recordContextReceiptOutcome } from '../../runtime/context-receipt';
+import type { RetrievalTrace } from '../../runtime/retrieval-provenance';
 import { recordLearningTurn } from '../learning/turn-recorder.js';
 import { getSkillRoutingReport } from '../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
@@ -2714,6 +2716,8 @@ async function handleChatUntraced(
     phase: 'handle_chat',
   });
   const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
+  let receiptResponse = '';
+  let receiptCompleted = false;
   const inheritedAdmissionLease = runtimeOptions?.admissionLease;
   let ownedAdmissionLease: RuntimeAdmissionLease | null = null;
   if (inheritedAdmissionLease) {
@@ -3557,8 +3561,10 @@ async function handleChatUntraced(
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
   let learningTurnCaptured = false;
+  const turnRetrieval: RetrievalTrace[] = [];
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
     learningTurnCaptured = true;
+    receiptResponse = finalResponse; receiptCompleted = true;
     recordSkillGardenerTurn({
       workspacePath,
       sessionId,
@@ -4817,6 +4823,7 @@ async function handleChatUntraced(
           personalityProfile,
           abortSignal?.signal,
           turnTiming,
+          trace => { if (turnRetrieval.length < 16) turnRetrieval.push(trace); },
         );
       },
       abortSignal?.signal,
@@ -6580,6 +6587,7 @@ Do not produce prose. Use the canonical thread tool now.` });
           promptManifest: {
               gatewayTurnId: turnTiming.turnId,
               originalUserRequest: message,
+              retrieval: turnRetrieval,
               executionMode: executionMode || 'interactive',
               personalityProfile: String((personalityProfile as any)?.profile || 'default'),
               surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
@@ -8735,6 +8743,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         finalResponse: '', toolResults: allToolResults, routing: getSkillRoutingReport(sessionId),
         gatewayTurnId: turnTiming.turnId });
     }
+    recordContextReceiptOutcome({ sessionId, gatewayTurnId: turnTiming.turnId, status: abortSignal?.aborted ? 'cancelled' : receiptCompleted ? 'completed' : 'failed', response: receiptResponse, reason: !receiptCompleted && !abortSignal?.aborted ? 'turn_terminated_without_final_response' : '' }, getConfig().getWorkspacePath());
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal
     // completion without changing tool execution semantics.
