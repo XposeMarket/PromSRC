@@ -1488,8 +1488,12 @@ export function getCisSystemTools(): any[] {
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'review_routing'] },
+            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'review_routing', 'sample_routing', 'propose_routing', 'rollback'] },
             mode: { type: 'string', enum: ['dry-run', 'pending', 'auto-safe'], description: 'For action=run. Defaults to dry-run; auto-safe is currently mutation-frozen.' },
+            rollback_negative_prompts: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'rollback: baseline negative regressions that should not invoke this skill; prior verified positives are reused.' },
+            trigger_manifest: { type: 'object', description: 'propose_routing: concrete replacement triggers and/or promptSignals only; no instruction edits.' },
+            positive_turn_ids: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'propose_routing: native reviewed relevant original turns preserving valid coverage.' },
+            negative_turn_ids: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'propose_routing: at least three distinct native reviewed irrelevant originals.' },
             turn_id: { type: 'string', description: 'review_routing: exact learning turn ID from skill_routing_evidence.' },
             request_hash: { type: 'string', description: 'review_routing: original request hash from that evidence.' },
             skill_id: { type: 'string', description: 'review_routing: exact offered skill ID.' },

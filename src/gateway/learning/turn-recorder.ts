@@ -248,13 +248,14 @@ function boundedAppend(file: string, value: unknown): void {
   fs.appendFileSync(file, line, 'utf8');
 }
 function windowDays(days: number): number { return Number.isFinite(days) ? Math.max(1, Math.min(90, Math.floor(days))) : 30; }
-export interface RoutingReview { turnId: string; requestHash: string; skillId: string; relevance: Relevance; reason: string; ts: string; reviewerSource?: 'user' | 'agent'; reviewerId?: string; reviewedEvidence?: string }
+export interface RoutingReview { turnId: string; requestHash: string; skillId: string; relevance: Relevance; reason: string; ts: string; reviewerSource?: 'user' | 'agent'; reviewerId?: string; reviewedEvidence?: string; nativeReviewed?: boolean; contextHash?: string }
 export interface RoutingEvidence extends LearningTurnRecord { turnId: string; reviews: RoutingReview[]; legacyProxy: boolean }
 function validReview(r: any): r is RoutingReview {
   return !!r && /^lt_[a-f0-9]{32}$/.test(r.turnId) && /^[a-f0-9]{64}$/.test(r.requestHash)
     && typeof r.skillId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(r.skillId)
     && ['relevant', 'irrelevant', 'unknown'].includes(r.relevance) && typeof r.reason === 'string'
     && r.reason.trim().length > 0 && r.reason.length <= 500 && typeof r.ts === 'string' && Number.isFinite(Date.parse(r.ts))
+    && (r.nativeReviewed === undefined || (r.nativeReviewed === true && typeof r.contextHash === 'string' && /^[a-f0-9]{64}$/.test(r.contextHash)))
     && (r.reviewerSource === undefined || ['user', 'agent'].includes(r.reviewerSource))
     && (r.reviewerId === undefined || (typeof r.reviewerId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(r.reviewerId)))
     && (r.reviewedEvidence === undefined || (typeof r.reviewedEvidence === 'string' && r.reviewedEvidence.trim().length > 0 && r.reviewedEvidence.length <= 1000))
@@ -306,7 +307,7 @@ export function getSkillRoutingEvidence(workspacePath: string, options: { days?:
   return result;
 }
 /** Validation and persistence share one path for API and regression callers. Workspace never comes from the body. */
-export function submitSkillRoutingFeedback(workspacePath: string, body: unknown): RoutingReview {
+export function submitSkillRoutingFeedback(workspacePath: string, body: unknown, nativeEvidence?: { contextHash: string }): RoutingReview {
   const b = body as any;
   if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['turnId', 'requestHash', 'skillId', 'relevance', 'reason', 'reviewerSource', 'reviewerId', 'reviewedEvidence'].includes(k))) throw new Error('Invalid feedback fields');
   const r: RoutingReview = { ...b, ts: new Date().toISOString() };
@@ -318,6 +319,7 @@ export function submitSkillRoutingFeedback(workspacePath: string, body: unknown)
   r.reason = safeExcerpt(r.reason, 500);
   r.reviewerSource = r.reviewerSource || 'user';
   if (r.reviewedEvidence) r.reviewedEvidence = safeExcerpt(r.reviewedEvidence, 1000);
+  if (nativeEvidence && /^[a-f0-9]{64}$/.test(nativeEvidence.contextHash)) { r.nativeReviewed = true; r.contextHash = nativeEvidence.contextHash; }
   boundedAppend(path.join(learningDir(workspacePath), 'routing-feedback.jsonl'), r);
   return r;
 }

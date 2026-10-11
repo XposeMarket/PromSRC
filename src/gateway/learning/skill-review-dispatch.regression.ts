@@ -16,6 +16,8 @@ async function main() {
   assert.equal(JSON.parse(String(result.result)).skillFilesChanged, false);
   const review = getSkillRoutingEvidence(root, { turnId: rec.turnId })[0].reviews[0];
   assert.equal(review.reviewerSource, 'agent'); assert.equal(review.reviewerId, 'brain_judge');
+  assert.equal(review.relevance, 'unknown', 'missing full authoritative original/scope stays unknown');
+  assert.notEqual(review.nativeReviewed, true, 'caller evidence text cannot grant native trust');
   const invalid = await skillsCapabilityExecutor.execute({ name: 'skill_curator', args: { ...args, request_hash: '0'.repeat(64) }, sessionId: 'brain_judge', workspacePath: root, deps: {} as any });
   assert.equal(invalid.error, true);
   const brain = fs.readFileSync(path.join(__dirname, '../brain/brain-runner.ts'), 'utf8');

@@ -1,10 +1,102 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { scrubContextText } from '../../runtime/context-receipt';
 import { rankSkillMatches, type SkillChangeLedgerEntry, type SkillsManager } from './skills-manager';
-import { MAX_SKILL_TRIGGERS, validateSkillTriggers } from './skill-package';
+import { MAX_SKILL_TRIGGERS, validateSkillTriggers, validateSkillPromptSignals } from './skill-package';
 import { scanSkillText, type SkillSafetyScan } from './skill-safety';
 import { getSkillRoutingEvidence } from '../learning/turn-recorder';
+
+export interface RoutingOriginal { request: string; contextHash: string; context?: string }
+export type RoutingOriginalResolver = (sessionId: string, requestHash: string) => RoutingOriginal | null;
+
+/** Rotating round-robin across skill/term buckets; usage never affects eligibility. */
+export function sampleRoutingOffers(workspacePath: string, now = new Date()) {
+  const evidence = getSkillRoutingEvidence(workspacePath, { days: 90, limit: 10000 });
+  const buckets = new Map<string, Array<{ turnId: string; requestHash: string; sessionId: string; skillId: string; term: string }>>();
+  for (const turn of evidence) {
+    if (!turn.routingMatched) continue;
+    for (const offer of turn.offered) {
+      if (turn.reviews.some(r => r.skillId === offer.id && r.relevance !== 'unknown')) continue;
+      for (const term of offer.terms.length ? offer.terms : ['(scope match)']) {
+        const key = `${offer.id}:${term}`;
+        const rows = buckets.get(key) || [];
+        rows.push({ turnId: turn.turnId, requestHash: turn.requestHash, sessionId: turn.sessionId, skillId: offer.id, term });
+        buckets.set(key, rows);
+      }
+    }
+  }
+  const keys = [...buckets.keys()].sort();
+  const statePath = path.join(workspacePath, 'Brain', 'learning', 'routing-review-cursor.json');
+  let last = '';
+  try { last = JSON.parse(fs.readFileSync(statePath, 'utf8')).last || ''; } catch {}
+  const after = keys.findIndex(k => k > last);
+  const start = after < 0 ? 0 : after;
+  const samples = keys.slice(start).concat(keys.slice(0, start)).slice(0, 3).map(key => {
+    const rows = buckets.get(key)!;
+    return rows[Math.floor(now.getTime() / 86400000) % rows.length];
+  });
+  if (samples.length) {
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ last: `${samples[samples.length - 1].skillId}:${samples[samples.length - 1].term}` }));
+  }
+  return { samples, scan: evidence.scan, coverage: 'Bounded rotating sample; partial scans cannot establish complete coverage.' };
+}
+
+/** Native reviewer supplies a concrete patch; only verified original examples can authorize a pending proposal. */
+export function proposeRoutingTrigger(workspacePath: string, skillsManager: SkillsManager, input: {
+  skillId: string; manifest: Record<string, unknown>; positiveTurnIds: string[]; negativeTurnIds: string[];
+}, resolveOriginal: RoutingOriginalResolver): SkillCuratorSuggestion {
+  const skill = skillsManager.get(input.skillId);
+  if (!skill) throw new Error('Unknown target skill');
+  if (!input.manifest || Object.keys(input.manifest).some(k => !['triggers', 'promptSignals'].includes(k))) throw new Error('Only trigger metadata is allowed');
+  if (!input.positiveTurnIds?.length || !input.negativeTurnIds?.length || input.positiveTurnIds.length > 12 || input.negativeTurnIds.length > 12) throw new Error('Bounded positive AND negative original examples required');
+  const source = getSkillRoutingEvidence(workspacePath, { days: 90, limit: 10000, skillId: skill.id });
+  if (source.scan.partial) throw new Error('Incomplete evidence; retain unknown');
+  const evidence: string[] = [];
+  const prompts = (ids: string[], relevance: 'relevant' | 'irrelevant') => ids.map(id => {
+    const turn = source.find(t => t.turnId === id);
+    if (!turn || !turn.routingMatched || !turn.reviews.some(r => r.skillId === skill.id && r.relevance === relevance && r.nativeReviewed === true)) throw new Error('Native reviewed original examples required');
+    const original = resolveOriginal(turn.sessionId, turn.requestHash);
+    if (!original || !/^[a-f0-9]{64}$/.test(original.contextHash) || !turn.reviews.some(r => r.skillId === skill.id && r.contextHash === original.contextHash) || crypto.createHash('sha256').update(original.request.trim()).digest('hex') !== turn.requestHash) throw new Error('Original request unavailable or hash mismatch; retain unknown');
+    evidence.push(`turn=${id} requestHash=${turn.requestHash} contextHash=${original.contextHash} relevance=${relevance}`);
+    return original.request;
+  });
+  const knownPositiveIds = source.filter(t => t.reviews.some(r => r.skillId === skill.id && r.relevance === 'relevant' && r.nativeReviewed)).map(t => t.turnId);
+  const allPositiveIds = [...new Set([...input.positiveTurnIds, ...knownPositiveIds])];
+  if (allPositiveIds.length > 12) throw new Error('Positive coverage exceeds bounded budget; defer proposal rather than silently discard coverage');
+  const positivePrompts = prompts(allPositiveIds, 'relevant');
+  const negativePrompts = prompts(input.negativeTurnIds, 'irrelevant');
+  if (new Set(negativePrompts).size < 3) throw new Error('Three distinct irrelevant originals required');
+  const signalValidation = input.manifest.promptSignals === undefined ? null : validateSkillPromptSignals(input.manifest.promptSignals);
+  if (signalValidation && (signalValidation.rejected.length || !signalValidation.signals)) throw new Error('Invalid promptSignals');
+  const manifest = { ...skill.manifest, triggers: skill.triggers, promptSignals: skill.promptSignals, ...input.manifest, ...(signalValidation ? { promptSignals: signalValidation.signals } : {}) };
+  const candidate = { ...skill, manifest, triggers: manifest.triggers as string[] || skill.triggers, promptSignals: manifest.promptSignals as typeof skill.promptSignals };
+  if (input.manifest.triggers !== undefined && (!Array.isArray(input.manifest.triggers) || (validateSkillTriggers(input.manifest.triggers).rejected.length || validateSkillTriggers(input.manifest.triggers).capped.length))) throw new Error('Invalid trigger metadata');
+  const skills = skillsManager.getAll().map(s => s.id === skill.id ? candidate : s);
+  const positive = positivePrompts.map(prompt => { const top = rankSkillMatches(skills, prompt, { limit: 1 })[0]; return { prompt, passed: top?.id === skill.id && top.confidence === 'high', topSkill: top?.id, confidence: top?.confidence }; });
+  const negative = negativePrompts.map(prompt => { const target = rankSkillMatches(skills, prompt, { limit: 100 }).find(s => s.id === skill.id); return { prompt, passed: !target || target.confidence === 'low', confidence: target?.confidence }; });
+  if (positive.some(p => !p.passed) || negative.some(p => !p.passed)) throw new Error('Trigger regression failed; valid positives must survive and negatives must not route');
+  const now = new Date().toISOString();
+  const semanticKey = `routing-tested:${skill.id}:${crypto.createHash('sha256').update(JSON.stringify(input.manifest)).digest('hex')}`;
+  const suggestion: SkillCuratorSuggestion = {
+    id: `routing_patch_${crypto.createHash('sha256').update(semanticKey).digest('hex').slice(0, 24)}`, semanticKey,
+    createdAt: now, updatedAt: now, status: 'pending', skillId: skill.id, title: `Tested stricter routing for ${skill.id}`,
+    reason: 'Concrete trigger patch passed verified positive and negative original-request regressions.', lessonType: 'trigger_patch',
+    approvePreview: 'Apply this tested metadata overlay through the existing curator; no instructions change.',
+    autoApplyEligible: false, autoDecisionReason: 'Explicit approval required.', evidence, risk: 'medium',
+    previousManifest: { ...skill.manifest, triggers: skill.triggers, promptSignals: skill.promptSignals },
+    change: { kind: 'manifest_overlay', manifest }, scan: scanSkillText(JSON.stringify(manifest)),
+    triggerEvaluation: { passed: true, positive, negative, errors: [] },
+  };
+  if (suggestion.scan.verdict === 'critical') throw new Error('Unsafe proposed metadata');
+  // Evaluate originals in memory; persist only privacy-scrubbed prompt text.
+  suggestion.triggerEvaluation!.positive = positive.map(p => ({ ...p, prompt: scrubContextText(p.prompt) }));
+  suggestion.triggerEvaluation!.negative = negative.map(p => ({ ...p, prompt: scrubContextText(p.prompt) }));
+  writeJsonArray(suggestionsPath(workspacePath), mergeSuggestions(listSkillCuratorSuggestions(workspacePath), [suggestion]));
+  return suggestion;
+}
+
 
 /** Only reviewed repeated irrelevant requests qualify. Never uses non-read as evidence. */
 export function buildRoutingReviewSuggestions(workspacePath: string): SkillCuratorSuggestion[] {
@@ -48,11 +140,11 @@ export function buildUnreviewedRoutingSuggestions(workspacePath: string): SkillC
     if (!turn.routingMatched) continue;
     for (const offered of turn.offered) {
       if (turn.reviews.some(r => r.skillId === offered.id && r.relevance !== 'unknown')) continue;
-      if (turn.read.some(id => typeof id === 'string' && id.toLowerCase() === offered.id.toLowerCase())) continue;
+      // Read/unread is usage, not relevance: both remain eligible for review.
       for (const term of offered.terms) {
         const key = `${offered.id}\u0000${term}`;
         const group = groups.get(key) || { skillId: offered.id, term, examples: new Map<string, string>() };
-        group.examples.set(turn.requestHash, `UNKNOWN relevance; offered/not_read proxy only; turn=${turn.turnId} requestHash=${turn.requestHash} trigger=${term} request=${turn.requestExcerpt}`);
+        group.examples.set(turn.requestHash, `UNKNOWN relevance; offered usage is not relevance; turn=${turn.turnId} requestHash=${turn.requestHash} trigger=${term} request=${turn.requestExcerpt}`);
         groups.set(key, group);
       }
     }
@@ -105,6 +197,7 @@ export interface SkillCuratorSuggestion {
     manifest?: Record<string, unknown>;
   };
   scan: SkillSafetyScan;
+  previousManifest?: Record<string, unknown>;
   appliedAt?: string;
   rejectedAt?: string;
   semanticKey?: string;
@@ -1050,6 +1143,21 @@ export function rejectSkillCuratorSuggestion(workspacePath: string, id: string):
   return rows[idx];
 }
 
+export function rollbackRoutingSuggestion(workspacePath: string, skillsManager: SkillsManager, id: string, negativePrompts: string[]): SkillCuratorSuggestion | null {
+  const rows = listSkillCuratorSuggestions(workspacePath);
+  const index = rows.findIndex(s => s.id === id);
+  if (index < 0) return null;
+  const row = rows[index];
+  if (row.status !== 'applied' || !row.previousManifest || !row.semanticKey?.startsWith('routing-tested:')) throw new Error('Only applied routing proposals can be rolled back');
+  const current = skillsManager.get(row.skillId);
+  if (JSON.stringify(current?.triggers) !== JSON.stringify(row.change.manifest?.triggers) || JSON.stringify(current?.promptSignals) !== JSON.stringify(row.change.manifest?.promptSignals)) throw new Error('Skill changed since application; refuse stale rollback');
+  if (!Array.isArray(negativePrompts) || !negativePrompts.length || negativePrompts.length > 12 || negativePrompts.some(p => typeof p !== 'string' || p.length > 4000)) throw new Error('Rollback requires bounded baseline negative regression prompts');
+  skillsManager.writeManifestOverlay(row.skillId, { ...row.previousManifest, promptSignals: row.previousManifest.promptSignals || {} }, { changeType: 'brain_curator_rollback', evidence: row.evidence, appliedBy: 'skill_curator', reason: `Rollback ${id}`, triggerPositivePrompts: row.triggerEvaluation?.positive.map(p => p.prompt), triggerNegativePrompts: negativePrompts });
+  rows[index] = { ...row, status: 'rejected', rejectedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  writeJsonArray(suggestionsPath(workspacePath), rows);
+  return rows[index];
+}
+
 export function applySkillCuratorSuggestion(workspacePath: string, skillsManager: SkillsManager, id: string): SkillCuratorSuggestion | null {
   const rows = listSkillCuratorSuggestions(workspacePath);
   const idx = rows.findIndex((row) => row.id === id);
@@ -1057,6 +1165,10 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
   const suggestion = rows[idx];
   if (suggestion.status === 'applied') return suggestion;
   if (suggestion.status !== 'pending') throw new Error(`Cannot apply a ${suggestion.status} skill suggestion.`);
+  if (suggestion.semanticKey?.startsWith('routing-tested:')) {
+    const current = skillsManager.get(suggestion.skillId);
+    if (JSON.stringify(current?.triggers) !== JSON.stringify(suggestion.previousManifest?.triggers) || JSON.stringify(current?.promptSignals) !== JSON.stringify(suggestion.previousManifest?.promptSignals)) throw new Error('Skill changed since proposal; re-review before applying');
+  }
   if (suggestion.change.kind === 'write_resource') {
     const resourcePath = suggestion.change.path || '';
     const incomingContent = suggestion.change.content || '';
