@@ -1399,15 +1399,21 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'prometheus_audit_ops',
-        description: 'Read-only operational audit for reconstructing interrupted Prometheus work from the workspace audit mirror and immediate continuity journal. Search and timelines contain bounded redacted message/tool/goal evidence only; it never resumes, approves, or mutates work. After an interruption, inspect this evidence, verify live Goal/request state, then use existing thread/request recovery mechanisms only if appropriate.',
+        description: 'Read-only operational audit, including context_receipts (provider-bound redacted memory sections; detail=true for text) and context_receipt_settings, skill_routing_evidence and skill_routing_stats for request/trigger examples and reviewed relevance (read rate is not relevance), and reconstructing interrupted Prometheus work from the workspace audit mirror and immediate continuity journal. Search and timelines contain bounded redacted message/tool/goal evidence only; it never resumes, approves, or mutates work. After an interruption, inspect this evidence, verify live Goal/request state, then use existing thread/request recovery mechanisms only if appropriate.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact'] },
+            action: { type: 'string', enum: ['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact', 'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings'] },
             session_id: { type: 'string', description: 'Exact audited session id for a timeline or recovery brief.' },
             query: { type: 'string', description: 'Bounded redacted audit search text.' },
             limit: { type: 'number', description: 'Maximum sessions/events/results; default 30, maximum 100.' },
+            receipt_id: { type: 'string', description: 'Exact rpm_ manifest/receipt ID returned by context_receipts.' },
+            detail: { type: 'boolean', description: 'Include bounded redacted receipt text rather than metadata only.' },
+            days: { type: 'number', description: 'Evidence window: skill routing maximum 90 days; context receipts maximum 30.' },
+            skill_id: { type: 'string', description: 'Filter skill routing evidence to this skill.' },
+            turn_id: { type: 'string', description: 'Exact learning turn ID for routing evidence.' },
+            relevance: { type: 'string', enum: ['relevant', 'irrelevant', 'unknown'], description: 'Filter explicitly reviewed skill relevance. Unread is not irrelevant.' },
             artifact_ref: { type: 'string', description: 'Opaque artifact reference returned by an audit result. Only use this for bounded audit artifact reads.' },
             offset: { type: 'number', description: 'Byte offset for paginated artifact reads.' },
             max_chars: { type: 'number', description: 'Maximum characters for read_artifact; default 8000, maximum 24000.' },

@@ -17,6 +17,7 @@ import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads }
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { voiceContextRequestHash, voiceContextEntryMatches } from '../voice/context-cache-key';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
@@ -3573,6 +3574,7 @@ async function handleChatUntraced(
       finalResponse,
       toolResults: allToolResults,
       routing: getSkillRoutingReport(sessionId),
+      gatewayTurnId: turnTiming.turnId,
     });
     return finalResponse;
   };
@@ -6574,6 +6576,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           agentId: 'main',
           traceId: turnTiming.turnId,
           promptManifest: {
+              gatewayTurnId: turnTiming.turnId,
+              originalUserRequest: message,
               executionMode: executionMode || 'interactive',
               personalityProfile: String((personalityProfile as any)?.profile || 'default'),
               surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
@@ -12082,6 +12086,7 @@ type VoiceAgentContextBlockCacheEntry = {
   workspacePath: string;
   historyLength: number;
   targetKey: string;
+  requestHash: string;
   contextBlock: string;
   createdAt: number;
 };
@@ -12126,13 +12131,13 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const history = targetAgentId ? getSubagentChatHistory(targetAgentId, 500) : (Array.isArray(session?.history) ? session.history : []);
   const historyLength = history.length;
   const targetKey = voiceTarget.kind === 'subagent' ? `subagent:${voiceTarget.agentId || voiceTarget.label || 'unknown'}` : 'main';
+  const requestHash = voiceContextRequestHash(transcript);
+  const contextRequest = { workspacePath, historyLength, targetKey, requestHash };
   const cached = voiceAgentContextBlockCache.get(cacheKey);
   const ageMs = cached ? Date.now() - Number(cached.createdAt || 0) : Number.POSITIVE_INFINITY;
   if (
     cached
-    && cached.workspacePath === workspacePath
-    && cached.historyLength === historyLength
-    && cached.targetKey === targetKey
+    && voiceContextEntryMatches(cached, contextRequest)
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= VOICE_AGENT_CONTEXT_BLOCK_TTL_MS
@@ -12143,7 +12148,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const pending = voiceAgentContextBlockPending.get(cacheKey);
   if (pending) {
     const entry = await pending;
-    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength && entry.targetKey === targetKey) {
+    if (voiceContextEntryMatches(entry, contextRequest)) {
       return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
     }
   }
@@ -12160,7 +12165,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
       { profile: targetAgentId ? 'direct_subagent' : 'voice_agent' },
     );
     const contextBlock = applyVoiceTargetContextBlock(baseContextBlock, voiceTarget);
-    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, contextBlock, createdAt: Date.now() };
+    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, requestHash, contextBlock, createdAt: Date.now() };
     voiceAgentContextBlockCache.set(cacheKey, entry);
     return entry;
   })();

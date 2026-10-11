@@ -1484,12 +1484,18 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'skill_curator',
         description:
-          'Inspect or run the Brain Skill Curator. Runs default to dry-run. Applying a pending suggestion is the only autonomous-system path that may mutate a skill.',
+          'Inspect or run the Brain Skill Curator. review_routing records an evidence-backed relevant/irrelevant/unknown judgment for a skill offer; it never edits skill files. Get exact turn/hash/examples through prometheus_audit_ops skill_routing_evidence. Read/unread is not relevance. Runs default to dry-run. Applying a pending suggestion is the only autonomous-system path that may mutate a skill.',
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject'] },
+            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'review_routing'] },
             mode: { type: 'string', enum: ['dry-run', 'pending', 'auto-safe'], description: 'For action=run. Defaults to dry-run; auto-safe is currently mutation-frozen.' },
+            turn_id: { type: 'string', description: 'review_routing: exact learning turn ID from skill_routing_evidence.' },
+            request_hash: { type: 'string', description: 'review_routing: original request hash from that evidence.' },
+            skill_id: { type: 'string', description: 'review_routing: exact offered skill ID.' },
+            relevance: { type: 'string', enum: ['relevant', 'irrelevant', 'unknown'], description: 'Judgment from request plus full skill scope. Use unknown if evidence is insufficient.' },
+            reason: { type: 'string', description: 'review_routing: bounded audit reason, maximum 500 characters.' },
+            reviewed_evidence: { type: 'string', description: 'review_routing: evidence examined, maximum 1000 characters; do not include secrets.' },
             id: { type: 'string', description: 'Suggestion id for apply/reject.' },
             limit: { type: 'number', description: 'For status. Compact rows to return; defaults to 5, maximum 100.' },
             cursor: { type: 'number', description: 'For status pagination. Zero-based offset.' },

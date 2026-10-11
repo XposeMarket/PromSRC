@@ -4,6 +4,71 @@ import crypto from 'crypto';
 import { rankSkillMatches, type SkillChangeLedgerEntry, type SkillsManager } from './skills-manager';
 import { MAX_SKILL_TRIGGERS, validateSkillTriggers } from './skill-package';
 import { scanSkillText, type SkillSafetyScan } from './skill-safety';
+import { getSkillRoutingEvidence } from '../learning/turn-recorder';
+
+/** Only reviewed repeated irrelevant requests qualify. Never uses non-read as evidence. */
+export function buildRoutingReviewSuggestions(workspacePath: string): SkillCuratorSuggestion[] {
+  const groups = new Map<string, { skillId: string; term: string; examples: Map<string, string> }>();
+  const source = getSkillRoutingEvidence(workspacePath, { days: 90, limit: 10000, relevance: 'irrelevant' });
+  if (source.scan.partial) return []; // Defer trigger judgments when evidence is incomplete.
+  for (const turn of source) {
+    if (!turn.routingMatched) continue;
+    for (const offered of turn.offered) {
+      const review = turn.reviews.find(r => r.skillId === offered.id && r.relevance === 'irrelevant');
+      if (!review) continue;
+      for (const term of offered.terms) {
+        const key = `${offered.id}\u0000${term}`;
+        const group = groups.get(key) || { skillId: offered.id, term, examples: new Map<string, string>() };
+        group.examples.set(turn.requestHash, `turn=${turn.turnId} requestHash=${turn.requestHash} trigger=${term} request=${turn.requestExcerpt} review=${review.reason}`);
+        groups.set(key, group);
+      }
+    }
+  }
+  return [...groups.values()].filter(g => g.examples.size >= 3).map(g => {
+    const semanticKey = `routing-strictness:${g.skillId}:${g.term}`;
+    const recommendation = `Make trigger "${g.term}" stricter: require the skill's specific task/domain in combination, add near-miss negative prompts from these reviewed examples, and A/B test positive coverage before approving any change. Do not drop a trigger based on non-read usage.`;
+    const now = new Date().toISOString();
+    return { id: `routing_review_${crypto.createHash('sha256').update(semanticKey).digest('hex').slice(0, 24)}`, semanticKey,
+      createdAt: now, updatedAt: now, status: 'pending', skillId: g.skillId, title: `Review overbroad trigger: ${g.term}`,
+      reason: `${g.examples.size} distinct original request hashes explicitly reviewed irrelevant. ${recommendation}`,
+      lessonType: 'trigger_patch', learnedBehavior: recommendation, approvePreview: recommendation,
+      autoApplyEligible: false, autoDecisionReason: 'Confirmed routing evidence is review-only; no automatic skill mutation.',
+      evidence: [...g.examples.values()].slice(0, 8), risk: 'medium', change: { kind: 'review_only', content: recommendation }, scan: scanSkillText(recommendation),
+    } as SkillCuratorSuggestion;
+  });
+}
+
+
+/** Queue unknown samples for a background reviewer, never classify usage as relevance. */
+export function buildUnreviewedRoutingSuggestions(workspacePath: string): SkillCuratorSuggestion[] {
+  const groups = new Map<string, { skillId: string; term: string; examples: Map<string, string> }>();
+  const source = getSkillRoutingEvidence(workspacePath, { days: 30, limit: 10000, relevance: 'unknown' });
+  if (source.scan.partial) return [];
+  for (const turn of source) {
+    if (!turn.routingMatched) continue;
+    for (const offered of turn.offered) {
+      if (turn.reviews.some(r => r.skillId === offered.id && r.relevance !== 'unknown')) continue;
+      if (turn.read.some(id => typeof id === 'string' && id.toLowerCase() === offered.id.toLowerCase())) continue;
+      for (const term of offered.terms) {
+        const key = `${offered.id}\u0000${term}`;
+        const group = groups.get(key) || { skillId: offered.id, term, examples: new Map<string, string>() };
+        group.examples.set(turn.requestHash, `UNKNOWN relevance; offered/not_read proxy only; turn=${turn.turnId} requestHash=${turn.requestHash} trigger=${term} request=${turn.requestExcerpt}`);
+        groups.set(key, group);
+      }
+    }
+  }
+  return [...groups.values()].filter(g => g.examples.size >= 3).slice(0, 100).map(g => {
+    const semanticKey = `routing-unknown-review:${g.skillId}:${g.term}`;
+    const recommendation = `Background reviewer: inspect original request context and skill scope for these unknown samples. Submit relevant/irrelevant/unknown feedback with reviewerSource=agent, reviewerId, reason and reviewedEvidence. Repeated unread usage only requests review; it is NOT irrelevant evidence and does NOT justify trigger strictness changes.`;
+    const now = new Date().toISOString();
+    return { id: `routing_unknown_${crypto.createHash('sha256').update(semanticKey).digest('hex').slice(0, 24)}`, semanticKey,
+      createdAt: now, updatedAt: now, status: 'pending', skillId: g.skillId, title: `Review UNKNOWN routing relevance: ${g.term}`,
+      reason: recommendation, autoApplyEligible: false, autoDecisionReason: 'Unknown relevance requires a judge; usage is only a proxy.',
+      evidence: [...g.examples.values()].slice(0, 8), risk: 'low', change: { kind: 'review_only', content: recommendation }, scan: scanSkillText(recommendation),
+    } as SkillCuratorSuggestion;
+  });
+}
+
 
 export type SkillCuratorMode = 'dry-run' | 'pending' | 'auto-safe';
 export type SkillCuratorSuggestionStatus = 'pending' | 'applied' | 'rejected' | 'quarantined' | 'expired' | 'suppressed';
@@ -1079,7 +1144,9 @@ export function runSkillCurator(params: {
     .filter((item): item is SkillCuratorSuggestion => !!item && (
       item.change.kind === 'review_only' || !!params.skillsManager.get(item.skillId)
     ));
-  const incoming = dedupeIncomingSuggestions([...incomingRaw, ...auditSuggestions]);
+  const incoming = dedupeIncomingSuggestions([...incomingRaw, ...auditSuggestions,
+    ...buildRoutingReviewSuggestions(params.workspacePath).filter(s => !!params.skillsManager.get(s.skillId)),
+    ...buildUnreviewedRoutingSuggestions(params.workspacePath).filter(s => !!params.skillsManager.get(s.skillId))]);
 
   const existing = listSkillCuratorSuggestions(params.workspacePath);
   const merged = mergeSuggestions(existing, incoming);

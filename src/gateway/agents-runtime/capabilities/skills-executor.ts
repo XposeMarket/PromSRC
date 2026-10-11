@@ -12,6 +12,7 @@ import {
 } from '../../skills-runtime/skill-curator';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import { rankSkillMatches } from '../../skills-runtime/skills-manager';
+import { submitSkillRoutingFeedback } from '../../learning/turn-recorder';
 
 const SKILL_TOOL_NAMES = new Set([
   'skill_list',
@@ -695,6 +696,14 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
       case 'skill_curator': {
         const action = String(args.action || 'status').trim().toLowerCase();
         try {
+          if (action === 'review_routing') {
+            const review = submitSkillRoutingFeedback(ctx.workspacePath, {
+              turnId: args.turn_id, requestHash: args.request_hash, skillId: args.skill_id || args.skillId,
+              relevance: args.relevance, reason: args.reason, reviewerSource: 'agent',
+              reviewerId: ctx.sessionId, reviewedEvidence: args.reviewed_evidence,
+            });
+            return { name, args, result: JSON.stringify({ review, skillFilesChanged: false }), error: false };
+          }
           if (action === 'status') {
             const status = getSkillCuratorStatus(ctx.workspacePath, { limit: args.limit, cursor: args.cursor, statusFilter: args.statusFilter || args.status_filter, skillId: args.skillId || args.skill_id, includeContent: args.includeContent === true || args.include_content === true });
             return { name, args, result: JSON.stringify(status, null, 2), error: false };

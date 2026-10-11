@@ -96,7 +96,29 @@ router.get('/api/skills/match', (req, res) => {
   res.json({ success: true, matches });
 });
 
-// Learning loop: rolling skill-trigger precision (offered vs read) per skill and trigger term.
+// Learning evidence stays in the authenticated router and configured workspace.
+router.get('/api/learning/skill-routing-evidence', (req, res) => {
+  try {
+    const { getConfig } = require('../../config/config');
+    const { getSkillRoutingEvidence } = require('../learning/turn-recorder');
+    const relevance = req.query.relevance;
+    if (relevance !== undefined && !['relevant', 'irrelevant', 'unknown'].includes(String(relevance))) throw new Error('Invalid relevance filter');
+    const evidence = getSkillRoutingEvidence(getConfig().getWorkspacePath(), {
+      days: Number(req.query.days) || 30, limit: Math.min(200, Number(req.query.limit) || 100),
+      skillId: req.query.skillId === undefined ? undefined : String(req.query.skillId).slice(0, 128),
+      turnId: req.query.turnId === undefined ? undefined : String(req.query.turnId).slice(0, 64), relevance,
+    });
+    res.json({ success: true, evidence, scan: evidence.scan });
+  } catch (err: any) { res.status(400).json({ success: false, error: String(err?.message || err) }); }
+});
+router.post('/api/learning/skill-routing-feedback', (req, res) => {
+  try {
+    const { getConfig } = require('../../config/config');
+    const { submitSkillRoutingFeedback } = require('../learning/turn-recorder');
+    res.json({ success: true, review: submitSkillRoutingFeedback(getConfig().getWorkspacePath(), req.body) });
+  } catch (err: any) { res.status(400).json({ success: false, error: String(err?.message || err) }); }
+});
+// Read rate is tool usage; precision uses only explicit relevant/irrelevant reviews.
 router.get('/api/learning/skill-routing-stats', (req, res) => {
   try {
     const { getConfig } = require('../../config/config');

@@ -97,6 +97,12 @@ async function main(): Promise<void> {
   assert.equal(executor.automationCapabilityExecutor.canHandle('prometheus_audit_ops'), true);
   const dispatched = await executor.automationCapabilityExecutor.execute({ name: 'prometheus_audit_ops', args: { action: 'recent_sessions' }, sessionId: 'owner', workspacePath: process.env.PROMETHEUS_WORKSPACE_DIR!, deps: {} as any });
   assert.equal(dispatched.error, false);
+  assert.ok(Array.isArray(audit.executePrometheusAuditOps('owner', { action: 'skill_routing_evidence', days: 1 }).evidence));
+  assert.ok(audit.executePrometheusAuditOps('owner', { action: 'skill_routing_stats' }).stats);
+  assert.ok(Array.isArray(audit.executePrometheusAuditOps('owner', { action: 'context_receipts', limit: 1 }).records));
+  assert.equal(audit.executePrometheusAuditOps('owner', { action: 'context_receipt_settings' }).settings.enabled, true);
+  assert.ok(auditDef.function.parameters.properties.action.enum.includes('context_receipts'));
+  assert.ok(auditDef.function.parameters.properties.action.enum.includes('skill_routing_evidence'));
   console.log('audit ops regression: ok');
 }
 

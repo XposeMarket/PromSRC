@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
 import { safeAuditSessionId, scrubAuditValue } from './continuity';
+import { getSkillRoutingEvidence, computeSkillRoutingStats } from '../learning/turn-recorder';
+import { readContextReceipts, contextReceiptSettings } from '../../runtime/context-receipt';
 
 const MAX_FILE_READ = 512 * 1024;
 const PREVIEW_FILE_READ = 24 * 1024;
@@ -123,8 +125,21 @@ function validateRawIssued(ref: { kind: 'raw'; sessionId: string; observationId:
 }
 
 export function executePrometheusAuditOps(_ownerSessionId: string, args: any): Record<string, any> {
-  const action = String(args?.action || '').trim().toLowerCase(); const max = limit(args?.limit, 30, MAX_RESULTS); if (!['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact'].includes(action)) throw new Error('Unsupported prometheus_audit_ops action.');
+  const action = String(args?.action || '').trim().toLowerCase(); const max = limit(args?.limit, 30, MAX_RESULTS); if (!['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact', 'skill_routing_evidence', 'skill_routing_stats', 'context_receipts', 'context_receipt_settings'].includes(action)) throw new Error('Unsupported prometheus_audit_ops action.');
   const provenance = mirrorProvenance();
+  if (action === 'context_receipts') {
+    return readContextReceipts({ id: args.receipt_id, sessionId: args.session_id, days: args.days, limit: max, detail: args.detail === true }, getConfig().getWorkspacePath());
+  }
+  if (action === 'context_receipt_settings') {
+    return { settings: contextReceiptSettings(getConfig().getWorkspacePath()) };
+  }
+  if (action === 'skill_routing_evidence') {
+    const evidence = getSkillRoutingEvidence(getConfig().getWorkspacePath(), { days: args.days, skillId: args.skill_id, turnId: args.turn_id, relevance: args.relevance, limit: max });
+    return { evidence, scan: evidence.scan, provenance: { source: 'workspace_learning_evidence', relevanceRequiresReview: true } };
+  }
+  if (action === 'skill_routing_stats') {
+    return { stats: computeSkillRoutingStats(getConfig().getWorkspacePath(), Number(args.days) || 30), provenance: { source: 'workspace_learning_evidence', readRateIsNotRelevance: true } };
+  }
   if (action === 'recent_sessions') {
     const budget: Budget = { deadline: Date.now() + SCAN_DEADLINE_MS, remainingBytes: SCAN_BYTE_BUDGET, exhausted: false }; const sessions = recentSessionIds().slice(0, max).map((id) => candidate(id, budget)).sort((a, b) => Number(b.freshness || 0) - Number(a.freshness || 0));
     return { sessions, partial: budget.exhausted, budget: { exhausted: budget.exhausted, remainingBytes: budget.remainingBytes }, provenance };
