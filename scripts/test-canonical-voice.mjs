@@ -122,4 +122,3 @@ await backend.synthesizeCanonicalSpeech({ provider: 'xai', text: 'Same answer', 
 assert.equal(audioRequests[1].body.voice_id, 'eve');
 await assert.rejects(() => backend.synthesizeCanonicalSpeech({ provider: 'legacy', text: 'no' }), /Unsupported/);
 console.log('PASS backend audio: OpenAI/xAI synthesize returned chat text only; unsupported provider rejected');
-

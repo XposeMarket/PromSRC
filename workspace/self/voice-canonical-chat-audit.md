@@ -1,15 +1,20 @@
-# Voice canonical-chat audit
+# Canonical voice chat
 
-Voice native-tool parity is partial runtime parity, not one reasoning loop. Realtime currently exposes canonical native tools but owns provider audio history and executes a separate realtime tool bridge. The voice_agent personality profile also remains separate from normal interactive chat.
+Desktop Voice and mobile Voice default to **canonical** mode. Speech is transport into the existing normal chat admission and `handleChat` runtime: same current session, model route, prompts, automatic/atomic memory, skill routing, native tools, approval policy and history. No copy of the normal assistant prompt/tool dispatcher is created.
 
-## Confirmed defect fixed in this PR
-Voice context cache reused context across different transcripts with unchanged session/target/history for up to 30 seconds. Cache and pending-result reuse now compare exact transcript SHA-256 along with workspace, target and history length. New utterances rebuild memory and skill context. This does not make realtime invoke handleChat.
+## Transport
+- Desktop finalized speech uses existing `sendChat`; mobile uses existing authenticated `/api/chat` SSE.
+- Browser/device or configured OpenAI/xAI adapters transcribe audio and speak returned chat text only. Audio-provider selection is distinct from the normal chat reasoning model.
+- Canonical mode does not add voice-agent caller instructions or launch the separate voice worker.
+- Barge-in stops playback and normal chat generation; request/session guards discard late transcripts after navigation and duplicate browser finals.
+- Existing attachments, selected/excluded skills, client request IDs and approval events remain owned by normal chat.
 
-## Target architecture
-Finalized speech -> canonical /api/chat admission and handleChatRequest -> authoritative chat stream -> speech output. Preserve session/client request IDs, attachments, approvals, cancellation and turn origin. Audio adapters own transcription, playback, barge-in and speech buffering, not a second prompt/tool dispatcher. Read-only/realtime audio controls may remain transport-specific.
+## Legacy and reverse states
+Realtime native audio reasoning remains explicit **Legacy** opt-in. Old implicit saved defaults migrate to canonical; status refresh cannot silently switch back. Canonical voice can start/stop and cancel playback/generation. Legacy voice context cache keys include transcript SHA-256 to avoid reuse across different utterances.
 
-## Deliberately not claimed done
-The full migration requires validating both desktop/mobile clients, existing OpenAI API/Codex and xAI auth paths, incremental speech synthesis, cancellation and latency. Realtime native audio reasoning cannot simply be given full prompts and called the same runtime. Do not remove legacy routes or promise native realtime latency without proof. Current PR leaves voice behavior available and documents this distinct follow-up.
+## Credentials and platform limits
+OpenAI public audio needs a configured API key or Codex exchanged API key. An access-only Codex account does not imply audio entitlement. xAI uses configured account credentials. Browser speech availability/permissions vary by OS/browser; absent browser STT uses available server STT, never silently substitutes legacy reasoning. No hardcoded account or machine paths.
 
 ## Verification
-npx tsx src/gateway/voice/context-cache-key.regression.ts
+`node scripts/test-canonical-voice.mjs` exercises production routing/defaults/provider preservation, stale/duplicate transcripts, start/stop, cancellation, SSE attachments/request IDs/approval events and mocked transport TTS. `npx tsx src/gateway/voice/context-cache-key.regression.ts` covers legacy cache keys.
+Physical microphone/speaker, phone permissions and live provider entitlement require real-device verification; mocks are not proof of audio-device success. Default canonical turn-taking is not promised to match native realtime latency.
