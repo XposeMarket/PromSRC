@@ -2718,6 +2718,7 @@ async function handleChatUntraced(
   const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
   let receiptResponse = '';
   let receiptCompleted = false;
+  let captureUnfinishedLearningTurn: (() => void) | undefined;
   const inheritedAdmissionLease = runtimeOptions?.admissionLease;
   let ownedAdmissionLease: RuntimeAdmissionLease | null = null;
   if (inheritedAdmissionLease) {
@@ -3561,6 +3562,11 @@ async function handleChatUntraced(
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
   let learningTurnCaptured = false;
+  captureUnfinishedLearningTurn = () => {
+    if (!learningTurnCaptured) recordLearningTurn({ workspacePath, sessionId, executionMode,
+      request: message, finalResponse: '', toolResults: allToolResults,
+      routing: getSkillRoutingReport(sessionId), gatewayTurnId: turnTiming.turnId });
+  };
   const turnRetrieval: RetrievalTrace[] = [];
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
     learningTurnCaptured = true;
@@ -8738,11 +8744,7 @@ Do not produce prose. Use the canonical thread tool now.` });
   } finally {
     // Capture offers for failed/cancelled turns too. Usage is never relevance.
     // Normal finalization already captured successful turns; avoid duplicate records.
-    if (!learningTurnCaptured) {
-      recordLearningTurn({ workspacePath, sessionId, executionMode, request: message,
-        finalResponse: '', toolResults: allToolResults, routing: getSkillRoutingReport(sessionId),
-        gatewayTurnId: turnTiming.turnId });
-    }
+    captureUnfinishedLearningTurn?.();
     recordContextReceiptOutcome({ sessionId, gatewayTurnId: turnTiming.turnId, status: abortSignal?.aborted ? 'cancelled' : receiptCompleted ? 'completed' : 'failed', response: receiptResponse, reason: !receiptCompleted && !abortSignal?.aborted ? 'turn_terminated_without_final_response' : '' }, getConfig().getWorkspacePath());
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal
