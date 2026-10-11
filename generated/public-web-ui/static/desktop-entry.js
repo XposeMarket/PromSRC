@@ -1,4 +1,5 @@
 import './legacy-desktop-bootstrap.js';
+import './context-review-entry.js';
 import { checkSessionDetailed, mountLoginScreen, getAccount, getPersistedAccount } from './auth/account.js';
 import { installMobileSettingsReturnBridge } from './settings-return.js';
 

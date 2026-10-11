@@ -694,6 +694,7 @@ export async function renderHubPage(page, { navigate } = {}) {
     <div class="pm-body pm-hub-profile-page" id="pm-hub-body">${_pmMoreSkeleton()}</div>
   `;
   wireHeaderActions(page, {});
+  await _mountEvidenceReview(page, navigate, 'skills');
   const body = page.querySelector('#pm-hub-body');
   let loadGeneration = 0;
   const load = async () => {
@@ -959,13 +960,32 @@ async function _renderMoreMemory(page, { navigate }) {
   requestAnimationFrame(() => memoryPageActivate());
 }
 
+async function _mountEvidenceReview(page, navigate, tab = 'context') {
+  const { api } = await import('../api.js');
+  const { mountContextReview } = await import('../context-review.js');
+  const launch = document.createElement('button');
+  launch.className = 'pm-btn'; launch.type = 'button';
+  launch.textContent = 'Review context & skill evidence';
+  const host = document.createElement('div');
+  host.style.cssText = 'width:100%;min-width:0';
+  launch.onclick = () => {
+    if (host.dataset.mounted) { host.hidden = !host.hidden; return; }
+    host.dataset.mounted = '1';
+    mountContextReview(host, { api, mobile: true, navigate, initialTab: tab });
+  };
+  page.prepend(host); page.prepend(launch);
+}
+
 export async function renderMorePage(page, { section = '', navigate }) {
   if (section === 'hub') {
     try { navigate?.('#mobile/hub'); } catch {}
     return renderHubPage(page, { navigate });
   }
-  if (section === 'audit') return _renderMoreAudit(page, { navigate });
-  if (section === 'memory') return _renderMoreMemory(page, { navigate });
+  if (section === 'audit' || section === 'memory') {
+    await (section === 'audit' ? _renderMoreAudit(page, { navigate }) : _renderMoreMemory(page, { navigate }));
+    await _mountEvidenceReview(page, navigate);
+    return;
+  }
   if (section === 'overview') return _renderMoreLanding(page, { navigate });
   // Mobile-only: the More landing is now the Plugins page (Audit, Memory and
   // asset reload live in its footer; #mobile/more/overview keeps the old view).
