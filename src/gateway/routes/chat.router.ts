@@ -86,6 +86,7 @@ import {
   buildDurableCommentaryContext,
 } from '../context/commentary-context';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
+import { BrainRunBudget, type BrainRunBudgetOptions } from '../agents-runtime/brain-run-budget';
 import {
   collectRichArtifacts,
   extractVisualArtifactsFromMarkdown,
@@ -2700,7 +2701,7 @@ async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -3497,6 +3498,10 @@ async function handleChatUntraced(
     sendSSE('tool_category_provisioning', payload);
   };
   let tools: any[] = [];
+  // Only Brain Dream/cleanup opts into this guard. It lives at the provider
+  // boundary so retries and the helper-model fallback cannot bypass it.
+  const brainRunBudget = runtimeOptions?.brainRunBudget ? new BrainRunBudget(runtimeOptions.brainRunBudget) : null;
+  let brainRunBudgetHit: 'model_calls' | 'input_tokens' | undefined;
   let currentProviderCallIteration: number | null = null;
   const allToolResults: ToolResult[] = [];
   // ── Dispatch-time tool policy (src/gateway/chat/tool-dispatch-policy.ts) ──
@@ -6197,6 +6202,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     // for primary to do. Build the reply from what we already know in-memory.
 
     let response: any;
+    // Per-round cursor is captured immediately before the admitted provider call
+    // and consumed after its response, so stale session events cannot reconcile.
+    let brainProviderUsageCursor: ReturnType<typeof captureModelUsageLogCursor> | null = null;
     let responseStopReason: string | undefined;
     let responseIncompleteCause: string | undefined;
     let isGrokGeneration = false;
@@ -6206,7 +6214,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
       const opts = { reason, cause, partialText, userRequest: message };
       const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
-      if (abortSignal?.aborted || skipModel) return deterministic;
+      // The run budget is hard: finalization must preserve completed tool output
+      // without spending one more model call for a prose digest.
+      if (abortSignal?.aborted || skipModel || brainRunBudget) return deterministic;
       const causeLabel = describeTurnCutoffCause(reason, cause);
       sendSSE('info', { message: `Turn was cut off (${causeLabel}); writing a status summary from saved tool results.` });
       let route: ReturnType<typeof resolveProviderModelOverride> | TurnRouteSnapshot;
@@ -6500,7 +6510,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       });
       // The first provider call gets the same token-budget guard as later
       // rounds. A single huge first turn can therefore compact immediately.
-      if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+      if (!brainRunBudget && round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
         const preflightCompact = await maybeRunMidWorkflowCompaction({
           sessionId,
           messages,
@@ -6637,6 +6647,22 @@ Do not produce prose. Use the canonical thread tool now.` });
             },
           })
         : null;
+      brainProviderUsageCursor = brainRunBudget ? captureModelUsageLogCursor() : null;
+      const brainBudgetDecision = brainRunBudget?.tryReserve(messages, generationOptions.tools);
+      if (brainBudgetDecision && !brainBudgetDecision.allowed) {
+        brainRunBudgetHit = brainBudgetDecision.hit;
+        const snapshot = brainBudgetDecision.snapshot;
+        const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+        sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Finishing with saved output.` });
+        return {
+          type: 'chat',
+          text: await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true),
+          thinking: allThinking || undefined,
+          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+          toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+          brainRunBudget: { ...snapshot, hit: brainBudgetDecision.hit },
+        } as any;
+      }
       const generationPromise = (async () => {
         try {
           return await withSpan(
@@ -6649,7 +6675,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           if (isUsageLimitError(helperErr)) {
             try { recordProviderUsageExhausted(String(generationOverride.providerId || '')); } catch {}
           }
-          if (!helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
+          // A helper fallback is another provider request. Budgeted Brain runs
+          // must never make it implicitly after their reserved request fails.
+          if (brainRunBudget || !helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
           const helperLabel = `${generationOverride.providerId}/${generationOverride.model}`;
           const mainLabel = `${admittedRouteSnapshot.providerId}/${admittedRouteSnapshot.model}`;
           console.warn(`[switch_model] helper ${helperLabel} failed (${String(helperErr?.message || helperErr).slice(0, 200)}); falling back to main ${mainLabel}`);
@@ -6820,6 +6848,29 @@ Do not produce prose. Use the canonical thread tool now.` });
         toolResults: preservedToolResults,
       };
     }
+
+    // Provider usage is reconciled after every admitted request. The current
+    // response completes normally; an actual overage blocks every next round.
+    if (brainRunBudget) {
+      const actualEvent = brainProviderUsageCursor ? readModelUsageEventsSince(brainProviderUsageCursor, sessionId, turnTiming.turnId).at(-1) : undefined;
+      const actualInput = actualEvent ? resolveProviderPromptTokens(actualEvent) : Number(response?.usage?.inputTokens || 0);
+      const actualBudget = brainRunBudget.reconcileActualInput(actualInput);
+      if (actualBudget.hit) brainRunBudgetHit = actualBudget.hit;
+    }
+    if (brainRunBudgetHit && brainRunBudget) {
+      const snapshot = brainRunBudget.snapshot();
+      const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+      sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Preserving this response and ending the run.` });
+      return {
+        type: 'chat',
+        text: String(response?.content || await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true)),
+        thinking: allThinking || undefined,
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        brainRunBudget: snapshot,
+      } as any;
+    }
+
 
     let toolCalls = response.tool_calls;
 
@@ -8696,7 +8747,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 
 
     if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
-      const midCompact = await maybeRunMidWorkflowCompaction({
+      const midCompact = !brainRunBudget ? await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,
         toolResults: allToolResults.slice(compactedToolResultCount),
@@ -8706,7 +8757,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         sendSSE,
         abortSignal,
         routeSnapshot: activeGenerationRouteSnapshot,
-      });
+      }) : { compacted: false };
       if (midCompact.compacted) {
         midWorkflowCompactionsThisTurn++;
         compactedToolResultCount = allToolResults.length;
@@ -9297,7 +9348,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact' },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact'; brainRunBudget?: BrainRunBudgetOptions },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9857,6 +9908,7 @@ async function runInteractiveTurn(
         timingRecorder: turnTiming,
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
+        brainRunBudget: flags?.brainRunBudget,
         runtimeId: flags?.runtimeId,
         // Restart-resumed turns keep the root turn id so the cross-turn edit
         // log files pre- and post-restart edits under one turn.

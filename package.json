@@ -179,6 +179,8 @@
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",
     "test:brain-scheduled-chat": "tsx src/gateway/brain/brain-runner-scheduled-chat.regression.ts",
+    "test:brain-curator-rejections": "tsx src/gateway/skills-runtime/skill-curator-rejections.regression.ts",
+    "test:brain-run-budget": "tsx src/gateway/agents-runtime/brain-run-budget.regression.ts && tsx src/gateway/brain/brain-runner-budget.regression.ts",
     "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
     "test:openai-compat-reasoning": "tsx src/providers/openai-compat-adapter.regression.ts",
     "test:memory-worker-readiness": "tsx src/gateway/memory-index/memory-search-worker-readiness.regression.ts",
