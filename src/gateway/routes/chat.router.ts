@@ -3556,7 +3556,9 @@ async function handleChatUntraced(
   let midWorkflowCompactionsThisTurn = 0;
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
+  let learningTurnCaptured = false;
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
+    learningTurnCaptured = true;
     recordSkillGardenerTurn({
       workspacePath,
       sessionId,
@@ -8726,6 +8728,13 @@ Do not produce prose. Use the canonical thread tool now.` });
   }
 
   } finally {
+    // Capture offers for failed/cancelled turns too. Usage is never relevance.
+    // Normal finalization already captured successful turns; avoid duplicate records.
+    if (!learningTurnCaptured) {
+      recordLearningTurn({ workspacePath, sessionId, executionMode, request: message,
+        finalResponse: '', toolResults: allToolResults, routing: getSkillRoutingReport(sessionId),
+        gatewayTurnId: turnTiming.turnId });
+    }
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal
     // completion without changing tool execution semantics.

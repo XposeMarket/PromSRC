@@ -42,3 +42,5 @@ Approval uses existing curator `apply`, rejection uses `reject`. `rollback` rest
 Additional regression: `npx tsx src/gateway/learning/skill-trigger-monitor.regression.ts` exercises native review/propose/apply/rollback/reject, concrete conjunctive tightening, positive preservation, failed tightening, and body trust-spoof rejection. Existing capture hooks still own success/failure/cancel coverage; this lane does not change the chat turn lifecycle.
 
 Privacy: source hashes identify originals, not trust in their contents. Samples expose only scrubbed user/assistant-visible text; reasoning/media/tool payloads are omitted. Raw requests are hash-verified and evaluated only in memory; stored proposal regression text is scrubbed and rechecked by the existing apply evaluator. Redaction is best-effort. A stale skill metadata baseline blocks apply/rollback.
+
+Normal chat terminal cleanup captures offer evidence for cancelled/failed turns that did not pass final-response learning capture. Successful-turn capture is not duplicated; terminal state is joined through the shared context receipt outcome rather than inferred from skill usage.
