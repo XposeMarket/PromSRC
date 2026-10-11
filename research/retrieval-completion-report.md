@@ -3,7 +3,7 @@
 Status: DONE_WITH_CONCERNS
 BASE: cb2ca5dbd1abccc51dd93947174d39f69c86cb71
 Branch: feat/retrieval-provenance-complete
-SHA: see final commit returned by worker; this report is part of that commit.
+Implementation SHA: e6982ed25f6aaba94940261314ef00a421f23cef (following documentation-only commit records this SHA).
 
 ## Paths
 `src/runtime/{context-receipt,prompt-manifest,retrieval-provenance,retrieval-provenance.regression}.ts`; `src/gateway/memory-index/{memory-atoms,memory-atoms-hybrid,recall-index,sqlite-store,index,recall-index.regression,automatic-memory-search.regression}.ts`; `src/gateway/chat/{chat-helpers,context-build-worker-client}.ts`; `src/gateway/{prompt-context,audit/audit-ops,routes/audit-log.router,routes/chat.router,tools/defs/agent-team-schedule}.ts`; `research/retrieval-api-contract.md`.
