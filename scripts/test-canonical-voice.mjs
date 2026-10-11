@@ -39,13 +39,100 @@ const settings = box.loadDesktopVoiceSettings();
 assert.equal(settings.voiceMode, 'canonical');
 assert.equal(settings.sttProvider, 'xai'); assert.equal(settings.ttsProvider, 'xai');
 assert.equal(box.applyDesktopVoiceProviderDefaults(), false);
-await box.transcribeBackendRecording({});
+await box.transcribeBackendRecording({}, Object.freeze({ sessionId: box.window.activeChatSessionId, epoch: box.canonicalVoiceEpoch }));
 assert.equal(calls[0][0], '/api/voice/transcribe'); assert.equal(calls[0][1].provider, 'xai');
 assert.deepEqual(calls.slice(1), [['text', 'use my tools'], ['canonical-submit']]);
 // A response arriving after thread navigation must not submit to another chat.
 calls.length = 0;
 box.fetch = async () => { box.window.activeChatSessionId = 'thread-b'; return { ok: true, json: async () => ({ text: 'stale' }) }; };
-await box.transcribeBackendRecording({}); assert.equal(calls.length, 0);
+await box.transcribeBackendRecording({}, Object.freeze({ sessionId: box.window.activeChatSessionId, epoch: box.canonicalVoiceEpoch })); assert.equal(calls.length, 0);
+// Execute the production recorder path, including permission and stop callbacks.
+function recorderHarness(mode = 'canonical') {
+  const events = [], recorders = [];
+  const stream = { getTracks: () => [{ stop: () => events.push('track-stop') }] };
+  class Recorder {
+    constructor(stream, options) { this.stream = stream; this.options = options; recorders.push(this); }
+    start() { events.push('record-start'); }
+    stop() {
+      this.ondataavailable?.({ data: new Blob(['audio'], { type: 'audio/webm' }) });
+      this.done = this.onstop?.();
+    }
+  }
+  const r = vm.createContext({
+    Blob, MediaRecorder: Recorder, console, DESKTOP_VOICE_MODES: new Set(['canonical', 'xai', 'openai_realtime']),
+    window: { activeChatSessionId: 'thread-a', currentMode: 'chat' },
+    navigator: { language: 'en-US', mediaDevices: { getUserMedia: async () => stream } },
+    desktopVoiceSettings: { voiceMode: mode, sttProvider: 'xai' }, canonicalVoiceEpoch: 1,
+    voiceDictationEnabled: true, voiceDictationActive: false, voiceSttProvider: 'xai',
+    backendVoiceRecorder: null, backendVoiceChunks: [], backendVoiceMimeType: '', xaiStreamingDictationConnection: null,
+    getProviderInfo: () => ({ configured: true, label: 'xAI' }), getRecorderMimeType: () => 'audio/webm',
+    stopRealtimeVoicePlayback() {}, showDesktopVoiceStatus() {},
+    setVoiceDictationState: active => { r.voiceDictationActive = active; },
+    blobToBase64: async () => 'audio', appendDictationText: text => events.push(['text', text]),
+    sendChat: async () => events.push(['submit', r.window.activeChatSessionId]),
+    fetch: async (_url, init) => { events.push(['upload', JSON.parse(init.body).provider]); return { ok: true, json: async () => ({ text: 'recorded in A' }) }; },
+    resetDesktopNewChatContext() {}, setAgentSessionId() {},
+  });
+  vm.runInContext([fn(desktop, 'normalizeDesktopVoiceMode'), fn(desktop, 'toggleBackendDictation'), fn(desktop, 'stopBackendDictation'), fn(desktop, 'transcribeBackendRecording')].join('\n'), r);
+  // Execute the actual synchronous navigation lifecycle before unrelated session loading.
+  vm.runInContext(fn(desktop, '_openSession').split('  let sess =')[0] + '}\n', r);
+  return { r, events, recorders, stream };
+}
+// Exact reviewer sequence: record in A -> navigate B -> stop; no upload or submit.
+{
+  const { r, events, recorders } = recorderHarness();
+  await r.toggleBackendDictation({ forceBatch: true });
+  r.window.activeChatSessionId = 'thread-b';
+  await r.toggleBackendDictation({ forceBatch: true });
+  await recorders[0].done;
+  assert.deepEqual(events, ['record-start', 'track-stop']);
+}
+// The real navigation lifecycle invalidates and stops an existing capture immediately.
+{
+  const { r, events, recorders } = recorderHarness();
+  await r.toggleBackendDictation({ forceBatch: true });
+  await r._openSession('thread-b', 1);
+  await recorders[0].done;
+  assert.equal(r.canonicalVoiceEpoch, 2);
+  assert.equal(r.backendVoiceRecorder, null);
+  assert.deepEqual(events, ['record-start', 'track-stop']);
+}
+// Permission resolves after navigation (even A -> B -> A): release stream, never start.
+{
+  const { r, events, recorders, stream } = recorderHarness();
+  let grant;
+  r.navigator.mediaDevices.getUserMedia = () => new Promise(resolve => { grant = resolve; });
+  const starting = r.toggleBackendDictation({ forceBatch: true });
+  await r._openSession('thread-b', 1);
+  await r._openSession('thread-a', 2);
+  grant(stream);
+  await starting;
+  assert.equal(recorders.length, 0);
+  assert.deepEqual(events, ['track-stop']);
+}
+// Navigation during encoding is checked before upload, not just before submission.
+{
+  const { r, events } = recorderHarness();
+  r.blobToBase64 = async () => { r.window.activeChatSessionId = 'thread-b'; return 'audio'; };
+  await r.transcribeBackendRecording(new Blob(['audio']), Object.freeze({ sessionId: 'thread-a', epoch: 1 }));
+  assert.deepEqual(events, []);
+}
+// Epoch changes during the request suppress text and submit even in the same thread.
+{
+  const { r, events } = recorderHarness();
+  r.fetch = async () => { r.canonicalVoiceEpoch += 1; return { ok: true, json: async () => ({ text: 'stale' }) }; };
+  await r.transcribeBackendRecording(new Blob(['audio']), Object.freeze({ sessionId: 'thread-a', epoch: 1 }));
+  assert.deepEqual(events, []);
+}
+// Normal start/stop keeps provider selection and the legacy text-only recorder behavior.
+for (const mode of ['canonical', 'xai']) {
+  const { r, events, recorders } = recorderHarness(mode);
+  await r.toggleBackendDictation({ forceBatch: true });
+  assert.equal(recorders[0].options.mimeType, 'audio/webm');
+  await r.toggleBackendDictation({ forceBatch: true });
+  await recorders[0].done;
+  assert.deepEqual(events, ['record-start', 'track-stop', ['upload', mode === 'canonical' ? 'xai' : 'auto'], ['text', 'recorded in A'], ...(mode === 'canonical' ? [['submit', 'thread-a']] : [])]);
+}
 // Repeated browser finals are one turn; navigating or changing epoch drops stale events.
 const browserCalls = [];
 class Recognition { start() {} stop() {} }

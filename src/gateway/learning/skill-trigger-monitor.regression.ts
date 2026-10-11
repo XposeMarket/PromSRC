@@ -8,7 +8,7 @@ import { getSessionStorageDirectory } from '../session';
 import { recordLearningTurn, sha, submitSkillRoutingFeedback, getSkillRoutingEvidence } from './turn-recorder';
 import { sampleRoutingOffers } from '../skills-runtime/skill-curator';
 
-async function main() {
+async function main(legacyFullManifest = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trigger-monitor-'));
   const sessionId = `monitor_${Date.now()}`;
   const sessionFile = path.join(getSessionStorageDirectory(), `${sessionId}.json`);
@@ -50,19 +50,49 @@ async function main() {
     assert.equal(proposal.triggerEvaluation.positive.length, 2); assert.equal(proposal.triggerEvaluation.negative.length, 3);
     assert.ok(proposal.evidence.every((e: string) => /requestHash=\w+ contextHash=\w+/.test(e)));
     assert.deepEqual(manager.get('deploy')!.triggers, ['build application', 'build castle'], 'proposal does not mutate');
+    assert.ok(Object.keys(proposal.change.manifest).every(key => ['triggers', 'promptSignals'].includes(key)), 'new proposals store only trigger fields');
+    assert.ok(Object.keys(proposal.previousManifest).every(key => ['triggers', 'promptSignals'].includes(key)), 'new rollback snapshots store only trigger fields');
+    if (legacyFullManifest) {
+      // Reproduce a persisted pre-fix proposal, including stale unrelated fields on both sides.
+      const relative = (fs.readdirSync(root, { recursive: true }) as string[]).find(file => file.endsWith('suggestions.json'))!;
+      const file = path.join(root, relative);
+      const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const stored = rows.find((row: any) => row.id === proposal.id);
+      stored.change.manifest = { ...manager.get('deploy')!.manifest, ...stored.change.manifest, description: 'Obsolete proposal description', requiredTools: ['obsolete_tool'] };
+      stored.previousManifest = { ...manager.get('deploy')!.manifest, ...stored.previousManifest, description: 'Obsolete rollback description', requiredTools: ['obsolete_rollback_tool'] };
+      fs.writeFileSync(file, JSON.stringify(rows));
+    }
     const originalTriggers = [...manager.get('deploy')!.triggers];
     manager.get('deploy')!.triggers = ['changed baseline'];
     const stale = await execute({ action: 'apply', id: proposal.id }); assert.equal(stale.error, true, 'stale proposals must not overwrite new metadata');
     manager.get('deploy')!.triggers = originalTriggers;
+    const editMetadata = (description: string, requiredTools: string[]) => manager.writeManifestOverlay('deploy', { ...manager.get('deploy')!.manifest, description, requiredTools });
+    const assertMetadata = (description: string, requiredTools: string[]) => {
+      assert.equal(manager.get('deploy')!.description, description);
+      assert.deepEqual(manager.get('deploy')!.requiredTools, requiredTools);
+      assert.equal(manager.get('deploy')!.manifest.description, description);
+      assert.deepEqual(manager.get('deploy')!.manifest.requiredTools, requiredTools);
+    };
+    editMetadata('Current deployment description before apply', ['current_apply_tool']);
     const applied = await execute({ action: 'apply', id: proposal.id });
     assert.equal(applied.error, false, String(applied.result));
-    assert.equal(rankSkillMatches(manager.getAll(), requests[0], { limit: 1 })[0]?.id, 'deploy');
-    assert.equal(rankSkillMatches(manager.getAll(), requests[2], { limit: 100 }).some(s => s.id === 'deploy'), false);
+    assertMetadata('Current deployment description before apply', ['current_apply_tool']);
+    for (const request of requests.slice(0, 2)) assert.equal(rankSkillMatches(manager.getAll(), request, { limit: 1 })[0]?.id, 'deploy');
+    for (const request of requests.slice(2)) assert.equal(rankSkillMatches(manager.getAll(), request, { limit: 100 }).some(s => s.id === 'deploy'), false);
+    editMetadata('Newer deployment description before rollback', ['current_rollback_tool']);
+    const appliedSignals = manager.get('deploy')!.promptSignals;
+    manager.get('deploy')!.promptSignals = undefined;
+    const staleRollback = await execute({ action: 'rollback', id: proposal.id, rollback_negative_prompts: ['Write a grocery list'] });
+    assert.equal(staleRollback.error, true, 'rollback must still refuse stale trigger fields');
+    assertMetadata('Newer deployment description before rollback', ['current_rollback_tool']);
+    manager.get('deploy')!.promptSignals = appliedSignals;
     const rolledBack = await execute({ action: 'rollback', id: proposal.id, rollback_negative_prompts: ['Write a grocery list'] });
     assert.equal(rolledBack.error, false, String(rolledBack.result));
     assert.deepEqual(manager.get('deploy')!.triggers, ['build application', 'build castle']);
+    assert.equal(manager.get('deploy')!.promptSignals, undefined, 'rollback clears newly introduced prompt signals');
+    assertMetadata('Newer deployment description before rollback', ['current_rollback_tool']);
     const rejected = await execute({ action: 'reject', id: proposal.id }); assert.equal(rejected.error, false);
     console.log('skill-trigger-monitor regression: ok');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(sessionFile, { force: true }); }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+main().then(() => main(true)).catch(error => { console.error(error); process.exitCode = 1; });

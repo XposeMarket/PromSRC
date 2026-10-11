@@ -70,8 +70,8 @@ export function proposeRoutingTrigger(workspacePath: string, skillsManager: Skil
   if (new Set(negativePrompts).size < 3) throw new Error('Three distinct irrelevant originals required');
   const signalValidation = input.manifest.promptSignals === undefined ? null : validateSkillPromptSignals(input.manifest.promptSignals);
   if (signalValidation && (signalValidation.rejected.length || !signalValidation.signals)) throw new Error('Invalid promptSignals');
-  const manifest = { ...skill.manifest, triggers: skill.triggers, promptSignals: skill.promptSignals, ...input.manifest, ...(signalValidation ? { promptSignals: signalValidation.signals } : {}) };
-  const candidate = { ...skill, manifest, triggers: manifest.triggers as string[] || skill.triggers, promptSignals: manifest.promptSignals as typeof skill.promptSignals };
+  const manifest = { triggers: skill.triggers, promptSignals: skill.promptSignals, ...input.manifest, ...(signalValidation ? { promptSignals: signalValidation.signals } : {}) };
+  const candidate = { ...skill, manifest: { ...skill.manifest, ...manifest }, triggers: manifest.triggers as string[] || skill.triggers, promptSignals: manifest.promptSignals as typeof skill.promptSignals };
   if (input.manifest.triggers !== undefined && (!Array.isArray(input.manifest.triggers) || (validateSkillTriggers(input.manifest.triggers).rejected.length || validateSkillTriggers(input.manifest.triggers).capped.length))) throw new Error('Invalid trigger metadata');
   const skills = skillsManager.getAll().map(s => s.id === skill.id ? candidate : s);
   const positive = positivePrompts.map(prompt => { const top = rankSkillMatches(skills, prompt, { limit: 1 })[0]; return { prompt, passed: top?.id === skill.id && top.confidence === 'high', topSkill: top?.id, confidence: top?.confidence }; });
@@ -85,7 +85,7 @@ export function proposeRoutingTrigger(workspacePath: string, skillsManager: Skil
     reason: 'Concrete trigger patch passed verified positive and negative original-request regressions.', lessonType: 'trigger_patch',
     approvePreview: 'Apply this tested metadata overlay through the existing curator; no instructions change.',
     autoApplyEligible: false, autoDecisionReason: 'Explicit approval required.', evidence, risk: 'medium',
-    previousManifest: { ...skill.manifest, triggers: skill.triggers, promptSignals: skill.promptSignals },
+    previousManifest: { triggers: skill.triggers, promptSignals: skill.promptSignals },
     change: { kind: 'manifest_overlay', manifest }, scan: scanSkillText(JSON.stringify(manifest)),
     triggerEvaluation: { passed: true, positive, negative, errors: [] },
   };
@@ -1143,6 +1143,14 @@ export function rejectSkillCuratorSuggestion(workspacePath: string, id: string):
   return rows[idx];
 }
 
+/** The writer replaces the overlay file: merge ONLY trigger fields into the live manifest.
+ * Also strips unrelated fields from legacy routing-tested full-manifest snapshots. */
+function routingTriggerOverlay(skillsManager: SkillsManager, skillId: string, snapshot?: Record<string, unknown>): Record<string, unknown> {
+  const current = skillsManager.get(skillId);
+  if (!current || !snapshot || !Array.isArray(snapshot.triggers)) throw new Error('Missing routing trigger snapshot; re-review before applying');
+  return { ...current.manifest, triggers: snapshot.triggers, promptSignals: snapshot.promptSignals || {} };
+}
+
 export function rollbackRoutingSuggestion(workspacePath: string, skillsManager: SkillsManager, id: string, negativePrompts: string[]): SkillCuratorSuggestion | null {
   const rows = listSkillCuratorSuggestions(workspacePath);
   const index = rows.findIndex(s => s.id === id);
@@ -1152,7 +1160,7 @@ export function rollbackRoutingSuggestion(workspacePath: string, skillsManager: 
   const current = skillsManager.get(row.skillId);
   if (JSON.stringify(current?.triggers) !== JSON.stringify(row.change.manifest?.triggers) || JSON.stringify(current?.promptSignals) !== JSON.stringify(row.change.manifest?.promptSignals)) throw new Error('Skill changed since application; refuse stale rollback');
   if (!Array.isArray(negativePrompts) || !negativePrompts.length || negativePrompts.length > 12 || negativePrompts.some(p => typeof p !== 'string' || p.length > 4000)) throw new Error('Rollback requires bounded baseline negative regression prompts');
-  skillsManager.writeManifestOverlay(row.skillId, { ...row.previousManifest, promptSignals: row.previousManifest.promptSignals || {} }, { changeType: 'brain_curator_rollback', evidence: row.evidence, appliedBy: 'skill_curator', reason: `Rollback ${id}`, triggerPositivePrompts: row.triggerEvaluation?.positive.map(p => p.prompt), triggerNegativePrompts: negativePrompts });
+  skillsManager.writeManifestOverlay(row.skillId, routingTriggerOverlay(skillsManager, row.skillId, row.previousManifest), { changeType: 'brain_curator_rollback', evidence: row.evidence, appliedBy: 'skill_curator', reason: `Rollback ${id}`, triggerPositivePrompts: row.triggerEvaluation?.positive.map(p => p.prompt), triggerNegativePrompts: negativePrompts });
   rows[index] = { ...row, status: 'rejected', rejectedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   writeJsonArray(suggestionsPath(workspacePath), rows);
   return rows[index];
@@ -1190,7 +1198,9 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
       },
     });
   } else if (suggestion.change.kind === 'manifest_overlay') {
-    skillsManager.writeManifestOverlay(suggestion.skillId, suggestion.change.manifest || {}, {
+    skillsManager.writeManifestOverlay(suggestion.skillId, suggestion.semanticKey?.startsWith('routing-tested:')
+      ? routingTriggerOverlay(skillsManager, suggestion.skillId, suggestion.change.manifest)
+      : suggestion.change.manifest || {}, {
       changeType: 'brain_curator_manifest',
       evidence: suggestion.evidence,
       appliedBy: 'skill_curator',

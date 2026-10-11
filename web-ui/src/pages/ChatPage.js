@@ -8963,6 +8963,10 @@ async function _openSession(id, generation) {
     else setMode('chat');
   }
   resetDesktopNewChatContext();
+  if (window.activeChatSessionId !== id) {
+    canonicalVoiceEpoch += 1;
+    if (backendVoiceRecorder) stopBackendDictation();
+  }
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   let sess = window.chatSessions.find(s => s.id === id);
@@ -23248,13 +23252,14 @@ async function toggleBackendDictationFallback() {
 }
 
 let canonicalVoiceEpoch = 0;
-async function transcribeBackendRecording(blob) {
-  if (!voiceDictationEnabled) return;
-  const epoch = canonicalVoiceEpoch;
-  const sessionId = window.activeChatSessionId;
+async function transcribeBackendRecording(blob, recordingContext) {
+  if (!recordingContext || !voiceDictationEnabled) return;
+  const { epoch, sessionId } = recordingContext;
+  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId) return;
   const provider = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical' ? (desktopVoiceSettings.sttProvider === 'browser' ? 'auto' : desktopVoiceSettings.sttProvider || 'auto') : 'auto';
   const audioBase64 = await blobToBase64(blob);
-    const response = await fetch('/api/voice/transcribe', {
+  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
+  const response = await fetch('/api/voice/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -23301,38 +23306,43 @@ async function toggleBackendDictation(options = {}) {
     showDesktopVoiceStatus('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
     return;
   }
+  const recordingContext = Object.freeze({ sessionId: window.activeChatSessionId, epoch: canonicalVoiceEpoch });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) {
+    try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+    return;
+  }
   stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'backend_dictation_started' });
-  backendVoiceChunks = [];
-  backendVoiceMimeType = getRecorderMimeType();
-  backendVoiceRecorder = new MediaRecorder(stream, backendVoiceMimeType ? { mimeType: backendVoiceMimeType } : undefined);
-  backendVoiceRecorder.ondataavailable = (event) => {
-    if (voiceDictationEnabled && event.data && event.data.size > 0) backendVoiceChunks.push(event.data);
+  const chunks = [];
+  const mimeType = getRecorderMimeType();
+  backendVoiceChunks = chunks;
+  backendVoiceMimeType = mimeType;
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  backendVoiceRecorder = recorder;
+  recorder.ondataavailable = (event) => {
+    if (voiceDictationEnabled && event.data && event.data.size > 0) chunks.push(event.data);
   };
-  backendVoiceRecorder.onerror = (event) => {
+  recorder.onerror = (event) => {
     showDesktopVoiceStatus('Recording failed', String(event?.error?.message || event?.error || 'Unknown recording error'), 'error');
   };
-  backendVoiceRecorder.onstop = async () => {
-    const chunks = backendVoiceChunks.slice();
-    backendVoiceChunks = [];
-    const recorder = backendVoiceRecorder;
-    backendVoiceRecorder = null;
-    setVoiceDictationState(false);
-    try { recorder?.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
-    if (!voiceDictationEnabled) {
+  recorder.onstop = async () => {
+    if (backendVoiceRecorder === recorder) {
       backendVoiceChunks = [];
-      return;
+      backendVoiceRecorder = null;
+      setVoiceDictationState(false);
     }
+    try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+    if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) return;
     if (!chunks.length) return;
-    const blob = new Blob(chunks, { type: backendVoiceMimeType || 'audio/webm' });
+    const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
     try {
       showDesktopVoiceStatus('Transcribing', `Sending audio to ${selected?.label || voiceSttProvider}.`, 'info', 1600);
-      await transcribeBackendRecording(blob);
+      await transcribeBackendRecording(blob, recordingContext);
     } catch (err) {
       showDesktopVoiceStatus('Transcription failed', String(err?.message || err), 'error');
     }
   };
-  backendVoiceRecorder.start();
+  recorder.start();
   setVoiceDictationState(true);
   showDesktopVoiceStatus('Recording', `Tap the mic again to transcribe with ${selected?.label || voiceSttProvider}.`, 'info', 2200);
 }
