@@ -1,5 +1,6 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
+import { loadTokens, refreshTokens } from '../../auth/openai-oauth.js';
 import { getConfig } from '../../config/config.js';
 import { getXaiAuthCandidates, isXaiCredentialFailure } from '../../auth/xai-account-pool.js';
 
@@ -59,8 +60,21 @@ function transcriptionForm(input: { audio: Buffer; mimeType: string; filename: s
   return form;
 }
 
+async function openAiAudioKey(): Promise<string> {
+  const direct = openAiKey();
+  if (direct) return direct;
+  const dir = getConfig().getConfigDir();
+  let tokens = loadTokens(dir);
+  if (tokens && !tokens.api_key) {
+    try { tokens = await refreshTokens(dir); } catch {}
+  }
+  // Codex exchanged API credentials are usable for audio endpoints. Do not
+  // send a ChatGPT access token to an unrelated paid API or swap reasoning.
+  return String(tokens?.api_key || '').trim();
+}
+
 async function transcribeOpenAi(input: { audio: Buffer; mimeType: string; filename: string; language?: string }) {
-  const key = openAiKey();
+  const key = await openAiAudioKey();
   if (!key) throw new Error('OpenAI transcription is not configured.');
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -92,9 +106,7 @@ async function transcribeXai(input: { audio: Buffer; mimeType: string; filename:
   throw new Error(lastError);
 }
 
-// The normal mic path is transcription-only. Speech playback and the legacy
-// provider/voice catalogue were deliberately removed; live spoken interaction
-// is handled exclusively by the OpenAI or xAI realtime transports.
+// STT is audio transport only. The transcript is submitted through /api/chat.
 router.post('/api/voice/transcribe', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
@@ -110,3 +122,43 @@ router.post('/api/voice/transcribe', async (req, res) => {
     res.status(502).json({ success: false, error: String(err?.message || err) });
   }
 });
+
+// Canonical voice audio endpoints: no prompt construction, reasoning or tools.
+router.get('/api/voice/status', async (_req, res) => {
+  const xai = (await getXaiAuthCandidates()).length > 0;
+  const providers = [
+    { id: 'browser', label: 'Browser / device', configured: true },
+    { id: 'openai', label: 'OpenAI audio', configured: !!(await openAiAudioKey()) },
+    { id: 'xai', label: 'xAI audio', configured: xai },
+  ];
+  res.json({ sttProviders: providers, ttsProviders: providers });
+});
+
+async function synthesizeCanonicalSpeech(body: any) {
+  const provider = String(body?.provider || 'openai');
+  const text = String(body?.text || '').trim();
+  if (!text || text.length > 12000) throw new Error('Speech text must contain 1–12000 characters.');
+  if (!['openai', 'xai'].includes(provider)) throw new Error('Unsupported speech provider.');
+  const candidates = provider === 'xai' ? await getXaiAuthCandidates() : [{ token: await openAiAudioKey() }];
+  if (!candidates.length || !candidates[0].token) throw new Error(`${provider} audio is not configured.`);
+  const url = provider === 'xai' ? `${xaiBaseUrl()}/tts` : 'https://api.openai.com/v1/audio/speech';
+  const voice = String(body?.voiceId || body?.voice || (provider === 'xai' ? 'eve' : 'alloy'));
+  let error = 'Speech synthesis failed.';
+  for (const candidate of candidates) {
+    const response = await fetch(url, {
+      method: 'POST', headers: { Authorization: `Bearer ${candidate.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(provider === 'xai' ? { text, voice_id: voice, format: 'mp3' } : { model: 'tts-1', input: text, voice, response_format: 'mp3' }),
+    });
+    if (response.ok) return { audioBase64: Buffer.from(await response.arrayBuffer()).toString('base64'), mimeType: response.headers.get('content-type') || 'audio/mpeg' };
+    error = `Speech synthesis failed (${response.status}).`;
+    if (provider !== 'xai' || !isXaiCredentialFailure(response.status, await response.text())) break;
+  }
+  throw new Error(error);
+}
+for (const route of ['/api/voice/tts', '/api/tts/speak']) {
+  router.post(route, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try { res.json({ success: true, ...(await synthesizeCanonicalSpeech(req.body)) }); }
+    catch (err: any) { res.status(502).json({ success: false, error: String(err?.message || err) }); }
+  });
+}
