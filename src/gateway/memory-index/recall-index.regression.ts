@@ -38,6 +38,9 @@ try {
 
   const hit = searchRecall(ws, { query: 'needs you card', excludeSessionId: 'current_chat' });
   assert.equal(hit.best, 'strong');
+  assert.equal(hit.retrieval?.state, 'available');
+  assert.ok(hit.retrieval?.candidates.some(c => c.selected && c.rank && typeof c.score === 'number' && c.sourceId));
+  assert.ok(hit.retrieval?.candidateCount! >= hit.hits.length);
   assert.ok(hit.hits.every((h) => h.sessionId !== 'current_chat'), 'current chat must be excluded');
   assert.ok(hit.hits.some((h) => h.sessionId === 'old_chat' && h.source === 'transcript'));
   assert.ok(!hit.hits.some((h) => /restart context packet/.test(h.snippet)), 'synthetic rows are not indexed');

@@ -1,3 +1,5 @@
+import { retrieveHybridMemoryAtoms } from '../memory-index/memory-atoms-hybrid';
+import { formatMemoryAtomReferenceContext } from '../memory-index/memory-atoms';
 import { RuntimeWorkerBroker, type RuntimeWorkerBrokerStatus } from '../process/runtime-worker-broker.js';
 import {
   buildPersonalityContext,
@@ -7,7 +9,6 @@ import {
   type PersonalityContextSnapshot,
   type SkillWindow,
 } from '../prompt-context.js';
-import { buildHybridMemoryAtomReferenceContext } from '../memory-index/memory-atoms-hybrid.js';
 import type { SkillsManager } from '../skills-runtime/skills-manager.js';
 import type { TurnTimingRecorder } from './turn-timing.js';
 
@@ -313,8 +314,10 @@ export async function buildPersonalityContextIsolated(
   options?: BuildPersonalityContextOptions,
   signal?: AbortSignal,
   timing?: TurnTimingRecorder,
+  onRetrieval?: (trace: import('../../runtime/retrieval-provenance').RetrievalTrace) => void,
 ): Promise<string> {
   if (!enabled) {
+    const snapshot = await capturePersonalityContextSnapshot(sessionId, workspacePath, messageText, executionMode, historyLength, skillsManager, setCurrentTurn, extraCats, options, signal, fields => { if (fields.retrieval) onRetrieval?.(fields.retrieval as import('../../runtime/retrieval-provenance').RetrievalTrace); });
     return buildPersonalityContext(
       sessionId,
       workspacePath,
@@ -325,10 +328,11 @@ export async function buildPersonalityContextIsolated(
       getSessionSkillWindowsFn,
       setCurrentTurn,
       extraCats,
-      options,
+      { ...options, serializedSnapshot: snapshot },
       signal,
     );
   }
+  const producerTraces: import('../../runtime/retrieval-provenance').RetrievalTrace[] = [];
   const snapshotStartedAt = Date.now();
   timing?.mark('personality_snapshot_capture_start');
   const snapshot = await capturePersonalityContextSnapshot(
@@ -342,7 +346,7 @@ export async function buildPersonalityContextIsolated(
     extraCats,
     options,
     signal,
-    (fields) => timing?.mark('automatic_memory_search', fields),
+    (fields) => { if (fields.retrieval) producerTraces.push(fields.retrieval as import('../../runtime/retrieval-provenance').RetrievalTrace); const { retrieval, ...telemetry } = fields; timing?.mark('automatic_memory_search', telemetry); },
   );
   if (shouldUseHybridAtomicMemory(snapshot, sessionId, executionMode, options?.profile || 'default', messageText)) {
     const memoryStartedAt = Date.now();
@@ -355,7 +359,7 @@ export async function buildPersonalityContextIsolated(
       let budgetTimer: ReturnType<typeof setTimeout> | undefined;
       const budgetExpired = Symbol('hybrid-memory-budget');
       const hybrid = await Promise.race([
-        buildHybridMemoryAtomReferenceContext(
+        retrieveHybridMemoryAtoms(
           workspacePath,
           messageText,
           {
@@ -369,7 +373,11 @@ export async function buildPersonalityContextIsolated(
         }),
       ]).finally(() => { if (budgetTimer) clearTimeout(budgetTimer); });
       const timedOut = hybrid === budgetExpired;
-      if (!timedOut && typeof hybrid === 'string') snapshot.memoryAtomContext = hybrid;
+      if (!timedOut && typeof hybrid === 'object') {
+        snapshot.memoryAtomContext = formatMemoryAtomReferenceContext(hybrid);
+        for (const trace of producerTraces.filter(t => t.source === 'atomic')) for (const candidate of trace.candidates) { if (candidate.selected) { candidate.selected = false; candidate.reason = 'superseded_by_hybrid_selection'; } }
+        if (hybrid.retrieval) producerTraces.push(hybrid.retrieval);
+      } else onRetrieval?.({ source: 'atomic', state: 'unavailable', reason: 'hybrid_outer_budget_timeout_deterministic_fallback_retained', thresholds: { budgetMs: hybridMemoryBudgetMs }, candidates: [], candidateCount: 0, truncated: false });
       timing?.mark('atomic_memory_hybrid_done', {
         durationMs: Date.now() - memoryStartedAt,
         injected: !timedOut && Boolean(hybrid),
@@ -386,6 +394,7 @@ export async function buildPersonalityContextIsolated(
       });
     }
   }
+  for (const trace of producerTraces) onRetrieval?.(trace);
   timing?.mark('personality_snapshot_capture_done', { durationMs: Date.now() - snapshotStartedAt });
   if (signal?.aborted) {
     cancelled += 1;

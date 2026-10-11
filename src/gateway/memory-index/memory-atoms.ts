@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { boundRetrievalTrace, type RetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -30,6 +31,7 @@ export interface MemoryAtomMatch {
 }
 
 export interface MemoryAtomRetrievalResult {
+  retrieval?: RetrievalTrace;
   direct: MemoryAtomMatch[];
   related: MemoryAtomMatch[];
   selected: MemoryAtomMatch[];
@@ -353,6 +355,7 @@ export function retrieveMemoryAtoms(
   const queryTerms = tokenize(queryText);
   if (!queryTerms.length || !snapshot.atoms.length) {
     return {
+      retrieval: { source: 'atomic', state: 'skipped', reason: !queryTerms.length ? 'no_query_terms' : 'no_atoms', thresholds: {}, candidates: [], candidateCount: 0, truncated: false },
       direct: [],
       related: [],
       selected: [],
@@ -367,11 +370,8 @@ export function retrieveMemoryAtoms(
     };
   }
 
-  const scored = snapshot.atoms
-    .map((atom) => {
-      const result = scoreAtom(atom, queryTerms, queryText, snapshot.termDocumentFrequency, snapshot.atoms.length, additionalContext);
-      return { atom, ...result };
-    })
+  const evaluated = snapshot.atoms.map(atom => ({ atom, ...scoreAtom(atom, queryTerms, queryText, snapshot.termDocumentFrequency, snapshot.atoms.length, additionalContext) }));
+  const scored = evaluated
     .filter((entry) => entry.matchedTerms.length > 0 && entry.score >= 0.13)
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
 
@@ -435,7 +435,13 @@ export function retrieveMemoryAtoms(
     selectedChars += cost;
   }
 
+  const eligible = new Map<string, MemoryAtomMatch>([...direct, ...related].map(e => [e.atom.id, e]));
+  const selectedIds = new Set(selected.map(e => e.atom.id));
+  const ranked = [...evaluated].sort((a,b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
+  const retrieval = boundRetrievalTrace({ source: 'atomic', state: 'available', thresholds: { candidateFloor: 0.13, directFloor, relatedFloor: 0.18, maxChars, maxAtoms: Number.isFinite(maxAtoms) ? maxAtoms : 'unbounded' }, candidateCount: evaluated.length, truncated: false,
+    candidates: ranked.map((e, index) => ({ sourceId: e.atom.id, source: e.atom.sourcePath, rank: index + 1, score: eligible.get(e.atom.id)?.score ?? e.score, matchedTerms: e.matchedTerms, selected: selectedIds.has(e.atom.id), reason: selectedIds.has(e.atom.id) ? (eligible.get(e.atom.id)?.relationReason || eligible.get(e.atom.id)?.relation || 'selected') : !e.matchedTerms.length ? 'no_matched_terms' : e.score < 0.13 ? 'below_candidate_floor' : !eligible.has(e.atom.id) ? 'below_direct_floor_or_no_qualifying_relation' : 'atom_or_character_budget' })) });
   return {
+    retrieval,
     direct,
     related,
     selected,

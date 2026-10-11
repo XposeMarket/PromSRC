@@ -88,6 +88,11 @@ async function main(): Promise<void> {
       { timeoutMs: 250 },
     );
     assert.ok(JSON.parse(first), 'the warmed automatic worker should serve the first retrieval');
+    const traced = JSON.parse(first);
+    if (traced.totalCandidates > 0) {
+      assert.equal(traced.retrieval?.source, 'auto', 'worker serialization must preserve actual producer trace');
+      assert.ok(traced.retrieval.candidates.some((c: any) => c.sourceId && typeof c.score === 'number'));
+    }
     await waitFor(() => {
       const status = getAutomaticMemorySearchWorkerStatus();
       return status.workers[0]?.state === 'ready' && status.workers[0]?.pid !== initialFloorPid;

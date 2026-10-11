@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getActiveMemoryEmbeddingProvider, getAutomaticMemoryEmbeddingProvider, getMemoryEmbeddingStatus } from '../memory/embeddings/registry';
 import { embedMemoryHash } from '../memory/embeddings/hash-provider';
+import { boundRetrievalTrace } from '../../runtime/retrieval-provenance';
 import { rerankMmr } from '../memory/ranking/mmr';
 import { temporalDecayMultiplier } from '../memory/ranking/temporal-decay';
 
@@ -231,6 +232,7 @@ type MemorySearchResult = {
   totalCandidates: number;
   hits: MemorySearchHit[];
   citations?: NonNullable<MemorySearchHit['citation']>[];
+  retrieval?: import('../../runtime/retrieval-provenance').RetrievalTrace;
   stats: { records: number; chunks: number; indexedAt: string; backend?: string; embedding?: any; rerank?: string; telemetry?: any };
 };
 
@@ -1307,7 +1309,7 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
     }
 
     const rankingStartedAt = Date.now();
-    const ranked = [...candidates.values()]
+    const evaluated = [...candidates.values()]
       .map((entry) => {
         const scored = scoreRow(
           entry.row,
@@ -1322,7 +1324,8 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         );
         return { entry, score: scored.score, diagnostics: scored.diagnostics, vector: scored.vector };
       })
-      .filter(({ score }) => score > 0.02)
+      ;
+    const ranked = evaluated.filter(({ score }) => score > 0.02)
       .sort((a, b) => {
         if (mode === 'timeline') return Number(a.entry.row.timestamp_ms || 0) - Number(b.entry.row.timestamp_ms || 0);
         return b.score - a.score || Number(b.entry.row.timestamp_ms || 0) - Number(a.entry.row.timestamp_ms || 0);
@@ -1367,6 +1370,7 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
       query: q,
       mode,
       totalCandidates: candidates.size,
+      retrieval: boundRetrievalTrace({ source: 'auto', state: 'available', thresholds: { scoreFloor: 0.02, limit, mmrPool: 50, rerank: mode === 'timeline' || params.rerank === false ? 'disabled' : 'mmr', sqlFilters: filters.where.join(' AND ') }, candidateCount: candidates.size, truncated: false, candidates: evaluated.sort((a,b) => b.score - a.score).map((e,index) => ({ sourceId: String(e.entry.row.id), source: String(e.entry.row.source_type || 'unknown'), rank: index + 1, score: e.score, matchedTerms: e.entry.lexical, selected: reranked.some(r => r.entry.row.id === e.entry.row.id), reason: e.score <= 0.02 ? 'below_score_floor' : reranked.some(r => r.entry.row.id === e.entry.row.id) ? 'ranked_selected' : 'rank_or_mmr_limit' })) }),
       hits,
       citations: hits.map((hit) => hit.citation).filter(Boolean) as NonNullable<MemorySearchHit['citation']>[],
       stats: {

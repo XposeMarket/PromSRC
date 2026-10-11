@@ -41,7 +41,7 @@ import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profi
 import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext, readCarryForwardForPrompt } from './brain/brain-continuity.js';
 import { renderNotesForPrompt } from './memory/intraday-notes';
 import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
-import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
+import { buildMemoryAtomReferenceContext, retrieveMemoryAtoms, formatMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
 import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
 import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
@@ -626,11 +626,13 @@ function buildMemoryAtomContext(
   projectContextBlock: string,
   profile: BuildPersonalityContextOptions['profile'],
   maxChars?: number,
+  onRetrieval?: (fields: Record<string, unknown>) => void,
 ): string {
-  if (profile === 'local_llm' || profile === 'direct_subagent' || profile === 'teach_mode') return '';
-  if (isLowInformationAutomaticMemoryQuery(messageText)) return '';
+  if (profile === 'local_llm' || profile === 'direct_subagent' || profile === 'teach_mode' || isLowInformationAutomaticMemoryQuery(messageText)) {
+    onRetrieval?.({ retrieval: { source: 'atomic', state: 'skipped', reason: isLowInformationAutomaticMemoryQuery(messageText) ? 'low_information_query' : 'profile_skip', thresholds: {}, candidates: [], candidateCount: 0, truncated: false } }); return '';
+  }
   const isVoice = profile === 'voice_agent';
-  return buildMemoryAtomReferenceContext(workspacePath, messageText, {
+  const result = retrieveMemoryAtoms(workspacePath, messageText, {
     // Main Prometheus uses the source-relative default in the atom compiler:
     // every qualifying durable fact is eligible. Voice keeps a small explicit
     // budget because its first-turn latency and spoken prompt size are tighter.
@@ -642,6 +644,8 @@ function buildMemoryAtomContext(
       : { maxChars: maxChars || 14_000, maxAtoms: 6 }),
     additionalContext: projectContextBlock,
   });
+  onRetrieval?.({ retrieval: result.retrieval });
+  return formatMemoryAtomReferenceContext(result);
 }
 
 // ─── readDailyMemoryContext ───────────────────────────────────────────────────────
@@ -952,6 +956,7 @@ export async function buildRetrievedMemoryContext(
       serialized = await searchPromise;
     }
     const result = JSON.parse(serialized);
+    if (result.retrieval) onTelemetry?.({ retrieval: result.retrieval });
     const searchTelemetry = result?.stats?.telemetry || {};
     const searchTelemetryFields = {
       searchMs: Number.isFinite(Number(searchTelemetry.total_ms)) ? Number(searchTelemetry.total_ms) : undefined,
@@ -963,9 +968,10 @@ export async function buildRetrievedMemoryContext(
       if (automatic) return '';
       return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${routing.reason}\nresults=none`;
     }
-    const hits = automatic
-      ? result.hits.filter((hit: any) => automaticMemoryHitIsUsable(hit, messageText, routing, currentSessionId)).slice(0, 3)
-      : result.hits;
+    const usable = result.hits.filter((hit: any) => automaticMemoryHitIsUsable(hit, messageText, routing, currentSessionId));
+    const hits = automatic ? usable.slice(0, 3) : result.hits;
+    onTelemetry?.({ retrieval: { source: 'auto', state: 'available', thresholds: { semanticFloor: 0.30, matchedFloor: 0.14, operationalFloor: 0.20, maxHits: automatic ? 3 : limit }, candidateCount: result.hits.length, truncated: !!result.retrieval?.truncated,
+      candidates: result.hits.map((h: any, index: number) => ({ sourceId: String(h.id || h.recordId || h.citation?.recordId || h.sourcePath || index), source: String(h.sourceType || h.citation?.sourceType || 'unknown'), rank: index + 1, score: Number(h.score), matchedTerms: [...(h.whyMatched?.lexical || []), ...(h.whyMatched?.exactTerms || []), ...(h.whyMatched?.entities || [])], selected: hits.includes(h), reason: hits.includes(h) ? 'injected' : usable.includes(h) ? 'hit_limit' : String(h.sourcePath || h.citation?.sourcePath || '').replace(/\\/g, '/').includes(`/chats/transcripts/${currentSessionId}.`) ? 'current_session' : /workspace\/memory\.md$/i.test(String(h.sourcePath || h.citation?.sourcePath || '').replace(/\\/g, '/')) || String(h.authority || h.citation?.authority || '') === 'durable_memory_file' ? 'already_in_atomic_profile' : ['chat_transcript','chat_session'].includes(String(h.sourceType || h.citation?.sourceType || '')) && !['automatic_history_cue','automatic_deep_cue_bounded'].includes(routing.reason) ? 'transcript_without_history_cue' : 'below_score_or_matched_signal_floor' })) } });
     if (automatic) {
       finishTelemetry(hits.length ? 'hit' : 'filtered', {
         hits: hits.length,
@@ -1739,6 +1745,7 @@ export async function capturePersonalityContextSnapshot(
     ? routeMemorySearchMode(messageText, { automatic: true })
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
   if (allowLongTermSearch && memorySearchRouting.mode === 'no_search') {
+    onMemorySearchTelemetry?.({ retrieval: { source: 'auto', state: 'skipped', reason: memorySearchRouting.reason, thresholds: {}, candidates: [], candidateCount: 0, truncated: false } });
     onMemorySearchTelemetry?.({
       status: 'skipped',
       automatic: true,
@@ -1770,6 +1777,7 @@ export async function capturePersonalityContextSnapshot(
         status: recall.text ? 'hit' : (recall.skipped || 'miss'),
         automatic: true,
         backend: 'recall_fts',
+        retrieval: recall.retrieval,
         durationMs: recall.ms,
         hits: recall.hits,
         candidates: recall.candidates,
@@ -1804,7 +1812,7 @@ export async function capturePersonalityContextSnapshot(
     }
   } catch {}
   const memoryAtomContext = allowAtomicMemory
-    ? buildMemoryAtomContext(workspacePath, messageText, projectContextBlock, profile)
+    ? buildMemoryAtomContext(workspacePath, messageText, projectContextBlock, profile, undefined, onMemorySearchTelemetry)
     : '';
   const retrievedMemoryContext = memorySearchSettled ? memorySearchValue : '';
   const advanceTurn = shouldAdvancePromptTurn(executionMode, historyLength, profile, runtimeActor || null);

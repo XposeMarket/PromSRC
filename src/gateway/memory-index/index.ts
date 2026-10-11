@@ -118,6 +118,7 @@ export interface MemorySearchResult {
   totalCandidates: number;
   hits: MemorySearchHit[];
   citations?: NonNullable<MemorySearchHit['citation']>[];
+  retrieval?: import('../../runtime/retrieval-provenance').RetrievalTrace;
   stats: { records: number; chunks: number; indexedAt: string; backend?: string; sqlite?: any; embedding?: any; rerank?: string; telemetry?: any };
 }
 
@@ -1352,12 +1353,11 @@ export function searchMemoryIndex(
   const limit = Math.max(1, Math.min(50, Number(params.limit || 8))); const now = Date.now();
   const scoreStartedAt = Date.now();
   const scored: Array<{ c: ChunkItem; r: RecordItem; s: number }> = [];
+  const rejected: import('../../runtime/retrieval-provenance').RetrievalCandidate[] = [];
   for (const cid of candidates) {
-    const c = store.chunks[cid]; if (!c) continue; const r = store.records[c.recordId]; if (!r) continue;
-    if (sourceSet.size && !sourceSet.has(r.sourceType)) continue;
-    if (projectId && String(r.projectId || '') !== projectId) continue;
-    if (from !== null && r.timestampMs < from) continue; if (to !== null && r.timestampMs > to) continue;
-    if (r.durability < minDur) continue;
+    const c = store.chunks[cid]; if (!c) { rejected.push({sourceId:cid,source:'unknown',selected:false,reason:'missing_chunk'}); continue; } const r = store.records[c.recordId]; if (!r) { rejected.push({sourceId:cid,source:'unknown',selected:false,reason:'missing_record'}); continue; }
+    const rejectedReason = sourceSet.size && !sourceSet.has(r.sourceType) ? 'source_filter' : projectId && String(r.projectId || '') !== projectId ? 'project_filter' : (from !== null && r.timestampMs < from) || (to !== null && r.timestampMs > to) ? 'date_filter' : r.durability < minDur ? 'durability_filter' : '';
+    if (rejectedReason) { rejected.push({sourceId:cid,source:r.sourceType,selected:false,reason:rejectedReason,matchedTerms:qTerms.filter(t=>c.terms.includes(t))}); continue; }
     const cSet = new Set(c.terms); const matched = qTerms.filter((t) => cSet.has(t)).length;
     const kw = qTerms.length ? matched / qTerms.length : 0.25; const rc = recency(r.timestampMs, now);
     const sem = qTerms.length ? Math.max(0, cosine(qEmbedding, c.embedding || [])) : 0.25;
@@ -1430,6 +1430,7 @@ export function searchMemoryIndex(
     query: q,
     mode,
     totalCandidates: scored.length,
+    retrieval: require('../../runtime/retrieval-provenance').boundRetrievalTrace({ source: 'auto', state: 'available', thresholds: { limit, minDurability: minDur, backend: 'json_hybrid' }, candidateCount: candidates.size + opHits.length, truncated: false, candidates: [...rejected, ...scored.map((e,index) => ({sourceId:e.c.id,source:e.r.sourceType,rank:index+1,score:e.s,matchedTerms:qTerms.filter(t=>e.c.terms.includes(t)),selected:finalHits.some(h=>h.chunkId===e.c.id),reason:finalHits.some(h=>h.chunkId===e.c.id)?'ranked_selected':'duplicate_or_merge_limit'})), ...opHits.map(h=>({sourceId:h.recordId,source:h.sourceType,rank:h.rank,score:h.score,selected:finalHits.includes(h),reason:finalHits.includes(h)?'operational_selected':'merge_limit'}))] }),
     hits: finalHits,
     citations: finalHits.map((hit) => hit.citation).filter(Boolean) as NonNullable<MemorySearchHit['citation']>[],
     stats: {
