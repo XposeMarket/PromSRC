@@ -3,6 +3,7 @@ import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile
 import { prettifyModelName } from './mobile-model-badge.js';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
+import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
@@ -348,13 +349,15 @@ async function renderModels(content, page) {
       </div>
       <div id="pm-settings-live-status"></div>
     `, 'gear', 'pm-card-strong')}
+    ${renderContextSelection(session.contextProfile, session.contextBudget, 'mobile-context')}
     ${card('Context Compaction', `
       <div class="pm-card-body">Prometheus uses the selected model's token window automatically. Context is compacted only when token pressure requires it; message count does not define model context.</div>
       ${toggleRow('pm-session-roll', 'Rolling compaction', session.rollingCompactionEnabled !== false, 'Automatically summarize older active context when token pressure requires it.')}
-      ${field('Compaction threshold', input('pm-session-compact', session.compactionThreshold || 0.82, 'type="number" min="0.4" max="0.95" step="0.01"'))}
+      ${toggleRow('pm-session-compact-auto', 'Use selected context window', session.compactionThreshold === 'auto' || session.compactionThreshold == null, 'Automatic sizing reserves output, reasoning and one estimation margin. Turn off to use a manual earlier threshold.')}
+      ${field('Manual compaction threshold', input('pm-session-compact', typeof session.compactionThreshold === 'number' ? session.compactionThreshold : 0.7, 'type="number" min="0.4" max="0.95" step="0.01"'))}
       ${field('Memory flush threshold', input('pm-session-memory', session.memoryFlushThreshold || 0.9, 'type="number" min="0.5" max="0.98" step="0.01"'))}
       ${field('Rolling tool turns', input('pm-session-tool-turns', session.rollingCompactionToolTurns || 4, 'type="number" min="1" max="12"'))}
-      ${field('Summary max words', input('pm-session-words', session.rollingCompactionSummaryMaxWords || 900, 'type="number" min="80" max="1500"'))}
+      <div class="pm-card-body">Summary length is adaptive. Compaction preserves requests, decisions, pending work and recovery references; there is no fixed 900-word cutoff.</div>
       ${field('Compaction model override', input('pm-session-model', session.rollingCompactionModel || '', 'placeholder="Optional"'))}
       <button class="pm-btn primary" id="pm-save-session">${ICONS.check} Save compaction</button>
     `, 'clipboard')}
@@ -399,14 +402,15 @@ async function renderModels(content, page) {
       setSectionStatus(page, 'Model settings saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }
   });
+  wireContextSelection(page, session.contextProfile, selection => mobileGatewayFetch('/api/settings/context-window', { method: 'POST', body: JSON.stringify(selection) }), () => renderModels(content, page), 'mobile-context');
   page.querySelector('#pm-save-session')?.addEventListener('click', async () => {
     try {
       await mobileGatewayFetch('/api/settings/session', { method: 'POST', body: JSON.stringify({
         rollingCompactionEnabled: boolValue(page, 'pm-session-roll'),
-        compactionThreshold: Number(val(page, 'pm-session-compact')),
+        compactionThreshold: boolValue(page, 'pm-session-compact-auto') ? 'auto' : Number(val(page, 'pm-session-compact')),
+        compactionThresholdMode: boolValue(page, 'pm-session-compact-auto') ? 'auto' : 'manual',
         memoryFlushThreshold: Number(val(page, 'pm-session-memory')),
         rollingCompactionToolTurns: Number(val(page, 'pm-session-tool-turns')),
-        rollingCompactionSummaryMaxWords: Number(val(page, 'pm-session-words')),
         rollingCompactionModel: val(page, 'pm-session-model'),
       }) });
       setSectionStatus(page, 'Compaction settings saved.', 'ok');

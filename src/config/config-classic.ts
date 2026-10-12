@@ -319,7 +319,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   voice: {},
   session: {
     maxMessages: 120,
-    compactionThreshold: 0.7,
+    compactionThreshold: 'auto',
     memoryFlushThreshold: 0.75,
     compactionMinMessages: 20,
     rollingCompactionEnabled: true,

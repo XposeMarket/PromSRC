@@ -34,12 +34,14 @@ const pressure = buildContextWindowPressure({
   calibrationFactor: 1,
   contextWindowTokens: 272_000,
   compactionThreshold: 0.7,
+  compactionThresholdMode: 'manual',
 });
 const visibleTwentyMessageSlice = buildContextWindowPressure({
   history: longHistory.slice(-20),
   calibrationFactor: 1,
   contextWindowTokens: 272_000,
   compactionThreshold: 0.7,
+  compactionThresholdMode: 'manual',
 });
 
 assert.ok(
@@ -67,6 +69,7 @@ const compactedPressure = buildContextWindowPressure({
   calibrationFactor: 1,
   contextWindowTokens: 272_000,
   compactionThreshold: 0.7,
+  compactionThresholdMode: 'manual',
 });
 assert.equal(compactedPressure.summaryActive, true);
 assert.equal(compactedPressure.activeHistoryMessages, 1);

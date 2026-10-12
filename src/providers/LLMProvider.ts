@@ -140,6 +140,8 @@ export interface ModelInfo {
   family?: string;
   modified_at?: string;
   contextWindowTokens?: number;
+  defaultContextWindowTokens?: number;
+  maxContextWindowTokens?: number;
   maxOutputTokens?: number;
   tokenizer?: string;
   supportsReasoningTokens?: boolean;

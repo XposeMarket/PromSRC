@@ -2092,7 +2092,7 @@ function extractLastCompactionSummary(history: Array<any>): string {
   return '';
 }
 
-function formatCompactionMessageBody(message: any, maxChars = 2_400): string {
+function formatCompactionMessageBody(message: any, maxChars = Number.MAX_SAFE_INTEGER): string {
   const body = Array.isArray(message?.content)
     ? message.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
     : String(message?.content || '').trim();
@@ -2167,7 +2167,8 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
     : 'This compaction is happening at a rolling conversation checkpoint after enough new messages accumulated.';
   const promptLines: string[] = [
     'Create a structured rolling resume packet for context compaction.',
-    `Target length: ${input.targetLengthText}.`,
+    'Length guidance is adaptive to source and the full previous handoff, bounded by compactor capacity. No fixed word or character cap.',
+    'All ten numbered headings must appear as plain text, exactly as shown. Do not wrap them in Markdown.',
     modeDescription,
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
@@ -2177,7 +2178,7 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
     'When the bounded reasoning/decision block is provided, use it to capture durable analysis: hypotheses tested, files or searches ruled out, planned next steps, and conclusions reached from tool results. Do not copy private/raw stream-of-consciousness.',
     'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
     'Do not invent details. Do not include generic advice. Output plain text only.',
-    'If you cannot faithfully preserve the active request, pending work, and earlier constraints within the target length, output COMPACTION_INCOMPLETE instead of an incomplete summary.',
+    'If you cannot faithfully preserve the active request, pending work, and earlier constraints within the actual output capacity, output COMPACTION_INCOMPLETE instead of an incomplete summary.',
     '',
     'Required format:',
     '1. Primary Request and Intent:',
@@ -2211,6 +2212,10 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
 }
 
 async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' }> {
+  const { resolveModelContextProfile } = require('../context/model-context') as typeof import('../context/model-context');
+  const compactorProfile = input.routeSnapshot?.contextProfile || resolveModelContextProfile(String(input.provider || resolveActiveModelContextProfile().providerId), input.model || resolveActiveModelContextProfile().model);
+  // Provider-safe reserve: leave most of the window for source ingestion.
+  input = { ...input, numCtx: Math.min(input.numCtx, compactorProfile.contextWindowTokens), numPredict: Math.max(1, Math.floor(Math.min(compactorProfile.maxOutputTokens, Math.min(input.numCtx, compactorProfile.contextWindowTokens) * 0.2))) };
   const baseMessageCount = getSession(input.sessionId).history.length;
   try {
     const result = await runCompactionTransaction({
@@ -2219,8 +2224,10 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
       maxWords: input.maxWords,
       numCtx: input.numCtx,
       numPredict: input.numPredict,
-      tokenizer: input.routeSnapshot?.contextProfile.tokenizer,
+      tokenizer: compactorProfile.tokenizer,
+      onInvalidSummary: (details) => console.warn(`[v2] Compaction summary rejected (${input.strategy}):`, JSON.stringify(details)),
       isAborted: () => input.abortSignal?.aborted === true,
+      renderSource: (messages, includeMetadata) => [formatCompactionMessages(messages), ...(includeMetadata ? [input.recentToolLogsBlock, input.reasoningTrailBlock, input.artifactPathsBlock] : [])].join('\n'),
       renderPrompt: (messages, previousSummary, includeMetadata) => buildContextCompactionPrompt({
         ...input,
         previousSummary,
@@ -2241,6 +2248,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
           'manager',
           {
             temperature: 0.1,
+            abortSignal: input.abortSignal?.signal,
             num_ctx: input.numCtx,
             num_predict: input.numPredict,
             ...(input.model ? { model: input.model } : {}),
@@ -2296,13 +2304,12 @@ async function maybeRunMidWorkflowCompaction(input: {
   ].filter(Boolean).join('\n\n');
   const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   if (!policy.enabled) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
-  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
-    || recentToolTokens >= budget.toolContextBudgetTokens;
+  // Tool-log growth is bounded separately; it must not retire the entire
+  // transcript while the active model request still fits its context budget.
+  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens;
   if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
 
-  const reason = projectedTokens >= budget.compactionTriggerTokens
-    ? 'projected_context_over_budget'
-    : 'tool_context_over_budget';
+  const reason = 'projected_context_over_budget';
   input.sendSSE('tool_call', {
     action: CONTEXT_COMPACTION_TOOL_NAME,
     args: {
@@ -2334,28 +2341,29 @@ async function maybeRunMidWorkflowCompaction(input: {
   const session = getSession(input.sessionId);
   const previousSummary = String((session as any).latestContextSummary || '').trim()
     || extractLastCompactionSummary(session.history || []);
-  const summaryMaxTokens = Math.max(700, Math.min(2400, budget.summaryBudgetTokens));
-  const summaryMaxWords = Math.max(80, Math.min(policy.summaryMaxWords, Math.ceil(summaryMaxTokens / 1.3)));
+  const summaryMaxTokens = Math.max(1, Math.floor(Math.min(profile.maxOutputTokens, profile.contextWindowTokens * 0.2)));
+  const summaryMaxWords = policy.summaryMaxWords; // Legacy compatibility, not a validation cap.
 
   try {
     const compactorResult = await runContextCompactor({
       sessionId: input.sessionId,
       strategy: 'mid_workflow_token_budget',
-      targetLengthText: `about ${summaryMaxTokens} tokens or less`,
+      targetLengthText: 'adaptive to source and prior handoff',
       maxWords: summaryMaxWords,
       previousSummary,
       recentToolLogsBlock: recentToolText,
       reasoningTrailBlock: reasoningTrailText,
       artifactPathsBlock: formatCompactionArtifactPaths(input.sessionId),
       recentWindow,
-      // Compaction output is tightly bounded, so the compactor can use
-      // the model's hard window to ingest the active conversation being retired.
+      // Reserve provider-safe output space and use the effective model window
+      // to ingest the active conversation being retired.
       numCtx: profile.contextWindowTokens,
-      numPredict: Math.max(900, Math.min(2600, Math.ceil(summaryMaxTokens * 1.2))),
+      numPredict: summaryMaxTokens,
       // An active interactive turn compacts with its admitted route, never a
       // newly selected global compaction/main provider.
       model: input.routeSnapshot?.model || policy.model || undefined,
       provider: input.routeSnapshot?.provider,
+      routeSnapshot: input.routeSnapshot,
       abortSignal: input.abortSignal,
       recordMeta: {
         reason,

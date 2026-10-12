@@ -505,7 +505,8 @@ export interface PrometheusConfig {
   agents?: AgentDefinition[];
   session?: {
     maxMessages?: number;
-    compactionThreshold?: number;
+    compactionThreshold?: number | 'auto';
+    compactionThresholdMode?: 'auto' | 'manual';
     memoryFlushThreshold?: number;
     /** Minimum real user/assistant messages before token-threshold compaction may run. */
     compactionMinMessages?: number;

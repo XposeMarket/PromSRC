@@ -1,3 +1,4 @@
+import { resolveCompactionTriggerTokens } from './model-context';
 import { deriveContextWindowUsage } from './context-window-usage';
 import { appendDurableCommentaryContext } from './commentary-context';
 
@@ -17,6 +18,8 @@ export interface ContextWindowPressureInput {
   calibrationFactor?: unknown;
   contextWindowTokens?: unknown;
   compactionThreshold?: unknown;
+  compactionThresholdMode?: unknown;
+  inputBudgetTokens?: unknown;
 }
 
 export interface ContextWindowPressureState {
@@ -96,15 +99,13 @@ export function buildContextWindowPressure(input: ContextWindowPressureInput): C
   const contextWindowTokens = Math.floor(nonNegativeFinite(input.contextWindowTokens));
   const calibrationRaw = Number(input.calibrationFactor);
   const calibrationFactor = Number.isFinite(calibrationRaw) && calibrationRaw > 0 ? calibrationRaw : 1;
-  const thresholdRaw = Number(input.compactionThreshold);
-  const compactionThreshold = Number.isFinite(thresholdRaw) && thresholdRaw >= 0.4 && thresholdRaw <= 0.95
-    ? thresholdRaw
-    : 0.7;
+  const inputBudgetTokens = Math.min(contextWindowTokens, Math.floor(nonNegativeFinite(input.inputBudgetTokens ?? contextWindowTokens)));
   const raw = estimateRawActiveSessionTokens(input);
   const pressureTokens = Math.max(0, Math.round(raw.tokens * calibrationFactor));
   const compactionTriggerTokens = contextWindowTokens > 0
-    ? Math.floor(contextWindowTokens * compactionThreshold)
+    ? resolveCompactionTriggerTokens(contextWindowTokens, inputBudgetTokens, input.compactionThreshold, input.compactionThresholdMode)
     : 0;
+  const compactionThreshold = contextWindowTokens > 0 ? compactionTriggerTokens / contextWindowTokens : 0;
   const usage = deriveContextWindowUsage(pressureTokens, contextWindowTokens);
   const triggerRatio = compactionTriggerTokens > 0 ? pressureTokens / compactionTriggerTokens : 0;
 
