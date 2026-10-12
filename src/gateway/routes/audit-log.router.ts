@@ -18,7 +18,33 @@ import { Router, Request, Response } from 'express';
 import { queryAuditLogAsync } from '../audit-log.js';
 import { getDevEditLedger, getDevEditLedgerPatch } from '../dev-edit-ledger.js';
 
+import { readContextReceipts, configureContextReceipts, readContextReceipt, reviewContextReceipt } from '../../runtime/context-receipt';
+
 const router = Router();
+
+router.get('/api/context-receipts/:id', (req: Request, res: Response) => {
+  try { if (!/^rpm_[A-Za-z0-9_-]+$/.test(String(req.params.id))) return res.status(400).json({ success: false, error: 'Invalid receipt id' }); const receipt = readContextReceipt(String(req.params.id)); return res.status(receipt ? 200 : 404).json({ success: !!receipt, receipt }); }
+  catch { return res.status(400).json({ success: false, error: 'Invalid receipt id' }); }
+});
+router.post('/api/context-receipts/:id/review', (req: Request, res: Response) => {
+  try { const result = reviewContextReceipt(String(req.params.id), req.body); return res.status(result.saved ? 200 : 404).json({ success: result.saved, ...result }); }
+  catch { return res.status(400).json({ success: false, error: 'Invalid receipt review' }); }
+});
+
+
+// This router is mounted behind requireGatewayAuth + requireAccountAccess.
+router.get('/api/context-receipts', (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, ...readContextReceipts({ id: typeof req.query.id === 'string' ? req.query.id : undefined, sessionId: typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined, days: Number(req.query.days || 7), limit: Number(req.query.limit || 20), detail: req.query.detail === 'true' }) });
+  } catch { res.status(400).json({ success: false, error: 'Invalid context receipt query' }); }
+});
+router.post('/api/context-receipts/settings', (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    if ((body.enabled !== undefined && typeof body.enabled !== 'boolean') || (body.reset !== undefined && typeof body.reset !== 'boolean') || (body.retentionDays !== undefined && (!Number.isFinite(body.retentionDays) || body.retentionDays < 1 || body.retentionDays > 30))) return res.status(400).json({ success: false, error: 'Invalid receipt settings' });
+    return res.json({ success: true, settings: configureContextReceipts(body) });
+  } catch { return res.status(500).json({ success: false, error: 'Context receipt settings unavailable' }); }
+});
 
 router.get('/api/audit-log', async (req: Request, res: Response) => {
   try {

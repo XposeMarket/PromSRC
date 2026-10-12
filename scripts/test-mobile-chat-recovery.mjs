@@ -248,7 +248,10 @@ assert.match(pages, /const PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE = 20/, 'mobile chat 
 assert.match(pages, /if \(isUpwardScroll && scrollTop <= 80\) loadOlderMobileMessages\(\)/, 'scrolling to the top must load the next history page');
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
-assert.match(router, /buildDurableChatTraceFromFrames\(stream\.events/, 'completed turns must use the shared durable trace adapter');
+const streamStore = read('src/gateway/chat/main-chat-stream-store.ts');
+assert.match(router, /createMainChatStreamStore\(/, 'main chat must use the extracted stream store');
+assert.match(router, /buildDurableToolStreamTrace\(sessionId\)/, 'completed turns must request the store-owned durable trace');
+assert.match(streamStore, /buildDurableChatTraceFromFrames\(stream\.events/, 'completed turns must use the shared durable trace adapter');
 assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ordinary tool traces must not depend on a vision event');
 assert.match(durableTrace, /type: 'compaction'/, 'context compaction must have a dedicated durable trace type');
 assert.match(durableTrace, /previousStatus === 'compacting'/, 'durable recovery must merge compaction start and completion into one boundary');

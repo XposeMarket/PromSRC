@@ -1,0 +1,1529 @@
+{
+  "version": 2,
+  "mode": "gateway",
+  "runnerCommit": "17fda754503f56dd6fa02122177b1d41ae61b6d0",
+  "runtime": {
+    "commit": "17fda754503f56dd6fa02122177b1d41ae61b6d0",
+    "repo": "C:\\Users\\rafel\\PromSRC",
+    "buildSha256": "6e6359f85768411b72d9995817a1989f43a1d99bd458c89c694d28b98af20c25",
+    "attestation": "checkout-and-dist; loaded process commit not exposed by gateway"
+  },
+  "gateway": "http://127.0.0.1:32466",
+  "startedAt": "2026-10-10T17:23:31.138Z",
+  "finishedAt": "2026-10-10T17:35:45.493Z",
+  "repeats": 2,
+  "tasks": [
+    {
+      "id": "file-create",
+      "area": "files"
+    },
+    {
+      "id": "read-and-answer",
+      "area": "retrieval"
+    },
+    {
+      "id": "bugfix-off-by-one",
+      "area": "coding"
+    }
+  ],
+  "summary": {
+    "ollama:qwen3.5:9b": {
+      "runs": 6,
+      "passed": 0,
+      "failed": 0,
+      "blocked": 6,
+      "medianMs": 122182.5,
+      "passRate": 0
+    }
+  },
+  "rows": [
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "file-create",
+      "area": "files",
+      "repeat": 1,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "93c0f054-de7d-4488-86ab-070984f889c8",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "18711312-11a1-4971-a458-3ff2a30a5cfd",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_1aedc8551e884aedbde4ac95cabe1355",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_b748e62c-885b-4997-a938-925e5dfec76b",
+          "detail": "Create a file named hello.txt in the workspace containing exactly the text: Hello, Prometheus\n\nAll task paths (including directory targets such as src/) are rel",
+          "startedAt": 1791653011401,
+          "abortable": true,
+          "abortRequestedAt": 1791653134236,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653131145,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (93s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653015880,
+              "lastUpdateAt": 1791653015880,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (118s).",
+            "processEntries": [
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:31 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 119ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 4462ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 4464ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:23:35 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 25392,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 25227,
+                      "user": 165
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 25227,
+                        "chars": 78177
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 165,
+                        "chars": 485
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_1aedc8551e884aedbde4ac95cabe1355",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653011373
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 123056,
+      "cleanupSafe": true
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "file-create",
+      "area": "files",
+      "repeat": 2,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "7416d019-07cf-429e-b2d4-8b6d7a8c7198",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "25f0eca6-b94f-4fc7-9f25-c27feab5c423",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_b76ad1c3f98f4c09bc21a115bf13bc96",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_a724f134-f3d1-4cde-a78d-b0b7317d4035",
+          "detail": "Create a file named hello.txt in the workspace containing exactly the text: Hello, Prometheus\n\nAll task paths (including directory targets such as src/) are rel",
+          "startedAt": 1791653134618,
+          "abortable": true,
+          "abortRequestedAt": 1791653257732,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653253551,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (98s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653135781,
+              "lastUpdateAt": 1791653135781,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (122s).",
+            "processEntries": [
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:34 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 98ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 1150ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:35 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 1152ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:25:35 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 25409,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 25244,
+                      "user": 165
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 25244,
+                        "chars": 78230
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 165,
+                        "chars": 485
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_b76ad1c3f98f4c09bc21a115bf13bc96",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653134594
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 123402,
+      "cleanupSafe": true
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "read-and-answer",
+      "area": "retrieval",
+      "repeat": 1,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "95d457f5-b8fa-4707-b0bd-2af3c5d74b1f",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "b2e65941-ff6b-479c-be0b-801ca6323210",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_2d8ad8bc7da14729887976998a1ee839",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_33a2698d-68fb-431a-8c50-2db7ea0abb3e",
+          "detail": "Read config/settings.json in the workspace and tell me the value of \"retryLimit\". Answer with just the number.\n\nAll task paths (including directory targets such",
+          "startedAt": 1791653258052,
+          "abortable": true,
+          "abortRequestedAt": 1791653379640,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653376503,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (92s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653263755,
+              "lastUpdateAt": 1791653263755,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (116s).",
+            "processEntries": [
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:38 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 208ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 5676ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 5680ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:27:43 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 25154,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 24984,
+                      "user": 170
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 24984,
+                        "chars": 77423
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 170,
+                        "chars": 502
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_2d8ad8bc7da14729887976998a1ee839",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653257964
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 121730,
+      "cleanupSafe": true
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "read-and-answer",
+      "area": "retrieval",
+      "repeat": 2,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "f1c70c32-305d-4ab5-878a-c9dd83016d1d",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "6c2a0bf6-2f48-48ed-9472-8d0f623905fe",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_2fa9dbc392e14ac1a56ead0669883be6",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_7f03c884-056b-494d-a28d-af4240d30df5",
+          "detail": "Read config/settings.json in the workspace and tell me the value of \"retryLimit\". Answer with just the number.\n\nAll task paths (including directory targets such",
+          "startedAt": 1791653379861,
+          "abortable": true,
+          "abortRequestedAt": 1791653502402,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653498275,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (92s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653381472,
+              "lastUpdateAt": 1791653381472,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (121s).",
+            "processEntries": [
+              {
+                "ts": "1:29:39 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:39 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:39 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:40 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 183ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:41 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 1589ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:41 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:41 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 1591ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:29:41 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 25154,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 24984,
+                      "user": 170
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 24984,
+                        "chars": 77423
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 170,
+                        "chars": 502
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_2fa9dbc392e14ac1a56ead0669883be6",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653379830
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 122635,
+      "cleanupSafe": true
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "bugfix-off-by-one",
+      "area": "coding",
+      "repeat": 1,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "59811c0f-ee07-4921-9b5a-19a20647f946",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "1e5666b3-b034-47e5-8173-e9653d362524",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_29e76cea281d4ae2a5fa0836b74afdbe",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_9f911212-6d7b-4b72-8348-ffa8f27aec1a",
+          "detail": "src/sum.js has a bug: sumTo(n) should return 1+2+...+n but the tests in test.js fail. Fix src/sum.js so `node test.js` prints PASS. Do not edit test.js.\n\nAll ta",
+          "startedAt": 1791653502951,
+          "abortable": true,
+          "abortRequestedAt": 1791653623686,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653620581,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (93s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653512903,
+              "lastUpdateAt": 1791653512903,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (111s).",
+            "processEntries": [
+              {
+                "ts": "1:31:42 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:42 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 220ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:52 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 9926ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:52 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:52 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 9930ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:31:52 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 25179,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 24995,
+                      "user": 184
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 24995,
+                        "chars": 77459
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 184,
+                        "chars": 544
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_29e76cea281d4ae2a5fa0836b74afdbe",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653502913
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 120988,
+      "cleanupSafe": true
+    },
+    {
+      "model": "ollama:qwen3.5:9b",
+      "task": "bugfix-off-by-one",
+      "area": "coding",
+      "repeat": 2,
+      "status": "blocked",
+      "pass": false,
+      "detail": "timeout",
+      "toolCalls": 0,
+      "toolErrors": 0,
+      "timedOut": true,
+      "traceId": "049129b0-2c7f-4c28-920b-fa9992625710",
+      "doneSeen": false,
+      "stop": {
+        "success": true,
+        "message": "Main chat aborted.",
+        "target": {
+          "id": "f17c5438-e0f1-4c4c-997b-014d6b0c2dcf",
+          "kind": "main_chat",
+          "label": "Main chat",
+          "sessionId": "eval_f8c23405c0cb484da8074165b896ac92",
+          "taskId": "",
+          "teamId": "",
+          "agentId": "",
+          "scheduleId": "",
+          "source": "web",
+          "clientRequestId": "eval_b089e21b-7ad5-499d-b3f4-bc560de516cd",
+          "detail": "src/sum.js has a bug: sumTo(n) should return 1+2+...+n but the tests in test.js fail. Fix src/sum.js so `node test.js` prints PASS. Do not edit test.js.\n\nAll ta",
+          "startedAt": 1791653623978,
+          "abortable": true,
+          "abortRequestedAt": 1791653745284,
+          "checkpoint": {
+            "event": "heartbeat",
+            "at": 1791653741084,
+            "toolName": "context_compaction",
+            "message": "Still connected. Waiting for context compaction result (99s).",
+            "activeTool": {
+              "name": "context_compaction",
+              "kind": "tool",
+              "startedAt": 1791653625216,
+              "lastUpdateAt": 1791653625216,
+              "openCalls": 1
+            },
+            "connectionMessage": "Still connected. Waiting for context compaction result (120s).",
+            "processEntries": [
+              {
+                "ts": "1:33:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Checking paused task follow-up...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:43 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing chat context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Preparing Prometheus runtime...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Selecting model route...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Loading tool schemas...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Tool schemas ready.",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Progress: reset",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "progress_state",
+                  "activeIndex": -1,
+                  "total": 0
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Building model context...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "ui_preflight",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:44 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_start at 117ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:45 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: context_build_done at 1223ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:45 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Thinking...",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "info",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:45 PM",
+                "type": "info",
+                "actor": "Prom",
+                "content": "Latency: provider_request_start at 1225ms",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "latency_mark",
+                  "toolName": ""
+                }
+              },
+              {
+                "ts": "1:33:45 PM",
+                "type": "compaction",
+                "actor": "Prom",
+                "content": "Compacting context",
+                "status": "compacting",
+                "extra": {
+                  "source": "runtime_checkpoint",
+                  "event": "tool_call",
+                  "toolName": "context_compaction",
+                  "action": "context_compaction",
+                  "status": "compacting",
+                  "args": {
+                    "phase": "start",
+                    "mode": "mid_workflow",
+                    "reason": "pre_model_token_budget",
+                    "projected_tokens": 27090,
+                    "trigger_tokens": 5714,
+                    "input_budget_tokens": 6349,
+                    "context_window_tokens": 8192,
+                    "provider": "ollama",
+                    "model": "qwen3.5:9b",
+                    "message_count": 2,
+                    "token_breakdown": {
+                      "system": 24995,
+                      "user": 184
+                    },
+                    "largest_messages": [
+                      {
+                        "index": 0,
+                        "role": "system",
+                        "tokens": 24995,
+                        "chars": 77459
+                      },
+                      {
+                        "index": 1,
+                        "role": "user",
+                        "tokens": 184,
+                        "chars": 544
+                      }
+                    ],
+                    "recent_tool_observation_tokens": 0,
+                    "tool_context_budget_tokens": 1015
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "abortedBackgroundIds": []
+      },
+      "sessionId": "eval_f8c23405c0cb484da8074165b896ac92",
+      "route": {
+        "mode": "explicit",
+        "override": {
+          "version": 1,
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "updatedAt": 1791653623947
+        },
+        "effective": {
+          "providerId": "ollama",
+          "model": "qwen3.5:9b",
+          "speed": "standard"
+        },
+        "availability": "ready"
+      },
+      "elapsedMs": 121479,
+      "cleanupSafe": true
+    }
+  ]
+}

@@ -1,17 +1,52 @@
 import fs from 'fs';
+import path from 'path';
+import { scrubContextText } from '../../../runtime/context-receipt';
+import { getSessionStorageDirectory } from '../../session';
 import { parseJsonLike, type ToolResult } from '../../tool-builder';
 import { activateSkillForSession, activateSkillResourceForSession } from '../../session';
 import { submitSkillGardenerCandidate } from '../../brain/skill-episodes';
 import {
   applySkillCuratorSuggestion,
+  sampleRoutingOffers,
+  rollbackRoutingSuggestion,
+  proposeRoutingTrigger,
+  type RoutingOriginal,
   listSkillCuratorSuggestions,
   getSkillCuratorStatus,
   rejectSkillCuratorSuggestion,
+  restoreSkillCuratorSuggestion,
   runSkillCurator,
   type SkillCuratorMode,
 } from '../../skills-runtime/skill-curator';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import { rankSkillMatches } from '../../skills-runtime/skills-manager';
+import { submitSkillRoutingFeedback, getSkillRoutingEvidence, sha } from '../../learning/turn-recorder';
+
+/** Read authoritative history only; never accept raw original/context or paths from tool callers. */
+function resolveRoutingOriginal(sessionId: string, requestHash: string): RoutingOriginal | null {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) return null;
+  try {
+    const file = path.join(getSessionStorageDirectory(), `${sessionId}.json`);
+    if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 4 * 1024 * 1024) return null;
+    const source = fs.readFileSync(file, 'utf8');
+    const history = JSON.parse(source).history;
+    if (!Array.isArray(history)) return null;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const row = history[i];
+      if (row?.role !== 'user') continue;
+      const request = typeof row.content === 'string' ? row.content : Array.isArray(row.content) ? row.content.filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('\n') : '';
+      if (sha(request.trim()) === requestHash) {
+        const visible = history.slice(0, i + 1).filter((p: any) => p?.role === 'user' || p?.role === 'assistant').map((p: any) => ({
+          role: p.role,
+          content: scrubContextText(typeof p.content === 'string' ? p.content : Array.isArray(p.content) ? p.content.filter((part: any) => part?.type === 'text').map((part: any) => part.text).join('\n') : ''),
+        }));
+        const context = JSON.stringify(visible);
+        return { request, contextHash: sha(JSON.stringify(history.slice(0, i + 1))), context };
+      }
+    }
+  } catch {}
+  return null;
+}
 
 const SKILL_TOOL_NAMES = new Set([
   'skill_list',
@@ -695,6 +730,36 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
       case 'skill_curator': {
         const action = String(args.action || 'status').trim().toLowerCase();
         try {
+          if (action === 'rollback') {
+            const suggestion = rollbackRoutingSuggestion(ctx.workspacePath, deps.skillsManager, String(args.id || ''), args.rollback_negative_prompts);
+            return { name, args, result: JSON.stringify({ suggestion }), error: !suggestion };
+          }
+          if (action === 'sample_routing') {
+            const sampled = sampleRoutingOffers(ctx.workspacePath);
+            return { name, args, result: JSON.stringify({ ...sampled, samples: sampled.samples.map(sample => {
+              const original = resolveRoutingOriginal(sample.sessionId, sample.requestHash);
+              return { ...sample, original: original && original.context!.length <= 24000 ? { ...original, request: scrubContextText(original.request) } : null, insufficientContext: !original || original.context!.length > 24000 };
+            }) }), error: false };
+          }
+          if (action === 'propose_routing') {
+            const proposal = proposeRoutingTrigger(ctx.workspacePath, deps.skillsManager, {
+              skillId: args.skill_id || args.skillId, manifest: args.trigger_manifest,
+              positiveTurnIds: args.positive_turn_ids, negativeTurnIds: args.negative_turn_ids,
+            }, resolveRoutingOriginal);
+            return { name, args, result: JSON.stringify({ proposal, skillFilesChanged: false }), error: false };
+          }
+          if (action === 'review_routing') {
+            const turn = getSkillRoutingEvidence(ctx.workspacePath, { turnId: args.turn_id })[0];
+            const original = turn ? resolveRoutingOriginal(turn.sessionId, turn.requestHash) : null;
+            const scope = deps.skillsManager?.get(args.skill_id || args.skillId);
+            const nativeEvidence = original && original.context!.length <= 24000 && scope ? { contextHash: original.contextHash } : undefined;
+            const review = submitSkillRoutingFeedback(ctx.workspacePath, {
+              turnId: args.turn_id, requestHash: args.request_hash, skillId: args.skill_id || args.skillId,
+              relevance: nativeEvidence ? args.relevance : 'unknown', reason: args.reason, reviewerSource: 'agent',
+              reviewerId: ctx.sessionId, reviewedEvidence: args.reviewed_evidence,
+            }, nativeEvidence);
+            return { name, args, result: JSON.stringify({ review, skillFilesChanged: false }), error: false };
+          }
           if (action === 'status') {
             const status = getSkillCuratorStatus(ctx.workspacePath, { limit: args.limit, cursor: args.cursor, statusFilter: args.statusFilter || args.status_filter, skillId: args.skillId || args.skill_id, includeContent: args.includeContent === true || args.include_content === true });
             return { name, args, result: JSON.stringify(status, null, 2), error: false };
@@ -704,6 +769,11 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             const mode: SkillCuratorMode = rawMode === 'auto-safe' || rawMode === 'pending' ? rawMode : 'dry-run';
             const result = runSkillCurator({ workspacePath: ctx.workspacePath, skillsManager: deps.skillsManager, mode });
             return { name, args, result: JSON.stringify(result, null, 2), error: false };
+          }
+          if (action === 'restore') {
+            const id = String(args.id || '').trim();
+            const restored = restoreSkillCuratorSuggestion(ctx.workspacePath, id);
+            return { name, args, result: restored ? `Restored skill curator suggestion ${id}.` : `No restorable suggestion: ${id}`, error: !restored };
           }
           if (action === 'apply') {
             const id = String(args.id || '').trim();

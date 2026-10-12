@@ -96,13 +96,10 @@ async function runChild() {
     // tool calls for each task. Validates seeding, the runtime path and the
     // verifiers without a real model. Not a published result.
     provider = oracleProvider(task.id, workspaceDir);
-  } else if (model.startsWith('ollama:')) {
-    modelName = model.slice('ollama:'.length);
-    process.env.PROMETHEUS_DATA_DIR = dataDir;
-    const { OllamaAdapter } = require(path.join(repo, 'dist', 'providers', 'ollama-adapter.js'));
-    const base = new OllamaAdapter(process.env.OLLAMA_URL || 'http://127.0.0.1:11434');
-    // Pin the model for every call regardless of the runtime's role routing.
-    provider = { id: 'ollama', chat: (m, _model, o) => base.chat(m, modelName, o), generate: (p, _model, o) => base.generate(p, modelName, o), listModels: () => base.listModels(), testConnection: () => base.testConnection() };
+  } else if (/^(openai_codex|anthropic|ollama|xai):/.test(model)) {
+    // The embed API resolves approvals through its host callback, including
+    // automatic denial. Real cloud evals must use the user-gated gateway runner.
+    throw new Error('Cloud evals require evals/run-gateway-evals.mjs; embedded automatic approval resolution is forbidden');
   }
   const { createPrometheusRuntime } = require(path.join(repo, 'dist', 'embed', 'index.js'));
   // Eval host approval policy (what an unattended operator would allow): file

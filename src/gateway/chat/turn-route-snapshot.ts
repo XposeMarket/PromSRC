@@ -78,8 +78,8 @@ export function captureTurnRouteSnapshot(
     ? raw?.agent_model_default_reasoning?.main_chat
     : input.reasoningEffort;
   const reasoningEffort = normalizeReasoningEffort(providerId, model, configuredReasoning);
-  const contextProfile = cloneAndFreeze(resolveModelContextProfile(providerId, model, undefined, raw));
-  const contextBudget = cloneAndFreeze(buildContextBudget(contextProfile));
+  const contextProfile = cloneAndFreeze(resolveModelContextProfile(providerId, model, undefined, raw, identity?.accountId || accountId));
+  const contextBudget = cloneAndFreeze(buildContextBudget(contextProfile, raw?.session || {}));
   return Object.freeze({
     providerId,
     model,

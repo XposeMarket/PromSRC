@@ -151,6 +151,8 @@ function makeState(sessionId, surface, clientRequestId = '') {
     pressureTokens: 0,
     pressureWindowTokens: 0,
     pressureTriggerTokens: 0,
+    contextUsageWarning: '',
+    contextSelectionMode: '',
     pressureFetchedAt: 0,
     pressurePromise: null,
     pendingCompaction: false,
@@ -216,6 +218,8 @@ function refreshPressure(state, force = false) {
       state.pressureTokens = numeric(data.pressureTokens);
       state.pressureWindowTokens = numeric(data.contextWindowTokens);
       state.pressureTriggerTokens = numeric(data.effectiveCompactionTriggerTokens || data.compactionTriggerTokens);
+      state.contextUsageWarning = String(data.contextUsageWarning || '');
+      state.contextSelectionMode = String(data.contextSelectionMode || '');
       state.pendingCompaction = data.pendingCompaction === true || data.atOrPastCompactionTrigger === true;
       if (state.pressureWindowTokens > 0 && state.windowTokens <= 0) state.windowTokens = state.pressureWindowTokens;
       renderLiveEstimate(state);
@@ -369,6 +373,8 @@ function renderLiveEstimate(state) {
 
   const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
   if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
+  if (state.contextSelectionMode) titleParts.push(`${state.contextSelectionMode} context`);
+  if (state.contextUsageWarning) titleParts.push(state.contextUsageWarning);
   if (isLiveEstimate) titleParts.push('live estimate');
   const title = titleParts.join(' · ');
   if (elements.button && elements.button.title !== title) elements.button.title = title;

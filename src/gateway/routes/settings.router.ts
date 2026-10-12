@@ -66,7 +66,8 @@ import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth'
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
-import { buildContextBudget, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
+import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile, selectModelInfoForContextProfile, resolveModelContextProfile, rememberProviderContextMetadata } from '../context/model-context';
+import { validateContextSelection } from '../context/context-selection';
 import { resolveApprovalDecision } from '../approval-actions';
 import {
   getPrometheusQuestionQueue,
@@ -683,7 +684,7 @@ router.delete('/api/installed-apps/aliases', async (req, res) => {
 function getSessionDefaults() {
   return {
     maxMessages: 120,
-    compactionThreshold: 0.7,
+    compactionThreshold: 'auto' as const,
     memoryFlushThreshold: 0.75,
     compactionMinMessages: 20,
     rollingCompactionEnabled: true,
@@ -738,6 +739,30 @@ router.get('/api/settings/features', (_req, res) => {
   });
 });
 
+router.post('/api/settings/context-window', async (req, res) => {
+  try {
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    const active = resolveActiveModelContextProfile();
+    const providerId = String(req.body?.providerId || active.providerId);
+    const model = String(req.body?.model || active.model);
+    if (providerId !== active.providerId || model !== active.model) return res.status(409).json({ success: false, error: 'Model changed. Reload settings before selecting context.' });
+    if (req.body?.accountId && req.body.accountId !== active.contextAccountId) return res.status(409).json({ success: false, error: 'Account changed. Reload context settings.' });
+    const models = await Promise.race([getProvider().listModels(), new Promise<any[]>(resolve => setTimeout(() => resolve([]), 1800))]);
+    const info = selectModelInfoForContextProfile(models, model);
+    if (info) rememberProviderContextMetadata(providerId, info, current, active.contextAccountId);
+    const profile = resolveModelContextProfile(providerId, model, info, current, active.contextAccountId);
+    const selection = validateContextSelection(req.body, profile);
+    const accountId = active.contextAccountId || 'default';
+    const session = { ...(current.session || {}), contextSelections: { ...(current.session?.contextSelections || {}), [`${providerId}/${model}/${accountId}`]: selection } };
+    cm.updateConfig({ session } as any);
+    const selected = resolveModelContextProfile(providerId, model, undefined, { ...current, session }, accountId);
+    res.json({ success: true, contextProfile: selected, contextBudget: buildContextBudget(selected, session) });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message || 'Invalid context selection' });
+  }
+});
+
 router.get('/api/settings/session', async (_req, res) => {
   const cfg = (getConfig().getConfig() as any).session || {};
   const d = getSessionDefaults();
@@ -749,17 +774,18 @@ router.get('/api/settings/session', async (_req, res) => {
       new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 1800)),
     ]);
     const modelInfo = selectModelInfoForContextProfile(models, contextProfile.model);
-    if (modelInfo) contextProfile = resolveActiveModelContextProfile(modelInfo);
+    if (modelInfo) { rememberProviderContextMetadata(contextProfile.providerId, modelInfo, undefined, contextProfile.contextAccountId); contextProfile = resolveActiveModelContextProfile(modelInfo); }
   } catch {
     // Keep settings fast and available even when provider metadata endpoints are offline.
   }
-  const contextBudget = buildContextBudget(contextProfile);
+  const contextBudget = buildContextBudget(contextProfile, cfg);
   const autoSettleStatus = getAutoSettleStatus();
   res.json({
     success: true,
     session: {
       maxMessages: toBoundedInt(cfg.maxMessages, 20, 500, d.maxMessages),
-      compactionThreshold: toBoundedFloat(cfg.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+      compactionThreshold: resolveCompactionThreshold(cfg.compactionThreshold, cfg.compactionThresholdMode),
+      effectiveCompactionThreshold: contextBudget.compactionTriggerTokens / contextProfile.contextWindowTokens,
       memoryFlushThreshold: toBoundedFloat(cfg.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
       compactionMinMessages: toBoundedInt(cfg.compactionMinMessages ?? cfg.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
       rollingCompactionEnabled: cfg.rollingCompactionEnabled !== false,
@@ -787,7 +813,8 @@ router.post('/api/settings/session', async (req, res) => {
     const nextSession: Record<string, any> = {
       ...existing,
       maxMessages: toBoundedInt(body.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
-      compactionThreshold: toBoundedFloat(body.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+      compactionThreshold: resolveCompactionThreshold(body.compactionThreshold ?? existing.compactionThreshold, body.compactionThresholdMode ?? existing.compactionThresholdMode),
+      compactionThresholdMode: body.compactionThresholdMode ?? existing.compactionThresholdMode,
       memoryFlushThreshold: toBoundedFloat(body.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
       compactionMinMessages: toBoundedInt(
         body.compactionMinMessages ?? existing.compactionMinMessages ?? body.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount,
@@ -2393,7 +2420,8 @@ router.post('/api/settings/bulk', async (req, res) => {
       updates.session = {
         ...existing,
         maxMessages: toBoundedInt(s.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
-        compactionThreshold: toBoundedFloat(s.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+        compactionThreshold: resolveCompactionThreshold(s.compactionThreshold ?? existing.compactionThreshold, s.compactionThresholdMode ?? existing.compactionThresholdMode),
+        compactionThresholdMode: s.compactionThresholdMode ?? existing.compactionThresholdMode,
         memoryFlushThreshold: toBoundedFloat(s.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
         compactionMinMessages: toBoundedInt(s.compactionMinMessages ?? existing.compactionMinMessages ?? s.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
         rollingCompactionEnabled: s.rollingCompactionEnabled !== undefined ? !!s.rollingCompactionEnabled : (existing.rollingCompactionEnabled !== false),

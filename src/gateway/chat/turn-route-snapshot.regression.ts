@@ -89,4 +89,15 @@ assert.match(router, /routeSnapshot: activeGenerationRouteSnapshot/);
 assert.match(router, /provider: generationOverride\.provider/);
 assert.match(router, /turnRouteSnapshot,/);
 
+// Explicit route accounts own both consent and budget, not the provider default.
+const consentConfig: any = routeConfig('openai_codex', 'gpt-6.1-sol', 'medium', 'default-account');
+consentConfig.llm.providers.openai_codex = { model: 'gpt-6.1-sol', defaultAccountId: 'default-account' };
+consentConfig.session = { contextSelections: { 'openai_codex/gpt-6.1-sol/default-account': { mode: 'maximum', extendedAcknowledged: true } } };
+const defaultConsentTurn = captureTurnRouteSnapshot({ config: consentConfig }, { buildProvider: fakeFactory });
+const otherAccountTurn = captureTurnRouteSnapshot({ config: consentConfig, accountId: 'other-account' }, { buildProvider: fakeFactory });
+assert.equal(defaultConsentTurn.contextProfile.contextWindowTokens, 872000);
+assert.equal(otherAccountTurn.contextProfile.contextAccountId, 'other-account');
+assert.equal(otherAccountTurn.contextProfile.contextWindowTokens, 272000);
+assert.equal(otherAccountTurn.contextBudget.contextWindowTokens, 272000);
+
 console.log(`turn-route snapshot regression passed (${calls.length} deterministic snapshots)`);

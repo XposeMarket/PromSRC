@@ -18,6 +18,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
     "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",
     "build": "npm run build:backend && npm run build:web",
@@ -52,9 +53,10 @@
     "test:hyperframes-roundtrip": "node scripts/test-hyperframes-roundtrip.mjs",
     "test:hyperframes-catalog": "npm run build:backend && node scripts/test-hyperframes-catalog-pipeline.mjs",
     "test:runtime-prompt-manifest": "tsx src/runtime/prompt-manifest.regression.ts",
+    "test:context-routing-foundation": "node scripts/test-context-routing-foundation.mjs",
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
-    "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs",
+    "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs --online-install",
     "test:small-context-fit": "tsx src/gateway/tools/small-context-fit.regression.ts",
     "test:evals-selftest": "npm run build:backend && node evals/run-evals.mjs --model scripted:oracle --timeout-ms 60000 --out .tmp/evals-selftest",
     "test:turn-trace": "tsx src/gateway/observability/turn-trace.regression.ts",
@@ -181,6 +183,8 @@
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",
     "test:brain-scheduled-chat": "tsx src/gateway/brain/brain-runner-scheduled-chat.regression.ts",
+    "test:brain-curator-rejections": "tsx src/gateway/skills-runtime/skill-curator-rejections.regression.ts",
+    "test:brain-run-budget": "tsx src/gateway/agents-runtime/brain-run-budget.regression.ts && tsx src/gateway/brain/brain-runner-budget.regression.ts",
     "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
     "test:openai-compat-reasoning": "tsx src/providers/openai-compat-adapter.regression.ts",
     "test:memory-worker-readiness": "tsx src/gateway/memory-index/memory-search-worker-readiness.regression.ts",

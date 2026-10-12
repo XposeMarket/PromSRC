@@ -4,9 +4,10 @@
   "type": "module",
   "description": "A separate Node project that embeds the Prometheus agent runtime through its public API.",
   "dependencies": {
-    "prometheus": "file:../.."
+    "prometheus": "*"
   },
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "test": "node index.mjs"
   }
 }

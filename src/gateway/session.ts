@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
-import { resolveActiveModelContextProfile } from './context/model-context';
+import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
 import { normalizeSpeed } from '../providers/reasoning-capabilities';
 import { clearToolObservationSnapshotCache, getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
@@ -518,7 +518,7 @@ export const PRE_COMPACTION_MEMORY_FLUSH_PROMPT = [
   'After writing, reply with just: NO_REPLY (the user does not need to see this turn)',
   'Only send a real reply if there is something critical to tell the user right now.',
 ].join('\n');
-export const PRE_COMPACTION_SUMMARY_PROMPT = 'Before continuing: summarize the conversation so far into a compact context note. Include goals, constraints, decisions, and open items in <= 180 words.';
+export const PRE_COMPACTION_SUMMARY_PROMPT = 'Before continuing: produce a faithful, meaningfully shortened continuity handoff merging the full previous summary and conversation. Preserve pending tasks, decisions, constraints, artifacts and latest work. Length is adaptive to source and model output capacity, not a fixed word cap. Use these exact plain-text numbered headings with meaningful bodies: 1. Primary Request and Intent:; 2. Key Technical Concepts:; 3. Files and Code Sections:; 4. Errors, Fixes, and Test Results:; 5. Problem Solving and Decisions:; 6. Recent User Messages:; 7. Pending Tasks:; 8. Current Work:; 9. Recovery Artifacts:; 10. Continue From Here:. Put each heading on its own line. Resume directly from Current Work in Continue From Here. Do not output a truncated or incomplete handoff.';
 const API_HISTORY_PRUNE_THRESHOLD_CHARS = 3000;
 const API_HISTORY_PRUNE_KEEP_CHARS = 2500;
 const SESSION_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1984,29 +1984,27 @@ function activeUsageCalibrationFactor(): number {
 
 function resolveSessionPolicy(): {
   maxMessages: number;
-  compactionThreshold: number;
+  compactionThreshold: number | 'auto';
   memoryFlushThreshold: number;
   compactionMinMessages: number;
 } {
   const defaults = {
     maxMessages: 120,
-    compactionThreshold: 0.7,
+    compactionThreshold: 'auto' as const,
     memoryFlushThreshold: 0.75,
     compactionMinMessages: 20,
   };
   try {
     const cfg: any = getConfig().getConfig();
     const maxMessagesRaw = Number(cfg?.session?.maxMessages);
-    const compactionThresholdRaw = Number(cfg?.session?.compactionThreshold);
+    const compactionThresholdRaw = cfg?.session?.compactionThreshold;
     const memoryFlushThresholdRaw = Number(cfg?.session?.memoryFlushThreshold);
     const rollingMessageCountRaw = Number(cfg?.session?.rollingCompactionMessageCount);
     const compactionMinMessagesRaw = Number(cfg?.session?.compactionMinMessages);
     const maxMessages = Number.isFinite(maxMessagesRaw) && maxMessagesRaw >= 20
       ? Math.floor(maxMessagesRaw)
       : defaults.maxMessages;
-    const compactionThreshold = Number.isFinite(compactionThresholdRaw) && compactionThresholdRaw >= 0.4 && compactionThresholdRaw <= 0.95
-      ? compactionThresholdRaw
-      : defaults.compactionThreshold;
+    const compactionThreshold = resolveCompactionThreshold(compactionThresholdRaw, cfg?.session?.compactionThresholdMode);
     const memoryFlushThreshold = Number.isFinite(memoryFlushThresholdRaw) && memoryFlushThresholdRaw >= 0.5 && memoryFlushThresholdRaw <= 0.98
       ? memoryFlushThresholdRaw
       : defaults.memoryFlushThreshold;
@@ -2214,7 +2212,7 @@ function appendCompactionArtifacts(
     const compactionDir = path.join(workspacePath, 'audit', 'chats', 'compactions');
 
     const ts = new Date().toISOString();
-    const cleanSummary = scrubPersistedText(String(summaryText || '')).slice(0, 12000);
+    const cleanSummary = scrubPersistedText(String(summaryText || ''));
     const cleanExtra = extra ? scrubPersistedData(extra) : undefined;
     const payload = {
       timestamp: ts,
@@ -2307,7 +2305,7 @@ export function recordSessionCompaction(
   const session = getSession(sessionId);
   const cleanSummary = String(summaryText || '').trim();
   if (!cleanSummary) return;
-  session.latestContextSummary = cleanSummary.slice(0, 12000);
+  session.latestContextSummary = cleanSummary;
   session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
   session.contextStartMessageId = session.contextStartIndex < session.history.length
     ? stableMessageIdentity(session.history[session.contextStartIndex])
@@ -2435,7 +2433,8 @@ export function applyRollingCompactionToHistory(
 ): void {
   const session = getSession(sessionId);
   const cleanSummary = String(summaryText || '').trim();
-  if (!cleanSummary) return;
+  const { isUsableCompactionSummary } = require('./context/compaction-safety') as typeof import('./context/compaction-safety');
+  if (!isUsableCompactionSummary(cleanSummary)) return;
   const summaryMsg: ChatMessage = {
     role: 'assistant',
     content: `${summaryPrefix}\n${cleanSummary}`,
@@ -2455,7 +2454,13 @@ function compactHistoryWithSummary(sessionId: string, session: Session, summaryT
   if (promptIndex <= 0) return false;
 
   const beforePromptCount = promptIndex;
-  const cleanSummary = String(summaryText || '').trim();
+  const { normalizeCompactionSummary, isUsableCompactionSummary } = require('./context/compaction-safety') as typeof import('./context/compaction-safety');
+  const cleanSummary = normalizeCompactionSummary(summaryText);
+  const profile = resolveActiveModelContextProfile();
+  const previousSummary = String(session.latestContextSummary || '');
+  const { estimateTextTokensForModel } = require('./context/model-context') as typeof import('./context/model-context');
+  const sourceTokens = estimateTextTokensForModel(session.history.slice(session.contextStartIndex || 0, promptIndex).map((message) => message.content).join('\n') + '\n' + previousSummary, profile.tokenizer);
+  if (cleanSummary === previousSummary || !isUsableCompactionSummary(cleanSummary, 0, { sourceTokens, outputBudgetTokens: profile.maxOutputTokens, tokenizer: profile.tokenizer })) return false;
   if (cleanSummary) {
     recordSessionCompaction(sessionId, 'legacy', cleanSummary, beforePromptCount, {
       strategy: 'pre_compaction_prompt',
@@ -2472,7 +2477,7 @@ function compactHistoryWithSummary(sessionId: string, session: Session, summaryT
     const _fs = require('fs');
     _fs.mkdirSync(require('path').dirname(_notesPath), { recursive: true });
     const _ts = new Date().toISOString();
-    const _cleanSummary = scrubPersistedText(String(summaryText || '')).slice(0, 600);
+    const _cleanSummary = scrubPersistedText(String(cleanSummary || ''));
     _fs.appendFileSync(_notesPath, `### [COMPACTION_SUMMARY] ${_ts}\n${_cleanSummary}\n\n`, 'utf-8');
   } catch {
     // Memory persistence must not break chat flow.
@@ -2716,7 +2721,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     : sessionPolicy.maxMessages;
   const contextLimitTokens = resolveNumCtx();
   const thresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.memoryFlushThreshold);
-  const compactionThresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.compactionThreshold);
+  const compactionThresholdTokens = buildContextBudget(resolveActiveModelContextProfile(), { ...sessionPolicy, compactionThresholdMode: sessionPolicy.compactionThreshold === 'auto' ? 'auto' : 'manual' }).compactionTriggerTokens;
   // Correct raw estimates toward real provider input-token counts before
   // comparing against the (now provider-aware) window thresholds.
   const usageCalibrationFactor = activeUsageCalibrationFactor();

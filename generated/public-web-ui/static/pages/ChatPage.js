@@ -1,3 +1,4 @@
+import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
@@ -8963,6 +8964,10 @@ async function _openSession(id, generation) {
     else setMode('chat');
   }
   resetDesktopNewChatContext();
+  if (window.activeChatSessionId !== id) {
+    canonicalVoiceEpoch += 1;
+    if (backendVoiceRecorder) stopBackendDictation();
+  }
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   let sess = window.chatSessions.find(s => s.id === id);
@@ -22224,13 +22229,9 @@ let realtimeDraftInterimText = '';
 let realtimeDraftStartedAt = 0;
 let realtimeVoicePendingInterruptContext = null;
 
-const OPENAI_PUBLIC_REALTIME_VOICE_IDS = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
-const CODEX_AVAS_REALTIME_VOICE_IDS = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
-const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
 const DESKTOP_VOICE_ROOM_STATE_KEY = 'pm_desktop_voice_room_state_v1';
 const DESKTOP_VOICE_ROOM_FOCUS_MS = 45_000;
-const DESKTOP_VOICE_MODES = new Set(['openai_realtime', 'xai']);
-let desktopVoiceSettings = loadDesktopVoiceSettings();
+let desktopVoiceSettings = loadDesktopVoiceSettings(getStoredVoiceSetting);
 let realtimeVoiceStatus = null;
 let desktopVoiceRoom = loadDesktopVoiceRoomState();
 let desktopVoiceTarget = desktopVoiceRoom.enabled
@@ -22260,140 +22261,17 @@ function creativeMediaSourceUrl(source = '') {
   return `/api/canvas/inline?path=${encodeURIComponent(normalizeCanvasPath(value))}`;
 }
 
-function getSpeechRecognitionCtor() {
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
-}
 
-function getStoredVoiceProvider(kind, fallback) {
-  try {
-    const value = localStorage.getItem(`prometheus_voice_${kind}_provider`);
-    return value ? String(value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function storeVoiceProvider(kind, provider) {
-  try { localStorage.setItem(`prometheus_voice_${kind}_provider`, provider); } catch {}
-}
-
-function getStoredVoiceSetting(key, fallback = '') {
-  try {
-    const value = localStorage.getItem(`prometheus_${key}`);
-    return value ? String(value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function storeVoiceSetting(key, value) {
-  try { localStorage.setItem(`prometheus_${key}`, String(value || '')); } catch {}
-}
-
-function normalizeDesktopVoiceMode(value) {
-  const mode = String(value || '').trim();
-  return DESKTOP_VOICE_MODES.has(mode) ? mode : 'openai_realtime';
-}
-
-function loadDesktopVoiceSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(DESKTOP_VOICE_SETTINGS_KEY) || '{}');
-    const legacyMode = saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
-    return {
-      voiceMode: normalizeDesktopVoiceMode(legacyMode),
-      sttProvider: 'auto',
-      ttsProvider: 'realtime',
-      realtimeVoice: saved.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin'),
-      realtimeSpeed: Number(saved.realtimeSpeed || getStoredVoiceSetting('realtime_voice_speed', '1.1') || 1.1),
-      serverVoice: saved.serverVoice || getStoredVoiceSetting('voice_xai_voice', 'eve'),
-      xaiSpeed: Number(saved.xaiSpeed || saved.realtimeSpeed || 1.0),
-      dictation: saved.dictation || 'quiet',
-      sttProviderLocked: saved.sttProviderLocked === true,
-      autoProviderDefault: saved.autoProviderDefault || '',
-      voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
-    };
-  } catch {
-    return {
-      voiceMode: 'openai_realtime',
-      sttProvider: 'auto',
-      ttsProvider: 'realtime',
-      realtimeVoice: 'marin',
-      realtimeSpeed: 1.1,
-      serverVoice: 'eve',
-      xaiSpeed: 1.0,
-      dictation: 'quiet',
-      sttProviderLocked: false,
-      autoProviderDefault: '',
-      voiceAgentXaiRealtime: false,
-    };
-  }
-}
 
 function saveDesktopVoiceSettings(settings = {}) {
   desktopVoiceSettings = {
     ...desktopVoiceSettings,
     ...settings,
     voiceMode: normalizeDesktopVoiceMode(settings.voiceMode || desktopVoiceSettings.voiceMode),
+    legacyRealtime: settings.legacyRealtime ?? desktopVoiceSettings.legacyRealtime ?? false,
   };
   try { localStorage.setItem(DESKTOP_VOICE_SETTINGS_KEY, JSON.stringify(desktopVoiceSettings)); } catch {}
   return desktopVoiceSettings;
-}
-
-function desktopVoiceParticipantKey(participant = {}) {
-  if (String(participant?.kind || '').trim() === 'subagent') {
-    const agentId = String(participant.agentId || participant.id || '').trim();
-    return agentId ? `subagent:${agentId}` : '';
-  }
-  return 'main';
-}
-
-function desktopVoiceParticipantLabel(participant = {}) {
-  if (String(participant?.kind || '').trim() !== 'subagent') return 'Prometheus';
-  return String(participant.label || participant.name || participant.alias || participant.agentId || participant.id || 'Subagent')
-    .replace(/\s+/g, ' ').trim() || 'Subagent';
-}
-
-function normalizeDesktopVoiceParticipant(participant = {}) {
-  const kind = String(participant?.kind || '').trim() === 'subagent' ? 'subagent' : 'main';
-  const agentId = kind === 'subagent' ? String(participant.agentId || participant.id || '').trim() : '';
-  const key = kind === 'subagent' ? (agentId ? `subagent:${agentId}` : '') : 'main';
-  if (!key) return null;
-  return {
-    key,
-    kind,
-    ...(agentId ? { agentId } : {}),
-    label: kind === 'main' ? 'Prometheus' : desktopVoiceParticipantLabel({ ...participant, kind, agentId }),
-    aliases: Array.from(new Set([
-      desktopVoiceParticipantLabel({ ...participant, kind, agentId }),
-      participant.alias,
-      participant.name,
-      agentId,
-      ...(kind === 'main' ? ['Prom', 'main agent', 'main chat'] : []),
-    ].map((value) => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean))),
-  };
-}
-
-function normalizeDesktopVoiceRoomState(source = {}) {
-  const rawParticipants = Array.isArray(source?.participants) ? source.participants : [];
-  const seen = new Set();
-  const participants = rawParticipants
-    .map(normalizeDesktopVoiceParticipant)
-    .filter((participant) => participant && !seen.has(participant.key) && seen.add(participant.key))
-    .slice(0, 12);
-  const enabled = source?.enabled === true && participants.length > 1;
-  const activeKey = String(source?.activeKey || '').trim();
-  return {
-    version: 1,
-    enabled,
-    sessionId: enabled && String(source?.sessionId || '').startsWith('voice_room_') ? String(source.sessionId) : '',
-    rosterKey: String(source?.rosterKey || '').trim(),
-    participants,
-    activeKey: enabled && participants.some((participant) => participant.key === activeKey)
-      ? activeKey
-      : (participants[0]?.key || ''),
-    focusUntil: Number(source?.focusUntil || 0) || 0,
-    quiet: source?.quiet && typeof source.quiet === 'object' ? { ...source.quiet } : {},
-  };
 }
 
 function loadDesktopVoiceRoomState() {
@@ -22554,12 +22432,14 @@ async function restoreDesktopVoiceRoomSession(sessionId = window.activeChatSessi
 }
 
 function getDesktopVoiceDefaultProvider() {
+  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') return 'canonical';
   if (realtimeVoiceConfigured) return 'openai_realtime';
   const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
   return xaiReady ? 'xai' : 'openai_realtime';
 }
 
 function applyDesktopVoiceProviderDefaults() {
+  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') return false;
   const provider = getDesktopVoiceDefaultProvider();
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   const autoProviderDefault = String(desktopVoiceSettings.autoProviderDefault || '');
@@ -22990,6 +22870,10 @@ function toggleBrowserDictation() {
     return;
   }
 
+  if (voiceRecognition) { try { voiceRecognition.stop(); } catch {} return; }
+  const epoch = canonicalVoiceEpoch;
+  const sessionId = window.activeChatSessionId;
+  let submitted = false;
   const input = document.getElementById('chat-input');
   voiceDictationBaseText = String(input?.value || '').trim();
   voiceDictationFinalText = '';
@@ -23016,7 +22900,7 @@ function toggleBrowserDictation() {
     if (voiceDictationEnabled) writeDictationTranscript('');
   };
   voiceRecognition.onresult = (event) => {
-    if (!voiceDictationEnabled) return;
+    if (!voiceDictationEnabled || submitted || epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId) return;
     let interim = '';
     let sawFinal = false;
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -23034,7 +22918,12 @@ function toggleBrowserDictation() {
       }
     }
     writeDictationTranscript(interim);
-    if (sawFinal) submitVoiceCommandIfPresent();
+    if (sawFinal && normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
+      submitted = true;
+      try { voiceRecognition?.stop?.(); } catch {}
+      sendChat().catch((err) => showDesktopVoiceStatus('Voice failed', String(err?.message || err), 'error'));
+    }
+    else if (sawFinal) submitVoiceCommandIfPresent();
   };
   try {
     voiceRecognition.start();
@@ -23233,11 +23122,15 @@ async function toggleBackendDictationFallback() {
   return toggleBackendDictation({ forceBatch: true });
 }
 
-async function transcribeBackendRecording(blob) {
-  if (!voiceDictationEnabled) return;
-  const provider = 'auto';
+let canonicalVoiceEpoch = 0;
+async function transcribeBackendRecording(blob, recordingContext) {
+  if (!recordingContext || !voiceDictationEnabled) return;
+  const { epoch, sessionId } = recordingContext;
+  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId) return;
+  const provider = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical' ? (desktopVoiceSettings.sttProvider === 'browser' ? 'auto' : desktopVoiceSettings.sttProvider || 'auto') : 'auto';
   const audioBase64 = await blobToBase64(blob);
-    const response = await fetch('/api/voice/transcribe', {
+  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
+  const response = await fetch('/api/voice/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -23250,7 +23143,13 @@ async function transcribeBackendRecording(blob) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `Transcription failed (${response.status})`);
+  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
   appendDictationText(data.text || '');
+  if (data.text && normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
+    // Exactly the normal composer path, including attachments, request IDs,
+    // canonical SSE and approval rendering. STT supplies text only.
+    await sendChat();
+  }
   if (data.text) showDesktopVoiceStatus('Transcribed', `${provider.toUpperCase()} wrote into the chat box.`, 'success', 1800);
   else showDesktopVoiceStatus('No speech detected', '', 'info', 1800);
 }
@@ -23274,47 +23173,56 @@ async function toggleBackendDictation(options = {}) {
     return;
   }
   const selected = getProviderInfo('stt', voiceSttProvider);
-  if (!selected?.configured) {
+  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && !selected?.configured) {
     showDesktopVoiceStatus('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
     return;
   }
+  const recordingContext = Object.freeze({ sessionId: window.activeChatSessionId, epoch: canonicalVoiceEpoch });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) {
+    try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+    return;
+  }
   stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'backend_dictation_started' });
-  backendVoiceChunks = [];
-  backendVoiceMimeType = getRecorderMimeType();
-  backendVoiceRecorder = new MediaRecorder(stream, backendVoiceMimeType ? { mimeType: backendVoiceMimeType } : undefined);
-  backendVoiceRecorder.ondataavailable = (event) => {
-    if (voiceDictationEnabled && event.data && event.data.size > 0) backendVoiceChunks.push(event.data);
+  const chunks = [];
+  const mimeType = getRecorderMimeType();
+  backendVoiceChunks = chunks;
+  backendVoiceMimeType = mimeType;
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  backendVoiceRecorder = recorder;
+  recorder.ondataavailable = (event) => {
+    if (voiceDictationEnabled && event.data && event.data.size > 0) chunks.push(event.data);
   };
-  backendVoiceRecorder.onerror = (event) => {
+  recorder.onerror = (event) => {
     showDesktopVoiceStatus('Recording failed', String(event?.error?.message || event?.error || 'Unknown recording error'), 'error');
   };
-  backendVoiceRecorder.onstop = async () => {
-    const chunks = backendVoiceChunks.slice();
-    backendVoiceChunks = [];
-    const recorder = backendVoiceRecorder;
-    backendVoiceRecorder = null;
-    setVoiceDictationState(false);
-    try { recorder?.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
-    if (!voiceDictationEnabled) {
+  recorder.onstop = async () => {
+    if (backendVoiceRecorder === recorder) {
       backendVoiceChunks = [];
-      return;
+      backendVoiceRecorder = null;
+      setVoiceDictationState(false);
     }
+    try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+    if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) return;
     if (!chunks.length) return;
-    const blob = new Blob(chunks, { type: backendVoiceMimeType || 'audio/webm' });
+    const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
     try {
       showDesktopVoiceStatus('Transcribing', `Sending audio to ${selected?.label || voiceSttProvider}.`, 'info', 1600);
-      await transcribeBackendRecording(blob);
+      await transcribeBackendRecording(blob, recordingContext);
     } catch (err) {
       showDesktopVoiceStatus('Transcription failed', String(err?.message || err), 'error');
     }
   };
-  backendVoiceRecorder.start();
+  recorder.start();
   setVoiceDictationState(true);
   showDesktopVoiceStatus('Recording', `Tap the mic again to transcribe with ${selected?.label || voiceSttProvider}.`, 'info', 2200);
 }
 
 function toggleVoiceDictation() {
+  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
+    toggleRealtimeVoiceReplies().catch((err) => showDesktopVoiceStatus('Voice failed', String(err?.message || err), 'error'));
+    return;
+  }
   if (realtimeVoiceStarting) {
     disableRealtimeVoiceMode();
     showToast('Realtime voice cancelled', '', 'info', 1400);
@@ -25085,8 +24993,9 @@ function renderVoiceModeSelect() {
   const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
   const xaiLabel = xaiReady ? 'xAI / Grok' : 'xAI / Grok (not connected)';
   select.innerHTML = [
-    { value: 'openai_realtime', label: realtimeLabel },
-    { value: 'xai', label: xaiLabel },
+    { value: 'canonical', label: 'Voice — normal Prometheus chat' },
+    { value: 'openai_realtime', label: `Legacy ${realtimeLabel}` },
+    { value: 'xai', label: `Legacy ${xaiLabel} realtime` },
   ].map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('');
   select.value = mode;
 }
@@ -25195,8 +25104,14 @@ function renderVoiceProviderControls() {
   const speedLabel = document.getElementById('voice-speed-label');
   const narrationLabel = document.getElementById('voice-narration-label');
   const listenLabel = document.getElementById('realtime-listen-label');
-  if (micLabel) micLabel.hidden = true;
-  if (speakLabel) speakLabel.hidden = true;
+  if (micLabel) micLabel.hidden = mode !== 'canonical';
+  if (speakLabel) speakLabel.hidden = mode !== 'canonical';
+  if (mode === 'canonical') {
+    for (const [id, selected] of [['voice-stt-provider', desktopVoiceSettings.sttProvider || 'browser'], ['voice-tts-provider', desktopVoiceSettings.ttsProvider || 'browser']]) {
+      const el = document.getElementById(id);
+      if (el) { el.innerHTML = ['browser', 'openai', 'xai'].map(p => `<option value="${p}">${p === 'browser' ? 'Browser / device' : p === 'openai' ? 'OpenAI audio' : 'xAI audio'}</option>`).join(''); el.value = selected; el.disabled = false; }
+    }
+  }
   if (realtimeVoiceLabel) realtimeVoiceLabel.hidden = mode !== 'openai_realtime';
   if (speedLabel) speedLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (narrationLabel) narrationLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
@@ -25206,7 +25121,8 @@ function renderVoiceProviderControls() {
   if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = mode !== 'xai';
   if (xaiRealtimeToggle) xaiRealtimeToggle.checked = desktopVoiceSettings.voiceAgentXaiRealtime === true;
   const voiceLabel = document.getElementById('voice-output-voice-label');
-  if (voiceLabel) voiceLabel.hidden = true;
+  if (voiceLabel) voiceLabel.hidden = mode !== 'canonical';
+  if (mode === 'canonical') renderOutputVoiceSelect().catch(() => {});
   renderRealtimeVoiceSelect().catch(() => {});
   renderRealtimeVoiceSpeedSelect();
   renderRealtimeNarrationModeSelect();
@@ -25223,15 +25139,15 @@ async function refreshVoiceProviderStatus() {
     const voiceAgent = defaults?.voiceAgent || {};
     const provider = String(voiceAgent.provider || '').trim();
     const voice = String(voiceAgent.voice || '').trim();
-    if (provider === 'openai_codex' || provider === 'openai_realtime') {
+    if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && (provider === 'openai_codex' || provider === 'openai_realtime')) {
       saveDesktopVoiceSettings({ voiceMode: 'openai_realtime', realtimeVoice: voice || desktopVoiceSettings.realtimeVoice || 'marin' });
-    } else if (provider === 'xai') {
+    } else if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && provider === 'xai') {
       saveDesktopVoiceSettings({ voiceMode: 'xai', serverVoice: voice || desktopVoiceSettings.serverVoice || 'eve' });
     }
   } catch {}
   desktopVoiceSettings = loadDesktopVoiceSettings();
-  voiceSttProvider = 'auto';
-  voiceTtsProvider = 'realtime';
+  voiceSttProvider = desktopVoiceSettings.sttProvider;
+  voiceTtsProvider = desktopVoiceSettings.ttsProvider;
   realtimeVoiceSelection = desktopVoiceSettings.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin');
   loadRealtimeVoiceSpeed();
   realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(desktopVoiceSettings.realtimeSpeed || realtimeVoiceSpeed);
@@ -25242,7 +25158,7 @@ async function refreshVoiceProviderStatus() {
     const data = await response.json().catch(() => ({}));
     if (data) {
       realtimeVoiceStatus = data;
-      voiceProvidersStatus = {
+      voiceProvidersStatus = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical' ? await api('/api/voice/status') : {
         sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
         ttsProviders: [
           { id: 'openai_realtime', label: 'OpenAI Realtime', configured: !!data?.configured },
@@ -25268,8 +25184,8 @@ async function refreshVoiceProviderStatus() {
     voiceTtsProvider = 'realtime';
     voiceSttProvider = 'auto';
   } else {
-    voiceSttProvider = 'auto';
-    voiceTtsProvider = 'realtime';
+    voiceSttProvider = desktopVoiceSettings.sttProvider || 'browser';
+    voiceTtsProvider = desktopVoiceSettings.ttsProvider === 'realtime' ? 'browser' : desktopVoiceSettings.ttsProvider || 'browser';
   }
   storeVoiceProvider('stt', voiceSttProvider);
   storeVoiceProvider('tts', voiceTtsProvider);
@@ -25316,6 +25232,7 @@ function onVoiceModeChanged() {
   storeVoiceProvider('tts', voiceTtsProvider);
   saveDesktopVoiceSettings({
     voiceMode: mode,
+    legacyRealtime: mode !== 'canonical',
     sttProvider: voiceSttProvider,
     ttsProvider: voiceTtsProvider,
     realtimeVoice: realtimeVoiceSelection || desktopVoiceSettings.realtimeVoice || 'marin',
@@ -28465,8 +28382,6 @@ function createStreamingTtsDispatcher(provider) {
 }
 
 async function speakWithServerTts(text, provider) {
-  return;
-  /*
   const chunkMax = provider === 'groq' ? 180 : 400;
   const chunks = splitVoiceText(text, chunkMax).filter(Boolean);
   if (!chunks.length) return;
@@ -28496,7 +28411,7 @@ async function speakWithServerTts(text, provider) {
     const data = await nextFetch;
     if (i + 1 < chunks.length) nextFetch = fetchChunk(chunks[i + 1]);
     await playAudioBase64(data.audioBase64, data.mimeType);
-  } */
+  }
 }
 
 async function speakAssistantReply(text) {
@@ -28524,6 +28439,26 @@ async function speakAssistantReply(text) {
 }
 
 async function toggleRealtimeVoiceReplies() {
+  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
+    try { window.speechSynthesis?.cancel?.(); } catch {}
+    try { if (window.voiceReplyAudio) { window.voiceReplyAudio.pause(); window.voiceReplyAudio = null; } } catch {}
+    stopRealtimeVoicePlayback({ recordInterrupt: false });
+    if (voiceRecognition) {
+      voiceRecognition.stop();
+      return;
+    }
+    if (!backendVoiceRecorder) {
+      canonicalVoiceEpoch += 1;
+      try { window.stopGeneration?.(); } catch {}
+    }
+    voiceRepliesEnabled = true;
+    voiceTtsProvider = desktopVoiceSettings.ttsProvider === 'realtime' ? 'browser' : (desktopVoiceSettings.ttsProvider || 'browser');
+    voiceDictationEnabled = true;
+    setRegularVoiceControlsVisible(true);
+    if (desktopVoiceSettings.sttProvider === 'browser' && (window.SpeechRecognition || window.webkitSpeechRecognition)) toggleBrowserDictation();
+    else await toggleBackendDictation({ forceBatch: true });
+    return;
+  }
   const xaiRealtime = wantsXaiRealtimeMode();
   if (xaiRealtime) {
     if (!(await isXaiRealtimeConfigured())) {

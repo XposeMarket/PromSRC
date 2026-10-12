@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { getConfig } from '../../config/config';
+import { resolveCompactionThreshold } from '../context/model-context';
 import { getUsageCalibration } from '../../providers/model-usage';
 import { captureChatTurnRouteSnapshot } from '../chat/chat-model-route';
 import { buildContextWindowPressure } from '../context/context-window-pressure';
@@ -9,12 +10,11 @@ import { isSafeStorageId } from '../storage/storage-paths';
 
 export const router = express.Router();
 
-function resolveSessionCompactionThreshold(): number {
+function resolveSessionCompactionThreshold(): number | 'auto' {
   try {
-    const raw = Number((getConfig().getConfig() as any)?.session?.compactionThreshold);
-    return Number.isFinite(raw) && raw >= 0.4 && raw <= 0.95 ? raw : 0.7;
+    return resolveCompactionThreshold((getConfig().getConfig() as any)?.session?.compactionThreshold, (getConfig().getConfig() as any)?.session?.compactionThresholdMode);
   } catch {
-    return 0.7;
+    return 'auto';
   }
 }
 
@@ -44,7 +44,9 @@ router.get('/api/sessions/:id/context-pressure', (req, res) => {
       contextTokenEstimate: session.contextTokenEstimate,
       calibrationFactor: calibration.factor,
       contextWindowTokens: profile.contextWindowTokens,
+      inputBudgetTokens: budget.inputBudgetTokens,
       compactionThreshold: resolveSessionCompactionThreshold(),
+      compactionThresholdMode: 'manual',
     });
 
     res.json({
@@ -53,6 +55,10 @@ router.get('/api/sessions/:id/context-pressure', (req, res) => {
       provider: snapshot.providerId,
       model: snapshot.model,
       ...pressure,
+      standardContextWindowTokens: profile.standardContextWindowTokens,
+      maxContextWindowTokens: profile.maxContextWindowTokens,
+      contextSelectionMode: profile.contextSelectionMode,
+      contextUsageWarning: profile.contextUsageWarning,
       pendingCompaction: session.pendingCompaction === true,
       inputBudgetTokens: budget.inputBudgetTokens,
       midWorkflowCompactionTriggerTokens: budget.compactionTriggerTokens,

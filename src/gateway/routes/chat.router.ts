@@ -17,11 +17,12 @@ import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads }
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { voiceContextRequestHash, voiceContextEntryMatches } from '../voice/context-cache-key';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
 import { goalReminderForTool } from '../chat/goal-reminder';
-import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
+import { createMainChatStreamStore, type MainChatStreamFrame, type MainChatStreamState } from '../chat/main-chat-stream-store';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../chat/degraded-turn-finish';
@@ -86,6 +87,7 @@ import {
   buildDurableCommentaryContext,
 } from '../context/commentary-context';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
+import { BrainRunBudget, type BrainRunBudgetOptions } from '../agents-runtime/brain-run-budget';
 import {
   collectRichArtifacts,
   extractVisualArtifactsFromMarkdown,
@@ -136,6 +138,8 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { recordContextReceiptOutcome } from '../../runtime/context-receipt';
+import type { RetrievalTrace } from '../../runtime/retrieval-provenance';
 import { recordLearningTurn } from '../learning/turn-recorder.js';
 import { getSkillRoutingReport } from '../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
@@ -149,7 +153,6 @@ import {
   isMainChatExecutionAgeExceeded,
   isLiveBackgroundJoin,
   resolveMainChatAbortSettlement,
-  isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
 } from '../chat/main-chat-execution-owner';
@@ -913,224 +916,16 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
   };
 }
 
-type MainChatStreamFrame = {
-  seq: number;
-  type: string;
-  at: number;
-  data: Record<string, any>;
-};
-
-type MainChatStreamState = {
-  sessionId: string;
-  streamId: string;
-  startedAt: number;
-  updatedAt: number;
-  lastSemanticProgressAt: number;
-  lastSemanticEvent?: string;
-  runtimeId?: string;
-  admissionLeaseId?: string;
-  active: boolean;
-  nextSeq: number;
-  events: MainChatStreamFrame[];
-  completedAt?: number;
-  terminalReason?: string;
-  abortExecution?: (reason: string) => void;
-  /** Latest declared plan; replay cursors can skip its frames. */
-  progressState?: any;
-};
-
-const mainChatStreams = new Map<string, MainChatStreamState>();
-const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
-const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
-// A stream/lease without a running runtime can exist briefly while a caller is
-// wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
-const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
-const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
-  'user_message',
-  'session_title',
-  'agent_mode',
-  'ui_preflight',
-  'info',
-  'tool_call',
-  'tool_result',
-  'tool_progress',
-  'progress_state',
-  'thinking',
-  'agent_thought',
-  'vision_injected',
-  'final',
-  'done',
-  'error',
-  'warn',
-  'runtime_registered',
-]);
-const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
-
-function getMainChatStream(sessionId: string): MainChatStreamState | null {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return null;
-  return mainChatStreams.get(sid) || null;
-}
-
-function pruneMainChatStreams(): void {
-  const cutoff = Date.now() - MAIN_CHAT_STREAM_TTL_MS;
-  for (const [sessionId, stream] of mainChatStreams.entries()) {
-    if (!stream.active && Number(stream.completedAt || stream.updatedAt || 0) < cutoff) {
-      mainChatStreams.delete(sessionId);
-    }
-  }
-}
-
-function beginMainChatStream(sessionId: string, runtimeId?: string, admissionLeaseId?: string): MainChatStreamState {
-  pruneMainChatStreams();
-  const sid = String(sessionId || 'default').trim() || 'default';
-  const stream: MainChatStreamState = {
-    sessionId: sid,
-    streamId: crypto.randomUUID(),
-    startedAt: Date.now(),
-    updatedAt: Date.now(),
-    lastSemanticProgressAt: Date.now(),
-    runtimeId: runtimeId || undefined,
-    admissionLeaseId: admissionLeaseId || undefined,
-    active: true,
-    nextSeq: 1,
-    events: [],
-  };
-  mainChatStreams.set(sid, stream);
-  return stream;
-}
-
-function broadcastMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
-  try {
-    broadcastWS({
-      type: 'main_chat_stream_update',
-      sessionId: stream.sessionId,
-      streamId: stream.streamId,
-      lastSeq: frame.seq,
-      event: frame.type,
-      at: frame.at,
-      active: stream.active,
-    });
-  } catch {}
-}
-
-function scheduleMainChatStreamUpdate(stream: MainChatStreamState, frame: MainChatStreamFrame): void {
-  const key = `${stream.sessionId}:${stream.streamId}`;
-  if (mainChatStreamUpdateTimers.has(key)) return;
-  const timer = setTimeout(() => {
-    mainChatStreamUpdateTimers.delete(key);
-    const latest = stream.events[stream.events.length - 1] || frame;
-    broadcastMainChatStreamUpdate(stream, latest);
-  }, MAIN_CHAT_WS_UPDATE_THROTTLE_MS);
-  if (typeof (timer as any).unref === 'function') (timer as any).unref();
-  mainChatStreamUpdateTimers.set(key, timer);
-}
-
-function finishMainChatStream(sessionId: string, streamId: string): void {
-  const stream = getMainChatStream(sessionId);
-  if (!stream || stream.streamId !== streamId) return;
-  stream.active = false;
-  stream.completedAt = Date.now();
-  stream.updatedAt = stream.completedAt;
-  const key = `${stream.sessionId}:${stream.streamId}`;
-  const timer = mainChatStreamUpdateTimers.get(key);
-  if (timer) {
-    clearTimeout(timer);
-    mainChatStreamUpdateTimers.delete(key);
-  }
-  const latest = stream.events[stream.events.length - 1];
-  if (latest) broadcastMainChatStreamUpdate(stream, latest);
-}
-
-function findSessionMainChatRuntime(sessionId: string): { id: string } | null {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return null;
-  const match = listLiveRuntimes().find((runtime: any) =>
-    (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
-    && String(runtime.sessionId || '') === sid
-    && String(runtime.status || 'running') === 'running'
-    && !runtime.abortRequestedAt
-    // A runtime mirrored from a draining previous gateway belongs to a turn
-    // running in that other process. Adopting it made a new timer turn look
-    // owned until the old gateway exited, then the owner watchdog killed it
-    // as runtime_missing.
-    && !(Number(runtime.remoteHostPid || 0) > 0));
-  return match ? { id: match.id } : null;
-}
-
-function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStreamState, reason: string): void {
-  if (!stream.active) return;
-  try {
-    // The durable runtime is already gone, so there is no registry abort hook
-    // left to call. Abort the request-owned controller directly before
-    // releasing the stream/coordinator; otherwise the provider promise could
-    // continue consuming memory behind a stream that the gateway considers
-    // finished.
-    stream.abortExecution?.(reason);
-  } catch (error: any) {
-    console.warn(`[main-chat-owner] failed to abort orphaned stream=${stream.streamId}:`, error?.message || error);
-  }
-  appendMainChatStreamEvent(sessionId, stream.streamId, 'error', {
-    code: 'MAIN_CHAT_RUNTIME_OWNER_LOST',
-    message: 'The active Chat execution owner was lost. This turn was interrupted and must be retried.',
-    reason: String(reason || 'runtime_owner_lost').slice(0, 160),
-    runtimeId: stream.runtimeId,
-  });
-  stream.terminalReason = String(reason || 'runtime_owner_lost').slice(0, 160);
-  finishMainChatStream(sessionId, stream.streamId);
-}
-
-function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
-  const stream = getMainChatStream(sessionId);
-  if (!stream || stream.streamId !== streamId) return null;
-  const cleanData = data && typeof data === 'object' ? { ...data } : {};
-  const frame: MainChatStreamFrame = {
-    seq: stream.nextSeq++,
-    type: String(type || 'event'),
-    at: Date.now(),
-    data: cleanData,
-  };
-  if (frame.type === 'progress_state') stream.progressState = frame.data;
-  const delivery = classifyMainChatStreamEvent(frame.type, frame.data);
-  const retain = delivery.retain;
-  if (retain) {
-    stream.events.push(frame);
-    if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
-      stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
-    }
-  }
-  stream.updatedAt = frame.at;
-  if (isMainChatSemanticProgressEvent(frame.type)) {
-    stream.lastSemanticProgressAt = frame.at;
-    stream.lastSemanticEvent = frame.type;
-  }
-  if (delivery.live) {
-    try {
-      broadcastWS({
-        type: 'main_chat_stream_event',
-        sessionId: stream.sessionId,
-        streamId: stream.streamId,
-        seq: frame.seq,
-        event: frame.type,
-        at: frame.at,
-        data: frame.data,
-      });
-    } catch {}
-  } else if (retain) {
-    scheduleMainChatStreamUpdate(stream, frame);
-  }
-  return frame;
-}
-
-function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] | undefined {
-  const stream = getMainChatStream(sessionId);
-  if (!stream) return undefined;
-  // A tool trace is useful even when a turn contains no screenshot. The old
-  // vision-only gate silently discarded every recovered tool/result/thought
-  // entry for ordinary mobile turns.
-  return buildDurableChatTraceFromFrames(stream.events, `trace_${stream.streamId}`);
-}
+const mainChatStreamStore = createMainChatStreamStore({
+  broadcastWS: (event) => broadcastWS(event),
+  listLiveRuntimes: () => listLiveRuntimes(),
+});
+const {
+  mainChatStreams, getMainChatStream, pruneMainChatStreams, beginMainChatStream, finishMainChatStream,
+  findSessionMainChatRuntime, finishMainChatStreamAsOrphaned,
+  appendMainChatStreamEvent, buildDurableToolStreamTrace,
+} = mainChatStreamStore;
 
 function truncateRuntimeProcessText(value: unknown, max = 4000): string {
   const text = String(value ?? '').trim();
@@ -2297,7 +2092,7 @@ function extractLastCompactionSummary(history: Array<any>): string {
   return '';
 }
 
-function formatCompactionMessageBody(message: any, maxChars = 2_400): string {
+function formatCompactionMessageBody(message: any, maxChars = Number.MAX_SAFE_INTEGER): string {
   const body = Array.isArray(message?.content)
     ? message.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
     : String(message?.content || '').trim();
@@ -2372,7 +2167,8 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
     : 'This compaction is happening at a rolling conversation checkpoint after enough new messages accumulated.';
   const promptLines: string[] = [
     'Create a structured rolling resume packet for context compaction.',
-    `Target length: ${input.targetLengthText}.`,
+    'Length guidance is adaptive to source and the full previous handoff, bounded by compactor capacity. No fixed word or character cap.',
+    'All ten numbered headings must appear as plain text, exactly as shown. Do not wrap them in Markdown.',
     modeDescription,
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
@@ -2382,7 +2178,7 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
     'When the bounded reasoning/decision block is provided, use it to capture durable analysis: hypotheses tested, files or searches ruled out, planned next steps, and conclusions reached from tool results. Do not copy private/raw stream-of-consciousness.',
     'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
     'Do not invent details. Do not include generic advice. Output plain text only.',
-    'If you cannot faithfully preserve the active request, pending work, and earlier constraints within the target length, output COMPACTION_INCOMPLETE instead of an incomplete summary.',
+    'If you cannot faithfully preserve the active request, pending work, and earlier constraints within the actual output capacity, output COMPACTION_INCOMPLETE instead of an incomplete summary.',
     '',
     'Required format:',
     '1. Primary Request and Intent:',
@@ -2416,6 +2212,10 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
 }
 
 async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' }> {
+  const { resolveModelContextProfile } = require('../context/model-context') as typeof import('../context/model-context');
+  const compactorProfile = input.routeSnapshot?.contextProfile || resolveModelContextProfile(String(input.provider || resolveActiveModelContextProfile().providerId), input.model || resolveActiveModelContextProfile().model);
+  // Provider-safe reserve: leave most of the window for source ingestion.
+  input = { ...input, numCtx: Math.min(input.numCtx, compactorProfile.contextWindowTokens), numPredict: Math.max(1, Math.floor(Math.min(compactorProfile.maxOutputTokens, Math.min(input.numCtx, compactorProfile.contextWindowTokens) * 0.2))) };
   const baseMessageCount = getSession(input.sessionId).history.length;
   try {
     const result = await runCompactionTransaction({
@@ -2424,8 +2224,10 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
       maxWords: input.maxWords,
       numCtx: input.numCtx,
       numPredict: input.numPredict,
-      tokenizer: input.routeSnapshot?.contextProfile.tokenizer,
+      tokenizer: compactorProfile.tokenizer,
+      onInvalidSummary: (details) => console.warn(`[v2] Compaction summary rejected (${input.strategy}):`, JSON.stringify(details)),
       isAborted: () => input.abortSignal?.aborted === true,
+      renderSource: (messages, includeMetadata) => [formatCompactionMessages(messages), ...(includeMetadata ? [input.recentToolLogsBlock, input.reasoningTrailBlock, input.artifactPathsBlock] : [])].join('\n'),
       renderPrompt: (messages, previousSummary, includeMetadata) => buildContextCompactionPrompt({
         ...input,
         previousSummary,
@@ -2446,6 +2248,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
           'manager',
           {
             temperature: 0.1,
+            abortSignal: input.abortSignal?.signal,
             num_ctx: input.numCtx,
             num_predict: input.numPredict,
             ...(input.model ? { model: input.model } : {}),
@@ -2501,13 +2304,12 @@ async function maybeRunMidWorkflowCompaction(input: {
   ].filter(Boolean).join('\n\n');
   const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   if (!policy.enabled) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
-  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
-    || recentToolTokens >= budget.toolContextBudgetTokens;
+  // Tool-log growth is bounded separately; it must not retire the entire
+  // transcript while the active model request still fits its context budget.
+  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens;
   if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
 
-  const reason = projectedTokens >= budget.compactionTriggerTokens
-    ? 'projected_context_over_budget'
-    : 'tool_context_over_budget';
+  const reason = 'projected_context_over_budget';
   input.sendSSE('tool_call', {
     action: CONTEXT_COMPACTION_TOOL_NAME,
     args: {
@@ -2539,28 +2341,29 @@ async function maybeRunMidWorkflowCompaction(input: {
   const session = getSession(input.sessionId);
   const previousSummary = String((session as any).latestContextSummary || '').trim()
     || extractLastCompactionSummary(session.history || []);
-  const summaryMaxTokens = Math.max(700, Math.min(2400, budget.summaryBudgetTokens));
-  const summaryMaxWords = Math.max(80, Math.min(policy.summaryMaxWords, Math.ceil(summaryMaxTokens / 1.3)));
+  const summaryMaxTokens = Math.max(1, Math.floor(Math.min(profile.maxOutputTokens, profile.contextWindowTokens * 0.2)));
+  const summaryMaxWords = policy.summaryMaxWords; // Legacy compatibility, not a validation cap.
 
   try {
     const compactorResult = await runContextCompactor({
       sessionId: input.sessionId,
       strategy: 'mid_workflow_token_budget',
-      targetLengthText: `about ${summaryMaxTokens} tokens or less`,
+      targetLengthText: 'adaptive to source and prior handoff',
       maxWords: summaryMaxWords,
       previousSummary,
       recentToolLogsBlock: recentToolText,
       reasoningTrailBlock: reasoningTrailText,
       artifactPathsBlock: formatCompactionArtifactPaths(input.sessionId),
       recentWindow,
-      // Compaction output is tightly bounded, so the compactor can use
-      // the model's hard window to ingest the active conversation being retired.
+      // Reserve provider-safe output space and use the effective model window
+      // to ingest the active conversation being retired.
       numCtx: profile.contextWindowTokens,
-      numPredict: Math.max(900, Math.min(2600, Math.ceil(summaryMaxTokens * 1.2))),
+      numPredict: summaryMaxTokens,
       // An active interactive turn compacts with its admitted route, never a
       // newly selected global compaction/main provider.
       model: input.routeSnapshot?.model || policy.model || undefined,
       provider: input.routeSnapshot?.provider,
+      routeSnapshot: input.routeSnapshot,
       abortSignal: input.abortSignal,
       recordMeta: {
         reason,
@@ -2702,7 +2505,7 @@ async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -2713,6 +2516,9 @@ async function handleChatUntraced(
     phase: 'handle_chat',
   });
   const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
+  let receiptResponse = '';
+  let receiptCompleted = false;
+  let captureUnfinishedLearningTurn: (() => void) | undefined;
   const inheritedAdmissionLease = runtimeOptions?.admissionLease;
   let ownedAdmissionLease: RuntimeAdmissionLease | null = null;
   if (inheritedAdmissionLease) {
@@ -3499,6 +3305,10 @@ async function handleChatUntraced(
     sendSSE('tool_category_provisioning', payload);
   };
   let tools: any[] = [];
+  // Only Brain Dream/cleanup opts into this guard. It lives at the provider
+  // boundary so retries and the helper-model fallback cannot bypass it.
+  const brainRunBudget = runtimeOptions?.brainRunBudget ? new BrainRunBudget(runtimeOptions.brainRunBudget) : null;
+  let brainRunBudgetHit: 'model_calls' | 'input_tokens' | undefined;
   let currentProviderCallIteration: number | null = null;
   const allToolResults: ToolResult[] = [];
   // ── Dispatch-time tool policy (src/gateway/chat/tool-dispatch-policy.ts) ──
@@ -3555,7 +3365,16 @@ async function handleChatUntraced(
   let midWorkflowCompactionsThisTurn = 0;
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
+  let learningTurnCaptured = false;
+  captureUnfinishedLearningTurn = () => {
+    if (!learningTurnCaptured) recordLearningTurn({ workspacePath, sessionId, executionMode,
+      request: message, finalResponse: '', toolResults: allToolResults,
+      routing: getSkillRoutingReport(sessionId), gatewayTurnId: turnTiming.turnId });
+  };
+  const turnRetrieval: RetrievalTrace[] = [];
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
+    learningTurnCaptured = true;
+    receiptResponse = finalResponse; receiptCompleted = true;
     recordSkillGardenerTurn({
       workspacePath,
       sessionId,
@@ -3573,6 +3392,7 @@ async function handleChatUntraced(
       finalResponse,
       toolResults: allToolResults,
       routing: getSkillRoutingReport(sessionId),
+      gatewayTurnId: turnTiming.turnId,
     });
     return finalResponse;
   };
@@ -4813,6 +4633,7 @@ async function handleChatUntraced(
           personalityProfile,
           abortSignal?.signal,
           turnTiming,
+          trace => { if (turnRetrieval.length < 16) turnRetrieval.push(trace); },
         );
       },
       abortSignal?.signal,
@@ -6199,6 +6020,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     // for primary to do. Build the reply from what we already know in-memory.
 
     let response: any;
+    // Per-round cursor is captured immediately before the admitted provider call
+    // and consumed after its response, so stale session events cannot reconcile.
+    let brainProviderUsageCursor: ReturnType<typeof captureModelUsageLogCursor> | null = null;
     let responseStopReason: string | undefined;
     let responseIncompleteCause: string | undefined;
     let isGrokGeneration = false;
@@ -6208,7 +6032,9 @@ Do not produce prose. Use the canonical thread tool now.` });
     const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
       const opts = { reason, cause, partialText, userRequest: message };
       const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
-      if (abortSignal?.aborted || skipModel) return deterministic;
+      // The run budget is hard: finalization must preserve completed tool output
+      // without spending one more model call for a prose digest.
+      if (abortSignal?.aborted || skipModel || brainRunBudget) return deterministic;
       const causeLabel = describeTurnCutoffCause(reason, cause);
       sendSSE('info', { message: `Turn was cut off (${causeLabel}); writing a status summary from saved tool results.` });
       let route: ReturnType<typeof resolveProviderModelOverride> | TurnRouteSnapshot;
@@ -6502,7 +6328,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       });
       // The first provider call gets the same token-budget guard as later
       // rounds. A single huge first turn can therefore compact immediately.
-      if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+      if (!brainRunBudget && round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
         const preflightCompact = await maybeRunMidWorkflowCompaction({
           sessionId,
           messages,
@@ -6574,6 +6400,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           agentId: 'main',
           traceId: turnTiming.turnId,
           promptManifest: {
+              gatewayTurnId: turnTiming.turnId,
+              originalUserRequest: message,
+              retrieval: turnRetrieval,
               executionMode: executionMode || 'interactive',
               personalityProfile: String((personalityProfile as any)?.profile || 'default'),
               surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
@@ -6639,6 +6468,22 @@ Do not produce prose. Use the canonical thread tool now.` });
             },
           })
         : null;
+      brainProviderUsageCursor = brainRunBudget ? captureModelUsageLogCursor() : null;
+      const brainBudgetDecision = brainRunBudget?.tryReserve(messages, generationOptions.tools);
+      if (brainBudgetDecision && !brainBudgetDecision.allowed) {
+        brainRunBudgetHit = brainBudgetDecision.hit;
+        const snapshot = brainBudgetDecision.snapshot;
+        const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+        sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Finishing with saved output.` });
+        return {
+          type: 'chat',
+          text: await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true),
+          thinking: allThinking || undefined,
+          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+          toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+          brainRunBudget: { ...snapshot, hit: brainBudgetDecision.hit },
+        } as any;
+      }
       const generationPromise = (async () => {
         try {
           return await withSpan(
@@ -6651,7 +6496,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           if (isUsageLimitError(helperErr)) {
             try { recordProviderUsageExhausted(String(generationOverride.providerId || '')); } catch {}
           }
-          if (!helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
+          // A helper fallback is another provider request. Budgeted Brain runs
+          // must never make it implicitly after their reserved request fails.
+          if (brainRunBudget || !helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
           const helperLabel = `${generationOverride.providerId}/${generationOverride.model}`;
           const mainLabel = `${admittedRouteSnapshot.providerId}/${admittedRouteSnapshot.model}`;
           console.warn(`[switch_model] helper ${helperLabel} failed (${String(helperErr?.message || helperErr).slice(0, 200)}); falling back to main ${mainLabel}`);
@@ -6822,6 +6669,29 @@ Do not produce prose. Use the canonical thread tool now.` });
         toolResults: preservedToolResults,
       };
     }
+
+    // Provider usage is reconciled after every admitted request. The current
+    // response completes normally; an actual overage blocks every next round.
+    if (brainRunBudget) {
+      const actualEvent = brainProviderUsageCursor ? readModelUsageEventsSince(brainProviderUsageCursor, sessionId, turnTiming.turnId).at(-1) : undefined;
+      const actualInput = actualEvent ? resolveProviderPromptTokens(actualEvent) : Number(response?.usage?.inputTokens || 0);
+      const actualBudget = brainRunBudget.reconcileActualInput(actualInput);
+      if (actualBudget.hit) brainRunBudgetHit = actualBudget.hit;
+    }
+    if (brainRunBudgetHit && brainRunBudget) {
+      const snapshot = brainRunBudget.snapshot();
+      const budgetCause = `model calls ${snapshot.modelCalls}/${snapshot.maxModelCalls}; input tokens ${snapshot.inputTokens}/${snapshot.maxInputTokens}`;
+      sendSSE('info', { message: `Brain run budget reached (${budgetCause}). Preserving this response and ending the run.` });
+      return {
+        type: 'chat',
+        text: String(response?.content || await finishDegradedTurn('brain_run_budget', budgetCause, lastPartialText, true)),
+        thinking: allThinking || undefined,
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        brainRunBudget: snapshot,
+      } as any;
+    }
+
 
     let toolCalls = response.tool_calls;
 
@@ -8698,7 +8568,7 @@ Do not produce prose. Use the canonical thread tool now.` });
 
 
     if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
-      const midCompact = await maybeRunMidWorkflowCompaction({
+      const midCompact = !brainRunBudget ? await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,
         toolResults: allToolResults.slice(compactedToolResultCount),
@@ -8708,7 +8578,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         sendSSE,
         abortSignal,
         routeSnapshot: activeGenerationRouteSnapshot,
-      });
+      }) : { compacted: false };
       if (midCompact.compacted) {
         midWorkflowCompactionsThisTurn++;
         compactedToolResultCount = allToolResults.length;
@@ -8722,6 +8592,10 @@ Do not produce prose. Use the canonical thread tool now.` });
   }
 
   } finally {
+    // Capture offers for failed/cancelled turns too. Usage is never relevance.
+    // Normal finalization already captured successful turns; avoid duplicate records.
+    captureUnfinishedLearningTurn?.();
+    recordContextReceiptOutcome({ sessionId, gatewayTurnId: turnTiming.turnId, status: abortSignal?.aborted ? 'cancelled' : receiptCompleted ? 'completed' : 'failed', response: receiptResponse, reason: !receiptCompleted && !abortSignal?.aborted ? 'turn_terminated_without_final_response' : '' }, getConfig().getWorkspacePath());
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal
     // completion without changing tool execution semantics.
@@ -9301,7 +9175,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact' },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact'; brainRunBudget?: BrainRunBudgetOptions },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9861,6 +9735,7 @@ async function runInteractiveTurn(
         timingRecorder: turnTiming,
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
+        brainRunBudget: flags?.brainRunBudget,
         runtimeId: flags?.runtimeId,
         // Restart-resumed turns keep the root turn id so the cross-turn edit
         // log files pre- and post-restart edits under one turn.
@@ -12082,6 +11957,7 @@ type VoiceAgentContextBlockCacheEntry = {
   workspacePath: string;
   historyLength: number;
   targetKey: string;
+  requestHash: string;
   contextBlock: string;
   createdAt: number;
 };
@@ -12126,13 +12002,13 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const history = targetAgentId ? getSubagentChatHistory(targetAgentId, 500) : (Array.isArray(session?.history) ? session.history : []);
   const historyLength = history.length;
   const targetKey = voiceTarget.kind === 'subagent' ? `subagent:${voiceTarget.agentId || voiceTarget.label || 'unknown'}` : 'main';
+  const requestHash = voiceContextRequestHash(transcript);
+  const contextRequest = { workspacePath, historyLength, targetKey, requestHash };
   const cached = voiceAgentContextBlockCache.get(cacheKey);
   const ageMs = cached ? Date.now() - Number(cached.createdAt || 0) : Number.POSITIVE_INFINITY;
   if (
     cached
-    && cached.workspacePath === workspacePath
-    && cached.historyLength === historyLength
-    && cached.targetKey === targetKey
+    && voiceContextEntryMatches(cached, contextRequest)
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= VOICE_AGENT_CONTEXT_BLOCK_TTL_MS
@@ -12143,7 +12019,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const pending = voiceAgentContextBlockPending.get(cacheKey);
   if (pending) {
     const entry = await pending;
-    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength && entry.targetKey === targetKey) {
+    if (voiceContextEntryMatches(entry, contextRequest)) {
       return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
     }
   }
@@ -12160,7 +12036,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
       { profile: targetAgentId ? 'direct_subagent' : 'voice_agent' },
     );
     const contextBlock = applyVoiceTargetContextBlock(baseContextBlock, voiceTarget);
-    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, contextBlock, createdAt: Date.now() };
+    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, requestHash, contextBlock, createdAt: Date.now() };
     voiceAgentContextBlockCache.set(cacheKey, entry);
     return entry;
   })();

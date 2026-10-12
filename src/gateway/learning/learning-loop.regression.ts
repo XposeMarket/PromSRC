@@ -26,8 +26,8 @@ const tools = [
 const { record } = buildLearningTurnRecord({ workspacePath: root, sessionId: 's1', executionMode: 'interactive', request, finalResponse: 'ok', toolResults: tools, routing });
 assert.equal(record.routingMatched, true);
 const byId = Object.fromEntries(record.labels.map((l) => [l.skillId, l.label]));
-assert.equal(byId['vita-dev'], 'hit');
-assert.equal(byId['capability-finder'], 'false_positive');
+assert.equal(byId['vita-dev'], 'read');
+assert.equal(byId['capability-finder'], 'not_read');
 assert.equal(byId['fast-coding-loop'], 'miss');
 assert.deepEqual(record.listedQueries, ['debug coding loop']);
 assert.ok(record.signals.includes('tool_errors'));
@@ -49,8 +49,10 @@ assert.equal(recordLearningTurn({ workspacePath: root, sessionId: 'brain_x', exe
 const stats = computeSkillRoutingStats(root, 7);
 assert.equal(stats.turns, 3);
 const cf = stats.skills.find((s) => s.skillId === 'capability-finder')!;
-assert.equal(cf.falsePositives, 1);
-assert.equal(cf.precision, 0);
+assert.equal(cf.falsePositives, 0);
+assert.equal(cf.unknown, 1);
+assert.equal(cf.readRate, 0);
+assert.equal(cf.precision, null);
 assert.ok(stats.terms.some((t) => t.skillId === 'capability-finder' && t.term === 'bug' && t.hits === 0));
 
 // ── Note threads: newer note supersedes older open notes on the same thread ──

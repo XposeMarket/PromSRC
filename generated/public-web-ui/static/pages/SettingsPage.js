@@ -1,4 +1,5 @@
 import { returnFromMobileSettings } from '../settings-return.js';
+import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 
 /**
  * SettingsPage.js — Settings Modal Extract
@@ -1983,7 +1984,13 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
-    renderContextBudgetSummary(s.contextProfile, s.contextBudget);
+    const contextWrap = document.getElementById('settings-context-budget-summary');
+    if (contextWrap) {
+      contextWrap.innerHTML = renderContextSelection(s.contextProfile, s.contextBudget, 'desktop-context');
+      wireContextSelection(contextWrap, s.contextProfile, selection => api('/api/settings/context-window', { method: 'POST', body: JSON.stringify(selection) }), loadSessionCompactionSettings, 'desktop-context');
+    }
+    const legacyWords = document.getElementById('settings-rolling-compaction-words');
+    if (legacyWords) { legacyWords.disabled = true; legacyWords.title = 'Legacy setting ignored. Summary length is adaptive to thread complexity and capacity.'; }
     window._settingsSessionLoadedToUI = true;
   } catch (e) {
     window._settingsSessionLoadedToUI = false;
