@@ -17,6 +17,7 @@ import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads }
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { voiceContextRequestHash, voiceContextEntryMatches } from '../voice/context-cache-key';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
@@ -137,6 +138,8 @@ import { loadSoul } from '../../config/soul-loader.js';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
+import { recordContextReceiptOutcome } from '../../runtime/context-receipt';
+import type { RetrievalTrace } from '../../runtime/retrieval-provenance';
 import { recordLearningTurn } from '../learning/turn-recorder.js';
 import { getSkillRoutingReport } from '../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../chat/attachment-context';
@@ -2505,6 +2508,9 @@ async function handleChatUntraced(
     phase: 'handle_chat',
   });
   const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
+  let receiptResponse = '';
+  let receiptCompleted = false;
+  let captureUnfinishedLearningTurn: (() => void) | undefined;
   const inheritedAdmissionLease = runtimeOptions?.admissionLease;
   let ownedAdmissionLease: RuntimeAdmissionLease | null = null;
   if (inheritedAdmissionLease) {
@@ -3351,7 +3357,16 @@ async function handleChatUntraced(
   let midWorkflowCompactionsThisTurn = 0;
   let compactedToolResultCount = 0;
   const turnCanvasFiles = new Set<string>();
+  let learningTurnCaptured = false;
+  captureUnfinishedLearningTurn = () => {
+    if (!learningTurnCaptured) recordLearningTurn({ workspacePath, sessionId, executionMode,
+      request: message, finalResponse: '', toolResults: allToolResults,
+      routing: getSkillRoutingReport(sessionId), gatewayTurnId: turnTiming.turnId });
+  };
+  const turnRetrieval: RetrievalTrace[] = [];
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
+    learningTurnCaptured = true;
+    receiptResponse = finalResponse; receiptCompleted = true;
     recordSkillGardenerTurn({
       workspacePath,
       sessionId,
@@ -3369,6 +3384,7 @@ async function handleChatUntraced(
       finalResponse,
       toolResults: allToolResults,
       routing: getSkillRoutingReport(sessionId),
+      gatewayTurnId: turnTiming.turnId,
     });
     return finalResponse;
   };
@@ -4609,6 +4625,7 @@ async function handleChatUntraced(
           personalityProfile,
           abortSignal?.signal,
           turnTiming,
+          trace => { if (turnRetrieval.length < 16) turnRetrieval.push(trace); },
         );
       },
       abortSignal?.signal,
@@ -6375,6 +6392,9 @@ Do not produce prose. Use the canonical thread tool now.` });
           agentId: 'main',
           traceId: turnTiming.turnId,
           promptManifest: {
+              gatewayTurnId: turnTiming.turnId,
+              originalUserRequest: message,
+              retrieval: turnRetrieval,
               executionMode: executionMode || 'interactive',
               personalityProfile: String((personalityProfile as any)?.profile || 'default'),
               surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
@@ -8564,6 +8584,10 @@ Do not produce prose. Use the canonical thread tool now.` });
   }
 
   } finally {
+    // Capture offers for failed/cancelled turns too. Usage is never relevance.
+    // Normal finalization already captured successful turns; avoid duplicate records.
+    captureUnfinishedLearningTurn?.();
+    recordContextReceiptOutcome({ sessionId, gatewayTurnId: turnTiming.turnId, status: abortSignal?.aborted ? 'cancelled' : receiptCompleted ? 'completed' : 'failed', response: receiptResponse, reason: !receiptCompleted && !abortSignal?.aborted ? 'turn_terminated_without_final_response' : '' }, getConfig().getWorkspacePath());
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal
     // completion without changing tool execution semantics.
@@ -11925,6 +11949,7 @@ type VoiceAgentContextBlockCacheEntry = {
   workspacePath: string;
   historyLength: number;
   targetKey: string;
+  requestHash: string;
   contextBlock: string;
   createdAt: number;
 };
@@ -11969,13 +11994,13 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const history = targetAgentId ? getSubagentChatHistory(targetAgentId, 500) : (Array.isArray(session?.history) ? session.history : []);
   const historyLength = history.length;
   const targetKey = voiceTarget.kind === 'subagent' ? `subagent:${voiceTarget.agentId || voiceTarget.label || 'unknown'}` : 'main';
+  const requestHash = voiceContextRequestHash(transcript);
+  const contextRequest = { workspacePath, historyLength, targetKey, requestHash };
   const cached = voiceAgentContextBlockCache.get(cacheKey);
   const ageMs = cached ? Date.now() - Number(cached.createdAt || 0) : Number.POSITIVE_INFINITY;
   if (
     cached
-    && cached.workspacePath === workspacePath
-    && cached.historyLength === historyLength
-    && cached.targetKey === targetKey
+    && voiceContextEntryMatches(cached, contextRequest)
     && Number.isFinite(ageMs)
     && ageMs >= 0
     && ageMs <= VOICE_AGENT_CONTEXT_BLOCK_TTL_MS
@@ -11986,7 +12011,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
   const pending = voiceAgentContextBlockPending.get(cacheKey);
   if (pending) {
     const entry = await pending;
-    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength && entry.targetKey === targetKey) {
+    if (voiceContextEntryMatches(entry, contextRequest)) {
       return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
     }
   }
@@ -12003,7 +12028,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
       { profile: targetAgentId ? 'direct_subagent' : 'voice_agent' },
     );
     const contextBlock = applyVoiceTargetContextBlock(baseContextBlock, voiceTarget);
-    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, contextBlock, createdAt: Date.now() };
+    const entry = { sessionId: sid, workspacePath, historyLength, targetKey, requestHash, contextBlock, createdAt: Date.now() };
     voiceAgentContextBlockCache.set(cacheKey, entry);
     return entry;
   })();

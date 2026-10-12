@@ -1669,10 +1669,11 @@ export async function runBgTaskAction(taskId, action) {
 }
 
 export async function loadVoiceStatus() {
-  const [realtime, xaiRealtime, creds] = await Promise.all([
+  const [realtime, xaiRealtime, creds, audioStatus] = await Promise.all([
     mfetch('/api/realtime/status').catch(() => null),
     mfetch('/api/realtime/xai/status').catch(() => null),
     mfetch('/api/settings/credentialed-model-providers').catch(() => null),
+    mfetch('/api/voice/status').catch(() => null),
   ]);
   const configuredProviders = Array.isArray(creds?.providers)
     ? creds.providers
@@ -1690,7 +1691,7 @@ export async function loadVoiceStatus() {
   const xaiVoices = Array.isArray(xaiRealtime?.voices) ? xaiRealtime.voices : [];
   return {
     realtime: realtime || { configured: false },
-    voice: {
+    voice: audioStatus || {
       sttProviders: [
         { id: 'auto', label: 'Transcription', configured: true },
         { id: 'xai', label: 'xAI / Grok', configured: xaiConfigured },

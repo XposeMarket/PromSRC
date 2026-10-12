@@ -1484,12 +1484,22 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'skill_curator',
         description:
-          'Inspect or run the Brain Skill Curator. Runs default to dry-run. Applying a pending suggestion is the only autonomous-system path that may mutate a skill.',
+          'Inspect or run the Brain Skill Curator. review_routing records an evidence-backed relevant/irrelevant/unknown judgment for a skill offer; it never edits skill files. Get exact turn/hash/examples through prometheus_audit_ops skill_routing_evidence. Read/unread is not relevance. Runs default to dry-run. Applying a pending suggestion is the only autonomous-system path that may mutate a skill.',
         parameters: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'restore'] },
+            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject', 'restore', 'review_routing', 'sample_routing', 'propose_routing', 'rollback'] },
             mode: { type: 'string', enum: ['dry-run', 'pending', 'auto-safe'], description: 'For action=run. Defaults to dry-run; auto-safe is currently mutation-frozen.' },
+            rollback_negative_prompts: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'rollback: baseline negative regressions that should not invoke this skill; prior verified positives are reused.' },
+            trigger_manifest: { type: 'object', description: 'propose_routing: concrete replacement triggers and/or promptSignals only; no instruction edits.' },
+            positive_turn_ids: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'propose_routing: native reviewed relevant original turns preserving valid coverage.' },
+            negative_turn_ids: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'propose_routing: at least three distinct native reviewed irrelevant originals.' },
+            turn_id: { type: 'string', description: 'review_routing: exact learning turn ID from skill_routing_evidence.' },
+            request_hash: { type: 'string', description: 'review_routing: original request hash from that evidence.' },
+            skill_id: { type: 'string', description: 'review_routing: exact offered skill ID.' },
+            relevance: { type: 'string', enum: ['relevant', 'irrelevant', 'unknown'], description: 'Judgment from request plus full skill scope. Use unknown if evidence is insufficient.' },
+            reason: { type: 'string', description: 'review_routing: bounded audit reason, maximum 500 characters.' },
+            reviewed_evidence: { type: 'string', description: 'review_routing: evidence examined, maximum 1000 characters; do not include secrets.' },
             id: { type: 'string', description: 'Suggestion id for apply/reject/restore. Rejections persist for 90 days; restore explicitly overrides suppression.' },
             limit: { type: 'number', description: 'For status. Compact rows to return; defaults to 5, maximum 100.' },
             cursor: { type: 'number', description: 'For status pagination. Zero-based offset.' },

@@ -46,6 +46,12 @@
 | 24 | [Release, packaging, update](24-release-packaging-update.md) | Electron build, public release, updater |
 | 25 | [Sharp edges](25-sharp-edges.md) | known traps across the system |
 
+## Voice and context evidence
+
+- [Canonical voice routing](voice-canonical-chat-audit.md): voice transport and normal chat runtime ownership.
+- [Memory/context observability](context-routing-memory-observability.md): request-to-context receipts, retrieval decisions, outcomes and reviewer judgments.
+- [Skill routing observability](context-routing-skill-observability.md): trigger matches, relevance evidence and pending stricter-trigger proposals.
+
 ## Generated inventories (never hand-edit; rerun `node self/_tools/generate-inventories.mjs`)
 
 | File | Contents |

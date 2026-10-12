@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { captureContextReceipt } from './context-receipt';
 import { inspectOperatingInstructions } from './operating-instructions';
 import path from 'path';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
@@ -33,6 +34,7 @@ export type RuntimePromptRole =
   | 'unknown';
 
 export interface RuntimePromptManifestContext {
+  retrieval?: import('./retrieval-provenance').RetrievalTrace[];
   runtimeRole?: RuntimePromptRole | string;
   executionMode?: string;
   personalityProfile?: string;
@@ -44,6 +46,8 @@ export interface RuntimePromptManifestContext {
   declaredSystemSegmentIds?: string[];
   capabilities?: Record<string, string | number | boolean | null | undefined>;
   callerContextPresent?: boolean;
+  gatewayTurnId?: string;
+  originalUserRequest?: string;
   instructionIntents?: Stage4InstructionIntents;
   skillRouting?: SkillRoutingReport;
 }
@@ -97,6 +101,7 @@ export interface RuntimePromptManifest {
   instructionResolution: InstructionResolutionReport;
   stage4InstructionRouting: Stage4InstructionRoutingReport;
   skillRouting?: SkillRoutingReport;
+  contextReceipt?: { id: string; persisted: boolean; reason?: string };
   systemMessages: RuntimePromptSystemMessageSummary[];
   messageSurface: {
     count: number;
@@ -426,6 +431,7 @@ export function appendRuntimePromptManifest(manifest: RuntimePromptManifest): vo
 
 export function captureRuntimePromptManifest(input: RuntimePromptManifestInput): RuntimePromptManifest {
   const manifest = buildRuntimePromptManifest(input);
+  manifest.contextReceipt = captureContextReceipt(input, manifest);
   appendRuntimePromptManifest(manifest);
   return manifest;
 }
