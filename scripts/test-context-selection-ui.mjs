@@ -19,7 +19,15 @@ try {
     await page.click('#context-choice-save');
     await page.waitForFunction(()=>window.saved?.mode==='maximum');
     assert.equal((await page.evaluate(()=>window.saved)).extendedAcknowledged,true);
-    await page.selectOption('#context-choice-mode','custom'); await page.fill('#context-choice-tokens','64000');
+    assert.equal(await page.locator('select').count(),2);
+    assert.equal(await page.getByText('Capacity source:',{exact:false}).count(),0);
+    await page.uncheck('#context-choice-ack');
+    await page.selectOption('#context-choice-mode','500k');
+    assert.equal(await page.locator('#context-choice-tokens').inputValue(),'500000');
+    assert.equal(await page.locator('#context-choice-save').isDisabled(),true);
+    await page.check('#context-choice-ack');await page.click('#context-choice-save');
+    await page.waitForFunction(()=>window.saved?.mode==='custom'&&window.saved?.tokens===500000);
+    await page.selectOption('#context-choice-mode','custom'); await page.selectOption('#context-choice-tokens','64000');
     await page.click('#context-choice-save');await page.waitForFunction(()=>window.saved?.tokens===64000);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true,`no overflow at ${width}`);
     const dir=process.env.CONTEXT_SCREENSHOT_DIR || 'artifacts/context-selection';await fs.mkdir(dir,{recursive:true});
