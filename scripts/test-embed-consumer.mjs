@@ -36,6 +36,10 @@ try {
     if (unpack.status !== 0) throw new Error(`Tar extraction failed: ${unpack.error || unpack.stderr}`);
   } else {
     npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-online'] : ['--offline']), '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund', tarball], project);
+    // node-pty ships a Windows binary, but Unix requires its native lifecycle
+    // build. Keep general install scripts disabled and build this dependency
+    // explicitly in the isolated consumer, as the CI checkout does.
+    if (process.platform !== 'win32') npm(['rebuild', 'node-pty'], project);
   }
   const installed = path.join(project, 'node_modules/prometheus');
   if (fs.lstatSync(installed).isSymbolicLink()) throw new Error('Expected installed package, not source link');
