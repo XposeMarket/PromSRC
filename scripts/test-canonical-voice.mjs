@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { parse } = require('acorn');
-const desktop = fs.readFileSync('web-ui/src/pages/ChatPage.js', 'utf8');
+const desktop = fs.readFileSync('web-ui/src/pages/ChatPage.js', 'utf8').replace(/^import \{[^\n]*\} from '\.\.\/voice\/desktop-voice-state\.js';\r?\n/, '') + '\n' + fs.readFileSync('web-ui/src/voice/desktop-voice-state.js', 'utf8');
 const mobile = fs.readFileSync('web-ui/src/mobile/mobile-voice-page.js', 'utf8');
 const api = fs.readFileSync('web-ui/src/mobile/mobile-api.js', 'utf8');
 function fn(source, name) {
@@ -35,7 +35,7 @@ const box = vm.createContext({
   fetch: async (url, init) => { calls.push([url, JSON.parse(init.body)]); return { ok: true, json: async () => ({ text: 'use my tools' }) }; },
 });
 vm.runInContext([fn(desktop, 'normalizeDesktopVoiceMode'), fn(desktop, 'loadDesktopVoiceSettings'), fn(desktop, 'transcribeBackendRecording'), fn(desktop, 'applyDesktopVoiceProviderDefaults')].join('\n'), box);
-const settings = box.loadDesktopVoiceSettings();
+const settings = box.loadDesktopVoiceSettings(box.getStoredVoiceSetting);
 assert.equal(settings.voiceMode, 'canonical');
 assert.equal(settings.sttProvider, 'xai'); assert.equal(settings.ttsProvider, 'xai');
 assert.equal(box.applyDesktopVoiceProviderDefaults(), false);

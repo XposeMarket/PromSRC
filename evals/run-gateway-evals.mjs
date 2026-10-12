@@ -115,7 +115,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (only.some(id => !TASKS.some(t => t.id === id)) || only.includes('stay-in-workspace')) throw new Error('Unknown or unsafe gateway task');
   const tasks = TASKS.filter(t => only.includes(t.id));
   const outDir = path.resolve(arg('out', [path.join(repo, 'evals/results')])[0]);
-  const runtimeRepo = path.resolve(arg('runtime-repo', ['C:/Users/rafel/PromSRC'])[0]);
+  const runtimeRepoArg = arg('runtime-repo', [''])[0];
+  if (!runtimeRepoArg) throw new Error('Explicit --runtime-repo required');
+  const runtimeRepo = path.resolve(runtimeRepoArg);
   const runtimeCommit = arg('runtime-commit', [''])[0];
   const git = root => spawnSync('git', ['rev-parse','HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
   if (!/^[a-f0-9]{40}$/.test(runtimeCommit) || git(runtimeRepo) !== runtimeCommit) throw new Error('Explicit full runtime commit must match runtime checkout');

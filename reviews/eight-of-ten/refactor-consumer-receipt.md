@@ -2,7 +2,7 @@
 
 ## Scope and cause
 
-- Worktree: `C:\Users\rafel\promsrc-pr\crash-windows`, verified clean at
+- Worktree: `<pr-worktrees>/crash-windows`, verified clean at
   `17fda754503f56dd6fa02122177b1d41ae61b6d0`; branch renamed safely to
   `refactor/chat-stream-consumer-evidence`.
 - Router contained replay storage, retention, WS notification batching, trace

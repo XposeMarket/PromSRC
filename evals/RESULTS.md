@@ -56,7 +56,7 @@ Two repeats per task, fresh sessions, fixed on-disk verifiers and elapsed wall-c
 
 ### Runtime attribution and reproduction
 
-Gateway `http://127.0.0.1:32466`, workspace `C:\Users\rafel\AppData\Roaming\Prometheus\workspace`; runtime checkout pinned and checked between runs at `17fda754503f56dd6fa02122177b1d41ae61b6d0` (`C:\Users\rafel\PromSRC`). Raw reports separate runner checkout SHA from runtime checkout SHA and SHA-256 of `dist/gateway/server-v2.js`; final reports also hash runner source.
+Gateway `http://127.0.0.1:32466`, workspace explicitly supplied through `--workspace`; runtime checkout supplied through `--runtime-repo`, pinned and checked between runs at `17fda754503f56dd6fa02122177b1d41ae61b6d0`. Raw reports separate runner checkout SHA from runtime checkout SHA and SHA-256 of `dist/gateway/server-v2.js`; final reports also hash runner source.
 
 **Limitation:** `/api/status` exposes no loaded process commit. Checkout/build attestation cannot prove every loaded module matches the checkout. The runtime commit is checkout-attested, **not process-attested**. No restart, global route change or Anthropic invocation occurred. Session route responses are retained.
 

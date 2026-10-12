@@ -1,6 +1,6 @@
 # Skill trigger overlay review fix
 
-- **DONE** in integration checkout `C:\Users\rafel\promsrc-pr\context-routing-observability`, based on HEAD `09d4f86bc`; read `fast-coding-loop` and `research/wholebranch-review.md`.
+- **DONE** in integration checkout `<pr-worktrees>/context-routing-observability`, based on HEAD `09d4f86bc`; read `fast-coding-loop` and `research/wholebranch-review.md`.
 - New routing-tested proposals persist only `triggers`/`promptSignals` for proposed and rollback snapshots; candidate evaluation still uses current nontrigger manifest metadata.
 - Apply and rollback extract only those allowed trigger fields from snapshots, including already-persisted legacy full manifests, and merge them into the current manifest before the overlay-replacing writer runs.
 - Existing stale trigger guards remain unchanged; absent prior prompt signals are explicitly cleared on rollback rather than retaining newly introduced signals.

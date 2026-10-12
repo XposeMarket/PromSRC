@@ -36,7 +36,9 @@ try {
  configureContextReceipts({ enabled: false }, root); assert.equal(captureContextReceipt(input, manifest, root).reason, 'disabled');
  configureContextReceipts({ enabled: true, reset: true }, root); assert.equal(readContextReceipts({}, root).records.length, 0);
  const blocker = path.join(root,'blocker'); fs.writeFileSync(blocker, 'file'); assert.equal(captureContextReceipt(input, manifest, blocker).persisted, false);
- assert(!scrubContextText('-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----').includes('secret'));
+ const pemHeader = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
+  const pemFooter = ['-----END ', 'PRIVATE KEY-----'].join('');
+  assert(!scrubContextText(`${pemHeader}\nsecret\n${pemFooter}`).includes('secret'));
  // Exercise the actual manifest capture linkage, but disabled in a temporary runtime workspace.
  process.env.PROMETHEUS_WORKSPACE_DIR = root;
  configureContextReceipts({ enabled: false }, root);
