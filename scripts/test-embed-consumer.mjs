@@ -14,7 +14,11 @@ function npm(args, cwd) {
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '1' },
   });
-  if (result.status !== 0) throw new Error(`npm ${args.join(' ')} failed: ${result.error || result.stderr || result.stdout}`);
+  if (result.status !== 0) {
+    const detail = String(result.error || result.stderr || result.stdout);
+    if (process.env.GITHUB_ACTIONS === 'true') console.error(`::error title=Packed consumer install::${detail.slice(-6000).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
+    throw new Error(`npm ${args.join(' ')} failed: ${detail}`);
+  }
   return result.stdout;
 }
 try {
@@ -40,7 +44,11 @@ try {
     env: { ...process.env, NODE_ENV: 'production', ...(process.argv.includes('--shared-dependencies') ? { NODE_PATH: path.join(repo, 'node_modules') } : {}) },
   });
   process.stdout.write(run.stdout || '');
-  if (run.status !== 0 || !/embed-consumer: ok/.test(run.stdout || '')) throw new Error(`Consumer failed: ${run.error || run.stderr || run.status}`);
+  if (run.status !== 0 || !/embed-consumer: ok/.test(run.stdout || '')) {
+    const detail = String(run.error || run.stderr || run.status);
+    if (process.env.GITHUB_ACTIONS === 'true') console.error(`::error title=Packed consumer runtime::${detail.slice(0, 6000).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
+    throw new Error(`Consumer failed: ${detail}`);
+  }
   console.log(`packed consumer: PASS (${packed[0].filename}; ${process.argv.includes('--shared-dependencies') ? 'shared external dependencies (not independent install)' : process.argv.includes('--online-install') ? 'registry-assisted install; runtime network denied' : 'offline install'}; public export; no source link)`);
 } finally {
   try { fs.rmSync(project, { recursive: true, force: true, maxRetries: 3 }); } catch {}
