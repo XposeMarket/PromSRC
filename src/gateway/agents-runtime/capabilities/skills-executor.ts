@@ -7,6 +7,7 @@ import {
   listSkillCuratorSuggestions,
   getSkillCuratorStatus,
   rejectSkillCuratorSuggestion,
+  restoreSkillCuratorSuggestion,
   runSkillCurator,
   type SkillCuratorMode,
 } from '../../skills-runtime/skill-curator';
@@ -704,6 +705,11 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             const mode: SkillCuratorMode = rawMode === 'auto-safe' || rawMode === 'pending' ? rawMode : 'dry-run';
             const result = runSkillCurator({ workspacePath: ctx.workspacePath, skillsManager: deps.skillsManager, mode });
             return { name, args, result: JSON.stringify(result, null, 2), error: false };
+          }
+          if (action === 'restore') {
+            const id = String(args.id || '').trim();
+            const restored = restoreSkillCuratorSuggestion(ctx.workspacePath, id);
+            return { name, args, result: restored ? `Restored skill curator suggestion ${id}.` : `No restorable suggestion: ${id}`, error: !restored };
           }
           if (action === 'apply') {
             const id = String(args.id || '').trim();

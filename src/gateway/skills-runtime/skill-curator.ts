@@ -42,6 +42,7 @@ export interface SkillCuratorSuggestion {
   scan: SkillSafetyScan;
   appliedAt?: string;
   rejectedAt?: string;
+  rejectedFingerprint?: string;
   semanticKey?: string;
   expiresAt?: string;
   suppressedUntil?: string;
@@ -704,7 +705,16 @@ function buildTriggerSuggestion(row: CandidateRow, skillsManager: SkillsManager)
   };
 }
 
-function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: SkillCuratorSuggestion[]): SkillCuratorSuggestion[] {
+export function curatorContentFingerprint(item: SkillCuratorSuggestion): string {
+  // Ignore candidate ids, dates and evidence references: repeated observations are
+  // not a new lesson. Normalize formatting, but retain the proposed behavior.
+  const content = normalizeSemanticText([item.skillId, item.lessonType, item.futureTrigger,
+    item.learnedBehavior, item.change.kind, item.change.path, item.change.content,
+    JSON.stringify(item.change.manifest || {})].join('|'));
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+export function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: SkillCuratorSuggestion[]): SkillCuratorSuggestion[] {
   const now = Date.now();
   const suppressionMs = 90 * 24 * 60 * 60 * 1000;
   const expiryMs = 45 * 24 * 60 * 60 * 1000;
@@ -764,7 +774,12 @@ function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: SkillCur
     });
   }
 
+  const rejectionRecords = existing.map(enrich).filter((item) => item.status === 'rejected' || item.status === 'suppressed');
   for (const raw of incoming.map(enrich)) {
+    const rejected = rejectionRecords.find((item) => (item.status === 'rejected' || item.status === 'suppressed')
+      && Date.parse(String(item.suppressedUntil || '')) > now
+      && ((item.rejectedFingerprint || curatorContentFingerprint(item)) === curatorContentFingerprint(raw)));
+    if (rejected) continue;
     const key = raw.semanticKey || semanticKeyFor(raw);
     const old = bySemantic.get(key);
     if (!old) {
@@ -772,7 +787,8 @@ function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: SkillCur
       continue;
     }
     const suppressionActive = (old.status === 'rejected' || old.status === 'suppressed')
-      && Date.parse(String(old.suppressedUntil || '')) > now;
+      && Date.parse(String(old.suppressedUntil || '')) > now
+      && (old.rejectedFingerprint || curatorContentFingerprint(old)) === curatorContentFingerprint(raw);
     if (old.status === 'applied' || suppressionActive) continue;
     if (old.status === 'expired' || old.status === 'suppressed' || old.status === 'rejected') {
       bySemantic.set(key, { ...raw, id: old.id, createdAt: raw.createdAt, semanticKey: key });
@@ -827,7 +843,7 @@ export function getSkillCuratorStatus(workspacePath: string, options: {
   const statusFilter = String(options.statusFilter || '').trim().toLowerCase();
   const skillId = String(options.skillId || '').trim().toLowerCase();
   const filtered = all
-    .filter((item) => !statusFilter || item.status === statusFilter)
+    .filter((item) => statusFilter ? item.status === statusFilter : item.status === 'pending' || item.status === 'quarantined')
     .filter((item) => !skillId || String(item.skillId || '').toLowerCase() === skillId)
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || ''));
   const cursor = Math.max(0, Math.floor(Number(options.cursor) || 0));
@@ -979,10 +995,39 @@ export function rejectSkillCuratorSuggestion(workspacePath: string, id: string):
     status: 'rejected',
     updatedAt: now.toISOString(),
     rejectedAt: now.toISOString(),
+    rejectedFingerprint: curatorContentFingerprint(rows[idx]),
     suppressedUntil: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
   };
+  const fingerprint = rows[idx].rejectedFingerprint;
+  for (const row of rows) {
+    if (row.id === id || row.status === 'applied') continue;
+    if (curatorContentFingerprint(row) !== fingerprint) continue;
+    row.status = 'suppressed';
+    row.duplicateOf = id;
+    row.rejectedFingerprint = fingerprint;
+    row.suppressedUntil = rows[idx].suppressedUntil;
+    row.updatedAt = now.toISOString();
+  }
   writeJsonArray(suggestionsPath(workspacePath), rows);
   return rows[idx];
+}
+
+export function restoreSkillCuratorSuggestion(workspacePath: string, id: string): SkillCuratorSuggestion | null {
+  const rows = listSkillCuratorSuggestions(workspacePath);
+  const item = rows.find((row) => row.id === id);
+  if (!item || !['rejected', 'suppressed', 'expired'].includes(item.status)) return null;
+  item.status = 'pending';
+  item.updatedAt = new Date().toISOString();
+  item.expiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+  delete item.rejectedAt;
+  delete item.rejectedFingerprint;
+  delete item.suppressedUntil;
+  for (const duplicate of rows.filter((row) => row.duplicateOf === id)) {
+    delete duplicate.suppressedUntil;
+    delete duplicate.rejectedFingerprint;
+  }
+  writeJsonArray(suggestionsPath(workspacePath), rows);
+  return item;
 }
 
 export function applySkillCuratorSuggestion(workspacePath: string, skillsManager: SkillsManager, id: string): SkillCuratorSuggestion | null {
@@ -1095,6 +1140,8 @@ export function runSkillCurator(params: {
       status: 'rejected' as SkillCuratorSuggestionStatus,
       updatedAt: now,
       rejectedAt: now,
+      rejectedFingerprint: curatorContentFingerprint(suggestion),
+      suppressedUntil: new Date(Date.parse(now) + 90 * 24 * 60 * 60 * 1000).toISOString(),
       autoDecisionReason: 'Auto-rejected legacy workflow dump: no failure recovery, positive reusable signal, future trigger, or learned behavior.',
     };
   });
