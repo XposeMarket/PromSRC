@@ -41,9 +41,17 @@ const REQUIRED_SECTIONS = [
 
 /** A rejected summary must never become the checkpoint for discarded messages. */
 export function normalizeCompactionSummary(value: unknown): string {
+  // Models decorate headings unpredictably ("## 1) Pending tasks", "**1. X**",
+  // "1. X" without a colon). Canonicalize recognizable headings so valid
+  // handoffs are not rejected for formatting alone.
+  const canonical = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return String(value || '').trim().split(/\r?\n/).map((line) => {
-    const plain = line.trim().replace(/^#{1,6}\s+/, '').replace(/\*\*/g, '');
-    return REQUIRED_SECTIONS.some((section, index) => plain === `${index + 1}. ${section}:`) ? plain : line;
+    const plain = line.trim().replace(/^#{1,6}\s*/, '').replace(/\*\*|__/g, '').trim();
+    const match = plain.match(/^(\d{1,2})\s*[.):-]?\s*(.+?)\s*:?\s*$/);
+    if (!match) return line;
+    const index = Number(match[1]) - 1;
+    const section = REQUIRED_SECTIONS[index];
+    return section && canonical(match[2]) === canonical(section) ? `${index + 1}. ${section}:` : line;
   }).join('\n');
 }
 
