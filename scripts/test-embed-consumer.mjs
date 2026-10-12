@@ -31,7 +31,7 @@ try {
     const unpack = spawnSync('tar', ['-xzf', tarball, '--strip-components=1', '-C', target], { encoding: 'utf8', timeout: 120_000 });
     if (unpack.status !== 0) throw new Error(`Tar extraction failed: ${unpack.error || unpack.stderr}`);
   } else {
-    npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-online'] : ['--offline']), '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], project);
+    npm(['install', ...(process.argv.includes('--online-install') ? ['--prefer-online'] : ['--offline']), '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund', tarball], project);
   }
   const installed = path.join(project, 'node_modules/prometheus');
   if (fs.lstatSync(installed).isSymbolicLink()) throw new Error('Expected installed package, not source link');
