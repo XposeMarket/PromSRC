@@ -34,6 +34,13 @@ assert.equal(isUsableCompactionSummary(summary.replace('10. Continue From Here:'
 assert.equal(isUsableCompactionSummary(summary.replace('Current Work retained.', 'Unknown'), 100), false);
 assert.equal(isUsableCompactionSummary(`${summary}\n[...truncated to compaction word limit]`, 100), false);
 assert.equal(isUsableCompactionSummary(summary, 20), true, 'legacy maxWords is not a hard cap');
+const decorated = headings.map((heading, index) => {
+  const variants = [`## ${index + 1}) ${heading}`, `**${index + 1}. ${heading}:**`, `${index + 1}. ${heading.toUpperCase()}`, `### ${index + 1} - ${heading}:`];
+  return `${variants[index % variants.length]}\n- ${heading} retained.`;
+}).join('\n');
+assert.equal(isUsableCompactionSummary(decorated, 100), false, 'raw decorated headings are not canonical');
+assert.equal(isUsableCompactionSummary(normalizeCompactionSummary(decorated), 100), true, 'decorated/colonless headings normalize to valid sections');
+assert.equal(normalizeCompactionSummary('3. Pending Tasks:'), '3. Pending Tasks:', 'wrong-number headings are not silently renumbered');
 const largeSummary = `${summary}\n${'durable decision and pending artifact retained. '.repeat(500)}`;
 assert.ok(largeSummary.length > 12_000 && largeSummary.split(/\s+/).length > 900);
 assert.equal(isUsableCompactionSummary(largeSummary, 900, { sourceTokens: 20_000, outputBudgetTokens: 12_000 }), true);
