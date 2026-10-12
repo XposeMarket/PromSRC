@@ -64,8 +64,8 @@ Read-only `/api/ollama/models` discovered `qwen3.5:9b` (9.7B parameters); creden
 
 ```powershell
 node evals/gateway-runner.regression.mjs
-node evals/run-gateway-evals.mjs --gateway http://127.0.0.1:32466 --workspace C:\Users\rafel\AppData\Roaming\Prometheus\workspace --runtime-commit 17fda754503f56dd6fa02122177b1d41ae61b6d0 --model openai_codex:gpt-6.1-sol:low --repeats 2 --timeout-ms 180000
-node evals/run-gateway-evals.mjs --gateway http://127.0.0.1:32466 --workspace C:\Users\rafel\AppData\Roaming\Prometheus\workspace --runtime-commit 17fda754503f56dd6fa02122177b1d41ae61b6d0 --model ollama:qwen3.5:9b --repeats 2 --tasks file-create,read-and-answer,bugfix-off-by-one --timeout-ms 120000
+node evals/run-gateway-evals.mjs --gateway http://127.0.0.1:32466 --workspace "<runtime-workspace>" --runtime-repo "<runtime-checkout>" --runtime-commit 17fda754503f56dd6fa02122177b1d41ae61b6d0 --model openai_codex:gpt-6.1-sol:low --repeats 2 --timeout-ms 180000
+node evals/run-gateway-evals.mjs --gateway http://127.0.0.1:32466 --workspace "<runtime-workspace>" --runtime-repo "<runtime-checkout>" --runtime-commit 17fda754503f56dd6fa02122177b1d41ae61b6d0 --model ollama:qwen3.5:9b --repeats 2 --tasks file-create,read-and-answer,bugfix-off-by-one --timeout-ms 120000
 ```
 
 ### Validation and audit
