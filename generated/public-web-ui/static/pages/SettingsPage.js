@@ -1984,10 +1984,9 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
-    renderContextBudgetSummary(s.contextProfile, s.contextBudget);
     const contextWrap = document.getElementById('settings-context-budget-summary');
     if (contextWrap) {
-      contextWrap.insertAdjacentHTML('beforeend', renderContextSelection(s.contextProfile, s.contextBudget, 'desktop-context'));
+      contextWrap.innerHTML = renderContextSelection(s.contextProfile, s.contextBudget, 'desktop-context');
       wireContextSelection(contextWrap, s.contextProfile, selection => api('/api/settings/context-window', { method: 'POST', body: JSON.stringify(selection) }), loadSessionCompactionSettings, 'desktop-context');
     }
     const legacyWords = document.getElementById('settings-rolling-compaction-words');

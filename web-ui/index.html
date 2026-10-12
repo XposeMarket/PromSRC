@@ -4533,17 +4533,8 @@
               </div>
               <div class="settings-provider-state-note">Choose the active model and per-agent behavior in the routing panels.</div>
             </div>
-            <div id="settings-context-compaction" style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel-2)">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
-                <div>
-                  <div style="font-size:12px;font-weight:800;color:var(--text)">Context & Summary Compaction</div>
-                  <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-top:2px">Resolved from provider metadata, config, or a known model profile.</div>
-                </div>
-                <label title="Keep long workflows inside the model context window" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;white-space:nowrap">
-                  <input id="settings-rolling-compaction-enabled" type="checkbox" checked />
-                  Enabled
-                </label>
-              </div>
+            <div id="settings-context-compaction" style="margin-top:14px;background:transparent">
+              <input id="settings-rolling-compaction-enabled" type="checkbox" checked hidden />
               <div id="settings-context-budget-summary">
                 <div style="font-size:11px;color:var(--muted);padding:8px 0">Loading token budget...</div>
               </div>

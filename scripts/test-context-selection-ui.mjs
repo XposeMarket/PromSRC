@@ -3,6 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 const code = await fs.readFile('web-ui/src/context-selection.js','utf8');
+const desktop = await fs.readFile('web-ui/src/pages/SettingsPage.js','utf8');
+const shell = await fs.readFile('web-ui/index.html','utf8');
+assert.match(desktop, /contextWrap\.innerHTML = renderContextSelection\(/, 'desktop production container must replace legacy budget tiles with the compact selector');
+assert.doesNotMatch(desktop, /renderContextBudgetSummary\(s\.contextProfile/, 'desktop settings must not prepend the legacy budget summary');
+assert.doesNotMatch(shell, /Context & Summary Compaction|Resolved from provider metadata, config, or a known model profile\./, 'desktop context wrapper must not reintroduce removed header prose');
 const browser = await chromium.launch({headless:true});
 try {
   for (const width of [320,390,1280]) {
