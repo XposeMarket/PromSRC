@@ -2372,7 +2372,8 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput & { recent
     : 'This compaction is happening at a rolling conversation checkpoint after enough new messages accumulated.';
   const promptLines: string[] = [
     'Create a structured rolling resume packet for context compaction.',
-    `Target length: ${input.targetLengthText}.`,
+    `Target length: ${input.targetLengthText}. Hard limit: ${input.maxWords} words including all headings.`,
+    'All ten numbered headings must appear as plain text, exactly as shown. Do not wrap them in Markdown.',
     modeDescription,
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
@@ -2425,6 +2426,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
       numCtx: input.numCtx,
       numPredict: input.numPredict,
       tokenizer: input.routeSnapshot?.contextProfile.tokenizer,
+      onInvalidSummary: (details) => console.warn(`[v2] Compaction summary rejected (${input.strategy}):`, JSON.stringify(details)),
       isAborted: () => input.abortSignal?.aborted === true,
       renderPrompt: (messages, previousSummary, includeMetadata) => buildContextCompactionPrompt({
         ...input,
@@ -2446,6 +2448,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
           'manager',
           {
             temperature: 0.1,
+            abortSignal: input.abortSignal?.signal,
             num_ctx: input.numCtx,
             num_predict: input.numPredict,
             ...(input.model ? { model: input.model } : {}),
@@ -2501,13 +2504,12 @@ async function maybeRunMidWorkflowCompaction(input: {
   ].filter(Boolean).join('\n\n');
   const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   if (!policy.enabled) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
-  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
-    || recentToolTokens >= budget.toolContextBudgetTokens;
+  // Tool-log growth is bounded separately; it must not retire the entire
+  // transcript while the active model request still fits its context budget.
+  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens;
   if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
 
-  const reason = projectedTokens >= budget.compactionTriggerTokens
-    ? 'projected_context_over_budget'
-    : 'tool_context_over_budget';
+  const reason = 'projected_context_over_budget';
   input.sendSSE('tool_call', {
     action: CONTEXT_COMPACTION_TOOL_NAME,
     args: {
@@ -2546,7 +2548,7 @@ async function maybeRunMidWorkflowCompaction(input: {
     const compactorResult = await runContextCompactor({
       sessionId: input.sessionId,
       strategy: 'mid_workflow_token_budget',
-      targetLengthText: `about ${summaryMaxTokens} tokens or less`,
+      targetLengthText: `at most ${summaryMaxWords} words (and about ${summaryMaxTokens} tokens or less)`,
       maxWords: summaryMaxWords,
       previousSummary,
       recentToolLogsBlock: recentToolText,

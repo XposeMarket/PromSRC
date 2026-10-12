@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
-import { resolveActiveModelContextProfile } from './context/model-context';
+import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
 import { normalizeSpeed } from '../providers/reasoning-capabilities';
 import { clearToolObservationSnapshotCache, getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
@@ -1984,29 +1984,27 @@ function activeUsageCalibrationFactor(): number {
 
 function resolveSessionPolicy(): {
   maxMessages: number;
-  compactionThreshold: number;
+  compactionThreshold: number | 'auto';
   memoryFlushThreshold: number;
   compactionMinMessages: number;
 } {
   const defaults = {
     maxMessages: 120,
-    compactionThreshold: 0.7,
+    compactionThreshold: 'auto' as const,
     memoryFlushThreshold: 0.75,
     compactionMinMessages: 20,
   };
   try {
     const cfg: any = getConfig().getConfig();
     const maxMessagesRaw = Number(cfg?.session?.maxMessages);
-    const compactionThresholdRaw = Number(cfg?.session?.compactionThreshold);
+    const compactionThresholdRaw = cfg?.session?.compactionThreshold;
     const memoryFlushThresholdRaw = Number(cfg?.session?.memoryFlushThreshold);
     const rollingMessageCountRaw = Number(cfg?.session?.rollingCompactionMessageCount);
     const compactionMinMessagesRaw = Number(cfg?.session?.compactionMinMessages);
     const maxMessages = Number.isFinite(maxMessagesRaw) && maxMessagesRaw >= 20
       ? Math.floor(maxMessagesRaw)
       : defaults.maxMessages;
-    const compactionThreshold = Number.isFinite(compactionThresholdRaw) && compactionThresholdRaw >= 0.4 && compactionThresholdRaw <= 0.95
-      ? compactionThresholdRaw
-      : defaults.compactionThreshold;
+    const compactionThreshold = resolveCompactionThreshold(compactionThresholdRaw, cfg?.session?.compactionThresholdMode);
     const memoryFlushThreshold = Number.isFinite(memoryFlushThresholdRaw) && memoryFlushThresholdRaw >= 0.5 && memoryFlushThresholdRaw <= 0.98
       ? memoryFlushThresholdRaw
       : defaults.memoryFlushThreshold;
@@ -2716,7 +2714,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     : sessionPolicy.maxMessages;
   const contextLimitTokens = resolveNumCtx();
   const thresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.memoryFlushThreshold);
-  const compactionThresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.compactionThreshold);
+  const compactionThresholdTokens = buildContextBudget(resolveActiveModelContextProfile(), { ...sessionPolicy, compactionThresholdMode: sessionPolicy.compactionThreshold === 'auto' ? 'auto' : 'manual' }).compactionTriggerTokens;
   // Correct raw estimates toward real provider input-token counts before
   // comparing against the (now provider-aware) window thresholds.
   const usageCalibrationFactor = activeUsageCalibrationFactor();

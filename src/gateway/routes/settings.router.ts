@@ -66,7 +66,7 @@ import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth'
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
-import { buildContextBudget, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
+import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
 import { resolveApprovalDecision } from '../approval-actions';
 import {
   getPrometheusQuestionQueue,
@@ -683,7 +683,7 @@ router.delete('/api/installed-apps/aliases', async (req, res) => {
 function getSessionDefaults() {
   return {
     maxMessages: 120,
-    compactionThreshold: 0.7,
+    compactionThreshold: 'auto' as const,
     memoryFlushThreshold: 0.75,
     compactionMinMessages: 20,
     rollingCompactionEnabled: true,
@@ -753,13 +753,14 @@ router.get('/api/settings/session', async (_req, res) => {
   } catch {
     // Keep settings fast and available even when provider metadata endpoints are offline.
   }
-  const contextBudget = buildContextBudget(contextProfile);
+  const contextBudget = buildContextBudget(contextProfile, cfg);
   const autoSettleStatus = getAutoSettleStatus();
   res.json({
     success: true,
     session: {
       maxMessages: toBoundedInt(cfg.maxMessages, 20, 500, d.maxMessages),
-      compactionThreshold: toBoundedFloat(cfg.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+      compactionThreshold: resolveCompactionThreshold(cfg.compactionThreshold, cfg.compactionThresholdMode),
+      effectiveCompactionThreshold: contextBudget.compactionTriggerTokens / contextProfile.contextWindowTokens,
       memoryFlushThreshold: toBoundedFloat(cfg.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
       compactionMinMessages: toBoundedInt(cfg.compactionMinMessages ?? cfg.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
       rollingCompactionEnabled: cfg.rollingCompactionEnabled !== false,
@@ -787,7 +788,8 @@ router.post('/api/settings/session', async (req, res) => {
     const nextSession: Record<string, any> = {
       ...existing,
       maxMessages: toBoundedInt(body.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
-      compactionThreshold: toBoundedFloat(body.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+      compactionThreshold: resolveCompactionThreshold(body.compactionThreshold ?? existing.compactionThreshold, body.compactionThresholdMode ?? existing.compactionThresholdMode),
+      compactionThresholdMode: body.compactionThresholdMode ?? existing.compactionThresholdMode,
       memoryFlushThreshold: toBoundedFloat(body.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
       compactionMinMessages: toBoundedInt(
         body.compactionMinMessages ?? existing.compactionMinMessages ?? body.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount,
@@ -2393,7 +2395,8 @@ router.post('/api/settings/bulk', async (req, res) => {
       updates.session = {
         ...existing,
         maxMessages: toBoundedInt(s.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
-        compactionThreshold: toBoundedFloat(s.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+        compactionThreshold: resolveCompactionThreshold(s.compactionThreshold ?? existing.compactionThreshold, s.compactionThresholdMode ?? existing.compactionThresholdMode),
+        compactionThresholdMode: s.compactionThresholdMode ?? existing.compactionThresholdMode,
         memoryFlushThreshold: toBoundedFloat(s.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
         compactionMinMessages: toBoundedInt(s.compactionMinMessages ?? existing.compactionMinMessages ?? s.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
         rollingCompactionEnabled: s.rollingCompactionEnabled !== undefined ? !!s.rollingCompactionEnabled : (existing.rollingCompactionEnabled !== false),

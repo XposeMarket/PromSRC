@@ -18,6 +18,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts",
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
     "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",
     "build": "npm run build:backend && npm run build:web",

@@ -413,7 +413,8 @@ export const PrometheusConfigSchema = z.object({
 
   session: z.object({
     maxMessages:            z.number().int().optional(),
-    compactionThreshold:    z.number().min(0).max(1).optional(),
+    compactionThresholdMode: z.enum(['auto', 'manual']).optional(),
+    compactionThreshold:    z.union([z.literal('auto'), z.number().min(0.4).max(0.95)]).optional(),
     memoryFlushThreshold:   z.number().min(0).max(1).optional(),
     compactionMinMessages:  z.number().int().min(2).max(120).optional(),
     rollingCompactionEnabled: z.boolean().optional(),

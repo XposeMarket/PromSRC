@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   compactionInputBudgetTokens,
   compactionPromptFits,
   isUsableCompactionSummary,
+  normalizeCompactionSummary,
+  compactionSummaryRejection,
   runCompactionTransaction,
   selectCompactionBatch,
 } from './compaction-safety';
+
+const routerSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
+assert.match(routerSource, /const shouldCompact = projectedTokens >= budget\.compactionTriggerTokens;/, 'tool-log growth alone must not compact the whole transcript');
+assert.match(routerSource, /Hard limit: \$\{input\.maxWords\} words including all headings/, 'prompt and validator must share the exact word limit');
+assert.match(routerSource, /abortSignal: input\.abortSignal\?\.signal/, 'provider request must honor cancellation');
 
 const headings = [
   'Primary Request and Intent',
@@ -27,6 +35,12 @@ assert.equal(isUsableCompactionSummary(summary.replace('Current Work retained.',
 assert.equal(isUsableCompactionSummary(`${summary}\n[...truncated to compaction word limit]`, 100), false);
 assert.equal(isUsableCompactionSummary(summary, 20), false, 'word limits must reject rather than truncate');
 assert.equal(isUsableCompactionSummary(`${summary}\n${'x'.repeat(12_000)}`, 20_000), false);
+
+const markdownSummary = headings.map((heading, index) => `## **${index + 1}. ${heading}:**\n- ${heading} retained.`).join('\n');
+assert.equal(normalizeCompactionSummary(markdownSummary), summary, 'only heading decoration is normalized');
+assert.equal(compactionSummaryRejection(summary, 20, false), 'word_limit');
+assert.equal(compactionSummaryRejection(summary, 100, true), 'unchanged');
+assert.equal(compactionSummaryRejection('', 100, false), 'empty');
 
 const budget = compactionInputBudgetTokens(8_192, 1_500);
 assert.ok(budget > 0 && budget < 8_192 - 1_500);
@@ -75,6 +89,65 @@ async function testTransaction(): Promise<void> {
   assert.ok(prompts.at(-1)?.includes('m'.repeat(1_200)), 'final metadata must be included before commit');
   assert.ok(prompts[1].includes(summary), 'the earlier pass must feed the later pass');
   assert.deepEqual(committed, [updatedSummary], 'only the completed transaction may advance the checkpoint');
+
+  let repairCalls = 0;
+  const repairs: string[] = [];
+  const repaired = await runCompactionTransaction({
+    ...input, messages: ['small source'], numCtx: 8_192, previousSummary: '',
+    renderPrompt: () => 'preserve the request and all sections',
+    summarize: async (prompt: string) => { repairs.push(prompt); return ++repairCalls === 1 ? 'invalid' : markdownSummary; },
+    commit: () => {},
+  });
+  assert.equal(repaired.compacted, true, 'one repair can recover a rejected outline');
+  assert.equal(repairCalls, 2);
+  assert.ok(repairs[1].includes('100 words'));
+  let repeatedCalls = 0;
+  let rejectedCommits = 0;
+  const rejected = await runCompactionTransaction({
+    ...input, messages: ['small source'], numCtx: 8_192,
+    renderPrompt: () => 'small prompt',
+    summarize: async () => { repeatedCalls++; return 'invalid'; },
+    commit: () => { rejectedCommits++; },
+  });
+  assert.equal(rejected.compacted, false);
+  assert.equal(repeatedCalls, 2, 'repair retry is bounded');
+  assert.equal(rejectedCommits, 0, 'invalid retry never advances the checkpoint');
+
+  let cancelled = false;
+  let cancelCalls = 0;
+  const cancelledRepair = await runCompactionTransaction({
+    ...input, messages: ['small source'], numCtx: 8_192,
+    renderPrompt: () => 'small prompt',
+    summarize: async () => { if (++cancelCalls === 2) cancelled = true; return cancelCalls === 1 ? 'invalid' : summary; },
+    isAborted: () => cancelled,
+    commit: () => { throw new Error('cancelled repair must not commit'); },
+  });
+  assert.deepEqual(cancelledRepair, { compacted: false, reason: 'aborted' });
+  const diagnostics: string[] = [];
+  let unchangedCalls = 0;
+  const unchanged = await runCompactionTransaction({
+    ...input, messages: ['small source'], numCtx: 8_192, previousSummary: summary,
+    renderPrompt: () => 'small prompt',
+    summarize: async () => { unchangedCalls++; return summary; },
+    onInvalidSummary: (details) => { diagnostics.push(details.reason); },
+    commit: () => { throw new Error('unchanged summary must not commit'); },
+  });
+  assert.deepEqual(unchanged, { compacted: false, reason: 'invalid_summary' });
+  assert.equal(unchangedCalls, 2);
+  assert.deepEqual(diagnostics, ['unchanged', 'unchanged']);
+
+  const budgetDiagnostics: number[] = [];
+  let budgetCalls = 0;
+  const nearLimitPrompt = 'x'.repeat(6_000);
+  await runCompactionTransaction({
+    ...input, messages: ['small source'], numCtx: 2_048, numPredict: 50,
+    renderPrompt: () => nearLimitPrompt,
+    summarize: async () => { budgetCalls++; return 'invalid'; },
+    onInvalidSummary: (details) => { budgetDiagnostics.push(details.attempt); },
+    commit: () => { throw new Error('invalid near-limit response must not commit'); },
+  });
+  assert.equal(budgetCalls, 1, 'repair exceeding the input budget must not run');
+  assert.deepEqual(budgetDiagnostics, [1], 'do not report a nonexistent second response');
 
   let failedCommits = 0;
   let calls = 0;

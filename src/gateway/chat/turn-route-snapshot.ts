@@ -79,7 +79,7 @@ export function captureTurnRouteSnapshot(
     : input.reasoningEffort;
   const reasoningEffort = normalizeReasoningEffort(providerId, model, configuredReasoning);
   const contextProfile = cloneAndFreeze(resolveModelContextProfile(providerId, model, undefined, raw));
-  const contextBudget = cloneAndFreeze(buildContextBudget(contextProfile));
+  const contextBudget = cloneAndFreeze(buildContextBudget(contextProfile, raw?.session || {}));
   return Object.freeze({
     providerId,
     model,

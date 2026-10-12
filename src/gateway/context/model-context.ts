@@ -29,11 +29,11 @@ export interface ContextBudget {
 type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
-  // Codex's catalog uses a smaller working context than the direct API.
+  // Verified Codex catalog maximum; the default working window is not the maximum.
   // ChatGPT web backend (openai_codex/chatgpt). Without this it fell through to
   // the small default and compacted at ~30k (2026-09-25).
   { provider: /^openai_codex$/i, model: /^chatgpt$/i, profile: { contextWindowTokens: 196000, maxOutputTokens: 32000, tokenizer: 'openai', supportsReasoningTokens: true } },
-  { provider: /^openai_codex$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai_codex$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 872000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^openai_codex$/i, model: /^gpt-5\.3-codex-spark$/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
@@ -198,7 +198,12 @@ export function resolveModelContextProfile(
 ): ModelContextProfile {
   const raw = configSnapshot || getConfig().getConfig();
   const override = configuredContextOverride(providerId, raw);
-  const metadataContext = Number(providerModelInfo?.contextWindowTokens);
+  // Some catalogs expose both the default working window and a supported maximum.
+  const metadata: any = providerModelInfo;
+  const metadataContext = [metadata?.maxContextWindowTokens, metadata?.maxSupportedContextWindowTokens,
+    metadata?.max_context_window, metadata?.max_supported_context_window,
+    metadata?.contextWindowTokens, metadata?.context_window]
+    .map(Number).find(value => Number.isFinite(value) && value > 512) ?? NaN;
   const metadataOutput = Number(providerModelInfo?.maxOutputTokens);
   let source: ModelContextProfile['source'] = 'fallback';
   let known: KnownModelProfile = {};
@@ -223,9 +228,9 @@ export function resolveModelContextProfile(
     || known.maxOutputTokens
     || Math.min(8192, Math.max(1024, Math.floor(contextWindowTokens * 0.15)));
   const tokenizer = override.tokenizer || normalizeTokenizer(providerModelInfo?.tokenizer) || known.tokenizer || inferTokenizer(providerId, model);
-  const supportsReasoningTokens = typeof known.supportsReasoningTokens === 'boolean'
+  const supportsReasoningTokens = providerModelInfo?.supportsReasoningTokens ?? (typeof known.supportsReasoningTokens === 'boolean'
     ? known.supportsReasoningTokens
-    : /^(openai|openai_codex|anthropic|xai)$/i.test(providerId);
+    : /^(openai|openai_codex|anthropic|xai)$/i.test(providerId));
   const reasoningBudgetTokens = override.reasoningBudgetTokens || (supportsReasoningTokens ? Math.min(10000, Math.floor(contextWindowTokens * 0.08)) : 0);
   return {
     providerId,
@@ -239,21 +244,37 @@ export function resolveModelContextProfile(
   };
 }
 
-export function buildContextBudget(profile: ModelContextProfile): ContextBudget {
-  const safetyHeadroomTokens = Math.max(512, Math.floor(profile.contextWindowTokens * 0.1));
+export function resolveCompactionThreshold(value: unknown, mode?: unknown): number | 'auto' {
+  // Authorized legacy-default migration; manual marker preserves an explicit 70% choice.
+  if (mode === 'auto' || (mode !== 'manual' && Number(value) === 0.7)) return 'auto';
+  if (value === 'auto' || value === undefined || value === null) return 'auto';
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0.4 && numeric <= 0.95 ? numeric : 'auto';
+}
+
+export function resolveCompactionTriggerTokens(windowTokens: number, inputBudgetTokens: number, threshold: unknown = 'auto', mode?: unknown): number {
+  const policy = resolveCompactionThreshold(threshold, mode);
+  return policy === 'auto' ? inputBudgetTokens : Math.min(inputBudgetTokens, Math.floor(windowTokens * policy));
+}
+
+export function buildContextBudget(profile: ModelContextProfile, sessionPolicy?: { compactionThreshold?: unknown; compactionThresholdMode?: unknown }): ContextBudget {
+  // One estimation margin only. Output/reasoning remain genuine generation reserves.
+  const safetyHeadroomTokens = Math.min(Math.floor(profile.contextWindowTokens * 0.05), 4096);
   const reservedOutputTokens = Math.min(
     profile.maxOutputTokens || 4096,
-    Math.max(1024, Math.min(32768, Math.floor(profile.contextWindowTokens * 0.08))),
+    Math.floor(profile.contextWindowTokens * 0.5),
+    Math.max(4096, Math.min(32768, Math.floor(profile.contextWindowTokens * 0.08))),
   );
   const reservedReasoningTokens = profile.supportsReasoningTokens ? Math.min(profile.reasoningBudgetTokens || 0, Math.floor(profile.contextWindowTokens * 0.12)) : 0;
-  const inputBudgetTokens = Math.max(1024, profile.contextWindowTokens - reservedOutputTokens - reservedReasoningTokens - safetyHeadroomTokens);
+  const inputBudgetTokens = Math.max(1, profile.contextWindowTokens - reservedOutputTokens - reservedReasoningTokens - safetyHeadroomTokens);
+  const policy = sessionPolicy ?? (getConfig().getConfig() as any)?.session;
   return {
     contextWindowTokens: profile.contextWindowTokens,
     reservedOutputTokens,
     reservedReasoningTokens,
     safetyHeadroomTokens,
     inputBudgetTokens,
-    compactionTriggerTokens: Math.floor(inputBudgetTokens * 0.9),
+    compactionTriggerTokens: resolveCompactionTriggerTokens(profile.contextWindowTokens, inputBudgetTokens, policy?.compactionThreshold, policy?.compactionThresholdMode),
     toolContextBudgetTokens: Math.max(600, Math.floor(inputBudgetTokens * 0.16)),
     summaryBudgetTokens: Math.max(700, Math.floor(inputBudgetTokens * 0.08)),
   };
