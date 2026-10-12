@@ -26,8 +26,8 @@ assert.doesNotMatch(session, /realMessageCount\s*>=\s*sessionPolicy\.compactionM
   'compaction/memory maintenance must not be blocked by a minimum message count');
 assert.match(chat, /disableCompactionCheck:\s*true/,
   'interactive persistence must leave context compaction to the model-call boundary');
-assert.match(chat, /if \(round === 0[\s\S]{0,1400}maybeRunMidWorkflowCompaction\(/,
-  'the first provider call must run the token-budget compaction preflight');
+assert.match(chat, /if \(!brainRunBudget && round === 0[^\n]*\) \{\s*const preflightCompact = await maybeRunMidWorkflowCompaction\(/,
+  'the first normal-chat provider call must run token-budget compaction preflight; bounded Brain runs use their own budget guard');
 assert.doesNotMatch(chat, /midWorkflowCompactionsThisTurn\s*<\s*3\s*&&\s*messages\.length\s*>\s*3/,
   'mid-workflow compaction must not require an arbitrary message count');
 assert.doesNotMatch(chat, /rollingCompactionEnabled\s*===\s*false[^\n]*compacted:\s*false/,
