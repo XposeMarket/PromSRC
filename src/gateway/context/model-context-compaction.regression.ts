@@ -6,13 +6,15 @@ import { buildContextWindowPressure } from './context-window-pressure';
 const config = { llm: { providers: {} }, session: { compactionThreshold: 'auto' } };
 const profile = (provider: string, model: string, metadata?: any, cfg: any = config) => resolveModelContextProfile(provider, model, metadata, cfg);
 const sol = profile('openai_codex', 'gpt-6.1-sol');
-assert.equal(sol.contextWindowTokens, 872000);
-for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) assert.equal(profile('openai_codex', model).contextWindowTokens, 872000);
-assert.equal(profile('openai', 'gpt-6.1-sol').contextWindowTokens, 1050000);
+assert.equal(sol.contextWindowTokens, 272000);
+assert.equal(sol.maxContextWindowTokens, 872000);
+for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) assert.equal(profile('openai_codex', model).contextWindowTokens, 272000);
+assert.equal(profile('openai', 'gpt-6.1-sol').maxContextWindowTokens, 1050000);
+assert.equal(profile('openai', 'gpt-6.1-sol').contextWindowTokens, 272000);
 assert.equal(profile('openai_codex', 'gpt-5.5').contextWindowTokens, 272000);
 assert.equal(profile('anthropic', 'claude-fable-5-1').contextWindowTokens, 1000000);
-assert.equal(profile('openai', 'gpt-5.4').contextWindowTokens, 1050000);
-assert.equal(profile('openai_codex', 'gpt-6.1-sol', { contextWindowTokens: 272000, max_context_window: 872000 }).contextWindowTokens, 872000);
+assert.equal(profile('openai', 'gpt-5.4').maxContextWindowTokens, 1050000);
+assert.equal(profile('openai_codex', 'gpt-6.1-sol', { contextWindowTokens: 272000, max_context_window: 872000 }).contextWindowTokens, 272000);
 assert.equal(profile('openai_codex', 'gpt-6.1-sol', { contextWindowTokens: 128000 }).contextWindowTokens, 128000);
 assert.equal(profile('openai_codex', 'gpt-6.1-sol', { max_context_window: 0, contextWindowTokens: 128000 }).contextWindowTokens, 128000);
 assert.equal(profile('openai_codex', 'gpt-6.1-sol', { max_context_window: 872000 }, { llm: { providers: { openai_codex: { context_window: 64000 } } } }).contextWindowTokens, 64000);
@@ -34,11 +36,13 @@ for (const p of [sol, profile('openai_codex', 'gpt-5.5'), profile('anthropic', '
     assert.equal(pressure.atOrPastCompactionTrigger, true);
   }
 }
-const full = buildContextBudget(sol, { compactionThreshold: 'auto' });
+const selectedConfig = { llm: { providers: {} }, session: { contextSelections: { 'openai_codex/gpt-6.1-sol/default': { mode: 'maximum', extendedAcknowledged: true } } } };
+const selectedSol = profile('openai_codex', 'gpt-6.1-sol', undefined, selectedConfig);
+const full = buildContextBudget(selectedSol, { compactionThreshold: 'auto' });
 assert.equal(full.inputBudgetTokens, 825136);
 assert.ok(full.compactionTriggerTokens > 800000);
-assert.equal(buildContextBudget(sol, { compactionThreshold: 0.7 }).compactionTriggerTokens, full.inputBudgetTokens);
-assert.equal(buildContextBudget(sol, { compactionThreshold: 0.7, compactionThresholdMode: 'manual' }).compactionTriggerTokens, 610400);
+assert.equal(buildContextBudget(selectedSol, { compactionThreshold: 0.7 }).compactionTriggerTokens, full.inputBudgetTokens);
+assert.equal(buildContextBudget(selectedSol, { compactionThreshold: 0.7, compactionThresholdMode: 'manual' }).compactionTriggerTokens, 610400);
 const snapshotSource = fs.readFileSync('src/gateway/chat/turn-route-snapshot.ts', 'utf8');
 assert.match(snapshotSource, /buildContextBudget\(contextProfile, raw\?\.session \|\| \{\}\)/);
 const session = fs.readFileSync('src/gateway/session.ts', 'utf8');

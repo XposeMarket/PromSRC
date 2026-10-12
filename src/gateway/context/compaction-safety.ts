@@ -1,6 +1,30 @@
 import { estimateTextTokensForModel, type TokenizerFamily } from './model-context';
 
-export const MAX_COMPACTION_SUMMARY_CHARS = 12_000;
+/** @deprecated Compatibility only: summaries are bounded by model capacity, not characters. */
+export const MAX_COMPACTION_SUMMARY_CHARS = Number.POSITIVE_INFINITY;
+
+export interface CompactionSummaryBudget {
+  sourceTokens?: number;
+  outputBudgetTokens?: number;
+  tokenizer?: TokenizerFamily;
+}
+
+/** Guidance scales with the material retained; it is not a validation ceiling. */
+export function adaptiveCompactionTargetTokens(sourceTokens: number, previousSummaryTokens: number, outputCapacity: number): number {
+  return Math.max(1, Math.floor(Math.min(outputCapacity * 0.85, Math.max(256, (sourceTokens + previousSummaryTokens) * 0.45))));
+}
+
+function summaryBudgetRejection(text: string, budget: CompactionSummaryBudget): string {
+  const tokens = estimateTextTokensForModel(text, budget.tokenizer);
+  if (budget.outputBudgetTokens !== undefined && tokens > budget.outputBudgetTokens) return 'output_budget';
+  if (budget.sourceTokens !== undefined) {
+    // Small batches need room for the resume schema; substantial batches must
+    // actually shrink, including the full previous handoff in the comparison.
+    const limit = budget.sourceTokens < 512 ? budget.sourceTokens + 256 : Math.floor(budget.sourceTokens * 0.95);
+    if (tokens > limit) return 'no_meaningful_shortening';
+  }
+  return '';
+}
 
 const REQUIRED_SECTIONS = [
   'Primary Request and Intent',
@@ -23,15 +47,15 @@ export function normalizeCompactionSummary(value: unknown): string {
   }).join('\n');
 }
 
-export function isUsableCompactionSummary(value: unknown, maxWords: number): value is string {
+export function isUsableCompactionSummary(value: unknown, _maxWords = 0, budget: CompactionSummaryBudget = {}): value is string {
   const text = String(value || '').trim();
-  if (!text || text.length > MAX_COMPACTION_SUMMARY_CHARS) return false;
-  if ((text.match(/\S+/g) || []).length > maxWords) return false;
-  if (/\[\.\.\.truncated(?: to compaction word limit)?\]/i.test(text)) return false;
+  if (!text || summaryBudgetRejection(text, budget)) return false;
+  if (/\[\.\.\.truncated(?:[^\]]*)\]|\bCOMPACTION_(?:INCOMPLETE|FAILED)\b/i.test(text)) return false;
   const lines = text.split(/\r?\n/);
   const headings = REQUIRED_SECTIONS.map((section, index) => {
     const heading = `${index + 1}. ${section}:`;
-    return lines.findIndex((line) => line.trim() === heading);
+    const matches = lines.flatMap((line, position) => line.trim() === heading ? [position] : []);
+    return matches.length === 1 ? matches[0] : -1;
   });
   if (headings.some((position, index) => position < 0 || (index > 0 && position <= headings[index - 1]))) return false;
   // A formal outline with no actual handoff would still drop the active task.
@@ -71,13 +95,13 @@ export function selectCompactionBatch(
   return null;
 }
 
-export function compactionSummaryRejection(value: string, maxWords: number, unchanged: boolean): string {
+export function compactionSummaryRejection(value: string, _maxWords: number, unchanged: boolean, budget: CompactionSummaryBudget = {}): string {
   if (!value.trim()) return 'empty';
   if (unchanged) return 'unchanged';
-  if (value.length > MAX_COMPACTION_SUMMARY_CHARS) return 'character_limit';
-  if ((value.match(/\S+/g) || []).length > maxWords) return 'word_limit';
-  if (/\[\.\.\.truncated(?: to compaction word limit)?\]/i.test(value)) return 'truncated';
-  return 'sections_or_content';
+  const budgetReason = summaryBudgetRejection(value, budget);
+  if (budgetReason) return budgetReason;
+  if (/\[\.\.\.truncated(?:[^\]]*)\]|\bCOMPACTION_(?:INCOMPLETE|FAILED)\b/i.test(value)) return 'truncated';
+  return isUsableCompactionSummary(value) ? '' : 'sections_or_content';
 }
 
 export interface CompactionTransactionInput<T> {
@@ -88,6 +112,7 @@ export interface CompactionTransactionInput<T> {
   numPredict: number;
   tokenizer?: TokenizerFamily;
   renderPrompt: (messages: T[], previousSummary: string, includeMetadata: boolean) => string;
+  renderSource?: (messages: T[], includeMetadata: boolean) => string;
   summarize: (prompt: string) => Promise<string>;
   commit: (summary: string, passCount: number) => void | Promise<void>;
   isAborted?: () => boolean;
@@ -107,9 +132,11 @@ export async function runCompactionTransaction<T>(
   let nextMessage = 0;
   let metadataIncluded = false;
   let passCount = 0;
-  const promptFor = (end: number, includeMetadata: boolean) => input.renderPrompt(
-    input.messages.slice(nextMessage, end), previousSummary, includeMetadata,
-  );
+  const sourceFor = (end: number, includeMetadata: boolean) => input.renderSource?.(input.messages.slice(nextMessage, end), includeMetadata) ?? JSON.stringify(input.messages.slice(nextMessage, end));
+  const promptFor = (end: number, includeMetadata: boolean) => {
+    const target = adaptiveCompactionTargetTokens(estimateTextTokensForModel(sourceFor(end, includeMetadata), input.tokenizer), estimateTextTokensForModel(previousSummary, input.tokenizer), input.numPredict);
+    return input.renderPrompt(input.messages.slice(nextMessage, end), previousSummary, includeMetadata) + `\n\n[ADAPTIVE_LENGTH]\nAim for about ${target} tokens; this is guidance, not a hard limit. Preserve pending tasks, decisions, constraints and recovery artifacts from the full prior handoff and new material. Output capacity: ${input.numPredict} tokens. Shorten meaningfully without dropping continuity.`;
+  };
 
   while (nextMessage < input.messages.length || !metadataIncluded) {
     if (input.isAborted?.()) return { compacted: false, reason: 'aborted' };
@@ -120,15 +147,19 @@ export async function runCompactionTransaction<T>(
     const end = selected?.end ?? nextMessage;
     const includeMetadata = selected ? selected.includeFinalMetadata : nextMessage === input.messages.length;
     if (nextMessage < input.messages.length && !selected) return { compacted: false, reason: 'input_budget' };
+    const batch = input.messages.slice(nextMessage, end);
+    const sourceTokens = estimateTextTokensForModel(input.renderSource?.(batch, includeMetadata) ?? JSON.stringify(batch), input.tokenizer);
+    const previousTokens = estimateTextTokensForModel(previousSummary, input.tokenizer);
     const prompt = promptFor(end, includeMetadata);
     if (!compactionPromptFits(prompt, tokenBudget, input.tokenizer)) return { compacted: false, reason: 'input_budget' };
 
     let summary = normalizeCompactionSummary(await input.summarize(prompt));
     if (input.isAborted?.()) return { compacted: false, reason: 'aborted' };
-    const valid = (text: string) => isUsableCompactionSummary(text, input.maxWords)
-      && !(end > nextMessage && text === previousSummary);
+    const summaryBudget = { sourceTokens: sourceTokens + previousTokens, outputBudgetTokens: input.numPredict, tokenizer: input.tokenizer };
+    const valid = (text: string) => isUsableCompactionSummary(text, input.maxWords, summaryBudget)
+      && text !== previousSummary;
     const reportInvalid = (attempt: number) => input.onInvalidSummary?.({
-      reason: compactionSummaryRejection(summary, input.maxWords, end > nextMessage && summary === previousSummary),
+      reason: compactionSummaryRejection(summary, input.maxWords, summary === previousSummary, summaryBudget),
       words: (summary.match(/\S+/g) || []).length,
       chars: summary.length,
       attempt,
@@ -137,7 +168,7 @@ export async function runCompactionTransaction<T>(
       reportInvalid(1);
       // One bounded repair attempt. Never truncate a handoff or advance the
       // checkpoint after an invalid response. Provider errors still propagate.
-      const repairPrompt = `${prompt}\n\n[FORMAT_REPAIR]\nThe prior attempt was rejected. Return all 10 required numbered headings, plain text, with meaningful request/current-work/continuation details. Hard limit: ${input.maxWords} words and ${MAX_COMPACTION_SUMMARY_CHARS} characters, including headings. Do not omit constraints or output a truncated summary.`;
+      const repairPrompt = `${prompt}\n\n[FORMAT_REPAIR]\nThe prior attempt was rejected. Return all 10 required numbered headings, plain text, with meaningful request/current-work/continuation details. Meaningfully shorten the combined source and previous summary. The adaptive target is guidance; stay within ${input.numPredict} output tokens. Do not omit constraints or output a truncated summary.`;
       if (compactionPromptFits(repairPrompt, tokenBudget, input.tokenizer)) {
         summary = normalizeCompactionSummary(await input.summarize(repairPrompt));
         if (input.isAborted?.()) return { compacted: false, reason: 'aborted' };
@@ -151,6 +182,7 @@ export async function runCompactionTransaction<T>(
     passCount++;
   }
 
+  if (input.isAborted?.()) return { compacted: false, reason: 'aborted' };
   await input.commit(previousSummary, passCount);
   return { compacted: true, summaryText: previousSummary, passCount };
 }

@@ -1,15 +1,25 @@
-# Model-aware context compaction
+# Model-aware context selection and compaction
 
-`session.compactionThreshold: "auto"` is the default for new profiles. It uses the selected model's usable input budget, not a universal 70% raw-history gate. Usable input reserves generation output (up to 32,768 tokens), supported reasoning (normally up to 10,000), and one estimation margin (5%, capped at 4,096); no additional 90% compaction discount applies.
+## Capacity is not the selected budget
 
-Codex GPT-6/6.1 astra, sol, and luna use the verified 872,000-token catalog maximum, not the 272,000 working default. GPT-5 Codex remains 272,000. The direct OpenAI API profile is unchanged (1,050,000); Codex evidence is not used to alter a separate provider's limit. Runtime metadata's valid supported maximum takes priority over its working window; explicit configured context overrides take priority over metadata. Provider limits and supported reasoning still apply.
+The UI distinguishes model-supported maximum, standard working budget, selected budget, and effective compaction trigger. Provider metadata is preferred, with known model profiles as fallback and configurable overrides for unlisted/local models. Unknown models use a conservative fallback, explicitly labeled by capacity source; there is no universal 200k limit.
 
-The legacy default 0.7 migrates to auto unless `compactionThresholdMode: "manual"` explicitly marks it. Other numeric thresholds remain manual overrides. This migration intentionally upgrades old default profiles; historical unmarked intentional 0.7 choices cannot be distinguished and should be re-saved with the manual marker. In mobile model settings, enable **Use full model context** and save to opt into auto sizing; turn it off to use a manual 0.4–0.95 threshold. APIs accept `"auto"` or a number and return an effective threshold alongside the policy.
+Settings on desktop and mobile offer **Standard**, **Maximum**, and **Custom** context. Choices are stored per provider/model/account. Above-standard selection requires an explicit usage acknowledgement in both UI and backend. Settings apply to new turns; running turns retain their admitted route/budget snapshot. A setting is a local request budget, not an entitlement or billing upgrade; provider/account admission can differ.
 
-The session pre-turn gate, mid-workflow budget, and context-pressure endpoint share the same trigger formula. Actual token counts remain estimates calibrated to provider usage; message count is not the context limit.
+Codex GPT-6/6.1 catalog evidence separates 272,000 working from 872,000 maximum. Standard stays at 272k until acknowledged opt-in. Direct OpenAI API capacity is separate (1,050,000 for the matched GPT-6 models). Current Anthropic 1M models such as Opus 5.5 use their 1M default. Haiku 5.5 uses a 100k usage-safe standard option because API prompts above 100k use a 5x tariff; 1M is still selectable.
 
-## Compaction failure safety
+Warnings separate API billing from subscription allowance. OpenAI documents GPT-5.4 Codex 2x subscription usage above 272k; a GPT-6 multiplier is not verified. Current Claude 1M API rates are standard except Haiku 5.5. Claude subscription allowances are account-specific and cannot be inferred from API pricing. Other providers receive an explicit model/account-specific caution rather than an invented universal surcharge.
 
-Recent runtime logs showed repeated `mid_workflow_token_budget: invalid_summary` rejections. The old summary prompt specified a token target without declaring the separately enforced hard word cap. Prompts now state the exact word cap (including headings), normalize decoration only on the ten known section headings, and allow one input-budget-checked repair attempt. Empty, unchanged, truncated, overlong, or semantically empty handoffs still fail; rejected transactions never advance the retained-history checkpoint. Diagnostics record reason, word/character counts and actual attempt numbers, not summary content. Cancellation is forwarded to the provider.
+## Automatic pressure budget
 
-Tool-observation growth alone no longer triggers whole-thread compaction while the active request is below its shared model budget. Tool-result bounding remains separate.
+`session.compactionThreshold: "auto"` uses selected usable input capacity after output (up to 32,768), supported reasoning (normally up to 10,000), and estimation margin (5%, capped at 4,096). There is no extra 90% discount. Codex standard 272k therefore has roughly 225k usable input; acknowledged 872k roughly 825k. Actual counts are estimates calibrated to provider usage.
+
+Legacy unmarked 0.7 migrates to auto. Explicit manual markers and other numeric thresholds remain. The UI auto-compaction toggle controls threshold policy, not maximum-context consent. Pre-turn, mid-workflow, and pressure UI use the shared budget; tool-observation growth alone does not compact an otherwise-under-budget thread.
+
+## Adaptive continuity handoff
+
+There is no hard 900-word or 12k-character summary ceiling. Each pass receives the full previous handoff and complete selected source messages, with an adaptive target bounded by the compactor's actual context/output capacity. Substantial input must shrink meaningfully (at least 5%); tiny batches permit schema overhead. A guidance target is not a rejection ceiling.
+
+Ten ordered headings preserve intent, constraints, decisions, evidence, artifacts, pending tasks, current work, and where to resume. Empty, unchanged, explicitly incomplete/truncated, malformed or over-capacity summaries are rejected. The transaction allows one input-budget-checked repair attempt. Every batch and final metadata merge must succeed before the history checkpoint advances; cancellation or failure leaves active history intact. Full accepted summaries are retained in checkpoints/audit artifacts rather than clipped to 12k characters. Raw persisted transcripts remain the recovery authority for verbatim details.
+
+Validation can prove structure, budget fit, shortening and atomic checkpoint behavior, not perfect semantic retention by an LLM. No real 872k/1M provider admission or physical-phone end-to-end test has been claimed. Desktop/mobile controls have local browser regression coverage at 320, 390 and 1280 pixels.

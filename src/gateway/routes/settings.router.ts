@@ -66,7 +66,8 @@ import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth'
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
-import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
+import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile, selectModelInfoForContextProfile, resolveModelContextProfile, rememberProviderContextMetadata } from '../context/model-context';
+import { validateContextSelection } from '../context/context-selection';
 import { resolveApprovalDecision } from '../approval-actions';
 import {
   getPrometheusQuestionQueue,
@@ -738,6 +739,30 @@ router.get('/api/settings/features', (_req, res) => {
   });
 });
 
+router.post('/api/settings/context-window', async (req, res) => {
+  try {
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    const active = resolveActiveModelContextProfile();
+    const providerId = String(req.body?.providerId || active.providerId);
+    const model = String(req.body?.model || active.model);
+    if (providerId !== active.providerId || model !== active.model) return res.status(409).json({ success: false, error: 'Model changed. Reload settings before selecting context.' });
+    if (req.body?.accountId && req.body.accountId !== active.contextAccountId) return res.status(409).json({ success: false, error: 'Account changed. Reload context settings.' });
+    const models = await Promise.race([getProvider().listModels(), new Promise<any[]>(resolve => setTimeout(() => resolve([]), 1800))]);
+    const info = selectModelInfoForContextProfile(models, model);
+    if (info) rememberProviderContextMetadata(providerId, info, current, active.contextAccountId);
+    const profile = resolveModelContextProfile(providerId, model, info, current, active.contextAccountId);
+    const selection = validateContextSelection(req.body, profile);
+    const accountId = active.contextAccountId || 'default';
+    const session = { ...(current.session || {}), contextSelections: { ...(current.session?.contextSelections || {}), [`${providerId}/${model}/${accountId}`]: selection } };
+    cm.updateConfig({ session } as any);
+    const selected = resolveModelContextProfile(providerId, model, undefined, { ...current, session }, accountId);
+    res.json({ success: true, contextProfile: selected, contextBudget: buildContextBudget(selected, session) });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message || 'Invalid context selection' });
+  }
+});
+
 router.get('/api/settings/session', async (_req, res) => {
   const cfg = (getConfig().getConfig() as any).session || {};
   const d = getSessionDefaults();
@@ -749,7 +774,7 @@ router.get('/api/settings/session', async (_req, res) => {
       new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 1800)),
     ]);
     const modelInfo = selectModelInfoForContextProfile(models, contextProfile.model);
-    if (modelInfo) contextProfile = resolveActiveModelContextProfile(modelInfo);
+    if (modelInfo) { rememberProviderContextMetadata(contextProfile.providerId, modelInfo, undefined, contextProfile.contextAccountId); contextProfile = resolveActiveModelContextProfile(modelInfo); }
   } catch {
     // Keep settings fast and available even when provider metadata endpoints are offline.
   }

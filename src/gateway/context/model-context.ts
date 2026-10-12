@@ -8,6 +8,11 @@ export interface ModelContextProfile {
   providerId: string;
   model: string;
   contextWindowTokens: number;
+  standardContextWindowTokens?: number;
+  maxContextWindowTokens?: number;
+  contextSelectionMode?: 'standard' | 'maximum' | 'custom' | 'legacy';
+  contextUsageWarning?: string;
+  contextAccountId?: string;
   maxOutputTokens: number;
   tokenizer: TokenizerFamily;
   supportsReasoningTokens: boolean;
@@ -34,6 +39,7 @@ const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: Kn
   // the small default and compacted at ~30k (2026-09-25).
   { provider: /^openai_codex$/i, model: /^chatgpt$/i, profile: { contextWindowTokens: 196000, maxOutputTokens: 32000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai_codex$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 872000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai_codex$/i, model: /^gpt-5\.6-(?:sol|terra|luna)(?:-|$)/i, profile: { contextWindowTokens: 872000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^openai_codex$/i, model: /^gpt-5\.3-codex-spark$/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
@@ -178,6 +184,20 @@ export function estimateMessageTokenBreakdownForModel(
   };
 }
 
+const providerContextMetadata = new Map<string, Partial<ModelInfo>>();
+function contextExecutionAccount(providerId: string, raw: any, executionAccountId?: string): string {
+  return String(executionAccountId || raw?.llm?.providers?.[providerId]?.defaultAccountId || (raw?.llm?.provider === providerId ? raw?.llm?.accountId : '') || 'default');
+}
+function contextMetadataKey(providerId: string, model: string, raw: any, executionAccountId?: string): string {
+  const cfg = raw?.llm?.providers?.[providerId] || {};
+  return JSON.stringify([providerId, model, contextExecutionAccount(providerId, raw, executionAccountId), cfg.base_url || cfg.baseUrl || cfg.baseURL || cfg.endpoint || 'default']);
+}
+/** Capacity metadata is scoped to execution account and provider endpoint. */
+export function rememberProviderContextMetadata(providerId: string, info: Partial<ModelInfo> & { name: string }, configSnapshot?: any, executionAccountId?: string): void {
+  const raw = configSnapshot || getConfig().getConfig();
+  providerContextMetadata.set(contextMetadataKey(providerId, info.name, raw, executionAccountId), { ...info });
+}
+
 export function selectModelInfoForContextProfile(models: ModelInfo[] | undefined, model: string): ModelInfo | undefined {
   if (!Array.isArray(models) || !models.length) return undefined;
   const wanted = String(model || '').trim().toLowerCase();
@@ -195,8 +215,10 @@ export function resolveModelContextProfile(
   model: string,
   providerModelInfo?: Partial<ModelInfo>,
   configSnapshot?: any,
+  executionAccountId?: string,
 ): ModelContextProfile {
   const raw = configSnapshot || getConfig().getConfig();
+  providerModelInfo = providerModelInfo || providerContextMetadata.get(contextMetadataKey(providerId, model, raw, executionAccountId));
   const override = configuredContextOverride(providerId, raw);
   // Some catalogs expose both the default working window and a supported maximum.
   const metadata: any = providerModelInfo;
@@ -218,11 +240,37 @@ export function resolveModelContextProfile(
   if (ollamaCtx) source = 'ollama_num_ctx';
   if (Number.isFinite(metadataContext) && metadataContext > 512) source = 'provider_metadata';
   if (override.contextWindowTokens) source = 'config_override';
-  const contextWindowTokens = override.contextWindowTokens
-    || (Number.isFinite(metadataContext) && metadataContext > 512 ? Math.floor(metadataContext) : undefined)
+  const supportedContextWindowTokens = (Number.isFinite(metadataContext) && metadataContext > 512 ? Math.floor(metadataContext) : undefined)
     || ollamaCtx
     || known.contextWindowTokens
     || (/ollama|llama_cpp|lm_studio/i.test(providerId) ? 8192 : 32768);
+  const maxContextWindowTokens = Math.max(supportedContextWindowTokens, Number(metadata?.maxContextWindowTokens || metadata?.max_context_window) || 0);
+  const standardMetadata = Number(metadata?.defaultContextWindowTokens || metadata?.contextWindowTokens || metadata?.context_window);
+  const standardContextWindowTokens = Math.min(maxContextWindowTokens,
+    Number.isFinite(standardMetadata) && standardMetadata > 512 ? Math.floor(standardMetadata)
+      : providerId === 'openai_codex' && /^gpt-(?:6|5\.(?:4|5|6))/.test(model) ? Math.min(272000, maxContextWindowTokens)
+      : maxContextWindowTokens);
+  const usageSafeStandard = providerId === 'anthropic' && /^claude-haiku-5-5(?:$|-)/.test(model) ? Math.min(100000, standardContextWindowTokens)
+    : providerId === 'openai' && /^gpt-(?:6|5\.(?:4|5|6))(?:[.-]|$)/.test(model) && maxContextWindowTokens > 400000 ? Math.min(272000, standardContextWindowTokens)
+    : standardContextWindowTokens;
+  const accountId = contextExecutionAccount(providerId, raw, executionAccountId);
+  const selection = raw?.session?.contextSelections?.[`${providerId}/${model}/${accountId}`];
+  const contextSelectionMode: ModelContextProfile['contextSelectionMode'] = selection?.mode || (override.contextWindowTokens ? 'legacy' : 'standard');
+  const extendedAccepted = selection?.extendedAcknowledged === true;
+  const requestedRaw = selection?.mode === 'maximum' ? maxContextWindowTokens : selection?.mode === 'custom' ? Number(selection.tokens) : usageSafeStandard;
+  const requested = Number.isFinite(requestedRaw) ? requestedRaw : usageSafeStandard;
+  const contextWindowTokens = selection
+    ? Math.max(1024, Math.min(maxContextWindowTokens, extendedAccepted ? requested : Math.min(requested, usageSafeStandard)))
+    : override.contextWindowTokens || usageSafeStandard;
+  const contextUsageWarning = providerId === 'openai_codex'
+    ? 'Extended context can consume more subscription allowance. OpenAI documents 2x usage above the standard 272k window for GPT-5.4; the exact multiplier for other models is not verified. This is a local request budget, not a billing setting.'
+    : providerId === 'anthropic'
+      ? /^claude-haiku-5-5(?:$|-)/.test(model)
+        ? 'Haiku 5.5 API: prompts over 100,000 tokens use a 5x pricing tier (input, output and cache). Standard mode stays at 100k. Maximum is 1M. Claude subscription allowance is separate from API pricing.'
+        : 'Current Claude 1M models, including Opus 5.5, use standard API rates throughout the window (Haiku 5.5 is the exception). More tokens still use more allowance. Claude subscription limits are account-specific, not API prices.'
+      : providerId === 'openai' && /^gpt-(?:6|5\.(?:4|5|6))/.test(model)
+        ? 'OpenAI API long-context categories can cost 2x input/cache and 1.5x output. GPT-5.4 documents the boundary above 272k input; the exact GPT-6 boundary is not verified here. These API tariffs are not Codex subscription usage. Check current pricing before large requests.'
+      : 'Larger requests use more input tokens. Long-context pricing and availability depend on this provider, model and account; no universal surcharge is assumed.';
   const maxOutputTokens = override.maxOutputTokens
     || (Number.isFinite(metadataOutput) && metadataOutput > 0 ? Math.floor(metadataOutput) : undefined)
     || known.maxOutputTokens
@@ -236,6 +284,11 @@ export function resolveModelContextProfile(
     providerId,
     model,
     contextWindowTokens,
+    standardContextWindowTokens: usageSafeStandard,
+    maxContextWindowTokens,
+    contextSelectionMode,
+    contextUsageWarning,
+    contextAccountId: accountId,
     maxOutputTokens,
     tokenizer,
     supportsReasoningTokens,
