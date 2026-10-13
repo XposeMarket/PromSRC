@@ -5,6 +5,13 @@
 const STYLE_DEFINITIONS = Object.freeze({
   shell: Object.freeze([
     Object.freeze({
+      id: 'pm-theme-tokens-style',
+      file: 'theme-tokens.css',
+      layer: 'shell',
+      version: 'theme-tokens-p1',
+      attribute: 'data-prom-theme-tokens-style',
+    }),
+    Object.freeze({
       id: 'pm-mobile-demo-glass-style',
       file: 'mobile-liquid-glass-demo.css',
       layer: 'shell',

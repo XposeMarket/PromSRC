@@ -1,0 +1,108 @@
+/* Phase 1: additive semantic contract; existing rendering remains authoritative.
+ * Values are copied by reference from base.css/themes.css (including custom
+ * properties derived inline by app.js). Do not invert these aliases until the
+ * phase-2 migration: doing so would create cycles and change the legacy cascade.
+ * All registry skins explicitly opt into the same complete mapping. Their
+ * existing skin-specific values, not a second palette, supply the differences.
+ */
+:root,
+:root[data-skin="light"],
+:root[data-skin="gray"],
+:root[data-skin="dark"],
+:root[data-skin="blue"],
+:root[data-skin="purple"],
+:root[data-skin="custom"] {
+  --t-bg: var(--bg);
+  --t-sidebar: var(--sidebar-bg);
+  --t-surface: var(--bg);
+  --t-panel: var(--panel);
+  --t-raised: var(--panel-2);
+  --t-input: var(--composer-input, var(--panel-2));
+  --t-overlay: rgba(0, 0, 0, .6);
+  --t-border: var(--line);
+  --t-border-strong: var(--line-strong);
+  --t-divider: var(--line);
+  --t-text: var(--text);
+  --t-text-2: var(--composer-text, var(--text));
+  --t-muted: var(--muted);
+  --t-text-on-accent: #fff;
+  --t-accent: var(--brand);
+  --t-accent-hover: var(--flame-mid);
+  --t-accent-soft: var(--sidebar-item-hover);
+  --t-accent-border: var(--flame-border);
+  --t-accent-glow: var(--flame-glow);
+  --t-focus-ring: var(--flame-border);
+  --t-ok: var(--ok);
+  --t-warn: var(--warn);
+  --t-err: var(--err);
+  --t-info: var(--log-info);
+  --t-font-ui: var(--pm-custom-font, 'Manrope', sans-serif);
+  --t-font-display: var(--pm-custom-font, 'Manrope', sans-serif);
+  --t-font-mono: 'IBM Plex Mono', monospace;
+  --t-fs-xs: 12px;
+  --t-fs-sm: 13px;
+  --t-fs-md: 14px;
+  --t-fs-lg: 16px;
+  --t-fs-xl: 20px;
+  --t-radius: var(--radius-md);
+  --t-shadow: var(--shadow-md);
+}
+
+/* The mobile legacy palette is intentionally different from desktop. P1 is
+ * still `dark` on mobile and `light` on desktop. Read the actually displayed
+ * --pm-* cascade, without changing IDs, selectors, or stored preferences.
+ * Root aliases support generated visuals/root probes; body aliases re-resolve
+ * page-local gold chrome overrides on Settings and other non-chat routes.
+ */
+:root:has(body.pm-mobile-active),
+body.pm-mobile-active {
+  --t-bg: var(--pm-bg);
+  --t-sidebar: var(--sidebar-bg, var(--pm-bg));
+  --t-surface: var(--pm-surface);
+  --t-panel: var(--pm-surface);
+  --t-raised: var(--pm-surface-strong);
+  --t-input: var(--pm-surface);
+  --t-overlay: rgba(0, 0, 0, .6);
+  --t-border: var(--pm-border);
+  --t-border-strong: var(--pm-border-strong);
+  --t-divider: var(--pm-border);
+  --t-text: var(--pm-text);
+  --t-text-2: var(--pm-text-soft);
+  --t-muted: var(--pm-muted);
+  --t-text-on-accent: #fff;
+  --t-accent: var(--pm-orange);
+  --t-accent-hover: var(--pm-orange-dark);
+  --t-accent-soft: var(--pm-orange-soft);
+  --t-accent-border: var(--pm-border-strong);
+  --t-accent-glow: var(--pm-orange-soft);
+  --t-focus-ring: var(--pm-border-strong);
+  --t-ok: var(--pm-green);
+  --t-warn: var(--warn, #fbbf24);
+  --t-err: var(--pm-red);
+  --t-info: var(--pm-blue);
+  --t-font-ui: var(--pm-font);
+  --t-font-display: var(--pm-font);
+  --t-font-mono: var(--pm-font-mono, 'IBM Plex Mono', monospace);
+  --t-fs-xs: 12px;
+  --t-fs-sm: 13px;
+  --t-fs-md: 14px;
+  --t-fs-lg: 16px;
+  --t-fs-xl: 20px;
+  --t-radius: var(--pm-radius-md);
+  --t-shadow: var(--pm-shadow-md);
+}
+
+/* Re-declare on body so local mobile palette changes aren't frozen at root. */
+:root,
+body.pm-mobile-active {
+  --prom-bg: var(--t-bg);
+  --prom-surface: var(--t-panel);
+  --prom-surface-secondary: var(--t-raised);
+  --prom-border: var(--t-border);
+  --prom-text: var(--t-text);
+  --prom-muted: var(--t-muted);
+  --prom-accent: var(--t-accent);
+  --prom-success: var(--t-ok);
+  --prom-warning: var(--t-warn);
+  --prom-danger: var(--t-err);
+}
