@@ -3361,11 +3361,10 @@ void main() {
         clearChatLoadRetryTimer();
         if (!__pmChat.threads[requestedSession]?.length) {
           showChatLoadRetry(`Could not load chat: ${err.message || 'Unknown error'}`);
-          if (window.ws?.readyState !== WebSocket.OPEN) setChatConnectionStatus(true, 'Reconnecting to Prometheus');
         } else {
-          pmToast('Showing cached chat. History refresh failed; tap Retry to try again.', 'info');
-          if (window.ws?.readyState !== WebSocket.OPEN) setChatConnectionStatus(true, 'Reconnecting to Prometheus');
+          pmToast('Showing cached chat. Refresh failed; tap Retry.', 'info');
         }
+        if (window.ws?.readyState !== 1) setChatConnectionStatus(true, 'Reconnecting to Prometheus');
       })
       .finally(() => {
         initialSessionLoadPending = false;
