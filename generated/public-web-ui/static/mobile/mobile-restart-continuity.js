@@ -362,3 +362,29 @@ export function dropOrphanLiveRows(thread, keep) {
   }
   return removed;
 }
+
+/**
+ * Whether a replayed frame belongs after a live steer boundary. Moved here from
+ * mobile-chat-page-runtime.js (which re-exports it) to keep that file under its
+ * architecture size ceiling.
+ */
+export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
+  if (!steer) return true;
+  const boundaryStreamId = String(steer.workflowStreamId || '').trim();
+  const frameStreamId = String(frame?.streamId || replayStreamId || '').trim();
+  const boundarySeq = Math.max(0, Math.floor(Number(steer.workflowBoundarySeq || 0) || 0));
+  const frameSeq = Math.max(0, Math.floor(Number(frame?.seq || 0) || 0));
+  if (boundaryStreamId && frameStreamId && frameStreamId !== boundaryStreamId) {
+    // Steer boundaries are sequence-based only within their source stream. A
+    // continued run can acquire a new stream ID, and comparing its gateway
+    // timestamp with the phone's local steer timestamp drops every frame when
+    // the device clock is ahead (common with mobile clocks).
+    return true;
+  }
+  if (boundaryStreamId && frameStreamId === boundaryStreamId && boundarySeq > 0 && frameSeq > 0) {
+    return frameSeq > boundarySeq;
+  }
+  const frameAt = Number(frame?.at || 0) || 0;
+  const steerAt = Number(steer.timestamp || 0) || 0;
+  return !frameAt || !steerAt || frameAt > steerAt;
+}
