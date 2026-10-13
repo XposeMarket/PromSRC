@@ -98,38 +98,143 @@ export function stackAboveComposerTop(els, composerTop, gap = 8, extra = 0) {
   return edge;
 }
 
-/** Pin plan pill + jump button above the composer. Returns the bottom used. */
+/**
+ * Which compact pills share one row (#pm-mobile-runtime-pills):
+ * - 'goal'  goal + collapsed agent pill; the row is the first layer on the
+ *           composer and queued/tool-progress stack ABOVE it.
+ * - 'plan'  plan + collapsed agent pill; the row sits at the plan/agent level,
+ *           ABOVE queued/tool-progress, like either pill alone.
+ * One row = one bottom edge, so paired pills can never sit at different heights.
+ */
+export function runtimePillRow(page) {
+  if (page?.classList?.contains('pm-runtime-goal-agent-pills-paired') === true) return 'goal';
+  if (page?.classList?.contains('pm-runtime-pills-paired') === true) return 'plan';
+  return '';
+}
+
+/**
+ * Element the runtime chrome stacks on: the composer, or the input-mode
+ * launcher that replaces it while the composer is hidden. Pinning against the
+ * launcher keeps hidden-composer layout on the same measured path instead of a
+ * CSS fallback that ignored queued prompts and split paired pills apart.
+ */
+export function runtimeChromeAnchor({ rect, form, page } = {}) {
+  if (!form) return null;
+  if (!form.classList.contains('pm-composer-mode-hidden')) return rect || form.getBoundingClientRect?.() || null;
+  const launcher = page?.querySelector?.('#pm-chat-mode-launcher');
+  const r = launcher && !launcher.hidden ? launcher.getBoundingClientRect?.() : null;
+  return r?.height ? r : null;
+}
+
+const visibleTop = (el) => {
+  if (!el || el.hidden) return Infinity;
+  const r = el.getBoundingClientRect?.();
+  return r?.height ? r.top : Infinity;
+};
+
+/**
+ * Measured top edge of the layers that sit directly on the composer: queued
+ * prompts, tool progress, and the goal strip (or the goal+agent row). Plan and
+ * agent pills stack above this. It used to be derived from summed live-height
+ * vars, which missed each layer's own CSS gap, so the plan/agent pills and the
+ * jump arrow landed 5-7px inside the queued card.
+ */
+export function runtimeStackBase({ anchorRect, page, goalStrip } = {}) {
+  const anchorTop = Number(anchorRect?.top);
+  if (!Number.isFinite(anchorTop)) return null;
+  const rowMode = runtimePillRow(page);
+  const q = (sel) => page?.querySelector?.(sel);
+  return Math.min(
+    anchorTop,
+    visibleTop(q('#pm-mobile-queued-prompts')),
+    visibleTop(q('#pm-tool-progress-dock')),
+    rowMode === 'goal' ? visibleTop(q('#pm-mobile-runtime-pills')) : visibleTop(goalStrip),
+  );
+}
+
+/** Park the jump arrow 10px above the highest visible runtime surface. */
+export function placeJumpAbove({ page, base, planDock, agentDock, jumpButton } = {}) {
+  if (!jumpButton || !Number.isFinite(base)) return;
+  const ceiling = Math.min(
+    base,
+    visibleTop(planDock),
+    visibleTop(agentDock),
+    visibleTop(page?.querySelector?.('#pm-mobile-runtime-pills')),
+    visibleTop(page?.querySelector?.('.pm-chat-connection-status')),
+  );
+  if (!Number.isFinite(ceiling)) return;
+  if (jumpButton.hidden) {
+    // Hidden buttons have no rect to measure. Park it from the layout viewport
+    // so it already clears the stack when scrolling reveals it; the reveal
+    // path re-measures once it is visible.
+    const vh = Number(window.innerHeight || window.visualViewport?.height || 0);
+    if (vh > 0) {
+      jumpButton.style.setProperty('position', 'fixed');
+      jumpButton.style.setProperty('bottom', `${Math.max(0, Math.round(vh - ceiling + 10))}px`);
+    }
+    return;
+  }
+  alignBottomAbove(jumpButton, ceiling, 10);
+}
+
+/**
+ * Pin plan/agent pills + jump button above the composer (or the input-mode
+ * launcher while the composer is hidden). Returns null when nothing could be
+ * measured, otherwise an object: the caller must then NOT re-align the agent
+ * dock vertically (it only keeps its horizontal width lock). Keyboard up:
+ * `{ keyboardTop }`; keyboard down: `{ bottom, docked: true }`.
+ */
 export function pinRuntimeChrome({ rect, form, page, goalStrip, planDock, agentDock, jumpButton } = {}) {
   const visible = form && !form.classList.contains('pm-composer-mode-hidden');
   const kbTop = visible ? keyboardComposerTop(form) : null;
+  const rowMode = runtimePillRow(page);
+  const row = page?.querySelector?.('#pm-mobile-runtime-pills') || null;
+  const css = (name) => Number.parseFloat(page?.style?.getPropertyValue?.(name) || '') || 0;
+  const height = (el) => (el && !el.hidden ? Math.ceil(el.getBoundingClientRect?.().height || 0) : 0);
+  // Paired pills are static children of the row; drop any stale fixed pins.
+  if (rowMode) { unpinChrome(planDock); unpinChrome(agentDock); }
   if (kbTop != null) {
     // Keyboard up: share the composer's fixed-top space. Order bottom-up:
-    // plan/agent pills sit on the composer, the jump button above them.
-    const css = (name) => Number.parseFloat(page?.style?.getPropertyValue?.(name) || '') || 0;
-    const extra = css('--pm-queued-live-height') + css('--pm-tool-progress-live-height');
-    const paired = page?.classList?.contains('pm-runtime-goal-agent-pills-paired') === true;
-    const pills = (paired ? [planDock, page?.querySelector?.('#pm-mobile-runtime-pills')] : [planDock, agentDock]).filter((el) => el && !el.hidden);
-    const pillEdge = Math.min(...pills.map((el) => stackAboveComposerTop([el], kbTop, 8, extra)), kbTop - 8 - extra);
+    // goal row, queued + tool progress, plan/agent pills, then the jump button.
+    const queuedAndTool = css('--pm-queued-live-height') + css('--pm-tool-progress-live-height');
+    if (rowMode === 'goal') {
+      const rowEdge = row ? stackAboveComposerTop([row], kbTop, 8, 0) : kbTop - 8;
+      stackAboveComposerTop([jumpButton], rowEdge + 8 - queuedAndTool, 10);
+      return { keyboardTop: kbTop };
+    }
+    const pills = (rowMode === 'plan' ? [row] : [planDock, agentDock]).filter((el) => el && !el.hidden);
+    const pillEdge = Math.min(...pills.map((el) => stackAboveComposerTop([el], kbTop, 8, queuedAndTool)), kbTop - 8 - queuedAndTool);
     stackAboveComposerTop([jumpButton], pillEdge + 8, 10);
     return { keyboardTop: kbTop };
   }
-  for (const el of [planDock, agentDock, jumpButton]) el?.style.removeProperty('top');
-  unpinChrome(page?.querySelector?.('#pm-mobile-runtime-pills'));
+  for (const el of [planDock, agentDock, jumpButton, row]) el?.style.removeProperty('top');
   if (agentDock?.style.getPropertyValue('bottom') === 'auto') agentDock.style.removeProperty('bottom');
-  const bottom = visible ? runtimeChromeBottom({ rect: rect || form.getBoundingClientRect?.(), page, goalStrip }) : null;
-  for (const el of [planDock, jumpButton]) {
+  // The goal row keeps its CSS slot directly on the composer.
+  if (rowMode !== 'plan') unpinChrome(row);
+  const anchorRect = runtimeChromeAnchor({ rect, form, page });
+  const bottom = anchorRect ? runtimeChromeBottom({ rect: anchorRect, page, goalStrip }) : null;
+  const targets = (rowMode === 'plan' ? [row] : rowMode === 'goal' ? [] : [planDock]).filter(Boolean);
+  for (const el of [...targets, jumpButton]) {
     if (!el) continue;
     if (bottom == null) unpinChrome(el);
     else el.style.setProperty('position', 'fixed');
   }
   if (bottom == null) return null;
-  planDock?.style.setProperty('bottom', `${bottom}px`);
-  const composerTop = Number((rect || form.getBoundingClientRect?.())?.top);
-  const stack = bottom - Math.max(0, Math.round(Number(window.visualViewport?.height || window.innerHeight || 0) - composerTop + 8));
-  alignBottomAbove(planDock, composerTop - Math.max(0, stack));
-  const height = (el) => (el && !el.hidden ? Math.ceil(el.getBoundingClientRect?.().height || 0) : 0);
-  const pills = Math.max(height(planDock), agentDock?.classList.contains('is-collapsed') ? height(agentDock) : 0);
+  const base = runtimeStackBase({ anchorRect, page, goalStrip });
+  // The agent dock sits on the measured top of queued/tool/goal layers too
+  // (summed live-height vars missed each layer's CSS gap and overlapped the
+  // queued card). A collapsed pill riding a shared row is placed by the row.
+  const agentFree = agentDock && !agentDock.hidden
+    && !(rowMode && agentDock.classList?.contains('is-collapsed'));
+  if (agentFree) targets.push(agentDock);
+  for (const el of targets) {
+    el.style.setProperty('bottom', `${bottom}px`);
+    alignBottomAbove(el, base);
+  }
+  // Seed, then measure: the arrow clears whatever is actually on the plan/agent
+  // level, collapsed OR expanded (an open agent card used to count as 0px).
+  const pills = Math.max(height(planDock), height(agentDock), rowMode ? height(row) : 0);
   jumpButton?.style.setProperty('bottom', `${bottom + (pills ? pills + 10 : 10)}px`);
-  alignBottomAbove(jumpButton, composerTop - Math.max(0, stack) - (pills ? pills + 2 : 2));
-  return bottom;
+  placeJumpAbove({ page, base, planDock, agentDock, jumpButton });
+  return { bottom, docked: true };
 }

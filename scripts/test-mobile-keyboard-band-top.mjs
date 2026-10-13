@@ -61,4 +61,24 @@ assert.equal(jump.s.get('top'), '362px', 'jump button stacks 10px above the pill
 // Keyboard down (no fixed top on the composer): keyboard pins are dropped.
 composer.style.removeProperty('top');
 assert.equal(keyboardComposerTop(composer), null);
-console.log('[mobile keyboard band top] layout + visual rect spaces, settle loop, dock alignment: ok');
+// Composer pill stack (IMG_0485 steer): paired pills share one row, hidden
+// composer anchors on the launcher, and the arrow clears queued + agent cards.
+const { runtimePillRow, runtimeChromeAnchor, runtimeStackBase, placeJumpAbove } = await import('../web-ui/src/mobile/mobile-runtime-chrome.js');
+const cls = (...names) => ({ contains: (n) => names.includes(n) });
+assert.equal(runtimePillRow({ classList: cls('pm-runtime-pills-paired') }), 'plan');
+assert.equal(runtimePillRow({ classList: cls('pm-runtime-goal-agent-pills-paired') }), 'goal');
+assert.equal(runtimePillRow({ classList: cls() }), '');
+const launcherRect = { top: 535, bottom: 589, height: 54 };
+const hiddenForm = { classList: cls('pm-composer-mode-hidden'), getBoundingClientRect: () => ({ top: 0, height: 0 }) };
+const launcherPage = { querySelector: (s) => (s === '#pm-chat-mode-launcher' ? { hidden: false, getBoundingClientRect: () => launcherRect } : null) };
+assert.deepEqual(runtimeChromeAnchor({ form: hiddenForm, page: launcherPage }), launcherRect, 'hidden composer anchors on the launcher');
+const rectEl = (top, height) => ({ hidden: false, getBoundingClientRect: () => ({ top, bottom: top + height, height }) });
+const stackPage = { classList: cls(), querySelector: (s) => (s === '#pm-mobile-queued-prompts' ? rectEl(444, 76) : null) };
+assert.equal(runtimeStackBase({ anchorRect: launcherRect, page: stackPage }), 444, 'plan/agent level starts at the queued card top');
+const s2 = new Map([['bottom', '100px']]);
+globalThis.window = { visualViewport: { height: 844, offsetTop: 0 }, innerHeight: 844 };
+globalThis.getComputedStyle = () => ({ bottom: s2.get('bottom') });
+const jumpEl = { hidden: false, style: { getPropertyValue: (k) => s2.get(k) || '', setProperty: (k, v) => s2.set(k, v) }, getBoundingClientRect() { const b = 844 - Number.parseFloat(s2.get('bottom')); return { top: b - 38, bottom: b, height: 38 }; } };
+placeJumpAbove({ page: stackPage, base: 444, agentDock: rectEl(338, 128), jumpButton: jumpEl });
+assert.equal(jumpEl.getBoundingClientRect().bottom, 328, 'arrow sits 10px above an expanded agent card');
+console.log('[mobile keyboard band top] layout + visual rect spaces, settle loop, dock alignment, pill stack: ok');
