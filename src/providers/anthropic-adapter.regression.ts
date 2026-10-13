@@ -33,7 +33,7 @@ const call = [
 ];
 const text = [
   event('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }),
-  event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Done ✅' } }),
+  event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Done ?' } }),
   event('content_block_stop', { index: 0 }),
 ];
 
@@ -77,9 +77,33 @@ async function main() {
     assert.equal(recovery.inspect(edit.message, edit.stopReason).action, 'accept');
     messages.push(edit.message, { role: 'tool', tool_call_id: 'write_1', content: 'Saved game.c' });
     nextResponse = () => stream([...text, ...finish('end_turn')], false);
-    assert.equal((await run()).message.content, 'Done ✅');
+    assert.equal((await run()).message.content, 'Done ?');
     assert.ok(requests.every(r => r.tools?.[0].name === 'write_file'));
     assert.equal(requests.at(-1).messages.at(-1).content[0].type, 'tool_result');
+
+    // Volatile per-turn context leaves `system` and rides after the history
+    // cache breakpoint, so history stays a cache hit across turns and rounds.
+    const volMessages: ChatMessage[] = [
+      { role: 'system', content: `${'Stable policy. '.repeat(400)}${PROMPT_CACHE_MARKER}TODAY_NOTES turn 1` },
+      { role: 'user', content: 'yo' },
+    ];
+    nextResponse = () => stream([...text, ...finish('end_turn')]);
+    await adapter.chat(volMessages, 'claude-fable-5-1', { onToken: () => {} });
+    const turn1 = requests.at(-1);
+    assert.ok(!JSON.stringify(turn1.system).includes('TODAY_NOTES'), 'volatile tail must not stay in system');
+    const t1Last = turn1.messages.at(-1).content;
+    assert.equal(t1Last.at(-1).cache_control, undefined, 'volatile block stays uncached');
+    assert.match(t1Last.at(-1).text, /TODAY_NOTES turn 1/);
+    assert.deepEqual(t1Last.at(-2).cache_control, { type: 'ephemeral' }, 'history breakpoint sits before volatile');
+    volMessages[0].content = `${'Stable policy. '.repeat(400)}${PROMPT_CACHE_MARKER}TODAY_NOTES turn 2`;
+    volMessages.push({ role: 'assistant', content: 'hey' }, { role: 'user', content: 'next' });
+    await adapter.chat(volMessages, 'claude-fable-5-1', { onToken: () => {} });
+    const turn2 = requests.at(-1);
+    assert.deepEqual(turn2.system, turn1.system, 'system prefix identical across turns');
+    assert.equal(turn2.messages[0].content, 'yo', 'prior user turn carries no stale volatile');
+    const breakpoints = JSON.stringify(turn2).split('"cache_control"').length - 1;
+    assert.ok(breakpoints <= 4, `Anthropic allows at most 4 cache breakpoints, got ${breakpoints}`);
+    assert.match(turn2.messages.at(-1).content.at(-1).text, /TODAY_NOTES turn 2/);
 
     // Steer acknowledgements and orphan tool notes must not end with assistant prefill.
     messages.push({ role: 'user', content: 'Use the other install folder.' }, { role: 'assistant', content: 'Understood.' });
