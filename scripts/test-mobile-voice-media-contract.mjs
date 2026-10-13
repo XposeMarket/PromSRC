@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const pageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+// The camera module was split out of the page runtime (2026-10-13); contracts span both.
+const pageRuntime = [read('web-ui/src/mobile/mobile-chat-page-runtime.js'), read('web-ui/src/mobile/mobile-chat-camera.js')].join('\n');
 const pages = [read('web-ui/src/mobile/mobile-pages.js'), pageRuntime].join('\n');
 const voiceRuntime = read('web-ui/src/mobile/mobile-voice-runtime.js');
 const realtimeRuntime = read('web-ui/src/mobile/mobile-voice-realtime-runtime.js');
@@ -17,7 +18,7 @@ const desktop = [read('web-ui/index.html'), read('web-ui/src/legacy-desktop-boot
 const baseCss = read('web-ui/src/styles/base.css');
 const slashCommands = read('web-ui/src/features/chat/core/slash-commands.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
-const generatedPageRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js');
+const generatedPageRuntime = [read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js'), read('generated/public-web-ui/static/mobile/mobile-chat-camera.js')].join('\n');
 const generatedVoicePage = read('generated/public-web-ui/static/mobile/mobile-voice-page.js');
 const generatedRealtimeRuntime = read('generated/public-web-ui/static/mobile/mobile-voice-realtime-runtime.js');
 const generatedVoiceMedia = [generatedPages, generatedPageRuntime, generatedVoicePage, generatedRealtimeRuntime].join('\n');
