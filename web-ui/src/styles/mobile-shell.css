@@ -3,6 +3,32 @@
  * Desktop UI is untouched otherwise.
  */
 
+/* Mobile sweep-2: creative composer sits above the floating tab bar, chip rows hide scroll bars,
+   loading skeletons are subtle, and the empty tasks count pill is hidden. */
+body.pm-mobile-active .pm-body.pm-creative {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--pm-mobile-tabbar-bottom, 10px) + 56px + 140px);
+}
+body.pm-mobile-active .pm-creative-composer {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--pm-mobile-tabbar-bottom, 10px) + 56px + 12px);
+}
+body.pm-mobile-active :is(.pm-creative-providers, .pm-creative-templates, .pm-creative-composer-meta, .pm-creative-chiprow, .pm-creative-modeswitch, .pm-creative-gallery) {
+  scrollbar-width: none;
+}
+body.pm-mobile-active :is(.pm-creative-providers, .pm-creative-templates, .pm-creative-composer-meta, .pm-creative-chiprow, .pm-creative-modeswitch, .pm-creative-gallery)::-webkit-scrollbar {
+  display: none;
+}
+body .pm-more-skeleton span {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--pm-text, #fff) 4%, transparent) 0%,
+    color-mix(in srgb, var(--pm-text, #fff) 9%, transparent) 50%,
+    color-mix(in srgb, var(--pm-text, #fff) 4%, transparent) 100%);
+  background-size: 220% 100%;
+  border: 1px solid color-mix(in srgb, var(--pm-text, #fff) 6%, transparent);
+  animation: pm-more-shimmer 1.6s linear infinite;
+}
+body .pm-more-skeleton.pm-tasks-skel span { height: 56px; }
+.pm-count-pill:empty { display: none; }
+
 :root {
   --pm-bg:            #f7f1e6;
   --pm-bg-soft:       #f3ead9;

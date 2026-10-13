@@ -964,8 +964,9 @@ async function _mountEvidenceReview(page, navigate, tab = 'context') {
   const { api } = await import('../api.js');
   const { mountContextReview } = await import('../context-review.js');
   const launch = document.createElement('button');
-  launch.className = 'pm-btn'; launch.type = 'button';
-  launch.textContent = 'Review context & skill evidence';
+  launch.className = 'pm-evidence-launch'; launch.type = 'button';
+  launch.textContent = tab === 'skills' ? 'Skill evidence' : 'Context evidence';
+  launch.title = 'Review context & skill evidence';
   const host = document.createElement('div');
   host.style.cssText = 'width:100%;min-width:0';
   launch.onclick = () => {
@@ -973,7 +974,10 @@ async function _mountEvidenceReview(page, navigate, tab = 'context') {
     host.dataset.mounted = '1';
     mountContextReview(host, { api, mobile: true, navigate, initialTab: tab });
   };
-  page.prepend(host); page.prepend(launch);
+  // Sit under the page header, never on top of it.
+  const anchor = page.querySelector('.pm-title-row') || page.querySelector('.pm-header');
+  if (anchor) anchor.after(launch, host);
+  else { page.prepend(host); page.prepend(launch); }
 }
 
 export async function renderMorePage(page, { section = '', navigate }) {

@@ -210,7 +210,7 @@ body:not(.pm-mobile-active) :is(.right-panel, .sources-minimized-panel) :is(.sou
   color: var(--text);
   background: color-mix(in srgb, var(--text) 8%, transparent) !important;
 }
-.sources-minimized-card { border-color: color-mix(in srgb, #fff 7%, transparent); }
+.sources-minimized-card { border-color: color-mix(in srgb, var(--text) 7%, transparent); }
 .sources-minimized-body > .source-panel-section { border-top: 0; }
 
 /* ── Settings: model route rows ─────────────────────────────────
@@ -229,3 +229,74 @@ body:not(.pm-mobile-active) :is(.right-panel, .sources-minimized-panel) :is(.sou
   background: color-mix(in srgb, #22c55e 10%, transparent);
 }
 #settings-modal .settings-connected-pill-label { color: #4ade80; font-size: 12px; font-weight: 600; }
+
+/* ── Desktop pass 2: compact navigation rail ──────────────────── */
+body:not(.pm-mobile-active) .sidebar.collapsed {
+  width: 64px; min-width: 64px; visibility: visible; pointer-events: auto;
+  overflow: visible !important; background: var(--panel) !important;
+  border-right: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
+}
+body:not(.pm-mobile-active) .sidebar.collapsed :is(.sidebar-fixed, .sidebar-footer) { padding: 10px; overflow: visible; }
+body:not(.pm-mobile-active) .sidebar.collapsed .sidebar-top { flex-direction: column; gap: 8px; }
+body:not(.pm-mobile-active) .sidebar.collapsed .sidebar-top-actions { flex-direction: column; align-items: center; gap: 4px; }
+body:not(.pm-mobile-active) .sidebar.collapsed #sidebarToggle { display: flex !important; }
+body:not(.pm-mobile-active) .sidebar.collapsed .nav-group { display: flex !important; flex-direction: column; gap: 4px; padding: 8px 0; }
+body:not(.pm-mobile-active) .sidebar.collapsed :is(.nav-item, .new-chat, .sidebar-header-btn) {
+  width: 40px; height: 36px; min-height: 36px; margin: 0 auto; padding: 0;
+  display: flex; align-items: center; justify-content: center; gap: 0;
+  border: 0; border-radius: 10px; background: transparent; box-shadow: none;
+}
+body:not(.pm-mobile-active) .sidebar.collapsed :is(.nav-item, .new-chat, .sidebar-header-btn):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text);
+}
+body:not(.pm-mobile-active) .sidebar.collapsed .nav-item.active { background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); }
+body:not(.pm-mobile-active) .sidebar.collapsed .nav-icon { background: transparent; border: 0; box-shadow: none; flex-shrink: 0; }
+body:not(.pm-mobile-active) .sidebar.collapsed :is(.sidebar-scroll, .sidebar-pages-toggle) { display: none !important; }
+body:not(.pm-mobile-active) .sidebar.collapsed .sidebar-footer { margin-top: auto; }
+body:not(.pm-mobile-active) .sidebar.collapsed .sidebar-footer .nav-item { font-size: 0; }
+body:not(.pm-mobile-active) .sidebar.collapsed .more-popover { left: calc(100% + 10px); right: auto; }
+body:not(.pm-mobile-active) .sidebar.collapsed ~ .workspace .page-view { left: 64px !important; }
+
+/* One menu surface contract. Keep positioning and visibility owned by each
+   menu; search/priority and Prom Bot use the same surface without pretending
+   their richer content is a list of actions. */
+body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
+  box-sizing: border-box; padding: 6px; border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
+  background: var(--panel) !important; color: var(--text);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--text) 14%, transparent);
+  font-family: inherit; font-size: 13px; font-weight: 500;
+  max-width: min(420px, calc(100vw - 24px));
+}
+body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .sidebar-priority-row, .prom-bot-agent-row) {
+  box-sizing: border-box; min-height: 34px; padding: 7px 10px; border-radius: 8px;
+  border: 0; font-family: inherit; font-size: 13px; font-weight: 500; line-height: 20px; color: var(--text);
+}
+body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover) :is([role="menuitem"], .more-popover-item, .model-switcher-row, .model-switcher-option, .sidebar-priority-row, .prom-bot-agent-row):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--text) 6%, transparent); }
+
+/* Desktop page chrome: quiet boundaries, wrapping toolbars, readable forms. */
+body:not(.pm-mobile-active) .page-view { background: var(--panel); }
+body:not(.pm-mobile-active) :is(.page-view, #settings-modal) :is(.card, .panel, .settings-card, .settings-section, .hub-card, .plugin-card, .memory-card, .schedule-card, .team-card, .subagent-card) { border-color: color-mix(in srgb, var(--text) 8%, transparent); }
+body:not(.pm-mobile-active) :is(.page-view, #settings-modal) :is(.page-header, .page-toolbar, .settings-section-header) { min-width: 0; flex-wrap: wrap; gap: 10px; }
+body:not(.pm-mobile-active) :is(.page-view, #settings-modal) :is(input, select, textarea) { max-width: 100%; box-sizing: border-box; }
+body:not(.pm-mobile-active) :is(.page-view, #settings-modal) :is(.empty-state, .empty-state-text, .page-subtitle) { overflow-wrap: anywhere; }
+body:not(.pm-mobile-active) :is(.panel-toggle-btn, .sidebar .icon-btn) { background: transparent; border-color: transparent; box-shadow: none; }
+body:not(.pm-mobile-active) :is(.panel-toggle-btn, .sidebar .icon-btn):hover { background: color-mix(in srgb, var(--text) 8%, transparent); border-color: transparent; }
+body:not(.pm-mobile-active) .panel-toggle-btn.active { background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); border-color: transparent; box-shadow: none; }
+body:not(.pm-mobile-active).left-collapsed .sidebar-inner { opacity: 1; pointer-events: auto; overflow: visible; }
+body:not(.pm-mobile-active) .sidebar.collapsed .sidebar-footer { border-top: 0; background: transparent; }
+body:not(.pm-mobile-active) .sidebar.collapsed .more-popover { left: 74px; }
+body:not(.pm-mobile-active) .model-switcher-popover :is(.model-switcher-row strong, .model-switcher-option span) { min-width: 0; overflow-wrap: anywhere; }
+body:not(.pm-mobile-active) .model-switcher-popover .model-switcher-row strong { font-size: 13px; font-weight: 500; }
+/* Rail controls open usable flyouts rather than clipping into the 64px lane. */
+body:not(.pm-mobile-active) .sidebar.collapsed.sidebar-search-open .sidebar-search:not([hidden]) { display: flex !important; position: fixed; left: 74px; top: 56px; width: 280px; z-index: 1100; }
+body:not(.pm-mobile-active) .sidebar.collapsed #sidebar-priority-panel:not([hidden]) { position: fixed; left: 74px; top: 100px; width: 320px; max-height: calc(100vh - 120px); overflow: auto; z-index: 1100; }
+body:not(.pm-mobile-active) .sidebar.collapsed #prom-bot-sidebar-section:not([hidden]) { display: block !important; position: fixed; left: 74px; top: 144px; width: 280px; max-height: calc(100vh - 164px); overflow: auto; z-index: 1100; }
+/* Explicit geometry wins over the legacy themed header's fixed-height row. */
+body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-top { height: auto !important; min-height: 0 !important; flex: 0 0 auto; padding: 0 !important; align-items: center; }
+body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-top-actions { position: static !important; height: auto !important; transform: none !important; flex: 0 0 auto; }
+body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-fixed { gap: 8px !important; padding: 10px !important; }
+body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-scroll { display: flex !important; padding: 0 10px; overflow: visible; flex: 1 1 auto; }
+body:not(.pm-mobile-active) #sidebar.collapsed .nav-group { gap: 4px !important; }
+body:not(.pm-mobile-active) #sidebar.collapsed :is(.nav-item, .new-chat) { padding: 0 !important; gap: 0 !important; }
+body:not(.pm-mobile-active) #sidebar.collapsed :is(.nav-item, .new-chat):hover { background: color-mix(in srgb, var(--text) 8%, transparent) !important; }
