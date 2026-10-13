@@ -213,6 +213,43 @@ body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-run
   pointer-events: none;
 }
 
+/* Plan + collapsed agent pill: one centered row on the plan/agent level, above
+   queued prompts and tool progress. pinRuntimeChrome pins the row itself, so
+   both pills share one bottom edge whether the composer is open or hidden
+   (they used to be positioned separately and sat 4-7px apart). */
+body.pm-mobile-active .pm-page.pm-runtime-pills-paired #pm-mobile-runtime-pills {
+  position: fixed;
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  bottom: calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-queued-live-height, 0px)
+    + var(--pm-tool-progress-live-height, 0px)
+  );
+  z-index: 6;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--pm-composer-stack-gap, 8px);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-page.pm-runtime-pills-paired #pm-mobile-runtime-pills > :is(.pm-main-plan-dock, .pm-background-spawn-dock) {
+  position: static !important;
+  inset: auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  overflow: visible;
+  transform: none !important;
+  transition: none;
+}
+body.pm-mobile-active .pm-page.pm-runtime-pills-paired #pm-mobile-runtime-pills > .pm-mobile-goal-strip {
+  display: none;
+}
+
 body.pm-mobile-active .pm-background-spawn-dock:not(.is-collapsed) {
   left: var(--pm-composer-stack-inset);
   right: var(--pm-composer-stack-inset);

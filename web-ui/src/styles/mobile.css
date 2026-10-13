@@ -6803,16 +6803,7 @@ html.pm-session-context-open * {
   display: none !important;
 }
 
-.pm-runtime-pills-paired .pm-main-plan-dock {
-  left: auto;
-  right: calc(50% + 4px);
-  transform: translateY(4px);
-}
-.pm-runtime-pills-paired .pm-background-spawn-dock.is-collapsed {
-  left: calc(50% + 4px);
-  right: auto;
-  transform: none;
-}
+/* Paired plan + agent pills: one flex row owned by mobile-composer-stack.css. */
 .pm-main-plan-dock.is-open ~ .pm-background-spawn-dock,
 .pm-page.pm-bg-agents-open .pm-main-plan-dock { display: none !important; }
 .pm-background-spawn-dock.is-collapsed {
