@@ -296,6 +296,7 @@
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
+<link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <meta name="application-name" content="Prometheus">
@@ -2889,33 +2890,32 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
       <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Automation &amp; Tasks</span>
-      <span id="bgt-count" style="font-size:11px;background:#eaf2ff;color:#0d4faf;border-radius:999px;padding:2px 10px;font-weight:700">0 tasks</span>
+      <span id="bgt-count" style="font-size:11px;background:color-mix(in srgb, var(--brand) 14%, transparent);color:var(--brand);border-radius:999px;padding:2px 10px;font-weight:700">0 tasks</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button
         id="bgt-heartbeat-label"
         onclick="openSettings('heartbeat')"
-        style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer"
+        style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer"
         title="Unified heartbeat settings"
       >• heartbeat: --</button>
-      <button id="bgt-edit-btn" onclick="toggleBgtEditMode()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer">Edit</button>
-      <button onclick="refreshBgTasks()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
+      <button id="bgt-edit-btn" class="bgt-icon-btn" onclick="toggleBgtEditMode()" title="Edit tasks" aria-label="Edit tasks"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
+      <button class="bgt-icon-btn" onclick="refreshBgTasks()" title="Refresh" aria-label="Refresh tasks"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4L3 10m0-4v4h4M4 13a8 8 0 0 0 14.9 4L21 14m0 4v-4h-4"/></svg></button>
     </div>
   </div>
 
   <div id="bgt-search-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0">
-    <label for="bgt-search" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Search</label>
     <div style="position:relative;display:flex;align-items:center;flex:1;max-width:520px">
-      <input id="bgt-search" type="search" autocomplete="off" placeholder="Search tasks and managed threads" aria-label="Search tasks and managed threads" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 34px 8px 11px;font-size:12px;font-family:inherit;background:var(--panel);color:var(--text);outline:none">
+      <input id="bgt-search" type="search" autocomplete="off" placeholder="Search tasks and managed threads" aria-label="Search tasks and managed threads" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:9px;padding:8px 34px 8px 11px;font-size:12px;font-family:inherit;background:var(--panel);color:var(--text);outline:none">
       <button id="bgt-search-clear" type="button" aria-label="Clear task search" style="position:absolute;right:6px;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;visibility:hidden">×</button>
     </div>
     <span id="bgt-search-results" aria-live="polite" style="font-size:11px;color:var(--muted)"></span>
   </div>
 
   <!-- Needs you: items blocked on the user, resolved in place through the same endpoints chat uses -->
-  <section id="bgt-needs-you-wrap" aria-label="Needs you" style="padding:0 0 12px">
-    <h3 style="margin:4px 0 8px;font-size:14px">Needs you</h3>
-    <div id="bgt-needs-you" style="display:flex;flex-direction:column;gap:10px"></div>
+  <section id="bgt-needs-you-wrap" aria-label="Needs you">
+    <h3 class="bgt-section-title">Needs you</h3>
+    <div id="bgt-needs-you"></div>
   </section>
 
   <!-- Kanban columns -->
@@ -2928,7 +2928,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);flex-shrink:0">
       <span id="bgt-panel-title" style="font-size:14px;font-weight:800">Task Details</span>
       <div style="display:flex;gap:8px">
-        <button id="bgt-panel-pause" onclick="bgtPauseResume()" style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted)">Pause</button>
+        <button id="bgt-panel-pause" onclick="bgtPauseResume()" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);border-radius:8px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted)">Pause</button>
         <button onclick="closeBgtPanel()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted);line-height:1">&#x2715;</button>
       </div>
     </div>
@@ -2939,7 +2939,7 @@
     <div id="bgt-chat-bar" style="flex-shrink:0;border-top:1px solid var(--line);padding:10px 12px;background:var(--panel);display:flex;flex-direction:column;gap:6px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Chat with agent</div>
       <div style="display:flex;gap:8px;align-items:flex-end">
-        <textarea id="bgt-chat-input" rows="2" placeholder="Steer this task without creating a new one... (Shift+Enter for newline)" style="flex:1;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();bgtChatSend();}"></textarea>
+        <textarea id="bgt-chat-input" rows="2" placeholder="Steer this task without creating a new one... (Shift+Enter for newline)" style="flex:1;resize:none;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();bgtChatSend();}"></textarea>
         <button onclick="bgtChatSend()" style="background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;height:36px">Send</button>
       </div>
     </div>
@@ -2951,12 +2951,12 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
       <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Schedules</span>
-      <span id="schedule-count" style="font-size:11px;background:#eaf2ff;color:#0d4faf;border-radius:999px;padding:2px 10px;font-weight:700">0 schedules</span>
-      <span style="font-size:11px;color:var(--muted);padding:2px 8px;border:1px solid var(--line);border-radius:6px;margin-left:4px">one-off &amp; recurring tasks &mdash; team agents live in Teams</span>
+      <span id="schedule-count" style="font-size:11px;background:color-mix(in srgb, var(--brand) 14%, transparent);color:var(--brand);border-radius:999px;padding:2px 10px;font-weight:700">0 schedules</span>
+      <span style="font-size:11px;color:var(--muted);padding:2px 8px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;margin-left:4px">one-off &amp; recurring tasks &mdash; team agents live in Teams</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button onclick="openScheduleCreateModal()" style="border:1px solid var(--brand);background:var(--brand);color:white;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">+ New Schedule</button>
-      <button onclick="refreshSchedules()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
+      <button onclick="refreshSchedules()" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
     </div>
   </div>
 
@@ -3773,15 +3773,12 @@
           </div>
           <div class="settings-section-panel settings-onboarding-panel">
             <div class="settings-onboarding-copy">
-              <div class="settings-section-description">
-                Replay the clean tutorial, run the no-write dev test flow, or reset onboarding intentionally.
-              </div>
               <div id="settings-onboarding-status" class="settings-row-status"></div>
             </div>
             <div class="settings-row-actions">
               <button class="btn btn-sm" onclick="replayOnboardingTutorial()" style="background:var(--brand);color:#fff;border:none">Replay tutorial</button>
-              <button class="btn btn-sm" onclick="runOnboardingDevTest()" style="background:#fff;color:var(--text);border:1px solid var(--line)">Dev test</button>
-              <button class="btn btn-sm" onclick="redoOnboardingFromSettings()" style="background:#fff;color:#b91c1c;border:1px solid #fecaca">Redo onboarding...</button>
+              <button class="btn btn-sm" onclick="runOnboardingDevTest()" style="background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent)">Dev test</button>
+              <button class="btn btn-sm" onclick="redoOnboardingFromSettings()" style="background:transparent;color:#f87171;border:none">Redo onboarding...</button>
             </div>
           </div>
         </section>
@@ -3889,7 +3886,7 @@
             <div class="settings-row settings-auto-settle-row">
               <div class="settings-row-copy">
                 <div class="settings-row-label">Move untouched chats to Settled Chats</div>
-                <div class="settings-row-description">Choose when inactivity should qualify a chat.</div>
+                
               </div>
               <select id="settings-auto-settle-after" class="settings-row-select" aria-label="Auto-settle inactivity period">
                 <option value="0">Never</option>
@@ -3920,7 +3917,7 @@
             <h2>Theme</h2>
             <span class="settings-help" tabindex="0" aria-label="Theme technical details" data-settings-help="Choose a preset or build a custom Prometheus theme. Presets remain available from the top-bar theme button.">?</span>
           </div>
-          <div class="settings-section-description appearance-theme-intro">Choose a starting point for the workspace. Your custom colors and typography stay on this device until you switch back to a preset.</div>
+          
           <div id="theme-picker-grid" class="appearance-theme-grid"></div>
           <div id="appearance-active-theme" class="appearance-active-theme" role="status" aria-live="polite"></div>
         </section>
@@ -3998,7 +3995,7 @@
 
 	    <div id="settings-panel-heartbeat" style="display:none;padding:14px 16px">
 	      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-	        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+	        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
 	          <div class="right-section-title" style="margin-bottom:8px">Main Agent Heartbeat</div>
 	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px">
 	            <span style="flex:1">Enable periodic heartbeat runs</span>
@@ -4007,34 +4004,34 @@
 	          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
 	            <div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Interval (minutes)</label>
-	              <input id="settings-hb-interval" type="number" min="1" max="1440" value="30" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:13px;box-sizing:border-box" />
+	              <input id="settings-hb-interval" type="number" min="1" max="1440" value="30" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:13px;box-sizing:border-box" />
 	            </div>
 	            <div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Model Override</label>
-	              <input id="settings-hb-model" type="text" placeholder="blank = default" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+	              <input id="settings-hb-model" type="text" placeholder="blank = default" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
 	            </div>
 	          </div>
 	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
 	            <span style="flex:1">Review all teams after each heartbeat run</span>
 	            <button id="settings-hb-review-teams" class="appearance-switch" type="button" role="switch" aria-checked="false" aria-label="Review all teams after each heartbeat run" onclick="toggleHeartbeatSetting('settings-hb-review-teams')"><span class="appearance-switch-thumb"></span></button>
 	          </div>
-	          <div id="settings-hb-path" style="font-size:11px;color:var(--muted);padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;word-break:break-all">HEARTBEAT.md path: -</div>
+	          <div id="settings-hb-path" style="font-size:11px;color:var(--muted);padding:8px 10px;background:var(--panel-2);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;word-break:break-all">HEARTBEAT.md path: -</div>
 	          <div style="display:flex;gap:8px;margin-top:12px">
 	            <button class="btn btn-sm" onclick="saveHeartbeatSettings()">Save Heartbeat</button>
-	            <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadHeartbeatSettings(true)">Reload</button>
+	            <button class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)" onclick="loadHeartbeatSettings(true)">Reload</button>
 	          </div>
 	          <div id="settings-hb-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
 	        </div>
-	        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;display:flex;flex-direction:column;gap:8px">
+	        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent);display:flex;flex-direction:column;gap:8px">
 	          <div class="right-section-title">HEARTBEAT.md Instructions</div>
-	          <div id="settings-hb-editor-wrap" style="border:1px solid var(--line);border-radius:10px;overflow:hidden;min-height:240px"></div>
+	          <div id="settings-hb-editor-wrap" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;overflow:hidden;min-height:240px"></div>
 	          <div style="font-size:11px;color:var(--muted);line-height:1.6">
 	            Persisted to <code style="background:var(--bg-soft);padding:1px 4px;border-radius:4px">HEARTBEAT.md</code> in the main workspace. Run on each heartbeat tick.
 	          </div>
 	        </div>
 	      </div>
 		      <!-- Subagent schedules now live in Scheduled Tasks -->
-		      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+		      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
 		        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
 		          <div class="right-section-title">Subagent Schedules</div>
 		        </div>
@@ -4138,21 +4135,21 @@
     </div>
 
     <div id="settings-panel-security" style="display:none;padding:14px 16px">
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
           <div>
             <div class="right-section-title" style="margin-bottom:4px">Tool Permissions</div>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
-          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
+          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
             <input id="settings-terminal-permission-default" type="radio" name="settings-terminal-permission-mode" value="default" checked style="margin-top:3px" />
             <span>
               <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Default Permissions</span>
               <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Apply capability-based approvals to writes, destructive actions, external actions, and terminal commands.</span>
             </span>
           </label>
-          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
+          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
             <input id="settings-terminal-permission-lite" type="radio" name="settings-terminal-permission-mode" value="lite" style="margin-top:3px" />
             <span>
               <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Lite Permissions</span>
@@ -4170,28 +4167,28 @@
         </div>
         <div id="settings-security-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
       </div>
-      <div class="settings-command-permissions-panel" style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+      <div class="settings-command-permissions-panel" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
           <div>
             <div class="right-section-title" style="margin-bottom:4px">Always-Allowed Commands</div>
           </div>
           <div class="settings-command-permissions-actions">
             <button id="settings-command-permissions-toggle" type="button" class="btn btn-sm settings-command-permissions-toggle" aria-expanded="false" aria-controls="settings-command-permissions-details" onclick="toggleCommandPermissionList()">View commands</button>
-            <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Refresh</button>
+            <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text);flex-shrink:0">Refresh</button>
           </div>
         </div>
         <div id="settings-command-permissions-details" class="settings-command-permissions-details" hidden>
           <div id="settings-command-permissions-list" class="settings-command-permissions-list"></div>
         </div>
       </div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px">
         <div class="right-section-title" style="margin-bottom:8px">File Access</div>
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Workspace Path</label>
-        <input id="settings-workspace-path" type="text" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:10px" placeholder="e.g. %APPDATA%\Prometheus\workspace" />
+        <input id="settings-workspace-path" type="text" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:10px" placeholder="e.g. %APPDATA%\Prometheus\workspace" />
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Allowed Paths (one per line)</label>
-        <textarea id="settings-allowed-paths" style="width:100%;min-height:120px;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
+        <textarea id="settings-allowed-paths" style="width:100%;min-height:120px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
         <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Blocked Paths (one per line)</label>
-        <textarea id="settings-blocked-paths" style="width:100%;min-height:100px;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
+        <textarea id="settings-blocked-paths" style="width:100%;min-height:100px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
       </div>
     </div>
 
@@ -4199,7 +4196,6 @@
 
       <div class="settings-models-usage" id="settings-models-usage" style="display:none">
         <div class="settings-models-usage-title">Usage &amp; Limits</div>
-        <div class="settings-models-usage-sub">Live subscription limits and tracked token usage for every configured account used by your main chat and assigned subagents.</div>
         <div class="hub-providers-grid" id="settings-models-usage-grid"></div>
       </div>
 
@@ -4207,7 +4203,7 @@
       <div class="settings-models-provider-bar">
         <div class="settings-models-provider-copy">
           <div class="settings-section-heading">Connect Provider <span class="settings-help" tabindex="0" data-settings-help="Manage provider credentials and connection status. Routing choices live in the panels on the right." aria-label="About provider connections">?</span></div>
-          <div class="settings-section-subtitle">Choose which provider connection to manage. Routing defaults are set in the panels on the right.</div>
+          
         </div>
         <select id="settings-llm-provider" class="settings-input settings-models-provider-select" onchange="onProviderChange()" aria-label="Provider connection">
           <option value="ollama">Ollama (local)</option>
@@ -4230,10 +4226,10 @@
           <div id="prov-fields-ollama">
             <div class="right-section-title" style="margin-bottom:8px">Ollama Connection</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Endpoint</label>
-            <input id="settings-ollama-endpoint" type="text" placeholder="http://localhost:11434" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-ollama-endpoint" type="text" placeholder="http://localhost:11434" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="refreshProviderModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test</button>
+              <button class="btn btn-sm" onclick="refreshProviderModels()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Refresh Models</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test</button>
             </div>
             <div id="provider-status-msg" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
             <div class="right-section-title" style="margin:14px 0 8px">Primary Model</div>
@@ -4247,11 +4243,11 @@
           <div id="prov-fields-llama_cpp" style="display:none">
             <div class="right-section-title" style="margin-bottom:8px">llama.cpp Server</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Endpoint</label>
-            <input id="settings-llamacpp-endpoint" type="text" placeholder="http://localhost:8080" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-llamacpp-endpoint" type="text" placeholder="http://localhost:8080" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model name <span style="color:var(--muted);font-weight:400">(type manually)</span></label>
-            <input id="settings-llamacpp-model" type="text" placeholder="e.g. qwen2.5-7b" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-llamacpp-model" type="text" placeholder="e.g. qwen2.5-7b" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button>
             </div>
             <div id="provider-status-msg-llamacpp" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
             <div style="font-size:11px;color:var(--muted);margin-top:12px;line-height:1.6">Start with: <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">llama-server -m model.gguf --port 8080</code></div>
@@ -4261,12 +4257,12 @@
           <div id="prov-fields-lm_studio" style="display:none">
             <div class="right-section-title" style="margin-bottom:8px">LM Studio</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Endpoint</label>
-            <input id="settings-lmstudio-endpoint" type="text" placeholder="http://localhost:1234" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-lmstudio-endpoint" type="text" placeholder="http://localhost:1234" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model name</label>
-            <input id="settings-lmstudio-model" type="text" placeholder="e.g. qwen2.5-7b-instruct" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-lmstudio-model" type="text" placeholder="e.g. qwen2.5-7b-instruct" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="refreshProviderModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Detect Model</button>
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test</button>
+              <button class="btn btn-sm" onclick="refreshProviderModels()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Detect Model</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test</button>
             </div>
             <div id="provider-status-msg-lmstudio" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
             <div style="font-size:11px;color:var(--muted);margin-top:12px;line-height:1.6">Enable the Local Server in LM Studio before connecting.</div>
@@ -4276,7 +4272,7 @@
           <div id="prov-fields-openai" style="display:none">
             <div class="right-section-title" style="margin-bottom:8px">OpenAI API Key</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
-            <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-openai-model" class="settings-input" style="font-size:13px" onchange="syncProviderReasoningControls('openai')">
               <option value="gpt-6-astra">Astra 6</option>
@@ -4319,8 +4315,8 @@
               <option value="required">required — force tool call on first turn</option>
             </select>
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+              <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Refresh Models</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button>
             </div>
             <div id="provider-status-msg-openai" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
           </div>
@@ -4334,8 +4330,8 @@
               <div id="codex-oauth-status" style="font-size:11px;color:var(--muted);margin-top:8px;text-align:center"></div>
             </div>
             <div id="codex-connected-state" style="display:none">
-              <div style="background:#f0faf4;border:1px solid #86d4a8;border-radius:10px;padding:10px;margin-bottom:12px">
-                <div style="font-size:12px;font-weight:600;color:#0a6b3d">Connected</div>
+              <div class="settings-connected-pill">
+                <div class="settings-connected-pill-label">Connected</div>
                 <div id="codex-account-id" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
               </div>
               <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
@@ -4377,7 +4373,7 @@
                 <option value="auto" selected>auto — let model decide (enables preamble)</option>
                 <option value="required">required — force tool call on first turn</option>
               </select>
-              <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
+              <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:transparent;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
             </div>
           </div>
 
@@ -4390,23 +4386,23 @@
               </div>
               <button class="btn" id="anthropic-oneclick-btn" onclick="connectAnthropicOneClick()" style="width:100%;background:var(--brand);color:#fff;border:none;padding:10px;border-radius:10px;font-size:13px;cursor:pointer;margin-bottom:8px">Connect Claude account</button>
               <div id="anthropic-oneclick-code-row" style="display:none;gap:8px;margin-bottom:8px">
-                <input id="anthropic-oneclick-code" type="text" placeholder="Paste the code from the Claude page" style="flex:1;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px" />
+                <input id="anthropic-oneclick-code" type="text" placeholder="Paste the code from the Claude page" style="flex:1;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px" />
                 <button class="btn btn-sm" onclick="submitAnthropicOneClickCode()">Submit</button>
               </div>
               <details style="margin:4px 0 10px;font-size:12px;color:var(--muted)">
                 <summary style="cursor:pointer">Use an API key or paste a setup-token instead</summary>
                 <div style="margin-top:8px;line-height:1.6">Paste an Anthropic API key, or the output of <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">claude setup-token</code>.</div>
               </details>
-              <input id="settings-anthropic-token" type="password" placeholder="sk-ant-oat-... (paste setup-token here)" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
+              <input id="settings-anthropic-token" type="password" placeholder="sk-ant-oat-... (paste setup-token here)" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
               <div style="display:flex;gap:8px">
                 <button class="btn" onclick="connectAnthropic()" style="flex:1;background:var(--brand);color:#fff;border:none;padding:10px;border-radius:10px;font-size:13px;cursor:pointer">Connect</button>
-                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test</button>
+                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test</button>
               </div>
               <div id="anthropic-oauth-status" style="font-size:11px;color:var(--muted);margin-top:8px;text-align:center"></div>
             </div>
             <div id="anthropic-connected-state" style="display:none">
-              <div style="background:#f0faf4;border:1px solid #86d4a8;border-radius:10px;padding:10px;margin-bottom:12px">
-                <div style="font-size:12px;font-weight:600;color:#0a6b3d">Connected</div>
+              <div class="settings-connected-pill">
+                <div class="settings-connected-pill-label">Connected</div>
                 <div id="anthropic-auth-type" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
               </div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
@@ -4449,8 +4445,8 @@
                   <select id="settings-anthropic-speed" class="settings-input"><option value="standard">Standard</option><option value="fast">Fast</option></select>
                 </div>
 	              <div style="display:flex;gap:8px;margin-top:10px">
-	                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
-	                <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect</button>
+	                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button>
+	                <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:transparent;border:1px solid var(--err);color:var(--err)">Disconnect</button>
 	              </div>
 
 	              <!-- Usage tracking (separate OAuth token used only for usage reads) -->
@@ -4462,10 +4458,10 @@
 	                <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">Your chat setup-token can't read usage limits. This opens a separate Claude browser approval so Prometheus can display your 5-hour and weekly limits.</div>
 	                <div id="anthropic-usage-oauth-flow" style="display:none;margin-top:10px">
 	                  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">1. A browser window opened to approve access. 2. Copy the code Claude shows and paste it below:</div>
-	                  <input id="settings-anthropic-usage-code" type="text" placeholder="paste code#state here" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
+	                  <input id="settings-anthropic-usage-code" type="text" placeholder="paste code#state here" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px" />
 	                  <div style="display:flex;gap:8px">
 	                    <button class="btn btn-sm" onclick="completeAnthropicUsageTracking()" style="background:var(--brand);border:1px solid var(--brand);color:#fff">Connect usage tracking</button>
-	                    <button class="btn btn-sm" onclick="cancelAnthropicUsageTracking()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Cancel</button>
+	                    <button class="btn btn-sm" onclick="cancelAnthropicUsageTracking()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Cancel</button>
 	                  </div>
 	                </div>
 	                <div id="anthropic-usage-oauth-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
@@ -4478,7 +4474,7 @@
             <div class="right-section-title" style="margin-bottom:8px">Perplexity AI</div>
             <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Get an API key at <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">perplexity.ai/settings/api</code>. Sonar models are web-grounded.</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
-            <input id="settings-perplexity-key" type="password" placeholder="pplx-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-perplexity-key" type="password" placeholder="pplx-..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-perplexity-model" class="settings-input" style="font-size:13px">
               <option value="sonar-pro">sonar-pro (flagship)</option>
@@ -4495,7 +4491,7 @@
               <option value="high">high</option>
             </select>
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button>
             </div>
             <div id="provider-status-msg-perplexity" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
           </div>
@@ -4505,7 +4501,7 @@
             <div class="right-section-title" style="margin-bottom:8px">Google Gemini</div>
             <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Get an API key at <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">aistudio.google.com/apikey</code>. Uses the OpenAI-compatible Gemini endpoint.</div>
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
-            <input id="settings-gemini-key" type="password" placeholder="AIza..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <input id="settings-gemini-key" type="password" placeholder="AIza..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-gemini-model" class="settings-input" style="font-size:13px">
               <option value="gemini-2.5-pro">gemini-2.5-pro (flagship)</option>
@@ -4517,7 +4513,7 @@
               <option value="gemini-1.5-flash">gemini-1.5-flash</option>
             </select>
             <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button>
             </div>
 	            <div id="provider-status-msg-gemini" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
 	          </div>
@@ -4555,7 +4551,7 @@
           </style>
           <div class="settings-model-defaults-intro">
             <div class="settings-section-heading">Agent Model Defaults <span class="settings-help" tabindex="0" data-settings-help="Choose the provider and model used by each agent slot. Blank rows inherit the primary route." aria-label="About agent model defaults">?</span></div>
-            <div class="settings-section-subtitle">Set the model used by each agent type. Blank rows inherit from the primary route.</div>
+            
           </div>
 
           <div class="settings-models-subsection settings-models-template-section" style="order:20">
@@ -4566,11 +4562,11 @@
             </select>
             <input id="amd-template-name" class="settings-input" style="width:100%;margin-bottom:8px" placeholder="Template name" />
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">
-              <button onclick="saveAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)">Save</button>
+              <button onclick="saveAgentModelDefaultTemplate()" class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Save</button>
               <button onclick="applyAgentModelDefaultTemplate()" class="btn btn-sm">Apply</button>
-              <button onclick="deleteAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid #fecaca;color:#dc2626">Delete</button>
+              <button onclick="deleteAgentModelDefaultTemplate()" class="btn btn-sm" style="background:transparent;border:none;color:#f87171">Delete</button>
             </div>
-            <button id="amd-set-default-btn" onclick="applyAsDefaultTemplate()" class="btn btn-sm" style="width:100%;margin-bottom:8px;background:#fff;border:1px solid var(--line);color:var(--text)">Apply as Default</button>
+            <button id="amd-set-default-btn" onclick="applyAsDefaultTemplate()" class="btn btn-sm" style="width:100%;margin-bottom:8px;background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Apply as Default</button>
             <div id="amd-template-status" style="font-size:11px;min-height:16px"></div>
             </div>
           </div>
@@ -4861,7 +4857,7 @@
 
 	    <div id="settings-panel-channels" style="display:none;padding:14px 16px">
       <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:14px">
-        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
           <div class="right-section-title" style="margin-bottom:8px">Channel Connection</div>
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Channel</label>
           <select id="settings-channel-select" class="settings-input" onchange="onChannelTypeChange()" style="margin-bottom:10px">
@@ -4870,24 +4866,24 @@
             <option value="whatsapp">WhatsApp</option>
           </select>
 
-          <div id="tg-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:#f8f9fa;font-size:12px">
+          <div id="tg-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
             <div id="tg-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
             <span id="tg-status-text" style="color:var(--muted)">Not configured</span>
           </div>
-          <div id="dc-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:#f8f9fa;font-size:12px">
+          <div id="dc-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
             <div id="dc-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
             <span id="dc-status-text" style="color:var(--muted)">Not configured</span>
           </div>
-          <div id="wa-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:#f8f9fa;font-size:12px">
+          <div id="wa-status-bar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
             <div id="wa-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
             <span id="wa-status-text" style="color:var(--muted)">Not configured</span>
           </div>
 
           <div id="channel-form-telegram">
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Bot Token</label>
-            <input id="settings-tg-token" type="password" placeholder="123456:ABC-DEF1234..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-tg-token" type="password" placeholder="123456:ABC-DEF1234..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Your Telegram User ID(s)</label>
-            <input id="settings-tg-userid" type="text" placeholder="e.g. 123456789, 987654321" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-tg-userid" type="text" placeholder="e.g. 123456789, 987654321" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
               <input type="checkbox" id="settings-tg-enabled" />
               Enable Telegram channel
@@ -4896,15 +4892,15 @@
 
           <div id="channel-form-discord" style="display:none">
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Bot Token</label>
-            <input id="settings-dc-token" type="password" placeholder="Discord bot token" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-dc-token" type="password" placeholder="Discord bot token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Application ID (optional)</label>
-            <input id="settings-dc-appid" type="text" placeholder="Discord app ID" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-dc-appid" type="text" placeholder="Discord app ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Guild ID (optional)</label>
-            <input id="settings-dc-guildid" type="text" placeholder="Server ID" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-dc-guildid" type="text" placeholder="Server ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Channel ID (for send-test)</label>
-            <input id="settings-dc-channelid" type="text" placeholder="Channel ID" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-dc-channelid" type="text" placeholder="Channel ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook URL (optional)</label>
-            <input id="settings-dc-webhook" type="password" placeholder="https://discord.com/api/webhooks/..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-dc-webhook" type="password" placeholder="https://discord.com/api/webhooks/..." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
               <input type="checkbox" id="settings-dc-enabled" />
               Enable Discord channel
@@ -4913,17 +4909,17 @@
 
           <div id="channel-form-whatsapp" style="display:none">
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Access Token</label>
-            <input id="settings-wa-token" type="password" placeholder="Meta access token" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-token" type="password" placeholder="Meta access token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Phone Number ID</label>
-            <input id="settings-wa-phoneid" type="text" placeholder="WhatsApp phone number ID" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-phoneid" type="text" placeholder="WhatsApp phone number ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Business Account ID (optional)</label>
-            <input id="settings-wa-baid" type="text" placeholder="WABA ID" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-baid" type="text" placeholder="WABA ID" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook Verify Token (optional)</label>
-            <input id="settings-wa-verify" type="password" placeholder="Verify token" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-verify" type="password" placeholder="Verify token" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Webhook Secret (optional)</label>
-            <input id="settings-wa-secret" type="password" placeholder="Webhook secret" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-secret" type="password" placeholder="Webhook secret" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Test Recipient (E.164)</label>
-            <input id="settings-wa-recipient" type="text" placeholder="15551234567" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-wa-recipient" type="text" placeholder="15551234567" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0 0;cursor:pointer">
               <input type="checkbox" id="settings-wa-enabled" />
               Enable WhatsApp channel
@@ -4957,17 +4953,17 @@
               </label>
             </div>
             <label style="display:block;font-size:12px;color:var(--muted);margin:8px 0 6px">Summary max characters</label>
-            <input id="settings-ch-notify-maxchars" type="number" min="80" max="1200" step="20" placeholder="420" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+            <input id="settings-ch-notify-maxchars" type="number" min="80" max="1200" step="20" placeholder="420" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
           </div>
 
           <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn btn-sm" id="channel-test-btn" onclick="testSelectedChannel()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test</button>
+            <button class="btn btn-sm" id="channel-test-btn" onclick="testSelectedChannel()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test</button>
             <button class="btn btn-sm" onclick="saveSelectedChannelSettings()" style="background:var(--brand);color:#fff;border:1px solid var(--brand)">Save</button>
-            <button class="btn btn-sm" id="channel-send-test-btn" onclick="sendSelectedChannelTest()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Send Test</button>
+            <button class="btn btn-sm" id="channel-send-test-btn" onclick="sendSelectedChannelTest()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Send Test</button>
           </div>
         </div>
 
-        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
           <div class="right-section-title" style="margin-bottom:8px">Instructions</div>
           <div id="channel-guide-telegram" style="font-size:12px;color:var(--muted);line-height:1.8">
             <b>Telegram Setup</b><br>
@@ -5162,7 +5158,6 @@
               <button class="btn btn-sm" onclick="tickAgentHeartbeat()">▶ Run Now</button>
             </div>
           </div>
-          <div class="settings-section-description">HEARTBEAT.md — what this agent does when woken. Saved automatically when you click outside the editor or use Save.</div>
           <div id="agent-hb-editor-wrap" class="settings-agent-editor"></div>
           <div class="settings-agent-actions">
             <button class="btn btn-sm" onclick="saveAgentHeartbeatMd()">Save HEARTBEAT.md</button>
@@ -5195,18 +5190,18 @@
     <div id="settings-panel-integrations" style="display:none;padding:14px 16px">
       <!-- Sub-tab row -->
       <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button id="itab-webhooks" onclick="setIntegTab('webhooks')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:#eaf2ff;color:#0d4faf">Webhooks</button>
-        <button id="itab-mcp" onclick="setIntegTab('mcp')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">MCP Servers</button>
+        <button id="itab-webhooks" onclick="setIntegTab('webhooks')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:0;background:color-mix(in srgb, var(--text) 10%, transparent);color:var(--text)">Webhooks</button>
+        <button id="itab-mcp" onclick="setIntegTab('mcp')" style="padding:5px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:0;background:transparent;color:var(--muted)">MCP Servers</button>
       </div>
 
       <!-- WEBHOOKS PANEL ----------------------------------------------- -->
       <div id="itab-panel-webhooks">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
           <!-- Left: config -->
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <div class="right-section-title" style="margin-bottom:10px">Webhook Endpoint</div>
 
-            <div id="wh-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:#f8f9fa;font-size:12px">
+            <div id="wh-status-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--text) 4%, transparent);font-size:12px">
               <div id="wh-status-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
               <span id="wh-status-text" style="color:var(--muted)">Not configured</span>
             </div>
@@ -5218,24 +5213,24 @@
 
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">Secret Token</label>
             <div style="display:flex;gap:6px;margin-bottom:10px">
-              <input id="wh-token" type="password" placeholder="Paste or generate a secret token" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
-              <button onclick="generateWebhookToken()" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:#f8f9fa;font-size:11px;cursor:pointer;white-space:nowrap">Generate</button>
+              <input id="wh-token" type="password" placeholder="Paste or generate a secret token" style="flex:1;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+              <button onclick="generateWebhookToken()" style="padding:6px 10px;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;background:transparent;font-size:11px;cursor:pointer;white-space:nowrap;color:var(--text)">Generate</button>
             </div>
 
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">URL Path Prefix</label>
-            <input id="wh-path" type="text" value="/hooks" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;margin-bottom:12px" />
+            <input id="wh-path" type="text" value="/hooks" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;margin-bottom:12px" />
 
-            <div id="wh-url-display" style="display:none;background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#0d4faf;margin-bottom:12px;word-break:break-all"></div>
+            <div id="wh-url-display" style="display:none;background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:8px;padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--brand);margin-bottom:12px;word-break:break-all"></div>
 
             <div style="display:flex;gap:8px">
               <button onclick="saveWebhookSettings()" style="padding:6px 14px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
-              <button onclick="testWebhookEndpoint()" style="padding:6px 14px;background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:12px;cursor:pointer">Test</button>
-              <button onclick="copyWebhookCurl()" style="padding:6px 14px;background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:12px;cursor:pointer">Copy cURL</button>
+              <button onclick="testWebhookEndpoint()" style="padding:6px 14px;background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;font-size:12px;cursor:pointer">Test</button>
+              <button onclick="copyWebhookCurl()" style="padding:6px 14px;background:transparent;color:var(--text);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;font-size:12px;cursor:pointer">Copy cURL</button>
             </div>
           </div>
 
           <!-- Right: guide -->
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <div class="right-section-title" style="margin-bottom:8px">Setup Guide</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.85">
               <b>1. Enable + set a token</b> — any secret string you choose.<br>
@@ -5246,12 +5241,12 @@
               <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/" target="_blank" style="color:var(--brand)">Cloudflare Tunnel</a>.
               <br><br>
               <b>Endpoints:</b><br>
-              <code style="background:#f4f4f4;padding:2px 5px;border-radius:4px">POST /hooks/agent</code> — full AI run<br>
-              <code style="background:#f4f4f4;padding:2px 5px;border-radius:4px">POST /hooks/wake</code> — lightweight nudge<br>
-              <code style="background:#f4f4f4;padding:2px 5px;border-radius:4px">GET /hooks/status</code> — health check<br><br>
+              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">POST /hooks/agent</code> — full AI run<br>
+              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">POST /hooks/wake</code> — lightweight nudge<br>
+              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">GET /hooks/status</code> — health check<br><br>
               <b>Auth:</b> Send token as<br>
-              <code style="background:#f4f4f4;padding:2px 5px;border-radius:4px">Authorization: Bearer &lt;token&gt;</code><br>
-              or <code style="background:#f4f4f4;padding:2px 5px;border-radius:4px">x-prometheus-token: &lt;token&gt;</code><br><br>
+              <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">Authorization: Bearer &lt;token&gt;</code><br>
+              or <code style="background:color-mix(in srgb, var(--text) 4%, transparent);padding:2px 5px;border-radius:4px">x-prometheus-token: &lt;token&gt;</code><br><br>
               Works with: GitHub Actions, Stripe, Vercel, n8n, IFTTT, Home Assistant, or any script.
             </div>
           </div>
@@ -5263,26 +5258,26 @@
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
           <!-- Left: server list + add form -->
           <div>
-            <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;margin-bottom:12px">
+            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:12px">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
                 <div class="right-section-title">MCP Servers</div>
-                <button onclick="showMCPAddForm()" style="padding:4px 10px;border:1px solid var(--brand);border-radius:6px;background:#fff;color:var(--brand);font-size:11px;font-weight:600;cursor:pointer">+ Add Server</button>
+                <button onclick="showMCPAddForm()" style="padding:4px 10px;border:1px solid var(--brand);border-radius:6px;background:transparent;color:var(--brand);font-size:11px;font-weight:600;cursor:pointer">+ Add Server</button>
               </div>
               <div id="mcp-server-list" style="font-size:12px;color:var(--muted)">Loading...</div>
             </div>
 
             <!-- Add/Edit form (hidden by default) -->
-            <div id="mcp-add-form" style="display:none;border:1px solid var(--brand);border-radius:12px;padding:14px;background:#f8faff">
+            <div id="mcp-add-form" style="display:none;border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--brand) 6%, transparent)">
               <div class="right-section-title" style="margin-bottom:10px" id="mcp-form-title">Add MCP Server</div>
 
               <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">ID <span style="color:#888">(letters/numbers/dash, no spaces)</span></label>
-              <input id="mcp-f-id" type="text" placeholder="e.g. filesystem" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
+              <input id="mcp-f-id" type="text" placeholder="e.g. filesystem" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
 
               <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Display Name</label>
-              <input id="mcp-f-name" type="text" placeholder="e.g. Filesystem" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
+              <input id="mcp-f-name" type="text" placeholder="e.g. Filesystem" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
 
               <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Transport</label>
-              <select id="mcp-f-transport" onchange="onMCPTransportChange()" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px">
+              <select id="mcp-f-transport" onchange="onMCPTransportChange()" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px">
                 <option value="stdio">stdio (local process)</option>
                 <option value="sse">HTTP/SSE (remote)</option>
               </select>
@@ -5290,22 +5285,22 @@
               <!-- stdio fields -->
               <div id="mcp-stdio-fields">
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Command</label>
-                <input id="mcp-f-command" type="text" placeholder="e.g. npx" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
+                <input id="mcp-f-command" type="text" placeholder="e.g. npx" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
 
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Arguments <span style="color:#888">(one per line)</span></label>
-                <textarea id="mcp-f-args" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;C:\Users\you\Documents" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:64px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
+                <textarea id="mcp-f-args" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;C:\Users\you\Documents" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:64px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
 
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Environment Variables <span style="color:#888">(KEY=VALUE, one per line)</span></label>
-                <textarea id="mcp-f-env" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
+                <textarea id="mcp-f-env" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
               </div>
 
               <!-- SSE fields -->
               <div id="mcp-sse-fields" style="display:none">
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Server URL</label>
-                <input id="mcp-f-url" type="text" placeholder="https://mcp.example.com/sse" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
+                <input id="mcp-f-url" type="text" placeholder="https://mcp.example.com/sse" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;margin-bottom:8px" />
 
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:3px">Headers <span style="color:#888">(KEY: value, one per line)</span></label>
-                <textarea id="mcp-f-headers" placeholder="Authorization: Bearer token123" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
+                <textarea id="mcp-f-headers" placeholder="Authorization: Bearer token123" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:7px;padding:6px 9px;font-size:12px;box-sizing:border-box;height:52px;resize:vertical;font-family:'IBM Plex Mono',monospace;margin-bottom:8px"></textarea>
               </div>
 
               <label style="display:flex;align-items:center;gap:7px;font-size:12px;margin-bottom:10px;cursor:pointer">
@@ -5315,7 +5310,7 @@
 
               <div style="display:flex;gap:8px">
                 <button onclick="saveMCPServer()" style="padding:6px 14px;background:var(--brand);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
-                <button onclick="hideMCPAddForm()" style="padding:6px 14px;background:#fff;color:var(--muted);border:1px solid var(--line);border-radius:7px;font-size:12px;cursor:pointer">Cancel</button>
+                <button onclick="hideMCPAddForm()" style="padding:6px 14px;background:transparent;color:var(--muted);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:7px;font-size:12px;cursor:pointer">Cancel</button>
               </div>
               <div id="mcp-form-msg" style="margin-top:8px;font-size:11px;color:var(--muted)"></div>
             </div>
@@ -5323,7 +5318,7 @@
 
           <!-- Right: info + popular servers -->
           <div>
-            <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;margin-bottom:12px">
+            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:12px">
               <div class="right-section-title" style="margin-bottom:8px">What is MCP?</div>
               <div style="font-size:12px;color:var(--muted);line-height:1.85">
                 <b>Model Context Protocol</b> (by Anthropic) is a standard that lets AI connect to external tools and data sources.<br><br>
@@ -5334,7 +5329,7 @@
               </div>
             </div>
 
-            <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+            <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
               <div class="right-section-title" style="margin-bottom:8px">Popular Servers</div>
               <div style="font-size:12px;color:var(--muted);line-height:1">
                 <div id="mcp-preset-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><div style="color:var(--muted)">Loading registry presets…</div></div>
@@ -5353,19 +5348,19 @@
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
 
         <!-- Left: Add new shortcut -->
-        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
           <div class="right-section-title" style="margin-bottom:10px">Add Shortcut</div>
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Website (hostname)</label>
-          <input id="sc-hostname" type="text" placeholder="e.g. x.com" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
+          <input id="sc-hostname" type="text" placeholder="e.g. x.com" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
 
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Key / Key Combo</label>
-          <input id="sc-key" type="text" placeholder="e.g. n, j, g h, Control+Enter" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;margin-bottom:8px" />
+          <input id="sc-key" type="text" placeholder="e.g. n, j, g h, Control+Enter" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;margin-bottom:8px" />
 
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Action (what it does)</label>
-          <input id="sc-action" type="text" placeholder="e.g. Open tweet composer" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
+          <input id="sc-action" type="text" placeholder="e.g. Open tweet composer" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
 
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Context (optional)</label>
-          <input id="sc-context" type="text" placeholder="e.g. feed/timeline, global, player" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
+          <input id="sc-context" type="text" placeholder="e.g. feed/timeline, global, player" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box;margin-bottom:8px" />
 
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:10px;cursor:pointer">
             <input type="checkbox" id="sc-compose" />
@@ -5375,17 +5370,17 @@
           <button onclick="addSiteShortcut()" style="padding:7px 16px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Add Shortcut</button>
           <span id="sc-add-status" style="font-size:11px;color:var(--ok);margin-left:8px"></span>
 
-          <div style="margin-top:14px;padding:10px;background:#f0f7ff;border:1px solid #c7dff7;border-radius:8px;font-size:11px;color:#1e3a6a;line-height:1.7">
+          <div style="margin-top:14px;padding:10px;background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:8px;font-size:11px;color:#1e3a6a;line-height:1.7">
             <strong>How it works:</strong><br>
             When the AI opens a URL matching this hostname, these shortcuts are injected into its context so it can use them instead of hunting for DOM elements. Shortcuts for navigation (like j/k on X) work with the keyboard focus tracker so the AI knows exactly which item it’s on.
           </div>
         </div>
 
         <!-- Right: Current shortcuts list -->
-        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:0">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent);display:flex;flex-direction:column;gap:0">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
             <div class="right-section-title">Known Shortcuts</div>
-            <select id="sc-filter-host" onchange="renderShortcutsList()" style="font-size:12px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;color:var(--text)">
+            <select id="sc-filter-host" onchange="renderShortcutsList()" style="font-size:12px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;padding:3px 8px;color:var(--text)">
               <option value="">All sites</option>
             </select>
           </div>
@@ -5398,20 +5393,20 @@
     <!-- Pairing Panel -->
     <div id="settings-panel-pairing" style="display:none;padding:14px 16px">
 
-      <div id="pairing-browser-admin" style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--panel-2);margin-bottom:14px">
+      <div id="pairing-browser-admin" style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px 14px;background:var(--panel-2);margin-bottom:14px">
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:4px">Browser pairing authority</div>
         <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:9px">
           This is required when a manually launched gateway is bound to the LAN. Paste the configured <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>; it is kept in memory for this tab only and is never placed in a QR code or URL.
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input id="pairing-browser-admin-token" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" style="flex:1;min-width:220px;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--panel);color:var(--text)" />
+          <input id="pairing-browser-admin-token" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" style="flex:1;min-width:220px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--panel);color:var(--text)" />
           <button id="pairing-browser-admin-apply" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">Use for this tab</button>
         </div>
         <div id="pairing-browser-admin-status" style="margin-top:7px;font-size:11px;color:var(--muted)">Electron desktop uses its protected authority automatically.</div>
       </div>
 
       <!-- Remote Access (Tailscale Funnel) -->
-      <div style="border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;margin-bottom:14px">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px 16px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <div class="right-section-title" style="margin:0;flex:1">Remote access</div>
           <span id="pairing-remote-status-pill" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Funnel offline</span>
@@ -5421,31 +5416,31 @@
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
-          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafafa">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text);cursor:pointer">
               <input type="checkbox" id="pairing-remote-enabled" />
               <span>Enable remote access</span>
             </label>
             <div style="margin-top:10px">
               <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Mode</div>
-              <select id="pairing-remote-mode" class="btn btn-sm" style="width:100%;background:#fff;border:1px solid var(--line);color:var(--text);padding:6px 8px;border-radius:8px">
+              <select id="pairing-remote-mode" class="btn btn-sm" style="width:100%;background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);color:var(--text);padding:6px 8px;border-radius:8px">
                 <option value="tailscale-funnel">Tailscale Funnel</option>
                 <option value="custom">Custom HTTPS URL</option>
               </select>
             </div>
             <div style="margin-top:10px">
               <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Public URL</div>
-              <input type="text" id="pairing-remote-url" placeholder="https://your-machine.tail1234.ts.net" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px" />
+              <input type="text" id="pairing-remote-url" placeholder="https://your-machine.tail1234.ts.net" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px" />
               <div id="pairing-remote-url-hint" style="margin-top:4px;font-size:11px;color:var(--muted);line-height:1.45">Paste the HTTPS address Tailscale assigned your machine. Multiple Prometheus instances can use separate Funnel HTTPS ports such as 443, 8443, and 10000.</div>
             </div>
             <div style="display:flex;gap:8px;margin-top:12px">
               <button id="pairing-remote-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;flex:1">Save</button>
-              <button id="pairing-remote-detect-btn" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)">Detect Tailscale</button>
+              <button id="pairing-remote-detect-btn" class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Detect Tailscale</button>
             </div>
             <div id="pairing-remote-msg" style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.45"></div>
           </div>
 
-          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafafa">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <div style="font-size:12px;font-weight:800;color:var(--text);flex:1">Tailscale Funnel</div>
               <span id="pairing-funnel-live-pill" style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Checking…</span>
@@ -5453,12 +5448,12 @@
             <div id="pairing-ts-status" style="font-size:12px;color:var(--muted);line-height:1.55">Click <strong>Detect Tailscale</strong> to check installation and login state.</div>
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
               <button id="pairing-funnel-enable-btn" class="btn btn-sm" style="background:#15803d;color:#fff;border:none;display:none">Enable Funnel</button>
-              <button id="pairing-funnel-disable-btn" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:#b91c1c;display:none">Disable Funnel</button>
+              <button id="pairing-funnel-disable-btn" class="btn btn-sm" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:#f87171;display:none">Disable Funnel</button>
             </div>
             <div id="pairing-funnel-msg" style="margin-top:6px;font-size:11px;color:var(--muted);line-height:1.45"></div>
             <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:var(--muted);line-height:1.55">
               <strong>One-time setup</strong>: Install Tailscale from <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">tailscale.com</span> and sign in, then use <strong>Enable Funnel</strong> above.
-              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 8px;word-break:break-all;display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
+              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;padding:6px 8px;word-break:break-all;display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
             </div>
           </div>
         </div>
@@ -5467,7 +5462,7 @@
       <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start">
 
         <!-- LEFT: QR + status -->
-        <div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:#fff;text-align:center">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:16px;background:color-mix(in srgb, var(--text) 4%, transparent);text-align:center">
           <div class="right-section-title" style="margin-bottom:10px;text-align:left">Gateway Connections · Pair a phone</div>
           <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
             <div style="color:var(--muted);font-size:12px">Loading QR…</div>
@@ -5475,7 +5470,7 @@
           <div id="pairing-qr-meta" style="margin-top:10px;font-size:12px;color:var(--muted);line-height:1.5"></div>
           <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
             <button id="pairing-regen-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">↻ New QR</button>
-            <button id="pairing-copy-link-btn" class="btn btn-sm" style="background:var(--panel-2);border:1px solid var(--line);color:var(--muted)">Copy link</button>
+            <button id="pairing-copy-link-btn" class="btn btn-sm" style="background:var(--panel-2);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--muted)">Copy link</button>
           </div>
           <div style="margin-top:12px;font-size:11px;color:var(--muted);line-height:1.55;text-align:left;border-top:1px solid var(--line);padding-top:10px">
             Scan this one-time QR with your phone's Gateway Connections camera action. It contains only a short-lived pairing challenge; after it opens, you'll see an approval prompt below.
@@ -5485,19 +5480,19 @@
 
         <!-- RIGHT: pending + devices -->
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
               <div class="right-section-title" style="margin:0;flex:1">Awaiting approval</div>
-              <span id="pairing-pending-count" style="font-size:11px;font-weight:800;background:#fff1e3;color:#c0541a;padding:2px 8px;border-radius:999px">0</span>
+              <span id="pairing-pending-count" style="font-size:11px;font-weight:800;background:color-mix(in srgb, #f5b544 12%, transparent);color:#f5c46b;padding:2px 8px;border-radius:999px">0</span>
             </div>
             <div id="pairing-pending-list" style="display:flex;flex-direction:column;gap:8px">
               <div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>
             </div>
           </div>
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+          <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px;background:color-mix(in srgb, var(--text) 4%, transparent)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
               <div class="right-section-title" style="margin:0;flex:1">Trusted devices</div>
-              <span id="pairing-device-count" style="font-size:11px;font-weight:800;background:#eaf2ff;color:#0d4faf;padding:2px 8px;border-radius:999px">0</span>
+              <span id="pairing-device-count" style="font-size:11px;font-weight:800;background:color-mix(in srgb, var(--brand) 14%, transparent);color:var(--brand);padding:2px 8px;border-radius:999px">0</span>
             </div>
             <div id="pairing-device-list" style="display:flex;flex-direction:column;gap:8px">
               <div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>
@@ -5514,7 +5509,7 @@
 
       <div class="settings-page-footer">
         <span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
-        <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Cancel</button>
+        <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid color-mix(in srgb, var(--text) 12%, transparent)" onclick="closeSettings()">Cancel</button>
         <button id="settings-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;min-width:80px" onclick="saveSettings()">Save</button>
       </div>
     </main>
@@ -5531,11 +5526,11 @@
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--panel)">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Teams</span>
-        <span id="teams-count" style="font-size:11px;background:var(--panel-2);color:var(--brand);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-weight:700;white-space:nowrap">…</span>
+        <span id="teams-count" style="font-size:11px;background:var(--panel-2);color:var(--brand);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:999px;padding:2px 10px;font-weight:700;white-space:nowrap">…</span>
       </div>
       <div style="display:flex;gap:8px">
         <button onclick="openCreateTeamModal()" style="border:1px solid var(--brand);background:var(--brand);color:white;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">+ New Team</button>
-        <button onclick="refreshTeams()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Refresh</button>
+        <button onclick="refreshTeams()" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Refresh</button>
       </div>
     </div>
     <!-- The pixel canvas -->
@@ -5561,10 +5556,10 @@
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--panel)">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Subagents</span>
-        <span id="subagents-count" style="font-size:11px;background:#f0fdf4;color:#166534;border-radius:999px;padding:2px 10px;font-weight:700;border:1px solid #bbf7d0">0 agents</span>
+        <span id="subagents-count" style="font-size:11px;background:color-mix(in srgb, #22c55e 12%, transparent);color:#4ade80;border-radius:999px;padding:2px 10px;font-weight:700;border:none">0 agents</span>
       </div>
       <div style="display:flex;gap:8px">
-        <button onclick="refreshSubagents()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
+        <button onclick="refreshSubagents()" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
       </div>
     </div>
     <div id="subagents-canvas" style="flex:1;overflow:auto;padding:32px 24px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:20px">
@@ -5581,7 +5576,7 @@
 
 <!-- Create Team Modal -->
 <div id="create-team-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.35);z-index:9999;align-items:center;justify-content:center;padding:18px">
-  <div style="width:min(500px,96vw);max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
+  <div style="width:min(500px,96vw);max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:14px;box-shadow:var(--shadow-md)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:1">
       <div style="font-weight:800">Create Team</div>
       <button onclick="closeCreateTeamModal()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted)">&#x2715;</button>
@@ -5590,16 +5585,16 @@
       <div style="display:flex;gap:10px">
         <div style="flex:0 0 60px">
           <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">Emoji</label>
-          <input id="cteam-emoji" type="text" value="🏠" maxlength="4" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:18px;text-align:center;background:var(--panel-2)">
+          <input id="cteam-emoji" type="text" value="🏠" maxlength="4" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px;font-size:18px;text-align:center;background:var(--panel-2)">
         </div>
         <div style="flex:1">
           <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">Team Name</label>
-          <input id="cteam-name" type="text" placeholder="X Account Team" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
+          <input id="cteam-name" type="text" placeholder="X Account Team" style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
         </div>
       </div>
       <div>
         <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">Team Goal / Context</label>
-        <textarea id="cteam-context" rows="3" placeholder="What is this team trying to achieve? The manager will use this to review and improve the team." style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);resize:vertical;font-family:inherit"></textarea>
+        <textarea id="cteam-context" rows="3" placeholder="What is this team trying to achieve? The manager will use this to review and improve the team." style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);resize:vertical;font-family:inherit"></textarea>
       </div>
       <div>
         <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px">Subagents (select agents to include)</label>
@@ -5607,7 +5602,7 @@
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 16px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel)">
-      <button onclick="closeCreateTeamModal()" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
+      <button onclick="closeCreateTeamModal()" style="background:var(--panel-2);color:var(--muted);border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:8px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
       <button id="cteam-save-btn" onclick="saveCreateTeam()" style="background:var(--brand);color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:13px;font-weight:700;cursor:pointer">Create Team</button>
     </div>
   </div>

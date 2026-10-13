@@ -8497,45 +8497,50 @@ function renderMainGoalStrip() {
   const deniedActions = Array.isArray(goal.deniedActions) ? goal.deniedActions : [];
   const latestDenial = deniedActions[deniedActions.length - 1] || null;
   const plans = mainGoalTurnPlans(goal);
-  const latestPlan = plans[plans.length - 1] || null;
+  // Only state that is not already obvious from the strip itself. Status is the
+  // dot, elapsed time sits next to the title; "Autonomous"/"Hard policy" were
+  // constant boilerplate on every goal.
+  const turns = Number(goal.turnsUsed || 0);
   const policyMeta = [
-    mainGoalStatusLabel(status),
-    `${Number(goal.turnsUsed || 0)} turns`,
-    latestPlan ? `turn plans ${plans.length}` : '',
-    'Autonomous',
-    'Hard policy active',
+    turns ? `${turns} turn${turns === 1 ? '' : 's'}` : '',
     deniedActions.length ? `${deniedActions.length} denied` : '',
-    reason,
+    isActive ? '' : reason,
   ].filter(Boolean).join(' · ');
   const judgeReprompt = String(goal.nextStepDirective || goal.lastJudgeDirective || goal.lastReason || '').trim();
   const expanded = mainGoalDetailsOpen === true;
+  const goalIcon = (paths) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  const goalButton = (action, label, paths) => `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('${action}')" title="${label}" aria-label="${label}">${goalIcon(paths)}</button>`;
   strip.style.display = 'flex';
   strip.setAttribute('data-status', status);
+  strip.classList.toggle('is-expanded', expanded);
   chatView?.classList.add('has-main-goal');
   strip.innerHTML = `
-    <button type="button" class="main-goal-main" onclick="toggleMainGoalDetails()" aria-expanded="${expanded ? 'true' : 'false'}" title="Show goal details">
-      <div class="main-goal-kicker"><span>${escHtml(mainGoalStatusLabel(status))}</span><span class="main-goal-elapsed" data-main-goal-elapsed>${escHtml(formatGoalElapsed(mainGoalElapsedMs(goal)))}</span></div>
-      <div class="main-goal-title" title="${escHtml(goal.goal || '')}">${escHtml(goal.goal || 'Untitled goal')}</div>
-      <div class="main-goal-meta">${escHtml(policyMeta)}</div>
-      ${latestDenial ? `<div class="main-goal-denial">${escHtml(`Latest denied: ${latestDenial.category || 'policy'} - ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
-      ${expanded ? `
-        <div class="main-goal-details">
-          <div><strong>Turns</strong><span>${escHtml(String(Number(goal.turnsUsed || 0)))}</span></div>
-          <div><strong>Original goal</strong><span>${escHtml(goal.goal || 'Untitled goal')}</span></div>
-          <div><strong>Last judge reprompt</strong><span>${escHtml(judgeReprompt || 'No judge reprompt yet.')}</span></div>
-          ${renderMainGoalDiagnostics(goal)}
-          ${renderMainGoalTurnPlans(goal)}
-        </div>
-      ` : ''}
-    </button>
-    <div class="main-goal-actions">
-      ${isActive ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('pause')" title="Pause goal">Pause</button>` : ''}
-      ${canResume ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('resume')" title="Resume goal">Resume</button>` : ''}
-      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('status')" title="Refresh goal">Status</button>
-      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('revise')" title="Revise goal">Revise</button>
-      ${status !== 'done' ? `<button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('done')" title="Mark goal done">Done</button>` : ''}
-      <button class="main-goal-action" type="button" onclick="event.stopPropagation(); mainGoalAction('clear')" title="Clear goal">Clear</button>
+    <div class="main-goal-row">
+      <button type="button" class="main-goal-main" onclick="toggleMainGoalDetails()" aria-expanded="${expanded ? 'true' : 'false'}" title="${escHtml(mainGoalStatusLabel(status))} · show details">
+        <span class="main-goal-dot" aria-hidden="true"></span>
+        <span class="main-goal-title">${escHtml(goal.goal || 'Untitled goal')}</span>
+        <span class="main-goal-elapsed" data-main-goal-elapsed>${escHtml(formatGoalElapsed(mainGoalElapsedMs(goal)))}</span>
+        ${policyMeta ? `<span class="main-goal-meta">${escHtml(policyMeta)}</span>` : ''}
+        <span class="main-goal-chevron" aria-hidden="true">${goalIcon('<polyline points="6 9 12 15 18 9"/>')}</span>
+      </button>
+      <div class="main-goal-actions">
+        ${isActive ? goalButton('pause', 'Pause goal', '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>') : ''}
+        ${canResume ? goalButton('resume', 'Resume goal', '<polygon points="7 4 19 12 7 20 7 4"/>') : ''}
+        ${goalButton('status', 'Refresh status', '<path d="M20 11a8 8 0 0 0-14.9-4L3 10m0-4v4h4M4 13a8 8 0 0 0 14.9 4L21 14m0 4v-4h-4"/>')}
+        ${goalButton('revise', 'Revise goal', '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>')}
+        ${status !== 'done' ? goalButton('done', 'Mark done', '<polyline points="20 6 9 17 4 12"/>') : ''}
+        ${goalButton('clear', 'Clear goal', '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
+      </div>
     </div>
+    ${latestDenial ? `<div class="main-goal-denial">${escHtml(`Denied: ${latestDenial.category || 'policy'} - ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
+    ${expanded ? `
+      <div class="main-goal-details">
+        ${judgeReprompt ? `<div><strong>Next step</strong><span>${escHtml(judgeReprompt)}</span></div>` : ''}
+        ${!isActive && reason ? `<div><strong>Reason</strong><span>${escHtml(reason)}</span></div>` : ''}
+        ${renderMainGoalDiagnostics(goal)}
+        ${renderMainGoalTurnPlans(goal)}
+      </div>
+    ` : ''}
   `;
   syncMainGoalElapsedTimer();
 }
@@ -20233,11 +20238,7 @@ function sourcePanelCountMarkup(label, value, glyph) {
 
 function renderSourcePanelOverview(data) {
   if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) {
-    return `<section class="source-panel-section source-panel-project-context">
-      <h3 class="source-panel-section-title">Subagent chat sources</h3>
-      <p class="source-panel-subtitle">Only sources produced by this subagent’s chat and tool activity appear here.</p>
-    </section>
-    <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 8).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}</section>`;
+    return `<section class="source-panel-section" title="Only sources from this subagent's chat"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 8).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}</section>`;
   }
   const project = sourcePanelState.project || {};
   const context = sourcePanelState.codingContext || {};
@@ -20249,9 +20250,8 @@ function renderSourcePanelOverview(data) {
   const remoteData = sourcePanelState.gitRemoteData;
   const prCount = remoteData && remoteData.root && sourcePanelRootKey(remoteData.root) === sourcePanelRootKey(sourcePanelRemoteRoot()?.root) ? Number(remoteData.prs?.length || 0) : '—';
   return `<section class="source-panel-section source-panel-project-context">
-    <h3 class="source-panel-section-title">Project context</h3>
-    <p class="source-panel-project-name">${escHtml(projectName)}</p>
-    <p class="source-panel-subtitle">These sources are available to this project${root ? `<span class="source-panel-project-root">${escHtml(root)}</span>` : ''}</p>
+    <p class="source-panel-project-name"${root ? ` title="${escHtml(root)}"` : ''}>${escHtml(projectName)}</p>
+    ${root ? `<p class="source-panel-subtitle"><span class="source-panel-project-root">${escHtml(root)}</span></p>` : ''}
     <div class="source-panel-count-grid">
       ${sourcePanelCountMarkup('Files', fileCount, '▤')}
       ${sourcePanelCountMarkup('Web links', data.links.length, '◎')}

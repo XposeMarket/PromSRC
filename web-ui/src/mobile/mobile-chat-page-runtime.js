@@ -400,10 +400,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       wireMobileContextWindow,
       wsEventBus,
     } = resolveContext() || {};
-  // A prior render can still have an in-flight history request when the route
-  // is remounted (especially after an iOS refresh/bfcache transition). The
-  // session id alone is not an ownership check: an old response for the same
-  // chat must not repaint the current page with its stale snapshot.
+  // A remount (iOS refresh/bfcache) can leave an old history request in flight.
+  // Session id is not ownership: a stale response must not repaint this page.
   const mobilePageInstanceToken = `mobile_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   let mobilePageDisposed = false;
   __pmChat.mobilePageInstanceToken = mobilePageInstanceToken;
@@ -4383,6 +4381,7 @@ void main() {
         ? Math.ceil(toolProgressDock.getBoundingClientRect?.().height || 0)
         : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
+      if (height) page?.style?.setProperty?.('--pm-composer-top-gap', `${Math.ceil(innerHeight - composerRect.top)}px`);
       syncContextDockToComposer();
       page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
       page?.style?.setProperty?.('--pm-goal-live-height', `${goalHeight}px`);

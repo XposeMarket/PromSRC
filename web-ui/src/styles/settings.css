@@ -33,7 +33,7 @@
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
-  border-right: 1px solid var(--line-strong);
+  border-right: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-sidebar-top {
@@ -72,7 +72,7 @@
   padding: 0 10px;
   height: 34px;
   flex: 0 0 auto;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 999px;
   color: var(--muted);
   background: var(--panel-2);
@@ -190,7 +190,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 14px clamp(24px, 4vw, 56px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   background: color-mix(in srgb, var(--panel) 94%, transparent);
 }
 
@@ -213,7 +213,7 @@
 #settings-modal .settings-close-btn {
   min-height: 28px;
   padding: 4px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 7px;
   font-size: 11px;
 }
@@ -263,7 +263,7 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 16px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 50%;
   color: var(--muted);
   font-size: 10px;
@@ -288,7 +288,7 @@
   display: none;
   width: 270px;
   padding: 10px 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 9px;
   background: var(--bg);
   color: var(--text);
@@ -306,8 +306,8 @@
 }
 
 #settings-modal .settings-section-panel {
-  border: 1px solid var(--line);
-  border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 12px;
   background: var(--panel-2);
 }
 
@@ -379,7 +379,7 @@
 
 #settings-modal .settings-inline-link {
   gap: 5px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
   background: var(--panel);
 }
@@ -387,6 +387,31 @@
 #settings-modal .settings-inline-link:hover {
   border-color: var(--brand);
   color: var(--brand);
+}
+
+#settings-modal .settings-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+#settings-modal .settings-icon-btn:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+#settings-modal .settings-icon-btn.is-danger:hover {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+  color: var(--err);
 }
 
 #settings-modal .settings-danger-button {
@@ -409,7 +434,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-info-row:last-child {
@@ -424,7 +449,7 @@
 }
 
 #settings-modal .settings-update-preference-row {
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-update-status-row {
@@ -437,7 +462,7 @@
 }
 
 #settings-modal .settings-update-actions .btn {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   background: var(--panel);
   color: var(--text);
 }
@@ -518,7 +543,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 9px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 10px;
   background: var(--panel);
 }
@@ -584,7 +609,7 @@
 #settings-modal .settings-import-card {
   min-width: 0;
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 13px;
   background: var(--panel-2);
 }
@@ -691,7 +716,7 @@
 #settings-modal .settings-import-job {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--muted);
   font-size: 10.5px;
   line-height: 1.4;
@@ -700,7 +725,7 @@
 #settings-modal .settings-import-history {
   margin-top: 12px;
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 13px;
   background: var(--panel-2);
 }
@@ -740,7 +765,7 @@
   gap: 10px;
   min-width: 0;
   padding: 8px 9px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 75%, transparent);
 }
@@ -806,7 +831,7 @@
   gap: 10px;
   min-width: 0;
   padding: 7px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 75%, transparent);
 }
@@ -993,7 +1018,7 @@
   gap: 3px;
   margin-top: 8px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 75%, transparent);
 }
@@ -1030,7 +1055,7 @@
   margin-top: 7px;
   padding: 4px;
   overflow: auto;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 72%, transparent);
 }
@@ -1264,7 +1289,7 @@
 #settings-modal .settings-row-input {
   width: 190px;
   min-height: 32px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   padding: 6px 9px;
   background: var(--panel);
@@ -1283,7 +1308,7 @@
 #settings-modal .settings-auto-settle-extra {
   display: none;
   padding: 0 14px 14px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-auto-settle-date-row {
@@ -1300,7 +1325,7 @@
 }
 
 #settings-modal .settings-auto-settle-preview-row .btn {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   background: var(--panel);
   color: var(--text);
 }
@@ -1326,7 +1351,7 @@
   gap: 8px;
   padding: 12px clamp(24px, 4vw, 56px);
   margin-top: auto;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   background: color-mix(in srgb, var(--panel) 96%, transparent);
 }
 
@@ -1372,7 +1397,7 @@
   #settings-modal .settings-page-sidebar {
     max-height: 230px;
     border-right: 0;
-    border-bottom: 1px solid var(--line-strong);
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   }
 
   #settings-modal .settings-sidebar-top {
@@ -1463,7 +1488,7 @@
   gap: 18px;
   margin-bottom: 18px;
   padding: 14px 16px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 13px;
   background: var(--panel-2);
 }
@@ -1554,7 +1579,7 @@
   gap: 7px;
   padding: 0 0 12px;
   margin: 0 0 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-model-slot-row {
@@ -1564,7 +1589,7 @@
   gap: 7px;
   margin: 0 !important;
   padding: 10px 0 !important;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-model-slot-row:last-child {
@@ -1628,7 +1653,7 @@
   order: initial !important;
   margin: 12px 0 0 !important;
   padding: 12px 0 0 !important;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-bottom: 0 !important;
 }
 
@@ -1642,7 +1667,7 @@
 #settings-modal .settings-provider-state-summary {
   margin-top: 15px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 11px;
   background: color-mix(in srgb, var(--panel) 62%, var(--panel-2));
 }
@@ -1665,7 +1690,7 @@
   justify-content: space-between;
   gap: 12px;
   min-height: 31px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-provider-state-grid > div:last-child {
@@ -1811,7 +1836,7 @@
   gap: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 13px;
   background: var(--panel-2);
   color: var(--text);
@@ -1964,7 +1989,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .appearance-panel-title {
@@ -1977,7 +2002,7 @@
 #settings-modal .appearance-secondary-button {
   min-height: 30px;
   padding: 5px 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
@@ -2003,7 +2028,7 @@
   gap: 20px;
   min-height: 58px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .appearance-control-row:last-child {
@@ -2042,7 +2067,7 @@
   width: 34px;
   height: 30px;
   padding: 2px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel);
   cursor: pointer;
@@ -2052,7 +2077,7 @@
   width: 106px;
   min-height: 30px;
   padding: 5px 8px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
@@ -2064,7 +2089,7 @@
   width: 162px;
   min-height: 30px;
   padding: 5px 8px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
@@ -2238,7 +2263,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-agent-field,
@@ -2266,7 +2291,7 @@
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
@@ -2282,7 +2307,7 @@
 
 #settings-modal .settings-agent-profile-panel > .settings-agent-row {
   padding: 14px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-agent-profile-panel > .settings-agent-row textarea {
@@ -2295,7 +2320,7 @@
   align-items: center;
   gap: 14px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-agent-row > label {
@@ -2324,7 +2349,7 @@
   min-width: 34px;
   min-height: 34px;
   padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel-2);
   color: var(--text);
@@ -2359,7 +2384,7 @@
 
 #settings-modal .settings-agent-profile-panel .settings-agent-actions .btn:last-child {
   background: transparent;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 
@@ -2411,7 +2436,7 @@
 #settings-modal .settings-agent-editor {
   min-height: 120px;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
 }
 
@@ -2442,7 +2467,7 @@
 #settings-modal .settings-agent-heartbeat-controls input[type="number"] {
   width: 56px;
   box-sizing: border-box;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 6px;
   background: var(--panel);
   color: var(--text);
@@ -2530,7 +2555,7 @@
   gap: 18px;
   min-height: 58px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 #settings-modal .settings-search-row:last-child,
@@ -2581,7 +2606,7 @@
   width: 38px;
   height: 22px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 999px;
   background: var(--panel-2);
   transition: background .16s ease, border-color .16s ease;
@@ -2607,7 +2632,7 @@
 
 #settings-modal .settings-chrome-profile-import-panel {
   padding: 12px 14px 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   background: color-mix(in srgb, var(--panel-2) 72%, var(--panel));
 }
 
@@ -2640,7 +2665,7 @@
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
@@ -2664,7 +2689,7 @@
   min-width: 38px;
   min-height: 34px;
   padding: 0 9px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   background: var(--panel-2);
   color: var(--text);
