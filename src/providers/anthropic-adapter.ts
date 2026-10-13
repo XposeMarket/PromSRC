@@ -185,6 +185,29 @@ export function slimToolsForExtraUsageRetryDetailed(
   return { tools: kept, droppedCategories: Array.from(dropped).sort(), droppedDirectDuplicates };
 }
 
+export const VOLATILE_TURN_CONTEXT_HEADER = '[PER-TURN RUNTIME CONTEXT: injected by Prometheus, not typed by the user. Same authority as the system prompt.]';
+
+/**
+ * Append the system prompt's volatile tail as a trailing, uncached text block on
+ * the final user message, AFTER the rolling-history cache breakpoint. History
+ * blocks never contain it, so the next request (tool round or new user turn)
+ * still hits the cached tools + stable system + history prefix.
+ */
+export function attachVolatileContextToUserTurn(messages: any[], volatile: string): boolean {
+  const text = String(volatile || '').trim();
+  const last = messages[messages.length - 1];
+  if (!text || !last || last.role !== 'user') return false;
+  if (typeof last.content === 'string') {
+    if (!last.content.trim()) return false;
+    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+  }
+  if (!Array.isArray(last.content) || last.content.length === 0) return false;
+  const tail = last.content[last.content.length - 1];
+  if (tail && typeof tail === 'object' && !tail.cache_control) tail.cache_control = { type: 'ephemeral' };
+  last.content.push({ type: 'text', text: `${VOLATILE_TURN_CONTEXT_HEADER}\n${text}` });
+  return true;
+}
+
 export function slimToolsForExtraUsageRetry(
   tools: any[] | undefined,
   messages: any[] | undefined,
@@ -230,7 +253,7 @@ import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
-// prefix when it is comfortably large. ~1024 tokens ≈ 3500 chars at 3.5 ch/tok.
+// prefix when it is comfortably large. ~1024 tokens � 3500 chars at 3.5 ch/tok.
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 // Anthropic rejects the entire request when any image exceeds its size cap.
 // Images are normally resized well under this upstream; this only catches
@@ -359,7 +382,7 @@ export class AnthropicAdapter implements LLMProvider {
       || /^claude-sonnet-5(?:\b|[-_])/.test(model);
   }
 
-  // Claude Fast Mode (Messages API `speed: 'fast'`) — faster output on the same
+  // Claude Fast Mode (Messages API `speed: 'fast'`) � faster output on the same
   // model, no intelligence downgrade. Supported on Opus 5 and Opus 4.8 only
   // (it was removed on Opus 4.7); sending it elsewhere errors, so gate strictly.
   private isFastModeCapableModel(model: string): boolean {
@@ -536,7 +559,7 @@ export class AnthropicAdapter implements LLMProvider {
     return repaired;
   }
 
-  // ─── Convert Prometheus ChatMessage[] → Anthropic messages format ────────────
+  // --- Convert Prometheus ChatMessage[] ? Anthropic messages format ------------
 
   private buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): { system: string; messages: any[] } {
     let systemPrompt = '';
@@ -546,7 +569,7 @@ export class AnthropicAdapter implements LLMProvider {
     const consumedToolUseIds = new Set<string>();
     const repairedMessages = this.repairMessagesForAnthropic(messages);
 
-    // Pending tool_result blocks for batching — Anthropic requires all tool results
+    // Pending tool_result blocks for batching � Anthropic requires all tool results
     // from a single assistant turn to be in ONE user message (not separate messages).
     let pendingToolResults: any[] = [];
 
@@ -609,11 +632,11 @@ export class AnthropicAdapter implements LLMProvider {
           const idx = pendingToolUseIds.indexOf(explicitToolCallId);
           if (idx !== -1) pendingToolUseIds.splice(idx, 1);
         } else if (explicitToolCallId) {
-          // Explicit ID provided but not in known set — still use it (may be from previous turn)
+          // Explicit ID provided but not in known set � still use it (may be from previous turn)
           // The API will ignore tool_results for unknown tool_use IDs, which is safe.
           resolvedToolUseId = explicitToolCallId;
         } else if (pendingToolUseIds.length > 0) {
-          // No explicit ID — try to auto-match from pending queue (FIFO)
+          // No explicit ID � try to auto-match from pending queue (FIFO)
           resolvedToolUseId = pendingToolUseIds.shift() || '';
         }
 
@@ -622,7 +645,7 @@ export class AnthropicAdapter implements LLMProvider {
         if (resolvedToolUseId && !isAlreadyConsumed) {
           // Accept both known IDs and explicit-but-unknown IDs (latter will be ignored by API)
           consumedToolUseIds.add(resolvedToolUseId);
-          // Accumulate into pending batch instead of pushing immediately —
+          // Accumulate into pending batch instead of pushing immediately �
           // will be flushed as a single user message when a non-tool message arrives.
           const toolResultBlock: any = {
             type: 'tool_result',
@@ -640,7 +663,7 @@ export class AnthropicAdapter implements LLMProvider {
         const toolName = String((m as any).tool_name || (m as any).name || 'tool').trim() || 'tool';
         const maxNoteLength = 4000;
         const noteContent = toolContent.length > maxNoteLength
-          ? `${toolContent.slice(0, maxNoteLength)}…`
+          ? `${toolContent.slice(0, maxNoteLength)}�`
           : toolContent;
         anthropicMessages.push({
           role: 'assistant',
@@ -749,7 +772,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
 
-  // ─── Convert Anthropic tools format ──────────────────────────────────────────
+  // --- Convert Anthropic tools format ------------------------------------------
 
   private buildTools(tools?: any[]): any[] | undefined {
     if (!tools?.length) return undefined;
@@ -761,20 +784,20 @@ export class AnthropicAdapter implements LLMProvider {
     // Prompt-cache breakpoint #1: tools are the largest stable payload (hundreds
     // of schemas). Tagging the LAST tool caches the entire tools array as a
     // prefix segment. When a category is activated mid-session the tool list
-    // changes and this re-caches once — expected, then re-stabilizes.
+    // changes and this re-caches once � expected, then re-stabilizes.
     if (mapped.length > 0) {
       (mapped[mapped.length - 1] as any).cache_control = { type: 'ephemeral' };
     }
     return mapped;
   }
 
-  // ─── Chat ───────────────────────────────────────────────────────────────────
+  // --- Chat -------------------------------------------------------------------
 
   // Trim system prompt progressively to fit within Anthropic's 200k token limit.
   // Anthropic counts system + messages + tools together.
   // Use 3.5 chars/token (code-heavy content tokenizes denser than plain text).
   // Target 180k tokens to leave a 20k headroom for response + overhead.
-  // Strips in order: TODAY_NOTES → tools policy blocks → USER section → SOUL truncation.
+  // Strips in order: TODAY_NOTES ? tools policy blocks ? USER section ? SOUL truncation.
   private trimSystemForBudget(system: string, bodyWithoutSystem: string, model = ''): string {
     // The budget used to be a flat 180k tokens for every model. Opus 5.x /
     // Sonnet 4.6+ have a 1M window, so once a chat passed ~180k tokens the
@@ -785,7 +808,7 @@ export class AnthropicAdapter implements LLMProvider {
     const SAFE_CHAR_BUDGET  = Math.floor(SAFE_TOKEN_BUDGET * CHARS_PER_TOKEN); // 630_000
 
     const bodyChars = bodyWithoutSystem.length;
-    if (bodyChars + system.length <= SAFE_CHAR_BUDGET) return system; // fits — no trim needed
+    if (bodyChars + system.length <= SAFE_CHAR_BUDGET) return system; // fits � no trim needed
 
     let s = system;
     const budget = () => SAFE_CHAR_BUDGET - bodyChars;
@@ -836,7 +859,7 @@ export class AnthropicAdapter implements LLMProvider {
   // (persona/memory/tool-policy) is cached while the VOLATILE tail
   // (today's notes, retrieved memory, skill turn-context) stays uncached.
   // For OAuth the Claude Code preamble MUST remain the first block (subscription
-  // gate) — caching attaches to the stable block that follows it.
+  // gate) � caching attaches to the stable block that follows it.
   private buildSystemBlocks(systemText: string, includePreamble: boolean): any[] {
     const preamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
     const blocks: any[] = [];
@@ -967,7 +990,20 @@ export class AnthropicAdapter implements LLMProvider {
       if (trimmed.length < system.length) {
         console.warn(`[anthropic] system prompt trimmed ${system.length} -> ${trimmed.length} chars for ${model} (body ${bodyWithoutSystem.length} chars)`);
       }
-      const blocks = this.buildSystemBlocks(trimmed, !!isOAuth);
+      // Prompt-cache order is tools -> system -> messages. A per-turn volatile
+      // tail left in `system` invalidates the cached prefix for the ENTIRE
+      // conversation history on every new user turn (measured 2026-10-13:
+      // 20-43k tokens re-written per turn). Move it onto the current user turn
+      // so tools + stable system + prior history stay a cache hit. Opt out with
+      // anthropic.volatile_context_in_system: true.
+      let systemForBlocks = trimmed;
+      if ((anthropicCfg as any).volatile_context_in_system !== true) {
+        const { stable, volatile } = splitOnCacheMarker(trimmed);
+        if (volatile.trim() && stable.trim() && attachVolatileContextToUserTurn(anthropicMessages, volatile)) {
+          systemForBlocks = stable;
+        }
+      }
+      const blocks = this.buildSystemBlocks(systemForBlocks, !!isOAuth);
       if (blocks.length > 0) {
         body.system = blocks;
       } else if (isOAuth) {
@@ -1013,7 +1049,7 @@ export class AnthropicAdapter implements LLMProvider {
       }
     }
 
-    // ─── DEBUG: log request shape so we can diff main-chat vs subagent ────────
+    // --- DEBUG: log request shape so we can diff main-chat vs subagent --------
     try {
       const sysPreview = Array.isArray(body.system)
         ? `array(${body.system.length}) first="${String(body.system[0]?.text || '').slice(0, 60)}"`
@@ -1216,7 +1252,7 @@ export class AnthropicAdapter implements LLMProvider {
           const result = slimToolsForExtraUsageRetryDetailed(
             originalTools,
             body.messages,
-            body.system,
+            [...(Array.isArray(body.system) ? body.system : []), { text: system }],
             attempt === 1 ? 'active' : 'minimal',
           );
           if (result) {
@@ -1281,7 +1317,7 @@ export class AnthropicAdapter implements LLMProvider {
     return this.parseResponse(data);
   }
 
-  // ─── Parse Anthropic streaming SSE response ──────────────────────────────────
+  // --- Parse Anthropic streaming SSE response ----------------------------------
 
   private async parseStreamingResponse(response: Response, model: string, options: ChatOptions): Promise<ChatResult> {
     const reader = response.body?.getReader();
@@ -1301,7 +1337,7 @@ export class AnthropicAdapter implements LLMProvider {
     let messageStopped = false;
     let invalidToolInput = false;
     let invalidToolDetail: { name: string; length: number; head: string; tail: string } | undefined;
-    // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
+    // Track per-block accumulation: blockIndex ? { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
     // Idle watchdog: abort only when the stream goes silent, never because a
@@ -1522,7 +1558,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   // Claude Opus 4.7+ (and every 5-series model) can end a turn with
-  // stop_reason: 'refusal' — HTTP 200, but no content. Without this the caller
+  // stop_reason: 'refusal' � HTTP 200, but no content. Without this the caller
   // sees a silently empty assistant turn instead of an explanation.
   // stop_details is populated ONLY for refusals, so guard before reading it.
   private refusalText(stopReason: unknown, stopDetails: any): string | undefined {
@@ -1536,7 +1572,7 @@ export class AnthropicAdapter implements LLMProvider {
     ].filter(Boolean).join(' ');
   }
 
-  // ─── Parse Anthropic response → ChatResult ──────────────────────────────────
+  // --- Parse Anthropic response ? ChatResult ----------------------------------
 
   private parseResponse(data: any): ChatResult {
     let textContent = '';
@@ -1571,7 +1607,7 @@ export class AnthropicAdapter implements LLMProvider {
     return { message, thinking: thinking || undefined, usage: this.parseUsage(data.usage), stopReason: data.stop_reason || undefined };
   }
 
-  // ─── Generate (single prompt) ────────────────────────────────────────────────
+  // --- Generate (single prompt) ------------------------------------------------
 
   async generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
     const messages: ChatMessage[] = [];
@@ -1589,7 +1625,7 @@ export class AnthropicAdapter implements LLMProvider {
     };
   }
 
-  // ─── List Models ─────────────────────────────────────────────────────────────
+  // --- List Models -------------------------------------------------------------
 
   async listModels(): Promise<ModelInfo[]> {
     // Anthropic doesn't have a public model listing endpoint for OAuth tokens.
@@ -1598,7 +1634,7 @@ export class AnthropicAdapter implements LLMProvider {
     return models.map(name => ({ name, ...this.getKnownModelInfo(name) }));
   }
 
-  // ─── Test Connection ─────────────────────────────────────────────────────────
+  // --- Test Connection ---------------------------------------------------------
 
   async diagnoseConnection(model = 'claude-haiku-4-5-20251001', variant: 'plain' | 'matched-skill' = 'plain'): Promise<{
     success: boolean;
