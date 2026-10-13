@@ -44,6 +44,7 @@ import {
   storageFilePath,
 } from './storage/storage-paths';
 import type { ExternalImportBinding, ImportedHistoricalEvent } from './imports/import-types';
+import { retainAnthropicToolCategories, ANTHROPIC_RETAINED_CATEGORY_LIMIT } from '../providers/anthropic-tool-cache';
 
 export interface ChatMessage {
   messageId?: string;
@@ -398,6 +399,8 @@ export interface Session {
   tags?: string[];
   userTurnCounter?: number;
   activatedToolCategories?: string[];
+  /** Bounded Anthropic-only warm category set; cleared by explicit category reset. */
+  anthropicCachedToolCategories?: string[];
   scopedToolCategoryActivations?: ScopedToolCategoryActivation[];
   activatedSkillIds?: string[];
   activatedSkillResources?: Record<string, string[]>;
@@ -1744,6 +1747,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
         : Array.isArray(data?.history)
           ? data.history.filter((msg: any) => msg?.role === 'user').length
           : 0,
+      anthropicCachedToolCategories: Array.isArray(data?.anthropicCachedToolCategories) ? data.anthropicCachedToolCategories.map(normalizeSessionToolCategory).filter(Boolean).slice(0, ANTHROPIC_RETAINED_CATEGORY_LIMIT) : [],
       activatedToolCategories: Array.isArray(data?.activatedToolCategories) ? data.activatedToolCategories : [],
       scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data?.scopedToolCategoryActivations, Number(data?.userTurnCounter)),
       activatedSkillIds: Array.isArray(data?.activatedSkillIds) ? data.activatedSkillIds : [],
@@ -2607,6 +2611,7 @@ export function getSession(id: string): Session {
           : Array.isArray(data.history)
             ? data.history.filter((msg: any) => msg?.role === 'user').length
             : 0,
+        anthropicCachedToolCategories: Array.isArray(data.anthropicCachedToolCategories) ? data.anthropicCachedToolCategories.map(normalizeSessionToolCategory).filter(Boolean).slice(0, ANTHROPIC_RETAINED_CATEGORY_LIMIT) : [],
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
         scopedToolCategoryActivations: normalizeScopedToolCategoryActivations(data.scopedToolCategoryActivations, Number(data.userTurnCounter)),
         activatedSkillIds: Array.isArray(data.activatedSkillIds) ? data.activatedSkillIds : [],
@@ -4068,6 +4073,7 @@ export function restoreToolCategoryActivationState(
     .concat(snapshot.scoped.map((entry) => ({ ...entry })));
 
   session.activatedToolCategories = nextCategories;
+  session.anthropicCachedToolCategories = (session.anthropicCachedToolCategories || []).filter(entry => entry !== cleanCategory);
   session.scopedToolCategoryActivations = nextScoped;
   saveSession(id);
 }
@@ -4083,6 +4089,12 @@ export function deactivateToolCategory(id: string, category: string): void {
   const cleanCategory = String(category || '').trim();
   if (!cleanCategory) return;
   let changed = false;
+  const retained = session.anthropicCachedToolCategories || [];
+  const nextRetained = retained.filter(entry => entry !== cleanCategory);
+  if (nextRetained.length !== retained.length) {
+    session.anthropicCachedToolCategories = nextRetained;
+    changed = true;
+  }
   const activeCategories = Array.isArray(session.activatedToolCategories)
     ? session.activatedToolCategories
     : [];
@@ -4205,6 +4217,7 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
       .filter(Boolean),
   ));
   session.activatedToolCategories = next;
+  session.anthropicCachedToolCategories = [];
   session.scopedToolCategoryActivations = [];
   saveSession(id);
 }
@@ -4228,7 +4241,20 @@ export function getActivatedToolCategories(id: string): Set<string> {
   for (const entry of scoped) {
     active.add(entry.category);
   }
-  if (changed || categoriesChanged) saveSession(id);
+  const cfg = getConfig().getConfig() as any;
+  const provider = session.chatModelRoute?.providerId || cfg.llm?.provider;
+  const anthropic = provider === 'anthropic' && cfg.llm?.providers?.anthropic?.sticky_tool_categories !== false;
+  let retentionChanged = false;
+  if (anthropic) {
+    const retained = retainAnthropicToolCategories(active, session.anthropicCachedToolCategories || []);
+    retentionChanged = JSON.stringify(retained) !== JSON.stringify(session.anthropicCachedToolCategories || []);
+    session.anthropicCachedToolCategories = retained;
+    for (const category of retained) active.add(category);
+  } else if (session.anthropicCachedToolCategories?.length) {
+    session.anthropicCachedToolCategories = [];
+    retentionChanged = true;
+  }
+  if (changed || categoriesChanged || retentionChanged) saveSession(id);
   return active;
 }
 

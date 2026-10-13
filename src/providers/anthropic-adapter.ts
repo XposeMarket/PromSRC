@@ -18,6 +18,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
+import { canonicalAnthropicToolValue } from './anthropic-tool-cache';
 
 /**
  * Anthropic capacity errors (HTTP 529 / overloaded_error). They say nothing
@@ -253,7 +254,7 @@ import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
-// prefix when it is comfortably large. ~1024 tokens ˜ 3500 chars at 3.5 ch/tok.
+// prefix when it is comfortably large. ~1024 tokens ï¿½ 3500 chars at 3.5 ch/tok.
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 // Anthropic rejects the entire request when any image exceeds its size cap.
 // Images are normally resized well under this upstream; this only catches
@@ -382,7 +383,7 @@ export class AnthropicAdapter implements LLMProvider {
       || /^claude-sonnet-5(?:\b|[-_])/.test(model);
   }
 
-  // Claude Fast Mode (Messages API `speed: 'fast'`) — faster output on the same
+  // Claude Fast Mode (Messages API `speed: 'fast'`) ï¿½ faster output on the same
   // model, no intelligence downgrade. Supported on Opus 5 and Opus 4.8 only
   // (it was removed on Opus 4.7); sending it elsewhere errors, so gate strictly.
   private isFastModeCapableModel(model: string): boolean {
@@ -569,7 +570,7 @@ export class AnthropicAdapter implements LLMProvider {
     const consumedToolUseIds = new Set<string>();
     const repairedMessages = this.repairMessagesForAnthropic(messages);
 
-    // Pending tool_result blocks for batching — Anthropic requires all tool results
+    // Pending tool_result blocks for batching ï¿½ Anthropic requires all tool results
     // from a single assistant turn to be in ONE user message (not separate messages).
     let pendingToolResults: any[] = [];
 
@@ -632,11 +633,11 @@ export class AnthropicAdapter implements LLMProvider {
           const idx = pendingToolUseIds.indexOf(explicitToolCallId);
           if (idx !== -1) pendingToolUseIds.splice(idx, 1);
         } else if (explicitToolCallId) {
-          // Explicit ID provided but not in known set — still use it (may be from previous turn)
+          // Explicit ID provided but not in known set ï¿½ still use it (may be from previous turn)
           // The API will ignore tool_results for unknown tool_use IDs, which is safe.
           resolvedToolUseId = explicitToolCallId;
         } else if (pendingToolUseIds.length > 0) {
-          // No explicit ID — try to auto-match from pending queue (FIFO)
+          // No explicit ID ï¿½ try to auto-match from pending queue (FIFO)
           resolvedToolUseId = pendingToolUseIds.shift() || '';
         }
 
@@ -645,7 +646,7 @@ export class AnthropicAdapter implements LLMProvider {
         if (resolvedToolUseId && !isAlreadyConsumed) {
           // Accept both known IDs and explicit-but-unknown IDs (latter will be ignored by API)
           consumedToolUseIds.add(resolvedToolUseId);
-          // Accumulate into pending batch instead of pushing immediately —
+          // Accumulate into pending batch instead of pushing immediately ï¿½
           // will be flushed as a single user message when a non-tool message arrives.
           const toolResultBlock: any = {
             type: 'tool_result',
@@ -663,7 +664,7 @@ export class AnthropicAdapter implements LLMProvider {
         const toolName = String((m as any).tool_name || (m as any).name || 'tool').trim() || 'tool';
         const maxNoteLength = 4000;
         const noteContent = toolContent.length > maxNoteLength
-          ? `${toolContent.slice(0, maxNoteLength)}…`
+          ? `${toolContent.slice(0, maxNoteLength)}ï¿½`
           : toolContent;
         anthropicMessages.push({
           role: 'assistant',
@@ -776,15 +777,17 @@ export class AnthropicAdapter implements LLMProvider {
 
   private buildTools(tools?: any[]): any[] | undefined {
     if (!tools?.length) return undefined;
-    const mapped = tools.map((t: any) => ({
+    const mapped = tools.map((t: any) => canonicalAnthropicToolValue({
       name:         toAnthropicWireToolName(t.function?.name || t.name),
       description:  t.function?.description || t.description || '',
       input_schema: t.function?.parameters || t.parameters || { type: 'object', properties: {} },
-    }));
+    })).sort((a: any, b: any) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     // Prompt-cache breakpoint #1: tools are the largest stable payload (hundreds
     // of schemas). Tagging the LAST tool caches the entire tools array as a
     // prefix segment. When a category is activated mid-session the tool list
-    // changes and this re-caches once — expected, then re-stabilizes.
+    // changes and invalidates ALL downstream cache segments once; order alone
+    // cannot prevent this. Session category retention avoids repeated expiry churn.
+    // This re-caches once ï¿½ expected, then re-stabilizes.
     if (mapped.length > 0) {
       (mapped[mapped.length - 1] as any).cache_control = { type: 'ephemeral' };
     }
@@ -808,7 +811,7 @@ export class AnthropicAdapter implements LLMProvider {
     const SAFE_CHAR_BUDGET  = Math.floor(SAFE_TOKEN_BUDGET * CHARS_PER_TOKEN); // 630_000
 
     const bodyChars = bodyWithoutSystem.length;
-    if (bodyChars + system.length <= SAFE_CHAR_BUDGET) return system; // fits — no trim needed
+    if (bodyChars + system.length <= SAFE_CHAR_BUDGET) return system; // fits ï¿½ no trim needed
 
     let s = system;
     const budget = () => SAFE_CHAR_BUDGET - bodyChars;
@@ -859,7 +862,7 @@ export class AnthropicAdapter implements LLMProvider {
   // (persona/memory/tool-policy) is cached while the VOLATILE tail
   // (today's notes, retrieved memory, skill turn-context) stays uncached.
   // For OAuth the Claude Code preamble MUST remain the first block (subscription
-  // gate) — caching attaches to the stable block that follows it.
+  // gate) ï¿½ caching attaches to the stable block that follows it.
   private buildSystemBlocks(systemText: string, includePreamble: boolean): any[] {
     const preamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
     const blocks: any[] = [];
@@ -1558,7 +1561,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   // Claude Opus 4.7+ (and every 5-series model) can end a turn with
-  // stop_reason: 'refusal' — HTTP 200, but no content. Without this the caller
+  // stop_reason: 'refusal' ï¿½ HTTP 200, but no content. Without this the caller
   // sees a silently empty assistant turn instead of an explanation.
   // stop_details is populated ONLY for refusals, so guard before reading it.
   private refusalText(stopReason: unknown, stopDetails: any): string | undefined {
