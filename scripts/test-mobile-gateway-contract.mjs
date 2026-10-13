@@ -55,6 +55,7 @@ function assertContractFiles() {
   const pages = [
     read('web-ui/src/mobile/mobile-pages.js'),
     read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+    read('web-ui/src/mobile/mobile-chat-camera.js'),
   ].join('\n');
   const voicePage = read('web-ui/src/mobile/mobile-voice-page.js');
   const pairingPage = read('web-ui/src/mobile/mobile-pairing-page.js');

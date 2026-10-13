@@ -8,8 +8,9 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
 const mobileDocument = read('web-ui/mobile.html');
 const generatedMobileDocument = read('generated/public-web-ui/mobile.html');
-// The route renderer owns the camera scanner after the page-runtime extraction.
-const scannerOwner = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+// The mobile chat camera module owns the scanner (split out of the page runtime 2026-10-13).
+const scannerOwner = read('web-ui/src/mobile/mobile-chat-camera.js');
+assert.match(read('web-ui/src/mobile/mobile-chat-page-runtime.js'), /createMobileChatCamera\(/, 'page runtime must mount the camera module');
 
 assert.match(
   mobileDocument,
