@@ -1,0 +1,161 @@
+/* Mobile popover system (UI sweep 2).
+ *
+ * One material, one type scale and one row geometry for every floating mobile
+ * menu: chat ... menu, gateway/project pickers, context window, slash commands,
+ * message long-press, queued-prompt menu, schedule actions, Sources, token
+ * activity and plan popovers. Loaded by the shell style owner on every route,
+ * after mobile.css, so this file is the single owner of popover look. Feature
+ * files keep positioning only.
+ */
+body.pm-mobile-active {
+  --pm-pop-radius: 22px;
+  --pm-pop-pad: 6px;
+  --pm-pop-row-h: 44px;
+  --pm-pop-row-radius: 14px;
+  --pm-pop-row-pad: 8px 12px;
+  --pm-pop-font: 500 15px/1.25 var(--pm-font);
+  --pm-pop-meta-font: 500 12px/1.3 var(--pm-font);
+  --pm-pop-label-font: 650 11px/1.2 var(--pm-font);
+  --pm-pop-icon: 20px;
+  --pm-pop-soft-line: color-mix(in srgb, var(--pm-text) 8%, transparent);
+  --pm-pop-tint: color-mix(in srgb, var(--pm-text) 6%, transparent);
+}
+
+/* Native controls inherit the app face (WebKit/Windows otherwise falls back to
+   the platform dialog font). Zero specificity so feature fonts still win. */
+:where(body.pm-mobile-active) :where(button, input, select, textarea) { font-family: inherit; }
+
+/* ── Panel material ─────────────────────────────────────────────────────── */
+body.pm-mobile-active :is(
+  .pm-chat-settings-popover,
+  .pm-ctx-popover,
+  .pm-chat-slash-popover,
+  .pm-msg-lp-popover,
+  .pm-mobile-queued-popover,
+  .pm-schedule-action-popover,
+  .pm-mobile-sources-panel,
+  .pm-chat-target-popover,
+  .pm-token-activity-popover
+) {
+  border: 1px solid var(--pm-pop-soft-line) !important;
+  border-radius: var(--pm-pop-radius) !important;
+  /* Near-opaque: 84% glass let dense chat text bleed through menus. */
+  background: color-mix(in srgb, var(--pm-ios-popover-base, var(--pm-surface)) 96%, transparent) !important;
+  box-shadow: var(--pm-ios-popover-shadow, 0 18px 44px rgba(0,0,0,.34)) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+  color: var(--pm-text);
+  font-family: var(--pm-font);
+}
+body.pm-mobile-active .pm-chat-settings-popover::before { display: none; }
+
+/* ── Rows ───────────────────────────────────────────────────────────────── */
+body.pm-mobile-active :is(
+  .pm-chat-settings-menu-item,
+  .pm-msg-lp-btn,
+  .pm-mobile-queued-menu-item,
+  .pm-schedule-action-row,
+  .pm-chat-slash-item,
+  .pm-msheet:not(.is-reasoning):not(.is-model-switch) .pm-msheet-row
+) {
+  min-height: var(--pm-pop-row-h);
+  padding: var(--pm-pop-row-pad);
+  border: 0 !important;
+  border-radius: var(--pm-pop-row-radius);
+  font: var(--pm-pop-font);
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-chat-settings-menu-item::after { display: none; }
+body.pm-mobile-active :is(.pm-chat-settings-menu-icon, .pm-schedule-action-icon) svg,
+body.pm-mobile-active .pm-msg-lp-btn svg {
+  width: var(--pm-pop-icon);
+  height: var(--pm-pop-icon);
+}
+
+/* ── Context window ─────────────────────────────────────────────────────── */
+body.pm-mobile-active .pm-ctx-popover { padding: 12px 14px 14px; }
+body.pm-mobile-active .pm-ctx-popover :is(.pm-ctx-head, .pm-ctx-head *) { font-weight: 650; font-size: 14px; }
+
+/* ── Slash commands ─────────────────────────────────────────────────────── */
+body.pm-mobile-active .pm-chat-slash-popover { padding: var(--pm-pop-pad); }
+
+/* ── Sources ────────────────────────────────────────────────────────────── */
+body.pm-mobile-active .pm-mobile-sources-panel { padding: 12px; gap: 10px; }
+body.pm-mobile-active .pm-mobile-sources-header strong { font: 650 15px/1.2 var(--pm-font); }
+body.pm-mobile-active .pm-mobile-sources-header span,
+body.pm-mobile-active #pm-mobile-sources-mode { font: var(--pm-pop-meta-font); color: var(--pm-muted); }
+body.pm-mobile-active .pm-mobile-sources-toolbar { scrollbar-width: none; }
+body.pm-mobile-active .pm-mobile-sources-toolbar::-webkit-scrollbar { display: none; }
+body.pm-mobile-active :is(.pm-mobile-source-toolbar-btn, .pm-mobile-source-action) {
+  border: 0;
+  border-radius: 999px;
+  background: var(--pm-pop-tint);
+  padding: 7px 11px;
+  font: var(--pm-pop-meta-font);
+}
+body.pm-mobile-active .pm-mobile-sources-search {
+  border: 0;
+  border-radius: 12px;
+  background: var(--pm-pop-tint);
+  padding: 10px 12px;
+  font: var(--pm-pop-font);
+}
+body.pm-mobile-active .pm-mobile-source-row { border-top: 0; padding: 9px 6px; border-radius: 12px; }
+body.pm-mobile-active .pm-mobile-source-row + .pm-mobile-source-row { box-shadow: 0 -1px 0 var(--pm-pop-soft-line); }
+body.pm-mobile-active .pm-mobile-source-copy strong { font: 600 14px/1.25 var(--pm-font); }
+body.pm-mobile-active .pm-mobile-source-copy small,
+body.pm-mobile-active .pm-mobile-source-age { font: var(--pm-pop-meta-font); }
+body.pm-mobile-active .pm-mobile-sources-section-label { font: var(--pm-pop-label-font); letter-spacing: .06em; }
+body.pm-mobile-active .pm-mobile-sources-empty { font: var(--pm-pop-meta-font); }
+
+/* ── Gateway picker ─────────────────────────────────────────────────────── */
+body.pm-mobile-active .pm-chat-target-popover { padding: 10px; }
+body.pm-mobile-active .pm-chat-target-popover h3 { font: var(--pm-pop-label-font); letter-spacing: .06em; text-transform: uppercase; color: var(--pm-muted); }
+
+/* ── Section labels inside any popover share one style ─────────────────── */
+body.pm-mobile-active :is(.pm-chat-settings-popover, .pm-ctx-popover) :is(.pm-new-chat-context-popover-title, .pm-ctx-section-title) {
+  font: var(--pm-pop-label-font);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+}
+
+/* ── Settings (shared desktop modal shown on mobile) ───────────────────── */
+/* Esc is a keyboard hint; "Back to app" already closes on touch. */
+body.pm-mobile-active .settings-page-toolbar .settings-close-btn { display: none !important; }
+body.pm-mobile-active #settings-save-btn::before,
+body.pm-mobile-active #settings-save-btn::after { display: none !important; }
+body.pm-mobile-active #settings-save-btn {
+  background: var(--pm-gold, var(--pm-accent)) !important;
+  color: #17130a !important;
+  box-shadow: none !important;
+}
+body.pm-mobile-active .settings-page-footer .btn { border-radius: 999px; font: 600 14px/1 var(--pm-font); padding: 10px 18px; }
+
+/* ── Tasks: Needs you ──────────────────────────────────────────────────── */
+body.pm-mobile-active .needs-you-card {
+  border: 0;
+  border-radius: 18px;
+  background: var(--pm-pop-tint);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  box-shadow: none;
+}
+body.pm-mobile-active .needs-you-card .pm-card-head {
+  display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px;
+  font: 650 13px/1.3 var(--pm-font); letter-spacing: 0; text-transform: none; color: var(--pm-text);
+}
+body.pm-mobile-active .needs-you-card .pm-card-head span { color: var(--pm-muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.pm-mobile-active .needs-you-card .pm-card-body {
+  color: var(--pm-text-soft, var(--pm-muted)); font: 500 13px/1.4 var(--pm-font);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+}
+body.pm-mobile-active .needs-you-card .pm-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+body.pm-mobile-active .needs-you-card .pm-btn { min-height: 34px; padding: 0 14px; border-radius: 999px; font: 600 13px/1 var(--pm-font); }
+
+/* ── Hub/Audit evidence review launcher: quiet row under the header ─────── */
+body.pm-mobile-active .pm-evidence-launch {
+  display: flex; align-items: center; gap: 8px; width: auto; margin: 0 16px 8px;
+  padding: 8px 12px; border: 0; border-radius: 999px; background: var(--pm-pop-tint);
+  color: var(--pm-muted); font: 600 12px/1 var(--pm-font);
+}

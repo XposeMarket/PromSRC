@@ -87,7 +87,7 @@ export async function renderMobileGatewaysPage(page, { navigate }) {
     ${renderMobileHeader({ title: 'Gateway Connections', online: true, leftIcon: 'back', hideTitle: false })}
     <main class="pm-body pm-gateways-page" id="pm-gateways-page">
       <section class="pm-gateway-scan-fallback" aria-label="Pair a gateway">
-        <div><strong>Pair from a computer</strong><p>Scan the QR in that computer’s Settings → Pairing. The phone confirms the target before saving its grant.</p></div>
+        <div><strong>Pair from a computer</strong></div>
         <button type="button" class="pm-btn ghost" id="pm-gateway-scan">Open camera scanner</button>
       </section>
       <section class="pm-gateway-filter" aria-labelledby="pm-gateway-devices-title">

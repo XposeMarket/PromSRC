@@ -2824,7 +2824,7 @@
 
 <!-- Skill view modal (Hub) -->
 <div id="hub-skill-modal" class="hub-modal" style="display:none">
-  <div class="hub-modal-backdrop" onclick="closeHubSkillModal()"></div>
+  <div class="hub-modal-backdrop" onclick="window.closeHubSkillModal?.()"></div>
   <div class="hub-modal-card">
     <div class="hub-modal-header">
       <div class="hub-modal-title">
@@ -2838,7 +2838,7 @@
         <span id="hub-modal-name">Skill</span>
         <span class="hub-modal-version" id="hub-modal-version"></span>
       </div>
-      <button class="hub-modal-close" type="button" onclick="closeHubSkillModal()">×</button>
+      <button class="hub-modal-close" type="button" onclick="window.closeHubSkillModal?.()">×</button>
     </div>
     <div class="hub-modal-body" id="hub-modal-body"></div>
   </div>

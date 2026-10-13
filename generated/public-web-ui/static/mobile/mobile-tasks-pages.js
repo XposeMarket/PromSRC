@@ -31,14 +31,27 @@ import {
 
 /* ---------------- TASKS PAGE ---------------- */
 
-// Needs you: items blocked on Raul. Resolved through the same endpoints chat uses.
+// Agent prompts open with [SUBAGENT]/IDENTITY/WORKSPACE RULES boilerplate.
+// Show the actual task line (same rule as desktop TasksPage bgtNeedsYouSummary).
+function needsYouSummary(payload = {}) {
+  const raw = String(payload.content || payload.reason || payload.prompt || payload.toolName || payload.title || payload.targetTitle || '');
+  const task = raw.match(/\b(?:YOUR TASK|TASK|ASSIGNMENT|GOAL|OBJECTIVE)\s*:\s*([\s\S]+)/)?.[1]
+    || raw.replace(/^\s*\[[^\]]+\]\s*/, '')
+      .split(/\n\s*\n|(?=\b(?:IDENTITY|WORKSPACE RULES|CONTEXT|CONSTRAINTS)\s*:)/)
+      .find((block) => block.trim().length > 12 && !/^\s*(IDENTITY|WORKSPACE RULES|RULES|CONTEXT|CONSTRAINTS)\s*:/.test(block))
+    || '';
+  const text = task.replace(/\s+/g, ' ').trim() || 'Waiting for your input.';
+  return text.length > 220 ? `${text.slice(0, 217)}…` : text;
+}
+
+// Needs you: items blocked on the user. Resolved through the same endpoints chat uses.
 function renderNeedsYouCard(item) {
   const id = escapeHtml(String(item.id || ''));
   const kind = String(item.kind || '');
   const origin = escapeHtml(String(item.sessionId || ''));
   const payload = item.payload || {};
   const title = escapeHtml(String(item.source || 'Chat'));
-  const summary = escapeHtml(String(payload.content || payload.reason || payload.prompt || payload.toolName || payload.title || payload.targetTitle || 'Waiting for your input.'));
+  const summary = escapeHtml(needsYouSummary(payload));
   let actions = '';
   if (kind === 'tool_approval' || kind === 'final_action_approval') {
     actions = `<button class="pm-btn" data-ny-deny="${id}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${id}">Approve</button>`;
@@ -47,7 +60,7 @@ function renderNeedsYouCard(item) {
   } else {
     actions = `<button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Open thread</button>`;
   }
-  return `<div class="pm-card needs-you-card" data-needs-you-id="${id}"><div class="pm-card-head"><strong>${escapeHtml(kind.replace(/_/g, ' '))}</strong> <span>from ${title}</span></div><div class="pm-card-body">${summary}</div><div class="pm-card-actions">${actions}${origin ? `<a href="#" data-ny-link="${origin}">Source thread</a>` : ''}</div></div>`;
+  return `<div class="pm-card needs-you-card" data-needs-you-id="${id}"><div class="pm-card-head"><strong>${escapeHtml(kind.replace(/_/g, ' '))}</strong> <span>from ${title}</span></div><div class="pm-card-body">${summary}</div><div class="pm-card-actions">${actions}${origin && !actions.includes('data-ny-open') ? `<button class="pm-btn" data-ny-link="${origin}" aria-label="Open source thread" title="Open source thread">Thread</button>` : ''}</div></div>`;
 }
 
 async function paintNeedsYouSection(page) {
@@ -93,9 +106,9 @@ const TASK_PILL = {
 const TASK_ACTIVE_STATUSES = new Set(['running','queued','paused','stalled','needs_assistance','awaiting_user_input','waiting_subagent']);
 
 function _tasksSkeleton() {
-  const block = `<div class="pm-card" style="opacity:.55"><div class="pm-card-head">${ICONS.clipboard} loading…</div><div class="pm-card-body" style="height:36px;background:rgba(0,0,0,.04);border-radius:6px;"></div></div>`;
-  return block.repeat(3);
+  return '<div class="pm-more-skeleton pm-tasks-skel" aria-hidden="true"><span></span><span></span><span></span></div>';
 }
+
 
 async function _renderTasksPageOld(page, { navigate }) {
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">…</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
@@ -354,7 +367,7 @@ function _pmTaskAction(task) {
 
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
   const taskPageSize = 40;
-  const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">...</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
+  const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">

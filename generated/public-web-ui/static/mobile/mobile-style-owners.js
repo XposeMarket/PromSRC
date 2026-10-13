@@ -12,6 +12,14 @@ const STYLE_DEFINITIONS = Object.freeze({
       attribute: 'data-prom-mobile-demo-glass-style',
       query: 'drawer-tabs=white-v1',
     }),
+    // One owner for every floating menu's material/type/row geometry.
+    Object.freeze({
+      id: 'pm-mobile-surfaces-style',
+      file: 'mobile-surfaces.css',
+      layer: 'shell',
+      version: 'pm-v1-2026-10-13-surface-system',
+      attribute: 'data-prom-mobile-surfaces-style',
+    }),
   ]),
   chat: Object.freeze([
     Object.freeze({
