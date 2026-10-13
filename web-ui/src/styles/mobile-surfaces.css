@@ -21,9 +21,11 @@ body.pm-mobile-active {
   --pm-pop-tint: color-mix(in srgb, var(--pm-text) 6%, transparent);
 }
 
-/* Native controls inherit the app face (WebKit/Windows otherwise falls back to
-   the platform dialog font). Zero specificity so feature fonts still win. */
-:where(body.pm-mobile-active) :where(button, input, select, textarea) { font-family: inherit; }
+/* Native controls use the app face (WebKit/Windows otherwise falls back to
+   the platform dialog font). Explicit var, NOT inherit: body has no family on
+   mobile, so inherit resolved to -webkit-standard (Times) and turned drawer
+   session titles serif. Zero specificity so feature fonts still win. */
+:where(body.pm-mobile-active) :where(button, input, select, textarea) { font-family: var(--pm-font); }
 
 /* ── Panel material ─────────────────────────────────────────────────────── */
 body.pm-mobile-active :is(
