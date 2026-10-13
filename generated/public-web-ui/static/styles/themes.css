@@ -1143,7 +1143,7 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
   color: #fff !important;
   box-shadow: 0 0 0 4px rgba(216,71,58,.16) !important;
 }
-:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.main-goal-strip, .chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging, .chat-new-context-dock, .chat-new-context-popover) {
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging, .chat-new-context-dock, .chat-new-context-popover) {
   color: var(--text);
   border-color: rgba(214, 183, 94, .28);
   background: rgba(12, 12, 11, .96);

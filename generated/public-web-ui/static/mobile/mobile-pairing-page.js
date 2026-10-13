@@ -160,9 +160,9 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   } : null;
   page.innerHTML = `
     ${renderMobileHeader({ title: addMode ? 'Add gateway' : 'Pair phone', online: false, leftIcon: 'menu' })}
-    <div class="pm-body" style="display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:8px;">
+    <div class="pm-body" style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:8px 20px calc(120px + env(safe-area-inset-bottom, 0px));">
       <div id="pm-pair-stage" style="max-width:360px;width:100%;">
-        <div class="pm-voice-orb" style="width:min(60vw,200px);margin:14px auto 24px;" aria-hidden="true">
+        <div class="pm-voice-orb" style="width:min(38vw,140px);margin:8px auto 18px;" aria-hidden="true">
           <svg viewBox="0 0 200 200" style="width:100%;height:100%;">
             <defs>
               <radialGradient id="pm-pair-core" cx="35%" cy="32%" r="70%">
@@ -183,6 +183,17 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
     </div>
   `;
   wireHeaderActions(page, {});
+  // Unpaired navigation only returns to this form; keep it clear of the inputs.
+  const pairingTabbar = page.parentElement?.querySelector('.pm-tabbar');
+  const previousTabbarDisplay = pairingTabbar?.style.getPropertyValue('display') || '';
+  const previousTabbarPriority = pairingTabbar?.style.getPropertyPriority('display') || '';
+  pairingTabbar?.style.setProperty('display', 'none', 'important');
+  const previousCleanup = window.__pmMobileCleanup;
+  window.__pmMobileCleanup = () => {
+    if (previousTabbarDisplay) pairingTabbar?.style.setProperty('display', previousTabbarDisplay, previousTabbarPriority);
+    else pairingTabbar?.style.removeProperty('display');
+    if (typeof previousCleanup === 'function') previousCleanup();
+  };
 
   const titleEl  = page.querySelector('#pm-pair-title');
   const subEl    = page.querySelector('#pm-pair-sub');
@@ -232,8 +243,8 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
       status: '',
       actions: `
         <form id="pm-pair-code-form" style="display:flex;flex-direction:column;gap:10px;">
-          <input id="pm-pair-code-input" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="PAIR-ABCD-1234 or paste link" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:14px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:.08em;" />
-          <input id="pm-pair-origin-input" type="url" inputmode="url" autocomplete="url" spellcheck="false" value="${_escapeHtml(window.location.origin)}" placeholder="https://your-machine.ts.net" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:11px 13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;" />
+          <input id="pm-pair-code-input" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" aria-label="Pair code or pairing link" placeholder="Pair code or link" style="width:100%;box-sizing:border-box;border:1px solid color-mix(in srgb, var(--pm-text, #fff) 8%, transparent);border-radius:12px;background:color-mix(in srgb, var(--pm-text, #fff) 4%, transparent);color:var(--pm-text);padding:14px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:.08em;" />
+          <input id="pm-pair-origin-input" type="url" inputmode="url" autocomplete="url" spellcheck="false" aria-label="Gateway address" value="${_escapeHtml(window.location.origin)}" placeholder="https://your-machine.ts.net" style="width:100%;box-sizing:border-box;border:1px solid color-mix(in srgb, var(--pm-text, #fff) 8%, transparent);border-radius:12px;background:color-mix(in srgb, var(--pm-text, #fff) 4%, transparent);color:var(--pm-text);padding:11px 13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;" />
           <div style="font-size:12px;color:var(--pm-muted);line-height:1.45;">Use the Gateway address shown on the desktop. If you paste the full pairing link above, this address is ignored.</div>
           <button class="pm-btn primary" type="submit">Pair with code</button>
           <button class="pm-btn ghost" type="button" id="pm-pair-retry">I scanned the QR</button>

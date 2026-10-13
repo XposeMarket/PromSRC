@@ -62,8 +62,21 @@ const SETTINGS_ICON_PATHS = {
   palette: '<path d="M12 3a9 9 0 1 0 0 18h1.2a1.8 1.8 0 0 0 1.3-3.05 1.8 1.8 0 0 1 1.28-3.07H18A3 3 0 0 0 21 12C21 7.03 16.97 3 12 3Z"></path><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle><circle cx="10" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="14" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="16.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle>',
 };
 
+const SETTINGS_ACTION_ICON_PATHS = {
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"></path><path d="M21 3v5h-5"></path>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
+  pencil: '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>',
+  trash: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path>',
+  plus: '<path d="M12 5v14"></path><path d="M5 12h14"></path>',
+};
+
+// Compact icon-only row action. `label` becomes the title + aria-label.
+function renderSettingsIconButton(icon, label, attrs = '', extraClass = '') {
+  return `<button type="button" class="settings-icon-btn${extraClass ? ' ' + extraClass : ''}" title="${escHtml(label)}" aria-label="${escHtml(label)}" ${attrs}>${renderSettingsIcon(icon, 15)}</button>`;
+}
+
 function renderSettingsIcon(name, size = 14) {
-  const paths = SETTINGS_ICON_PATHS[name];
+  const paths = SETTINGS_ICON_PATHS[name] || SETTINGS_ACTION_ICON_PATHS[name];
   if (!paths) return '';
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 }
@@ -770,7 +783,7 @@ async function loadSubagentHeartbeatList() {
       const lastRun = a.lastRunAt ? new Date(a.lastRunAt).toLocaleString() : 'never';
       const resultDot = a.lastResult === 'active' ? '#22c55e' : a.lastResult === 'error' ? '#ef4444' : '#94a3b8';
       return `
-        <div style="border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel-2)">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px;background:var(--panel-2)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
             <span style="width:8px;height:8px;border-radius:50%;background:${resultDot};flex-shrink:0"></span>
             <span style="font-weight:600;font-size:13px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.agentId)}</span>
@@ -781,11 +794,11 @@ async function loadSubagentHeartbeatList() {
             </label>
             <div style="display:flex;align-items:center;gap:3px">
               <input type="number" min="1" max="1440" value="${cfg.intervalMinutes || 30}"
-                style="width:52px;border:1px solid var(--line);border-radius:6px;padding:2px 5px;font-size:12px;text-align:center"
+                style="width:52px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;padding:2px 5px;font-size:12px;text-align:center"
                 onchange="updateSubagentHb('${escHtml(a.agentId)}',{interval_minutes:Number(this.value)})" />
               <span style="font-size:11px;color:var(--muted)">min</span>
             </div>
-            <button onclick="tickSubagentHb('${escHtml(a.agentId)}')" style="padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:11px;cursor:pointer">▶</button>
+            <button onclick="tickSubagentHb('${escHtml(a.agentId)}')" style="padding:2px 8px;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:6px;background:transparent;font-size:11px;cursor:pointer;color:var(--text)">▶</button>
           </div>
           <div style="font-size:10px;color:var(--muted)">last: ${escHtml(lastRun)}</div>
         </div>`;
@@ -1333,15 +1346,13 @@ function renderProviderAccountControls(provider) {
   const accounts = normalizeProviderAccountsForUI(provider.id, cfg);
   const selected = String(cfg.defaultAccountId || accounts[0]?.id || 'default');
   const options = accounts.map(account => `<option value="${escHtml(account.id)}"${account.id === selected ? ' selected' : ''}>${escHtml(account.label || account.id)}</option>`).join('');
-  return `<div class="settings-provider-account-panel" style="margin:10px 0 12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:end">
-      <label style="display:block;font-size:12px;color:var(--muted)">Account<select id="${getProviderAccountSelectId(provider.id)}" class="settings-input" onchange="onProviderAccountChange('${provider.id}')" style="margin-top:6px;font-size:13px">${options}</select></label>
+  const hint = provider.id === 'openai_codex' ? 'Connect a new account before it can become the default.' : 'Takes effect when you save Settings.';
+  return `<div class="settings-provider-account-panel" style="margin:10px 0 12px">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:end">
+      <label style="display:block;font-size:12px;color:var(--muted)" title="${hint}">Account<select id="${getProviderAccountSelectId(provider.id)}" class="settings-input" onchange="onProviderAccountChange('${provider.id}')" style="margin-top:6px;font-size:13px">${options}</select></label>
       <label style="display:block;font-size:12px;color:var(--muted)">Name<input id="${getProviderAccountLabelId(provider.id)}" class="settings-input" value="${escHtml(accounts.find(a => a.id === selected)?.label || selected)}" placeholder="Account name" style="margin-top:6px;font-size:13px" /></label>
+      ${renderSettingsIconButton('plus', 'Add account', `onclick="addProviderAccount('${provider.id}')" style="margin-bottom:4px"`)}
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-      <button class="btn btn-sm" onclick="addProviderAccount('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Add Account</button>
-    </div>
-    <div style="margin-top:7px;font-size:11px;color:var(--muted)">${provider.id === 'openai_codex' ? 'Connect a new account before it can become the default when you save Settings.' : 'The selected account becomes active for this provider when you save Settings.'}</div>
   </div>`;
 }
 
@@ -1509,7 +1520,7 @@ function renderProviderField(provider, field) {
     return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><select id="${fieldId}" class="settings-input" style="font-size:13px">${staticModels.map(model => `<option value="${escHtml(model)}">${escHtml(formatModelDisplayName(model, provider.id))}</option>`).join('')}</select>${helpHtml}`;
   }
   if (field.input === 'textarea') {
-    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><textarea id="${fieldId}" style="width:100%;min-height:90px;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace"></textarea>${helpHtml}`;
+    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><textarea id="${fieldId}" style="width:100%;min-height:90px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace"></textarea>${helpHtml}`;
   }
   if (field.input === 'checkbox') {
     return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer"><input id="${fieldId}" type="checkbox" /><span>${label}</span></label>${helpHtml}`;
@@ -1519,7 +1530,7 @@ function renderProviderField(provider, field) {
   }
   const inputType = field.input === 'password' ? 'password' : 'text';
   const placeholder = field.placeholder ? ` placeholder="${escHtml(field.placeholder)}"` : '';
-  return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><input id="${fieldId}" type="${inputType}"${placeholder} style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />${helpHtml}`;
+  return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><input id="${fieldId}" type="${inputType}"${placeholder} style="width:100%;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />${helpHtml}`;
 }
 
 function renderDynamicProviderPanel(provider) {
@@ -1530,7 +1541,7 @@ function renderDynamicProviderPanel(provider) {
     ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">${escHtml(provider.description)}</div>`
     : '';
   const refreshButton = provider.runtime?.options?.supportsLiveModelDiscovery
-    ? `<button class="btn btn-sm" onclick="refreshProviderModels('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>`
+    ? `${renderSettingsIconButton('refresh', 'Refresh models', `onclick="refreshProviderModels('${provider.id}')"`)}`
     : '';
   const xaiAuthModeField = provider.id === 'xai'
     ? renderProviderField(provider, fields.find(field => field.key === 'auth_mode') || {
@@ -1551,7 +1562,7 @@ function renderDynamicProviderPanel(provider) {
       })}</div>`
     : '';
   const xaiOAuthPanel = provider.id === 'xai'
-    ? `<div id="xai-oauth-auth-panel" style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    ? `<div id="xai-oauth-auth-panel" style="margin:12px 0;padding:10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;background:var(--panel-2)">
         <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Grok account OAuth</div>
         <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">Connect your Grok/X account for the selected account. xAI still decides whether X Premium, Premium+, or SuperGrok can use each endpoint.</div>
         <div id="xai-oauth-disconnected-state" style="display:block">
@@ -1559,17 +1570,17 @@ function renderDynamicProviderPanel(provider) {
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
           <input id="xai-oauth-manual-code" class="settings-input" placeholder="Paste xAI code if the browser cannot reach Prometheus" style="font-size:12px;min-width:0" />
-          <button class="btn btn-sm" onclick="submitXaiOAuthCode()" style="background:#fff;border:1px solid var(--line);color:var(--text);white-space:nowrap">Submit Code</button>
+          <button class="btn btn-sm" onclick="submitXaiOAuthCode()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text);white-space:nowrap">Submit Code</button>
         </div>
         <div id="xai-oauth-connected-state" style="display:none">
           <div id="xai-oauth-account-id" style="font-size:12px;color:var(--success);margin-bottom:8px">xAI OAuth connected</div>
-          <button class="btn btn-sm" onclick="disconnectXaiOAuth()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Disconnect xAI OAuth</button>
+          <button class="btn btn-sm" onclick="disconnectXaiOAuth()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Disconnect xAI OAuth</button>
         </div>
         <div id="xai-oauth-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
       </div>`
     : '';
   const xApiOAuthPanel = provider.id === 'x'
-    ? `<div style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+    ? `<div style="margin:12px 0;padding:10px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;background:var(--panel-2)">
         <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Official X API OAuth</div>
         <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">X API/xurl tools require an X Developer app and OAuth 2.0 user context. xAI/Grok OAuth stays separate for models, x_search, TTS, and STT.</div>
         <div style="display:grid;gap:6px;margin-bottom:8px">
@@ -1579,13 +1590,13 @@ function renderDynamicProviderPanel(provider) {
           <input id="x-api-scopes" class="settings-input" placeholder="tweet.read users.read follows.read like.read bookmark.read offline.access" style="font-size:12px" />
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="saveXApiCredentials()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Save App</button>
+          <button class="btn btn-sm" onclick="saveXApiCredentials()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Save App</button>
           <button class="btn btn-sm" onclick="startXApiOAuth()" style="background:#111827;color:#fff;border:1px solid #111827">Connect X API OAuth</button>
-          <button class="btn btn-sm" onclick="disconnectXApiOAuth()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Disconnect</button>
+          <button class="btn btn-sm" onclick="disconnectXApiOAuth()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Disconnect</button>
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
           <input id="x-api-manual-code" class="settings-input" placeholder="Paste X OAuth code if callback cannot reach Prometheus" style="font-size:12px;min-width:0" />
-          <button class="btn btn-sm" onclick="submitXApiOAuthCode()" style="background:#fff;border:1px solid var(--line);color:var(--text);white-space:nowrap">Submit Code</button>
+          <button class="btn btn-sm" onclick="submitXApiOAuthCode()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text);white-space:nowrap">Submit Code</button>
         </div>
         <div id="x-api-oauth-account-id" style="font-size:12px;color:var(--success);margin-top:8px"></div>
         <div id="x-api-oauth-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
@@ -1594,7 +1605,7 @@ function renderDynamicProviderPanel(provider) {
   const visibleFields = provider.id === 'xai'
     ? fields.filter(field => field.key !== 'auth_mode' && field.key !== 'api_key')
     : fields;
-  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${renderProviderAccountControls(provider)}${xaiAuthModeField}${xaiApiKeyPanel}${xaiOAuthPanel}${xApiOAuthPanel}${visibleFields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
+  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${renderProviderAccountControls(provider)}${xaiAuthModeField}${xaiApiKeyPanel}${xaiOAuthPanel}${xApiOAuthPanel}${visibleFields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
 }
 
 function renderProviderSelectors() {
@@ -2013,19 +2024,19 @@ function renderContextBudgetSummary(profile, budget) {
   const b = budget || {};
   wrap.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Primary model</div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text);overflow-wrap:anywhere;margin-top:3px">${escHtml(p.providerId || 'provider')}/${escHtml(p.model || 'model')}</div>
       </div>
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Context window</div>
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(p.contextWindowTokens))} tokens</div>
       </div>
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Compaction trigger</div>
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(b.compactionTriggerTokens))} input tokens</div>
       </div>
-      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Tool budget</div>
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(b.toolContextBudgetTokens))} tokens</div>
       </div>
@@ -2048,7 +2059,7 @@ function renderCommandPermissionGrants(grants) {
     const cwd = grant.cwdDisplay || grant.targetDisplay || '';
     const boundary = grant.boundaryScope && grant.boundaryScope !== 'workspace' ? String(grant.boundaryScope).replace(/_/g, ' ') : '';
     const externalPaths = Array.isArray(grant.externalPaths) ? grant.externalPaths.filter(Boolean) : [];
-    return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--panel-2)">
+    return `<div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:10px;background:var(--panel-2)">
       <div style="display:flex;align-items:flex-start;gap:10px;justify-content:space-between">
         <div style="min-width:0;flex:1">
           <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text);overflow-wrap:anywhere">${escHtml(command)}</div>
@@ -2056,7 +2067,7 @@ function renderCommandPermissionGrants(grants) {
           ${boundary ? `<div style="font-size:11px;color:#9a5b00;margin-top:5px;overflow-wrap:anywhere">boundary: ${escHtml(boundary)}${externalPaths.length ? ` · ${escHtml(externalPaths.slice(0, 2).join(', '))}` : ''}</div>` : ''}
           <div style="font-size:10.5px;color:var(--muted);margin-top:4px">created: ${escHtml(created)} · used: ${escHtml(used)} · ${Number(grant.useCount || 0)} use(s)</div>
         </div>
-        <button class="btn btn-sm" onclick="revokeCommandPermission('${escHtml(grant.id)}')" style="background:#fff;color:#b91c1c;border:1px solid #fecaca;flex-shrink:0">Remove</button>
+        ${renderSettingsIconButton('trash', 'Remove', `onclick="revokeCommandPermission('${escHtml(grant.id)}')"`, 'is-danger')}
       </div>
     </div>`;
   }).join('');
@@ -3962,7 +3973,7 @@ function renderMigrationReports(reports = []) {
     return;
   }
   el.innerHTML = reports.slice(0, 6).map((report) => `
-    <div style="border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:8px;background:var(--panel-2)">
+    <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:9px;padding:8px 10px;margin-bottom:8px;background:var(--panel-2)">
       <div style="display:flex;justify-content:space-between;gap:8px">
         <div style="font-size:12px;font-weight:700;color:var(--text)">${escHtml(report.source || report.sourceKind || 'Migration')}</div>
         <div style="font-size:10px;color:var(--muted)">${escHtml(report.completedAt ? new Date(report.completedAt).toLocaleString() : '')}</div>
@@ -4143,7 +4154,7 @@ function renderShortcutsList() {
       const ctx = sc.context ? `<span style="color:var(--muted)"> (${sc.context})</span>` : '';
       const star = sc.preferred_for_compose ? ' ?' : '';
       html += `<div style="display:flex;align-items:flex-start;gap:6px;padding:3px 4px;border-radius:5px;margin-bottom:2px" onmouseover="this.style.background='var(--bg-soft)'" onmouseout="this.style.background=''">`;
-      html += `<code style="font-size:11px;background:var(--bg-soft);border:1px solid var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap;flex-shrink:0">${sc.key}</code>`;
+      html += `<code style="font-size:11px;background:var(--bg-soft);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:4px;padding:1px 6px;white-space:nowrap;flex-shrink:0">${sc.key}</code>`;
       html += `<span style="flex:1;font-size:12px;color:var(--text)">${sc.action}${ctx}${star ? '<span style="color:#d18b19">' + star + '</span>' : ''}</span>`;
       html += `<button onclick="deleteSiteShortcutUI('${host}','${sc.key.replace(/'/g,"\\'")}')"
         title="Delete shortcut" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:0 2px;line-height:1">&#x2715;</button>`;
@@ -4480,9 +4491,9 @@ function renderAgentsList() {
     const selected = a.id === window.selectedAgentId;
     const lastRun = a.lastRun?.finishedAt ? new Date(a.lastRun.finishedAt).toLocaleString() : 'never';
     const heartbeat = a.lastHeartbeatAt ? new Date(a.lastHeartbeatAt).toLocaleString() : 'never';
-    const defaultBadge = isMainAgentEntry(a) ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#eaf2ff;color:#0d4faf;border:1px solid #bdd3f6">default</span>' : '';
-    const dynamicBadge = a.subagentType === 'dynamic' ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">dynamic</span>' : '';
-    const managerBadge = a.isTeamManager ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#fffbeb;color:#92400e;border:1px solid #fde68a">manager</span>' : '';
+    const defaultBadge = isMainAgentEntry(a) ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:color-mix(in srgb, var(--brand) 14%, transparent);color:var(--brand);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent)">default</span>' : '';
+    const dynamicBadge = a.subagentType === 'dynamic' ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:color-mix(in srgb, #22c55e 12%, transparent);color:#4ade80;border:none">dynamic</span>' : '';
+    const managerBadge = a.isTeamManager ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:color-mix(in srgb, #f5b544 12%, transparent);color:#f5c46b;border:none">manager</span>' : '';
     const modelSource = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
     const modelLine = a.effectiveModel
       ? `<div style="margin-top:2px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted)">model: ${escHtml(a.effectiveModel)}${modelSource ? ` <span style="font-family:inherit;color:var(--muted)">(${escHtml(modelSource)})</span>` : ''}</div>`
@@ -5038,7 +5049,7 @@ async function loadAgentRunHistory() {
       const when = new Date(r.finishedAt || r.startedAt || Date.now()).toLocaleString();
       const label = `${r.trigger || 'manual'} • ${r.durationMs || 0}ms`;
       const preview = String(r.resultPreview || r.error || '').slice(0, 140);
-      return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px">
+      return `<div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:6px 8px">
         <div style="display:flex;justify-content:space-between;gap:8px">
           <span style="font-weight:700;color:${color}">${r.success ? 'success' : 'failed'}</span>
           <span style="font-size:11px;color:var(--muted)">${escHtml(when)}</span>
@@ -5048,7 +5059,7 @@ async function loadAgentRunHistory() {
       </div>`;
     }).join('');
   } catch (err) {
-    el.innerHTML = `<div style="color:#9c1a1a">Failed to load history: ${escHtml(err.message)}</div>`;
+    el.innerHTML = `<div style="color:#f87171">Failed to load history: ${escHtml(err.message)}</div>`;
   }
 }
 
@@ -5642,9 +5653,9 @@ function setIntegTab(tab) {
     const btn = document.getElementById('itab-' + t);
     const panel = document.getElementById('itab-panel-' + t);
     if (btn) {
-      btn.style.background = t === tab ? '#eaf2ff' : '#fff';
-      btn.style.color = t === tab ? '#0d4faf' : 'var(--muted)';
-      btn.style.borderColor = t === tab ? '#bdd3f6' : 'var(--line)';
+      btn.style.background = t === tab ? 'color-mix(in srgb, var(--text) 10%, transparent)' : 'transparent';
+      btn.style.color = t === tab ? 'var(--text)' : 'var(--muted)';
+      btn.style.border = '0';
     }
     if (panel) panel.style.display = t === tab ? 'block' : 'none';
   });
@@ -5811,7 +5822,7 @@ async function loadMCPServers() {
       const statusColor = s.status === 'connected' ? '#22c55e' : s.status === 'error' ? '#ef4444' : s.status === 'connecting' ? '#f59e0b' : '#9ca3af';
       const statusLabel = s.status === 'connected' ? `Connected · ${s.toolCount} tool${s.toolCount !== 1 ? 's' : ''}` : s.status === 'error' ? 'Error' : s.status === 'connecting' ? 'Connecting…' : 'Disconnected';
       const toolTip = s.toolNames?.length ? s.toolNames.join(', ') : '';
-      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:${s.enabled ? '#fff' : '#fafafa'}">
+      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;margin-bottom:6px;background:${s.enabled ? '#fff' : '#fafafa'}">
         <div style="padding-top:2px">
           <div style="width:8px;height:8px;border-radius:50%;background:${statusColor};flex-shrink:0"></div>
         </div>
@@ -5822,11 +5833,11 @@ async function loadMCPServers() {
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">
           ${s.status === 'connected'
-            ? `<button onclick="disconnectMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid var(--line);border-radius:5px;background:#fff;font-size:10px;cursor:pointer">Disconnect</button>`
-            : `<button onclick="connectMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid var(--brand);border-radius:5px;background:#fff;color:var(--brand);font-size:10px;font-weight:600;cursor:pointer">Connect</button>`
+            ? `<button onclick="disconnectMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);border-radius:5px;background:transparent;font-size:10px;cursor:pointer;color:var(--text)">Disconnect</button>`
+            : `<button onclick="connectMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid var(--brand);border-radius:5px;background:transparent;color:var(--brand);font-size:10px;font-weight:600;cursor:pointer">Connect</button>`
           }
-          <button onclick="editMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid var(--line);border-radius:5px;background:#fff;font-size:10px;cursor:pointer">Edit</button>
-          <button onclick="deleteMCPServer('${s.id}')" style="padding:3px 8px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#ef4444;font-size:10px;cursor:pointer">Delete</button>
+          ${renderSettingsIconButton('pencil', 'Edit', `onclick="editMCPServer('${s.id}')"`)}
+          ${renderSettingsIconButton('trash', 'Delete', `onclick="deleteMCPServer('${s.id}')"`, 'is-danger')}
         </div>
       </div>`;
     }).join('');
@@ -5853,7 +5864,7 @@ async function renderMCPPresetCatalog() {
   const grid = document.getElementById('mcp-preset-grid');
   if (!grid) return;
   const presets = Object.values(await loadMCPPresetCatalog());
-  grid.innerHTML = presets.map((preset) => `<button onclick="prefillMCPServer(${JSON.stringify(String(preset.id)).replace(/</g, '\\u003c')})" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px"><div style="font-weight:600;color:var(--text)">${escHtml(String(preset.name || preset.id))}</div><div style="color:var(--muted)">${escHtml(String(preset.transport || 'MCP'))}${preset.credentialFields?.length ? ` · ${preset.credentialFields.length} credential field(s)` : ''}</div></button>`).join('') || '<div style="color:var(--muted)">No presets registered.</div>';
+  grid.innerHTML = presets.map((preset) => `<button onclick="prefillMCPServer(${JSON.stringify(String(preset.id)).replace(/</g, '\\u003c')})" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:transparent;cursor:pointer;font-size:11px"><div style="font-weight:600;color:var(--text)">${escHtml(String(preset.name || preset.id))}</div><div style="color:var(--muted)">${escHtml(String(preset.transport || 'MCP'))}${preset.credentialFields?.length ? ` · ${preset.credentialFields.length} credential field(s)` : ''}</div></button>`).join('') || '<div style="color:var(--muted)">No presets registered.</div>';
 }
 
 function showMCPAddForm(editData) {
@@ -6180,8 +6191,8 @@ function askAutoSettleActivationMode() {
       <div style="font-size:15px;font-weight:800;margin-bottom:9px">When should auto-settle begin?</div>
       <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:17px">You chose a past date. Include chats that are already older than that date, or start the inactivity clock from now for existing chats.</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-        <button data-auto-settle-choice="cancel" type="button" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
-        <button data-auto-settle-choice="start_now" type="button" style="border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Start from now</button>
+        <button data-auto-settle-choice="cancel" type="button" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+        <button data-auto-settle-choice="start_now" type="button" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Start from now</button>
         <button data-auto-settle-choice="apply_existing" type="button" style="border:none;background:var(--brand);color:#fff;border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Apply to eligible chats</button>
       </div>`;
     overlay.appendChild(box);
@@ -7308,7 +7319,7 @@ async function loadRemoteAccessSettings() {
     _remoteAccessLoaded = true;
   } catch (err) {
     const msg = document.getElementById('pairing-remote-msg');
-    if (msg) msg.innerHTML = `<span style="color:#b91c1c">Failed to load remote access settings: ${escHtml(err.message || err)}</span>`;
+    if (msg) msg.innerHTML = `<span style="color:#f87171">Failed to load remote access settings: ${escHtml(err.message || err)}</span>`;
   }
 }
 
@@ -7331,7 +7342,7 @@ async function _saveRemoteAccess() {
     refreshPairingQR().catch(() => {});
     showToast?.('Remote access updated', '', 'success');
   } catch (err) {
-    if (msg) msg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Save failed')}</span>`;
+    if (msg) msg.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Save failed')}</span>`;
     showToast?.('Save failed', String(err.message || err), 'error');
   }
 }
@@ -7348,7 +7359,7 @@ async function _enableFunnel() {
     _applyFunnelLiveStatus(!!r.funnelActive);
     showToast?.('Tailscale funnel enabled', '', 'success');
   } catch (err) {
-    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Enable failed')}</span>`;
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Enable failed')}</span>`;
     showToast?.('Funnel enable failed', String(err.message || err), 'error');
   } finally {
     if (enableBtn) { enableBtn.disabled = false; enableBtn.textContent = 'Enable Funnel'; }
@@ -7363,11 +7374,11 @@ async function _disableFunnel() {
   try {
     const r = await pairingAdminApi('/api/pairing/tailscale/funnel/disable', { method: 'POST', body: '{}' });
     if (!r?.success) throw new Error(r?.error || 'Failed to disable funnel');
-    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b45309">Funnel listener on HTTPS ${r.httpsPort || 443} disabled.</span>`;
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#f5c46b">Funnel listener on HTTPS ${r.httpsPort || 443} disabled.</span>`;
     _applyFunnelLiveStatus(false);
     showToast?.('Tailscale funnel disabled', '', 'success');
   } catch (err) {
-    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Disable failed')}</span>`;
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Disable failed')}</span>`;
   } finally {
     if (disableBtn) { disableBtn.disabled = false; disableBtn.textContent = 'Disable Funnel'; }
   }
@@ -7382,18 +7393,18 @@ async function _detectTailscale() {
   try {
     const r = await pairingAdminApi('/api/pairing/tailscale/status');
     if (!r?.installed) {
-      if (out) out.innerHTML = `<span style="color:#b45309">${escHtml(r?.error || 'Tailscale CLI not found.')}</span><br><span style="font-size:11px">Install from <span style="font-family:ui-monospace">tailscale.com</span> and try again.</span>`;
+      if (out) out.innerHTML = `<span style="color:#f5c46b">${escHtml(r?.error || 'Tailscale CLI not found.')}</span><br><span style="font-size:11px">Install from <span style="font-family:ui-monospace">tailscale.com</span> and try again.</span>`;
       return;
     }
     const lines = [];
     lines.push(`<div><strong>Installed:</strong> <span style="color:#15803d">yes</span></div>`);
-    lines.push(`<div><strong>Logged in:</strong> ${r.loggedIn ? '<span style="color:#15803d">yes</span>' : '<span style="color:#b45309">no — run <span style="font-family:ui-monospace">tailscale up</span></span>'}</div>`);
+    lines.push(`<div><strong>Logged in:</strong> ${r.loggedIn ? '<span style="color:#15803d">yes</span>' : '<span style="color:#f5c46b">no — run <span style="font-family:ui-monospace">tailscale up</span></span>'}</div>`);
     if (r.hostname) lines.push(`<div><strong>Hostname:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.hostname)}</span></div>`);
     if (r.suggestedUrl) lines.push(`<div><strong>Suggested URL:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.suggestedUrl)}</span></div>`);
-    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (HTTPS ${r.suggestedHttpsPort || 443} → local ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active for this instance</span>'}</div>`);
+    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (HTTPS ${r.suggestedHttpsPort || 443} → local ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#f5c46b">not active for this instance</span>'}</div>`);
     if (r.suggestedFunnelCommand) lines.push(`<div style="margin-top:4px;font-family:ui-monospace;word-break:break-all;font-size:11px">${escHtml(r.suggestedFunnelCommand)}</div>`);
     if (r.suggestedUrl) {
-      lines.push(`<div style="margin-top:8px"><button class="btn btn-sm" id="pairing-ts-apply-btn" style="background:#eaf2ff;border:1px solid #bdd3f6;color:#0d4faf">Use this URL</button></div>`);
+      lines.push(`<div style="margin-top:8px"><button class="btn btn-sm" id="pairing-ts-apply-btn" style="background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);color:var(--brand)">Use this URL</button></div>`);
     }
     if (out) out.innerHTML = lines.join('');
     const port = (() => {
@@ -7410,7 +7421,7 @@ async function _detectTailscale() {
       });
     }
   } catch (err) {
-    if (out) out.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Detect failed')}</span>`;
+    if (out) out.innerHTML = `<span style="color:#f87171">${escHtml(err.message || 'Detect failed')}</span>`;
   }
 }
 
@@ -7455,13 +7466,13 @@ async function refreshPairingQR() {
           <div style="display:flex;justify-content:center;max-width:288px;width:100%;margin:0 auto;">${r.qrSvg || ''}</div>
           <div style="display:flex;flex-direction:column;gap:10px;min-width:0;text-align:left;">
             <div style="font-size:12px;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.06em;">Pair code</div>
-            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(22px,4vw,34px);font-weight:900;letter-spacing:.08em;line-height:1.15;color:#221a14;background:#fff8ef;border:1px solid #f3d6b9;border-radius:10px;padding:14px 16px;text-align:center;word-break:break-word;">
+            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(22px,4vw,34px);font-weight:900;letter-spacing:.08em;line-height:1.15;color:var(--text);background:color-mix(in srgb, var(--text) 6%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:14px 16px;text-align:center;word-break:break-word;">
               ${escHtml(pairCode || 'PAIR-....-....')}
             </div>
             <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Gateway address</div>
-            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--text);background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 9px;word-break:break-all;">${escHtml(pairingOrigin || 'Unavailable')}</div>
+            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--text);background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:8px 9px;word-break:break-all;">${escHtml(pairingOrigin || 'Unavailable')}</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open this gateway address on the phone first and enter the pair code. You can also paste the full pairing link.</div>
-            <button class="btn btn-sm" id="pairing-copy-code-btn" style="background:#fff;border:1px solid var(--line);color:var(--text);width:max-content">Copy code</button>
+            ${renderSettingsIconButton('copy', 'Copy code', 'id="pairing-copy-code-btn"')}
           </div>
         </div>`;
       const copyCode = document.getElementById('pairing-copy-code-btn');
@@ -7477,18 +7488,18 @@ async function refreshPairingQR() {
     if (meta) {
       const expires = new Date(r.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const warning = r.warning
-        ? `<div style="margin-top:6px;color:#b45309;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:6px 8px">${escHtml(r.warning)}</div>`
+        ? `<div style="margin-top:6px;color:#f5c46b;background:color-mix(in srgb, #f5b544 12%, transparent);border:none;border-radius:8px;padding:6px 8px">${escHtml(r.warning)}</div>`
         : '';
       const lan = Array.isArray(r.lanOrigins) && r.lanOrigins.length
         ? `<div style="margin-top:4px;color:var(--muted);font-size:11px">LAN: ${r.lanOrigins.map(x => `<span style="word-break:break-all">${escHtml(x)}</span>`).join(', ')}</div>`
         : '';
       const remoteBadge = r.remoteAccess && r.remoteAccess.active
-        ? `<div style="margin-top:6px;color:#0d4faf;background:#eaf2ff;border:1px solid #bdd3f6;border-radius:8px;padding:6px 8px;font-size:11px">Remote access ON — QR uses public URL (${escHtml(String(r.remoteAccess.mode || 'custom'))})</div>`
+        ? `<div style="margin-top:6px;color:var(--brand);background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:8px;padding:6px 8px;font-size:11px">Remote access ON — QR uses public URL (${escHtml(String(r.remoteAccess.mode || 'custom'))})</div>`
         : '';
       meta.innerHTML = `Expires at <strong>${escHtml(expires)}</strong> · <span style="word-break:break-all">${escHtml(r.pairUrl)}</span>${remoteBadge}${warning}${lan}`;
     }
   } catch (err) {
-    if (wrap) wrap.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to generate QR')}</div>`;
+    if (wrap) wrap.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to generate QR')}</div>`;
   }
 }
 
@@ -7510,17 +7521,17 @@ async function refreshPairingPending() {
       return;
     }
     list.innerHTML = reqs.map(req => `
-      <div style="border:1px solid #f3d6b9;background:#fff8ef;border-radius:10px;padding:10px 12px" data-pairing-req="${escHtml(req.id)}">
+      <div style="border:none;background:color-mix(in srgb, #f5b544 12%, transparent);border-radius:10px;padding:10px 12px" data-pairing-req="${escHtml(req.id)}">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
           <strong style="flex:1;font-size:13px">${escHtml(req.deviceName || 'Mobile device')}</strong>
-          <span style="font-size:10px;font-weight:800;color:#c0541a;background:#ffe8d2;padding:2px 7px;border-radius:6px">pending</span>
+          <span style="font-size:10px;font-weight:800;color:#f5c46b;background:color-mix(in srgb, #f5b544 12%, transparent);padding:2px 7px;border-radius:6px">pending</span>
         </div>
         <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
           ${escHtml(_summarizeUA(req.userAgent))} · ${escHtml(req.ipHint || 'unknown ip')}
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm" style="flex:1;background:#16a34a;color:#fff;border:none" data-pairing-action="approve" data-id="${escHtml(req.id)}">✓ Allow</button>
-          <button class="btn btn-sm" style="flex:1;background:#fff;color:#b91c1c;border:1px solid #fecaca" data-pairing-action="deny" data-id="${escHtml(req.id)}">✕ Deny</button>
+          <button class="btn btn-sm" style="flex:1;background:transparent;color:#f87171;border:none" data-pairing-action="deny" data-id="${escHtml(req.id)}">✕ Deny</button>
         </div>
       </div>
     `).join('');
@@ -7549,7 +7560,7 @@ async function refreshPairingPending() {
       });
     });
   } catch (err) {
-    list.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to load pending requests')}</div>`;
+    list.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to load pending requests')}</div>`;
   }
 }
 
@@ -7569,7 +7580,7 @@ async function refreshPairedDevices() {
       const lastSeen = d.lastSeenAt ? `last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'never';
       const enabled = d.enabled !== false;
       return `
-        <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff" data-pairing-device="${escHtml(d.id)}">
+        <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:10px 12px;background:color-mix(in srgb, var(--text) 4%, transparent)" data-pairing-device="${escHtml(d.id)}">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
             <strong style="flex:1;font-size:13px">📱 ${escHtml(d.name || 'Device')}</strong>
             <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;background:${enabled ? '#d9f7ed' : '#ffe0e0'};color:${enabled ? '#066046' : '#8b0000'}">${enabled ? 'enabled' : 'disabled'}</span>
@@ -7579,7 +7590,7 @@ async function refreshPairedDevices() {
           </div>
           <div style="display:flex;gap:6px">
             <button class="btn btn-sm" style="flex:1;background:${enabled ? '#fff' : '#16a34a'};color:${enabled ? 'var(--muted)' : '#fff'};border:1px solid ${enabled ? 'var(--line)' : '#16a34a'}" data-device-action="toggle" data-id="${escHtml(d.id)}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Disable' : 'Enable'}</button>
-            <button class="btn btn-sm" style="flex:1;background:#fff;color:#b91c1c;border:1px solid #fecaca" data-device-action="remove" data-id="${escHtml(d.id)}">Remove</button>
+            ${renderSettingsIconButton('trash', 'Remove', `data-device-action="remove" data-id="${escHtml(d.id)}"`, 'is-danger')}
           </div>
         </div>
       `;
@@ -7610,7 +7621,7 @@ async function refreshPairedDevices() {
       });
     });
   } catch (err) {
-    list.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to load devices')}</div>`;
+    list.innerHTML = `<div style="color:#f87171;font-size:12px">${escHtml(err.message || 'Failed to load devices')}</div>`;
   }
 }
 

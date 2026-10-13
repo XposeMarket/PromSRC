@@ -374,6 +374,21 @@ async function bgtHandleColumnDrop(e, targetStatus) {
 }
 
 // --- Needs you: video approvals, team escalation replies, live refresh ---------
+// Agent prompts open with identity/workspace boilerplate. Show the actual task
+// line instead, collapsed to a short single paragraph.
+function bgtNeedsYouSummary(payload = {}) {
+  const raw = String(payload.content || payload.reason || payload.prompt || payload.title || 'Waiting for your input.');
+  // Prefer an explicit task header anywhere in the prompt; otherwise drop the
+  // [SUBAGENT: x] tag and any leading IDENTITY/WORKSPACE RULES/CONTEXT blocks.
+  const task = raw.match(/\b(?:YOUR TASK|TASK|ASSIGNMENT|GOAL|OBJECTIVE)\s*:\s*([\s\S]+)/)?.[1]
+    || raw.replace(/^\s*\[[^\]]+\]\s*/, '')
+      .split(/\n\s*\n|(?=\b(?:IDENTITY|WORKSPACE RULES|CONTEXT|CONSTRAINTS)\s*:)/)
+      .find((block) => block.trim().length > 12 && !/^\s*(IDENTITY|WORKSPACE RULES|RULES|CONTEXT|CONSTRAINTS)\s*:/.test(block))
+    || '';
+  const text = task.replace(/\s+/g, ' ').trim();
+  return text.length > 220 ? `${text.slice(0, 217)}…` : text;
+}
+
 function renderVideoApprovalCard(item) {
   const p = item.payload || {};
   const id = escHtml(String(p.id || item.id || ''));
@@ -655,8 +670,22 @@ function renderBgTasks() {
               ? renderVideoApprovalCard(item)
               : item.kind === 'team_escalation'
                 ? renderTeamEscalationCard(item)
-                : `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">${escHtml(String(payload.content || payload.reason || payload.prompt || payload.title || 'This item is waiting for your input.'))}</div><div class="chat-approval-actions">${item.kind === 'paused_agent_run' ? `<button class="chat-approval-btn chat-approval-approve" onclick="bgtOpenCardFromClick(null,'${escHtml(String(payload.id || ''))}')">Open run</button>` : ''}</div></div>`;
-        return `<article class="pm-card bgt-needs-you-card"><div class="bgt-needs-you-meta"><strong>${escHtml(String(item.kind || '').replace(/_/g, ' '))}</strong><span>From ${escHtml(String(item.source || 'Chat'))}</span>${origin ? `<a href="#" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')">Open origin chat</a>` : ''}</div>${content}<small data-needs-you-id="${escHtml(id)}">${escHtml(id)}</small></article>`;
+                : (bgtNeedsYouSummary(payload) ? `<p class="bgt-needs-you-summary">${escHtml(bgtNeedsYouSummary(payload))}</p>` : '');
+        const runId = item.kind === 'paused_agent_run' ? String(payload.id || '') : '';
+        const kindLabel = String(item.kind || '').replace(/_/g, ' ');
+        return `<article class="bgt-needs-you-card" data-kind="${escHtml(String(item.kind || ''))}" title="${escHtml(id)}">
+          <div class="bgt-needs-you-meta">
+            <span class="bgt-needs-you-dot" aria-hidden="true"></span>
+            <strong>${escHtml(kindLabel.charAt(0).toUpperCase() + kindLabel.slice(1))}</strong>
+            <span class="bgt-needs-you-source">${escHtml(String(item.source || 'Chat'))}</span>
+            <span class="bgt-needs-you-actions">
+              ${runId ? `<button type="button" class="bgt-needs-you-open" onclick="bgtOpenCardFromClick(null,'${escHtml(runId)}')">Open run</button>` : ''}
+              ${origin ? `<button type="button" class="bgt-icon-btn" title="Open origin chat" aria-label="Open origin chat" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>` : ''}
+            </span>
+          </div>
+          ${content}
+          <small data-needs-you-id="${escHtml(id)}" hidden>${escHtml(id)}</small>
+        </article>`;
       }).join('')
       : '<div class="pm-empty">Nothing is waiting on you.</div>';
   }
@@ -690,7 +719,7 @@ function renderBgTasks() {
         ${items.slice(0,5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}
         ${items.length > 5 ? `
         <div id="bgt-more-${col.key}" style="display:none;">${items.slice(5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}</div>
-        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${items.length - 5} more'" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${items.length - 5} more</button>` : ''}
+        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${items.length - 5} more'" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${items.length - 5} more</button>` : ''}
       </div>
     `;
     board.appendChild(colEl);
@@ -777,12 +806,12 @@ function bgtCardHTML(t, col) {
         ${bgtEditMode ? `<button
           onclick="event.stopPropagation(); bgtHideTask('${escHtml(t.id)}')"
           title="Hide task"
-          style="border:none;background:none;color:#9c1a1a;font-size:15px;cursor:pointer;padding:0 2px;line-height:1;opacity:0.85"
+          style="border:none;background:none;color:#f87171;font-size:15px;cursor:pointer;padding:0 2px;line-height:1;opacity:0.85"
         >🗑</button>` : ''}
         <span style="font-size:14px;flex-shrink:0">${STATUS_ICON[displayStatus] || '●'}</span>
       </div>
     </div>
-    ${brainLabel ? `<div style="font-size:10px;color:#6d2d9e;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin:-2px 0 7px">${escHtml(brainLabel)}${t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>` : ''}
+    ${brainLabel ? `<div style="font-size:10px;color:#c4b5fd;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin:-2px 0 7px">${escHtml(brainLabel)}${t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>` : ''}
     ${currentStep ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.4">Step ${currentStepIndex + 1}/${totalSteps}: ${escHtml(String(currentStep.text || '').slice(0,60))}${String(currentStep.text || '').length>60?'…':''}</div>` : ''}
     ${totalSteps > 0 ? `
     <div style="background:var(--line);border-radius:999px;height:3px;margin-bottom:8px;overflow:hidden">
@@ -790,8 +819,8 @@ function bgtCardHTML(t, col) {
     </div>` : ''}
     <div style="display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:10px;color:var(--muted)">${channel} ${timeAgo}</span>
-      ${displayStatus === 'needs_assistance' ? `<span style="font-size:10px;background:#f5eeff;color:#6d2d9e;border-radius:999px;padding:1px 8px;font-weight:700">Needs you</span>` : ''}
-      ${displayStatus === 'paused' ? `<span style="font-size:10px;background:#f5f5f5;color:#555;border-radius:999px;padding:1px 8px;font-weight:700">${t.pauseReason || 'paused'}</span>` : ''}
+      ${displayStatus === 'needs_assistance' ? `<span style="font-size:10px;background:color-mix(in srgb, #a78bfa 12%, transparent);color:#c4b5fd;border-radius:999px;padding:1px 8px;font-weight:700">Needs you</span>` : ''}
+      ${displayStatus === 'paused' ? `<span style="font-size:10px;background:color-mix(in srgb, var(--text) 4%, transparent);color:#555;border-radius:999px;padding:1px 8px;font-weight:700">${t.pauseReason || 'paused'}</span>` : ''}
     </div>
     ${displayStatus === 'failed' && (t.lastError || t.finalSummary) ? `<div title="${escHtml(String(t.lastError || t.finalSummary))}" style="margin-top:7px;font-size:10px;line-height:1.4;color:#9b1c1c;background:rgba(239,68,68,.08);border-radius:6px;padding:4px 7px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(String(t.lastError || t.finalSummary).slice(0, 160))}</div>` : ''}
   </div>`;
@@ -909,8 +938,8 @@ async function bgtRefreshOpenPanel() {
   let assistanceHTML = '';
   const taskStatusNorm = String(task.status || '').trim().toLowerCase();
   const pauseAnalysisHtml = task.pauseAnalysis?.message
-    ? `<div style="margin-top:10px;background:#fff;border:1px solid #e9d8ff;border-radius:10px;padding:10px 12px;color:#3d1a6e">
-        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#6d2d9e;margin-bottom:6px">AI Recovery Plan</div>
+    ? `<div style="margin-top:10px;background:color-mix(in srgb, var(--text) 4%, transparent);border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:10px;padding:10px 12px;color:#c4b5fd">
+        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#c4b5fd;margin-bottom:6px">AI Recovery Plan</div>
         <div style="font-size:12px;line-height:1.6">${renderMd(task.pauseAnalysis.message)}</div>
       </div>`
     : '';
@@ -919,8 +948,8 @@ async function bgtRefreshOpenPanel() {
     : [];
   const canChatWithTask = ['needs_assistance', 'paused', 'stalled', 'awaiting_user_input', 'failed'].includes(taskStatusNorm);
   const recoveryConversationHtml = (recoveryTurns.length > 0 || canChatWithTask)
-    ? `<div style="border:1px solid #e9d8ff;border-radius:10px;background:#fff;overflow:hidden">
-        <div style="padding:8px 12px;font-size:11px;font-weight:800;color:#6d2d9e;border-bottom:1px solid #f0e7ff">Task Chat & Recovery Trail</div>
+    ? `<div style="border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:10px;background:color-mix(in srgb, var(--text) 4%, transparent);overflow:hidden">
+        <div style="padding:8px 12px;font-size:11px;font-weight:800;color:#c4b5fd;border-bottom:1px solid #f0e7ff">Task Chat & Recovery Trail</div>
         <div style="display:flex;flex-direction:column;gap:8px;padding:10px 12px">
           ${recoveryTurns.length > 0 ? recoveryTurns.map((turn) => {
             const isUser = turn.role === 'user';
@@ -933,13 +962,13 @@ async function bgtRefreshOpenPanel() {
                 ? 'Pause Analysis'
                 : isUser ? 'You' : 'Prometheus';
             const body = isUser ? escHtml(turn.content || '') : renderMd(turn.content || '');
-            return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${bg};border:1px solid #e9d8ff;border-radius:10px;padding:8px 10px;color:${color};font-size:12px;line-height:1.55">
+            return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${bg};border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:10px;padding:8px 10px;color:${color};font-size:12px;line-height:1.55">
               <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;opacity:0.7;margin-bottom:4px">${label}</div>
               <div>${body}</div>
             </div>`;
           }).join('') : '<div style="color:var(--muted);font-size:12px">No recovery messages yet.</div>'}
 	          ${canChatWithTask ? `<div style="display:flex;gap:8px;border-top:1px solid #f0e7ff;padding-top:10px">
-            <textarea id="task-reply-input" rows="2" placeholder="Type your reply - the agent will see this and continue..." style="flex:1;resize:none;border:1px solid #cba8f5;border-radius:8px;padding:8px;font-size:12px;font-family:inherit;background:#fff;color:var(--text)"></textarea>
+            <textarea id="task-reply-input" rows="2" placeholder="Type your reply - the agent will see this and continue..." style="flex:1;resize:none;border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:8px;padding:8px;font-size:12px;font-family:inherit;background:color-mix(in srgb, var(--text) 4%, transparent);color:var(--text)"></textarea>
             <button id="task-reply-send" data-taskid="${escHtml(task.id)}" style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-end">Send</button>
 	          </div>` : ''}
         </div>
@@ -953,12 +982,12 @@ async function bgtRefreshOpenPanel() {
     const pauseMsg = escHtml((lastPause?.content || (isFailedTask ? task.finalSummary : '') || lastStatusPush?.content || (isFailedTask ? 'Task failed.' : 'Task paused and waiting for input.')).replace(/^Task paused for assistance:\s*/i, ''));
     const pauseDetail = lastPause?.detail ? escHtml(lastPause.detail.slice(0, 300)) : '';
     const clarificationMsg = task.pendingClarificationQuestion
-      ? '<div style="font-size:11px;color:#6d2d9e;margin-top:6px"><strong>Pending question:</strong> ' + escHtml(task.pendingClarificationQuestion) + '</div>'
+      ? '<div style="font-size:11px;color:#c4b5fd;margin-top:6px"><strong>Pending question:</strong> ' + escHtml(task.pendingClarificationQuestion) + '</div>'
       : '';
-    assistanceHTML = '<div style="background:#f5eeff;border:1px solid #cba8f5;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#6d2d9e">'
+    assistanceHTML = '<div style="background:color-mix(in srgb, #a78bfa 12%, transparent);border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#c4b5fd">'
       + '<div style="font-weight:800;margin-bottom:6px">' + (isFailedTask ? '❌ Task failed' : '⚠️ Task needs your input') + '</div>'
-      + '<div style="color:#3d1a6e;margin-bottom:' + (pauseDetail ? '6px' : '0') + '">' + pauseMsg + '</div>'
-      + (pauseDetail ? '<div style="font-size:11px;color:#6d2d9e;opacity:0.8;margin-bottom:4px">' + pauseDetail + '</div>' : '')
+      + '<div style="color:#c4b5fd;margin-bottom:' + (pauseDetail ? '6px' : '0') + '">' + pauseMsg + '</div>'
+      + (pauseDetail ? '<div style="font-size:11px;color:#c4b5fd;opacity:0.8;margin-bottom:4px">' + pauseDetail + '</div>' : '')
       + clarificationMsg
       + pauseAnalysisHtml
       + '</div>';
@@ -976,7 +1005,7 @@ async function bgtRefreshOpenPanel() {
       <span style="font-size:11px;color:var(--muted)">Started ${startedAt}</span>
     </div>
 
-    ${brainLabel ? `<div style="background:#f8f5ff;border:1px solid #e9d8ff;border-radius:10px;padding:9px 12px;font-size:11px;color:#6d2d9e;line-height:1.5">
+    ${brainLabel ? `<div style="background:color-mix(in srgb, #a78bfa 12%, transparent);border:1px solid color-mix(in srgb, #a78bfa 25%, transparent);border-radius:10px;padding:9px 12px;font-size:11px;color:#c4b5fd;line-height:1.5">
       <strong>${escHtml(brainLabel)}</strong>${task.brainDate ? ` · ${escHtml(String(task.brainDate))}` : ''}${task.brainRunId ? `<br><span style="opacity:.78">Run ${escHtml(String(task.brainRunId))}</span>` : ''}${task.brainArtifact ? `<br><span style="opacity:.78">Primary artifact: ${escHtml(String(task.brainArtifact))}</span>` : ''}
     </div>` : ''}
 
@@ -1033,7 +1062,7 @@ async function bgtRefreshOpenPanel() {
     </div>
 
     <!-- Manager/Worker status indicator (only shown when manager is active) -->
-    ${task.managerEnabled ? `<div id="manager-status-bar" style="background:#f0f5ff;border:1px solid #c7d8f5;border-radius:10px;padding:8px 12px;font-size:11px;font-weight:700;color:#0d4faf;display:flex;align-items:center;gap:8px">
+    ${task.managerEnabled ? `<div id="manager-status-bar" style="background:color-mix(in srgb, var(--brand) 14%, transparent);border:1px solid color-mix(in srgb, var(--brand) 30%, transparent);border-radius:10px;padding:8px 12px;font-size:11px;font-weight:700;color:var(--brand);display:flex;align-items:center;gap:8px">
       <span id="manager-status-icon">⚙️</span>
       <span id="manager-status-text">Manager/Worker mode active</span>
       ${task.executorProvider ? `<span style="font-weight:400;color:#555;margin-left:auto">Worker: ${escHtml(task.executorProvider)}</span>` : ''}
@@ -1062,7 +1091,7 @@ async function bgtRefreshOpenPanel() {
     <!-- Process journal -->
     <div>
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Process Log <span style="font-weight:400;opacity:0.6">(latest first)</span></div>
-      <div style="font-family:monospace;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
+      <div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
         ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}
       </div>
     </div>
@@ -1070,8 +1099,8 @@ async function bgtRefreshOpenPanel() {
     <!-- Finished-task actions -->
     ${(displayStatus === 'complete' || displayStatus === 'failed') ? `
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button onclick="bgtCreateSkillProposal('${escHtml(task.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Draft Skill</button>
-      <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Remove</button>
+      <button onclick="bgtCreateSkillProposal('${escHtml(task.id)}')" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel);color:var(--text);border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Draft Skill</button>
+      <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:none;background:color-mix(in srgb, #ef4444 12%, transparent);color:#f87171;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Remove</button>
     </div>` : ''}
   `;
 
@@ -1310,7 +1339,7 @@ async function loadEvidenceBusEntries(taskId) {
       if (!grouped[e.category]) grouped[e.category] = [];
       grouped[e.category].push(e);
     }
-    let html = '<div style="font-family:monospace;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:250px;overflow-y:auto">';
+    let html = '<div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:250px;overflow-y:auto">';
     for (const [cat, catEntries] of Object.entries(grouped)) {
       const col = catColors[cat] || '#555';
       html += `<div style="font-size:10px;font-weight:800;color:${col};text-transform:uppercase;padding:4px 0 2px">${escHtml(cat)} (${catEntries.length})</div>`;

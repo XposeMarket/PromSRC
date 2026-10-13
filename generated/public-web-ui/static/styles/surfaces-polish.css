@@ -1,0 +1,231 @@
+/* surfaces-polish.css: owned home for the 2026-10 desktop surface polish pass
+   (goal strip, floating Sources card, soft tinted rows). New desktop polish
+   rules go here instead of growing the legacy components.css cascade.
+   Loaded after themes.css so it is the final authority for these surfaces. */
+
+/* ── Goal strip ─────────────────────────────────────────────────
+   One quiet row docked at the top of the composer. It is a direct child of
+   the desktop composer grid, so it must span every column. */
+.main-goal-strip {
+  grid-column: 1 / -1;
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 4px;
+  padding: 4px 4px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  --goal-accent: var(--brand);
+}
+.main-goal-strip[data-status="paused"],
+.main-goal-strip[data-status="restarting"] { --goal-accent: #f5b544; }
+.main-goal-strip[data-status="blocked"],
+.main-goal-strip[data-status="failed"] { --goal-accent: var(--err, #f87171); }
+.main-goal-strip[data-status="done"] { --goal-accent: #22c55e; }
+.main-goal-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.main-goal-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.main-goal-main:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.main-goal-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--goal-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--goal-accent) 18%, transparent);
+}
+.main-goal-strip[data-status="active"] .main-goal-dot { animation: main-goal-pulse 2.4s ease-in-out infinite; }
+@keyframes main-goal-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--goal-accent) 6%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .main-goal-strip[data-status="active"] .main-goal-dot { animation: none; } }
+.main-goal-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.main-goal-elapsed,
+.main-goal-meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.main-goal-meta { opacity: .8; }
+@media (max-width: 900px) { .main-goal-meta { display: none; } }
+.main-goal-chevron { flex: 0 0 auto; display: inline-flex; color: var(--muted); opacity: .7; transition: transform .18s ease; }
+.main-goal-strip.is-expanded .main-goal-chevron { transform: rotate(180deg); }
+.main-goal-denial {
+  padding: 0 8px 0 21px;
+  color: var(--err, #f87171);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.main-goal-details {
+  display: grid;
+  gap: 6px;
+  margin: 2px 6px 4px 21px;
+  max-height: min(42vh, 380px);
+  overflow: auto;
+  padding-right: 4px;
+}
+.main-goal-details > div:not(.main-goal-diagnostics):not(.main-goal-turn-plans),
+.main-goal-diagnostics > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.main-goal-details strong,
+.main-goal-turn-head strong { color: var(--muted); font-weight: 600; }
+.main-goal-details span { min-width: 0; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
+.main-goal-diagnostics { display: grid; gap: 6px; }
+.main-goal-turn-plans { display: grid; gap: 10px; margin-top: 4px; }
+.main-goal-turn-plan {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.main-goal-turn-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.main-goal-turn-head span { color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.main-goal-turn-steps { display: grid; gap: 4px; }
+.main-goal-turn-steps .progress-item { min-height: 22px; gap: 7px; }
+.main-goal-turn-steps .progress-step-dot { width: 18px; height: 18px; flex-basis: 18px; font-size: 10px; }
+.main-goal-turn-steps .progress-step-text { font-size: 11.5px; line-height: 1.35; font-weight: 500; }
+.main-goal-turn-judge,
+.main-goal-plan-empty { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.main-goal-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
+.main-goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease;
+}
+.main-goal-action:hover,
+.main-goal-action:focus-visible { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+
+/* ── Sources panel: floating card ───────────────────────────────
+   The open drawer reads as the same floating surface as the minimized peek:
+   inset from the window edge, rounded, shadowed, no hard dock line. It stays
+   in the flex flow so chat content is never hidden behind it. */
+body:not(.pm-mobile-active) .workspace > .right-panel.open {
+  --sp-gap: 12px;
+  --sp-tint: color-mix(in srgb, var(--text) 4%, transparent);
+  align-self: stretch;
+  height: auto !important;
+  max-height: none !important;
+  margin: var(--sp-gap) var(--sp-gap) var(--sp-gap) 4px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent) !important;
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .34);
+}
+body:not(.pm-mobile-active) .workspace > .right-panel.open:not(.canvas-open) { overflow: hidden !important; }
+body:not(.pm-mobile-active) .right-panel.open :is(#right-panel-topbar, .source-panel-topbar) {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 12px 0 18px;
+  border-bottom: 0 !important;
+  background: transparent !important;
+}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-heading { font-size: 16px; font-weight: 650; }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-shell { background: transparent; }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0 12px;
+  padding: 3px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--sp-tint);
+}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-tab { min-height: 30px; border-radius: 8px; }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-tab.is-active { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-tab.is-active::after { display: none; }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-body { padding: 16px 14px 22px; overflow-x: hidden; scrollbar-width: thin; }
+body:not(.pm-mobile-active) .right-panel.open :is(.source-panel-subtitle, .source-panel-project-root) {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body:not(.pm-mobile-active) .right-panel.open :is(.source-panel-count-card, .source-panel-row, .source-panel-repo-card, .source-panel-info-card, .source-panel-environment-card, .source-panel-filter-row) {
+  border-color: transparent;
+  background: var(--sp-tint);
+}
+body:not(.pm-mobile-active) .right-panel.open button.source-panel-row:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  transform: none;
+}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-section-title { color: var(--muted); }
+body:not(.pm-mobile-active) .right-panel.open .source-panel-subtitle { margin-bottom: 12px; }
+/* Header icon buttons stay flat: no outlined accent box around refresh/close. */
+body:not(.pm-mobile-active) :is(.right-panel, .sources-minimized-panel) :is(.source-panel-icon-btn, .source-panel-close-btn) {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+body:not(.pm-mobile-active) :is(.right-panel, .sources-minimized-panel) :is(.source-panel-icon-btn, .source-panel-close-btn):is(:hover, :focus-visible) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent) !important;
+}
+.sources-minimized-card { border-color: color-mix(in srgb, #fff 7%, transparent); }
+.sources-minimized-body > .source-panel-section { border-top: 0; }
+
+/* ── Settings: model route rows ─────────────────────────────────
+   Five ~80px columns truncated provider/model names ("claude-opus",
+   "Standa"). The label takes its own line; selects get usable widths. */
+#settings-modal :is(.settings-model-row, .settings-model-slot-row) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(88px, .8fr) minmax(88px, .8fr) !important;
+  row-gap: 6px;
+}
+#settings-modal :is(.settings-model-row, .settings-model-slot-row) > [data-settings-icon-label] { grid-column: 1 / -1; }
+#settings-modal :is(.settings-model-row, .settings-model-slot-row) select { min-width: 0; text-overflow: ellipsis; }
+#settings-modal .settings-connected-pill {
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+}
+#settings-modal .settings-connected-pill-label { color: #4ade80; font-size: 12px; font-weight: 600; }
