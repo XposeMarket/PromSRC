@@ -4299,3 +4299,87 @@
 .prom-inline-save.is-busy { opacity: .45; }
 .prom-inline-save.is-done { color: var(--prom-success, #22c55e); }
 .prom-inline-save.is-error { color: var(--prom-danger, #ef4444); }
+
+/* ── Tasks: header icons + "Needs you" rows ─────────────────────── */
+.bgt-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease;
+}
+.bgt-icon-btn:hover,
+.bgt-icon-btn:focus-visible { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+#bgt-edit-btn.active { color: var(--brand); }
+#bgt-needs-you-wrap { padding: 0 0 14px; }
+#bgt-needs-you-wrap:has(#bgt-needs-you > .pm-empty) { display: none; }
+.bgt-section-title {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+#bgt-needs-you { display: flex; flex-direction: column; gap: 6px; max-height: 38vh; overflow-y: auto; }
+.bgt-needs-you-card {
+  display: grid;
+  gap: 6px;
+  max-width: 760px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.bgt-needs-you-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.bgt-needs-you-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #f5b544;
+}
+.bgt-needs-you-meta strong { flex: 0 0 auto; color: var(--text); font-weight: 600; }
+.bgt-needs-you-source {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bgt-needs-you-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.bgt-needs-you-open {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bgt-needs-you-open:hover { background: color-mix(in srgb, var(--text) 14%, transparent); }
+.bgt-needs-you-summary {
+  margin: 0 0 0 15px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bgt-needs-you-card .chat-approval-card { margin: 0; }

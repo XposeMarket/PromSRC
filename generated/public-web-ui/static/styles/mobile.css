@@ -6099,6 +6099,7 @@ html.pm-session-context-open * {
 .pm-keyboard-open .pm-scroll-latest {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-scroll-latest-stack-height, 0px) + 24px);
 }
+.pm-chat-composer-mode-open .pm-scroll-latest{bottom:calc(var(--pm-composer-top-gap) + 14px)}
 .pm-mobile-goal-strip {
   position: absolute;
   left: 10px;
@@ -18327,6 +18328,7 @@ body.pm-mobile-active #pm-composer .pm-composer-model-badge {
   box-shadow: none !important;
   color: var(--pm-text);
   font-size: 12px;
+  font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
