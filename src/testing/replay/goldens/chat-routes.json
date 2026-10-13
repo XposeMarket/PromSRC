@@ -1,0 +1,254 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/traces"
+  },
+  {
+    "method": "GET",
+    "path": "/api/traces/:traceId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/chat/desktop-screenshot-preview/:sessionId/:screenshotId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/mobile/chat/stream/:sessionId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/mobile/chat/runs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/mobile/chat/runs/:sessionId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/mobile/chat/reconcile/:sessionId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/mobile/commands/models"
+  },
+  {
+    "method": "GET",
+    "path": "/api/mobile/commands/stop-targets"
+  },
+  {
+    "method": "POST",
+    "path": "/api/mobile/commands/stop-now"
+  },
+  {
+    "method": "POST",
+    "path": "/api/mobile/commands/stop"
+  },
+  {
+    "method": "POST",
+    "path": "/api/mobile/commands/screenshot"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-context"
+  },
+  {
+    "method": "GET",
+    "path": "/api/voice-agent/realtime-context/:sessionId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/_removed/voice-agent-narrate"
+  },
+  {
+    "method": "POST",
+    "path": "/api/_removed/voice-agent-input"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-bootstrap"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-call"
+  },
+  {
+    "method": "GET",
+    "path": "/api/realtime/xai/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/xai-realtime-bootstrap"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-skill-context"
+  },
+  {
+    "method": "GET",
+    "path": "/api/voice-agent/workgroups/session/:sessionId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/voice-agent/workgroups/:id"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/voice-agent/workgroups/:id/workers/:taskId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/restart-gateway-quick"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/dispatch-workers"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-tool-surface"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/realtime-tool"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-agent/xai-vision-summary"
+  },
+  {
+    "method": "POST",
+    "path": "/api/mobile/voice/interruption"
+  },
+  {
+    "method": "POST",
+    "path": "/api/connectors/gmail/send-composer"
+  },
+  {
+    "method": "POST",
+    "path": "/api/chat/steer"
+  },
+  {
+    "method": "POST",
+    "path": "/api/background-agents/steer"
+  },
+  {
+    "method": "GET",
+    "path": "/api/push/public-key"
+  },
+  {
+    "method": "GET",
+    "path": "/api/push/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/push/subscribe"
+  },
+  {
+    "method": "POST",
+    "path": "/api/push/unsubscribe"
+  },
+  {
+    "method": "POST",
+    "path": "/api/push/test"
+  },
+  {
+    "method": "POST",
+    "path": "/api/chat"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/reorder"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-rooms/resolve"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice-rooms/:id/transcript"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/search"
+  },
+  {
+    "method": "GET",
+    "path": "/api/thread-supervisions"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/thread-supervisions/:id"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/settle"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/unsettle"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/mobile-read"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/mobile-unread"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/history"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/edit-rerun-reset"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/sessions/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/:id/model-route"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/sessions/:id/model-route"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sessions/:id/model-route"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/:id/history-page"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/:id/context-window"
+  },
+  {
+    "method": "POST",
+    "path": "/api/sessions/:id/main-goal/:action"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sessions/:id"
+  }
+]
