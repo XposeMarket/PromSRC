@@ -64,8 +64,10 @@ try {
   assert(Math.abs(metrics.planPill.height - metrics.agentPill.height) <= 1,
     `paired plan/agent pills must share a height (${metrics.planPill.height}px vs ${metrics.agentPill.height}px)`);
   const pairedTopOffset = metrics.planPill.top - metrics.agentPill.top;
-  assert(pairedTopOffset >= 3 && pairedTopOffset <= 5,
-    `paired plan pill must sit slightly lower than the agent pill (${metrics.planPill.top}px vs ${metrics.agentPill.top}px)`);
+  // #643: paired pills share one row and one bottom edge (the old 3-5px plan
+  // offset was the misalignment Raul reported).
+  assert(Math.abs(pairedTopOffset) <= 1,
+    `paired plan/agent pills must share one row (${metrics.planPill.top}px vs ${metrics.agentPill.top}px)`);
 } finally {
   await browser.close();
 }
