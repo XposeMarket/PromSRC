@@ -955,6 +955,12 @@ export class BrainRunner {
     return this._countThoughtsForDate(dateStr) > 0;
   }
 
+  /** Completion-day or previous-day artifact (windows start <= 12h before completion). */
+  private _hasThoughtArtifactNear(completedAt: Date): boolean {
+    return this._hasThoughtArtifactForDate(getLocalDateStr(completedAt))
+      || this._hasThoughtArtifactForDate(getLocalDateStr(addLocalDays(completedAt, -1)));
+  }
+
   private _isValidTimestamp(value: string | null | undefined): boolean {
     if (!value) return false;
     return Number.isFinite(new Date(value).getTime());
@@ -1054,7 +1060,13 @@ export class BrainRunner {
     }
 
     const lastThought = new Date(lastThoughtAt);
-    if (!this._hasThoughtArtifactForDate(getLocalDateStr(lastThought))) {
+    // Thought artifacts are keyed by their local *window start* date, while
+    // lastThoughtAt is completion time. A window starting before local midnight
+    // that finishes after it lands in the previous day's folder; checking only
+    // the completion date then looked "missing" and re-ran a fresh 6h Thought
+    // on every 15-minute tick until morning. Windows are capped at 12h, so the
+    // artifact is always under the completion day or the day before.
+    if (!this._hasThoughtArtifactNear(lastThought)) {
       const windowStart = new Date(now.getTime() - THOUGHT_INTERVAL_MS);
       return { windowStart, windowEnd };
     }
