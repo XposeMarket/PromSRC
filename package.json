@@ -18,6 +18,8 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
+    "test:needs-you-hotpath": "node scripts/test-needs-you-hotpath.mjs",
     "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
     "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",

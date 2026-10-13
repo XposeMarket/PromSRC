@@ -178,6 +178,14 @@ async function mfetch(path, opts = {}) {
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-Pairing-Token', token);
   const timeoutMs = Math.max(1000, Math.floor(Number(opts.timeoutMs || 15000) || 15000));
+  // A timeout is a budget for the whole read, not a fresh budget per retry.
+  const deadline = Number(opts._gatewayDeadline) || Date.now() + timeoutMs;
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    const err = new Error('Gateway request timed out. Prometheus may still be starting.');
+    err.retryable = true;
+    throw err;
+  }
   const controller = new AbortController();
   const parentSignal = opts.signal;
   const onParentAbort = () => controller.abort();
@@ -185,11 +193,14 @@ async function mfetch(path, opts = {}) {
     if (parentSignal.aborted) controller.abort();
     else parentSignal.addEventListener('abort', onParentAbort, { once: true });
   }
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, signal: _signal, _gatewayRestartAttempt: _restartAttempt, ...fetchOpts } = opts;
+  const timeout = setTimeout(() => controller.abort(), remainingMs);
+  const { timeoutMs: _timeoutMs, signal: _signal, _gatewayRestartAttempt: _restartAttempt, _gatewayDeadline: _deadline, ...fetchOpts } = opts;
   let res;
+  let text;
   try {
     res = await fetch(_buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
+    // Body consumption remains inside the same abort deadline.
+    text = await res.text();
   } catch (err) {
     if (parentSignal?.aborted) throw err;
     const isAbort = err?.name === 'AbortError';
@@ -202,9 +213,9 @@ async function mfetch(path, opts = {}) {
     // return a visible 503. A mobile browser can still surface a transient
     // network/CORS error while its prior preflight is being refreshed, so
     // retry only safe reads and never replay a chat/tool mutation.
-    if (!parentSignal?.aborted && canRetryGatewayRestart && gatewayRestartAttempt < 8) {
-      await new Promise((resolve) => setTimeout(resolve, 500 * (gatewayRestartAttempt + 1)));
-      return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1 });
+    if (!parentSignal?.aborted && !isAbort && canRetryGatewayRestart && gatewayRestartAttempt < 1 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * (gatewayRestartAttempt + 1), Math.max(0, deadline - Date.now()))));
+      return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1, _gatewayDeadline: deadline });
     }
     throw out;
   } finally {
@@ -216,7 +227,6 @@ async function mfetch(path, opts = {}) {
     clearDeviceToken();
     window.dispatchEvent(new Event('pm-device-revoked'));
   }
-  const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
   if (!res.ok) {
@@ -229,9 +239,9 @@ async function mfetch(path, opts = {}) {
     if (restarting) {
       err.code = 'GATEWAY_RESTARTING';
       err.retryable = true;
-      if (!parentSignal?.aborted && canRetryGatewayRestart && gatewayRestartAttempt < 8) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * (gatewayRestartAttempt + 1)));
-        return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1 });
+      if (!parentSignal?.aborted && canRetryGatewayRestart && gatewayRestartAttempt < 8 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(500 * (gatewayRestartAttempt + 1), Math.max(0, deadline - Date.now()))));
+        return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1, _gatewayDeadline: deadline });
       }
     }
     throw err;
