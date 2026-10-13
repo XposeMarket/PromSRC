@@ -77,6 +77,10 @@ const AnthropicProviderSchema_LLM = z.object({
   reasoning_effort: ReasoningEffortSchema,
   speed: z.enum(['standard', 'fast']).optional(),
   extended_thinking: z.boolean().optional(),
+  // Anthropic cache controls: default volatile context after history; retain up to
+  // eight static tool categories across turns. False restores per-turn expiry.
+  volatile_context_in_system: z.boolean().optional(),
+  sticky_tool_categories: z.boolean().optional(),
   thinking_budget: z.number().int().min(1024).optional(),
   // Claude Fast Mode — faster output on the same Opus model (no quality
   // downgrade). Supported on Opus 4.6/4.7/4.8 via the Messages API `speed` field.
