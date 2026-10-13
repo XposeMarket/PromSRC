@@ -45,7 +45,8 @@ assert.equal(thread.length, 3, 'finalization keeps the split');
 const steer = thread[1];
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_1', seq: 12, at: 1999 }, steer), false);
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_1', seq: 13, at: 1999 }, steer), true);
-assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_2', seq: 1, at: 1999 }, steer), false);
+assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_2', seq: 1, at: 1999 }, steer), true,
+  'a new stream is the post-steer continuation even when the phone and gateway clocks differ');
 assert.equal(mobileReplayFrameAfterSteer({ streamId: 'stream_2', seq: 1, at: 2001 }, steer), true);
 // The server's before-row id becomes the frozen row's identity so history
 // merges dedupe it, and the continuation id survives serialization.

@@ -4,22 +4,10 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 
-export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
-  if (!steer) return true;
-  const boundaryStreamId = String(steer.workflowStreamId || '').trim();
-  const frameStreamId = String(frame?.streamId || replayStreamId || '').trim();
-  const boundarySeq = Math.max(0, Math.floor(Number(steer.workflowBoundarySeq || 0) || 0));
-  const frameSeq = Math.max(0, Math.floor(Number(frame?.seq || 0) || 0));
-  if (boundaryStreamId && frameStreamId === boundaryStreamId && boundarySeq > 0 && frameSeq > 0) {
-    return frameSeq > boundarySeq;
-  }
-  const frameAt = Number(frame?.at || 0) || 0;
-  const steerAt = Number(steer.timestamp || 0) || 0;
-  return !frameAt || !steerAt || frameAt > steerAt;
-}
+export { mobileReplayFrameAfterSteer };
 
 export function resolveMobileKeyboardComposerTop({
   layoutHeight,
