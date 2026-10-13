@@ -852,9 +852,11 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
       const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
       status = await inferGitStatus(gitRoot, relPath, absPath);
       try {
-        const numstat = (await runGitText(gitRoot, ['diff', 'HEAD', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
+        // Plumbing diff-index/diff-files never write .git/index (porcelain diff
+        // does, even with GIT_OPTIONAL_LOCKS=0, and leaves index.lock on a kill).
+        const numstat = (await runGitText(gitRoot, ['diff-index', '--numstat', 'HEAD', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
           || (await runGitText(gitRoot, ['diff', '--cached', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
-          || (await runGitText(gitRoot, ['diff', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
+          || (await runGitText(gitRoot, ['diff-files', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
           || '';
         const parts = numstat.split(/\s+/);
         if (parts[0] === '-' || parts[1] === '-') {
@@ -868,9 +870,9 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
         insertions = countTextFileLines(absPath);
       }
       try {
-        diffPreview = (await runGitText(gitRoot, ['diff', 'HEAD', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000)
+        diffPreview = (await runGitText(gitRoot, ['diff-index', '-p', '--unified=2', 'HEAD', '--', relPath], 512 * 1024)).slice(0, 12000)
           || (await runGitText(gitRoot, ['diff', '--cached', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000)
-          || (await runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
+          || (await runGitText(gitRoot, ['diff-files', '-p', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
       } catch {}
       baselineKind = status === 'modified' && !diffPreview ? 'git-index' : 'git-head';
     } else if (fs.existsSync(absPath)) {

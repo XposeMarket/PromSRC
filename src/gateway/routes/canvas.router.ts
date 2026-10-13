@@ -4830,7 +4830,7 @@ router.get('/api/canvas/diff-ranges', (req: any, res: any, next: any) => _requir
     let diff = '';
     try {
       diff = require('child_process')
-        .execFileSync('git', ['diff', '--no-color', '--unified=0', '--', repoRel], { cwd: gitRoot, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 })
+        .execFileSync('git', ['diff-files', '-p', '--no-color', '--unified=0', '--', repoRel], { cwd: gitRoot, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 })
         .toString();
     } catch { respond([], { reason: 'diff-failed' }); return; }
     if (!diff.trim()) {

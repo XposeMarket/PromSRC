@@ -214,7 +214,7 @@ async function buildPreview(repoRoot: string): Promise<string> {
   const snapshot = await scanDirty(repoRoot);
   const tracked = snapshot.eligible.filter((item) => item.status !== '??');
   const untracked = snapshot.eligible.filter((item) => item.status === '??');
-  const stat = await runGit(repoRoot, ['diff', '--shortstat'], 60_000);
+  const stat = await runGit(repoRoot, ['diff-files', '--shortstat'], 60_000);
   return [
     '📋 Read-only Prometheus repo sync preview (the Git index was not modified).',
     '',

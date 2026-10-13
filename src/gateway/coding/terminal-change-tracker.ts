@@ -280,6 +280,7 @@ function ensurePrometheusHistoryExcluded(gitRoot: string): void {
 
 function gitChangedSince(gitRoot: string, fromHead: string, toHead: string): string[] {
   if (!fromHead || !toHead || fromHead === toHead) return [];
+  // git-index-safe: commit-to-commit diff never reads or refreshes the worktree index.
   const raw = runGit(gitRoot, ['diff', '--name-only', '-z', '--no-renames', fromHead, toHead], { maxBuffer: 8 * 1024 * 1024 });
   return String(raw || '').split('\0').map(normalizeRelative).filter(Boolean);
 }

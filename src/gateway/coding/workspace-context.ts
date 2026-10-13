@@ -793,9 +793,10 @@ export function getCodingWorkspaceDiff(input: { root?: string; file: string; ses
     } else {
       const args = view === 'staged'
         ? ['diff', '--cached', '--no-color', '--no-ext-diff', '--unified=3', '--', relative]
-        : ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--unified=3', '--', relative];
+        // Plumbing diff-index/diff-files never write .git/index (porcelain diff does).
+        : ['diff-index', '-p', '--no-color', '--no-ext-diff', '--unified=3', 'HEAD', '--', relative];
       diff = runGit(repoRoot, args);
-      if (!diff.trim() && view === 'working') diff = runGit(repoRoot, ['diff', '--no-color', '--no-ext-diff', '--unified=3', '--', relative]);
+      if (!diff.trim() && view === 'working') diff = runGit(repoRoot, ['diff-files', '-p', '--no-color', '--no-ext-diff', '--unified=3', '--', relative]);
     }
     }
   } else {

@@ -256,7 +256,7 @@ export function invalidateGitReadCache(root?: string): void {
 /** Read-only git subcommands that are safe to memo briefly. */
 export function isCacheableGitRead(args: string[]): boolean {
   const sub = String(args[0] || '');
-  if (sub === 'diff') return !args.includes('--no-index');
+  if (sub === 'diff' || sub === 'diff-files' || sub === 'diff-index') return !args.includes('--no-index');
   return ['status', 'rev-parse', 'branch', 'remote', 'symbolic-ref', 'rev-list', 'log', 'ls-files'].includes(sub)
     && !args.some((a) => ['-d', '-D', '-m', '-M', 'add', 'remove', 'rename', 'set-url'].includes(a));
 }

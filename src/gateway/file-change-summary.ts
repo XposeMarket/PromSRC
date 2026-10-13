@@ -413,7 +413,8 @@ export function collectTurnFileChanges(toolResults: any[] | undefined, workspace
       const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
       status = inferGitStatus(gitRoot, relPath, absPath);
       try {
-        const numstat = runGitText(gitRoot, ['diff', '--numstat', '--', relPath]).trim().split(/\r?\n/).filter(Boolean)[0] || '';
+        // Plumbing (diff-files/diff-index) never writes .git/index; porcelain diff does.
+        const numstat = runGitText(gitRoot, ['diff-files', '--numstat', '--', relPath]).trim().split(/\r?\n/).filter(Boolean)[0] || '';
         const parts = numstat.split(/\s+/);
         if (parts[0] === '-' || parts[1] === '-') {
           binary = true;
@@ -426,7 +427,7 @@ export function collectTurnFileChanges(toolResults: any[] | undefined, workspace
         insertions = countTextFileLines(absPath);
       }
       try {
-        diffPreview = runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024).slice(0, 12000);
+        diffPreview = runGitText(gitRoot, ['diff-files', '-p', '--unified=2', '--', relPath], 512 * 1024).slice(0, 12000);
       } catch {}
     } else if (fs.existsSync(absPath)) {
       insertions = countTextFileLines(absPath);

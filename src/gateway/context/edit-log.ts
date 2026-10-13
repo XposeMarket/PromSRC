@@ -208,7 +208,10 @@ export function extractShellEditPaths(command: string, cwd: string): string[] {
 function gitHunksFor(file: string): { lines: string; removed: string; added: string } | null {
   try {
     const dir = path.dirname(file);
-    const out = execFileSync('git', ['diff', '-U0', '--no-color', '--', path.basename(file)], {
+    // Plumbing diff-files never refreshes/writes .git/index. Porcelain `git diff`
+    // does (even with GIT_OPTIONAL_LOCKS=0), and this 3s timeout kill left stale
+    // index.lock files behind during builds.
+    const out = execFileSync('git', ['diff-files', '-p', '-U0', '--no-color', '--', path.basename(file)], {
       cwd: dir, encoding: 'utf8', timeout: 3000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
     });
     if (!out) return null;
