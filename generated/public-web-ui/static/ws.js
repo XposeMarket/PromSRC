@@ -113,7 +113,8 @@ function _wsScheduleReconnect(customDelay = null) {
     return;
   }
 
-  const delay = Number.isFinite(Number(customDelay)) ? Math.max(0, Number(customDelay)) : _wsNextDelay();
+  const delay = customDelay != null && Number.isFinite(Number(customDelay))
+    ? Math.max(0, Number(customDelay)) : _wsNextDelay();
   wsEventBus._dispatch({ type: 'ws:reconnecting', timestamp: Date.now(), delayMs: delay, attempt: _wsBackoffIdx });
   _wsReconnectTimer = setTimeout(() => {
     _wsReconnectTimer = null;
@@ -177,7 +178,7 @@ export function connectWS(options = {}) {
     _wsConnecting = false;
     _wsClearConnectTimer();
     wsEventBus._dispatch({ type: 'ws:close', timestamp: Date.now(), code: event?.code, reason: event?.reason || '' });
-    _wsScheduleReconnect(options.reconnectDelayMs);
+    _wsScheduleReconnect();
   };
 
   ws.onerror = (event) => {
@@ -225,9 +226,9 @@ function probeWsOnResume() {
   if (current && current.readyState === WebSocket.OPEN) {
     // iOS suspends page timers in the background. A live socket can therefore
     // look stale on the first foreground tick, before its queued heartbeat is
-    // delivered. Give it one short heartbeat window instead of creating a
+    // delivered. Give it a full 10s heartbeat interval plus 2s jitter instead of creating a
     // visible reconnect on every ordinary app resume.
-    _wsResumeGraceUntil = now + 2500;
+    _wsResumeGraceUntil = now + 12000;
     if (_wsResumeGraceTimer) clearTimeout(_wsResumeGraceTimer);
     _wsResumeGraceTimer = setTimeout(() => {
       _wsResumeGraceTimer = null;
@@ -235,7 +236,7 @@ function probeWsOnResume() {
       if (_wsLastMessageAt > now) return;
       wsEventBus._dispatch({ type: 'ws:stale', timestamp: Date.now(), inboundAgeMs: Date.now() - _wsLastMessageAt, source: 'resume' });
       connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 });
-    }, 2500);
+    }, 12000);
     return;
   }
   ensureWSConnected({ timeoutMs: 6000 });

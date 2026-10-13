@@ -3,7 +3,7 @@ import { getPrometheusQuestionQueue, serializePrometheusQuestionForClient } from
 import { getApprovalQueue } from './verification-flow';
 import { listProposals } from './proposals/proposal-store';
 import { listThreadSupervisions } from './threads/thread-supervision';
-import { listTasks } from './tasks/task-store';
+import { listTaskSummaries } from './tasks/task-store';
 import { listManagedTeams } from './teams/managed-teams';
 import { listVideoApprovalsAcrossWorkspaces } from './video-pending-approvals';
 import { getConfig } from '../config/config';
@@ -34,7 +34,9 @@ export function collectNeedsYouItems(): NeedsYouItem[] {
   const proposals = safe(() => listProposals('pending') as any[], [] as any[]);
   const supervisions = safe(() => listThreadSupervisions({ status: 'blocked', includeTerminal: false, limit: 200 }) as any[], [] as any[]);
   const teams = safe(() => listManagedTeams() as any[], [] as any[]);
-  const tasks = safe(() => listTasks({ status: ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] as any }) as any[], [] as any[]);
+  // This runs every five seconds. Use the in-memory summary index rather than
+  // synchronously reading every historical task (including completed tasks).
+  const tasks = safe(() => listTaskSummaries({ status: ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] as any }) as any[], [] as any[]);
   const videoApprovals = safe(() => listVideoApprovalsAcrossWorkspaces(safeWorkspace()), [] as any[]);
   return buildNeedsYouItems({
     questions,
