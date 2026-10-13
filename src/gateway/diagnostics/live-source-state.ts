@@ -95,8 +95,9 @@ export function readLiveSourceState(options: { root?: string | null; now?: numbe
       state.behind = Number.isFinite(behind) ? behind : null;
       state.ahead = Number.isFinite(ahead) ? ahead : null;
     }
-    // Read-only commands; --no-optional-locks keeps git from taking index.lock to refresh stat info.
-    state.dirtyFiles = parseRealDiffNumstat(git(root, ['--no-optional-locks', 'diff', '--ignore-cr-at-eol', '--numstat', 'HEAD']) || '')
+    // Read-only. --no-optional-locks is NOT enough for porcelain `git diff` (git 2.54
+    // still rewrites .git/index for worktree diffs); plumbing diff-index never does.
+    state.dirtyFiles = parseRealDiffNumstat(git(root, ['--no-optional-locks', 'diff-index', '--ignore-cr-at-eol', '--numstat', 'HEAD']) || '')
       .filter((file) => !file.startsWith('generated/'));
     state.untrackedSourceFiles = lines(git(root, ['--no-optional-locks', 'ls-files', '--others', '--exclude-standard']))
       .filter((file) => SOURCE_DIRS.test(file));

@@ -316,7 +316,8 @@ export function getCodingWorkspaceSession(rawRoot?: string): CodingWorkspaceSess
 }
 
 export function getGitDiff(root: string, file?: string): string {
-  const args = ['diff', '--'];
+  // diff-files: same worktree-vs-index patch, but never writes .git/index.
+  const args = ['diff-files', '-p', '--'];
   if (file) args.push(file);
   return runGit(root, args, 30000);
 }
