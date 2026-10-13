@@ -1,2 +1,3 @@
 @layer tokens, shell, route, components, state, compatibility;
+@import './theme-tokens.css' layer(tokens);
 @import './mobile.css' layer(route);

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "scope": "web-ui/src/styles/*.css",
+  "patterns": {
+    "orangeHex": "#f97316",
+    "orangeRgba": "rgba(249,115,22,",
+    "emberRgba": "rgba(234,106,31,",
+    "goldHex": "#d6b75e"
+  },
+  "totals": {
+    "orangeHex": 58,
+    "orangeRgba": 106,
+    "emberRgba": 2,
+    "goldHex": 79
+  },
+  "files": {
+    "web-ui/src/styles/base.css": { "orangeHex": 8, "orangeRgba": 29, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/components-sidebar.css": { "orangeHex": 2, "orangeRgba": 4, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/components.css": { "orangeHex": 10, "orangeRgba": 34, "emberRgba": 0, "goldHex": 22 },
+    "web-ui/src/styles/context-review.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/desktop-entry.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/fonts.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/hub.css": { "orangeHex": 2, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/mobile-composer-stack.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/mobile-entry.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/mobile-shell.css": { "orangeHex": 1, "orangeRgba": 1, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/mobile.css": { "orangeHex": 5, "orangeRgba": 0, "emberRgba": 0, "goldHex": 17 },
+    "web-ui/src/styles/multi-chat-workspace.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/onboarding.css": { "orangeHex": 13, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/pages.css": { "orangeHex": 5, "orangeRgba": 29, "emberRgba": 1, "goldHex": 0 },
+    "web-ui/src/styles/projects.css": { "orangeHex": 0, "orangeRgba": 1, "emberRgba": 0, "goldHex": 1 },
+    "web-ui/src/styles/settings.css": { "orangeHex": 1, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1 },
+    "web-ui/src/styles/surfaces-polish.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/theme-tokens.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
+    "web-ui/src/styles/themes.css": { "orangeHex": 11, "orangeRgba": 8, "emberRgba": 1, "goldHex": 38 },
+    "web-ui/src/styles/workspace-file-tree.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 }
+  }
+}
