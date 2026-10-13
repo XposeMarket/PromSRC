@@ -590,7 +590,7 @@ function _syncPageViewPositions() {
   const sidebar = document.getElementById('sidebar');
   const collapsed = sidebar && sidebar.classList.contains('collapsed');
   const sidebarRight = collapsed
-    ? 0
+    ? Math.round(sidebar?.getBoundingClientRect().width || 64)
     : sidebar
       ? Math.round(_sidebarDragW || sidebar.getBoundingClientRect().width || SIDEBAR_DEFAULT_W)
       : SIDEBAR_DEFAULT_W;
@@ -650,7 +650,16 @@ function updateSidebarToggleControls(collapsed) {
     control.setAttribute('aria-label', label);
     control.title = label;
   });
-  syncSidebarEdgeReveal(collapsed);
+  // The compact rail keeps navigation visible: every icon retains its name
+  // for both native hover tooltips and assistive technology.
+  document.querySelectorAll('.sidebar .nav-item, .sidebar .new-chat').forEach((item) => {
+    const label = item.querySelector('span:not(.nav-badge)')?.textContent?.trim()
+      || item.getAttribute('aria-label') || item.textContent.trim();
+    if (!label) return;
+    item.title = label;
+    item.setAttribute('aria-label', label);
+  });
+  syncSidebarEdgeReveal(false);
 }
 
 export function toggleSidebar() {

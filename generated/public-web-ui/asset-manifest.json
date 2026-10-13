@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "b24c10c3892cc8f1",
-  "sourceDigest": "b24c10c3892cc8f1149325b3bb4c0675f26de76cfc38e9d6dc5d744f0c580bdf",
+  "buildId": "72fccb866a5208c4",
+  "sourceDigest": "72fccb866a5208c4a5b0bf884f396b798633c0baf49aab0648c30c9105235e35",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -10,8 +10,8 @@
   "entries": {
     "desktop": {
       "html": "/index.html",
-      "js": "/build/entries/desktop-DLEBNIFS.js",
-      "css": "/build/styles/desktop-Z2I2ZA4G.css",
+      "js": "/build/entries/desktop-66LN4UVR.js",
+      "css": "/build/styles/desktop-IUNOVOZ4.css",
       "modulePreloads": [
         "/build/chunks/chunk-6FFPACLU.js",
         "/build/chunks/chunk-DJBPOZDJ.js",
@@ -29,7 +29,7 @@
   },
   "moduleOutputs": {
     "src/api.js": "/build/chunks/api-E6JRTMDQ.js",
-    "src/app.js": "/build/chunks/app-X3NAC7N3.js",
+    "src/app.js": "/build/chunks/app-XUTM46PP.js",
     "src/auth/account.js": "/build/chunks/account-IYSY3BMY.js",
     "src/bot-create-settings-bridge.js": "/build/chunks/bot-create-settings-bridge-NINKSEP7.js",
     "src/bot-create.js": "/build/chunks/bot-create-YHLBFREE.js",
@@ -43,7 +43,7 @@
     "src/components/video-project-card.js": "/build/chunks/video-project-card-4MUF76NF.js",
     "src/context-review.js": "/build/chunks/context-review-FEXKUOBC.js",
     "src/context-window-live-tracking.js": "/build/chunks/context-window-live-tracking-DLMLV5UG.js",
-    "src/desktop-entry.js": "/build/entries/desktop-DLEBNIFS.js",
+    "src/desktop-entry.js": "/build/entries/desktop-66LN4UVR.js",
     "src/features/chat/canonical-desktop-composer.js": "/build/chunks/canonical-desktop-composer-ABD6TDHD.js",
     "src/features/chat/desktop-turn-file-diff.js": "/build/chunks/desktop-turn-file-diff-I2A35HSD.js",
     "src/features/chat/multi-chat-intent.js": "/build/chunks/multi-chat-intent-Z4RPASAZ.js",
@@ -108,7 +108,7 @@
         "/build/chunks/chunk-EPSJJCWL.js",
         "/build/chunks/chunk-HJADIT6Y.js",
         "/build/chunks/chunk-JF4LWGNM.js",
-        "/build/entries/desktop-DLEBNIFS.js",
+        "/build/entries/desktop-66LN4UVR.js",
         "/build/inline/index-inline-01-57964227a42d.js",
         "/build/inline/index-inline-02-7defea606ed9.js",
         "/build/inline/index-inline-03-e9885749b55f.js",
@@ -118,15 +118,15 @@
         "/build/inline/index-inline-07-ecc8cfa8ff4d.js",
         "/build/inline/index-inline-08-4550e6a395a8.js",
         "/build/inline/index-inline-09-4ae0a1e9d247.js",
-        "/build/styles/desktop-Z2I2ZA4G.css"
+        "/build/styles/desktop-IUNOVOZ4.css"
       ],
       "files": 16,
-      "bytes": 868878,
-      "gzipBytes": 162493,
+      "bytes": 875707,
+      "gzipBytes": 163488,
       "jsBytes": 186088,
       "jsGzipBytes": 56781,
-      "cssBytes": 682790,
-      "cssGzipBytes": 105712
+      "cssBytes": 689619,
+      "cssGzipBytes": 106707
     },
     "mobile": {
       "paths": [
@@ -654,10 +654,10 @@
       ]
     },
     {
-      "path": "/build/chunks/app-X3NAC7N3.js",
-      "bytes": 68224,
-      "gzipBytes": 20272,
-      "sha256": "39750918c0da7d23a6a7cea453e1b8a2960440a969fdf393b1f44d3327c93919",
+      "path": "/build/chunks/app-XUTM46PP.js",
+      "bytes": 68519,
+      "gzipBytes": 20360,
+      "sha256": "b28c179929d684a9e1f5117a1b4d37cc648bbf59d761257a7f782feb394d359f",
       "entryPoint": "web-ui/src/app.js",
       "imports": [
         {
@@ -3401,10 +3401,10 @@
       ]
     },
     {
-      "path": "/build/entries/desktop-DLEBNIFS.js",
+      "path": "/build/entries/desktop-66LN4UVR.js",
       "bytes": 133043,
       "gzipBytes": 36463,
-      "sha256": "9818633908595d225dab8394dd7b149253c00bc681d28c52abb977df5bfce4f5",
+      "sha256": "759762db9b7893dddff04ae8d8f13b7c98b053279a1d0e6680e03fc3610a4c44",
       "entryPoint": "web-ui/src/desktop-entry.js",
       "imports": [
         {
@@ -3453,7 +3453,7 @@
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/app-X3NAC7N3.js"
+          "path": "/build/chunks/app-XUTM46PP.js"
         },
         {
           "kind": "dynamic-import",
@@ -3636,10 +3636,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-Z2I2ZA4G.css",
-      "bytes": 682790,
-      "gzipBytes": 105712,
-      "sha256": "0fd5d56b407262433ad8de5618a54726651facd3853878c718d577f04c2cc6d7",
+      "path": "/build/styles/desktop-IUNOVOZ4.css",
+      "bytes": 689619,
+      "gzipBytes": 106707,
+      "sha256": "d965c10a03b8ad0ca3873fb4d9a6c75fcf42c54b8c05df29ccfe47faed3c4033",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
