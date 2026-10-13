@@ -291,77 +291,6 @@ function normalizeRuntimeAttachmentPreviewsInput(value: unknown): any[] {
 }
 
 
-function buildVisionInjectedPreviewPayload(visionMessage: any): Record<string, any> | undefined {
-  const parts = Array.isArray(visionMessage?.content) ? visionMessage.content : [];
-  const imagePart = parts.find((part: any) => part?.type === 'image_url' || part?.type === 'image');
-  const dataUrl = String(imagePart?.image_url?.url || '').trim();
-  if (dataUrl) {
-    return { dataUrl, mimeType: dataUrl.match(/^data:([^;]+);/i)?.[1] || 'image/png' };
-  }
-  const base64 = String(imagePart?.source?.data || '').trim();
-  if (!base64) return undefined;
-  const mimeType = String(imagePart?.source?.media_type || 'image/png').trim() || 'image/png';
-  return { dataUrl: `data:${mimeType};base64,${base64}`, mimeType };
-}
-
-function formatRecentMessagesForCreativeHandoff(
-  history: Array<{ role: string; content: string }>,
-  currentMessage: string,
-): string {
-  const current = String(currentMessage || '').trim();
-  const recent = (history || [])
-    .filter((m) => {
-      const role = String(m?.role || '').trim();
-      const content = String(m?.content || '').trim();
-      if (!role || !content) return false;
-      return !(role === 'user' && current && content === current);
-    })
-    .slice(-5);
-  if (!recent.length) return '';
-  return recent
-    .map((m, index) => {
-      const role = String(m.role || 'message').toUpperCase();
-      const content = String(m.content || '').replace(/\r/g, '').trim();
-      return `${index + 1}. ${role}: ${content}`;
-    })
-    .join('\n\n');
-}
-
-function formatSkillsReadForCreativeHandoff(toolResults: ToolResult[]): string {
-  const seen = new Set<string>();
-  const blocks: string[] = [];
-  for (const tr of toolResults || []) {
-    if (tr?.name !== 'skill_read' || tr.error) continue;
-    const id = String((tr.args as any)?.id || (tr.args as any)?.skill_id || '').trim() || `skill_${blocks.length + 1}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const content = String(tr.result || '').replace(/\r/g, '').trim();
-    if (!content) continue;
-    blocks.push(`--- skill_read: ${id} ---\n${content}`);
-  }
-  return blocks.join('\n\n');
-}
-
-function formatPreCreativeSwitchToolResultsForHandoff(toolResults: ToolResult[]): string {
-  const results = (toolResults || [])
-    .filter((tr) => tr && tr.name && tr.name !== 'switch_creative_mode' && tr.name !== 'enter_creative_mode' && tr.name !== 'exit_creative_mode');
-  if (!results.length) return '';
-
-  const blocks = results.map((tr, index) => {
-    let args = '{}';
-    try {
-      args = JSON.stringify(tr.args || {});
-    } catch {}
-    const result = String(tr.result || '').replace(/\r/g, '').trim();
-    return [
-      `--- pre_switch_tool_${index + 1}: ${tr.name}${tr.error ? ' [ERROR]' : ''} ---`,
-      `args: ${args}`,
-      result ? `result:\n${result}` : 'result: (empty)',
-    ].join('\n');
-  });
-
-  return blocks.join('\n\n');
-}
 const getOrchestrationConfig: any = () => null;
 const clampPreemptConfig: any = (x: any) => x;
 
@@ -1542,7 +1471,6 @@ import {
   getEvidenceBusSnapshot,
   type TaskRecord,
   type TaskSummary,
-  type TaskStatus,
 } from '../tasks/task-store';
 import { clearTaskRunBinding, completeNextOpenTaskStep, getTaskRunBinding, mirrorSessionChatEvent } from '../tasks/task-run-mirror';
 import {
@@ -11086,17 +11014,6 @@ function appendVoiceInterruptionLog(event: any): void {
     console.warn('[voice interruption] log failed:', err?.message || err);
   }
 }
-
-const ACTIVE_TASK_STATUSES: TaskStatus[] = [
-  'queued',
-  'running',
-  'paused',
-  'stalled',
-  'needs_assistance',
-  'awaiting_user_input',
-  'failed',
-  'waiting_subagent',
-];
 
 function inferTaskChannelFromSession(sessionId: string): 'web' | 'telegram' {
   return String(sessionId || '').startsWith('telegram_') ? 'telegram' : 'web';
