@@ -3,6 +3,7 @@
   "id": "ai-surface-smoke-research",
   "name": "ai-surface-smoke-research",
   "description": "Run the shared browser, desktop, and optional voice-agent smoke workflow across ChatGPT, Claude, Reddit, X, and other requested AI surfaces. Use for voice-triggered or typed end-to-end tool tests, AI chatter collection, browser scrolling, desktop focus, visible-action proof, and concise tool-grounded summaries.",
+  "visibility": "personal",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

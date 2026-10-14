@@ -3,6 +3,7 @@
   "id": "architecture-deepening",
   "name": "Architecture Deepening",
   "description": "Scan a codebase, weighted toward recent hot spots, for shallow modules, leaky seams, and poor locality using the deletion test; present ranked deepening candidates in a visual report; then work the chosen one through question cards while keeping GLOSSARY.md and ADRs current. Use for improve the architecture, where is this codebase hard to change, deepen these modules, or sharpening domain terminology. Do not use for cleaning up a recent diff (code-simplifier), bug fixing (root-cause-debugging), or first orientation (codebase-onboarding).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

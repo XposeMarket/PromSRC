@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Create hiring plans, role scorecards, job descriptions, interview loops, candidate rubrics, outreach, and onboarding handoffs. Use for recruiting and selection design; do not use for making unsupported judgments about protected traits or for legal employment advice.",
   "triggers": [
     "offer letter draft",

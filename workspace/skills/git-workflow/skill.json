@@ -3,6 +3,8 @@
   "id": "git-workflow",
   "name": "git-workflow",
   "description": "Inspect and operate Git repositories safely: status, diffs, commits, branches, remotes, conflict recovery, submodules, GitHub connector operations, and authenticated publication. Use for concrete Git or GitHub operations, not generic coding.",
+  "visibility": "public",
+  "publicExcludeResources": ["references/prometheus-public-release-pointer.md"],
   "version": "1.2.0",
   "entrypoint": "SKILL.md",
   "triggers": [

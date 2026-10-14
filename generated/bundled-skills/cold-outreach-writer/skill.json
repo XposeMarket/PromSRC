@@ -3,6 +3,7 @@
   "id": "cold-outreach-writer",
   "name": "cold-outreach-writer",
   "description": "Write or improve cold emails and prospecting DMs using verified personalization, a relevant problem hypothesis, credible value, and a low-friction call to action. Use for message-level outreach copy; do not use for lead discovery, full SDR-system design, or sending messages without authorization.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

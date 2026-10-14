@@ -3,6 +3,7 @@
   "id": "supervised-goal-orchestrator",
   "name": "Supervised Goal Orchestrator",
   "description": "Turn a broad objective into bounded parallel lanes with a supervisor and evidence ledger. Use for complex delegate-and-supervise goals; use parallel-agent-fanout for a narrow one-off fanout, not this workflow.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

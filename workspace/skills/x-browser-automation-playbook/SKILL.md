@@ -38,6 +38,5 @@ If X changes layout, a ref becomes stale, or a composer action appears ineffecti
 
 - Read [detailed-guide.md](references/detailed-guide.md) for composer paths, keyboard collection, bookmarks, and fallback patterns.
 - Read [no-em-dash-x-copy.md](references/no-em-dash-x-copy.md) when generating account copy that follows that style constraint.
-- Read [scheduled-x-jobs-and-composer.md](references/scheduled-x-jobs-and-composer.md) only when a live X action intersects a scheduled workflow.
 
 Never publish, reply, like, or otherwise mutate X unless the user’s request authorizes that specific external action.

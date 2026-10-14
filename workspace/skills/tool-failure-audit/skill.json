@@ -3,6 +3,7 @@
   "id": "tool-failure-audit",
   "name": "tool-failure-audit",
   "description": "Audit repeated Prometheus tool failures over a bounded period and classify defects versus misuse. Use for batch audit passes; not for one live failure (prometheus-runtime-forensics).",
+  "visibility": "dev",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

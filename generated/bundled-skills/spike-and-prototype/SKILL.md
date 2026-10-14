@@ -38,7 +38,7 @@ Per spike: a 2 to 3 sentence brief (what, why, key risk). If there is a real cho
 - Hardcode everything. No build tooling, Docker, env files, or persistence unless persistence is the question; if it is, use a scratch DB or file named so it is obviously disposable.
 - No polish, no error handling beyond what makes it run, no abstractions.
 - Depth over speed: never declare success after one happy path. Try edge cases and chase surprises.
-- Comparison spikes needing real engineering can run in parallel: spawn one worker per variant with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")` (or `gpt-6-luna`), each returning its own verdict. Never spawn Anthropic workers from an Anthropic main chat. You write the head-to-head.
+- Comparison spikes needing real engineering can run in parallel: spawn one worker per variant with `background_ops(action:"spawn")`, each returning its own verdict. Never spawn Anthropic workers from an Anthropic main chat. You write the head-to-head.
 
 ## 5. Verdict
 

@@ -3,6 +3,7 @@
   "id": "x-video-vertical-social-cut",
   "name": "X Video to Vertical Social Cut",
   "description": "Turn an existing video from X/Twitter, YouTube, a direct media URL, or a local file into a fast, verified 9:16 captioned cut using the direct FFmpeg path. Use when the user explicitly requests a vertical cut from footage; use talking-head-recut for designed graphic overlays or embedded-captions for subtitles without reframing.",
+  "visibility": "personal",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

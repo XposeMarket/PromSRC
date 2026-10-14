@@ -3,6 +3,8 @@
   "id": "bookmark-to-skill-distiller",
   "name": "Bookmark-to-Skill Distiller",
   "description": "Audit X bookmarks or saved-link corpora, extract repeated operational workflows, compare them with the installed Prometheus skill catalog, and produce ranked evidence-backed new-skill and improvement recommendations. Use for bookmark audits and saved-idea operationalization.",
+  "visibility": "public",
+  "publicExcludeResources": ["examples/raul-x-bookmarks-audit.md"],
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

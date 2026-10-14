@@ -3,6 +3,7 @@
   "id": "document-coauthoring",
   "name": "document-coauthoring",
   "description": "Collaboratively structure, draft, refine, and cold-read a substantial document with decision context. Use for iterative briefs, proposals, specs, or RFCs; use docx, pdf, or report-generator for format-specific production or a finished research report. Not for format-only production (docx or pdf) or a finished research report (report-generator).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

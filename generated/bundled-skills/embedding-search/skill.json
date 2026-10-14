@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Design or implement semantic search, embeddings, vector indexes, RAG retrieval, document Q&A, chunking, similarity search, reranking, and retrieval evaluation. Use when information must be found by meaning rather than exact text.",
   "triggers": [
     "search memory semantically",

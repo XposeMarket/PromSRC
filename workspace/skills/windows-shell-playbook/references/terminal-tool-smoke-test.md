@@ -18,7 +18,7 @@ Run a compact smoke set that covers foreground, shell selection, Node availabili
 
 3. Node command
    - Example: `node --version`
-   - Expected: Node prints a valid version. On Raul's machine this was confirmed as `v20.20.2` on 2026-06-19.
+   - Expected: Node prints a valid version. One verified run reported `v20.20.2` (2026-06-19).
 
 4. Background terminal process
    - Start a short-running process, retrieve logs, and confirm the process finishes.

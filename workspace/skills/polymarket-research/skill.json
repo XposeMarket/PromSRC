@@ -3,6 +3,7 @@
   "id": "polymarket-research",
   "name": "polymarket-research",
   "description": "Perform read-only Polymarket research using public Gamma, CLOB, and Data APIs or the bundled Python helper. Use when the user explicitly asks for Polymarket market discovery, market-implied probabilities, order books, spreads, price history, or recent trades. Do not use for generic financial research, betting advice, wallet access, or trade execution.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "implicitInvocation": false,

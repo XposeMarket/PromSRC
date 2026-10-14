@@ -3,6 +3,7 @@
   "id": "prometheus-creative-director",
   "name": "prometheus-creative-director",
   "description": "Orchestrate complete image, motion-graphics, and video production with Prometheus Creative Mode. Use when the user wants a finished video, promo, explainer, social clip, slideshow, captions, talking-head edit, product launch, music video, generated sequence, or multi-stage creative project and the agent must choose among Creative Mode, HyperFrames, generation, media, timeline, audio, and QA workflows.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -62,7 +62,7 @@ Show the spec as a swatch preview before applying when the artifact is large: a 
 - Never alter a supplied logo's colors to match a theme.
 - Do not claim a font is applied in an Office file if it will fall back on the user's machine; say so.
 - Keep the theme to the spec. No extra one-off colors for "emphasis".
-- Raul's taste rule: avoid purple, blue, and cyan gradient SaaS looks; prefer editorial, industrial, and physical-material palettes unless a brand dictates otherwise.
+- Default taste rule: avoid purple, blue, and cyan gradient SaaS looks; prefer editorial, industrial, and physical-material palettes unless a brand dictates otherwise.
 
 ## Exit criteria
 

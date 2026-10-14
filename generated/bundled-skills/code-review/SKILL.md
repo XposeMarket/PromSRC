@@ -17,7 +17,7 @@ Summarize the change, affected files, user-visible behavior, and test evidence. 
 
 Review along two independent axes and report under separate **Standards** and **Spec** headings. Standards checks repository docs/conventions plus the smell baseline below. Spec checks missing or partial requirements, out-of-scope changes, and wrong implementations against quoted spec lines. Never rerank findings across axes. If no spec is available, mark that axis blocked rather than inventing requirements.
 
-Only after confirming a non-empty diff, run independent lenses in parallel with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")` when practical, or sequentially inline otherwise. Never use Anthropic reviewer subagents:
+Only after confirming a non-empty diff, run independent lenses in parallel with `background_ops(action:"spawn")` when practical, or sequentially inline otherwise. Never use Anthropic reviewer subagents:
 
 1. **Guidelines** - project instructions, API contracts, conventions, compatibility, and required tests.
 2. **Correctness** - changed-code bugs, edge cases, state transitions, async behavior, security, performance, and failure handling.

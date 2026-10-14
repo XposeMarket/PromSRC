@@ -13,6 +13,7 @@
   },
   "id": "product-launch-video",
   "name": "product-launch-video",
+  "visibility": "public",
   "description": "Turn a product or marketing URL, pasted script, or brief into a product launch / promo video — SaaS promos, feature reveals, product demos, app and company launches. Use when the user wants to market, launch, promote, or reveal a product; the default for any commercial URL. Not a general site tour (/website-to-video). Unclear → /hyperframes.",
   "entrypoint": "SKILL.md",
   "triggers": [],

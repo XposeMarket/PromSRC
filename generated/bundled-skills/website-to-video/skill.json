@@ -13,6 +13,7 @@
   },
   "id": "website-to-video",
   "name": "website-to-video",
+  "visibility": "public",
   "description": "Capture a general website/URL and turn it into a video OF the site — tour, showcase, or social clip built from captured screenshots and the site's own brand assets. Use for portfolio / blog / docs / landing-page showcases. Not a product launch or promo, even from a URL (/product-launch-video). Unclear → /hyperframes.",
   "entrypoint": "SKILL.md",
   "triggers": [],

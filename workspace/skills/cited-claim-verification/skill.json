@@ -3,6 +3,7 @@
   "id": "cited-claim-verification",
   "name": "Cited Claim Verification",
   "description": "Produce or fact-check a written deliverable so every outside claim is traceable: a source ledger with stable [n] ids registered at retrieval time, inline citations, verbatim supporting quotes, [unverified] markers for unsourced claims, and a final citation audit that catches invented ids, retyped URLs, and thin coverage. Use when the user asks to fact-check a draft, verify the claims in a document, add sources to a report, or wants a high-stakes cited deliverable (medical, legal, financial, disputed). Do not use for ordinary research answers (web-researcher), competitor monitoring (competitor-signal-monitor), or reviewing code.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

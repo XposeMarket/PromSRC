@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Design an SDR sales motion: ICP, qualification, prospecting stages, outreach sequence, discovery process, pipeline metrics, handoffs, and operating cadence. Use for building or diagnosing the sales system; do not use for finding local leads or drafting one standalone message.",
   "triggers": [
     "cold call script",

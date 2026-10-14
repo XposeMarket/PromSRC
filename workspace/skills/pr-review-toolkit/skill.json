@@ -3,6 +3,7 @@
   "id": "pr-review-toolkit",
   "name": "PR Review Toolkit",
   "description": "Run a focused pull-request review through specialized lenses for code correctness, tests, comments, silent failures, type design, and simplification. Use when the user explicitly requests a deep PR review or selected review aspects.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

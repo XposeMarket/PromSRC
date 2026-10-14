@@ -37,7 +37,7 @@ Bad: "fix the tests". Good: "Fix the 3 failing tests in src/agents/abort.test.ts
 
 Issue every `background_ops(action:"spawn")` in the same tool-call block so they run concurrently. Per spawn set:
 
-- `provider:"openai_codex"`, `model:"openai_codex/gpt-6-sol"` (default, `reasoning_effort` medium or high), or `model:"openai_codex/gpt-6-luna"` with `reasoning_effort:"max"` for the hardest unit, whose output must then be reviewed. Always fully qualified. Never spawn Anthropic models while the main chat runs on Anthropic.
+- The configured background model route by default (fully qualified `provider/model` when you pin one); use a stronger reasoning setting only for the hardest unit, and review its output.
 - `tool_categories` the unit needs (for example `["workspace_write"]`, `["browser_automation"]`).
 - Use the cheapest model that handles the unit; mechanical transcription-style units do not need the strongest tier.
 

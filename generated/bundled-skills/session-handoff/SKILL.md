@@ -63,7 +63,7 @@ Remove API keys, tokens, passwords, cookies, and personal data the next agent do
 ## 4. Persist and route
 
 - `write_note(status:"open", content:"Handoff written: <path>; next step: <step 1>")` so the work stays visible across days.
-- If the work continues in a background agent, pass the handoff path inside a fully self-contained `background_ops(action:"spawn")` prompt (default `openai_codex/gpt-6-sol`). If it continues in a peer session, use `thread-and-session-operations`.
+- If the work continues in a background agent, pass the handoff path inside a fully self-contained `background_ops(action:"spawn")` prompt. If it continues in a peer session, use `thread-and-session-operations`.
 - Tell the user, briefly: where the file is, and that a new session can start with "Read <path> and continue."
 
 ## Exit criteria

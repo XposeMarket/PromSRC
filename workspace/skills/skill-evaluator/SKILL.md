@@ -15,7 +15,7 @@ A skill is untested until an agent has been watched failing without it and succe
    - **Technique** (a how-to): test with an application case, a variation, and a case with missing information.
    - **Pattern** (when to apply a mental model): include counter-examples where it should not apply.
    - **Reference** (lookup material): test retrieval and correct application.
-3. Write 2 to 4 realistic prompts, the way Raul would actually type them, with concrete paths, names, and casual phrasing. Save to `reviews/skill-evals/<id>/evals.json` as `{id, name, prompt, expected_output, assertions: []}`.
+3. Write 2 to 4 realistic prompts, the way the user would actually type them, with concrete paths, names, and casual phrasing. Save to `reviews/skill-evals/<id>/evals.json` as `{id, name, prompt, expected_output, assertions: []}`.
 
 Done when each prompt has a descriptive name and a one-line statement of what good output looks like.
 
@@ -26,7 +26,7 @@ For every prompt, spawn two workers in one tool-call block with `background_ops(
 - **with_skill:** the prompt plus "First call skill_read('<id>') and follow it."
 - **baseline:** the identical prompt with no skill pointer (new skill), or pointed at the snapshot path (revised skill).
 
-Route both with the same model so the skill is the only variable: `provider:"openai_codex"`, `model:"openai_codex/gpt-6-sol"`, `reasoning_effort:"medium"`. Never spawn Anthropic models while the main chat runs on Anthropic. Pass `tool_categories` the task needs. Each prompt must be fully self-contained and must say where to write outputs: `reviews/skill-evals/<id>/iteration-<N>/<eval-name>/<with_skill|baseline>/`.
+Route both with the same model so the skill is the only variable (same `provider`, `model`, and `reasoning_effort`). Never spawn Anthropic models while the main chat runs on Anthropic. Pass `tool_categories` the task needs. Each prompt must be fully self-contained and must say where to write outputs: `reviews/skill-evals/<id>/iteration-<N>/<eval-name>/<with_skill|baseline>/`.
 
 While they run, draft assertions: objectively checkable, named so a glance explains them ("cites at least two fetched URLs", "asks via ask_prometheus_questions, not prose"). Subjective qualities (tone, design taste) get human review instead of forced assertions.
 

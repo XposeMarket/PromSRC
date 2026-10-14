@@ -3,6 +3,7 @@
   "id": "x-browser-automation-playbook",
   "name": "x-browser-automation-playbook",
   "description": "Operate X/Twitter interactively in an authenticated browser session: search, navigate, post, reply, like, inspect bookmarks, and recover from X-specific UI state. Use only when the user requests live X interaction; use x-post-fetch-and-media for reading a known post and general browser automation for non-X sites.",
+  "visibility": "public",
   "version": "2.6.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -50,16 +51,6 @@
       "description": "Read-only competitor feature scan workflow for X: collect latest competitor feature posts and translate them into Prometheus product implications, with snapshot-error fallback."
     },
     {
-      "path": "examples/daily-x-signal-radar-readonly-collector.md",
-      "type": "example",
-      "description": "Troubleshooting and successful-run example for the read-only Daily X Signal Radar collector, including the 2026-05-17 text-first success after no-activity failures."
-    },
-    {
-      "path": "examples/on-demand-x-vibe-check.md",
-      "type": "example",
-      "description": "Read-only on-demand X home-feed/vibe-check example for loose “go on X and tell me what’s happening” requests."
-    },
-    {
       "path": "examples/x-browser-open-timeout-no-session.md",
       "type": "example"
     },
@@ -76,22 +67,9 @@
       "type": "reference"
     },
     {
-      "path": "references/examples/grok-via-x-oauth-release-thread.md",
-      "type": "example",
-      "description": "Example recovery flow for using Grok through X OAuth when anonymous Grok blocks a file-upload release-thread drafting task."
-    },
-    {
-      "path": "references/examples/live-x-navigation-and-composite-maintenance.md",
-      "type": "reference"
-    },
-    {
       "path": "references/no-em-dash-x-copy.md",
       "type": "doc",
       "description": "X content style rule for posts and replies"
-    },
-    {
-      "path": "references/scheduled-x-jobs-and-composer.md",
-      "type": "reference"
     },
     {
       "path": "references/styles/x-browser-automation-playbook.md",

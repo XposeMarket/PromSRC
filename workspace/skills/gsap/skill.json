@@ -3,6 +3,7 @@
   "id": "gsap",
   "name": "gsap",
   "description": "GSAP animation reference for HyperFrames compositions. Use for paused timelines, deterministic seeking, tween methods, easing, stagger, labels, nesting, transforms, and performance when a HyperFrames motion task specifically uses GSAP.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

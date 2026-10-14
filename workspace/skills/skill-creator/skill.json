@@ -3,6 +3,7 @@
   "id": "skill-creator",
   "name": "skill-creator",
   "description": "Design or revise a focused Prometheus skill when the user asks to create, update, improve, review, or troubleshoot a skill, or asks to turn what was just done into a reusable skill. Do not fire after ordinary workflows the user did not ask to capture; route inferred lessons through candidate submission and Brain Curator review instead.",
+  "visibility": "public",
   "version": "4.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

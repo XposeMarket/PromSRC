@@ -24,12 +24,12 @@ This applies to every Prometheus JSON file without exception.
 
 | File | Path | What it controls |
 |---|---|---|
-| Main config | `D:\Prometheus\.prometheus\config.json` | Models, gateway, tools, agents[], workspace path |
-| Managed teams | `D:\Prometheus\.prometheus\managed-teams.json` | Team definitions, subagent IDs, manager config, chat |
-| Cron jobs | `D:\Prometheus\.prometheus\cron\jobs.json` | All scheduled jobs (source of truth) |
-| Heartbeat config | `D:\Prometheus\.prometheus\heartbeat\config.json` | Per-agent heartbeat enable/interval |
-| Integrations state | `D:\Prometheus\.prometheus\integrations-state.json` | MCP server connection status |
-| Skills state | `D:\Prometheus\workspace\skills\_state.json` | Installed skill metadata |
+| Main config | `<prometheus-config-dir>\config.json` | Models, gateway, tools, agents[], workspace path |
+| Managed teams | `<prometheus-config-dir>\managed-teams.json` | Team definitions, subagent IDs, manager config, chat |
+| Cron jobs | `<prometheus-config-dir>\cron\jobs.json` | All scheduled jobs (source of truth) |
+| Heartbeat config | `<prometheus-config-dir>\heartbeat\config.json` | Per-agent heartbeat enable/interval |
+| Integrations state | `<prometheus-config-dir>\integrations-state.json` | MCP server connection status |
+| Skills state | `<workspace>\skills\_state.json` | Installed skill metadata |
 
 ---
 
@@ -156,7 +156,7 @@ If it returns `INVALID`, you have a syntax error. Read the file again, find the 
 For config.json or managed-teams.json (the two most critical files), always back up before a large edit:
 
 ```
-shell("copy D:\Prometheus\.prometheus\config.json D:\Prometheus\.prometheus\config.json.bak")
+shell("copy <prometheus-config-dir>\config.json <prometheus-config-dir>\config.json.bak")
 ```
 
 If the write goes wrong, the backup is your recovery path.

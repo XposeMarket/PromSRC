@@ -15,7 +15,7 @@ Create a small checklist of discovery, decisions, implementation, review, and ve
 
 ## Phase 1 - Parallel discovery
 
-When useful, dispatch two or three independent explorers in parallel with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")`, each with a different scope. Never use Anthropic workers:
+When useful, dispatch two or three independent explorers in parallel with `background_ops(action:"spawn")`, each with a different scope. Never use Anthropic workers:
 
 - repository structure and likely entry points;
 - data flow, state, APIs, and dependencies;
@@ -29,7 +29,7 @@ Convert discovery into a one-sentence user story and a short acceptance contract
 
 ## Phase 3 - Architecture options
 
-For changes with real design choices, ask two or three architecture reviewers on the same openai_codex/gpt-6-sol background spawn route to propose distinct approaches. Require each to describe touched files, control/data flow, migration or compatibility impact, failure behavior, test strategy, and tradeoffs. Present the options concisely, recommend one, and obtain material decisions through `ask_prometheus_questions` cards. For a small change, document why the smallest existing pattern is sufficient.
+For changes with real design choices, ask two or three architecture reviewers on the same background spawn route to propose distinct approaches. Require each to describe touched files, control/data flow, migration or compatibility impact, failure behavior, test strategy, and tradeoffs. Present the options concisely, recommend one, and obtain material decisions through `ask_prometheus_questions` cards. For a small change, document why the smallest existing pattern is sufficient.
 
 ## Phase 4 - Implement in slices
 

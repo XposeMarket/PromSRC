@@ -25,7 +25,7 @@ Creating scheduled jobs that gracefully handle:
   },
   "instruction_prompt": `Run the X research & replies workflow every time this job fires:
 
-1. Read skill_read("prometheus-x-growth-operator") and its references/research-replies.md first.
+1. Read the account's X operating skill (if one exists) and its reply guidelines first.
 2. Read workspace/prometheus-x-posts-memory.md first using read_file to avoid duplicates and understand prior posts.
 
 3. RESEARCH PHASE - Try in order, use first one that succeeds:
@@ -65,11 +65,11 @@ SUCCESS: Real replies posted or high-quality drafts saved with thread URLs.`,
   },
   "instruction_prompt": `Run the X posting workflow every time this job fires:
 
-1. Read skill_read("prometheus-x-growth-operator") and its references/scheduled-posting.md.
+1. Read the account's X operating skill (if one exists) and its posting guidelines.
 2. Read workspace/prometheus-x-posts-memory.md using read_file to check prior posts and avoid duplicates.
 3. Generate one original, human-tone post grounded in Prometheus product updates, AI agent memory themes, or dev insights.
 4. CRITICAL: Do NOT use em dashes (—). Use periods, commas, colons, or hyphens instead.
-5. Post from @raulinvests via browser automation:
+5. Post from the connected X account via browser automation:
    a) Try browser_open("https://x.com/home") and use inline composer (tweetTextarea_0 element)
    b) Fill composer, click submit button, wait for confirmation
    c) If browser fails: fall back to workspace/prometheus-x-draft-posts.md and log the draft

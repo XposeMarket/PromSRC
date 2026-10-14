@@ -19,4 +19,4 @@ Convert ambiguous objectives into supervised execution that ends in evidence, no
 
 Success requires verified criteria, resolved conflicts, accessible artifacts, and named residual risks. Delegation never expands authority or bypasses approvals.
 
-For any spawned background agent, set a fully qualified route of `openai_codex/gpt-6-sol` or `openai_codex/gpt-6-luna` only. Review Luna output. Delegation does not bypass model policy.
+For any spawned background agent, follow the user's configured model routing and use a fully qualified `provider/model` when you pin one. Review worker output. Delegation does not bypass model policy.

@@ -38,7 +38,7 @@ Sign the exact bytes you send. Don't await the response in the sender's critical
 trigger_ops(action:"create_rule", rule_id:"<slug>", name:"<Source> <event> -> <what>",
   sources:["webhook"], endpoint_ids:["<endpoint_id>"], event_types:["<type>"],
   conditions:[{field:"payload.approved_count", operator:"not_equals", value:0}],
-  action_kind:"agent", model:"openai_codex/gpt-6-sol", prompt:"...",
+  action_kind:"agent", prompt:"...",
   only_on_failure:true, cooldown_seconds:20)
 ```
 Conditions: fields default to `payload.*`. Operators are equals, not_equals, contains, not_contains, exists, not_exists and in. Always add a condition that filters out no-op events, like zero approvals, so no agent spins up for nothing.
@@ -57,9 +57,9 @@ Choose `only_on_failure` for quiet agent rules only when the requester wants fai
 
 ### Model routing
 Never stack Anthropic spawns under an Anthropic main chat.
-- Posting and cheap execution: `openai_codex/gpt-6-luna`.
-- Reasoning, review and triage: `openai_codex/gpt-6-sol`.
-- Always use a fully qualified `provider/model`. Trigger agents may only use `openai_codex/gpt-6-sol` or `openai_codex/gpt-6-luna`; changing this requires the owner's explicit policy update.
+- Posting and cheap execution: a fast, inexpensive model.
+- Reasoning, review and triage: a stronger reasoning model.
+- Always use a fully qualified `provider/model`. Leave the model unset to use the configured default.
 
 ## Step 4: write the agent prompt (this decides whether it works)
 The agent has **no conversation history**, so the prompt must be self-contained:

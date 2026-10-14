@@ -1,6 +1,6 @@
 # Failure-looking success results — 2026-05-18
 
-Observed during Brain Dream review for the Weekly Opportunity Radar scheduled run.
+Observed during Brain Dream review for a weekly opportunity scan scheduled run.
 
 ## Signal
 A scheduled report run can be marked `success` even when the final output text is a tool failure string such as:

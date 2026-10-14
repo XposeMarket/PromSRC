@@ -1164,6 +1164,9 @@ export class SkillsManager {
       id,
       name: data.name,
       description: data.description || '',
+      // User/agent-created skills are the owner's own and never ship in a
+      // public build until someone deliberately re-tags them "public".
+      visibility: 'personal',
       version: '1.0.0',
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
@@ -1272,6 +1275,11 @@ export class SkillsManager {
       id,
       name: data.name,
       description: data.description || '',
+      // Preserve the declared public/personal/dev split across bundle
+      // rewrites; new bundles default to personal (never shipped publicly).
+      visibility: normalizeSkillVisibility((data as any).visibility)
+        || normalizeSkillVisibility((existing?.manifest as any)?.visibility)
+        || 'personal',
       version: data.version || '1.0.0',
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
@@ -1922,6 +1930,15 @@ function classifyImportSource(source: string): string {
 function getSkillImportAuditPath(rootDir: string, skillIdOrFolder?: string): string {
   const folderName = sanitizeSkillId(skillIdOrFolder || path.basename(rootDir));
   return path.join(path.dirname(rootDir), '.manifests', `${folderName}.import-audit.json`);
+}
+
+// public = ships in the installer; personal = owner-specific; dev = maintainer
+// workflows. Only "public" skills are bundled (scripts/prepare-public-build.js).
+export type SkillVisibility = 'public' | 'personal' | 'dev';
+
+export function normalizeSkillVisibility(value: unknown): SkillVisibility | undefined {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === 'public' || text === 'personal' || text === 'dev' ? text : undefined;
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {

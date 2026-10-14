@@ -3,6 +3,7 @@
   "id": "local-lead-hunting",
   "name": "local-lead-hunting",
   "description": "Discover, verify, qualify, and persist local-business leads from live public sources using explicit market, geography, service, and fit criteria. Use for building or updating a local prospect pipeline; do not use for writing outreach, general market research, or analyzing a lead already selected.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

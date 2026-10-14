@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Turn research, task output, audit findings, data, errors, or activity into a clean status, research, data, reliability, or executive report. Use when findings must be packaged with evidence and actionable conclusions.",
   "triggers": [
     "turn this into a report",

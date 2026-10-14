@@ -3,6 +3,7 @@
   "id": "prometheus-triggers-webhooks",
   "name": "prometheus-triggers-webhooks",
   "description": "Set up and verify event-driven Prometheus trigger endpoints and rules. Use for webhook-triggered work; not for time-based schedules (scheduler-operations-playbook) or the legacy receiver (webhook-receiver-framework).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

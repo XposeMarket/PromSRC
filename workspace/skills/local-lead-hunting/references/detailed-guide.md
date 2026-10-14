@@ -57,7 +57,7 @@ The workflow must be **persistent**. Save findings to workspace files as you go.
 For every lead-hunting run, create or update a stable research folder. Example:
 
 ```text
-lead-research/xpose-market/
+lead-research/my-agency/
   README.md
   prospects.csv
   YYYY-MM-DD-<city>-run.md
@@ -270,7 +270,7 @@ For **the organization revenue prospecting** (or similar systematic agency lead-
 After ranking all candidates and identifying **A-tier leads**:
 
 1. **Choose the top A-tier lead** for the first pitch package (usually the highest-review, weakest-website candidate).
-   - Example from Xpose runs: Castillo Landscaping Services (4.9 / 220 reviews, very weak visual site).
+   - Example: a local landscaping company (4.9 / 220 reviews, very weak visual site).
 
 2. **Create a dedicated pitch-package artifact** in the workspace with:
    - **Critique section:** Current site weaknesses (design, CTAs, trust signals, mobile feel, conversion flow).
@@ -295,7 +295,7 @@ After ranking all candidates and identifying **A-tier leads**:
 Example:
 
 ```text
-lead-research/xpose-market/2026-04-11-frederick-run.md
+lead-research/my-agency/2026-04-11-local-run.md
 ```
 
 Include:
@@ -310,7 +310,7 @@ Include:
 Example:
 
 ```text
-lead-research/xpose-market/prospects.csv
+lead-research/my-agency/prospects.csv
 ```
 
 Use one row per business. Update instead of duplicating.
@@ -319,7 +319,7 @@ Use one row per business. Update instead of duplicating.
 Example:
 
 ```text
-lead-research/xpose-market/evidence/acme-plumbing.md
+lead-research/my-agency/evidence/acme-plumbing.md
 ```
 
 Include:
@@ -363,11 +363,11 @@ Do **not**:
 ## Mental Trigger Tests
 
 ### Clear match
-User says: "Go through Google Maps in Frederick and find local businesses with weak websites."
+User says: "Go through Google Maps in my town and find local businesses with weak websites."
 Expected: This skill should load.
 
 ### Edge case
-User says: "Find local businesses in Frederick and tell me which ones are worth outreach."
+User says: "Find local businesses in my area and tell me which ones are worth outreach."
 Expected: This skill should load.
 
 ### False positive
@@ -391,5 +391,5 @@ A lead-hunting run is complete when:
 
 | Date | Change |
 |------|--------|
-| 2026-04-29 | v2.2.0: Added the organization workflow section with `background_spawn` parallel-screening guidance, independent browser-session requirements for candidate evaluation, 429/timeout fallback handling, text-screened-vs-visual-screened status tracking, and lead-hunt-to-pitch-package follow-through for A-tier leads. Preserved general map-first local-lead guidance for non-Xpose work. |
+| 2026-04-29 | v2.2.0: Added the organization workflow section with `background_spawn` parallel-screening guidance, independent browser-session requirements for candidate evaluation, 429/timeout fallback handling, text-screened-vs-visual-screened status tracking, and lead-hunt-to-pitch-package follow-through for A-tier leads. Preserved general map-first local-lead guidance for general prospecting work. |
 | 2026-04-23 | v2.1.0: Added browser scroll-guard guidance for live listing workflows. Documented that repeated blind `browser_scroll(...)` retries can be blocked by the automation layer, so the workflow should re-anchor with a real interaction or switch to bulk collection/extraction patterns instead. |

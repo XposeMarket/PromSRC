@@ -3,6 +3,7 @@
   "id": "mermaid-diagrams",
   "name": "mermaid-diagrams",
   "description": "Create or edit a Mermaid flowchart, sequence diagram, state diagram, ERD, class diagram, timeline, or other text-native diagram. Use only when Mermaid is explicitly requested or already used in the target document; use SVG for bespoke visual composition.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "frontend-quality-guard",
   "name": "frontend-quality-guard",
   "description": "Enforce polished, human-designed frontend quality whenever Prometheus creates, edits, reviews, or repairs any user-facing web interface—even a tiny page, component, prototype, dashboard, tool, game, or one-off HTML file. Use to prevent generic AI-generated visual patterns, preserve the repository’s design language, and require responsive browser verification.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

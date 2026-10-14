@@ -20,7 +20,7 @@ Run from `<prometheus-workspace>`. If it fails: `node workspace\doc-skills-setup
 Write a Node script to the workspace, run it, the script outputs a .docx file to the workspace. The pattern is always the same:
 
 1. Write `_tmp_docwrite.js` to `workspace/`
-2. Run: `shell({ command: "node _tmp_docwrite.js", cwd: "D:\\Prometheus\\workspace" })`
+2. Run: `shell({ command: "node _tmp_docwrite.js", cwd: "<workspace>" })`
 3. Tell user the file is at `workspace/[filename].docx`
 4. Clean up the temp script
 

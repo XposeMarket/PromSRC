@@ -3,6 +3,7 @@
   "id": "product-discovery",
   "name": "product-discovery",
   "description": "Turn a product opportunity or feature idea into an evidence-backed decision using problem framing, hypotheses, user research, opportunity sizing, prioritization, and a testable product brief. Use when deciding what or whether to build; do not use for implementing an already-approved feature.",
+  "visibility": "public",
   "version": "2.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

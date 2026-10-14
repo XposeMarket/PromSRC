@@ -3,6 +3,7 @@
   "id": "session-handoff",
   "name": "Session Handoff",
   "description": "Write a HANDOFF briefing that lets a fresh Prometheus session, background agent, or peer thread continue current work without the degraded context: goal, current state, files in play, failed attempts and why, best theory, ordered next steps, constraints, memory pointers, and suggested skills. Use when the user says handoff, start fresh, I'll pick this up later, or the session is looping on the same failed fix. Do not use for reusable project briefing packs (context-pack-builder) or ordinary end-of-task summaries.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

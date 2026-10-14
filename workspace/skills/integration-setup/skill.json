@@ -3,6 +3,7 @@
   "id": "integration-setup",
   "name": "integration-setup",
   "description": "Research, configure, connect, and verify a Prometheus integration for an external service using an existing connector, MCP preset, or supported definition. Use for installing/configuring a service connection; use connector-builder when implementation is missing and connector-smoke-test-harness for repeatable verification.",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "dev-debugging",
   "name": "dev-debugging",
   "description": "Hand a Prometheus development or debugging request to the ChatGPT desktop app when the user explicitly asks for that desktop handoff. Use for composing, submitting, proving, and following up on a ChatGPT debugging request; do not invoke for normal debugging that Prometheus can perform directly.",
+  "visibility": "dev",
   "version": "1.6.0",
   "entrypoint": "SKILL.md",
   "triggers": [

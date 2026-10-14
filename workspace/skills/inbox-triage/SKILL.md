@@ -21,7 +21,7 @@ Sort into: urgent decision, must reply, waiting on someone else, calendar or tas
 
 ## 4. Prepare next actions
 
-Return a concise priority queue, action table, suggested reply drafts where requested, and a list of questions requiring the user's decision. Before drafting in Raul's voice, sample 20 to 50 of his Sent replies when available and in scope; extract greeting, sign-off, length, and formality rather than copying private text verbatim. Check alternate Sent labels such as `[Gmail]/Sent Mail` before declaring Sent unavailable, then fall back to the thread's register and disclose that fallback. Drafts must not imply facts, attachments, authority, or promises not present in the thread. Draft only unless explicitly told to send. Keep send, delete, archive, label, unsubscribe, and forward as explicit actions requiring confirmation.
+Return a concise priority queue, action table, suggested reply drafts where requested, and a list of questions requiring the user's decision. Before drafting in the user's voice, sample 20 to 50 of their Sent replies when available and in scope; extract greeting, sign-off, length, and formality rather than copying private text verbatim. Check alternate Sent labels such as `[Gmail]/Sent Mail` before declaring Sent unavailable, then fall back to the thread's register and disclose that fallback. Drafts must not imply facts, attachments, authority, or promises not present in the thread. Draft only unless explicitly told to send. Keep send, delete, archive, label, unsubscribe, and forward as explicit actions requiring confirmation.
 
 ## 5. Verify side effects
 

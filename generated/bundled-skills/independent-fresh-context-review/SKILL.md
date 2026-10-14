@@ -22,7 +22,7 @@ Leave out persuasive narrative and the reasons you believe it is correct.
 
 ## 2. Spawn the reviewer
 
-`background_ops({action:"spawn", provider:"openai_codex", model:"openai_codex/gpt-6-sol", reasoning_effort:"high", tool_categories:[...what inspection needs, e.g. "workspace_write", "browser_automation"], prompt})`. Never spawn Anthropic models while main chat runs on Anthropic. The prompt is self-contained: the brief path, instructions to read the real files and run read-only checks, and the required output below. The producer of the work is never the reviewer.
+`background_ops({action:"spawn", tool_categories:[...what inspection needs, e.g. "workspace_write", "browser_automation"], prompt})`. Never spawn Anthropic models while main chat runs on Anthropic. The prompt is self-contained: the brief path, instructions to read the real files and run read-only checks, and the required output below. The producer of the work is never the reviewer.
 
 ## 3. Reviewer output contract
 

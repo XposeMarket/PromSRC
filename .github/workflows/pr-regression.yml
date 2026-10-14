@@ -37,6 +37,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
+      - name: Verify public skill bundle (visibility tags, no owner-specific content)
+        run: npm run test:public-skills
       - name: Verify durable main-chat goal user stop
         run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression

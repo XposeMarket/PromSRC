@@ -3,6 +3,7 @@
   "id": "theme-application",
   "name": "Theme Application",
   "description": "Choose, preview, and consistently apply a visual theme (palette roles, type pairing, accent and chart rules) to a slide deck, document, report, HTML page, dashboard, or chart set, from a bundled original theme library or a custom theme built from a brand. Use when asked to theme, restyle, or make an artifact match brand colors; do not use for full website design, logo or brand-kit creation, or brand positioning.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

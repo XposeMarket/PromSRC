@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Develop the narrative, slide architecture, evidence plan, and content for an investor, sales, partnership, or internal pitch deck. Use when persuasion and deck storyline are primary; use pptx-writer for file-generation mechanics and report-generator for prose reports.",
   "triggers": [
     "slide deck for investors",

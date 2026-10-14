@@ -3,6 +3,7 @@
   "id": "github-gh-address-comments",
   "name": "GitHub PR Comment Handler",
   "description": "Address actionable GitHub pull request review feedback. Use when the user wants to inspect unresolved review threads, requested changes, or inline review comments on a PR, then implement selected fixes. Use the GitHub connector for review comments and GraphQL thread state; judge feedback with receiving-code-review.",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

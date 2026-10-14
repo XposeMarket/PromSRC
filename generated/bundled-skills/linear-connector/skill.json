@@ -3,6 +3,7 @@
   "id": "linear-connector",
   "name": "linear-connector",
   "description": "Connect or operate Linear teams, projects, issues, cycles, and comments when Linear is explicitly requested. Use integration-setup for generic connection setup and connector-builder if implementation is missing; not for arbitrary task tracking.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

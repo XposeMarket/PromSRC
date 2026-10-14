@@ -38,7 +38,7 @@ Use `website-intelligence` for deep analysis of one selected site, `competitor-p
 
 ## Read details only when needed
 
-- Read [detailed-guide.md](references/detailed-guide.md) for persistence schemas, qualification tiers, Xpose-specific handling, team delegation, and file-output templates.
+- Read [detailed-guide.md](references/detailed-guide.md) for persistence schemas, qualification tiers, agency-specific handling, team delegation, and file-output templates.
 - Read the workspace’s current prospect schema before altering an existing pipeline.
 
 Report search scope, candidates reviewed, qualified/disqualified counts, output paths, evidence gaps, and the strongest reasons behind the final shortlist.

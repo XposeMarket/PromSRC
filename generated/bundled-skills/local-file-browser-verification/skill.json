@@ -3,6 +3,7 @@
   "id": "local-file-browser-verification",
   "name": "local-file-browser-verification",
   "description": "Open and verify a local HTML/web project in a browser, including visual layout, responsive behavior, interaction, console errors, local asset loading, and post-edit smoke testing. Use for browser QA of local files or localhost; do not use for generic coding or live-site automation unrelated to verification.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

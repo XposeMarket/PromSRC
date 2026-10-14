@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Tailwind CSS v4 browser-runtime patterns for HyperFrames compositions. Use only for HyperFrames Tailwind scaffolds, utility classes, CSS-first theme tokens, v3-to-v4 issues, and deterministic render styling.",
   "triggers": [
     "design system utilities",

@@ -27,7 +27,7 @@ Observed successful run on 2026-05-13: the user asked, “go on X… I don't kno
    - trading/mental-game signals
    - noise/downranked topics
 5. Give a concise “my read” that connects the feed to Prometheus/Xpose/trading priorities.
-6. Only save a file or note if the user asked, the signal is important, or the run should feed Daily X Signal Radar.
+6. Only save a file or note if the user asked, the signal is important, or the run should feed daily X signal brief.
 
 ## Output Shape
 

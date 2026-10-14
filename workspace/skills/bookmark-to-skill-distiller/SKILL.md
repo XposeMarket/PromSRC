@@ -19,7 +19,7 @@ Use `capability-finder` to search installed skill IDs, descriptions, triggers, a
 
 ## 4. Score
 
-Score frequency, Raul fit, novelty, specificity, leverage, evidence, and maintenance cost using `2*fit + 2*leverage + novelty + frequency + specificity + evidence - maintenance`. Rank recommendations using that same formula.
+Score frequency, user fit, novelty, specificity, leverage, evidence, and maintenance cost using `2*fit + 2*leverage + novelty + frequency + specificity + evidence - maintenance`. Rank recommendations using that same formula.
 
 ## 5. Deliver
 

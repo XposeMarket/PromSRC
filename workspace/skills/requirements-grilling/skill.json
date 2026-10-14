@@ -3,6 +3,7 @@
   "id": "requirements-grilling",
   "name": "Requirements Grilling",
   "description": "Interview the user in sequential question cards (recommended answer first) until a vague idea, plan, or design becomes a shared, fully decided understanding; classifies the request as spike, bounded, or architectural first. Use when the user says grill me, stress-test my plan, or wants to think a feature through before building. Do not use to write the spec document (spec-writing), for market or product validation (product-discovery), or when the design is already approved.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

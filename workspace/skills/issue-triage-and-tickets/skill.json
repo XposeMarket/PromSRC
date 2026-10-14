@@ -3,6 +3,7 @@
   "id": "issue-triage-and-tickets",
   "name": "Issue Triage and Tickets",
   "description": "Triage GitHub issues and external PRs through category plus state labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix), verify claims against code, post durable agent briefs, and break a spec or plan into tracer-bullet tickets with blocking edges published via connector_github tools or local ticket files. Use for triage the issues, what needs my attention on GitHub, or make tickets from this spec. Do not use for fixing the issue itself, code review, or email/inbox triage (inbox-triage).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

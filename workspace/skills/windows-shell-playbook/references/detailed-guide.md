@@ -94,19 +94,19 @@ powershell -NoProfile -Command "try { Get-Content 'file.json' | ConvertFrom-Json
 
 ```powershell
 # Build Prometheus
-powershell -NoProfile -Command "Set-Location 'D:\Prometheus'; npm run build"
+powershell -NoProfile -Command "Set-Location '<prometheus-root>'; npm run build"
 
 # Start Prometheus
-powershell -NoProfile -Command "Set-Location 'D:\Prometheus'; npm start"
+powershell -NoProfile -Command "Set-Location '<prometheus-root>'; npm start"
 
 # Check Node version
 powershell -NoProfile -Command "node --version"
 
 # Check if a package is installed
-powershell -NoProfile -Command "Set-Location 'D:\Prometheus'; npm list <package>"
+powershell -NoProfile -Command "Set-Location '<prometheus-root>'; npm list <package>"
 
 # Run a specific npm script
-powershell -NoProfile -Command "Set-Location 'D:\Prometheus'; npm run <script-name>"
+powershell -NoProfile -Command "Set-Location '<prometheus-root>'; npm run <script-name>"
 ```
 
 **Build after src/ changes is mandatory.** `src/` compiles to `dist/` via tsc. Never edit `dist/` directly.
@@ -141,10 +141,10 @@ npm --version
 powershell -NoProfile -Command "if (Test-Path 'path\to\file') { Get-Content 'path\to\file' } else { Write-Output 'NOT FOUND' }"
 
 # Get last N lines of a log
-powershell -NoProfile -Command "Get-Content 'D:\Prometheus\gateway.log' -Tail 50"
+powershell -NoProfile -Command "Get-Content '<prometheus-root>\gateway.log' -Tail 50"
 
 # Check error log
-powershell -NoProfile -Command "Get-Content 'D:\Prometheus\gateway.err.log' -Tail 30"
+powershell -NoProfile -Command "Get-Content '<prometheus-root>\gateway.err.log' -Tail 30"
 ```
 
 ---
@@ -156,7 +156,7 @@ If you are not on a real Windows host (or PowerShell/cmd behavior is stubbed), d
 - Detect mismatch early: if `powershell` is unavailable, or a command returns platform/command-not-found errors, stop assuming Windows semantics.
 - Run OS-native commands for that runtime (`bash`/`zsh` patterns on Linux/macOS) instead of forcing PowerShell syntax.
 - For deterministic file work, prefer Prometheus tools (`read_file`, `list_directory`, `grep_files`) over shell emulation.
-- Use runtime-correct absolute paths for the detected OS; never reuse `D:\Prometheus\...` on non-Windows hosts.
+- Use runtime-correct absolute paths for the detected OS; never reuse `<prometheus-root>\...` on non-Windows hosts.
 - In your final report, explicitly state the mismatch and the fallback path/toolchain used.
 
 ---

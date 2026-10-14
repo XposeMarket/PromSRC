@@ -1,6 +1,6 @@
 ---
 name: "file-surgery"
-description: "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery; use promsrc-pr-worktree for Prometheus source changes."
+description: "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery."
 ---
 
 # File surgery
