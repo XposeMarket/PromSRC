@@ -19,6 +19,9 @@
   },
   "scripts": {
     "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
+    "test:operation-ledger": "tsx src/gateway/operation-ledger.regression.ts",
+    "test:timer-stranded": "tsx src/gateway/timer-stranded.regression.ts",
+    "test:task-verifier": "tsx src/gateway/task-verifier.regression.ts",
     "test:gateway-auth-proxy": "tsx src/gateway/gateway-auth-proxy.regression.ts",
     "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",

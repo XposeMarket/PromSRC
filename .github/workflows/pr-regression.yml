@@ -39,6 +39,12 @@ jobs:
         run: npm run check:file-budgets
       - name: Verify proxied loopback requests (Tailscale Funnel) are not trusted
         run: npm run test:gateway-auth-proxy
+      - name: Verify external operation ledger and crash deduplication
+        run: npm run test:operation-ledger
+      - name: Verify stranded timer restart recovery
+        run: npm run test:timer-stranded
+      - name: Verify task acceptance verifier failure classification
+        run: npm run test:task-verifier
       - name: Verify durable main-chat goal user stop
         run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression
