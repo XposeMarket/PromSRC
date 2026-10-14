@@ -77,12 +77,26 @@ export function memoryFactsConflict(previous: string, next: string): boolean {
   return numberChanged || dateChanged || hasNegation(before) !== hasNegation(after);
 }
 
+function normalizeCategoryHeading(value: string): string {
+  return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+}
+
+// Match the existing writer contract: categories are matched case- and
+// separator-insensitively against display headings ("personality" -> "## Personality"),
+// so a write never creates a duplicate normalized section beside an existing one.
 function categoryRange(fileContent: string, category: string): { bodyStart: number; end: number } | null {
-  const heading = `## ${String(category || '').trim()}`;
-  const headingAt = fileContent.indexOf(`\n${heading}`);
-  const start = headingAt === -1 && fileContent.startsWith(heading) ? 0 : headingAt;
-  if (start === -1) return null;
-  const bodyStart = start + (start === 0 ? heading.length : heading.length + 1);
+  const wanted = normalizeCategoryHeading(category);
+  if (!wanted) return null;
+  const headingRe = /^##[ \t]+(.+?)[ \t]*\r?$/gm;
+  let match: RegExpExecArray | null;
+  let bodyStart = -1;
+  while ((match = headingRe.exec(fileContent)) !== null) {
+    if (normalizeCategoryHeading(match[1]) === wanted) {
+      bodyStart = match.index + match[0].replace(/\r$/, '').length;
+      break;
+    }
+  }
+  if (bodyStart === -1) return null;
   const nextHeading = fileContent.indexOf('\n## ', bodyStart);
   const closing = fileContent.indexOf('\n---', bodyStart);
   const end = [nextHeading, closing, fileContent.length].filter((value) => value >= 0).sort((a, b) => a - b)[0];

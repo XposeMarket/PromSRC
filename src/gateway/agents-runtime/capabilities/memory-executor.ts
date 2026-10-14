@@ -446,9 +446,11 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
         const today = new Date().toISOString().split('T')[0];
         const poisoned = isPoisonMemoryFact(content);
-        // Preserve the previous bullet as history when it is replaced. Poisoned
-        // candidate text is quarantined and deliberately cannot supersede it.
-        if (!poisoned) lines[matches[0]] = `- ${previousContent} [${today}] [superseded ${today} by ${content}]`;
+        // memory update is an explicit, exact correction: it replaces the bullet
+        // (documented tool contract). Contradiction-superseding with history
+        // applies to memory write. Poisoned candidate text is quarantined by
+        // writeMemoryFact and deliberately cannot displace the existing fact.
+        if (!poisoned) lines.splice(matches[0], 1);
         const updatedSection = lines.join(sectionText.includes('\r\n') ? '\r\n' : '\n');
         const baseContent = fileContent.slice(0, section.bodyStart) + updatedSection + fileContent.slice(section.end);
         const write = writeMemoryFact(baseContent, category, content, today);
