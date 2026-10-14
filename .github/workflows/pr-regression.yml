@@ -35,10 +35,24 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify memory contradiction, freshness, deletion and poisoned recall
+        run: npm run test:memory-recall
+      - name: Verify replay-gated skill promotion
+        run: npm run test:skill-promotion
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
+      - name: Verify scheduler misfire, leases, dedupe and script execution
+        run: npm run test:scheduler-misfire
       - name: Verify proxied loopback requests (Tailscale Funnel) are not trusted
         run: npm run test:gateway-auth-proxy
+      - name: Verify mandatory final-action gate and subagent tool ceiling
+        run: npm run test:final-action-gate
+      - name: Verify external operation ledger and crash deduplication
+        run: npm run test:operation-ledger
+      - name: Verify stranded timer restart recovery
+        run: npm run test:timer-stranded
+      - name: Verify task acceptance verifier failure classification
+        run: npm run test:task-verifier
       - name: Verify durable main-chat goal user stop
         run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression

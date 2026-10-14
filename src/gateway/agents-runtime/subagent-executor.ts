@@ -1,4 +1,5 @@
 import { handleDefaultTool } from './handlers/default-tools';
+import { getOperationLedger, isExternalSideEffect } from '../operation-ledger';
 import { createWorkspaceHelpers } from './workspace-helpers';
 import { normalizeDevSourceWrapperTool, isWorkspacePrometheusSourceCopyPath, normalizeWorkspaceWrapperTool, normalizeBrowserWrapperTool, normalizeExternalAppWrapperTool, normalizeAgentTeamWrapperTool, isPlainObjectArg, normalizeCreativeWrapperTool, normalizeMediaGenerateWrapperTool, normalizePromRepoOpsWrapperTool, normalizeBackgroundOpsWrapperTool, normalizeSkillOpsWrapperTool } from './wrapper-normalizers';
 export { normalizeTypeScriptModule, validateSourceSyntaxBeforeWrite, rejectInvalidSourceEdit, inferDevSourceSurface, normalizeDevSourceFileArg, normalizeDevSourcePathArg, normalizeDevSourceWrapperTool, normalizeWorkspacePatchOp, positiveNumberArg, hasNonEmptyValue, copyIfPresent, compactWorkspaceReadArgs, compactWorkspaceGrepArgs, compactWorkspaceBatchReadArgs, compactWorkspaceEditArgs, inferWorkspacePatchOp, coerceBatchFileList, normalizeWorkspacePatchsetArgs, isWorkspacePrometheusSourceCopyPath, normalizeWorkspaceWrapperTool, normalizeBrowserWrapperTool, copyVercelWrapperAlias, normalizeVercelWrapperRecord, normalizeVercelWrapperArgs, normalizeExternalAppWrapperTool, TEAM_GOAL_SUBACTIONS, normalizeAgentTeamWrapperTool, isPlainObjectArg, firstNonEmptyString, normalizeCreativeImageSourceCandidate, normalizeCreativeAssetIdCandidate, normalizeCreativeWrapperArgs, resolveCreativeToolSource, normalizeCreativeWrapperTool, normalizeMediaGenerateWrapperTool, normalizePromRepoOpsWrapperTool, normalizeBackgroundOpsWrapperTool, normalizeSkillOpsWrapperTool, collectDeliveryFilePaths } from './wrapper-normalizers';
@@ -2773,6 +2774,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     }
   }
 
+  // Policy/approval and wrapper normalization above remain authoritative.
+  // Ledger owns the entire dispatch continuation so every return is committed before delivery.
+  const externalSideEffect = isExternalSideEffect(name, args);
+  const forceReexecute = args?.force_reexecute === true;
+  if (externalSideEffect && args && typeof args === 'object') {
+    args = { ...args };
+    delete args.force_reexecute; // gateway-only control, never sent to an external API
+  }
+  const dispatch = async (): Promise<ToolResult> => {
   if (name === 'show_product_carousel') {
     const normalizedItems = normalizeProductArtifactItems(Array.isArray(args?.items) ? args.items : []);
     const enrichedItems = await enrichProductArtifactItems(normalizedItems.map((item, index) => ({
@@ -3692,4 +3702,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     }
     return { name, args, result: `Error: ${err.message}`, error: true };
   }
+  };
+  if (!externalSideEffect) return dispatch();
+  const result = await getOperationLedger().execute({ sessionId, toolName: name, args }, dispatch, forceReexecute);
+  return { name, args, ...result };
 }

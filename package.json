@@ -18,8 +18,14 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:memory-recall": "tsx src/gateway/memory-recall.regression.ts",
+    "test:skill-promotion": "tsx src/gateway/skills-runtime/skill-promotion.regression.ts && tsx src/gateway/brain/post-task-skill-review.regression.ts",
     "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
     "test:gateway-auth-proxy": "tsx src/gateway/gateway-auth-proxy.regression.ts",
+    "test:final-action-gate": "tsx src/gateway/final-action-gate.regression.ts",
+    "test:operation-ledger": "tsx src/gateway/operation-ledger.regression.ts",
+    "test:timer-stranded": "tsx src/gateway/timer-stranded.regression.ts",
+    "test:task-verifier": "tsx src/gateway/task-verifier.regression.ts",
     "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
     "test:needs-you-hotpath": "node scripts/test-needs-you-hotpath.mjs",
@@ -181,6 +187,7 @@
     "test:agents": "npm run build:backend && node scripts/test-agent-runtime-contract.mjs && node scripts/test-agent-unbounded-loop.mjs",
     "test:subagent-sources-scope": "node scripts/test-subagent-sources-scope.mjs",
     "test:automations": "npm run build:backend && node scripts/test-automation-runtime-contract.mjs && tsx src/gateway/internal-watch/internal-watch-restart-recovery.regression.ts && tsx src/gateway/internal-watch/internal-watch-policy.regression.ts && tsx src/gateway/scheduling/sched-task-review.regression.ts && node scripts/test-brain-thought-isolation.mjs",
+    "test:scheduler-misfire": "tsx src/gateway/scheduling/scheduler-misfire.regression.ts",
     "test:sched-task-review": "tsx src/gateway/scheduling/sched-task-review.regression.ts",
     "test:reasoning-capabilities": "npm run build:backend && node scripts/test-reasoning-capabilities.mjs",
     "test:p6-subagents-runs-proposals-ui": "node scripts/test-p6-subagents-runs-proposals-ui.mjs",

@@ -118,6 +118,13 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       verifier: 'qwen3:4b'
     }
   },
+  // Brain-owned learning remains fully opt-in; review is disabled by default.
+  brain: {
+    enabled: false,
+    skillLearning: {
+      autoReview: false,
+    },
+  },
   image_generation: {
     provider: process.env.PROMETHEUS_IMAGE_PROVIDER ?? 'auto',
     model: process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2.5-flare-medium',

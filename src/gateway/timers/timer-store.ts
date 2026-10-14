@@ -28,6 +28,11 @@ interface TimerStoreData {
   updatedAt: string;
 }
 
+// A `running` timer is owned only by the process that fired it. On a fresh boot,
+// recover persisted running timers from an earlier process so they can be picked
+// up again instead of remaining stranded forever.
+const timerStoreProcessStartedAt = Date.now();
+
 function getTimerDir(): string {
   return path.join(getConfig().getConfigDir(), 'timers');
 }
@@ -65,6 +70,23 @@ function normalizeTimer(raw: any): MainChatTimer | null {
   };
 }
 
+export function recoverStrandedMainChatTimers(timers: MainChatTimer[], processStartedAt: number = timerStoreProcessStartedAt): boolean {
+  let recovered = false;
+  for (const timer of timers) {
+    const lastOwnedAt = new Date(timer.firedAt || timer.updatedAt).getTime();
+    if (timer.status !== 'running' || !Number.isFinite(lastOwnedAt) || lastOwnedAt >= processStartedAt) continue;
+    // The original runner died with the previous process. Preserve its schedule
+    // semantics: future timers wait pending; elapsed timers wait to be claimed.
+    timer.status = new Date(timer.dueAt).getTime() <= processStartedAt ? 'due_waiting' : 'pending';
+    timer.firedAt = undefined;
+    timer.completedAt = undefined;
+    timer.error = 'Recovered after the process that owned this timer stopped.';
+    timer.updatedAt = new Date().toISOString();
+    recovered = true;
+  }
+  return recovered;
+}
+
 function loadStore(): TimerStoreData {
   const p = getTimerStorePath();
   if (!fs.existsSync(p)) return defaultStore();
@@ -73,10 +95,12 @@ function loadStore(): TimerStoreData {
     const timers = Array.isArray(parsed?.timers)
       ? parsed.timers.map(normalizeTimer).filter(Boolean) as MainChatTimer[]
       : [];
-    return {
+    const store: TimerStoreData = {
       timers,
       updatedAt: String(parsed?.updatedAt || new Date().toISOString()),
     };
+    if (recoverStrandedMainChatTimers(store.timers)) saveStore(store);
+    return store;
   } catch {
     return defaultStore();
   }
