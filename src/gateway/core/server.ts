@@ -462,6 +462,16 @@ function tryRawGatewayFastPath(
     return true;
   }
 
+  // /api/status and /api/system-stats expose workspace paths, models and queue
+  // state. Only authenticated callers (local desktop, paired device, gateway
+  // token) get the full payload; anyone else, e.g. the public Funnel URL, gets a
+  // liveness stub (status) or falls through to the auth-guarded express route.
+  if (!evaluateGatewayRequest(req as any).ok) {
+    if (pathname !== '/api/status') return false;
+    sendRawJson(res, { status: 'ok', version: 'v2-tools', authRequired: true, fastPath: true });
+    return true;
+  }
+
   const rawCfg = getConfig().getConfig() as any;
   const provider = String(rawCfg.llm?.provider || 'ollama');
   const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';

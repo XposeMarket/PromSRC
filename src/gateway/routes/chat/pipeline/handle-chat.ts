@@ -1,4 +1,5 @@
 import { inferReferenceImageMimeType } from './context-preparation';
+import { recordSessionToolCeiling } from '../../../agents-runtime/tool-ceiling';
 import { shouldUseLeanWriteNoteSwitchTools, providerToolLimit, parseSupervisionControlPayload, supervisionTerminalStatus } from './tool-loop';
 import { isExplicitLowOverheadBrowserObserve, feedItemKey } from './browser-observation';
 import { isReadOnlyDevPlanStep, planStepNeedsWriteEvidence } from './finalization-guards';
@@ -488,6 +489,9 @@ export async function handleChatUntraced(
       try { activateToolCategory(sessionId, category, { scope: 'turn' }); } catch { /* unknown category */ }
     }
   }
+  // Record this session's tool ceiling so any worker it spawns can never hold
+  // more authority than it does (see agents-runtime/tool-ceiling.ts).
+  if (!isSupervisionLoop) recordSessionToolCeiling(sessionId, toolFilter);
   htime('pre_context.tool_categories_activated');
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
