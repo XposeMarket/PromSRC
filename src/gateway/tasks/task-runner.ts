@@ -11,6 +11,7 @@
  */
 
 import crypto from 'crypto';
+import { getSessionToolCeiling } from '../agents-runtime/tool-ceiling';
 import { persistBackgroundSpawnReceipt } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
@@ -104,6 +105,8 @@ export interface EphemeralBackgroundStatus {
   executor_reasoning_effort?: string;
   /** Explicit tool categories the worker starts with (core tools are always present). */
   toolCategories?: string[];
+  /** Spawner's tool allowlist ceiling; the worker runs under it (undefined = unrestricted spawner). */
+  toolCeiling?: string[];
   stream?: Record<string, any> | null;
   startedAt: number;
   completedAt?: number;
@@ -757,7 +760,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}, speed=${record.speed || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.${workDirNotice}`,
           record.model,   // modelOverride
           'background_task',
-          undefined,   // toolFilter — full tool access
+          record.toolCeiling && record.toolCeiling.length ? record.toolCeiling : undefined,   // toolFilter: spawner's ceiling; unrestricted spawners pass none
           undefined,
           record.reasoningEffort
             ? { enabled: record.reasoningEffort !== 'none', level: record.reasoningEffort }
@@ -887,6 +890,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
+  record.toolCeiling = getSessionToolCeiling(record.spawnerSessionId);
   record.workDir = String(input?.workDir || '').trim() || undefined;
   record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
     ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
