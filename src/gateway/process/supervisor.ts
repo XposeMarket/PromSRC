@@ -13,6 +13,7 @@ import { createManagedTerminalWorkspaceTracker, type ManagedTerminalWorkspaceTra
 import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
 import { ProcessOutputBatcher } from './output-batcher';
 import { withNpmShimsOnPath } from './npm-shims';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 import { claimWarmPowerShell, prewarmPowerShell, sendWarmScript } from './warm-powershell';
 import type {
   ManagedProcessRun,
@@ -357,7 +358,10 @@ export class ProcessSupervisor {
     const cwd = path.resolve(String(input.cwd || getConfig().getWorkspacePath() || process.cwd()));
     const runId = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const startedAt = nowIso();
-    const commandEnv = resolveCommandEnv();
+    // Shell/terminal commands can invoke git status or other reads indirectly
+    // (including npm scripts); disabling optional index refresh is harmless for
+    // writes and prevents killed child reads from leaving index.lock behind.
+    const commandEnv = lockFreeGitReadOptions([], resolveCommandEnv()).env;
     const directInvocation = input.pty === true ? null : getDirectInvocation(command, input.shell, commandEnv);
     const invocation = directInvocation || getShellInvocation(command, input.shell);
     const record: ProcessRunRecord = {

@@ -4,6 +4,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { createWorkspaceSnapshot, toSnapshotRef, type WorkspaceSnapshotRef, type WorkspaceSnapshotRecord } from '../../workspace-history';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 
 export type TerminalWorkspaceChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
@@ -162,9 +163,11 @@ function commandPathHints(command: string | undefined, cwd: string, workspacePat
 }
 
 function runGit(root: string, args: string[], options: { maxBuffer?: number; encoding?: BufferEncoding | 'buffer' } = {}): string | Buffer {
+  const invocation = lockFreeGitReadOptions(args);
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', invocation.args, {
       cwd: root,
+      env: invocation.env,
       encoding: options.encoding || 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -450,8 +453,11 @@ function captureGitFiles(scopeRoot: string, gitRoot: string, baselineHead: strin
 function readGitHeadContent(gitRoot: string, baselineHead: string, relativeToGit: string): Buffer | null {
   if (!baselineHead || !relativeToGit) return null;
   try {
-    return execFileSync('git', ['show', `${baselineHead}:${relativeToGit}`], {
+    const args = ['show', `${baselineHead}:${relativeToGit}`];
+    const invocation = lockFreeGitReadOptions(args);
+    return execFileSync('git', invocation.args, {
       cwd: gitRoot,
+      env: invocation.env,
       encoding: 'buffer',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],

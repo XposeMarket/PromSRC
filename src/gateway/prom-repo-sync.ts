@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { isLockFreeGitRead, lockFreeGitReadOptions } from '../runtime/git-read';
 
 export type PromRepoToolName = 'prom_repo_push' | 'prom_repo_pull' | 'prom_repo_sync';
 
@@ -113,9 +114,12 @@ function parsePorcelainZ(output: string): DirtyPath[] {
 async function runGit(repoRoot: string, args: string[], timeoutMs = 180_000, env?: NodeJS.ProcessEnv): Promise<GitResult> {
   const startedAt = Date.now();
   return await new Promise((resolve) => {
-    const child = spawn('git', args, {
+    const invocation = isLockFreeGitRead(args)
+      ? lockFreeGitReadOptions(args, env || process.env)
+      : { args, env: env || process.env };
+    const child = spawn('git', invocation.args, {
       cwd: repoRoot,
-      env: env || process.env,
+      env: invocation.env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

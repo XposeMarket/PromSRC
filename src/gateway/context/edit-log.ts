@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getConfig } from '../../config/config';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 
 export const EDIT_LOG_MAX_ENTRIES = 40;
 export const EDIT_LOG_PROMPT_ENTRIES = 16;
@@ -211,8 +212,10 @@ function gitHunksFor(file: string): { lines: string; removed: string; added: str
     // Plumbing diff-files never refreshes/writes .git/index. Porcelain `git diff`
     // does (even with GIT_OPTIONAL_LOCKS=0), and this 3s timeout kill left stale
     // index.lock files behind during builds.
-    const out = execFileSync('git', ['diff-files', '-p', '-U0', '--no-color', '--', path.basename(file)], {
-      cwd: dir, encoding: 'utf8', timeout: 3000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+    const args = ['diff-files', '-p', '-U0', '--no-color', '--', path.basename(file)];
+    const invocation = lockFreeGitReadOptions(args);
+    const out = execFileSync('git', invocation.args, {
+      cwd: dir, env: invocation.env, encoding: 'utf8', timeout: 3000, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
     });
     if (!out) return null;
     const ranges: string[] = [];

@@ -34,6 +34,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { voiceContextRequestHash, voiceContextEntryMatches } from '../voice/context-cache-key';
 import { execFile } from 'child_process';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../chat/worker-batch-timing';
 import { goalReminderForTool } from '../chat/goal-reminder';
@@ -713,8 +714,10 @@ function extractTerminalWorkspaceChangesFromToolResult(result: any, workspacePat
 
 function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', args, {
+    const invocation = lockFreeGitReadOptions(args);
+    execFile('git', invocation.args, {
       cwd,
+      env: invocation.env,
       encoding: 'utf8',
       windowsHide: true,
       maxBuffer,
