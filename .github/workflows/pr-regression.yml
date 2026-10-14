@@ -41,6 +41,8 @@ jobs:
         run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression
         run: npm run test:thread-handoff
+      - name: Verify event-loop stall CPU attribution
+        run: npm run test:stall-profiler
       - name: Verify Brain provider diagnostics and bounded failures
         run: npm run test:brain-provider-diagnostics
       - name: Verify provider evidence and system health classification
