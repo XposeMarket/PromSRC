@@ -634,6 +634,10 @@ export function createServer(
   server.on('error', (err: any) => {
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
+      if (process.env.PROMETHEUS_HOT_RESTART === '1') {
+        console.warn('[Gateway] Handoff replacement will retry the listener bind while its predecessor releases the port.');
+        return;
+      }
       console.error('[Gateway] Another gateway instance is likely already running or the port is stuck.');
       console.error('[Gateway] Close the other process or run: prom gateway stop');
       process.exit(1);

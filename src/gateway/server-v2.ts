@@ -82,6 +82,7 @@ import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
+import { closeListeningHandle, listenWithHandoffRetry } from './runtime/handoff-replacement-bind';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
 import { resumeDurableDetachedTurns } from './threads/thread-ops';
@@ -1210,7 +1211,7 @@ setShutdownHooks({
   // Release the listeners so the replacement can bind, but leave established
   // connections (in-flight chat SSE responses) alone: they end when their turn
   // ends. WebSocket clients are terminated so they reconnect to the replacement.
-  closeListenersForHandoff: () => new Promise<void>((resolve) => {
+  closeListenersForHandoff: async () => {
     const terminateClients = (socketServer: any): void => {
       try {
         socketServer?.clients?.forEach((client: any) => {
@@ -1227,23 +1228,15 @@ setShutdownHooks({
     try { secureOpenAiRealtimeProxy?.close(); } catch {}
     // The draining gateway kept 127.0.0.1:9234 and the replacement's relay failed with EADDRINUSE (2026-10-07).
     void import('./user-chrome-relay').then((m) => m.stopUserChromeRelayForHandoff()).catch(() => {});
-    let settled = false;
-    const done = (): void => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    try {
-      try { (server as any).closeIdleConnections?.(); } catch {}
-      try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
-      // server.close() only stops the listener; its callback waits for every
-      // connection, which is exactly what we do not want to wait for here.
-      server.close();
-      try { secureBundle?.server.close(); } catch {}
-      server.once('close', done);
-      setTimeout(done, 1_000);
-    } catch { done(); }
-  }),
+    try { (server as any).closeIdleConnections?.(); } catch {}
+    try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
+    // server.close() stops accepting immediately but its callback waits for
+    // active SSE requests. Wait for the listening handle to be released instead.
+    await Promise.all([
+      closeListeningHandle(server),
+      ...(secureBundle ? [closeListeningHandle(secureBundle.server)] : []),
+    ]);
+  }
 });
 
 // ─── Initialize Advanced Error Response Systems ────────────────────────────────
@@ -1358,7 +1351,7 @@ async function startGatewayListeners(): Promise<void> {
     console.error('[Gateway] Pre-listen startup error:', err?.message || err);
   }
 
-  server.listen(PORT, HOST, () => {
+  const onMainListenerReady = (): void => {
     startupMark('server listen callback');
     // Pending approvals from turns that died long ago never resolve on their own.
     // Expire them at startup and hourly (unref'd so it never holds the process open).
@@ -1568,12 +1561,33 @@ async function startGatewayListeners(): Promise<void> {
       telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
     }, personaBotStartupDelayMs);
     if (typeof (personaBotStartupTimer as any).unref === 'function') (personaBotStartupTimer as any).unref();
-  });
+  };
 
-  if (secureBundle && httpsGateway) {
-    secureBundle.server.listen(httpsGateway.port, HTTPS_HOST, () => {
+  const handoffBindRetry = process.env.PROMETHEUS_HOT_RESTART === '1';
+  const bind = (target: typeof server, port: number, host: string): Promise<void> => listenWithHandoffRetry(
+    () => new Promise<void>((resolve, reject) => {
+      const onListening = (): void => { cleanup(); resolve(); };
+      const onError = (error: NodeJS.ErrnoException): void => { cleanup(); reject(error); };
+      const cleanup = (): void => {
+        target.off('listening', onListening);
+        target.off('error', onError);
+      };
+      target.once('listening', onListening);
+      target.once('error', onError);
+      try { target.listen(port, host); } catch (error) { cleanup(); reject(error); }
+    }),
+    { enabled: handoffBindRetry },
+  );
+  try {
+    await bind(server, PORT, HOST);
+    onMainListenerReady();
+    if (secureBundle && httpsGateway) {
+      await bind(secureBundle.server, httpsGateway.port, HTTPS_HOST);
       console.log(`[Gateway] HTTPS listener ready on https://${HTTPS_HOST}:${httpsGateway.port}`);
-    });
+    }
+  } catch (error) {
+    console.error('[Gateway] Listener bind failed:', (error as Error)?.message || error);
+    process.exit(1);
   }
 }
 
