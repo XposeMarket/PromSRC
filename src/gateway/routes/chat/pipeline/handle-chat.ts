@@ -51,6 +51,8 @@ import { recordSkillGardenerTurn } from '../../../brain/skill-episodes.js';
 import { recordContextReceiptOutcome } from '../../../../runtime/context-receipt';
 import type { RetrievalTrace } from '../../../../runtime/retrieval-provenance';
 import { recordLearningTurn } from '../../../learning/turn-recorder.js';
+import { enqueuePostTurnJob } from '../../../chat/post-turn-queue';
+import { isPostTaskSkillReviewEnabled, reviewCompletedMultiToolTurn } from '../../../brain/post-task-skill-review';
 import { getSkillRoutingReport } from '../../../../runtime/skill-routing-resolver.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments } from '../../../chat/attachment-context';
 import { getResourceStore, redactResourceText, type ResourceContextResult } from '../../../resources/resource-store';
@@ -1062,6 +1064,12 @@ export async function handleChatUntraced(
   };
   const turnRetrieval: RetrievalTrace[] = [];
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
+    if (!learningTurnCaptured && allToolResults.length >= 2 && isPostTaskSkillReviewEnabled()) {
+      const toolResults = [...allToolResults];
+      enqueuePostTurnJob({ sessionId, label: 'post_task_skill_review', run: () => {
+        reviewCompletedMultiToolTurn({ workspacePath, sessionId, executionMode, request: message, finalResponse, toolResults });
+      } });
+    }
     learningTurnCaptured = true;
     receiptResponse = finalResponse; receiptCompleted = true;
     recordSkillGardenerTurn({

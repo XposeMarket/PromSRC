@@ -2228,17 +2228,17 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory',
-        description: 'Durable memory. write adds a fact; update replaces one exact bullet; read reads USER/SOUL/MEMORY.md; search recalls across all past transcripts, notes, memory bullets and ideas (current chat excluded; hits labeled strong/partial/weak, NO STRONG MATCH when nothing fits); recall is the fast transcript/notes/ideas index only; ideas lists captured "we should build X" ideas. Manager/agent runtimes may only use file="memory" (their private MEMORY.md).',
+        description: 'Durable memory. write adds a fact and retains conflicting older facts as superseded; update replaces one exact bullet; delete removes one exact bullet and it is removed on the next index refresh; read reads USER/SOUL/MEMORY.md; search recalls across all past transcripts, notes, memory bullets and ideas (current chat excluded; hits labeled strong/partial/weak, NO STRONG MATCH when nothing fits); recall is the fast transcript/notes/ideas index only; ideas lists captured "we should build X" ideas. Instruction-like memory bullets are quarantined from recall. Manager/agent runtimes may only use file="memory" (their private MEMORY.md).',
         parameters: {
           type: 'object',
           required: ['action'],
           additionalProperties: false,
           properties: {
-            action: { type: 'string', enum: ['write', 'update', 'read', 'search', 'recall', 'ideas'], description: 'Memory operation to perform.' },
+            action: { type: 'string', enum: ['write', 'update', 'delete', 'read', 'search', 'recall', 'ideas'], description: 'Memory operation to perform.' },
             file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/update/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
             category: { type: 'string', description: 'For write/update: category section name, such as coding, communication_style, projects, or Personality.' },
-            previous_content: { type: 'string', description: 'For update: exact current bullet text after the leading "- ". The update fails if zero or multiple bullets in the category match.' },
-            content: { type: 'string', description: 'For write/update: the specific, concise durable fact to save. A fresh date stamp is added automatically.' },
+            previous_content: { type: 'string', description: 'For update/delete: exact current bullet text after the leading "- ". The operation fails if zero or multiple bullets in the category match.' },
+            content: { type: 'string', description: 'For write/update: the specific, concise durable fact to save. For delete: exact bullet text to remove. A fresh date stamp is added automatically for writes/updates.' },
             query: { type: 'string', description: 'For search: natural-language query or exact memory ID/key.' },
             mode: { type: 'string', enum: ['quick', 'deep', 'project', 'timeline'], description: 'For search: quick (default), deep, project, or timeline.' },
             limit: { type: 'integer', minimum: 1, maximum: 50, description: 'For search: maximum number of hits.' },

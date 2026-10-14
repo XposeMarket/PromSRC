@@ -35,6 +35,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify memory contradiction, freshness, deletion and poisoned recall
+        run: npm run test:memory-recall
+      - name: Verify replay-gated skill promotion
+        run: npm run test:skill-promotion
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
       - name: Verify scheduler misfire, leases, dedupe and script execution
