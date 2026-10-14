@@ -638,7 +638,7 @@ router.post('/api/hub/skills/review/:id/apply', (req: Request, res: Response) =>
     if (!_sm) { res.status(500).json({ success: false, error: 'skills manager not initialized' }); return; }
     const suggestion = applySkillCuratorSuggestion(getConfig().getWorkspacePath(), _sm, req.params.id);
     if (!suggestion) { res.status(404).json({ success: false, error: 'Suggestion not found' }); return; }
-    res.json({ success: true, suggestion });
+    res.status(suggestion.status === 'rejected_by_replay' ? 409 : 200).json({ success: suggestion.status === 'applied', suggestion });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || String(err) });
   }

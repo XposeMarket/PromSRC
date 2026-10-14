@@ -13,6 +13,7 @@ import {
   searchMemoryInWorker,
 } from '../../memory-index/search-worker-client';
 import { invalidateMemoryAtomSnapshot } from '../../memory-index/memory-atoms.js';
+import { deleteMemoryFact, isPoisonMemoryFact, writeMemoryFact } from '../../memory-index/memory-recall.js';
 import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
 import { getMemoryProviderStatus } from '../../memory/providers/registry';
 import { consolidateMemory, listMemoryClaims, reviewMemoryClaim } from '../../memory/consolidation/runner';
@@ -35,6 +36,7 @@ const MEMORY_TOOL_NAMES = new Set([
   'memory_browse',
   'memory_write',
   'memory_update',
+  'memory_delete',
   'memory_read',
   'memory_search',
   'memory_read_record',
@@ -240,11 +242,13 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         ? 'memory_write'
         : action === 'update'
           ? 'memory_update'
-          : action === 'read'
-            ? 'memory_read'
-            : action === 'search'
-              ? 'memory_search'
-              : '';
+          : action === 'delete'
+            ? 'memory_delete'
+            : action === 'read'
+              ? 'memory_read'
+              : action === 'search'
+                ? 'memory_search'
+                : '';
       if (!delegateName) {
         return {
           name,
@@ -383,6 +387,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         const content = String(args.content || '').trim();
         if (!category) return { name, args, result: 'memory_write: category is required', error: true };
         if (!content) return { name, args, result: 'memory_write: content is required', error: true };
+        if (/\r?\n\s*-\s+/.test(content)) return { name, args, result: 'memory_write: content must be one bullet; multiline bullet injection is not allowed', error: true };
         let memoryPath = '';
         try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
         catch (err: any) { return { name, args, result: `memory_write blocked: ${String(err?.message || err)}`, error: true }; }
@@ -390,24 +395,21 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
           fs.writeFileSync(memoryPath, `# ${filename}\n\n---\n`, 'utf-8');
         }
-        let fileContent = fs.readFileSync(memoryPath, 'utf-8');
-        const entry = `- ${content} [${new Date().toISOString().split('T')[0]}]`;
-        const section = findMemoryCategorySection(fileContent, category);
-        if (section) {
-          const needsLeadingNewline = section.end > 0 && fileContent[section.end - 1] !== '\n';
-          const prefix = needsLeadingNewline ? '\n' : '';
-          fileContent = fileContent.slice(0, section.end) + prefix + entry + '\n' + fileContent.slice(section.end);
-        } else {
-          const sectionHeader = `## ${category}`;
-          const closingComment = fileContent.lastIndexOf('\n---');
-          const insertAt = closingComment !== -1 ? closingComment : fileContent.length;
-          fileContent = fileContent.slice(0, insertAt) + '\n\n' + sectionHeader + '\n' + entry + '\n' + fileContent.slice(insertAt);
-        }
-        fs.writeFileSync(memoryPath, fileContent, 'utf-8');
+        const write = writeMemoryFact(
+          fs.readFileSync(memoryPath, 'utf-8'),
+          category,
+          content,
+          new Date().toISOString().split('T')[0],
+        );
+        fs.writeFileSync(memoryPath, write.content, 'utf-8');
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
+        // Do not leave a stale active row retrievable after a contradiction or poison write.
+        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
         const actor = getRuntimeActorContext(sessionId);
         const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
-        return { name, args, result: `Written to ${scope} ${filename} [${category}]: ${content}`, error: false };
+        const superseded = write.supersededCount ? ` Superseded ${write.supersededCount} conflicting older fact${write.supersededCount === 1 ? '' : 's'}.` : '';
+        const quarantine = write.flaggedAsUntrusted ? ' Flagged as untrusted instruction-like content; retained but excluded from recall.' : '';
+        return { name, args, result: `Written to ${scope} ${filename} [${category}]: ${content}.${superseded}${quarantine}`, error: false };
       }
 
       case 'memory_update': {
@@ -418,6 +420,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (!category) return { name, args, result: 'memory_update: category is required', error: true };
         if (!previousContent) return { name, args, result: 'memory_update: previous_content is required', error: true };
         if (!content) return { name, args, result: 'memory_update: content is required', error: true };
+        if (/\r?\n\s*-\s+/.test(content)) return { name, args, result: 'memory_update: content must be one bullet; multiline bullet injection is not allowed', error: true };
         let memoryPath = '';
         try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
         catch (err: any) { return { name, args, result: `memory_update blocked: ${String(err?.message || err)}`, error: true }; }
@@ -441,14 +444,40 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
             error: true,
           };
         }
-        lines[matches[0]] = `- ${content} [${new Date().toISOString().split('T')[0]}]`;
+        const today = new Date().toISOString().split('T')[0];
+        const poisoned = isPoisonMemoryFact(content);
+        // Preserve the previous bullet as history when it is replaced. Poisoned
+        // candidate text is quarantined and deliberately cannot supersede it.
+        if (!poisoned) lines[matches[0]] = `- ${previousContent} [${today}] [superseded ${today} by ${content}]`;
         const updatedSection = lines.join(sectionText.includes('\r\n') ? '\r\n' : '\n');
-        const updated = fileContent.slice(0, section.bodyStart) + updatedSection + fileContent.slice(section.end);
-        fs.writeFileSync(memoryPath, updated, 'utf-8');
+        const baseContent = fileContent.slice(0, section.bodyStart) + updatedSection + fileContent.slice(section.end);
+        const write = writeMemoryFact(baseContent, category, content, today);
+        fs.writeFileSync(memoryPath, write.content, 'utf-8');
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
+        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
         const actor = getRuntimeActorContext(sessionId);
         const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
-        return { name, args, result: `Updated ${scope} ${filename} [${section.heading}]: ${previousContent} -> ${content}`, error: false };
+        const quarantine = poisoned ? ' Candidate was flagged as untrusted instruction-like content and was not allowed to supersede the existing fact.' : '';
+        return { name, args, result: `Updated ${scope} ${filename} [${section.heading}]: ${previousContent} -> ${content}.${quarantine}`, error: false };
+      }
+
+
+      case 'memory_delete': {
+        const { filename } = resolveMemoryFile(args.file);
+        const category = normalizeMemoryCategory(args.category);
+        const content = String(args.content || args.previous_content || '').trim();
+        if (!category) return { name, args, result: 'memory_delete: category is required', error: true };
+        if (!content) return { name, args, result: 'memory_delete: content is required', error: true };
+        let memoryPath = '';
+        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
+        catch (err: any) { return { name, args, result: `memory_delete blocked: ${String(err?.message || err)}`, error: true }; }
+        if (!fs.existsSync(memoryPath)) return { name, args, result: `memory_delete: ${filename} not found at ${memoryPath}`, error: true };
+        const deleted = deleteMemoryFact(fs.readFileSync(memoryPath, 'utf-8'), category, content);
+        if (!deleted.deleted) return { name, args, result: `memory_delete: expected exactly one exact bullet match in ${filename} [${category}]`, error: true };
+        fs.writeFileSync(memoryPath, deleted.content, 'utf-8');
+        if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
+        await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
+        return { name, args, result: `Deleted from ${filename} [${category}]: ${content}. Removed from the refreshed retrieval index.`, error: false };
       }
 
       case 'memory_read': {

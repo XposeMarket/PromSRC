@@ -6,6 +6,8 @@ import { rankSkillMatches, type SkillChangeLedgerEntry, type SkillsManager } fro
 import { MAX_SKILL_TRIGGERS, validateSkillTriggers, validateSkillPromptSignals } from './skill-package';
 import { scanSkillText, type SkillSafetyScan } from './skill-safety';
 import { getSkillRoutingEvidence } from '../learning/turn-recorder';
+import { replaySkillPromotion, type SkillReplayReport } from './skill-promotion';
+import { resolveRoutingOriginal } from './routing-original';
 
 export interface RoutingOriginal { request: string; contextHash: string; context?: string }
 export type RoutingOriginalResolver = (sessionId: string, requestHash: string) => RoutingOriginal | null;
@@ -163,7 +165,7 @@ export function buildUnreviewedRoutingSuggestions(workspacePath: string): SkillC
 
 
 export type SkillCuratorMode = 'dry-run' | 'pending' | 'auto-safe';
-export type SkillCuratorSuggestionStatus = 'pending' | 'applied' | 'rejected' | 'quarantined' | 'expired' | 'suppressed';
+export type SkillCuratorSuggestionStatus = 'pending' | 'applied' | 'rejected' | 'rejected_by_replay' | 'quarantined' | 'expired' | 'suppressed';
 export type SkillCuratorLessonType =
   | 'recovery'
   | 'style_pattern'
@@ -205,6 +207,7 @@ export interface SkillCuratorSuggestion {
   expiresAt?: string;
   suppressedUntil?: string;
   duplicateOf?: string;
+  replayEvaluation?: SkillReplayReport;
   triggerEvaluation?: {
     passed: boolean;
     positive: Array<{ prompt: string; passed: boolean; topSkill?: string; confidence?: string }>;
@@ -903,6 +906,7 @@ export function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: S
   const priority: Record<SkillCuratorSuggestionStatus, number> = {
     applied: 6,
     rejected: 5,
+    rejected_by_replay: 5,
     pending: 4,
     quarantined: 3,
     suppressed: 2,
@@ -932,9 +936,9 @@ export function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: S
     });
   }
 
-  const rejectionRecords = existing.map(enrich).filter((item) => item.status === 'rejected' || item.status === 'suppressed');
+  const rejectionRecords = existing.map(enrich).filter((item) => item.status === 'rejected' || item.status === 'rejected_by_replay' || item.status === 'suppressed');
   for (const raw of incoming.map(enrich)) {
-    const rejected = rejectionRecords.find((item) => (item.status === 'rejected' || item.status === 'suppressed')
+    const rejected = rejectionRecords.find((item) => (item.status === 'rejected' || item.status === 'rejected_by_replay' || item.status === 'suppressed')
       && Date.parse(String(item.suppressedUntil || '')) > now
       && ((item.rejectedFingerprint || curatorContentFingerprint(item)) === curatorContentFingerprint(raw)));
     if (rejected) continue;
@@ -944,7 +948,7 @@ export function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: S
       bySemantic.set(key, raw);
       continue;
     }
-    const suppressionActive = (old.status === 'rejected' || old.status === 'suppressed')
+    const suppressionActive = (old.status === 'rejected' || old.status === 'rejected_by_replay' || old.status === 'suppressed')
       && Date.parse(String(old.suppressedUntil || '')) > now
       && (old.rejectedFingerprint || curatorContentFingerprint(old)) === curatorContentFingerprint(raw);
     if (old.status === 'applied' || suppressionActive) continue;
@@ -996,7 +1000,7 @@ export function getSkillCuratorStatus(workspacePath: string, options: {
   limit?: number; cursor?: number; statusFilter?: string; skillId?: string; includeContent?: boolean;
 } = {}): Record<string, unknown> {
   const all = listSkillCuratorSuggestions(workspacePath);
-  const counts = Object.fromEntries(['pending', 'applied', 'rejected', 'quarantined', 'expired', 'suppressed']
+  const counts = Object.fromEntries(['pending', 'applied', 'rejected', 'rejected_by_replay', 'quarantined', 'expired', 'suppressed']
     .map((status) => [status, all.filter((item) => item.status === status).length]));
   const statusFilter = String(options.statusFilter || '').trim().toLowerCase();
   const skillId = String(options.skillId || '').trim().toLowerCase();
@@ -1015,7 +1019,7 @@ export function getSkillCuratorStatus(workspacePath: string, options: {
     totalCount: all.length,
     pendingCount: counts.pending || 0,
     appliedCount: counts.applied || 0,
-    rejectedCount: counts.rejected || 0,
+    rejectedCount: (counts.rejected || 0) + (counts.rejected_by_replay || 0),
     quarantinedCount: counts.quarantined || 0,
     expiredCount: counts.expired || 0,
     suppressedCount: counts.suppressed || 0,
@@ -1173,7 +1177,7 @@ export function rejectSkillCuratorSuggestion(workspacePath: string, id: string):
 export function restoreSkillCuratorSuggestion(workspacePath: string, id: string): SkillCuratorSuggestion | null {
   const rows = listSkillCuratorSuggestions(workspacePath);
   const item = rows.find((row) => row.id === id);
-  if (!item || !['rejected', 'suppressed', 'expired'].includes(item.status)) return null;
+  if (!item || !['rejected', 'rejected_by_replay', 'suppressed', 'expired'].includes(item.status)) return null;
   item.status = 'pending';
   item.updatedAt = new Date().toISOString();
   item.expiresAt = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
@@ -1212,6 +1216,11 @@ export function rollbackRoutingSuggestion(workspacePath: string, skillsManager: 
 }
 
 export function applySkillCuratorSuggestion(workspacePath: string, skillsManager: SkillsManager, id: string): SkillCuratorSuggestion | null {
+  return promoteSkillCandidate(workspacePath, skillsManager, id);
+}
+
+/** The sole curator promotion path, shared by tools, HTTP and Brain. */
+export function promoteSkillCandidate(workspacePath: string, skillsManager: SkillsManager, id: string, resolveOriginal: RoutingOriginalResolver = resolveRoutingOriginal): SkillCuratorSuggestion | null {
   const rows = listSkillCuratorSuggestions(workspacePath);
   const idx = rows.findIndex((row) => row.id === id);
   if (idx < 0) return null;
@@ -1221,6 +1230,19 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
   if (suggestion.semanticKey?.startsWith('routing-tested:')) {
     const current = skillsManager.get(suggestion.skillId);
     if (JSON.stringify(current?.triggers) !== JSON.stringify(suggestion.previousManifest?.triggers) || JSON.stringify(current?.promptSignals) !== JSON.stringify(suggestion.previousManifest?.promptSignals)) throw new Error('Skill changed since proposal; re-review before applying');
+  }
+  if (suggestion.change.kind !== 'review_only') {
+    const replay = replaySkillPromotion(workspacePath, skillsManager, suggestion, resolveOriginal);
+    suggestion.replayEvaluation = replay;
+    // Persist the gate decision BEFORE any mutation, including failures.
+    ensureCuratorDirs(workspacePath);
+    fs.appendFileSync(path.join(curatorDir(workspacePath), 'promotion-ledger.jsonl'), JSON.stringify({ candidateId: id, skillId: suggestion.skillId, timestamp: replay.checkedAt, decision: replay.passed ? 'authorized_by_replay' : 'rejected_by_replay', replay }) + '\n', 'utf8');
+    if (!replay.passed) {
+      rows[idx] = { ...suggestion, status: 'rejected_by_replay', updatedAt: replay.checkedAt, rejectedAt: replay.checkedAt, suppressedUntil: new Date(Date.parse(replay.checkedAt) + 90 * 86400000).toISOString(), rejectedFingerprint: curatorContentFingerprint(suggestion), evidence: [...suggestion.evidence, ...replay.errors] };
+      writeJsonArray(suggestionsPath(workspacePath), rows);
+      return rows[idx];
+    }
+    writeJsonArray(suggestionsPath(workspacePath), rows);
   }
   if (suggestion.change.kind === 'write_resource') {
     const resourcePath = suggestion.change.path || '';
@@ -1258,6 +1280,7 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
   }
   rows[idx] = { ...suggestion, status: 'applied', updatedAt: new Date().toISOString(), appliedAt: new Date().toISOString() };
   writeJsonArray(suggestionsPath(workspacePath), rows);
+  if (suggestion.change.kind !== 'review_only') fs.appendFileSync(path.join(curatorDir(workspacePath), 'promotion-ledger.jsonl'), JSON.stringify({ candidateId: id, skillId: suggestion.skillId, timestamp: rows[idx].appliedAt, decision: 'applied', replayCheckedAt: suggestion.replayEvaluation?.checkedAt }) + '\n', 'utf8');
   return rows[idx];
 }
 
@@ -1343,8 +1366,8 @@ export function runSkillCurator(params: {
     for (const suggestion of persisted) {
       if (!canAutoApplySuggestion(suggestion)) continue;
       try {
-        applySkillCuratorSuggestion(params.workspacePath, params.skillsManager, suggestion.id);
-        applied.push(suggestion.id);
+        const promoted = applySkillCuratorSuggestion(params.workspacePath, params.skillsManager, suggestion.id);
+        if (promoted?.status === 'applied') applied.push(suggestion.id);
       } catch {}
     }
   }

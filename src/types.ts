@@ -422,6 +422,14 @@ export interface PrometheusConfig {
       verifier: string;
     };
   };
+  /** Explicit opt-in for Brain-owned background learning features. */
+  brain?: {
+    enabled?: boolean;
+    skillLearning?: {
+      /** Review completed multi-tool turns after response delivery. Default: false. */
+      autoReview?: boolean;
+    };
+  };
   image_generation?: {
     provider?: string;
     model?: string;

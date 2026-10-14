@@ -18,6 +18,8 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:memory-recall": "tsx src/gateway/memory-recall.regression.ts",
+    "test:skill-promotion": "tsx src/gateway/skills-runtime/skill-promotion.regression.ts && tsx src/gateway/brain/post-task-skill-review.regression.ts",
     "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
     "test:gateway-auth-proxy": "tsx src/gateway/gateway-auth-proxy.regression.ts",
     "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
