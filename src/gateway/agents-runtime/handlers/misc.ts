@@ -1780,7 +1780,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
             undefined,
             args.notes ? String(args.notes) : undefined,
           );
-          return { name, args, result: `Shortcut saved: ${shortcutHostname} â€” "${shortcutKey}" â†’ ${shortcutAction}`, error: false };
+          return { name, args, result: `Shortcut saved: ${shortcutHostname} - "${shortcutKey}" -> ${shortcutAction}`, error: false };
         } catch (err: any) {
           return { name, args, result: `save_site_shortcut failed: ${err.message}`, error: true };
         }

@@ -7362,7 +7362,7 @@ function assistantWorkStartedAt(msg) {
 }
 
 function renderAssistantWorkTimer(msg, { active = false, startedAt = 0 } = {}) {
-  if (msg?.suppressWorkTimer === true) return '';
+  if (msg?.suppressWorkTimer === true || ['goal_restart_notice', 'goal_continuation_notice'].includes(msg?.messageKind)) return '';
   const start = Number(startedAt || assistantWorkStartedAt(msg) || 0);
   if (!start) return '';
   const endedAt = Number(msg?.workEndedAt || 0);
@@ -14558,7 +14558,7 @@ function renderGoalContinuationMessage(msg) {
   const content = String(msg?.content || '').trim();
   const isRestart = String(msg?.messageKind || '') === 'goal_restart_notice'
     || /Restart recovery checkpoint:|Interrupted by (?:prom_apply_dev_changes|gateway_restart|build_deploy)/i.test(content);
-  const label = isRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.';
+  const label = isRestart ? 'Gateway restarted. Goal continuing.' : 'Goal continuing.';
   return `<div class="msg-content">
     <strong>${escHtml(label)}</strong>
   </div>`;
@@ -44192,7 +44192,7 @@ async function canvasPresentFileLegacy(diskPath, label) {
   try {
     const r = await fetch(`/api/canvas/file?path=${encodeURIComponent(diskPath)}`);
     const d = await r.json();
-    if (!d.success) { addProcessEntry('error', `Canvas: could not load ${diskPath} â€” ${d.error}`); return; }
+    if (!d.success) { addProcessEntry('error', `Canvas: could not load ${diskPath}. ${d.error}`); return; }
     const id = 'ctab_' + Math.random().toString(36).slice(2);
     const ext = name.split('.').pop().toLowerCase();
     if (d.isImage) {
@@ -44233,7 +44233,7 @@ async function canvasPresentFileLegacy(diskPath, label) {
     if (tree && canvasWorkspaceTree.length) tree.innerHTML = canvasRenderWorkspaceTree(canvasWorkspaceTree, 0);
     persistActiveChat();
   } catch (e) {
-    addProcessEntry('error', `Canvas: fetch error â€” ${e.message}`);
+    addProcessEntry('error', `Canvas: fetch error. ${e.message}`);
   }
 }
 

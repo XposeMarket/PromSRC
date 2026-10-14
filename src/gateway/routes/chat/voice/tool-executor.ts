@@ -537,6 +537,7 @@ export async function executeVoiceAgentTool(sessionId: string, name: string, arg
           instruction,
           dueAt,
           label: String(args.label || '').trim() || undefined,
+          fromGoalTurn: true,
           origin: { channel: 'voice', voiceMode: true },
           delivery: {
             origin: delivery.origin !== false,

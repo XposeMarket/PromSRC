@@ -201,6 +201,7 @@ export async function handleSchedulingTool(ctx: handleSchedulingToolContext): Pr
 	          const timer = createMainChatTimer({
 	            sessionId,
 	            instruction,
+	            fromGoalTurn: true,
 	            dueAt,
 	            label: String(args.label || '').trim() || undefined,
 	          });

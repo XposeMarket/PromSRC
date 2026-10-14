@@ -389,6 +389,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           const timer = createMainChatTimer({
             sessionId: timerOwnerSession || sessionId,
             instruction,
+            fromGoalTurn: true,
             dueAt,
             label: String(args.label || '').trim() || undefined,
           });

@@ -400,7 +400,7 @@ export async function runInteractiveTurn(
     if (!restartNoticeAlreadyStored) {
       addMessage(sessionId, {
         role: 'assistant',
-        content: 'Gateway restarted â€” goal continuing.',
+        content: 'Gateway restarted. Goal continuing.',
         timestamp: Date.now(),
         messageKind: 'goal_restart_notice',
         activeRunKind: 'main_chat_goal',

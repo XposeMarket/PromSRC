@@ -1,12 +1,13 @@
 /**
  * session.ts - Simple session state for Prometheus v2
- * 
+ *
  * Conversation history plus bounded runtime continuity metadata. Durable
  * working-context packets are safe handoffs, not raw model thinking or a
  * replacement for transcript/tool-observation audit data.
  */
 
 import fs from 'fs';
+import { cancelMainChatGoalTimers } from './timers/timer-store';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
@@ -2334,13 +2335,23 @@ export function recordSessionCompaction(
   saveSession(sessionId);
 }
 
+function cancelEndedGoalTimers(sessionId: string, previous: MainChatGoalState | null | undefined, next: MainChatGoalState | null): void {
+  if (!previous) return;
+  if (!next || next.id !== previous.id || ['done', 'cleared', 'failed'].includes(next.status) || next.userStoppedAt) {
+    const reason = !next || next.id !== previous.id ? 'goal cleared' : next.status === 'done' ? 'goal completed' : next.userStoppedAt ? 'goal stopped' : `goal ${next.status}`;
+    cancelMainChatGoalTimers(sessionId, previous.id, reason);
+  }
+}
+
 export function getMainChatGoal(sessionId: string): MainChatGoalState | null {
   return getSession(sessionId).mainChatGoal || null;
 }
 
 export function setMainChatGoal(sessionId: string, goal: MainChatGoalState | null): MainChatGoalState | null {
   const session = getSession(sessionId);
+  const previous = session.mainChatGoal;
   session.mainChatGoal = goal ? normalizeMainChatGoal({ ...goal, sessionId }, sessionId) : null;
+  cancelEndedGoalTimers(sessionId, previous, session.mainChatGoal);
   session.lastActiveAt = Date.now();
   saveSession(sessionId);
   appendContinuityEvent(sessionId, 'goal_state', {
@@ -2359,8 +2370,10 @@ export function updateMainChatGoal(
   updater: (goal: MainChatGoalState | null, session: Session) => MainChatGoalState | null,
 ): MainChatGoalState | null {
   const session = getSession(sessionId);
+  const previous = session.mainChatGoal ? { ...session.mainChatGoal } : null;
   const next = updater(session.mainChatGoal || null, session);
   session.mainChatGoal = next ? normalizeMainChatGoal({ ...next, sessionId }, sessionId) : null;
+  cancelEndedGoalTimers(sessionId, previous, session.mainChatGoal);
   session.lastActiveAt = Date.now();
   saveSession(sessionId);
   appendContinuityEvent(sessionId, 'goal_state', {
@@ -2691,12 +2704,12 @@ export function getSession(id: string): Session {
 
 export function getSessionsByChannel(channel: Session['channel']): Session[] {
   const result: Session[] = [];
-  
+
   // Get all sessions from disk
   if (!fs.existsSync(SESSION_DIR)) {
     return result;
   }
-  
+
   const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json') && f !== '_index.json');
   for (const file of files) {
     const sessionId = file.slice(0, -5); // remove .json
@@ -2710,7 +2723,7 @@ export function getSessionsByChannel(channel: Session['channel']): Session[] {
       // Skip corrupted sessions
     }
   }
-  
+
   return result;
 }
 

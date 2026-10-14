@@ -3,7 +3,6 @@ import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import { getMainChatGoal } from '../session';
-import { listLiveRuntimes } from '../live-runtime-registry';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -98,14 +97,13 @@ export function createMainChatTimer(input: {
   instruction: string;
   dueAt: Date;
   label?: string;
+  fromGoalTurn?: boolean;
   origin?: Record<string, any>;
   delivery?: Record<string, any>;
 }): MainChatTimer {
   const instruction = String(input.instruction || '').trim();
   const goal = getMainChatGoal(input.sessionId);
-  const goalRuntime = listLiveRuntimes().some(runtime => runtime.kind === 'main_chat_goal'
-    && runtime.sessionId === input.sessionId && runtime.status === 'running');
-  const origin = goalRuntime && goal?.status === 'active'
+  const origin = input.fromGoalTurn === true && goal?.status === 'active' && !goal.userStoppedAt
     ? { ...input.origin, goalId: goal.id } : input.origin;
   const sessionId = String(input.sessionId || '').trim();
   if (!sessionId) throw new Error('sessionId is required');
@@ -174,14 +172,16 @@ export function cancelMainChatTimer(id: string): MainChatTimer | null {
 }
 
 /** Cancel only timers with explicit goal ownership, never ordinary reminders. */
-export function cancelMainChatGoalTimers(sessionId: string, goalId: string): void {
+export function cancelMainChatGoalTimers(sessionId: string, goalId: string, reason = 'goal stopped'): void {
   const store = loadStore();
   let changed = false;
   for (const timer of store.timers) {
     if (timer.sessionId !== sessionId || timer.origin?.goalId !== goalId
       || !['pending', 'due_waiting', 'running'].includes(timer.status)) continue;
     timer.status = 'cancelled';
-    timer.updatedAt = new Date().toISOString();
+    timer.error = reason;
+    timer.completedAt = new Date().toISOString();
+    timer.updatedAt = timer.completedAt;
     changed = true;
   }
   if (changed) saveStore(store);
