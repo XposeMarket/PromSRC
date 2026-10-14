@@ -19,7 +19,7 @@ try {
   const started = handleMainChatGoalCommand(sessionId, '/goal Verify the pending changes');
   assert.equal(started.goal?.status, 'active');
   const runtimeId = registerLiveRuntime({ kind: 'main_chat_goal', sessionId, label: 'Regression goal', abortSignal: { aborted: false } });
-  const continuation = createMainChatTimer({ sessionId, instruction: 'Verify the pending changes', dueAt: new Date(0) });
+  const continuation = createMainChatTimer({ sessionId, instruction: 'Verify the pending changes', fromGoalTurn: true, dueAt: new Date(0) });
   assert.equal(continuation.origin?.goalId, started.goal!.id, 'Goal runtime timers must get durable ownership automatically');
   finishLiveRuntime(runtimeId);
   const reminder = createMainChatTimer({ sessionId, instruction: 'Drink water', dueAt: new Date(0) });

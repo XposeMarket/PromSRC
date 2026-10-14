@@ -1820,7 +1820,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     && /Restart recovery checkpoint:|Interrupted by (?:prom_apply_dev_changes|gateway_restart|build_deploy)/i.test(storedContent);
   const role = isLegacyGoalRuntimePrompt ? 'ai' : _serverRoleToMobileRole(m?.role);
   const rawContent = isLegacyGoalRuntimePrompt
-    ? (legacyGoalRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.')
+    ? (legacyGoalRestart ? 'Gateway restarted. Goal continuing.' : 'Goal continuing.')
     : storedContent;
   const content = role === 'user'
     ? _stripMobileInternalUploadContext(rawContent)
@@ -3565,7 +3565,7 @@ function _mobileTraceHasToolGroup(entries) {
 
 function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
-  if (msg?.suppressWorkTimer === true) return '';
+  if (msg?.suppressWorkTimer === true || ['goal_restart_notice', 'goal_continuation_notice'].includes(msg?.messageKind)) return '';
   // delivery_send creates an intermediate durable bubble during an existing
   // run. Its timestamp is a delivery time, not a model-work start.
   if (String(msg?.messageKind || '').trim() === 'delivery'
