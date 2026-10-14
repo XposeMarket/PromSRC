@@ -70,3 +70,41 @@ assert.equal(isRealAssistantReply({ role: 'assistant', content: 'x', messageKind
 assert.equal(isRealAssistantReply({ role: 'assistant', content: 'Done.' }), true);
 
 console.log('PASS restart replay guard: answered/superseded interrupted turns are not replayed');
+
+// 7. mobile_mv756r24_ubnpah 2026-10-14 12:31Z: a gateway-stopped checkpoint
+// ("This turn was stopped by the gateway ... Stopped before any tool calls
+// completed") was tagged with the request id and counted as the answer, so
+// RuntimeRecovery skipped the real continuation as `already_answered`.
+{
+  const deployRid = 'mobile_mv756r24_ubnpah_deploy';
+  const deployStart = Date.parse('2026-10-14T12:20:00.000Z');
+  const deployInterrupted = Date.parse('2026-10-14T12:31:20.000Z');
+  const deployRuntime = { clientRequestId: deployRid, startedAt: deployStart, interruptedAt: deployInterrupted };
+  const flagged = {
+    role: 'assistant',
+    content: '**This turn was stopped by the gateway, not by you.** Gateway restart interrupted the active turn (gateway_restart)\n\nStopped before any tool calls completed.',
+    timestamp: Date.parse('2026-10-14T12:31:25.723Z'),
+    _clientRequestId: deployRid,
+    interruptionCheckpoint: true,
+  };
+  assert.equal(isRealAssistantReply(flagged as any), false, 'flagged system-stop checkpoint is not an answer');
+  // Legacy rows persisted before the flag existed are caught by their prefix.
+  const legacy = { ...flagged } as any;
+  delete legacy.interruptionCheckpoint;
+  assert.equal(isRealAssistantReply(legacy), false, 'legacy system-stop checkpoint is not an answer');
+  const deployHistory = [
+    { role: 'user', content: 'merge both and deploy', timestamp: deployStart, _clientRequestId: deployRid },
+    flagged,
+  ];
+  assert.deepEqual(evaluateRestartReplay(deployRuntime, deployHistory as any), { replay: true }, 'continuation must replay');
+  assert.deepEqual(evaluateRestartReplay(deployRuntime, [deployHistory[0], legacy] as any), { replay: true });
+  // A real deployed summary written later still counts.
+  const answered = evaluateRestartReplay(deployRuntime, [
+    ...deployHistory,
+    { role: 'assistant', content: 'Deployed e15305550, health 200.', timestamp: deployInterrupted + 120_000, _clientRequestId: deployRid },
+  ] as any);
+  assert.equal(answered.replay, false);
+  assert.equal((answered as any).reason, 'already_answered');
+}
+
+console.log('restart-replay-guard: system-stop checkpoint cases passed');

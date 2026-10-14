@@ -893,7 +893,11 @@ export async function runInteractiveTurn(
       : (currentRequest || priorRequest || 'the interrupted turn');
     const stepSummary = result.toolResults && result.toolResults.length > 0
       ? `Stopped after ${result.toolResults.length} step${result.toolResults.length !== 1 ? 's' : ''}.`
-      : 'Stopped before any tool calls completed.';
+      : isSyntheticRestartRecovery
+        // A resumed segment only sees its own tool results. Saying "before any
+        // tool calls" hid the earlier segments' finished work (merge/build/deploy).
+        ? 'Stopped before this resumed segment completed a new tool call; work from earlier segments is preserved.'
+        : 'Stopped before any tool calls completed.';
     const checkpointPacket = [
       '[Interrupted by user]',
       `In the middle of: ${workSummary}`,
@@ -933,6 +937,10 @@ export async function runInteractiveTurn(
       ...chatSteerContinuationIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
+      // System-stopped checkpoints are bookkeeping, not the turn's answer. The
+      // restart replay guard must not read this row as `already_answered`, or
+      // the recovered continuation (the real reply) is skipped.
+      ...(userCancelled ? {} : { interruptionCheckpoint: true }),
       content: visibleCheckpointText,
       timestamp: Date.now(),
       workStartedAt: turnWorkStartedAt,

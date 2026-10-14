@@ -347,6 +347,49 @@ export function findLiveSteerContinuation(thread, clientRequestId = '', { create
   return null;
 }
 
+function isEmptyLiveRow(row) {
+  if (!row || row.role !== 'ai') return false;
+  if (row._pmFinalReceived === true || row._pmServerAuthoredFinal === true || row._pmAbortAcknowledged === true) return false;
+  if (row.questionRequest || row.errorPresentation) return false;
+  if (String(row.workflowPart || '') === 'before_interruption') return false;
+  if (rowText(row)) return false;
+  return !(Array.isArray(row.liveTraceEntries) && row.liveTraceEntries.length);
+}
+
+/**
+ * Reuse the trailing empty live row of the current request instead of
+ * allocating a new one. Each reconnect during a gateway restart froze the
+ * previous placeholder (no request id, streaming=false) and pushed another,
+ * stacking empty "Working for 3s / 7s / 10s" bubbles (IMG_0509/0510). Keeps
+ * the oldest empty row (truthful work timer), revives it, stamps the request
+ * id so request lookups find it next time, and removes the other empty rows.
+ * Never crosses the last real user message, so answered turns are untouched.
+ */
+export function reuseEmptyLiveRow(thread, clientRequestId = '') {
+  if (!Array.isArray(thread)) return null;
+  const cid = String(clientRequestId || '').trim();
+  const empties = [];
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const row = thread[i];
+    if (row?.role === 'user' && !isChatSteerUser(row)) break;
+    if (!isEmptyLiveRow(row)) continue;
+    const own = String(row._clientRequestId || '').trim();
+    if (cid && own && own !== cid) continue;
+    empties.push(row);
+  }
+  if (!empties.length) return null;
+  const keep = empties[empties.length - 1];
+  for (const extra of empties.slice(0, -1)) {
+    const index = thread.indexOf(extra);
+    if (index >= 0) thread.splice(index, 1);
+  }
+  if (cid && !String(keep._clientRequestId || '').trim()) keep._clientRequestId = cid;
+  keep.streaming = true;
+  delete keep.workEndedAt;
+  delete keep.workDurationMs;
+  return keep;
+}
+
 /** Drop empty duplicate live rows of the current request that are not `keep`. */
 export function dropOrphanLiveRows(thread, keep) {
   if (!Array.isArray(thread) || String(keep?.workflowPart || '') !== 'interruption_response') return 0;

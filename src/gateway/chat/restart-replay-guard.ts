@@ -44,6 +44,10 @@ const MARKER_PREFIXES = [
   '[Hot restart checkpoint',
   '[Internal tool observation omitted.]',
   'Gateway restarted',
+  // Visible system-stop checkpoint written by interactive-turn on a gateway
+  // abort. Rows persisted before the `interruptionCheckpoint` flag existed
+  // are only recognisable by this prefix.
+  '**This turn was stopped by the gateway',
 ];
 
 function textOf(message: ReplayGuardMessage): string {
@@ -55,6 +59,7 @@ export function isRealAssistantReply(message: ReplayGuardMessage): boolean {
   if (message?.role !== 'assistant') return false;
   const text = textOf(message);
   if (!text) return false;
+  if ((message as any)?.interruptionCheckpoint === true) return false;
   if (MARKER_PREFIXES.some((prefix) => text.startsWith(prefix))) return false;
   const kind = String(message.messageKind || '').trim();
   if (kind && (kind.startsWith('restart') || kind.startsWith('goal_'))) return false;
