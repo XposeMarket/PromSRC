@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 
 const TTL_MS = 4_000;
 const STALE_MAX_MS = 60_000;
@@ -29,6 +30,8 @@ const cache = new Map<string, Entry>();
 const refreshing = new Map<string, Promise<void>>();
 // Bumped on invalidation so a refresh that started before a git write cannot
 // repopulate the cache with pre-write output.
+
+
 let generation = 0;
 
 function norm(root: string): string {
@@ -272,8 +275,10 @@ export function runGitReadAsync(
   opts: { timeout: number; maxBuffer?: number; mode: 'trim' | 'raw' },
 ): Promise<string> {
   return new Promise((resolve) => {
-    execFile('git', args, {
+    const invocation = lockFreeGitReadOptions(args);
+    execFile('git', invocation.args, {
       cwd: root,
+      env: invocation.env,
       encoding: 'utf8',
       windowsHide: true,
       timeout: opts.timeout,

@@ -9,8 +9,9 @@ import {
   runCompactionTransaction,
   selectCompactionBatch,
 } from './compaction-safety';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
-const routerSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
+const routerSource = readChatRouterSource();
 assert.match(routerSource, /const shouldCompact = projectedTokens >= budget\.compactionTriggerTokens;/, 'tool-log growth alone must not compact the whole transcript');
 assert.match(routerSource, /No fixed word or character cap/, 'legacy word guidance must not be a validation ceiling');
 assert.match(routerSource, /abortSignal: input\.abortSignal\?\.signal/, 'provider request must honor cancellation');

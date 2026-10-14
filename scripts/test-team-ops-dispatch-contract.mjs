@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { readExecutorSource } from './lib/executor-source.mjs';
 
-const wrapperPath = new URL('../src/gateway/agents-runtime/subagent-executor.ts', import.meta.url);
-const wrapper = fs.readFileSync(wrapperPath, 'utf8');
+const wrapper = readExecutorSource(process.cwd());
 const teamExecutor = fs.readFileSync(new URL('../src/gateway/agents-runtime/capabilities/team-agent-executor.ts', import.meta.url), 'utf8');
 
 const wrapperStart = wrapper.indexOf('team_ops_wrapper:');

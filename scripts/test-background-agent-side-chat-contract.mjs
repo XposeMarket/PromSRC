@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { backgroundAgentText } from '../web-ui/src/features/chat/core/background-agent-work.js';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 const desktop = read('web-ui/src/pages/ChatPage.js');
@@ -13,7 +14,7 @@ const desktopWork = read('web-ui/src/features/chat/core/desktop-background-agent
 const performanceRuntime = read('web-ui/src/features/chat/runtime/chat-performance-runtime.js');
 const api = read('web-ui/src/mobile/mobile-api.js');
 const mobileStyles = read('web-ui/src/styles/mobile.css');
-const router = read('src/gateway/routes/chat.router.ts');
+const router = readChatRouterSource();
 const taskRunner = read('src/gateway/tasks/task-runner.ts');
 const startup = read('src/gateway/core/startup.ts');
 

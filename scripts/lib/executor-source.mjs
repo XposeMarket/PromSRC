@@ -7,6 +7,11 @@ import path from 'node:path';
 export function readExecutorSource(root) {
   const runtime = path.join(root, 'src', 'gateway', 'agents-runtime');
   const parts = [fs.readFileSync(path.join(runtime, 'subagent-executor.ts'), 'utf8')];
+  // Pure-move helpers and wrapper normalizers remain part of source contracts.
+  for (const file of ['workspace-helpers.ts', 'wrapper-normalizers.ts', 'executor-helpers.ts']) {
+    const helper = path.join(runtime, file);
+    if (fs.existsSync(helper)) parts.push(fs.readFileSync(helper, 'utf8'));
+  }
   const handlers = path.join(runtime, 'handlers');
   if (fs.existsSync(handlers)) {
     for (const file of fs.readdirSync(handlers).sort()) {

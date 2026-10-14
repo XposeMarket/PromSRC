@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readExecutorSource } from './lib/executor-source.mjs';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve('.');
 const tools = await import(pathToFileURL(path.join(root, 'dist/gateway/tools/defs/agent-team-schedule.js')).href);
@@ -138,7 +140,7 @@ assert.match(automationExecutorSource, /providerOverride:\s*args\.provider\s*\?\
 assert.match(automationExecutorSource, /reasoningEffort:\s*args\.reasoning_effort\s*\?\s*String\(args\.reasoning_effort\)\s*:\s*undefined/);
 assert.doesNotMatch(automationExecutorSource.match(/case 'background_spawn':[\s\S]*?case 'background_status'/)?.[0] || '', /set_agent_model|agent_model_defaults\s*=/);
 
-const executorSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
+const executorSource = readExecutorSource(root);
 assert.match(executorSource, /summarizeAgentRunCompact/);
 assert.match(executorSource, /args\?\.include_history === true/);
 assert.match(executorSource, /messages: args\?\.include_history === true/);
@@ -165,7 +167,7 @@ const tasksRouteSource = fs.readFileSync(path.join(root, 'src/gateway/routes/tas
 assert.match(tasksRouteSource, /router\.post\('\/api\/bg-tasks\/:id\/restart'/);
 assert.match(tasksRouteSource, /isImmutableCompletedAgentTask\(task\)/);
 
-const chatRouterSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatRouterSource = readChatRouterSource();
 assert.match(chatRouterSource, /const durableTaskId =/);
 assert.match(chatRouterSource, /sessionId\.startsWith\('task_'\) \|\| hasDurableTaskPlan/);
 assert.match(chatRouterSource, /durableTaskId \|\| sessionId\.replace/);

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => readFileSync(path.join(root, relativePath), 'utf8');
@@ -10,7 +11,7 @@ const require = createRequire(import.meta.url);
 
 const bridge = read('src/gateway/realtime/codex-app-server-bridge.ts');
 const router = read('src/gateway/routes/realtime.router.ts');
-const chatRouter = read('src/gateway/routes/chat.router.ts');
+const chatRouter = readChatRouterSource();
 const supervisionController = read('src/gateway/threads/thread-supervision-controller.ts');
 const chatPage = read('web-ui/src/pages/ChatPage.js');
 const generatedChatPage = read('generated/public-web-ui/static/pages/ChatPage.js');

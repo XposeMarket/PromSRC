@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const pressureModel = read('src/gateway/context/context-window-pressure.ts');
 const pressureRouter = read('src/gateway/routes/context-window-pressure.router.ts');
-const chatRouter = read('src/gateway/routes/chat.router.ts');
+const chatRouter = readChatRouterSource();
 const processesRouter = read('src/gateway/routes/processes.router.ts');
 const performance = read('web-ui/src/performance.js');
 const generatedPerformance = read('generated/public-web-ui/static/performance.js');

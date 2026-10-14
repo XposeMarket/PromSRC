@@ -18,6 +18,8 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
+    "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
     "test:needs-you-hotpath": "node scripts/test-needs-you-hotpath.mjs",
     "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
@@ -60,6 +62,10 @@
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
     "test:giant-split-parity": "tsx src/testing/replay/giant-split-parity.regression.ts",
+    "test:restart-replay-guard": "tsx src/gateway/chat/restart-replay-guard.regression.ts",
+    "test:stall-profiler": "tsx src/gateway/runtime/stall-profiler.regression.ts",
+    "check:file-budgets": "node scripts/check-file-budgets.mjs --self-test && node scripts/check-file-budgets.mjs",
+    "test:git-index-lock-timeout": "tsx src/gateway/coding/git-index-lock-timeout.regression.ts",
     "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs --online-install",
     "test:small-context-fit": "tsx src/gateway/tools/small-context-fit.regression.ts",
     "test:evals-selftest": "npm run build:backend && node evals/run-evals.mjs --model scripted:oracle --timeout-ms 60000 --out .tmp/evals-selftest",
@@ -113,6 +119,7 @@
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:background-spawn-tool-surface": "tsx src/gateway/tasks/background-spawn-tool-surface.regression.ts",
+    "test:goal-final-reply-placement": "tsx src/gateway/goal-final-reply-placement.regression.ts",
     "test:goal-stop-recovery": "tsx src/gateway/goal-stop-recovery.regression.ts",
 
     "test:goal-runtime-friction": "tsx src/gateway/chat/goal-runtime-friction.regression.ts",

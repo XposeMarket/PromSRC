@@ -15,6 +15,7 @@ import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
+import { StallProfiler } from '../runtime/stall-profiler';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -55,6 +56,7 @@ export function isGatewayDraining(): boolean { return _gatewayDraining; }
 export function enterGatewayDrainMode(relay: ((data: object) => void) | null): void {
   _gatewayDraining = true;
   _drainBroadcastRelay = relay;
+  stopStallProfiler();
   if (_runtimeHeartbeatTimer) {
     clearInterval(_runtimeHeartbeatTimer);
     _runtimeHeartbeatTimer = null;
@@ -80,6 +82,32 @@ const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEU
 const stallAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART || '').trim().toLowerCase();
 const EVENT_LOOP_STALL_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(stallAutorestartEnv);
 const EVENT_LOOP_STALL_DIAGNOSTIC_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_DIAGNOSTIC_MS', 5_000);
+// Rolling CPU profile so stall records name the code that blocked the loop.
+// PROMETHEUS_GATEWAY_STALL_PROFILER=0 disables it.
+const stallProfilerEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_PROFILER || '').trim().toLowerCase();
+const STALL_PROFILER_ENABLED = !['0', 'false', 'off', 'no'].includes(stallProfilerEnv);
+const STALL_PROFILER_SAMPLING_US = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_INTERVAL_US', 10_000);
+const STALL_PROFILER_ROTATE_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_PROFILER_ROTATE_MS', 60_000);
+let _stallProfiler: StallProfiler | null = null;
+
+function startStallProfiler(): void {
+  if (!STALL_PROFILER_ENABLED || _stallProfiler || _gatewayDraining) return;
+  try {
+    const profiler = new StallProfiler({
+      samplingIntervalUs: STALL_PROFILER_SAMPLING_US,
+      rotateMs: STALL_PROFILER_ROTATE_MS,
+      profileDir: path.join(getConfig().getConfigDir(), 'logs', 'stall-profiles'),
+    });
+    if (profiler.start()) _stallProfiler = profiler;
+  } catch {}
+}
+
+function stopStallProfiler(): void {
+  const profiler = _stallProfiler;
+  _stallProfiler = null;
+  try { profiler?.stop(); } catch {}
+}
+
 const MEMORY_PRESSURE_RSS_BYTES = parseNonNegativeIntEnv(
   'PROMETHEUS_GATEWAY_MEMORY_PRESSURE_RSS_BYTES',
   Math.floor(2.5 * 1024 * 1024 * 1024),
@@ -178,7 +206,18 @@ function appendEventLoopStallDiagnostic(
       runtimeWorkers: getRuntimeWorkerDiagnostics(),
       runtimes,
     };
-    enqueueAsyncAppend(path.join(configDir, 'gateway-event-loop-stalls.ndjson'), `${JSON.stringify(record)}\n`);
+    const stallsPath = path.join(configDir, 'gateway-event-loop-stalls.ndjson');
+    const profiler = _stallProfiler;
+    if (!profiler) {
+      enqueueAsyncAppend(stallsPath, `${JSON.stringify(record)}\n`);
+      return;
+    }
+    // The live profile window spans the whole stall (rotation cannot run while
+    // the loop is blocked), so summarize the elapsed heartbeat interval.
+    profiler.capture(elapsedMs + 1_000, `drift-${Math.round(heartbeatDriftMs / 1000)}s`, (cpuProfile) => {
+      const withProfile = cpuProfile ? { ...record, cpuProfile } : { ...record, cpuProfile: null };
+      enqueueAsyncAppend(stallsPath, `${JSON.stringify(withProfile)}\n`);
+    });
   } catch {}
 }
 
@@ -400,6 +439,7 @@ export function setLastMainSessionId(v: string): void {
 export function startRuntimeHeartbeat(): void {
   if (_runtimeHeartbeatTimer) return;
   writeRuntimeStatus('startup');
+  startStallProfiler();
   _runtimeHeartbeatTimer = setInterval(() => writeRuntimeStatus('heartbeat'), 5000);
   if (typeof (_runtimeHeartbeatTimer as any).unref === 'function') (_runtimeHeartbeatTimer as any).unref();
 }

@@ -35,10 +35,14 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify source file-size and any budgets
+        run: npm run check:file-budgets
       - name: Verify durable main-chat goal user stop
         run: npm run test:goal-stop-recovery
       - name: Verify thread handoff regression
         run: npm run test:thread-handoff
+      - name: Verify event-loop stall CPU attribution
+        run: npm run test:stall-profiler
       - name: Verify Brain provider diagnostics and bounded failures
         run: npm run test:brain-provider-diagnostics
       - name: Verify provider evidence and system health classification

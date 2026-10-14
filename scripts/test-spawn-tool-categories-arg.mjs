@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,13 +23,15 @@ assert.equal(normalize(undefined), undefined);
 assert.equal(normalize(42), undefined);
 
 for (const rel of ['src/gateway/agents-runtime/subagent-executor.ts', 'src/gateway/agents-runtime/capabilities/automation-executor.ts']) {
-  const text = fs.readFileSync(path.join(root, rel), 'utf8');
+  const text = rel.endsWith('subagent-executor.ts')
+    ? readExecutorSource(root)
+    : fs.readFileSync(path.join(root, rel), 'utf8');
   assert.doesNotMatch(text, /Array\.isArray\(args\.tool_categories\) \? args\.tool_categories : undefined/, `${rel} must normalize tool_categories`);
   assert.match(text, /normalizeSpawnToolCategoriesArg\(args\.tool_categories\)/, `${rel} must use the shared normalizer`);
 }
 
-const exec = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
-const chatStart = exec.indexOf("case 'chat_with_subagent': {");
+const exec = readExecutorSource(root);
+const chatStart = exec.lastIndexOf("case 'chat_with_subagent': {");
 const chat = exec.slice(chatStart, chatStart + 2500);
 assert.match(chat, /requestedType === 'team_member'[\s\S]*executeTool\('agent_message_send'/, 'chat_with_subagent must route team members to agent_message_send');
 

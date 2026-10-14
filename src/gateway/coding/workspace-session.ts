@@ -3,6 +3,7 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { getConfig } from '../../config/config';
 import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead, runGitReadAsync, primeGitReads } from './git-read-cache';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 
 export type PackageManagerKind = 'npm' | 'pnpm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'cargo' | 'go' | 'dotnet' | 'unknown';
 
@@ -66,9 +67,11 @@ function runGit(root: string, args: string[], timeout = 5000): string {
 }
 
 function runGitUncached(root: string, args: string[], timeout = 5000): string {
+  const invocation = lockFreeGitReadOptions(args);
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', invocation.args, {
       cwd: root,
+      env: invocation.env,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout,

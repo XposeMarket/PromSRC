@@ -18,6 +18,7 @@ import { compactBackgroundFileChanges, compactBackgroundToolPayload } from '../t
 import { buildNpmShimScripts, findNodeNpmInstall, withNpmShimsOnPath, resetNpmShimCacheForTests } from '../process/npm-shims';
 import { resolveBackgroundWorkDirArg } from '../agents-runtime/background-work-dir';
 import { runWithWorkspace } from '../../tools/workspace-context';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 // 1. Loop detector: polling a long-running run is not an identical-call loop.
 assert.equal(isPollingToolCall('workspace_run', { action: 'wait', runId: 'run_1' }), true);
@@ -35,7 +36,7 @@ assert.equal(
 );
 assert.notEqual(digestPollResult('running\npass 1/4'), digestPollResult('running\nFAIL x'));
 assert.ok(POLL_LOOP_WARNING_THRESHOLD >= 10 && POLL_LOOP_CRITICAL_THRESHOLD > POLL_LOOP_WARNING_THRESHOLD);
-const router = fs.readFileSync(path.join(__dirname, '..', 'routes', 'chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 assert.match(router, /isPollingToolCall\(toolName, args\)/, 'checkLoopDetection must route polls to the stale-result counter');
 assert.match(router, /notePollResult\(toolName, toolArgs, toolResult\?\.result\)/, 'poll results must feed the stale-result counter');
 assert.match(router, /toolName\.startsWith\('desktop_'\) \|\| isPollingToolCall\(toolName, toolArgs\)/, 'duplicate-call skip must exempt polls');

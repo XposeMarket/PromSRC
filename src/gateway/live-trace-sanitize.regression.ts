@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readChatRouterSource } from '../testing/chat-router-source';
 
 /**
  * Regression guard for the mobile live-trace payload cap.
@@ -12,8 +13,8 @@ import path from 'node:path';
  * that durable full thoughts are never dropped.
  */
 
-const routerPath = path.join(__dirname, 'routes', 'chat.router.ts');
-const routerSource = fs.readFileSync(routerPath, 'utf8');
+// chat.router.ts plus the routes/chat/** modules split out of it.
+const routerSource = readChatRouterSource();
 
 // Guard 1: the sanitizer must exist and be wired into the shared UI sanitizer.
 assert.ok(

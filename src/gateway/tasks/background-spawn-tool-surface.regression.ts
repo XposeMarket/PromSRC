@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildTools } from '../tool-builder';
 import { normalizeBackgroundSpawnToolCategories, resolveBackgroundAgentModelRouting } from './task-runner';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 assert.deepEqual(resolveBackgroundAgentModelRouting({ providerId: 'openai_codex', model: 'sol', reasoningEffort: 'medium' }), {
   providerId: 'openai_codex', model: 'gpt-5.6-sol', reasoningEffort: 'medium', source: 'background_spawn.override',
@@ -93,7 +94,7 @@ assert.ok(
 // activation, and the router must honour that flag before running the planner.
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const taskRunnerSource = readFileSync(path.join(repoRoot, 'src', 'gateway', 'tasks', 'task-runner.ts'), 'utf8');
-const chatRouterSource = readFileSync(path.join(repoRoot, 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf8');
+const chatRouterSource = readChatRouterSource();
 assert.match(
   taskRunnerSource,
   /skipAutomaticToolCategoryActivation:\s*true/,

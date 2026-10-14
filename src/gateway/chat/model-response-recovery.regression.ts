@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ModelResponseRecovery } from './model-response-recovery';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 const recovery = new ModelResponseRecovery();
 assert.equal(recovery.outputBudget('anthropic', 'claude-fable-5-1'), 16384);
@@ -37,7 +38,7 @@ exhaustedOutput.inspect({}, 'max_tokens');
 assert.deepEqual(exhaustedOutput.inspect({}, 'max_tokens'), { action: 'exhausted', reason: 'max_tokens' });
 
 // Wiring matters: the historical bug removed tools and dropped recovered calls.
-const router = fs.readFileSync(path.join(__dirname, '../routes/chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 assert.doesNotMatch(router, /salvageRound|Do not call any more tools|MAX_EMPTY_FINAL_SALVAGE/);
 assert.match(router, /modelResponseRecovery\.inspect\(response, responseStopReason/);
 assert.match(router, /num_predict:.*modelResponseRecovery\.outputBudget/);

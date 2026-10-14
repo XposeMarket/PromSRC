@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -127,11 +129,11 @@ await assert.rejects(abandonedWaiter, (error) => error?.name === 'TurnDiscardedE
 assert.equal(coordinator.isActive('reconcile-session'), false, 'reconciliation must not promote an abandoned queued request');
 assert.equal(coordinator.release(orphaned), false, 'a discarded lease cannot release a later turn');
 
-const executorSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'agents-runtime', 'subagent-executor.ts'), 'utf8');
+const executorSource = readExecutorSource(root);
 assert.doesNotMatch(executorSource, /captured\.code !== 0 && !captured\.timedOut/);
 assert.match(executorSource, /classifyCommandTermination\(captured\)/);
 
-const routeSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf8');
+const routeSource = readChatRouterSource();
 assert.match(routeSource, /code: 'SESSION_TURN_ACTIVE'/);
 assert.match(routeSource, /code: 'IDEMPOTENCY_KEY_REUSED'/);
 assert.match(routeSource, /mainChatTurnCoordinator\.acquire\(sessionId, abortSignal\?\.signal\)/);

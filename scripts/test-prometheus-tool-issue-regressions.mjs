@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fromDist = (relativePath) => import(pathToFileURL(path.join(root, 'dist', relativePath)).href);
@@ -122,7 +123,7 @@ assert.equal(writes, 1);
 assert.deepEqual(forwardedMetadata.triggerPositivePrompts, ['Use the new focused example workflow.']);
 assert.deepEqual(forwardedMetadata.triggerNegativePrompts, ['Create an unrelated browser animation.']);
 
-const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatSource = readChatRouterSource();
 assert.match(chatSource, /const loopWarningThreshold = 5/);
 assert.match(chatSource, /const loopCriticalThreshold = 8/);
 assert.doesNotMatch(chatSource, /JSON\.stringify\(normalize\(args \|\| \{\}\)\)\.slice\(0, 200\)/);
