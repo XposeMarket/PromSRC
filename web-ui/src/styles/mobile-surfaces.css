@@ -37,7 +37,9 @@ body.pm-mobile-active :is(
   .pm-schedule-action-popover,
   .pm-mobile-sources-panel,
   .pm-chat-target-popover,
-  .pm-token-activity-popover
+  .pm-token-activity-popover,
+  .pm-main-plan-popover,
+  .pm-mobile-goal-details
 ) {
   border: 1px solid var(--pm-pop-soft-line) !important;
   border-radius: var(--pm-pop-radius) !important;
@@ -109,6 +111,57 @@ body.pm-mobile-active .pm-mobile-source-copy small,
 body.pm-mobile-active .pm-mobile-source-age { font: var(--pm-pop-meta-font); }
 body.pm-mobile-active .pm-mobile-sources-section-label { font: var(--pm-pop-label-font); letter-spacing: .06em; }
 body.pm-mobile-active .pm-mobile-sources-empty { font: var(--pm-pop-meta-font); }
+
+/* ── Goal details (expanded goal pill) ───────────────────────────────── */
+/* Same panel as every other popover; rows use the popover type scale and
+   tints instead of the old hard 1px dividers and 11px/850 text. */
+body.pm-mobile-active .pm-mobile-goal-details { padding: 12px 14px; margin-top: 8px; }
+body.pm-mobile-active .pm-mobile-goal-details > div:not(.pm-mobile-goal-diagnostics):not(.pm-mobile-goal-plans),
+body.pm-mobile-active .pm-mobile-goal-diagnostics > div {
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px;
+  font: 500 13px/1.4 var(--pm-font);
+}
+body.pm-mobile-active .pm-mobile-goal-details > div + div { margin-top: 7px; }
+body.pm-mobile-active .pm-mobile-goal-details strong {
+  font: var(--pm-pop-label-font);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--pm-muted);
+  padding-top: 2px;
+}
+body.pm-mobile-active :is(.pm-mobile-goal-diagnostics, .pm-mobile-goal-actions) {
+  border-top: 0;
+  box-shadow: 0 -1px 0 var(--pm-pop-soft-line);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+body.pm-mobile-active .pm-mobile-goal-plan {
+  border: 0;
+  border-radius: var(--pm-pop-row-radius);
+  background: var(--pm-pop-tint);
+  padding: 10px 12px;
+}
+body.pm-mobile-active .pm-mobile-goal-plan-head { font: 600 13px/1.3 var(--pm-font); }
+body.pm-mobile-active .pm-mobile-goal-plan-head span { font: var(--pm-pop-meta-font); }
+/* The label/value grid above matches every direct child div, which squeezed
+   the action buttons into the 84px label column. Actions are a wrapping row. */
+body.pm-mobile-active .pm-mobile-goal-details > .pm-mobile-goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+  gap: 6px;
+}
+body.pm-mobile-active .pm-mobile-goal-empty { font: var(--pm-pop-meta-font); }
+body.pm-mobile-active .pm-mobile-goal-actions button {
+  flex: 1 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--pm-pop-tint);
+  min-height: 34px;
+  padding: 8px 13px;
+  font: 600 13px/1 var(--pm-font);
+}
 
 /* ── Gateway picker ─────────────────────────────────────────────────────── */
 body.pm-mobile-active .pm-chat-target-popover { padding: 10px; }
