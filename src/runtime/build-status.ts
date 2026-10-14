@@ -10,6 +10,7 @@
 import { execFile } from 'child_process';
 import path from 'path';
 import { isPublicDistributionBuild, resolvePrometheusRoot } from './distribution';
+import { lockFreeGitReadOptions } from './git-read';
 
 const RELEASES_OWNER = 'XposeMarket';
 const RELEASES_REPO = 'prometheus-releases';
@@ -75,8 +76,10 @@ function refreshDevRepoStatusInBackground(): void {
   if (devRepoRefreshInFlight) return;
   devRepoRefreshInFlight = true;
   const cwd = resolvePrometheusRoot();
-  execFile('git', ['status', '--porcelain=v1', '-b'], {
+  const invocation = lockFreeGitReadOptions(['status', '--porcelain=v1', '-b']);
+  execFile('git', invocation.args, {
     cwd,
+    env: invocation.env,
     timeout: 4000,
     encoding: 'utf-8',
     maxBuffer: 1024 * 1024,

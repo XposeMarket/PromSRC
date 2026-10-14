@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
-const router = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
+const router = readChatRouterSource();
 const desktop = fs.readFileSync('web-ui/src/pages/ChatPage.js', 'utf8');
 const mobile = [
   fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8'),

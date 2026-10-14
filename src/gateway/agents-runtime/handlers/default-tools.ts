@@ -1,6 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { resolveGatewayRestartScope } from '../../../runtime/supervisor-restart-request';
+import { lockFreeGitReadOptions } from '../../../runtime/git-read';
 import { getConfig, getAgentById } from '../../../config/config';
 import { mainChatRoutePatch } from '../../../config/main-chat-route.js';
 import { parseProviderModelRef } from '../../../agents/model-routing.js';
@@ -1824,6 +1825,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             try {
               const output = execSync(command, {
                 cwd: repoRoot,
+                env: lockFreeGitReadOptions([], process.env).env,
                 encoding: 'utf-8',
                 timeout: timeoutMs,
                 stdio: 'pipe',

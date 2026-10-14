@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readExecutorSource } from './lib/executor-source.mjs';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve('.');
 const tools = await import(pathToFileURL(path.join(root, 'dist/gateway/tools/defs/agent-team-schedule.js')).href);
@@ -166,7 +167,7 @@ const tasksRouteSource = fs.readFileSync(path.join(root, 'src/gateway/routes/tas
 assert.match(tasksRouteSource, /router\.post\('\/api\/bg-tasks\/:id\/restart'/);
 assert.match(tasksRouteSource, /isImmutableCompletedAgentTask\(task\)/);
 
-const chatRouterSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatRouterSource = readChatRouterSource();
 assert.match(chatRouterSource, /const durableTaskId =/);
 assert.match(chatRouterSource, /sessionId\.startsWith\('task_'\) \|\| hasDurableTaskPlan/);
 assert.match(chatRouterSource, /durableTaskId \|\| sessionId\.replace/);

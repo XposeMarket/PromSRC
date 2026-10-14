@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadTokens, saveTokens } from '../auth/openai-oauth';
 import { CodexIncompleteStreamError, OpenAICodexAdapter, codexHttpErrorDetail } from './openai-codex-adapter';
+import { readChatRouterSource } from '../testing/chat-router-source';
 
 assert.equal(codexHttpErrorDetail('{"error":{"message":"Unsupported model sol"}}'), 'Unsupported model sol');
 assert.equal(codexHttpErrorDetail('not JSON'), '');
@@ -112,7 +113,7 @@ async function main(): Promise<void> {
   assert.match(adapterSource, /accountId: activeAccountId/, 'the account that served the request must be recorded with usage');
   assert.doesNotMatch(adapterSource, /error:\s*text\.slice\(0,\s*400\)/, 'provider response bodies must not be persisted as runtime error text');
 
-  const chatSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
+  const chatSource = readChatRouterSource();
   const fallbackStart = chatSource.indexOf('if (!finalText.trim())');
   const fallbackEnd = chatSource.indexOf('if (greetingLikeTurn', fallbackStart);
   assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart, 'missing-final fallback block must exist');

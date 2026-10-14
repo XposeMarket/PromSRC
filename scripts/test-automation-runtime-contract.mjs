@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve('.');
 const timerRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/timers/timer-runner.ts'), 'utf8');
@@ -18,7 +19,7 @@ assert.match(watchRunnerSource, /addPendingRuntimeSteerForSession/, 'a watch tha
 assert.match(watchRunnerSource, /steerActiveTurn\(watch, obs, 'match'/, 'matched watches must attempt live in-turn delivery while Prometheus is busy');
 assert.match(watchRunnerSource, /deliveryMode: 'live_steer' \| 'follow_up'/, 'watch payloads must support both in-turn steering and post-turn follow-up delivery');
 assert.match(watchRunnerSource, /runInteractiveTurn/, 'post-turn watch delivery must still launch a normal Prometheus follow-up turn');
-const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatSource = readChatRouterSource();
 assert.match(chatSource, /liveEventsAppliedBeforeFinal = await injectPendingChatSteers\(\)/, 'finalization must drain watch events that arrive during the provider response');
 assert.match(chatSource, /if \(!isSyntheticInternalWatch(?: && !\w+)* && shouldCheckBlockedTaskFollowup\(message\)\)/, 'private watch payloads must never enter user blocked-task follow-up routing');
 assert.match(chatSource, /runWithInternalWatchTurnContext\(flags\.internalWatchContext/, 'watch policy must cover the entire synthetic turn, including wrapper and preflight paths');

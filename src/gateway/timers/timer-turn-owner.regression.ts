@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 const root = process.cwd();
-const router = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 const runner = fs.readFileSync(path.join(root, 'src/gateway/timers/timer-runner.ts'), 'utf8');
 
 // 1. A runtime mirrored from a draining gateway must never be adopted as the

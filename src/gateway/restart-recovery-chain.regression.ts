@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readChatRouterSource } from '../testing/chat-router-source';
 
 // Live failure 2026-09-22 17:52: a main-chat turn was resumed after a restart,
 // then interrupted by a SECOND restart. The resumed runtime had inherited
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
 
     // Wiring guard: the retrigger path must actually use the helper. Without
     // this, deleting the call in chat.router.ts would leave the test green.
-    const routerSource = fs.readFileSync(path.join(__dirname, 'routes', 'chat.router.ts'), 'utf8');
+    const routerSource = readChatRouterSource();
     const retriggerStart = routerSource.indexOf('export function retriggerInterruptedMainChat(');
     assert.ok(retriggerStart >= 0, 'retriggerInterruptedMainChat must exist');
     const retriggerBody = routerSource.slice(retriggerStart, retriggerStart + 4000);

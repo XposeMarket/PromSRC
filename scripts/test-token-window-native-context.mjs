@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const session = read('src/gateway/session.ts');
-const chat = read('src/gateway/routes/chat.router.ts');
+const chat = readChatRouterSource();
 const mobileSettings = read('web-ui/src/mobile/mobile-settings.js');
 
 // The main model path must use the entire active post-compaction history. A

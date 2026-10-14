@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -14,7 +15,7 @@ const config = read('src/config/config-classic.ts');
 const settings = read('src/gateway/routes/settings.router.ts');
 const tool = read('src/tools/generate-video.ts');
 const defs = read('src/gateway/tools/defs/file-web-memory.ts');
-const voice = read('src/gateway/routes/chat.router.ts');
+const voice = readChatRouterSource();
 const blockForTool = (source, name) => {
   const start = source.indexOf(`name: '${name}'`);
   const next = source.indexOf("\n        name: '", start + 1);

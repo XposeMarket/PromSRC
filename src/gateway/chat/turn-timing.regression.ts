@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createTurnTimingRecorder } from './turn-timing';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-turn-timing-'));
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
     assert.deepEqual(ttftRows.map((row) => row.label), ['provider_request_start', 'first_provider_event', 'first_visible_token'], 'durable telemetry must preserve TTFT stage labels');
     assert.equal(ttftRows[2].latencyElapsedMs, 14, 'TTFT must retain end-to-end elapsed time');
     assert.equal(ttftRows[2].providerTtftMs, 14, 'TTFT must retain provider-only first-visible-token time');
-    const chatRouterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf8');
+    const chatRouterSource = readChatRouterSource();
     assert.match(chatRouterSource, /turnTiming\.mark\(stage, \{ latencyElapsedMs: elapsedMs, \.\.\.extra \}\)/, 'latency SSE stages must also be persisted');
     assert.match(chatRouterSource, /markLatency\('first_visible_token',[\s\S]{0,500}providerTtftMs,/, 'first visible token telemetry must include provider-only TTFT');
     assert.match(chatRouterSource, /captureModelUsageLogCursor\(\)/, 'interactive turns must capture usage boundaries without a historical scan');

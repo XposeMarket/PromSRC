@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readExecutorSource } from './lib/executor-source.mjs';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-const router = read('src/gateway/routes/chat.router.ts');
+const router = readChatRouterSource();
 const analysisPreview = read('src/gateway/media-analysis-preview.ts');
 const mediaExecutor = read('src/gateway/agents-runtime/capabilities/web-media-executor.ts');
 const durableTrace = read('src/gateway/durable-chat-trace.ts');

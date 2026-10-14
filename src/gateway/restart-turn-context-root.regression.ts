@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readChatRouterSource } from '../testing/chat-router-source';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-turnctx-'));
 process.env.PROMETHEUS_CONFIG_DIR = tmp;
@@ -79,7 +80,7 @@ async function main() {
   assert.equal(olderKept, 4, `restart segments must not evict unrelated turn context (kept ${olderKept}/4)`);
 
   // Wiring: the recovery path must derive the root id and pass it through.
-  const router = fs.readFileSync(path.join(__dirname, 'routes', 'chat.router.ts'), 'utf8');
+  const router = readChatRouterSource();
   assert.match(router, /recoveryData\.rootTurnId\s*\|\|\s*runtime\.id/, 'recovery must reuse an inherited rootTurnId or seed it from the interrupted runtime');
   assert.match(router, /rootTurnId:\s*rootTurnContextId/, 'recovery runtime must persist rootTurnId for the next restart');
   assert.match(router, /turnContextId:\s*rootTurnContextId/, 'recovery turn must record packets under the root turn id');

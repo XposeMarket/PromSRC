@@ -1,4 +1,5 @@
 import { cachedGitRead, findGitRootByWalk, isCacheableGitRead, runGitReadAsync, primeGitReads } from './git-read-cache';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -195,9 +196,11 @@ function runGit(root: string, args: string[], maxBuffer = MAX_DIFF_BYTES): strin
 }
 
 function runGitUncached(root: string, args: string[], maxBuffer = MAX_DIFF_BYTES): string {
+  const invocation = lockFreeGitReadOptions(args);
   try {
-    return String(execFileSync('git', args, {
+    return String(execFileSync('git', invocation.args, {
       cwd: root,
+      env: invocation.env,
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

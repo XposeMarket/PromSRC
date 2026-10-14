@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -11,7 +12,7 @@ const editor = read('web-ui/src/components/creative/editor/index.js');
 const designRegression = read('scripts/test-design-preview-contract.mjs');
 const imageRegression = read('scripts/test-image-generation-flow.mjs');
 const promptContext = read('src/gateway/prompt-context.ts');
-const chatRouter = read('src/gateway/routes/chat.router.ts');
+const chatRouter = readChatRouterSource();
 const overview = read('workspace/self/14-creative-hyperframes-remotion.md');
 
 assert.match(tools, /design[\s\S]*image[\s\S]*canvas[\s\S]*video/, 'Creative tool definitions must retain all supported mode values');
