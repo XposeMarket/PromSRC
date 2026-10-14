@@ -6100,20 +6100,17 @@ html.pm-session-context-open * {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-scroll-latest-stack-height, 0px) + 24px);
 }
 .pm-chat-composer-mode-open .pm-scroll-latest{bottom:calc(var(--pm-composer-top-gap) + 14px)}
+/* Inset, bottom and keyboard placement are owned by mobile-composer-stack.css.
+   Unlayered bottoms here beat that layered contract, so the goal sat ~24px
+   above its slot: under queued prompts and off the agent pill's shared row. */
 .pm-mobile-goal-strip {
   position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-composer-live-height, 72px) + 32px);
   z-index: 4;
   display: flex;
   justify-content: center;
   align-items: flex-end;
   pointer-events: none;
   transition: bottom .18s ease;
-}
-.pm-keyboard-open .pm-mobile-goal-strip {
-  bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + 18px);
 }
 .pm-mobile-goal-strip[hidden] { display: none !important; }
 .pm-mobile-goal-strip[data-expanded="true"] {
@@ -6164,56 +6161,40 @@ html.pm-session-context-open * {
 .pm-mobile-goal-pill {
   width: auto;
   max-width: min(72vw, 260px);
-  min-height: 34px;
   position: relative;
   overflow: hidden;
-  display: flex;
+  min-height: 34px;
+  box-sizing: border-box;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  gap: 8px;
+  padding: 6px 13px 6px 9px;
+  /* Same glass as the plan / agent / tool-progress pills. */
+  border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
-  background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
-      transparent 34%, transparent 72%,
-      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    rgba(255,255,255,.035);
+  background: rgba(255,255,255,.08);
+  box-shadow: var(--pm-shadow-md);
   color: var(--pm-text);
-  box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.32),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(0,0,0,.06);
-  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
-  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
-  padding: 7px 13px 7px 10px;
-  pointer-events: auto;
   font: inherit;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 900;
+  pointer-events: auto;
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
 }
 .pm-mobile-goal-strip[data-expanded="true"] .pm-mobile-goal-pill,
 .pm-mobile-goal-strip-inline .pm-mobile-goal-pill {
+  display: flex;
   width: 100%;
   max-width: none;
   justify-content: space-between;
   gap: 10px;
-  padding: 7px 12px;
+  padding: 6px 12px;
 }
 :root[data-theme="dark"] .pm-mobile-goal-pill {
-  border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
-  background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
-      transparent 34%, transparent 72%,
-      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    rgba(255,255,255,.03);
-  box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.18),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .24)),
-    0 1px 4px rgba(0,0,0,.16);
+  border-color: rgba(255,255,255,.13);
+  background: rgba(255,255,255,.05);
 }
 
 .pm-chat-connection-status {
@@ -6397,18 +6378,19 @@ html.pm-session-context-open * {
 .pm-mobile-goal-details {
   margin-top: 6px;
   padding: 9px 10px;
-  border: 1px solid rgba(255,255,255,.18);
-  border-radius: 14px;
-  background: rgba(255,255,255,.68);
-  box-shadow: var(--pm-shadow-sm);
-  backdrop-filter: blur(18px) saturate(1.25);
-  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  /* Same card as the plan popover. */
+  border: 1px solid rgba(255,255,255,.20);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--pm-surface-strong) 84%, transparent);
+  box-shadow: 0 14px 34px rgba(0,0,0,.24);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
   max-height: min(48vh, 420px);
   overflow: auto;
+  pointer-events: auto;
 }
 :root[data-theme="dark"] .pm-mobile-goal-details {
-  border-color: rgba(255,255,255,.12);
-  background: rgba(24,24,27,.72);
+  border-color: rgba(255,255,255,.13);
 }
 .pm-mobile-goal-details > div:not(.pm-mobile-goal-diagnostics):not(.pm-mobile-goal-plans),
 .pm-mobile-goal-diagnostics > div {

@@ -196,7 +196,10 @@ export function pinRuntimeChrome({ rect, form, page, goalStrip, planDock, agentD
   if (kbTop != null) {
     // Keyboard up: share the composer's fixed-top space. Order bottom-up:
     // goal row, queued + tool progress, plan/agent pills, then the jump button.
-    const queuedAndTool = css('--pm-queued-live-height') + css('--pm-tool-progress-live-height');
+    // A standalone goal strip is the first layer on the composer, so pills and
+    // the arrow must clear it too (they used to land on top of it).
+    const goalLayer = rowMode === 'goal' ? 0 : height(goalStrip);
+    const queuedAndTool = css('--pm-queued-live-height') + css('--pm-tool-progress-live-height') + (goalLayer ? goalLayer + 8 : 0);
     if (rowMode === 'goal') {
       const rowEdge = row ? stackAboveComposerTop([row], kbTop, 8, 0) : kbTop - 8;
       stackAboveComposerTop([jumpButton], rowEdge + 8 - queuedAndTool, 10);
