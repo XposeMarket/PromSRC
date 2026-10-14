@@ -13,7 +13,7 @@ const requiredExplicit = new Set([
   'brand-strategist', 'browse-sh-web-skills', 'context-pack-builder', 'css-animations',
   'day-trading-mnq-mgc', 'financial-analyst', 'hook-library', 'hr-recruiter',
   'mermaid-diagrams', 'operations-manager', 'polymarket-research', 'product-discovery',
-  'prometheus-x-growth-operator', 'revenue-manager', 'social-intel', 'svg-diagrams',
+  'revenue-manager', 'social-intel', 'svg-diagrams',
   'tailwind', 'three', 'threejs-mobile-webgl', 'twitter-thread', 'typegpu', 'waapi',
   'animejs', 'chatgpt-desktop-restart', 'contribute-catalog', 'dev-debugging',
   'gsap', 'hyperframes-catalog-assets', 'hyperframes-cli', 'hyperframes-registry',

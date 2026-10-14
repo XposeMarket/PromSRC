@@ -23,7 +23,6 @@ const targetSkills = new Set([
   'polymarket-research',
   'pptx-writer',
   'product-carousel-builder',
-  'prometheus-x-growth-operator',
   'report-generator',
   'scheduler-operations-playbook',
   'secret-and-token-ops',
