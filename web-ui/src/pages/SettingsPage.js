@@ -368,12 +368,13 @@ function setQuickThinkingEffort(level) {
   addProcessEntry('info', `Thinking effort set to ${quickThinkingEffort} (UI preference).`);
 }
 
-let _desktopUpdaterState = { supported: false, autoUpdateEnabled: true, status: 'unsupported' };
+let _desktopUpdaterState = { supported: false, autoUpdateEnabled: true, updateChannel: 'stable', status: 'unsupported' };
 let _desktopUpdaterEventsBound = false;
 
 function desktopUpdaterElements() {
   return {
     toggle: document.getElementById('settings-auto-update-toggle'),
+    channel: document.getElementById('settings-update-channel'),
     status: document.getElementById('settings-update-status'),
     version: document.getElementById('settings-update-version'),
     check: document.getElementById('settings-update-check'),
@@ -390,6 +391,7 @@ function applyDesktopUpdateState(nextState = {}) {
 
   const supported = _desktopUpdaterState.supported === true;
   const enabled = _desktopUpdaterState.autoUpdateEnabled !== false;
+  const channel = _desktopUpdaterState.updateChannel === 'beta' ? 'beta' : 'stable';
   const status = String(_desktopUpdaterState.status || (supported ? 'idle' : 'unsupported'));
   const version = String(_desktopUpdaterState.version || '').trim();
   const currentVersion = String(_desktopUpdaterState.currentVersion || '').trim();
@@ -400,10 +402,14 @@ function applyDesktopUpdateState(nextState = {}) {
     els.toggle.classList.toggle('is-on', enabled);
     els.toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
   }
+  if (els.channel) {
+    els.channel.disabled = !supported || busy;
+    els.channel.value = channel;
+  }
   if (els.version) {
     els.version.textContent = currentVersion
-      ? `Installed version ${currentVersion}${version ? ` · release ${version}` : ''}`
-      : 'Installed version —';
+      ? `Installed version ${currentVersion} · ${channel === 'beta' ? 'Beta' : 'Stable'} channel${version ? ` · release ${version}` : ''}`
+      : `Installed version — · ${channel === 'beta' ? 'Beta' : 'Stable'} channel`;
   }
   if (els.status) {
     els.status.textContent = !supported
@@ -466,6 +472,23 @@ async function setDesktopAutoUpdate(enabled) {
 
 function toggleDesktopAutoUpdate() {
   return setDesktopAutoUpdate(_desktopUpdaterState.autoUpdateEnabled === false);
+}
+
+async function setDesktopUpdateChannel(channel) {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.setUpdateChannel !== 'function') return;
+  const requested = String(channel || '').trim().toLowerCase();
+  if (requested !== 'stable' && requested !== 'beta') {
+    applyDesktopUpdateState({ updateChannel: 'stable', status: 'error', message: 'Choose Stable or Beta for desktop updates.' });
+    return;
+  }
+  const select = desktopUpdaterElements().channel;
+  if (select) select.disabled = true;
+  try {
+    applyDesktopUpdateState(await bridge.setUpdateChannel(requested));
+  } catch (error) {
+    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Could not save the update channel.' });
+  }
 }
 
 async function checkDesktopForUpdates() {
@@ -7114,6 +7137,7 @@ window.sendSelectedChannelTest = sendSelectedChannelTest;
 window.setAgentForm = setAgentForm;
 window.setButtonBusy = setButtonBusy;
 window.toggleDesktopAutoUpdate = toggleDesktopAutoUpdate;
+window.setDesktopUpdateChannel = setDesktopUpdateChannel;
 window.toggleChromeProfileImportPanel = toggleChromeProfileImportPanel;
 window.selectInHouseBrowserProfile = selectInHouseBrowserProfile;
 window.importSelectedChromeProfile = importSelectedChromeProfile;

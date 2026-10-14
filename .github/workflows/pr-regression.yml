@@ -1,6 +1,11 @@
 name: Pull request regression checks
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
   pull_request:
     branches:
       - main
@@ -14,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-regression-${{ github.event.pull_request.number || github.ref }}
+  group: pr-regression-${{ inputs.ref || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,6 +28,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -33,6 +40,12 @@ jobs:
         run: npm rebuild node-pty --ignore-scripts=false
       - name: Install Playwright Chromium for browser regressions
         run: npx playwright install --with-deps chromium
+      - name: Verify desktop stable/beta update channel
+        run: node --test electron/update-channel.test.js
+      - name: Verify release workflow and updater manifests
+        run: node scripts/test-release-pipeline.mjs
+      - name: Verify public skills when available
+        run: npm run test:public-skills --if-present
       - name: Type-check backend
         run: npx tsc --noEmit
       - name: Verify source file-size and any budgets

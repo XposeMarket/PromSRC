@@ -3,9 +3,10 @@ productName: Prometheus
 copyright: "Prometheus Desktop"
 
 # ── Update feed ──────────────────────────────────────────────────────────────
-# Uses a separate *public* GitHub repo for releases so the source repo (PromSRC)
-# can stay private. Users never need a GitHub token to receive updates.
-# Set GH_TOKEN env var when running `npm run release` to publish.
+# Uses a separate public GitHub repository for distribution assets. The source
+# repository is also public; users never need a GitHub token to receive updates.
+# Tag-driven CI is primary (RELEASING.md); local `npm run release` with GH_TOKEN
+# remains the fallback publishing path.
 publish:
   provider: github
   owner: XposeMarket

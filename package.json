@@ -26,6 +26,7 @@
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
     "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",
     "build": "npm run build:backend && npm run build:web",
+    "release:prep": "node scripts/release-prep.mjs",
     "build:backend": "node scripts/prune-dist.js --quiet && tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js",
     "clean:dist": "node scripts/prune-dist.js --all",
     "check:dist": "node scripts/prune-dist.js --check",

@@ -3796,6 +3796,16 @@
               </div>
               <button id="settings-auto-update-toggle" class="appearance-switch" type="button" role="switch" aria-checked="true" aria-label="Automatically update Prometheus" onclick="toggleDesktopAutoUpdate()"><span class="appearance-switch-thumb"></span></button>
             </div>
+            <div class="settings-row settings-update-preference-row">
+              <div class="settings-row-copy">
+                <label class="settings-row-label" for="settings-update-channel">Update channel</label>
+                <div class="settings-row-description">Stable is recommended. Beta includes prerelease desktop builds; switch back to Stable after installing a beta if you want the next stable release.</div>
+              </div>
+              <select id="settings-update-channel" class="appearance-select" aria-label="Desktop update channel" onchange="setDesktopUpdateChannel(this.value)">
+                <option value="stable">Stable</option>
+                <option value="beta">Beta</option>
+              </select>
+            </div>
             <div class="settings-update-status-row">
               <div class="settings-row-copy">
                 <div id="settings-update-status" class="settings-row-label" role="status" aria-live="polite">Checking update support…</div>

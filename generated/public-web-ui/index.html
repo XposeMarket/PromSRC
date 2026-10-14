@@ -13,7 +13,7 @@
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-01-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-02-7defea606ed9.js"></script>
+<script src="/build/inline/index-inline-02-bf07ac4eccbd.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script src="/build/inline/index-inline-03-e9885749b55f.js"></script>
 <link rel="stylesheet" href="/build/styles/desktop-LL2QQQUO.css">
@@ -3476,6 +3476,16 @@
               </div>
               <button id="settings-auto-update-toggle" class="appearance-switch" type="button" role="switch" aria-checked="true" aria-label="Automatically update Prometheus" onclick="toggleDesktopAutoUpdate()"><span class="appearance-switch-thumb"></span></button>
             </div>
+            <div class="settings-row settings-update-preference-row">
+              <div class="settings-row-copy">
+                <label class="settings-row-label" for="settings-update-channel">Update channel</label>
+                <div class="settings-row-description">Stable is recommended. Beta includes prerelease desktop builds; switch back to Stable after installing a beta if you want the next stable release.</div>
+              </div>
+              <select id="settings-update-channel" class="appearance-select" aria-label="Desktop update channel" onchange="setDesktopUpdateChannel(this.value)">
+                <option value="stable">Stable</option>
+                <option value="beta">Beta</option>
+              </select>
+            </div>
             <div class="settings-update-status-row">
               <div class="settings-row-copy">
                 <div id="settings-update-status" class="settings-row-label" role="status" aria-live="polite">Checking update support…</div>
@@ -5295,7 +5305,7 @@
 <link rel="modulepreload" href="/build/chunks/chunk-EPSJJCWL.js">
 <link rel="modulepreload" href="/build/chunks/chunk-HJADIT6Y.js">
 <link rel="modulepreload" href="/build/chunks/chunk-JF4LWGNM.js">
-<script type="module" src="/build/entries/desktop-QKMNSYDM.js"></script>
+<script type="module" src="/build/entries/desktop-7GVIDVFZ.js"></script>
 <script src="/build/inline/index-inline-08-4550e6a395a8.js"></script>
 
 <script src="/build/inline/index-inline-09-4ae0a1e9d247.js"></script>
