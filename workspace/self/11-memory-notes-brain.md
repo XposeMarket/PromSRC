@@ -1,7 +1,9 @@
 # 11 — Memory, Notes & Brain
 
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `src/gateway/memory/`, `src/gateway/memory-index/`, `src/gateway/brain/`, `src/gateway/audit/`, `src/gateway/projects/`, `src/gateway/learning/`
-> **Read this when:** reading/writing durable user memory, recalling prior conversation, recording task continuity, tracing Brain Thought/Dream activity, inspecting audit continuity, or changing project knowledge.
+> **Read this when:** reading/writing durable user memory, recalling prior conversation, recording task continuity, tracing explicitly opted-in Brain Thought/Dream activity, inspecting audit continuity, or changing project knowledge.
+>
+> **Phase 0 Brain policy:** Thought, Dream, and cleanup are off by default and run only after explicit opt-in. Their capsules and carry-forward artifacts are not injected into prompts; legacy marked carry-forward sections are removed from intraday-note prompt projections while live notes remain available.
 
 ## TL;DR
 

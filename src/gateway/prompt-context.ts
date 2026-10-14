@@ -38,7 +38,6 @@ import {
   type Stage4MenuSegmentId,
 } from '../runtime/instruction-intent-detector';
 import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
-import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext, readCarryForwardForPrompt } from './brain/brain-continuity.js';
 import { renderNotesForPrompt } from './memory/intraday-notes';
 import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
 import { buildMemoryAtomReferenceContext, retrieveMemoryAtoms, formatMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
@@ -110,30 +109,23 @@ function buildSubagentsRosterBlock(): string {
 
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
-// The Dream-authored carry-forward section is preserved in full (within its own
-// budget). Ordinary live-note entries remain recent-first and capped. Capture on
-// disk is never limited by this prompt-only projection.
+// Phase 0 deliberately omits all Brain-generated carry-forward/capsule context
+// from prompts. Legacy marked sections are stripped while live note entries remain.
+const LEGACY_BRAIN_CARRY_FORWARD = /<!--[ \t]*BRAIN_CARRY_FORWARD_START[ \t]*-->[\s\S]*?<!--[ \t]*BRAIN_CARRY_FORWARD_END[ \t]*-->/g;
+
+export function stripLegacyBrainCarryForward(raw: string): string {
+  return raw.replace(LEGACY_BRAIN_CARRY_FORWARD, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export function processIntradayNotes(
   raw: string,
   maxEntries = 12,
   maxCharsPerEntry = 250,
-  maxCarryChars = 10_000,
 ): string {
-  if (!raw) return '';
-  let carry = '';
-  const start = raw.indexOf(BRAIN_CARRY_FORWARD_MARKERS.start);
-  const end = raw.indexOf(BRAIN_CARRY_FORWARD_MARKERS.end);
-  if (start >= 0 && end >= start) {
-    const finish = end + BRAIN_CARRY_FORWARD_MARKERS.end.length;
-    carry = raw.slice(start, finish).trim();
-    if (carry.length > maxCarryChars) carry = `${carry.slice(0, maxCarryChars)}\n...[carry-forward context truncated for prompt budget]`;
-  }
-  const withoutCarry = start >= 0 && end >= start
-    ? `${raw.slice(0, start)}${raw.slice(end + BRAIN_CARRY_FORWARD_MARKERS.end.length)}`
-    : raw;
+  const withoutCarry = stripLegacyBrainCarryForward(raw || '');
   const parts = withoutCarry.split(/(?=\n?### \[)/);
   const entries = parts.map((part) => part.trim()).filter((part) => part.startsWith('### ['));
-  const recent = entries.slice(-maxEntries).map((entry) => {
+  return entries.slice(-maxEntries).map((entry) => {
     const headerEnd = entry.indexOf('\n');
     if (headerEnd === -1) return entry;
     const header = entry.slice(0, headerEnd);
@@ -141,30 +133,15 @@ export function processIntradayNotes(
     const truncated = body.length > maxCharsPerEntry ? `${body.slice(0, maxCharsPerEntry)}…` : body;
     return `${header}\n${truncated}`;
   }).join('\n\n');
-  return [carry, recent].filter(Boolean).join('\n\n');
 }
 
 /**
- * Full-text notes projection for interactive turns: Brain carry-forward in
- * full, then open items (today + carried from the last 7 days) in full, info
- * notes newest-first in full, and done items as one-liners, under one budget.
- * Replaces the old 250-char-per-entry preview for main chat.
+ * Full-text notes projection for interactive turns, excluding all legacy Brain
+ * carry-forward content. Live notes retain the normal bounded renderer.
  */
 export function processIntradayNotesForPrompt(workspacePath: string, raw: string, budgetChars = 9_000): string {
-  let carry = '';
-  let rest = raw || '';
-  const start = rest.indexOf(BRAIN_CARRY_FORWARD_MARKERS.start);
-  const end = rest.indexOf(BRAIN_CARRY_FORWARD_MARKERS.end);
-  if (start >= 0 && end >= start) {
-    const finish = end + BRAIN_CARRY_FORWARD_MARKERS.end.length;
-    carry = rest.slice(start, finish).trim();
-    if (carry.length > 6_000) carry = `${carry.slice(0, 6_000)}\n...[carry-forward context truncated for prompt budget]`;
-    rest = `${rest.slice(0, start)}${rest.slice(finish)}`;
-  }
-  if (!carry) carry = readCarryForwardForPrompt(workspacePath, new Date().toISOString().split('T')[0]);
-  let notes = '';
-  try { notes = renderNotesForPrompt(workspacePath, rest, { budgetChars }); } catch { notes = processIntradayNotes(rest); }
-  return [carry, notes].filter(Boolean).join('\n\n');
+  const liveNotes = stripLegacyBrainCarryForward(raw || '');
+  try { return renderNotesForPrompt(workspacePath, liveNotes, { budgetChars }); } catch { return processIntradayNotes(liveNotes); }
 }
 // ─── Types ───────────────────────────────────────────────────────────────────────
 export interface SkillWindow {
@@ -475,14 +452,14 @@ function readBootBrainActivity(workspacePath: string): string {
 
 // ─── buildBootStartupSnapshot ────────────────────────────────────────────────────
 // Builds the lightweight BOOT.md snapshot used for the once-per-day startup
-// message: yesterday's intraday notes, recent compaction summaries, and
-// recent overnight brain/dream activity.
+// message: yesterday's intraday notes and recent compaction summaries. Phase 0
+// deliberately omits Brain Thought/Dream activity from all prompt context.
 export function buildBootStartupSnapshot(
   workspacePath: string,
 ): string {
   const lines: string[] = [];
   lines.push(`workspace_path: ${workspacePath}`);
-  lines.push('startup_focus: yesterday_intraday_notes_compactions_and_recent_brain_activity');
+  lines.push('startup_focus: yesterday_intraday_notes_and_compactions');
 
   const now = new Date();
   const yesterday = getLocalDateKey(new Date(now.getTime() - (24 * 60 * 60 * 1000)));
@@ -507,7 +484,6 @@ export function buildBootStartupSnapshot(
   }
 
   lines.push(readBootCompactionSummaries(workspacePath));
-  lines.push(readBootBrainActivity(workspacePath));
 
   return lines.join('\n');
 }
@@ -2336,9 +2312,6 @@ export async function buildPersonalityContext(
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
   const intradayNotes = !_skipIntradayInteractive ? processIntradayNotesForPrompt(workspacePath, readPromptProfileText(intradayPath)) : '';
-  const brainActiveContext = !_skipIntradayInteractive
-    ? buildBrainCapsuleContext(workspacePath, messageText)
-    : '';
 
   // ── Tier 1: first message in session ──────────────────────────────────────
   if (historyLength === 0) {
@@ -2374,7 +2347,6 @@ export async function buildPersonalityContext(
         memoryAtomCtx,
         retrievedMemoryCtx,
         toolCategoryMatchT1,
-        brainActiveContext,
         intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
         skillCtxT1,
         activeSkillCtxT1,
@@ -2429,7 +2401,6 @@ export async function buildPersonalityContext(
       memoryAtomCtx,
       retrievedMemoryCtx,
       toolCategoryMatch,
-      brainActiveContext,
       intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
       referenceHint,
       skillCtx,

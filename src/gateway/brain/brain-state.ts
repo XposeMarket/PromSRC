@@ -57,10 +57,12 @@ export interface BrainLatestState {
   gatewayStartedAt: string;
   /** Proposal IDs submitted in the most recent dream (for dedup) */
   proposalDedupeIds: string[];
-  /** Whether thought runs are enabled (default: true) */
+  /** Model-backed jobs are disabled until explicitly opted in. */
   thoughtEnabled: boolean;
-  /** Whether dream runs are enabled (default: true) */
   dreamEnabled: boolean;
+  cleanupEnabled: boolean;
+  /** Versioned consent marker; legacy default-on flags are not consent. */
+  optInVersion: number;
   /** Model override for thought runs — plain model name e.g. "claude-sonnet-4-6" (empty = use primary) */
   thoughtModel: string;
   /** Optional selectable reasoning effort for thought runs. */
@@ -163,8 +165,10 @@ function defaultLatestState(): BrainLatestState {
     lastDreamCleanupError: null,
     gatewayStartedAt: new Date().toISOString(),
     proposalDedupeIds: [],
-    thoughtEnabled: true,
-    dreamEnabled: true,
+    thoughtEnabled: false,
+    dreamEnabled: false,
+    cleanupEnabled: false,
+    optInVersion: 1,
     thoughtModel: '',
     thoughtReasoning: '',
     dreamModel: '',
@@ -177,7 +181,20 @@ export function loadLatestState(): BrainLatestState {
     const p = getLatestStatePath();
     if (!fs.existsSync(p)) return defaultLatestState();
     const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
-    return { ...defaultLatestState(), ...raw };
+    const state = { ...defaultLatestState(), ...raw };
+    // Older releases persisted default-on flags without recording user consent.
+    // Migrate once, retaining history/models but requiring a fresh explicit opt-in.
+    if (raw.optInVersion !== 1) {
+      state.thoughtEnabled = false;
+      state.dreamEnabled = false;
+      state.cleanupEnabled = false;
+      state.optInVersion = 1;
+      safeWrite(p, state);
+    }
+    state.thoughtEnabled = state.thoughtEnabled === true;
+    state.dreamEnabled = state.dreamEnabled === true;
+    state.cleanupEnabled = state.cleanupEnabled === true;
+    return state;
   } catch {
     return defaultLatestState();
   }
