@@ -37,6 +37,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
+      - name: Verify scheduler misfire, leases, dedupe and script execution
+        run: npm run test:scheduler-misfire
       - name: Verify proxied loopback requests (Tailscale Funnel) are not trusted
         run: npm run test:gateway-auth-proxy
       - name: Verify mandatory final-action gate and subagent tool ceiling
