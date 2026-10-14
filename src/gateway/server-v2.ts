@@ -217,7 +217,7 @@ import { getBrainActivityWorkerStatus, shutdownBrainActivityWorker } from './bra
 import { getRuntimeWorkerDiagnostics } from './process/runtime-worker-broker.js';
 import { gatewayRuntimeAdmission } from './runtime-admission';
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
-import { requireGatewayAuth } from './gateway-auth';
+import { requireGatewayAuth, isDirectLoopbackRequest } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import { getGatewayDescriptor } from './gateway-identity';
 import {
@@ -885,8 +885,7 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
 });
 
 app.post('/api/internal/shutdown', (req, res) => {
-  const addr = req.socket.remoteAddress || '';
-  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+  if (!isDirectLoopbackRequest(req)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
@@ -917,8 +916,7 @@ function getUpdatePreflightForInternalRequest() {
 }
 
 app.get('/api/internal/update-preflight', (req, res) => {
-  const addr = req.socket.remoteAddress || '';
-  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+  if (!isDirectLoopbackRequest(req)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
@@ -926,8 +924,7 @@ app.get('/api/internal/update-preflight', (req, res) => {
 });
 
 app.post('/api/internal/update-drain', async (req, res) => {
-  const addr = req.socket.remoteAddress || '';
-  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+  if (!isDirectLoopbackRequest(req)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
