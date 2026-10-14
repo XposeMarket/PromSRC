@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -30,7 +31,7 @@ const pass = (msg) => console.log(`PASS: ${msg}`);
 const desktop = await importLocal('dist/gateway/desktop-tools.js');
 const wrappers = await importLocal('dist/gateway/desktop-wrappers.js');
 const toolBuilderSrc = readFileSync(path.join(repoRoot, 'src/gateway/tool-builder.ts'), 'utf8');
-const execSrc = readFileSync(path.join(repoRoot, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
+const execSrc = readExecutorSource(repoRoot);
 
 const modelNames = new Set(desktop.getDesktopModelToolNames());
 const modelNamesFromDefs = new Set(desktop.getDesktopModelToolDefinitions().map((d) => d.function?.name));

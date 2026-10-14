@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 import { fileURLToPath } from 'node:url';
 import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
@@ -11,7 +12,7 @@ const router = readChatRouterSource();
 const analysisPreview = read('src/gateway/media-analysis-preview.ts');
 const mediaExecutor = read('src/gateway/agents-runtime/capabilities/web-media-executor.ts');
 const durableTrace = read('src/gateway/durable-chat-trace.ts');
-const executor = read('src/gateway/agents-runtime/subagent-executor.ts');
+const executor = readExecutorSource(root);
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobileApi = read('web-ui/src/mobile/mobile-api.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
