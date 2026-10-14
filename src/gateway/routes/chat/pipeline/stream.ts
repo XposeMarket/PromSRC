@@ -1,31 +1,9 @@
 import express from 'express';
-import { createMainChatStreamStore, type MainChatStreamFrame, type MainChatStreamState } from '../../../chat/main-chat-stream-store';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../../session';
-import {
-  appendDurableCommentaryContext,
-  buildDurableCommentaryContext,
-} from '../../../context/commentary-context';
-import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../../../tasks/task-runner';
-import {
-  listManagedTeams,
-  getManagedTeam,
-  saveManagedTeam,
-  deleteManagedTeam,
-  createManagedTeam,
-  appendTeamChat,
-  appendManagerNote,
-  applyTeamChange,
-  rejectTeamChange,
-  getTeamMemberAgentIds,
-  recordTeamRun,
-  addTeamNotificationTarget,
-  getTeamNotificationTargets,
-  listTeamContextReferences,
-  addTeamContextReference,
-  updateTeamContextReference,
-  deleteTeamContextReference,
-  buildTeamContextRuntimeBlock,
-} from '../../../teams/managed-teams';
+import { type MainChatStreamFrame } from '../../../chat/main-chat-stream-store';
+import { getSession, replaceHistory } from '../../../session';
+import { buildDurableCommentaryContext } from '../../../context/commentary-context';
+import { backgroundStatus } from '../../../tasks/task-runner';
+import { addTeamNotificationTarget } from '../../../teams/managed-teams';
 
 
 interface StreamDependencies {

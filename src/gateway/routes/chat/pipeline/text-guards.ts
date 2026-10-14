@@ -1,66 +1,8 @@
 import { refreshProjectContextForSession } from '../../../projects/project-learning.js';
-import {
-  blockMainChatGoalFromOwner,
-  buildMainChatGoalCompletionReport,
-  buildMainChatGoalContinuationPrompt,
-  getAllMainChatGoalRecords,
-  handleMainChatGoalCommand,
-  stopMainChatGoalByUser,
-  canAutomaticallyResumeMainChatGoal,
-  isMainChatGoalContinuation,
-  maybeSummarizeMainChatGoal,
-  recordMainChatGoalTurnPlanProgress,
-  recordMainChatGoalDeniedAction,
-  recordMainChatGoalRuntimeFailure,
-  recordMainChatGoalContinuationBoundary,
-  recordMainChatGoalRequirement,
-  resolveMainChatGoalPolicy,
-  snapshotMainChatGoal,
-  completeMainChatGoalFromOwner,
-} from '../../../main-chat-goals';
-import {
-  wss as _wssRef, setWss,
-  broadcastWS,
-  broadcastTeamEvent,
-  addTeamSseClient,
-  removeTeamSseClient,
-  sendTeamNotificationToChannels,
-  sendDiscordNotification,
-  sendWhatsAppNotification,
-  resolveChannelsConfig,
-  setTelegramChannelForBroadcaster,
-  isModelBusy, setModelBusy,
-  getLastMainSessionId, setLastMainSessionId,
-  setSessionChannelHint,
-  type TelegramChannelConfig,
-  type DiscordChannelConfig,
-  type WhatsAppChannelConfig,
-  type ChannelsConfig,
-  normalizeTelegramConfig,
-  normalizeDiscordConfig,
-  normalizeWhatsAppConfig,
-  isGatewayDraining,
-} from '../../../comms/broadcaster';
-import {
-  separateThinkingFromContent,
-  sanitizeFinalReply,
-  stripExplicitThinkTags,
-  normalizeForDedup,
-  isGreetingLikeMessage,
-} from '../../../comms/reply-processor';
-import {
-  initTaskRouter,
-  latestTaskForSession,
-  findBlockedTaskForSession,
-  findClarificationWaitingTask,
-  isResumeIntent, isRerunIntent, isCancelIntent,
-  isStatusQuestion, isTaskListIntent, isAdjustmentIntent,
-  getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
-  parseTaskStatusFilter, getTaskScopeBuckets, parseTaskIdFromText,
-  launchBackgroundTaskRunner, handleTaskControlAction,
-  handleTaskRecoveryMessage,
-  renderTaskCandidatesForHuman, tryHandleBlockedTaskFollowup,
-} from '../../../tasks/task-router';
+import { snapshotMainChatGoal } from '../../../main-chat-goals';
+import { broadcastWS } from '../../../comms/broadcaster';
+import { normalizeForDedup, isGreetingLikeMessage } from '../../../comms/reply-processor';
+import { isResumeIntent, isRerunIntent, isCancelIntent, parseTaskIdFromText } from '../../../tasks/task-router';
 
 
 

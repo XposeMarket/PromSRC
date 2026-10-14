@@ -1,51 +1,13 @@
 import { claimRuntimeRecovery } from '../../../runtime/recovery-claims';
-import { createMainChatStreamStore, type MainChatStreamFrame, type MainChatStreamState } from '../../../chat/main-chat-stream-store';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../../session';
-import { extractTurnFileTouches, mergeTurnFileTouches, type TurnFileTouch } from '../../../file-change-summary';
-import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../../../tasks/task-runner';
+import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
+import { addMessage } from '../../../session';
+import { mergeTurnFileTouches, type TurnFileTouch } from '../../../file-change-summary';
+import { listActiveBackgroundIdsForSession } from '../../../tasks/task-runner';
 import { formatBackgroundSpawnContinuity } from '../../../tasks/background-spawn-continuity';
-import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../../../chat/turn-coordinator';
-import {
-  wss as _wssRef, setWss,
-  broadcastWS,
-  broadcastTeamEvent,
-  addTeamSseClient,
-  removeTeamSseClient,
-  sendTeamNotificationToChannels,
-  sendDiscordNotification,
-  sendWhatsAppNotification,
-  resolveChannelsConfig,
-  setTelegramChannelForBroadcaster,
-  isModelBusy, setModelBusy,
-  getLastMainSessionId, setLastMainSessionId,
-  setSessionChannelHint,
-  type TelegramChannelConfig,
-  type DiscordChannelConfig,
-  type WhatsAppChannelConfig,
-  type ChannelsConfig,
-  normalizeTelegramConfig,
-  normalizeDiscordConfig,
-  normalizeWhatsAppConfig,
-  isGatewayDraining,
-} from '../../../comms/broadcaster';
-import {
-  registerLiveRuntime,
-  finishLiveRuntime,
-  hasTerminalRuntimeCheckpoint,
-  updateLiveRuntimeCheckpoint,
-  markLiveRuntimeProgress,
-  interruptLiveRuntimeForRecovery,
-  listLiveRuntimes,
-  listInterruptedRuntimes,
-  getLiveRuntime,
-  abortLiveRuntime,
-  addPendingRuntimeSteer,
-  consumePendingRuntimeSteersForSession,
-  isSteerableChatRuntimeKind,
-  stripInheritedRecoveryMarks,
-  type RuntimeSteerEvent,
-} from '../../../live-runtime-registry';
-import { resumePlannedRestartMainChats, retriggerDeferredMainChatRuntime, registerRestartContinuityEmitter } from '../../../runtime-recovery';
+import { mainChatTurnCoordinator } from '../../../chat/turn-coordinator';
+import { broadcastWS, setModelBusy } from '../../../comms/broadcaster';
+import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint, listLiveRuntimes, listInterruptedRuntimes, stripInheritedRecoveryMarks } from '../../../live-runtime-registry';
+import { retriggerDeferredMainChatRuntime } from '../../../runtime-recovery';
 import type { InterruptedMainChatRuntime } from '../../chat.router';
 
 interface RestartContinuityDependencies {

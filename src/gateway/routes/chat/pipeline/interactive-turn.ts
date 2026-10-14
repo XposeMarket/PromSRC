@@ -1,174 +1,29 @@
-import { estimateJsonTokensForModel, safeTokenSessionFileName, rawToolTokenCache, estimateToolObservationRawTokens, estimateStoredThreadFootprint, aggregateModelUsageEvents, aggregateSessionModelUsage, summarizeTurnToolResultBudget, buildActiveSkillsContextEstimate, ContextWindowRow, allocateContextChildren, friendlyContextToolCategory, estimateCurrentSystemToolSchemaTokens, estimateCurrentSystemPromptTokens, buildSystemToolSchemaChildren, buildContextWindowSubagentsRosterEstimate, getLastUserContextText, isBrainMemoryContextSession, resolveContextWindowMemoryMode, buildContextWindowMemoryAtomEstimate, buildContextWindowThoughtPacketEstimate, buildSystemPromptChildren, buildProviderUsageGroup, buildToolUsageGroup, buildContextWindowCurrentState } from '../.././chat/context-window';
+import { aggregateModelUsageEvents, summarizeTurnToolResultBudget } from '../.././chat/context-window';
 import { hasRecentVoiceWorkflowUserMessage } from '../.././chat/voice/spoken-reply';
 import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
-import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../../../chat/post-turn-queue';
-import {
-  getConfig,
-  getAgents,
-  getAgentById,
-  ensureAgentWorkspace,
-  resolveAgentWorkspace,
-} from '../../../../config/config';
-import {
-  captureModelUsageLogCursor,
-  readModelUsageEventsForSession,
-  readModelUsageEventsSince,
-  getUsageCalibration,
-  resolveProviderPromptTokens,
-  type ModelUsageEvent,
-} from '../../../../providers/model-usage';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../../session';
+import { enqueuePostTurnJob } from '../../../chat/post-turn-queue';
+import { getConfig } from '../../../../config/config';
+import { captureModelUsageLogCursor, readModelUsageEventsForSession, readModelUsageEventsSince } from '../../../../providers/model-usage';
+import { getSession, addMessage, getHistory, recordWorkingContextPacket, persistToolLog, getWorkspace, type TurnOrigin } from '../../../session';
 import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../../../durable-chat-trace';
-import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
-import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
-import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../../chat/chat-model-route';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../../tool-observations';
+import { type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
+import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
+import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError } from '../../../chat/chat-model-route';
+import { formatToolStateSummaryForContext, persistToolResultsAsObservations, type ToolObservation } from '../../../tool-observations';
 import { formatBackgroundSpawnContinuity } from '../../../tasks/background-spawn-continuity';
-import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../../../resources/resource-store';
-import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../../../chat/turn-coordinator';
-import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane, type RuntimeAdmissionBudget } from '../../../runtime-admission';
-import {
-  executeShoppingSearchProducts,
-  executeWebSearch,
-  executeWebFetch,
-} from '../../../../tools/web';
-import {
-  blockMainChatGoalFromOwner,
-  buildMainChatGoalCompletionReport,
-  buildMainChatGoalContinuationPrompt,
-  getAllMainChatGoalRecords,
-  handleMainChatGoalCommand,
-  stopMainChatGoalByUser,
-  canAutomaticallyResumeMainChatGoal,
-  isMainChatGoalContinuation,
-  maybeSummarizeMainChatGoal,
-  recordMainChatGoalTurnPlanProgress,
-  recordMainChatGoalDeniedAction,
-  recordMainChatGoalRuntimeFailure,
-  recordMainChatGoalContinuationBoundary,
-  recordMainChatGoalRequirement,
-  resolveMainChatGoalPolicy,
-  snapshotMainChatGoal,
-  completeMainChatGoalFromOwner,
-} from '../../../main-chat-goals';
-import { runWithInternalWatchTurnContext, setCurrentInternalWatchTurnContext } from '../../../internal-watch/internal-watch-policy';
-import {
-  wss as _wssRef, setWss,
-  broadcastWS,
-  broadcastTeamEvent,
-  addTeamSseClient,
-  removeTeamSseClient,
-  sendTeamNotificationToChannels,
-  sendDiscordNotification,
-  sendWhatsAppNotification,
-  resolveChannelsConfig,
-  setTelegramChannelForBroadcaster,
-  isModelBusy, setModelBusy,
-  getLastMainSessionId, setLastMainSessionId,
-  setSessionChannelHint,
-  type TelegramChannelConfig,
-  type DiscordChannelConfig,
-  type WhatsAppChannelConfig,
-  type ChannelsConfig,
-  normalizeTelegramConfig,
-  normalizeDiscordConfig,
-  normalizeWhatsAppConfig,
-  isGatewayDraining,
-} from '../../../comms/broadcaster';
-import {
-  initTaskRouter,
-  latestTaskForSession,
-  findBlockedTaskForSession,
-  findClarificationWaitingTask,
-  isResumeIntent, isRerunIntent, isCancelIntent,
-  isStatusQuestion, isTaskListIntent, isAdjustmentIntent,
-  getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
-  parseTaskStatusFilter, getTaskScopeBuckets, parseTaskIdFromText,
-  launchBackgroundTaskRunner, handleTaskControlAction,
-  handleTaskRecoveryMessage,
-  renderTaskCandidatesForHuman, tryHandleBlockedTaskFollowup,
-} from '../../../tasks/task-router';
-import {
-  registerLiveRuntime,
-  finishLiveRuntime,
-  hasTerminalRuntimeCheckpoint,
-  updateLiveRuntimeCheckpoint,
-  markLiveRuntimeProgress,
-  interruptLiveRuntimeForRecovery,
-  listLiveRuntimes,
-  listInterruptedRuntimes,
-  getLiveRuntime,
-  abortLiveRuntime,
-  addPendingRuntimeSteer,
-  consumePendingRuntimeSteersForSession,
-  isSteerableChatRuntimeKind,
-  stripInheritedRecoveryMarks,
-  type RuntimeSteerEvent,
-} from '../../../live-runtime-registry';
-import { addCanvasFile, getCanvasContextBlock } from '../.././canvas-state';
-import {
-  // Core exports
-  buildTools,
-  executeTool,
-  _dispatchToAgent,
-  initChatHelpers,
-  buildPersonalityContext,
-  // Stats / maps
-  getOrchestrationSessionStats,
-  orchestrationSessionStats,
-  recordOrchestrationEvent,
-  ensureMultiAgentSkill,
-  getPreemptSessionCount,
-  incrementPreemptSessionCount,
-  // Types
-  type SubagentProfile,
-  type HandleChatResult,
-  type RuntimeProgressItem,
-  // Skills
-  resolveSkillsDir,
-  configuredSkillsDir,
-  fallbackSkillsDir,
-  syncMissingSkills,
-  migrateSkillsStateIfMissing,
-  // Progress
-  prettifyToolName,
-  buildProgressItems,
-  // Tool call helpers
-  logToolCall,
-  isBrowserToolName,
-  isDesktopToolName,
-  isDesktopVisualToolName,
-  buildBrowserAck,
-  wrapUntrustedBrowserToolContent,
-  buildDesktopAck,
-  buildDesktopScreenshotContent,
-  buildVisionScreenshotMessage,
-  // Chat intent classifiers
-  isExecutionLikeRequest,
-  isContinuationCue,
-  hasPendingExecutionIntent,
-  isHardBlockerReply,
-  hasConcreteCompletion,
-  autoActivateToolCategories,
-  // File helpers
-  isHighStakesFile,
-  requestedFullTemplate,
-  resolveWorkspaceFilePath,
-  collectFileSnapshots,
-  // Browser quality
-  goalIsInteractiveAction,
-  isBrowserHeavyResearchPage,
-  goalLikelyNeedsTextInput,
-  parseSnapshotDiagnostics,
-  evaluateBrowserSnapshotQuality,
-} from '../../../chat/chat-helpers';
-import {
-  buildTurnContextPacket,
-  formatTurnContextPacketsForPrompt,
-  normalizeReasoningSummary,
-  shouldPersistTurnContext,
-} from '../../../context/turn-context-packet';
+import { autoAttachChatInputResources, redactResourceText } from '../../../resources/resource-store';
+import { mainChatTurnCoordinator, type SessionTurnLease } from '../../../chat/turn-coordinator';
+import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../../../runtime-admission';
+import { executeWebFetch } from '../../../../tools/web';
+import { buildMainChatGoalCompletionReport, handleMainChatGoalCommand, isMainChatGoalContinuation, recordMainChatGoalRequirement, snapshotMainChatGoal } from '../../../main-chat-goals';
+import { runWithInternalWatchTurnContext } from '../../../internal-watch/internal-watch-policy';
+import { broadcastWS } from '../../../comms/broadcaster';
+import { findBlockedTaskForSession, buildBlockedTaskStatusMessage, tryHandleBlockedTaskFollowup } from '../../../tasks/task-router';
+import { registerLiveRuntime, finishLiveRuntime, getLiveRuntime } from '../../../live-runtime-registry';
+import { getCanvasContextBlock } from '../.././canvas-state';
+import { type HandleChatResult } from '../../../chat/chat-helpers';
+import { buildTurnContextPacket, formatTurnContextPacketsForPrompt, shouldPersistTurnContext } from '../../../context/turn-context-packet';
 import type { ReasoningOptions } from '../../chat.router';
 
 interface InteractiveTurnDependencies {

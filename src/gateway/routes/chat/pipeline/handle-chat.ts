@@ -1,7 +1,11 @@
-import { normalizeRuntimeVisionAttachmentsInput, normalizeRuntimeAttachmentPreviewsInput, getOrchestrationConfig, truncateRuntimeProcessText, summarizeMobileRuntime, isLiveRunningRuntime, sessionProcessLogFromHistory, boundedPositiveInt, sanitizeUiProcessValue, sanitizeProcessEntryForUi, sanitizeAttachmentPreviewForUi, sanitizeMessageMediaForUi, trimLiveTraceStringLeaves, sanitizeLiveTraceEntriesForUi, compactFileChangeFilesForUi, sanitizeHistoryForUiResponse, MainChatTurnReconciliation } from '../.././chat/shared';
-import { registerDispatchVoiceRoutes, NormalizedVoiceDispatchTask, NormalizedPrimaryVoiceWorker, compactVoiceDispatchTitle, normalizeVoiceDispatchMode, normalizeVoiceDispatchDelivery, normalizeVoiceDispatchTasks, normalizePrimaryVoiceWorker } from '../.././chat/voice/dispatch';
-import { createVoiceNarrator, classifyVoiceInterruption, buildVoiceInterruptionContextBlock, buildChatSteerContextBlock, appendVoiceInterruptionLog } from '../.././chat/voice/narrator';
-import { VoiceAgentTargetContext, normalizeVoiceAgentTarget, voiceAgentTargetIdentity, loadVoiceAgentMemoryForTarget, voiceAgentWorkerHandoffSessions, findActiveMainChatRuntimeForSession, compactVoiceText, summarizeUnlockedToolCategories, buildVoiceConversationTranscript, buildVoiceCompactionSummaryBlock, buildVoiceRecentToolLog, buildVoiceWorkerContextPacket, getReusableVoiceContextPacket, getVoiceAgentContextBlock } from '../.././chat/voice/context';
+import { inferReferenceImageMimeType } from './context-preparation';
+import { shouldUseLeanWriteNoteSwitchTools, providerToolLimit, parseSupervisionControlPayload, supervisionTerminalStatus } from './tool-loop';
+import { isExplicitLowOverheadBrowserObserve, feedItemKey } from './browser-observation';
+import { isReadOnlyDevPlanStep, planStepNeedsWriteEvidence } from './finalization-guards';
+import { getOrchestrationConfig } from '../.././chat/shared';
+import { compactVoiceDispatchTitle } from '../.././chat/voice/dispatch';
+import { createVoiceNarrator, buildChatSteerContextBlock } from '../.././chat/voice/narrator';
+import { summarizeUnlockedToolCategories } from '../.././chat/voice/context';
 import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../../../media-analysis-preview';
 import path from 'path';
 import fs from 'fs';
@@ -13,7 +17,7 @@ import { ModelResponseRecovery } from '../../../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../../../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
-import { currentTrace, getTrace, listRecentTraces, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
+import { currentTrace, recordSpan, runInTrace, withSpan } from '../../../observability/turn-trace';
 import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../../../chat/tool-dispatch-policy';
 import { ToolPerformanceTracker } from '../../../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../../../tool-category-provisioning';
@@ -22,388 +26,72 @@ import { getWorkspaceToolMode } from '../../../../runtime/workspace-tool-mode';
 import { buildOperatingInstructions } from '../../../../runtime/operating-instructions';
 import { digestCanonicalToolArgs, digestPollResult, isPollingToolCall, POLL_LOOP_CRITICAL_THRESHOLD, POLL_LOOP_WARNING_THRESHOLD, previewCanonicalToolArgs } from '../../../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../../../prompt-cache';
-import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../../../chat/context-build-limiter';
-import {
-  getConfig,
-  getAgents,
-  getAgentById,
-  ensureAgentWorkspace,
-  resolveAgentWorkspace,
-} from '../../../../config/config';
+import { runWithContextBuildPermit } from '../../../chat/context-build-limiter';
+import { getConfig } from '../../../../config/config';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../../../onboarding/meet-prompt';
 import { getOllamaClient } from '../../../../agents/ollama-client';
 import { parseProviderModelRef } from '../../../../agents/model-routing.js';
-import {
-  captureModelUsageLogCursor,
-  readModelUsageEventsForSession,
-  readModelUsageEventsSince,
-  getUsageCalibration,
-  resolveProviderPromptTokens,
-  type ModelUsageEvent,
-} from '../../../../providers/model-usage';
+import { captureModelUsageLogCursor, readModelUsageEventsSince, resolveProviderPromptTokens } from '../../../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../../../providers/model-pricing';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../../session';
+import { getHistory, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled } from '../../../session';
 import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
-import {
-  collectRichArtifacts,
-  extractVisualArtifactsFromMarkdown,
-  normalizeProductArtifactItems,
-  normalizeSourceArtifactItems,
-  productCarouselToArtifact,
-} from '../../../rich-artifacts';
-import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
+import { collectRichArtifacts, extractVisualArtifactsFromMarkdown, productCarouselToArtifact } from '../../../rich-artifacts';
+import { buildContextBudget, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
 import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
-import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../../chat/chat-model-route';
+import { captureChatTurnRouteSnapshot } from '../../../chat/chat-model-route';
 import { envelopeOversizedToolResult } from '../../../tool-result-envelope';
 import { boundToolMessageContentForModelContext } from '../../../tool-result-model-context';
-import { ensurePrometheusThreadOpsForSupervision, getAgentTeamScheduleTools } from '../../../tools/defs/agent-team-schedule';
-import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../../../projects/project-store.js';
-import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../../../tasks/task-runner';
-import { getVerificationFlowManager, getApprovalQueue } from '../../../verification-flow';
+import { ensurePrometheusThreadOpsForSupervision } from '../../../tools/defs/agent-team-schedule';
+import { findProjectBySessionId } from '../../../projects/project-store.js';
+import { bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../../../tasks/task-runner';
+import { getApprovalQueue } from '../../../verification-flow';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../../../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../../../brain/skill-episodes.js';
 import { recordContextReceiptOutcome } from '../../../../runtime/context-receipt';
 import type { RetrievalTrace } from '../../../../runtime/retrieval-provenance';
 import { recordLearningTurn } from '../../../learning/turn-recorder.js';
 import { getSkillRoutingReport } from '../../../../runtime/skill-routing-resolver.js';
-import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../../../chat/attachment-context';
-import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../../../resources/resource-store';
-import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane, type RuntimeAdmissionBudget } from '../../../runtime-admission';
-import {
-  browserOpen,
-  browserSnapshot,
-  browserSnapshotDelta,
-  browserClick,
-  browserFill,
-  browserPressKey,
-  browserType,
-  browserWait,
-  browserScroll,
-  browserDrag,
-  browserClose,
-  formatBrowserInteractionContextBlock,
-  browserVisionScreenshot,
-  browserVisionClick,
-  browserVisionType,
-  browserPreviewScreenshot,
-  browserGetFocusedItem,
-  browserGetPageText,
-  getLastBrowserScreenshot,
-  getBrowserToolDefinitions,
-  getBrowserSessionInfo,
-  getBrowserAdvisorPacket,
-  listBrowserSessions,
-  type BrowserAdvisorPacket,
-  type BrowserObserveMode,
-  resolveBrowserObserveMode,
-} from '../../../browser-tools';
-import {
-  desktopFindWindow,
-  desktopFocusWindowVerified,
-  desktopWindowControl,
-  desktopClick,
-  desktopDrag,
-  desktopScroll,
-  desktopWait,
-  desktopType,
-  desktopTypeRaw,
-  desktopPressKey,
-  desktopGetClipboard,
-  desktopSetClipboard,
-  // Phase 4
-  desktopLaunchApp,
-  desktopCloseApp,
-  desktopGetProcessList,
-  // Phase 3
-  desktopWaitForChange,
-  desktopDiffScreenshot,
-  desktopScreenshotWithHistory,
-  desktopWindowScreenshot,
-  parseDesktopScreenshotToolArgs,
-  parseDesktopPointerMonitorArgs,
-  resolveDesktopActionPoint,
-  getDesktopAdvisorPacketById,
-  desktopGetActiveMonitorIndex,
-  desktopGetMonitors,
-  desktopGetMonitorsSummary,
-  desktopFindInstalledApp,
-  desktopListWindowsCanonical,
-  desktopFocusWindowCanonical,
-  desktopWindowClick,
-  desktopWindowType,
-  desktopWindowPressKey,
-  desktopWindowScroll,
-  getDesktopToolDefinitions,
-  getDesktopAdvisorPacket,
-} from '../../../desktop-tools';
+import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments } from '../../../chat/attachment-context';
+import { getResourceStore, redactResourceText, type ResourceContextResult } from '../../../resources/resource-store';
+import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../../../runtime-admission';
+import { browserSnapshotDelta, formatBrowserInteractionContextBlock, browserVisionScreenshot, getBrowserSessionInfo, getBrowserAdvisorPacket, type BrowserAdvisorPacket, type BrowserObserveMode, resolveBrowserObserveMode } from '../../../browser-tools';
+import { desktopWait, desktopScreenshotWithHistory, desktopGetActiveMonitorIndex, getDesktopAdvisorPacket } from '../../../desktop-tools';
 import { desktopBackgroundReleaseSession } from '../../../desktop-background';
 import { executeXaiImageVisionSummary } from '../../../tools/handlers/xai-handlers.js';
-import {
-  executeShoppingSearchProducts,
-  executeWebSearch,
-  executeWebFetch,
-} from '../../../../tools/web';
+import { executeWebFetch } from '../../../../tools/web';
 import { resolvePrimaryModelCapabilities, buildVisionImagePart, type ModelCapabilities } from '../../../vision-chat';
-import {
-  createTask,
-  loadTask,
-  saveTask,
-  updateTaskStatus,
-  setTaskStepRunning,
-  updateTaskRuntimeProgress,
-  appendJournal,
-  updateResumeContext,
-  listTaskSummaries,
-  deleteTask,
-  mutatePlan,
-  getEvidenceBusSnapshot,
-  type TaskRecord,
-  type TaskSummary,
-} from '../../../tasks/task-store';
+import { createTask, loadTask, saveTask, updateTaskStatus, setTaskStepRunning, appendJournal, mutatePlan } from '../../../tasks/task-store';
 import { clearTaskRunBinding, completeNextOpenTaskStep, getTaskRunBinding, mirrorSessionChatEvent } from '../../../tasks/task-run-mirror';
 import { BackgroundTaskRunner } from '../../../tasks/background-task-runner';
-import {
-  addVoiceWorkgroupWorker,
-  createVoiceWorkgroup,
-  listVoiceWorkgroupsForSession,
-  loadVoiceWorkgroup,
-  updateVoiceWorkgroupWorkerStatus,
-  type VoiceWorkgroupDelivery,
-  type VoiceWorkgroupMode,
-} from '../../../voice/voice-workgroup-store';
-import {
-  decidePostActionObservation,
-  summarizeBrowserObservationState,
-  summarizeDesktopObservationState,
-  type PostActionObservationDecision,
-  type BrowserObservationPageState,
-  type DesktopObservationPacketState,
-} from '../../../observation-policy';
-import {
-  blockMainChatGoalFromOwner,
-  buildMainChatGoalCompletionReport,
-  buildMainChatGoalContinuationPrompt,
-  getAllMainChatGoalRecords,
-  handleMainChatGoalCommand,
-  stopMainChatGoalByUser,
-  canAutomaticallyResumeMainChatGoal,
-  isMainChatGoalContinuation,
-  maybeSummarizeMainChatGoal,
-  recordMainChatGoalTurnPlanProgress,
-  recordMainChatGoalDeniedAction,
-  recordMainChatGoalRuntimeFailure,
-  recordMainChatGoalContinuationBoundary,
-  recordMainChatGoalRequirement,
-  resolveMainChatGoalPolicy,
-  snapshotMainChatGoal,
-  completeMainChatGoalFromOwner,
-} from '../../../main-chat-goals';
-import {
-  listManagedTeams,
-  getManagedTeam,
-  saveManagedTeam,
-  deleteManagedTeam,
-  createManagedTeam,
-  appendTeamChat,
-  appendManagerNote,
-  applyTeamChange,
-  rejectTeamChange,
-  getTeamMemberAgentIds,
-  recordTeamRun,
-  addTeamNotificationTarget,
-  getTeamNotificationTargets,
-  listTeamContextReferences,
-  addTeamContextReference,
-  updateTeamContextReference,
-  deleteTeamContextReference,
-  buildTeamContextRuntimeBlock,
-} from '../../../teams/managed-teams';
-import { runWithInternalWatchTurnContext, setCurrentInternalWatchTurnContext } from '../../../internal-watch/internal-watch-policy';
-import {
-  canExecuteToolCallsInParallel,
-  executeToolCallsInParallel,
-  partitionToolCallsForParallelExecution,
-  type ParallelToolCall,
-} from '../../../../tools/parallel-tool-calls.js';
-import {
-	  buildTools as _buildTools,
-	  getToolCategory,
-	  isSchemaHiddenCompatToolName,
-	  type BuildToolsDeps,
-  type ToolResult,
-  type TaskControlResponse,
-  type ScheduleJobAction,
-  normalizeScheduleJobAction,
-  summarizeCronJob,
-  normalizeDeliveryChannel,
-  normalizeToolArgsForTool,
-  parseJsonLike,
-  toStringRecord,
-  parseLooseMap,
-} from '../../../tool-builder';
+import { addVoiceWorkgroupWorker, loadVoiceWorkgroup } from '../../../voice/voice-workgroup-store';
+import { decidePostActionObservation, summarizeBrowserObservationState, summarizeDesktopObservationState, type PostActionObservationDecision, type BrowserObservationPageState, type DesktopObservationPacketState } from '../../../observation-policy';
+import { blockMainChatGoalFromOwner, isMainChatGoalContinuation, recordMainChatGoalTurnPlanProgress, recordMainChatGoalDeniedAction, resolveMainChatGoalPolicy, snapshotMainChatGoal, completeMainChatGoalFromOwner } from '../../../main-chat-goals';
+import { listManagedTeams } from '../../../teams/managed-teams';
+import { setCurrentInternalWatchTurnContext } from '../../../internal-watch/internal-watch-policy';
+import { canExecuteToolCallsInParallel, executeToolCallsInParallel, partitionToolCallsForParallelExecution, type ParallelToolCall } from '../../../../tools/parallel-tool-calls.js';
+import { buildTools as _buildTools, getToolCategory, isSchemaHiddenCompatToolName, type ToolResult, normalizeToolArgsForTool } from '../../../tool-builder';
 import { countEquivalentFailedReads } from '../../../tool-failure-guard';
-import {
-  wss as _wssRef, setWss,
-  broadcastWS,
-  broadcastTeamEvent,
-  addTeamSseClient,
-  removeTeamSseClient,
-  sendTeamNotificationToChannels,
-  sendDiscordNotification,
-  sendWhatsAppNotification,
-  resolveChannelsConfig,
-  setTelegramChannelForBroadcaster,
-  isModelBusy, setModelBusy,
-  getLastMainSessionId, setLastMainSessionId,
-  setSessionChannelHint,
-  type TelegramChannelConfig,
-  type DiscordChannelConfig,
-  type WhatsAppChannelConfig,
-  type ChannelsConfig,
-  normalizeTelegramConfig,
-  normalizeDiscordConfig,
-  normalizeWhatsAppConfig,
-  isGatewayDraining,
-} from '../../../comms/broadcaster';
-import {
-  getSessionSkillWindows,
-  sessionCurrentTurn,
-  isOrchestrationSkillEnabled,
-  setOrchestrationEnabled,
-  recoverSkillsIfEmpty,
-  syncOrchestrationOnStartup,
-  initSkillWindows,
-  setSkillRecoveryFn,
-} from '../../../skills-runtime/skill-windows';
+import { broadcastWS } from '../../../comms/broadcaster';
+import { isOrchestrationSkillEnabled } from '../../../skills-runtime/skill-windows';
 import { getPrimaryModel } from '../../../../providers/factory';
 import { clearTurnModelOverride, getTurnModelOverride } from '../../../chat/model-switch-state';
-import {
-  separateThinkingFromContent,
-  sanitizeFinalReply,
-  stripExplicitThinkTags,
-  normalizeForDedup,
-  isGreetingLikeMessage,
-} from '../../../comms/reply-processor';
-import {
-  initTaskRouter,
-  latestTaskForSession,
-  findBlockedTaskForSession,
-  findClarificationWaitingTask,
-  isResumeIntent, isRerunIntent, isCancelIntent,
-  isStatusQuestion, isTaskListIntent, isAdjustmentIntent,
-  getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
-  parseTaskStatusFilter, getTaskScopeBuckets, parseTaskIdFromText,
-  launchBackgroundTaskRunner, handleTaskControlAction,
-  handleTaskRecoveryMessage,
-  renderTaskCandidatesForHuman, tryHandleBlockedTaskFollowup,
-} from '../../../tasks/task-router';
-import {
-  router as tasksRouter,
-  initTasksRouter,
-  makeBroadcastForTask,
-} from '../.././tasks.router';
+import { separateThinkingFromContent, sanitizeFinalReply, stripExplicitThinkTags, normalizeForDedup, isGreetingLikeMessage } from '../../../comms/reply-processor';
+import { handleTaskControlAction } from '../../../tasks/task-router';
+import { makeBroadcastForTask } from '../.././tasks.router';
 import { sanitizeAgentId, normalizeAgentsForSave } from '../../../agents/agent-normalize';
-import {
-  registerLiveRuntime,
-  finishLiveRuntime,
-  hasTerminalRuntimeCheckpoint,
-  updateLiveRuntimeCheckpoint,
-  markLiveRuntimeProgress,
-  interruptLiveRuntimeForRecovery,
-  listLiveRuntimes,
-  listInterruptedRuntimes,
-  getLiveRuntime,
-  abortLiveRuntime,
-  addPendingRuntimeSteer,
-  consumePendingRuntimeSteersForSession,
-  isSteerableChatRuntimeKind,
-  stripInheritedRecoveryMarks,
-  type RuntimeSteerEvent,
-} from '../../../live-runtime-registry';
-import {
-  router as teamsRouter,
-  initTeamsRouter,
-  pauseManagedTeamInternal,
-  resumeManagedTeamInternal,
-  buildTeamDispatchContext,
-  runTeamAgentViaChat,
-} from '../.././teams.router';
-import { addCanvasFile, getCanvasContextBlock } from '../.././canvas-state';
+import { markLiveRuntimeProgress, consumePendingRuntimeSteersForSession, type RuntimeSteerEvent } from '../../../live-runtime-registry';
+import { pauseManagedTeamInternal, resumeManagedTeamInternal, buildTeamDispatchContext, runTeamAgentViaChat } from '../.././teams.router';
+import { addCanvasFile } from '../.././canvas-state';
 import { getMCPManager } from '../../../mcp-manager';
-import {
-  // Core exports
-  buildTools,
-  executeTool,
-  _dispatchToAgent,
-  initChatHelpers,
-  buildPersonalityContext,
-  // Stats / maps
-  getOrchestrationSessionStats,
-  orchestrationSessionStats,
-  recordOrchestrationEvent,
-  ensureMultiAgentSkill,
-  getPreemptSessionCount,
-  incrementPreemptSessionCount,
-  // Types
-  type SubagentProfile,
-  type HandleChatResult,
-  type RuntimeProgressItem,
-  // Skills
-  resolveSkillsDir,
-  configuredSkillsDir,
-  fallbackSkillsDir,
-  syncMissingSkills,
-  migrateSkillsStateIfMissing,
-  // Progress
-  prettifyToolName,
-  buildProgressItems,
-  // Tool call helpers
-  logToolCall,
-  isBrowserToolName,
-  isDesktopToolName,
-  isDesktopVisualToolName,
-  buildBrowserAck,
-  wrapUntrustedBrowserToolContent,
-  buildDesktopAck,
-  buildDesktopScreenshotContent,
-  buildVisionScreenshotMessage,
-  // Chat intent classifiers
-  isExecutionLikeRequest,
-  isContinuationCue,
-  hasPendingExecutionIntent,
-  isHardBlockerReply,
-  hasConcreteCompletion,
-  autoActivateToolCategories,
-  // File helpers
-  isHighStakesFile,
-  requestedFullTemplate,
-  resolveWorkspaceFilePath,
-  collectFileSnapshots,
-  // Browser quality
-  goalIsInteractiveAction,
-  isBrowserHeavyResearchPage,
-  goalLikelyNeedsTextInput,
-  parseSnapshotDiagnostics,
-  evaluateBrowserSnapshotQuality,
-} from '../../../chat/chat-helpers';
+import { buildTools, executeTool, buildPersonalityContext, getOrchestrationSessionStats, getPreemptSessionCount, incrementPreemptSessionCount, type SubagentProfile, type HandleChatResult, type RuntimeProgressItem, buildProgressItems, logToolCall, isBrowserToolName, isDesktopToolName, isDesktopVisualToolName, buildBrowserAck, wrapUntrustedBrowserToolContent, buildDesktopAck, buildDesktopScreenshotContent, buildVisionScreenshotMessage, isContinuationCue, hasPendingExecutionIntent, isHardBlockerReply, hasConcreteCompletion, autoActivateToolCategories } from '../../../chat/chat-helpers';
 import { isPublicDistributionBuild } from '../../../../runtime/distribution.js';
 import { detectStage4InstructionIntents } from '../../../../runtime/instruction-intent-detector';
-import { attachWorkspaceCheckpoint, collectSnapshotRefsFromToolResults, createWorkspaceTurnCheckpoint } from '../../../../workspace-history';
-import {
-  getCodingContextPacketTelemetry,
-  observeCodingContext,
-  recordCodingContextPacketDecisionDiagnostic,
-  selectCodingContextPacket,
-} from '../../../coding-context-packet';
+import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../../../workspace-history';
+import { getCodingContextPacketTelemetry, observeCodingContext, recordCodingContextPacketDecisionDiagnostic, selectCodingContextPacket } from '../../../coding-context-packet';
 import { OllamaProcessManager } from '../../../ollama-process-manager';
 import { raceWithWatchdog, PreemptState } from '../../../scheduling/preempt-watchdog';
 import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from '../.././tool-result-elision';
-import {
-  buildTurnContextPacket,
-  formatTurnContextPacketsForPrompt,
-  normalizeReasoningSummary,
-  shouldPersistTurnContext,
-} from '../../../context/turn-context-packet';
+import { normalizeReasoningSummary } from '../../../context/turn-context-packet';
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../../../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../../../providers/chatgpt-web/chatgpt-web-models';
@@ -881,13 +569,6 @@ export async function handleChatUntraced(
       counters: getCodingContextPacketTelemetry(),
     });
   }
-  const inferReferenceImageMimeType = (filePath: string): string => {
-    const ext = path.extname(filePath).toLowerCase();
-    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-    if (ext === '.webp') return 'image/webp';
-    if (ext === '.gif') return 'image/gif';
-    return 'image/png';
-  };
   const resolveReferenceImagePath = (rawPath: string): string | null => {
     const value = String(rawPath || '').trim();
     if (!value) return null;
@@ -1217,14 +898,6 @@ export async function handleChatUntraced(
     ...Array.from(PRIORITY_TOOL_NAMES),
     'send_telegram',
   ]);
-  const shouldUseLeanWriteNoteSwitchTools = (generationOverride: any): boolean => {
-    if (generationOverride?.source !== 'turn_override') return false;
-    if (String(generationOverride?.tier || '').trim().toLowerCase() !== 'low') return false;
-    const reason = String(generationOverride?.reason || '').trim().toLowerCase();
-    if (!/(^|[^a-z])write[_\s-]?note([^a-z]|$)|(^|[^a-z])note([^a-z]|$)|remember|memory/.test(reason)) return false;
-    if (/(command|shell|terminal|browser|desktop|file|search|lookup|read|analy[sz]e|creative|video|export|deliver)/.test(reason)) return false;
-    return true;
-  };
   const maybeLeanToolsForSwitchModel = (toolDefs: any[], generationOverride: any): any[] => {
     if (!shouldUseLeanWriteNoteSwitchTools(generationOverride)) return toolDefs;
     const leanTools = toolDefs.filter((tool: any) => LEAN_WRITE_NOTE_SWITCH_TOOLS.has(toolNameOf(tool)));
@@ -1237,11 +910,6 @@ export async function handleChatUntraced(
       after: summarizeToolSurface(leanTools),
     });
     return leanTools;
-  };
-  const providerToolLimit = (providerId: string): number | null => {
-    const provider = String(providerId || '').trim().toLowerCase();
-    if (provider === 'xai') return 200;
-    return null;
   };
   const capToolsForProvider = (toolDefs: any[], generationOverride: any): any[] => {
     const cfg = getConfig().getConfig() as any;
@@ -1736,12 +1404,6 @@ export async function handleChatUntraced(
     return true;
   };
 
-  const isReadOnlyDevPlanStep = (step: string): boolean => {
-    const text = String(step || '').toLowerCase();
-    return /\b(read|inspect|grep|search|list|locate|review|understand|check|confirm|compare|audit)\b/.test(text)
-      && !/\b(edit|patch|replace|write|insert|delete|update|fix|apply|sync|build|verify|test|restart|reload)\b/.test(text);
-  };
-
   const seedDevSourceEditProgressPlan = (toolResult: ToolResult): void => {
     const devPlan = (toolResult as any).extra?.devSourceEdit?.plan || (toolResult as any).data?.devSourceEdit?.plan;
     const completionTag = String(
@@ -1902,16 +1564,6 @@ export async function handleChatUntraced(
   const PROGRESS_LIFECYCLE_TOOLS = new Set([
     'declare_plan', 'complete_plan_step', 'step_complete', 'complete_goal', 'block_goal',
   ]);
-  const planStepNeedsWriteEvidence = (stepText: string, note: string): boolean => {
-    const text = `${stepText || ''} ${note || ''}`.toLowerCase();
-    if (!text.trim()) return false;
-    if (/\b(read|inspect|grep|search|list|locate|review|understand|check|confirm|audit)\b/.test(text)
-      && !/\b(write|create|implement|build|edit|patch|replace|insert|delete|update|fix|add|scaffold|generate)\b/.test(text)) {
-      return false;
-    }
-    return /\b(write|create|implement|build|edit|patch|replace|insert|delete|update|fix|add|scaffold|generate|complete)\b/.test(text)
-      && /\b(file|html|index|app|game|page|component|code|script|style|feature|control|button|ui|tool|deliverable)\b/.test(text);
-  };
   const hasRecentWriteEvidenceForCurrentStep = (): boolean => {
     const lastBoundary = Math.max(
       allToolResults.map((r, index) => ['declare_plan', 'complete_plan_step', 'step_complete'].includes(String(r?.name || '').trim()) ? index : -1).reduce((a, b) => Math.max(a, b), -1),
@@ -3116,24 +2768,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   } else {
     messages.push({ role: 'user', content: message });
   }
-
-  const parseSupervisionControlPayload = (toolResult: any): any | null => {
-    if (!toolResult || toolResult.error) return null;
-    try {
-      const parsed = typeof toolResult.result === 'string' ? JSON.parse(toolResult.result) : toolResult.result;
-      return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-      return null;
-    }
-  };
   const queueSupervisionControl = (content: string): void => {
     messages.push({ role: 'user', content: `[SUPERVISION CONTROL â€” INTERNAL]
 ${content}
 Do not produce prose. Use the canonical thread tool now.` });
-  };
-  const supervisionTerminalStatus = (payload: any): boolean => {
-    const status = String(payload?.supervision?.status || '').trim().toLowerCase();
-    return ['complete', 'blocked', 'failed', 'cancelled'].includes(status);
   };
 
   // â”€â”€ Browser observation policy layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -3332,16 +2970,6 @@ Do not produce prose. Use the canonical thread tool now.` });
     return allToolResults.filter((result) =>
       result.error && result.name === toolName && hashArgs(result.args) === argsDigest,
     ).length;
-  };
-
-  const isExplicitLowOverheadBrowserObserve = (
-    toolName: string,
-    toolArgs: Record<string, any> = {},
-  ): boolean => {
-    if (!isBrowserToolName(toolName)) return false;
-    if (!Object.prototype.hasOwnProperty.call(toolArgs || {}, 'observe')) return false;
-    const mode = resolveBrowserObserveMode(toolName, toolArgs?.observe);
-    return mode === 'none' || mode === 'compact';
   };
 
   const captureObservationPreContext = async (
@@ -3745,15 +3373,6 @@ Do not produce prose. Use the canonical thread tool now.` });
     } catch {
       return String(rawUrl || '').toLowerCase().split('?')[0];
     }
-  };
-
-  const feedItemKey = (item: Record<string, any>): string => {
-    if (item?.id) return `id:${String(item.id)}`;
-    if (item?.link) return `link:${String(item.link)}`;
-    const text = String(item?.text || item?.snippet || item?.title || '').replace(/\s+/g, ' ').trim().slice(0, 220);
-    const handle = String(item?.handle || item?.author || '').toLowerCase();
-    const time = String(item?.time || '').slice(0, 40);
-    return `hash:${handle}|${time}|${text}`;
   };
 
   const mergeBrowserFeedBatch = (batch: Array<Record<string, any>>): { added: number; deduped: number; total: number } => {

@@ -1,58 +1,16 @@
 import path from 'path';
-import {
-  getConfig,
-  getAgents,
-  getAgentById,
-  ensureAgentWorkspace,
-  resolveAgentWorkspace,
-} from '../../../../config/config';
+import { getConfig } from '../../../../config/config';
 import { getOllamaClient } from '../../../../agents/ollama-client';
-import {
-  captureModelUsageLogCursor,
-  readModelUsageEventsForSession,
-  readModelUsageEventsSince,
-  getUsageCalibration,
-  resolveProviderPromptTokens,
-  type ModelUsageEvent,
-} from '../../../../providers/model-usage';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../../session';
-import {
-  appendDurableCommentaryContext,
-  buildDurableCommentaryContext,
-} from '../../../context/commentary-context';
-import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
+import { getUsageCalibration } from '../../../../providers/model-usage';
+import { getSession, getWorkingContextForContext, recordSessionCompaction } from '../../../session';
+import { appendDurableCommentaryContext } from '../../../context/commentary-context';
+import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
 import { runCompactionTransaction } from '../../../context/compaction-safety';
-import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../../tool-observations';
-import {
-	  buildTools as _buildTools,
-	  getToolCategory,
-	  isSchemaHiddenCompatToolName,
-	  type BuildToolsDeps,
-  type ToolResult,
-  type TaskControlResponse,
-  type ScheduleJobAction,
-  normalizeScheduleJobAction,
-  summarizeCronJob,
-  normalizeDeliveryChannel,
-  normalizeToolArgsForTool,
-  parseJsonLike,
-  toStringRecord,
-  parseLooseMap,
-} from '../../../tool-builder';
-import {
-  separateThinkingFromContent,
-  sanitizeFinalReply,
-  stripExplicitThinkTags,
-  normalizeForDedup,
-  isGreetingLikeMessage,
-} from '../../../comms/reply-processor';
-import {
-  buildTurnContextPacket,
-  formatTurnContextPacketsForPrompt,
-  normalizeReasoningSummary,
-  shouldPersistTurnContext,
-} from '../../../context/turn-context-packet';
+import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext } from '../../../tool-observations';
+import { type ToolResult } from '../../../tool-builder';
+import { stripExplicitThinkTags } from '../../../comms/reply-processor';
+import { normalizeReasoningSummary } from '../../../context/turn-context-packet';
 
 
 interface CompactionDependencies {
