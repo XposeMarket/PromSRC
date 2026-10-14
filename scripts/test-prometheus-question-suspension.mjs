@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 import { pathToFileURL } from 'node:url';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-question-wait-'));
@@ -93,7 +94,7 @@ try {
     finishLiveRuntime(newerRuntimeId);
   }
 
-  const executorSource = fs.readFileSync(path.resolve('src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
+  const executorSource = readExecutorSource(process.cwd());
   const createStart = executorSource.indexOf('const question = questionQueue.create(payload);');
   const registerWaiter = executorSource.indexOf('const waitForAnswer = new Promise<', createStart);
   const broadcastCard = executorSource.indexOf("type: 'question_created'", createStart);

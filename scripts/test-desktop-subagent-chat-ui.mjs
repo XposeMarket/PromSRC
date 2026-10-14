@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 
 const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -28,7 +29,7 @@ const modelPicker = read('web-ui/src/components/agent-model-picker.js');
 const teamDispatchRuntime = read('src/gateway/teams/team-dispatch-runtime.ts');
 const teamMemberRoom = read('src/gateway/teams/team-member-room.ts');
 const cronScheduler = read('src/gateway/scheduling/cron-scheduler.ts');
-const subagentExecutor = read('src/gateway/agents-runtime/subagent-executor.ts');
+const subagentExecutor = readExecutorSource(root);
 const teamAgentExecutor = read('src/gateway/agents-runtime/capabilities/team-agent-executor.ts');
 const backgroundTrace = read('src/gateway/tasks/background-agent-trace.ts');
 const backgroundRunner = read('src/gateway/tasks/background-task-runner.ts');

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { readExecutorSource } from './lib/executor-source.mjs';
 
-const source = fs.readFileSync('src/gateway/agents-runtime/subagent-executor.ts', 'utf8');
-const start = source.indexOf("case 'open_pr':");
+const source = readExecutorSource(process.cwd());
+const start = source.lastIndexOf("case 'open_pr':");
 const end = source.indexOf("case 'run_tests':", start);
 assert.ok(start >= 0 && end > start, 'open_pr implementation must exist');
 const block = source.slice(start, end);

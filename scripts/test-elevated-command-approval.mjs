@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readExecutorSource } from './lib/executor-source.mjs';
 import { createRequire } from 'node:module';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1))), '..');
@@ -58,7 +59,7 @@ try {
   assert.equal(oneShotApproval.success, true, 'Approve Once must remain available');
   assert.equal(oneShotApproval.permissionGrant, null, 'approval must not create a reusable permission');
 
-  const executorSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
+  const executorSource = readExecutorSource(root);
   assert.match(executorSource, /const isLiteCommandApprovalBypass = !isElevatedCommand/);
   assert.match(executorSource, /const isAutonomousCommandApprovalBypass = !isElevatedCommand/);
   assert.match(executorSource, /approvalKind: isElevatedCommand \? 'elevated_command'/);
