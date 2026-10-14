@@ -9,8 +9,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildDurableChatTraceFromProcessEntries } from './durable-chat-trace';
 import { synthesizeToolResultsFromProcessEntries } from './file-change-summary';
+import { readChatRouterSource } from '../testing/chat-router-source';
 
-const router = readFileSync(path.join(__dirname, 'routes', 'chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 
 // 1. Finalize path merges seeded pre-restart entries into the durable trace.
 assert.match(router, /durableToolStreamTrace = \[\.\.\.preTrace, \.\.\.\(durableToolStreamTrace \|\| \[\]\)\]/,

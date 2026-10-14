@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { claimRuntimeRecovery, setRecoveryClaimDirForTests } from './recovery-claims';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-recovery-claims-'));
 setRecoveryClaimDirForTests(dir);
@@ -27,7 +28,7 @@ assert.equal(claimRuntimeRecovery('rt-race', 'main_chat_retrigger'), false, 'mod
 
 // The retrigger and handoff recovery paths must use the guards.
 const root = path.resolve(__dirname, '..');
-const router = fs.readFileSync(path.join(root, 'routes', 'chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 const start = router.indexOf('export function retriggerInterruptedMainChat(');
 const claimAt = router.indexOf("claimRuntimeRecovery(", start);
 const leaseAt = router.indexOf('mainChatTurnCoordinator.tryAcquire(sessionId)', start);

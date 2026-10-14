@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseHTML } from 'linkedom';
 import { createTimelineEntries, createWeightedTimelineController } from '../web-ui/src/features/chat/timeline/weighted-timeline.js';
 import { reconcileKeyedTimelineRows } from '../web-ui/src/features/chat/timeline/keyed-dom.js';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'prior' }, 'current'), false,
@@ -45,7 +46,7 @@ const mobileCss = [
 ].join('\n');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
-const router = read('src/gateway/routes/chat.router.ts');
+const router = readChatRouterSource();
 const durableTrace = read('src/gateway/durable-chat-trace.ts');
 const runtimeRecovery = read('src/gateway/runtime-recovery.ts');
 const historyReconciliation = read('src/gateway/history-reconciliation.ts');

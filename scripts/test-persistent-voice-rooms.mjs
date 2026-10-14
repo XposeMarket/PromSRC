@@ -1,12 +1,13 @@
 ﻿import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 const session = read('src/gateway/session.ts');
-const chatRouter = read('src/gateway/routes/chat.router.ts');
+const chatRouter = readChatRouterSource();
 const mobileApi = read('web-ui/src/mobile/mobile-api.js');
 const mobilePages = read('web-ui/src/mobile/mobile-pages.js') + '\n' + read('web-ui/src/mobile/mobile-voice-page.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');

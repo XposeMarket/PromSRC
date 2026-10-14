@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { appendFinalResponseDelta, reconcileFinalResponse } from '../web-ui/src/chat-final-response.js';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = process.cwd();
 const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-chat-page-runtime.js', 'web-ui/src/mobile/mobile-chat-renderer-runtime.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const desktop = fs.readFileSync(path.join(root, 'web-ui/src/pages/ChatPage.js'), 'utf8');
 const subagents = fs.readFileSync(path.join(root, 'web-ui/src/pages/SubagentsPage.js'), 'utf8');
-const gateway = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const gateway = readChatRouterSource();
 
 const splitMarkdown = ['### Exact', ' heading\n\n', '- first', '\n- second\n\n', '```ts\n', 'const value = `ok`;\n', '```'];
 const expected = splitMarkdown.join('');

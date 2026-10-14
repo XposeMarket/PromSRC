@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-chat-retrigger-'));
@@ -73,7 +74,7 @@ const require = createRequire(import.meta.url);
 const recovery = require('../dist/gateway/runtime-recovery.js');
 const sessions = require('../dist/gateway/session.js');
 
-const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatSource = readChatRouterSource();
 const recoverySource = fs.readFileSync(path.join(root, 'src/gateway/runtime-recovery.ts'), 'utf8');
 assert.match(chatSource, /export function retriggerInterruptedMainChat\(/);
 assert.match(chatSource, /syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease/);

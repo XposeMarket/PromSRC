@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-goal-steer-'));
@@ -103,7 +104,7 @@ try {
   assert.match(consumedTaskSteer[0].message, /do not create another task/);
   assert.equal(registry.getLiveRuntime(taskRuntimeId)?.status, 'running');
 
-  const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+  const chatSource = readChatRouterSource();
   const backgroundRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-runner.ts'), 'utf8');
   assert.match(backgroundRunnerSource, /queueBackgroundResultForForeground\(record\)/, 'background completion must queue a live foreground event');
   assert.match(chatSource, /steer\.kind === 'background_agent_result'/, 'foreground chat must recognize typed background-result events');

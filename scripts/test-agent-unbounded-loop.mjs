@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 // The shared chat loop and the background task runner must not regain a
 // synthetic step / tool-round cap. (The Reactor half of the old
@@ -12,7 +13,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 assert.doesNotMatch(read('src/gateway/tasks/task-runner.ts'), /\bmaxSteps\b|\bmax_steps\b/i,
   'task-runner must not retain a step-limit execution input');
 assert.doesNotMatch(
-  read('src/gateway/routes/chat.router.ts'),
+  readChatRouterSource(),
   /MAX_TOOL_ROUNDS|getMaxToolRounds|Hit max steps|PROMETHEUS_FILE_OP_EXTENDED_MAX_ROUNDS/,
   'the shared chat execution loop must not retain a synthetic tool-round boundary',
 );

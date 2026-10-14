@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { captureTurnRouteSnapshot } from './turn-route-snapshot';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 function routeConfig(provider: string, model: string, reasoning: string, accountId?: string, contextWindow = 128000): any {
   return {
@@ -82,7 +83,7 @@ assert.ok(Object.isFrozen(terraTurn.contextProfile));
 
 // Router integration contract: all active interactive routes flow into ordinary
 // calls and mid-workflow compaction as an explicit provider/client snapshot.
-const router = fs.readFileSync(path.resolve(__dirname, '../routes/chat.router.ts'), 'utf8');
+const router = readChatRouterSource();
 assert.match(router, /captureChatTurnRouteSnapshot\(sessionId\)/);
 assert.match(router, /provider: input\.routeSnapshot\?\.provider/);
 assert.match(router, /routeSnapshot: activeGenerationRouteSnapshot/);
