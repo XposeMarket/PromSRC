@@ -1,6 +1,7 @@
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { lockFreeGitReadOptions } from '../runtime/git-read';
 
 export type TurnFileChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
@@ -342,8 +343,10 @@ export function synthesizeToolResultsFromProcessEntries(entries: any[]): any[] {
 }
 
 function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): string {
-  return execFileSync('git', args, {
+  const invocation = lockFreeGitReadOptions(args);
+  return execFileSync('git', invocation.args, {
     cwd,
+    env: invocation.env,
     encoding: 'utf8',
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],

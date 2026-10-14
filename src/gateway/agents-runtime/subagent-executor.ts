@@ -8,6 +8,7 @@ import { handleBrowserDesktopTool } from './handlers/browser-desktop';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { lockFreeGitReadOptions } from '../../runtime/git-read';
 import { execFile } from 'child_process';
 import { looksLikeNativeFileToolBypass } from './native-file-tool-bypass';
 import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
@@ -15718,6 +15719,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             try {
               const output = execSync(command, {
                 cwd: repoRoot,
+                env: lockFreeGitReadOptions([], process.env).env,
                 encoding: 'utf-8',
                 timeout: timeoutMs,
                 stdio: 'pipe',

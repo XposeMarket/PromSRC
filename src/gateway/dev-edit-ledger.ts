@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { lockFreeGitReadOptions } from '../runtime/git-read';
 import { execFileSync } from 'child_process';
 
 export interface DevEditLedgerMutation {
@@ -158,7 +159,9 @@ function normalizePatchPaths(file: string, patch: string): string {
 function unifiedPatch(file: string, beforePath: string | undefined, afterPath: string | undefined, before: Buffer | null, after: Buffer | null): string {
   if (beforePath && afterPath) {
     try {
-      return normalizePatchPaths(file, execFileSync('git', ['-c', 'core.autocrlf=false', 'diff', '--no-index', '--no-ext-diff', '--unified=3', '--', beforePath, afterPath], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024 }));
+      const args = ['-c', 'core.autocrlf=false', 'diff', '--no-index', '--no-ext-diff', '--unified=3', '--', beforePath, afterPath];
+      const invocation = lockFreeGitReadOptions(args);
+      return normalizePatchPaths(file, execFileSync('git', invocation.args, { env: invocation.env, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024 }));
     } catch (err: any) {
       if (typeof err?.stdout === 'string' && err.stdout.trim()) return normalizePatchPaths(file, err.stdout);
     }
