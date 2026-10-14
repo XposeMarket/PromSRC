@@ -351,6 +351,29 @@ export function repairReappendedAssistantRows(history: any[]): any[] {
     out.splice(insertAt, 0, row);
     changed = true;
   }
+  // Goal continuations have no user row of their own. After a restart/reconnect,
+  // a completed continuation reply can therefore be stranded among much older
+  // turns with nothing for the user-pair repair above to anchor it to. Put each
+  // timestamped goal turn after the last message that existed by that time; this
+  // keeps it after restart receipts and ahead of later timer/user turns.
+  for (let index = 0; index < out.length; index += 1) {
+    const message = out[index];
+    const at = ts(message);
+    if (!isAssistant(message) || String(message?.messageKind || '') !== 'goal_turn' || !at) continue;
+    let insertAt = -1;
+    for (let j = 0; j < out.length; j += 1) {
+      if (j === index) continue;
+      const otherAt = ts(out[j]);
+      if (otherAt && otherAt <= at) insertAt = j;
+    }
+    if (insertAt < 0 || insertAt === index || insertAt === index - 1) continue;
+    const [row] = out.splice(index, 1);
+    if (insertAt > index) insertAt -= 1;
+    out.splice(insertAt + 1, 0, row);
+    changed = true;
+    index = Math.min(index, insertAt);
+  }
+
   // A whole turn (prompt + its replies) can also be displaced earlier than
   // much older turns. Detect a user row that is clearly newer than the turn
   // right after it and move the block to its time slot. Conservative: only
