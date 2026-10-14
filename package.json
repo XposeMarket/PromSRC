@@ -63,6 +63,7 @@
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
     "test:giant-split-parity": "tsx src/testing/replay/giant-split-parity.regression.ts",
     "test:restart-replay-guard": "tsx src/gateway/chat/restart-replay-guard.regression.ts",
+    "test:stall-profiler": "tsx src/gateway/runtime/stall-profiler.regression.ts",
     "check:file-budgets": "node scripts/check-file-budgets.mjs --self-test && node scripts/check-file-budgets.mjs",
     "test:git-index-lock-timeout": "tsx src/gateway/coding/git-index-lock-timeout.regression.ts",
     "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs --online-install",
