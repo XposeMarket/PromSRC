@@ -46,8 +46,18 @@ export class OperationLedger {
   constructor(readonly filePath: string, readonly now: () => number = Date.now) {
     if (fs.existsSync(filePath)) {
       const text = fs.readFileSync(filePath, 'utf8');
-      for (const line of text.split('\n').filter(Boolean)) {
-        const record = JSON.parse(line) as OperationRecord; // Corruption fails closed, never silently discards an intent.
+      const lines = text.split('\n').filter(Boolean);
+      for (let i = 0; i < lines.length; i += 1) {
+        let record: OperationRecord;
+        try {
+          record = JSON.parse(lines[i]) as OperationRecord;
+        } catch (err) {
+          // A crash mid-append can leave a torn final line. That write never
+          // completed, so its dispatch never started: skip it. Corruption anywhere
+          // else fails closed, never silently discarding an intent.
+          if (i === lines.length - 1 && !text.endsWith('\n')) break;
+          throw err;
+        }
         if (!record.opId || !record.idempotencyKey || !record.status) throw new Error('Invalid operation ledger record');
         this.records.set(record.opId, record);
       }
@@ -82,7 +92,12 @@ export class OperationLedger {
     const key = input.idempotencyKey || operationIdempotencyKey(input.sessionId, input.toolName, input.args);
     const matching = [...this.records.values()].filter(r => r.idempotencyKey === key).reverse();
     const open = matching.find(r => r.status === 'intent' || r.status === 'uncertain');
-    if (open) return `Outcome uncertain after crash (op ${open.opId}); held for review — verify externally before retrying, pass force_reexecute:true to override`;
+    if (open) {
+      const why = open.status === 'uncertain' && open.error
+        ? `previous attempt returned an error (${open.error.slice(0, 160)})`
+        : 'no result was recorded (gateway stopped mid-call, or an identical call is still in flight)';
+      return `Outcome uncertain after crash or error (op ${open.opId}): ${why}; held for review. Verify externally before retrying, then pass force_reexecute:true to override`;
+    }
     const committed = matching.find(r => r.status === 'committed' && this.now() - Date.parse(r.at) < 24 * 60 * 60 * 1000);
     return committed ? `Already executed (op ${committed.opId}) at ${committed.at}; not repeating` : undefined;
   }
@@ -93,6 +108,7 @@ export class OperationLedger {
     const result = await run();
     // A transport error may follow a successful remote write: leave intent open, never make it retryable.
     if (!result.error) this.commitOperation(opId, String(result.result ?? ''));
+    else this.finish(opId, 'uncertain', { error: String(result.result ?? 'error').slice(0, 2000) });
     return result;
   }
 }
