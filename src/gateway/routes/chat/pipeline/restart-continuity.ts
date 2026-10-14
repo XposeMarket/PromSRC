@@ -1,12 +1,13 @@
 import { claimRuntimeRecovery } from '../../../runtime/recovery-claims';
 import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
-import { addMessage } from '../../../session';
+import { addMessage, getHistory } from '../../../session';
+import { evaluateRestartReplay } from '../../../chat/restart-replay-guard';
 import { mergeTurnFileTouches, type TurnFileTouch } from '../../../file-change-summary';
 import { listActiveBackgroundIdsForSession } from '../../../tasks/task-runner';
 import { formatBackgroundSpawnContinuity } from '../../../tasks/background-spawn-continuity';
 import { mainChatTurnCoordinator } from '../../../chat/turn-coordinator';
 import { broadcastWS, setModelBusy } from '../../../comms/broadcaster';
-import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint, listLiveRuntimes, listInterruptedRuntimes, stripInheritedRecoveryMarks } from '../../../live-runtime-registry';
+import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint, listLiveRuntimes, listInterruptedRuntimes, stripInheritedRecoveryMarks, markDurableRuntimeRecovered } from '../../../live-runtime-registry';
 import { retriggerDeferredMainChatRuntime } from '../../../runtime-recovery';
 import type { InterruptedMainChatRuntime } from '../../chat.router';
 
@@ -140,6 +141,21 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   const recoveryData = runtime?.recoveryData || {};
   const message = String(recoveryData.message || runtime?.detail || '').trim();
   if (!sessionId || !message) return false;
+
+  // Never re-answer a request that was already answered after the interruption
+  // (the original turn kept running on a draining gateway, or a crashed
+  // replacement left a stale interrupted ledger entry), and never replay an old
+  // request after the user has moved on. Retire the ledger entry so the
+  // background-completion wake stops retrying it.
+  const plannedRestart = /^(gateway_restart|prom_apply_dev_changes)$/.test(String(runtime?.checkpoint?.toolName || '').trim());
+  const replayVerdict = evaluateRestartReplay(runtime, getHistory(sessionId, 80), { plannedRestart });
+  if (!replayVerdict.replay) {
+    console.warn(`[RuntimeRecovery] Skipped replay of ${sessionId} (old=${runtime?.id}): ${replayVerdict.reason} at ${new Date(replayVerdict.at).toISOString()}.`);
+    if (runtime?.id) {
+      markDurableRuntimeRecovered(String(runtime.id), 'completed', { recovery: `replay_skipped_${replayVerdict.reason}` });
+    }
+    return false;
+  }
 
   // Several gateway processes can run a recovery pass for the same lost host
   // during a warm handoff. Only one of them may replay this interrupted turn.
