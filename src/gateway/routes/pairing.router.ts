@@ -113,7 +113,7 @@ async function _resolvePairingOrigin(req: any, overrideOrigin: string): Promise<
     ? `${hostname.includes(':') ? `[${hostname}]` : hostname}:${fallbackPort}`
     : `localhost:${fallbackPort}`;
   const fallbackOrigin = `${proto}://${fallbackHost}`;
-  const bindHost = String(cfg?.gateway?.host || '').trim() || '127.0.0.1';
+  const bindHost = startupBindHost;
   const lanOrigins = _lanIPv4Addresses().map(ip => `${proto}://${ip}:${fallbackPort}`);
 
   if (overrideOrigin && _originLooksSafe(overrideOrigin)) {
@@ -281,6 +281,9 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
     const overrideOrigin = typeof req.body?.origin === 'string' ? String(req.body.origin).trim() : '';
     const pairingOrigin = await _resolvePairingOrigin(req, overrideOrigin);
     const origin = pairingOrigin.origin;
+    if (!pairingOrigin.remoteAccessActive && !lanHostEnabled(startupBindHost)) {
+      return res.status(409).json({ success: false, code: 'lan_access_off', error: 'LAN access is off - enable it to pair a phone on Wi-Fi, then restart the gateway.' });
+    }
 
     const challenge = createPairingChallenge();
     const gateway = getGatewayDescriptor(origin);
@@ -546,6 +549,10 @@ async function _resolveRemoteAccess(): Promise<{
   };
 }
 
+// Config changes do not rebind a running listener; retain the startup host.
+const startupBindHost = String(getConfig().getConfig().gateway.host || '127.0.0.1');
+const lanHostEnabled = (host: string) => !['127.0.0.1', 'localhost', '::1'].includes(host.toLowerCase());
+
 async function _publicRemoteAccess() {
   const resolved = await _resolveRemoteAccess();
   return {
@@ -553,6 +560,8 @@ async function _publicRemoteAccess() {
     mode: resolved.mode,
     publicUrl: resolved.publicUrl,
     valid: !!resolved.publicUrl && _originLooksSafe(resolved.publicUrl),
+    lanEnabled: lanHostEnabled(String(getConfig().getConfig().gateway.host || '127.0.0.1')),
+    lanRestartRequired: startupBindHost !== String(getConfig().getConfig().gateway.host || '127.0.0.1'),
   };
 }
 
@@ -616,6 +625,14 @@ router.get('/api/pairing/remote-access', requirePairingAdmin, async (_req, res) 
 router.put('/api/pairing/remote-access', requirePairingAdmin, async (req, res) => {
   try {
     const body = req.body || {};
+    if (Object.prototype.hasOwnProperty.call(body, 'lanEnabled')) {
+      if (typeof body.lanEnabled !== 'boolean') return res.status(400).json({ success: false, error: 'lanEnabled must be a boolean.' });
+      const cfgMgr = getConfig();
+      cfgMgr.updateConfig({ gateway: { ...cfgMgr.getConfig().gateway, host: body.lanEnabled ? '0.0.0.0' : '127.0.0.1' } } as any);
+      if (!Object.prototype.hasOwnProperty.call(body, 'enabled')) {
+        return res.json({ success: true, remoteAccess: await _publicRemoteAccess() });
+      }
+    }
     const enabled = !!body.enabled;
     const mode = (body.mode === 'custom') ? 'custom' : 'tailscale-funnel';
     const publicUrl = String(body.publicUrl || '').trim().replace(/\/+$/, '');

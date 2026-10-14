@@ -18,6 +18,7 @@ import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, captureToolCategoryActivationState, getActivatedToolCategories, restoreToolCategoryActivationState, type ToolCategoryActivationSnapshot } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
+import { startupModelReady } from '../onboarding/startup-model-ready';
 import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
 import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
 import {
@@ -551,6 +552,10 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
     console.error(`[startup-hook] +${Date.now() - startupProfileStartedAt}ms ${label}`);
   };
   startupProfileMark('gateway:startup handler entered');
+  if (!await startupModelReady()) {
+    console.debug('[startup-hook] Skipping startup model work: no connected model.');
+    return;
+  }
   const pendingRestartContext = readRestartContext();
   const explicitQuickRestart = pendingRestartContext?.quickRestart === true
     && (!Array.isArray(pendingRestartContext.affectedFiles) || pendingRestartContext.affectedFiles.length === 0)

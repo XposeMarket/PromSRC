@@ -13,6 +13,11 @@ import path from 'node:path';
 async function run(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-first-start-'));
   const oldData = process.env.PROMETHEUS_DATA_DIR;
+  const oldRuntime = process.env.PROMETHEUS_RUNTIME_DIR;
+  const oldWorkspace = process.env.PROMETHEUS_WORKSPACE_DIR;
+  // Exercise legacy data-dir isolation, independent of the developer gateway.
+  delete process.env.PROMETHEUS_RUNTIME_DIR;
+  process.env.PROMETHEUS_WORKSPACE_DIR = path.join(root, 'workspace');
   process.env.PROMETHEUS_DATA_DIR = root;
   const file = path.join(root, 'onboarding.json');
   const fresh = { version: '9.9.9', surface: 'electron', detectExisting: () => null };
@@ -126,6 +131,26 @@ async function run(): Promise<void> {
     assert.equal(detectExistingInstall(probe), 'chat_history:3');
     assert.equal(detectExistingInstall({ ...probe, sessionsDirs: [], hasModelCredential: () => true }), 'model_credential');
 
+    // A stray home-era record must never grandfather this fresh data profile.
+    const strayHome = path.join(root, 'stray-home');
+    fs.mkdirSync(path.join(strayHome, '.prometheus'), { recursive: true });
+    fs.writeFileSync(path.join(strayHome, '.prometheus', 'onboarding.json'), JSON.stringify({ users: { old: { completedAt: '2020-01-01' } } }));
+    const oldHome = process.env.HOME;
+    const oldProfile = process.env.USERPROFILE;
+    process.env.HOME = strayHome;
+    process.env.USERPROFILE = strayHome;
+    try {
+      fs.rmSync(store.onboardingFilePath(), { force: true });
+      const isolatedProbe = { sessionsDirs: [], hasModelCredential: () => false, hasAccountSession: () => false };
+      assert.equal(detectExistingInstall(isolatedProbe), null, 'stray homedir record does not grandfather fresh data dir');
+      const isolated = store.recordBoot(U, { ...fresh, detectExisting: () => detectExistingInstall(isolatedProbe) });
+      assert.equal(isolated.firstStart?.source, 'fresh');
+      assert.equal(store.nextStep(isolated), 'model');
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+      if (oldProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = oldProfile;
+    }
+
     // ── Claude CLI output parsing ──────────────────────────────────────────
     const cli = await import('../../auth/anthropic-cli-connect.js');
     const token = 'sk-ant-oat01-' + 'A'.repeat(60) + '_b-C';
@@ -140,6 +165,8 @@ async function run(): Promise<void> {
   } finally {
     if (oldData === undefined) delete process.env.PROMETHEUS_DATA_DIR;
     else process.env.PROMETHEUS_DATA_DIR = oldData;
+    if (oldRuntime === undefined) delete process.env.PROMETHEUS_RUNTIME_DIR; else process.env.PROMETHEUS_RUNTIME_DIR = oldRuntime;
+    if (oldWorkspace === undefined) delete process.env.PROMETHEUS_WORKSPACE_DIR; else process.env.PROMETHEUS_WORKSPACE_DIR = oldWorkspace;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

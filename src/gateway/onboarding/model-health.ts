@@ -27,8 +27,19 @@ export async function checkModelHealth(timeoutMs = 6000): Promise<ModelHealth> {
 
   try {
     const llm = getProvider();
+    const probe = async () => {
+      if (!await llm.testConnection()) return false;
+      // Ollama's connection test only establishes that the daemon is up.
+      // A missing selected model must not count as a connected brain.
+      if (provider === 'ollama') {
+        const models = await llm.listModels();
+        const normalize = (name: string) => name.includes(':') ? name : name + ':latest';
+        return !!model && models.some(item => normalize(item.name) === normalize(model!));
+      }
+      return true;
+    };
     const ok = await Promise.race<boolean>([
-      llm.testConnection().catch(() => false),
+      probe().catch(() => false),
       new Promise<boolean>(res => setTimeout(() => res(false), timeoutMs)),
     ]);
     return { healthy: !!ok, provider, model, reason: ok ? undefined : 'test_connection_failed' };
