@@ -4,7 +4,7 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 
@@ -7585,6 +7585,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // state in server history. If request identity found it, revive that exact
     // bubble; only allocate a new assistant when there is no owned live turn.
     if (!aiTurn || (!aiTurn.streaming && !foundRequestOwnedTurn)) {
+      aiTurn = reuseEmptyLive(activeThread, incomingClientRequestId) || aiTurn;
+    }
+    if (!aiTurn || (!aiTurn.streaming && !foundRequestOwnedTurn)) {
       const rememberedRun = _readMobileActiveRun(requestedSession);
       const recoveredStartedAt = Number(rememberedRun?.startedAt || data?.run?.startedAt || data?.startedAt || msg.startedAt || msg.at || data?.at || 0);
       const startedAt = Number.isFinite(recoveredStartedAt) && recoveredStartedAt > 0 ? recoveredStartedAt : Date.now();
@@ -7685,9 +7688,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     reviveFz(thread, aiTurn, run.clientRequestId);
     if (!sameLocalStream) {
       if (!aiTurn || aiTurn.streaming !== true) {
-        aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
-          content: '', processEntries: [], liveTraceEntries: [] };
-        thread.push(aiTurn);
+        aiTurn = reuseEmptyLive(thread, run.clientRequestId);
+        if (!aiTurn) {
+          aiTurn = { role: 'ai', streaming: true, timestamp: Date.now(), body: { sender: '', text: '' },
+            content: '', processEntries: [], liveTraceEntries: [], _clientRequestId: run.clientRequestId || undefined };
+          thread.push(aiTurn);
+        }
       }
       aiTurn._streamId = streamId;
     }
