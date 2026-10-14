@@ -1,0 +1,44 @@
+{
+  "maxNewFileLines": 3000,
+  "slackLines": 300,
+  "hardCaps": {
+    "src/gateway/routes/chat.router.ts": 3000,
+    "src/gateway/agents-runtime/subagent-executor.ts": 4000
+  },
+  "largeFiles": {
+    "src/gateway/browser-tools.ts": 11886,
+    "src/gateway/routes/canvas.router.ts": 8422,
+    "src/gateway/desktop-tools.ts": 8221,
+    "src/gateway/comms/telegram-channel.ts": 7394,
+    "src/gateway/routes/chat/pipeline/handle-chat.ts": 6270,
+    "src/gateway/session.ts": 4337,
+    "src/gateway/terminal-ui.ts": 3786,
+    "src/gateway/agents-runtime/subagent-executor.ts": 3695,
+    "src/gateway/creative/generative-pipeline.ts": 3536,
+    "src/tools/web.ts": 3511,
+    "src/gateway/tools/defs/creative-tools.ts": 3504,
+    "src/gateway/agents-runtime/handlers/default-tools.ts": 3431,
+    "src/gateway/tasks/background-task-runner.ts": 3381,
+    "src/gateway/brain/brain-runner.ts": 3363,
+    "src/gateway/teams/managed-teams.ts": 3316,
+    "src/gateway/agents-runtime/handlers/creative.ts": 3300
+  },
+  "anyGroups": {
+    "chat-router": {
+      "paths": [
+        "src/gateway/routes/chat.router.ts",
+        "src/gateway/routes/chat/"
+      ],
+      "max": 906
+    },
+    "tool-executor": {
+      "paths": [
+        "src/gateway/agents-runtime/subagent-executor.ts",
+        "src/gateway/agents-runtime/handlers/",
+        "src/gateway/agents-runtime/workspace-helpers.ts",
+        "src/gateway/agents-runtime/wrapper-normalizers.ts"
+      ],
+      "max": 698
+    }
+  }
+}
