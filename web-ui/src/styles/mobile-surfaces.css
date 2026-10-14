@@ -152,8 +152,6 @@ body.pm-mobile-active .pm-mobile-goal-details > .pm-mobile-goal-actions {
   grid-template-columns: none;
   gap: 6px;
 }
-/* "No turn plan has been declared yet." says nothing the card doesn't. */
-body.pm-mobile-active .pm-mobile-goal-details > .pm-mobile-goal-empty { display: none; }
 body.pm-mobile-active .pm-mobile-goal-empty { font: var(--pm-pop-meta-font); }
 body.pm-mobile-active .pm-mobile-goal-actions button {
   flex: 1 0 auto;
