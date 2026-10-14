@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -131,7 +132,7 @@ const executorSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'agents
 assert.doesNotMatch(executorSource, /captured\.code !== 0 && !captured\.timedOut/);
 assert.match(executorSource, /classifyCommandTermination\(captured\)/);
 
-const routeSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf8');
+const routeSource = readChatRouterSource();
 assert.match(routeSource, /code: 'SESSION_TURN_ACTIVE'/);
 assert.match(routeSource, /code: 'IDEMPOTENCY_KEY_REUSED'/);
 assert.match(routeSource, /mainChatTurnCoordinator\.acquire\(sessionId, abortSignal\?\.signal\)/);

@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { captureTurnRouteSnapshot } from './turn-route-snapshot';
+import { readChatRouterSource } from '../../testing/chat-router-source';
 
 const root = path.resolve(__dirname, '../../..');
 const read = (relative: string) => fs.readFileSync(path.join(root, relative), 'utf8');
 const route = read('src/gateway/chat/chat-model-route.ts');
 const session = read('src/gateway/session.ts');
-const router = read('src/gateway/routes/chat.router.ts');
+const router = readChatRouterSource();
 
 assert.match(session, /chatModelRoute\?: ChatModelRoute/);
 assert.match(session, /export function setChatModelRoute/);

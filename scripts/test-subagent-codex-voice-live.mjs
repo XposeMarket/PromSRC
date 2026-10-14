@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const picker = fs.readFileSync(path.join(root, 'web-ui/src/components/agent-voice-picker.js'), 'utf8');
@@ -9,7 +10,7 @@ const picker = fs.readFileSync(path.join(root, 'web-ui/src/components/agent-voic
 const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js']
   .map((rel) => fs.readFileSync(path.join(root, rel), 'utf8'))
   .join('\n');
-const chatRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatRouter = readChatRouterSource();
 
 assert.match(
   picker,

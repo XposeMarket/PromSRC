@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = process.cwd();
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -63,7 +64,7 @@ assert.match(skill, /exactly one complete fenced visual block/i);
 assert.match(skill, /freeform/i);
 assert.match(skill, /theme tokens/i);
 
-const chatRouter = read('src/gateway/routes/chat.router.ts');
+const chatRouter = readChatRouterSource();
 const promptContext = read('src/gateway/prompt-context.ts');
 const skillsManagerSource = read('src/gateway/skills-runtime/skills-manager.ts');
 assert.match(chatRouter, /VISUAL FINALIZATION BLOCKED/);

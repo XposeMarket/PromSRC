@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mobile = ['web-ui/src/mobile/mobile-voice-runtime.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-chat-page-runtime.js', 'web-ui/src/mobile/mobile-voice-page.js', 'web-ui/src/mobile/mobile-pages.js'].map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('\n');
 const router = fs.readFileSync(path.join(root, 'src/gateway/routes/realtime.router.ts'), 'utf8');
-const chatRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
+const chatRouter = readChatRouterSource();
 const bridge = fs.readFileSync(path.join(root, 'src/gateway/realtime/codex-app-server-bridge.ts'), 'utf8');
 
 const matcher = mobile.slice(

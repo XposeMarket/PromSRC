@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -12,7 +13,7 @@ process.env.PROMETHEUS_DATA_DIR = path.join(testRoot, 'data');
 process.env.PROMETHEUS_WORKSPACE_DIR = path.join(testRoot, 'workspace');
 
 const goals = read('src/gateway/main-chat-goals.ts');
-const chat = read('src/gateway/routes/chat.router.ts');
+const chat = readChatRouterSource();
 const chatHelpers = read('src/gateway/chat/chat-helpers.ts');
 const boot = read('src/gateway/boot.ts');
 const lifecycle = read('src/gateway/lifecycle.ts');

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -40,7 +41,7 @@ assert.match(dispatch, /resolveAgentToolFilter\(agentId\)/);
 assert.doesNotMatch(dispatch, /You have FULL tool access/, 'dispatch no longer claims every tool is loaded');
 
 // 3. handleChat honors detection text and pre-activates allowlist categories.
-const router = read('src/gateway/routes/chat.router.ts');
+const router = readChatRouterSource();
 assert.match(router, /autoActivateToolCategories\(sessionId,\s*toolCategoryDetectionText,/);
 assert.match(router, /allowlistCategories\.add\(category\)/);
 

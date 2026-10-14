@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 const mobile = ['web-ui/src/mobile/mobile-pages.js', 'web-ui/src/mobile/mobile-voice-realtime-runtime.js', 'web-ui/src/mobile/mobile-voice-runtime.js'].map((rel) => fs.readFileSync(rel, 'utf8')).join('\n');
-const chatRouter = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
+const chatRouter = readChatRouterSource();
 
 assert.match(mobile, /filter\(\(item\) => item && typeof item === 'object'\)\.slice\(-8\)/, 'the offline cache must retain every rich-card type');
 assert.doesNotMatch(mobile, /richArtifacts\.filter\(\(item\) => item\?\.type === 'visual' \|\| item\?\.type === 'thread_links'\)/, 'the offline cache must not discard show_ui cards');
