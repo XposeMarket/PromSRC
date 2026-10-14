@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { readChatRouterSource } from './lib/chat-router-source.mjs';
 
 // Guard the architectural boundary: Thought is supervisory cognition, not a normal Prometheus chat turn.
 const runner = fs.readFileSync('src/gateway/brain/brain-runner.ts', 'utf8');
 const server = fs.readFileSync('src/gateway/server-v2.ts', 'utf8');
 const toolBuilder = fs.readFileSync('src/gateway/tool-builder.ts', 'utf8');
 const chatHelpers = fs.readFileSync('src/gateway/chat/chat-helpers.ts', 'utf8');
-const chatFiles = [];
-for (const path of ['src/gateway/routes/chat.router.ts', 'src/gateway/server-v2.ts']) {
+const chatFiles = [readChatRouterSource()];
+for (const path of ['src/gateway/server-v2.ts']) {
   if (fs.existsSync(path)) chatFiles.push(fs.readFileSync(path, 'utf8'));
 }
 for (const dirent of fs.readdirSync('src/gateway/chat', { withFileTypes: true })) {
