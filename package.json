@@ -208,6 +208,7 @@
     "test:audit-ops": "tsx src/gateway/audit/audit-ops.regression.ts",
     "test:audit-materializer": "tsx src/gateway/audit/materializer.regression.ts",
     "test:activity-package": "tsx src/gateway/brain/activity-package.regression.ts",
+    "test:brain-phase0": "tsx src/gateway/brain/brain-phase0.regression.ts",
     "test:brain-proposal-policy": "tsx src/gateway/brain/brain-proposal-policy.regression.ts",
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",

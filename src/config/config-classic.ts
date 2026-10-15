@@ -276,6 +276,9 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     path: path.join(CONFIG_DIR, 'memory'),
     embedding_model: 'nomic-embed-text',
     embeddings: {
+      // Remote/paid embeddings must be explicitly enabled. Automatic memory
+      // indexing otherwise uses a local provider or remains disabled.
+      allow_cloud: process.env.PROMETHEUS_MEMORY_ALLOW_CLOUD_EMBEDDINGS === '1',
       provider: process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto',
       auto_backfill: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS !== '0',
       auto_backfill_limit: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT

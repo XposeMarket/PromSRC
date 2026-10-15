@@ -487,6 +487,8 @@ export interface PrometheusConfig {
     embedding_model: string;
     embeddings?: {
       provider?: string;
+      /** Enables paid or remote embedding providers. Disabled by default. */
+      allow_cloud?: boolean;
       auto_backfill?: boolean;
       auto_backfill_limit?: number;
       providers?: Record<string, Record<string, unknown>>;

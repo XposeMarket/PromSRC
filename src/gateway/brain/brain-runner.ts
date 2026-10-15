@@ -529,6 +529,7 @@ export interface BrainJobStatus {
 export interface BrainStatus {
   thought: BrainJobStatus;
   dream: BrainJobStatus;
+  cleanup: BrainJobStatus;
   thoughtModel: string;
   dreamModel: string;
   thoughtReasoning: string;
@@ -589,7 +590,7 @@ export class BrainRunner {
     const today   = getLocalDateStr();
     const daily   = loadDailyStatus(today);
     const now     = new Date();
-    const pendingDreamDate = this._getPendingDreamDate(now, state);
+    const pendingDreamDate = state.dreamEnabled ? this._getPendingDreamDate(now, state) : null;
     const usageSnapshot = getBrainUsageSnapshot({ limit: 100 });
     const latestUsage = (job: 'thought' | 'dream'): BrainJobUsageRecord | null =>
       usageSnapshot.records.find((record) => record.job === job) || null;
@@ -621,14 +622,29 @@ export class BrainRunner {
       thoughtReasoning: state.thoughtReasoning || '',
       dreamReasoning: state.dreamReasoning || '',
       usage: usageSnapshot.summary,
+      cleanup: {
+        id: 'brain_cleanup',
+        name: 'Brain cleanup',
+        description: 'Second-pass memory cleanup; uses model credits when enabled',
+        enabled: state.cleanupEnabled === true,
+        running: this.dreamCleanupRunning,
+        lastRun: state.lastDreamCleanupCompletedAt,
+        nextRun: null, // Cleanup depends on a completed Dream, not a fixed next run.
+        schedule: 'About 30 minutes after a completed Dream',
+        model: state.dreamModel || '',
+        ranToday: daily.dreamCleanupRan,
+        lastAttempt: state.lastDreamCleanupAttemptAt,
+        lastOutcome: state.lastDreamCleanupStatus,
+        lastError: state.lastDreamCleanupError,
+      },
       thought: {
         id: 'brain_thought',
         name: '🧠 Brain Thought',
         description: 'Observes the last 6h of activity and writes a reflection',
-        enabled: state.thoughtEnabled !== false,
+        enabled: state.thoughtEnabled === true,
         running: this.thoughtRunning,
         lastRun: state.lastThoughtAt,
-        nextRun: new Date(nextThoughtMs).toISOString(),
+        nextRun: state.thoughtEnabled ? new Date(nextThoughtMs).toISOString() : null,
         schedule: 'Every 6 hours',
         model: state.thoughtModel || '',
         todayCount: daily.thoughts.length,
@@ -641,12 +657,12 @@ export class BrainRunner {
       dream: {
         id: 'brain_dream',
         name: '💤 Brain Dream',
-        description: 'Nightly synthesis plus a second-pass memory cleanup 30m later',
-        enabled: state.dreamEnabled !== false,
-        running: this.dreamRunning || this.dreamCleanupRunning,
+        description: 'Nightly synthesis; uses model credits when enabled',
+        enabled: state.dreamEnabled === true,
+        running: this.dreamRunning,
         lastRun: state.lastDreamCompletedAt || daily.dreamCompletedAt,
-        nextRun: dreamTime.toISOString(),
-        schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local, cleanup about 30m later`,
+        nextRun: state.dreamEnabled ? dreamTime.toISOString() : null,
+        schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local`,
         model: state.dreamModel || '',
         ranToday: this._isDreamCompletedForDate(today),
         pendingDate: pendingDreamDate || undefined,
@@ -661,12 +677,20 @@ export class BrainRunner {
   setConfig(partial: {
     thoughtEnabled?: boolean;
     dreamEnabled?: boolean;
+    cleanupEnabled?: boolean;
     thoughtModel?: string;
     dreamModel?: string;
     thoughtReasoning?: string;
     dreamReasoning?: string;
   }): void {
     const state = loadLatestState();
+    for (const key of ['thoughtEnabled', 'dreamEnabled', 'cleanupEnabled'] as const) {
+      if (partial[key] !== undefined && typeof partial[key] !== 'boolean') {
+        throw new Error(`${key} must be a boolean`);
+      }
+    }
+    state.optInVersion = 1;
+    if (partial.cleanupEnabled !== undefined) state.cleanupEnabled = partial.cleanupEnabled;
     if (partial.thoughtEnabled !== undefined) state.thoughtEnabled = partial.thoughtEnabled;
     if (partial.dreamEnabled  !== undefined) state.dreamEnabled  = partial.dreamEnabled;
     if (partial.thoughtModel  !== undefined) state.thoughtModel  = normalizeBrainModelRef(partial.thoughtModel, 'thoughtModel');
@@ -674,6 +698,12 @@ export class BrainRunner {
     if (partial.thoughtReasoning !== undefined) state.thoughtReasoning = String(partial.thoughtReasoning || '').trim();
     if (partial.dreamReasoning !== undefined) state.dreamReasoning = String(partial.dreamReasoning || '').trim();
     saveLatestState(state);
+    if (!state.thoughtEnabled && !state.dreamEnabled && !state.cleanupEnabled) {
+      if (this.ticker) clearInterval(this.ticker);
+      this.ticker = null;
+    } else if (!this.ticker && !this.shuttingDown) {
+      this.start();
+    }
   }
 
   /** Manually trigger a thought or dream run regardless of eligibility */
@@ -704,6 +734,11 @@ export class BrainRunner {
       ? { thoughtRecovered: false, previousThoughtAttemptAt: null }
       : reconcileStaleThoughtAttemptAfterGatewayRestart();
     markGatewayStarted();
+    const state = loadLatestState();
+    if (!state.thoughtEnabled && !state.dreamEnabled && !state.cleanupEnabled) {
+      console.log('[BrainRunner] Disabled — no automatic Brain scheduler started');
+      return;
+    }
 
     // Do not run model-backed brain jobs during gateway boot. Startup status and
     // user chat should get the first provider slot; the periodic ticker handles
@@ -842,6 +877,8 @@ export class BrainRunner {
 
   private async _tick(): Promise<void> {
     if (this.shuttingDown) return;
+    const enabled = loadLatestState();
+    if (!enabled.thoughtEnabled && !enabled.dreamEnabled && !enabled.cleanupEnabled) return;
     if (this._hasCarriedBrainRun()) return;
     // If a carried host disappears before finalizing, its idle attempt becomes
     // stale only now. Preserve the ordinary failure backoff before retrying.
@@ -852,8 +889,8 @@ export class BrainRunner {
     const today    = getLocalDateStr(now);
     const daily    = loadDailyStatus(today);
     const latest   = loadLatestState();
-    const pendingDreamDate = this._getPendingDreamDate(now, latest);
-    const pendingCleanupDate = this._getPendingDreamCleanupDate(now, latest);
+    const pendingDreamDate = latest.dreamEnabled ? this._getPendingDreamDate(now, latest) : null;
+    const pendingCleanupDate = latest.cleanupEnabled ? this._getPendingDreamCleanupDate(now, latest) : null;
 
     // Thought and Dream assemble large activity packages and use the same
     // provider/worker pool as foreground chats. Never let the periodic brain
@@ -868,7 +905,7 @@ export class BrainRunner {
     if (
       !this.dreamRunning
       && !!pendingDreamDate
-      && latest.dreamEnabled !== false
+      && latest.dreamEnabled === true
       && this._isDreamRetryReady(now, latest, pendingDreamDate)
     ) {
       if (this.thoughtRunning) {
@@ -890,7 +927,7 @@ export class BrainRunner {
       !this.dreamRunning
       && !this.dreamCleanupRunning
       && !!pendingCleanupDate
-      && latest.dreamEnabled !== false
+      && latest.cleanupEnabled === true
       && this._isDreamCleanupRetryReady(now, latest, pendingCleanupDate)
     ) {
       this._runDreamCleanup(pendingCleanupDate)
@@ -904,7 +941,7 @@ export class BrainRunner {
     }
 
     // Thought check
-    if (!this.thoughtRunning && !daily.dreamRan && latest.thoughtEnabled !== false) {
+    if (!this.thoughtRunning && !daily.dreamRan && latest.thoughtEnabled === true) {
       const thoughtCheck = this._isThoughtEligible(now, latest);
       if (thoughtCheck) {
         this._runThought(thoughtCheck.windowStart, thoughtCheck.windowEnd, today, daily.thoughts.length + 1)
