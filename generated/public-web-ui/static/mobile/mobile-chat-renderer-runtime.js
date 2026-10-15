@@ -3345,7 +3345,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     const hasPendingImageGeneration = _hasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
       ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText, turnPresentation)}</div>`
-      : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
+      : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(message?.id || message?.timestamp || '')) || '') : '');
     inner += attachmentHtml;
     inner += _renderMobileRichArtifacts({ ...turnPresentation, content: markdownText });
     if (!(Array.isArray(turnPresentation.richArtifacts) && turnPresentation.richArtifacts.some((artifact) => artifact?.type === 'products'))) {

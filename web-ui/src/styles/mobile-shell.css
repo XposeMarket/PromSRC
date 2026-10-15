@@ -1150,3 +1150,83 @@ body.pm-model-badge-pressing * {
   --pm-accent: var(--theme-palette-orange);
   --pm-accent-dark: #c2410c;
 }
+
+/* Palette themes (registry kind 'palette', incl. Custom): the whole mobile
+   --pm-* layer derives from the 7 inline --skin-* colors theme-registry.js
+   writes before first paint. [data-skin] lifts specificity above the
+   :root[data-theme="dark"] defaults and the per-skin legacy blocks. */
+:root[data-skin-kind="palette"][data-skin] {
+  --pm-bg:            var(--skin-bg);
+  --pm-bg-soft:       color-mix(in srgb, var(--skin-text) 4%, var(--skin-bg));
+  --pm-surface:       var(--skin-panel);
+  --pm-surface-strong:color-mix(in srgb, var(--skin-text) calc(5% + var(--skin-contrast, .5) * 8%), var(--skin-panel));
+  --pm-ios-popover-base: color-mix(in srgb, var(--skin-text) 18%, var(--skin-panel));
+  --pm-border:        color-mix(in srgb, var(--skin-text) calc(6% + var(--skin-contrast, .5) * 12%), transparent);
+  --pm-border-strong: color-mix(in srgb, var(--skin-text) calc(11% + var(--skin-contrast, .5) * 20%), transparent);
+  --pm-text:          var(--skin-text);
+  --pm-text-soft:     color-mix(in srgb, var(--skin-text) 84%, var(--skin-bg));
+  --pm-muted:         var(--skin-muted);
+  --pm-accent:        var(--skin-accent);
+  --pm-accent-soft:   color-mix(in srgb, var(--skin-accent) 14%, transparent);
+  --pm-accent-dark:   color-mix(in srgb, var(--skin-accent) 72%, #000);
+  --pm-orange:        var(--pm-accent);
+  --pm-orange-soft:   var(--pm-accent-soft);
+  --pm-orange-dark:   var(--pm-accent-dark);
+  --pm-gold:          var(--skin-accent);
+  --pm-p1-gold:       var(--skin-accent);
+  --pm-p1-gold-light: color-mix(in srgb, var(--skin-accent) 70%, var(--skin-text));
+  --pm-p1-gold-muted: color-mix(in srgb, var(--skin-accent) 62%, var(--skin-bg));
+  --pm-p1-gold-soft:  color-mix(in srgb, var(--skin-accent) 14%, transparent);
+  --pm-voice-control-accent: var(--skin-accent);
+  --pm-voice-orb-light: color-mix(in srgb, var(--skin-accent) 12%, #fff);
+  --pm-voice-orb-hot: color-mix(in srgb, var(--skin-accent) 55%, #fff);
+  --pm-voice-orb-accent: var(--skin-accent);
+  --pm-voice-orb-deep: color-mix(in srgb, var(--skin-accent) 45%, #000);
+  --pm-voice-orb-glow: color-mix(in srgb, var(--skin-accent) 70%, #fff);
+  --pm-voice-orb-grid: color-mix(in srgb, var(--skin-accent) 26%, transparent);
+  --sidebar-bg:       var(--skin-sidebar);
+  --sidebar-text:     var(--skin-text);
+  --sidebar-muted:    var(--skin-muted);
+}
+:root[data-skin-kind="palette"] body.pm-mobile-active :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .page-view),
+:root[data-skin-kind="palette"] .pm-app {
+  background-color: var(--pm-bg) !important;
+  background-image: none !important;
+}
+:root[data-skin-kind="palette"] .pm-app::before,
+:root[data-skin-kind="palette"] .pm-app::after {
+  background: none;
+  background-image: none;
+  mix-blend-mode: normal;
+  opacity: 0;
+}
+/* Light-toned palettes: the liquid-glass material and shadows were tuned for
+   black. Darken the glass tint instead of lightening it. */
+:root[data-skin-kind="palette"][data-tone="light"] {
+  --pm-shadow-sm:     0 1px 2px rgba(40, 32, 16, .08), 0 1px 1px rgba(40, 32, 16, .05);
+  --pm-shadow-md:     0 6px 18px rgba(40, 32, 16, .10);
+  --pm-shadow-lg:     0 16px 40px rgba(40, 32, 16, .14);
+  --pm-lg-glass-fill: color-mix(in srgb, var(--skin-text) 4%, transparent);
+  --pm-lg-glass-fill-strong: color-mix(in srgb, var(--skin-text) 7%, transparent);
+  --pm-lg-lens-opacity: .3;
+  --pm-ios-popover-base: color-mix(in srgb, var(--skin-text) 8%, var(--skin-panel));
+}
+
+/* Per-theme loading word shown beside the thinking dots. */
+.pm-thinking-dots .prom-loading-word,
+.thinking .prom-loading-word {
+  width: auto !important;
+  height: auto !important;
+  border-radius: 0 !important;
+  background: none !important;
+  opacity: 1 !important;
+  animation: none !important;
+  transform: none !important;
+  margin-left: 4px;
+  color: var(--pm-muted, var(--muted));
+  font-size: var(--t-fs-sm, 13px);
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}

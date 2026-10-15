@@ -1865,6 +1865,51 @@
   background: #1a1a1a;
 }
 
+#settings-modal .theme-preview-accent {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.3);
+  z-index: 1;
+}
+
+#settings-modal .appearance-share-control,
+#settings-modal .appearance-import-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#settings-modal .appearance-share-input {
+  width: min(320px, 46vw);
+  font-family: var(--t-font-mono);
+  font-size: 12px;
+}
+#settings-modal .appearance-import-row { align-items: flex-start; }
+#settings-modal .appearance-import-control {
+  display: grid;
+  gap: 8px;
+  width: min(380px, 52vw);
+}
+#settings-modal .appearance-import-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: 12px/1.45 var(--t-font-mono);
+}
+#settings-modal .appearance-file-button { cursor: pointer; }
+#settings-modal .appearance-import-status { font-size: 12px; color: var(--muted); min-height: 1em; }
+#settings-modal .appearance-import-status[data-tone="error"] { color: var(--err); }
+#settings-modal .appearance-import-status[data-tone="ok"] { color: var(--ok); }
+
 #settings-modal .theme-preview::before {
   content: "";
   position: absolute;
@@ -1919,7 +1964,7 @@
   width: 38%;
   height: 17px;
   border-radius: 5px;
-  background: var(--brand);
+  background: var(--preview-accent, var(--brand));
   opacity: .88;
 }
 
@@ -2108,9 +2153,16 @@
 
 #settings-modal .appearance-switch {
   position: relative;
-  flex: 0 0 42px;
+  /* flex-basis must stay auto: inside a column row (phone layout) a 42px basis
+     becomes the switch HEIGHT and turns it into a circle. */
+  flex: 0 0 auto;
+  align-self: center;
+  box-sizing: border-box;
   width: 42px;
+  min-width: 42px;
   height: 24px;
+  min-height: 24px;
+  max-height: 24px;
   padding: 2px;
   border: 0;
   border-radius: 999px;
@@ -2170,6 +2222,17 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  /* Switch rows stay label-left / switch-right, like iOS Settings. */
+  #settings-modal .appearance-control-row:has(> .appearance-switch) {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+
+  #settings-modal .appearance-control-row:has(> .appearance-switch) > .appearance-control-copy {
+    flex: 1 1 auto;
   }
 
   #settings-modal .appearance-color-control,

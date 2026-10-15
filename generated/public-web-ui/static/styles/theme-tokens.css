@@ -67,7 +67,8 @@
 :root[data-skin="dark"],
 :root[data-skin="blue"],
 :root[data-skin="purple"],
-:root[data-skin="custom"] {
+:root[data-skin="custom"],
+:root[data-skin-kind="palette"] {
   --t-bg: var(--bg);
   --t-sidebar: var(--sidebar-bg);
   --t-surface: var(--bg);
@@ -81,7 +82,7 @@
   --t-text: var(--text);
   --t-text-2: var(--composer-text, var(--text));
   --t-muted: var(--muted);
-  --t-text-on-accent: #fff;
+  --t-text-on-accent: var(--skin-accent-ink, #fff);
   --t-accent: var(--brand);
   --t-accent-hover: var(--flame-mid);
   --t-accent-soft: var(--sidebar-item-hover);
@@ -147,6 +148,87 @@ body.pm-mobile-active {
   --t-fs-xl: 20px;
   --t-radius: var(--pm-radius-md);
   --t-shadow: var(--pm-shadow-md);
+}
+
+/* Palette themes (registry `kind: 'palette'`, including Custom).
+ * theme-registry.js writes 7 inline colors before first paint:
+ *   --skin-bg --skin-sidebar --skin-panel --skin-text --skin-muted
+ *   --skin-accent --skin-accent-ink   (+ --skin-contrast 0..1)
+ * Everything the desktop shell reads is derived here, so a new palette theme
+ * is one registry entry and nothing else. [data-skin] raises specificity above
+ * base.css :root[data-theme="dark"], which loads after this file. Mobile
+ * derives its --pm-* layer from the same inputs in mobile-shell.css. */
+:root[data-skin-kind="palette"][data-skin] {
+  --bg: var(--skin-bg);
+  --bg-soft: color-mix(in srgb, var(--skin-text) 4%, var(--skin-bg));
+  --panel: var(--skin-panel);
+  --panel-2: color-mix(in srgb, var(--skin-text) calc(4% + var(--skin-contrast, .5) * 8%), var(--skin-panel));
+  --line: color-mix(in srgb, var(--skin-text) calc(5% + var(--skin-contrast, .5) * 14%), transparent);
+  --line-strong: color-mix(in srgb, var(--skin-text) calc(10% + var(--skin-contrast, .5) * 24%), transparent);
+  --text: var(--skin-text);
+  --fg: var(--skin-text);
+  --muted: var(--skin-muted);
+  --brand: var(--skin-accent);
+  --brand-2: color-mix(in srgb, var(--skin-accent) 28%, var(--skin-bg));
+  --flame: var(--skin-accent);
+  --flame-mid: color-mix(in srgb, var(--skin-accent) 72%, var(--skin-text));
+  --flame-glow: color-mix(in srgb, var(--skin-accent) 22%, transparent);
+  --flame-border: color-mix(in srgb, var(--skin-accent) 48%, transparent);
+  --sidebar-bg: var(--skin-sidebar);
+  --sidebar-text: var(--skin-text);
+  --sidebar-muted: var(--skin-muted);
+  --sidebar-icon-bg: color-mix(in srgb, var(--skin-text) 8%, transparent);
+  --sidebar-icon-border: color-mix(in srgb, var(--skin-text) 14%, transparent);
+  --sidebar-item-bg: color-mix(in srgb, var(--skin-text) 5%, transparent);
+  --sidebar-item-hover: color-mix(in srgb, var(--skin-accent) 14%, transparent);
+  --sidebar-active-bg: color-mix(in srgb, var(--skin-accent) 20%, transparent);
+  --sidebar-search-bg: color-mix(in srgb, var(--skin-text) 7%, transparent);
+  --sidebar-seg-bg: color-mix(in srgb, var(--skin-text) 7%, transparent);
+  --sidebar-seg-active: color-mix(in srgb, var(--skin-accent) 18%, transparent);
+  --composer-bg: var(--panel-2);
+  --composer-panel: var(--panel-2);
+  --composer-input: var(--panel-2);
+  --composer-border: color-mix(in srgb, var(--skin-text) 14%, transparent);
+  --composer-text: var(--skin-text);
+  --composer-muted: color-mix(in srgb, var(--skin-text) 58%, transparent);
+  --pm-orange: var(--skin-accent);
+  --pm-orange-hot: color-mix(in srgb, var(--skin-accent) 80%, var(--skin-text));
+  --pm-ember: color-mix(in srgb, var(--skin-accent) 28%, var(--skin-bg));
+  --pm-gold: color-mix(in srgb, var(--skin-accent) 65%, var(--skin-text));
+  --p1-shared-gold: var(--skin-accent);
+  --p1-shared-gold-light: color-mix(in srgb, var(--skin-accent) 70%, var(--skin-text));
+  --p1-shared-gold-dark: color-mix(in srgb, var(--skin-accent) 70%, #000);
+  --p1-shared-gold-soft: color-mix(in srgb, var(--skin-accent) 12%, transparent);
+  --p1-shared-gold-line: color-mix(in srgb, var(--skin-accent) 34%, transparent);
+  --p1-shared-gold-glow: color-mix(in srgb, var(--skin-accent) 24%, transparent);
+  --t-text-on-accent: var(--skin-accent-ink);
+  --native-color-scheme: dark;
+  /* Chat surfaces: keep the page on the theme background, tint unread rows. */
+  --pm-chat-page-bg: var(--skin-bg);
+  --pm-unread-chat-bg: color-mix(in srgb, var(--skin-accent) 10%, var(--skin-panel));
+  --pm-pinned-chat-bg: var(--panel-2);
+  /* Cross-skin "always gold" chrome follows the palette's own accent, so a
+   * palette theme never shows stray P1 gold or legacy orange. */
+  --theme-palette-gold: var(--skin-accent);
+  --theme-palette-orange: var(--skin-accent);
+  --theme-palette-ember: var(--skin-accent);
+  --pm-shell-gold: var(--skin-accent);
+  --pm-shell-gold-light: color-mix(in srgb, var(--skin-accent) 70%, var(--skin-text));
+  --pm-shell-gold-muted: color-mix(in srgb, var(--skin-accent) 62%, var(--skin-bg));
+  --pm-shell-surface: var(--skin-sidebar);
+  --pm-shell-accent: var(--skin-accent);
+  --pm-shell-accent-light: color-mix(in srgb, var(--skin-accent) 70%, var(--skin-text));
+  --pm-shell-accent-muted: color-mix(in srgb, var(--skin-accent) 62%, var(--skin-bg));
+}
+/* Light-toned palette themes: soften shadows/overlays built for black. */
+:root[data-skin-kind="palette"][data-tone="light"] {
+  --native-color-scheme: light;
+  --t-overlay: rgba(20, 18, 12, .32);
+  --shadow-sm: 0 1px 2px rgba(40, 32, 16, .08);
+  --shadow-md: 0 6px 18px rgba(40, 32, 16, .10);
+  --shadow-lg: 0 16px 40px rgba(40, 32, 16, .14);
+  --sidebar-icon-bg: color-mix(in srgb, var(--skin-text) 6%, transparent);
+  --sidebar-item-hover: color-mix(in srgb, var(--skin-accent) 12%, transparent);
 }
 
 /* Re-declare on body so local mobile palette changes aren't frozen at root. */

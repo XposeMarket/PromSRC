@@ -4141,17 +4141,20 @@ function getInitialTheme() {
     const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
       ? window.PROM_READ_SAVED_THEME()
       : localStorage.getItem(THEME_KEY);
-    if (saved === 'custom') return saved;
+    if (saved === 'custom' || saved === 'system') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
   return window.PROM_DEFAULT_THEME || 'p1';
 }
 
 function applyTheme(themeId) {
-  const theme = themeId === 'custom'
-    ? { id: 'custom', label: 'Custom theme', base: 'dark' }
-    : resolveTheme(themeId);
-  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(themeId === 'custom' ? 'custom' : theme);
+  // The registry persists the choice (`system` stays `system`) and writes attributes.
+  const viaRegistry = themeId !== 'custom' && typeof window.PROM_SET_THEME === 'function';
+  const theme = viaRegistry
+    ? window.PROM_SET_THEME(themeId)
+    : (themeId === 'custom' ? { id: 'custom', label: 'Custom theme', base: 'dark' } : resolveTheme(themeId));
+  if (viaRegistry) { /* already applied */ }
+  else if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(themeId === 'custom' ? 'custom' : theme);
   else {
     document.documentElement.setAttribute('data-theme', theme.base);
     document.documentElement.setAttribute('data-skin', theme.id);
@@ -4170,7 +4173,7 @@ function applyTheme(themeId) {
     toggle.title = title;
     toggle.setAttribute('aria-label', title);
   }
-  try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
+  if (!viaRegistry) { try { localStorage.setItem(THEME_KEY, theme.id); } catch {} }
   try {
     document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base } }));
   } catch {}
