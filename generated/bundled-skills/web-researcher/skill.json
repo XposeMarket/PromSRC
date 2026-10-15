@@ -3,6 +3,7 @@
   "id": "web-researcher",
   "name": "web-researcher",
   "description": "Answer a research question with current web sources using search, batched or single-page fetch, source evaluation, triangulation, synthesis, and citations. Use for web research and current facts; do not use browser automation unless interactive/authenticated UI state is necessary.",
+  "visibility": "public",
   "version": "1.1.3",
   "entrypoint": "SKILL.md",
   "triggers": [

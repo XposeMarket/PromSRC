@@ -3,6 +3,7 @@
   "id": "day-trading-mnq-mgc",
   "name": "day-trading-mnq-mgc",
   "description": "Prepare an explicit, user-requested intraday MNQ or MGC futures plan using current market context, levels, catalysts, scenarios, invalidation, and risk controls. Use only when directly named or requested; never auto-invoke for general finance questions or present a setup as guaranteed advice.",
+  "visibility": "public",
   "version": "1.0.2",
   "entrypoint": "SKILL.md",
   "triggers": [

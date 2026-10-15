@@ -10,7 +10,7 @@ You are the executor. The plan file is the instruction set, the spec is the auth
 ## 1. Setup
 
 1. Read the plan once. Note its Global constraints, Allowed APIs, and Review focus. If it names a spec, read that too; conflicts inside the plan resolve against the spec. No reachable spec means rulings are provisional; note that in the ledger.
-2. Isolation: never implement on main/master without the user's explicit consent. For Prometheus source, follow `promsrc-pr-worktree` (linked worktree under `C:\Users\rafel\promsrc-pr\<slug>`). For other repos, create a branch or `git worktree add` via `workspace_run`, after checking with `workspace_git(action:"status")` that you are not already isolated.
+2. Isolation: never implement on main/master without the user's explicit consent. Create a branch or `git worktree add` via `workspace_run`, after checking with `workspace_git(action:"status")` that you are not already isolated.
 3. Ledger: `plans/<plan-slug>-progress.md` next to the plan (or the workspace `plans/` folder). First line: `# Ledger for plan: <plan path>`. If it exists and names this plan, every `Task N: complete` line is DONE; resume at the first task without one and trust the ledger plus `git log` over memory. A ledger naming a different plan is not yours.
 4. `declare_plan` with one step per plan task (group if more than 6), and `complete_plan_step` as each lands.
 5. Pre-flight: for every task that consumes what an earlier task produces, compare the Interfaces blocks. Record each mismatch and your ruling (spec wins) in the ledger, or write `Pre-flight: no shared interfaces`.
@@ -34,7 +34,7 @@ For each task, in order (or by frontier, see section 3):
 
 When tasks form a graph with independent branches, work the **frontier** (tasks whose blockers are complete):
 
-- Create an integration branch. Spawn one worker per frontier task with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")` (`gpt-6-luna` for small tasks). Never spawn Anthropic workers from an Anthropic main chat.
+- Create an integration branch. Spawn one worker per frontier task with `background_ops(action:"spawn")`. Never spawn Anthropic workers from an Anthropic main chat.
 - Each worker gets its own worktree on its own branch based on the integration branch, plus context pointers (plan path, task number, ledger path, spec path) instead of pasted content, and the instruction to follow this skill's task loop and `test-first-development`.
 - Workers return: branch, commits, test command and result, rulings. Verify their claims from `git log` and a test run; agent "success" is not evidence.
 - Merge each finished branch into the integration branch yourself (use `merge-conflict-arbitration` if two workers collide), update the ledger, and spawn workers for newly unblocked tasks.
@@ -50,7 +50,7 @@ After the last task:
 
 ## 5. Finish
 
-Run the full suite on the exact tree you will integrate. Then send a card via `ask_prometheus_questions`: `Recommended: open a PR` / `Merge locally into <base>` / `Keep the branch as-is`. Confirm the base branch rather than assuming main. PRs go through `connector_github_create_pr` (Prometheus source: `promsrc-pr-worktree`); the gh CLI is not installed. Discarding work requires the user to type the word discard. Never force-push or force-remove a worktree with uncommitted files without explicit consent.
+Run the full suite on the exact tree you will integrate. Then send a card via `ask_prometheus_questions`: `Recommended: open a PR` / `Merge locally into <base>` / `Keep the branch as-is`. Confirm the base branch rather than assuming main. PRs go through `connector_github_create_pr`; the gh CLI is not installed. Discarding work requires the user to type the word discard. Never force-push or force-remove a worktree with uncommitted files without explicit consent.
 
 ## Exit criteria
 

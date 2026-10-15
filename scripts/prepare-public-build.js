@@ -266,63 +266,12 @@ function copyPublicWebVendorAssets() {
   writeLocalFontCss();
 }
 
-// Skills that are internal/dev-only and should NOT be shipped to public users
-const SKILLS_EXCLUDE = new Set([
-  'ai-surface-smoke-research',
-  'dev-debugging',
-  'file-surgery',
-  'json-and-config-surgery',
-  'prometheus-team-design',
-  'src-edit-proposal-rigor',
-  'subagent-system-prompt-design',
-  'voice-browser-desktop-smoke-test',
-  'windows-shell-playbook',
-]);
-
-const PUBLIC_SKILL_RESOURCE_EXCLUDES = new Map([
-  ['git-workflow', new Set(['references/prometheus-public-release-pointer.md'])],
-  ['self-repair-protocol', new Set(['references/dev-escalation.md'])],
-]);
-
-const PRIVATE_SKILL_CONTENT_PATTERNS = [
-  /\bRaul\b/i,
-  /\bXpose Market\b/i,
-  /\bFrederick Roof Repair\b/i,
-  /\bTelegram\b/i,
-  /\bdesktop_send_to_telegram\b/i,
-  /\bbrowser_send_to_telegram\b/i,
-  /D:\\Prometheus/i,
-  /C:\\Users\\rafel/i,
-  /\bPromSRC\b/i,
-  /\bworkspace\/self\b/i,
-  /\bread_dev_sources\b/i,
-  /\bapply_dev_source_patchset\b/i,
-  /\brequest_dev_source_edit\b/i,
-  /\bupdate_dev_source_edit\b/i,
-  /\bawait_dev_source_edit_approval\b/i,
-  /\bprom_apply_dev_changes\b/i,
-  /\bsrc_edit\b/i,
-];
-
-function skillContainsPrivateContent(skillDir, ignoredRelativePaths = new Set()) {
-  const stack = [skillDir];
-  while (stack.length) {
-    const current = stack.pop();
-    const relative = path.relative(skillDir, current).replace(/\\/g, '/');
-    if (ignoredRelativePaths.has(relative)) continue;
-    const stat = fs.statSync(current);
-    if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(current)) {
-        stack.push(path.join(current, entry));
-      }
-      continue;
-    }
-    if (!TEXT_EXTENSIONS.has(path.extname(current).toLowerCase())) continue;
-    const text = fs.readFileSync(current, 'utf-8');
-    if (PRIVATE_SKILL_CONTENT_PATTERNS.some((pattern) => pattern.test(text))) return true;
-  }
-  return false;
-}
+// Which skills ship is decided by each skill's declared "visibility"
+// (public | personal | dev) in skill.json or its .manifests overlay; see
+// scripts/public-skill-policy.js. Content is never used to silently drop a
+// skill. Instead the shipped copy is scanned, and owner-specific content or a
+// reference to a non-public skill fails the build so the fix is explicit.
+const skillPolicy = require('./public-skill-policy');
 
 function bundleSkills() {
   const srcSkills = path.join(ROOT, 'workspace', 'skills');
@@ -334,51 +283,70 @@ function bundleSkills() {
     return;
   }
 
+  const skills = skillPolicy.classifySourceSkills(srcSkills);
+  const untagged = skills.filter((skill) => !skill.visibility).map((skill) => skill.id);
+  if (untagged.length) {
+    throw new Error(
+      `[prepare-public-build] ${untagged.length} skill(s) declare no valid "visibility" `
+      + `(${skillPolicy.SKILL_VISIBILITIES.join(' | ')}) in skill.json or .manifests/<id>.skill.json: ${untagged.join(', ')}`,
+    );
+  }
+  const hiddenIds = new Set(skills.filter((skill) => skill.visibility !== 'public').map((skill) => skill.id));
+
   rmrf(destSkills);
   mkdirp(destSkills);
 
+  const problems = [];
   let count = 0;
-  for (const entry of fs.readdirSync(srcSkills, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (SKILLS_EXCLUDE.has(entry.name)) continue;
-    if (entry.name.endsWith('-team-design')) continue;
-    if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
-
-    const srcSkillDir = path.join(srcSkills, entry.name);
-    const srcMd = path.join(srcSkillDir, 'SKILL.md');
-    const srcMdLower = path.join(srcSkillDir, 'skill.md');
-    const srcManifest = path.join(srcSkillDir, 'skill.json');
-    if (!fs.existsSync(srcMd) && !fs.existsSync(srcMdLower) && !fs.existsSync(srcManifest)) continue;
-    const privateScanIgnores = PUBLIC_SKILL_RESOURCE_EXCLUDES.get(entry.name) || new Set();
-    if (skillContainsPrivateContent(srcSkillDir, privateScanIgnores)) {
-      console.log(`[prepare-public-build] Skipping private/local skill: ${entry.name}`);
+  for (const skill of skills) {
+    if (skill.visibility !== 'public') {
+      console.log(`[prepare-public-build] Not shipping ${skill.visibility} skill: ${skill.id}`);
       continue;
     }
 
-    const destSkillDir = path.join(destSkills, entry.name);
-    copyRecursive(srcSkillDir, destSkillDir, { normalizeText: true });
+    const destSkillDir = path.join(destSkills, skill.id);
+    copyRecursive(skill.dir, destSkillDir, { normalizeText: true });
 
     // Imported skills may keep Prometheus bundle metadata as an overlay in
     // workspace/skills/.manifests. Public bundled skills need that metadata
     // inside each skill directory so future workspaces seed the same triggers,
     // resources, and permissions.
     const destManifest = path.join(destSkillDir, 'skill.json');
-    const overlayManifest = path.join(srcManifests, `${entry.name}.skill.json`);
+    const overlayManifest = path.join(srcManifests, `${skill.id}.skill.json`);
     if (!fs.existsSync(destManifest) && fs.existsSync(overlayManifest)) {
       copyFileForPublicBuild(overlayManifest, destManifest, { normalizeText: true });
     }
-    const excludedResources = PUBLIC_SKILL_RESOURCE_EXCLUDES.get(entry.name) || new Set();
-    for (const relativePath of excludedResources) rmrf(path.join(destSkillDir, relativePath));
-    if (excludedResources.size && fs.existsSync(destManifest)) {
-      const manifest = JSON.parse(fs.readFileSync(destManifest, 'utf-8'));
-      manifest.resources = (Array.isArray(manifest.resources) ? manifest.resources : [])
-        .filter((resource) => !excludedResources.has(resource?.path));
-      fs.writeFileSync(destManifest, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+
+    const excluded = skill.excludedResources;
+    for (const relativePath of excluded) rmrf(path.join(destSkillDir, relativePath));
+    if (fs.existsSync(destManifest)) {
+      const manifest = JSON.parse(fs.readFileSync(destManifest, 'utf-8').replace(/^\uFEFF/, ''));
+      if (excluded.size || Object.prototype.hasOwnProperty.call(manifest, 'publicExcludeResources')) {
+        manifest.resources = (Array.isArray(manifest.resources) ? manifest.resources : [])
+          .filter((resource) => !excluded.has(String(resource?.path || '').replace(/\\/g, '/')));
+        delete manifest.publicExcludeResources;
+        fs.writeFileSync(destManifest, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+      }
+    }
+
+    for (const hit of skillPolicy.scanSkillDirForLeaks(destSkillDir)) {
+      problems.push(`${skill.id}/${hit.file}:${hit.line} [${hit.pattern}] ${hit.text}`);
+    }
+    for (const hit of skillPolicy.scanSkillDirForHiddenSkillRefs(destSkillDir, hiddenIds)) {
+      problems.push(`${skill.id}/${hit.file}:${hit.line} [non-public skill: ${hit.skillId}] ${hit.text}`);
     }
     count++;
   }
 
-  console.log(`[prepare-public-build] Bundled ${count} skills to generated/bundled-skills`);
+  if (problems.length) {
+    throw new Error(
+      `[prepare-public-build] ${problems.length} owner-specific or non-public reference(s) in public skills. `
+      + 'Clean the text, list the file in that skill\'s "publicExcludeResources", or mark the skill personal/dev:\n'
+      + problems.map((line) => `  - ${line}`).join('\n'),
+    );
+  }
+
+  console.log(`[prepare-public-build] Bundled ${count} public skills to generated/bundled-skills (${hiddenIds.size} personal/dev skills kept out)`);
 }
 
 function buildPublicWebUi() {

@@ -3,6 +3,7 @@
   "id": "twitter-thread",
   "name": "twitter-thread",
   "description": "Draft, rewrite, structure, or polish a multi-post X/Twitter thread. Use only when the user explicitly asks for an X thread, Twitter thread, numbered post sequence, thread hook, or thread rewrite—not for single posts or posting automation.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -1,6 +1,7 @@
 {
   "id": "exact-logo-brand-kit-workflow",
   "name": "exact-logo-brand-kit-workflow",
+  "visibility": "public",
   "version": "1.0.0",
   "description": "Create brand-kit boards and mockups that preserve an exact supplied logo asset without AI redrawing or altering it. Use when logo fidelity is mandatory and generated layouts must reserve space for deterministic compositing; do not use for inventing a new logo.",
   "emoji": "🎨",
@@ -14,12 +15,12 @@
     "compositing",
     "quality-assurance",
     "client-deliverable",
-    "xpose"
+    "agency"
   ],
   "trigger_conditions": [
     "Client brand kits or logo boards requested",
     "Mockups, pitch decks, or presentation assets need exact logo placement",
-    "Xpose assets or sales collateral require brand identity fidelity",
+    "Agency assets or sales collateral require brand identity fidelity",
     "User says 'use this exact logo,' 'the real logo,' or 'our actual brand mark'",
     "Black/transparent logos or logos with unusual backgrounds involved",
     "Generated brand boards need logo verification before delivery",

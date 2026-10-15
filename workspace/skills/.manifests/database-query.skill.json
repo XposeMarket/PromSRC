@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Use when the user asks to author, review, optimize, or safely execute SQL for an explicitly identified SQLite, PostgreSQL, or Supabase database. Live execution requires an existing database file, a connected database MCP tool, or a user-provided connection plus an available client. Use read-only behavior by default and require explicit approval before writes.",
   "triggers": [
     "inspect database schema",

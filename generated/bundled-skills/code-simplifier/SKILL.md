@@ -11,7 +11,7 @@ Improve clarity without changing behavior. Scope the work to recently modified f
 
 Identify duplication, needless indirection, deep nesting, unclear names, avoidable state, unreachable branches, noisy comments, and inconsistent local patterns. Separate safe simplifications from changes that alter behavior, timing, errors, types, performance, or public API. Preserve intentional complexity when it encodes a real invariant or compatibility constraint.
 
-For a large diff, optionally run four independent angles in parallel on `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")`: reuse, quality, efficiency, and altitude (band-aid depth). Alternatively inspect them sequentially inline and say so. Warn before fanning out on diffs over about 2000 lines. Respect dry-run (just report) and focus modifiers.
+For a large diff, optionally run four independent angles in parallel on `background_ops(action:"spawn")`: reuse, quality, efficiency, and altitude (band-aid depth). Alternatively inspect them sequentially inline and say so. Warn before fanning out on diffs over about 2000 lines. Respect dry-run (just report) and focus modifiers.
 
 Report each finding as `file:line -> problem -> cost -> fix | confidence | SAFE/CAREFUL/RISKY`. SAFE is mechanically behavior-preserving with clear evidence. CAREFUL needs covering tests before application. RISKY is never auto-applied. Before deleting code whose purpose is unclear, inspect `git blame` and relevant `git log` history (Chesterton's fence); if intent remains unknown, mark confidence low and do not silently remove it.
 

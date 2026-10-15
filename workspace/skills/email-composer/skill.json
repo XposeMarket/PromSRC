@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Draft, reply to, rewrite, or polish a specific email with the appropriate context, tone, structure, subject, and call to action. Use for ordinary professional or personal email composition; use cold-outreach-writer for unsolicited prospecting and do not send without authorization.",
   "triggers": [
     "make this email better",

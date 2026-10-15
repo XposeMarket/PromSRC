@@ -1,6 +1,6 @@
 ---
 name: "session-retro"
-description: "Run a retrospective on a finished Prometheus session, task, or schedule run and propose concrete environment fixes: skill corrections, missing automated checks, memory or runbook entries, tool-economy changes, and information-access gaps. Use when the user asks for a retro, post-mortem, lessons learned, or what should change so the next run goes better. Do not use for weekly tool-log audits (tool-failure-audit), live runtime repair (self-repair-protocol), or reviewing a code diff."
+description: "Run a retrospective on a finished Prometheus session, task, or schedule run and propose concrete environment fixes: skill corrections, missing automated checks, memory or runbook entries, tool-economy changes, and information-access gaps. Use when the user asks for a retro, post-mortem, lessons learned, or what should change so the next run goes better. Do not use for weekly tool-log audits, live runtime repair (self-repair-protocol), or reviewing a code diff."
 ---
 
 # Session Retro

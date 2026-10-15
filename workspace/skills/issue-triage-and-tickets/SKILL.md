@@ -5,7 +5,7 @@ description: Triage GitHub issues and external PRs through a small state machine
 
 # Issue Triage and Tickets
 
-Two related jobs: (A) moving incoming issues to a clear state with an actionable brief, and (B) turning approved work into small, independently shippable tickets. All tracker access uses `connector_github_*` tools; the gh CLI is not installed. Every tracker write (comment, label, close, create) needs the user's approval in the moment unless they already authorized that exact action. Prometheus source issues live in `XposeMarket/PromSRC`.
+Two related jobs: (A) moving incoming issues to a clear state with an actionable brief, and (B) turning approved work into small, independently shippable tickets. All tracker access uses `connector_github_*` tools; the gh CLI is not installed. Every tracker write (comment, label, close, create) needs the user's approval in the moment unless they already authorized that exact action.
 
 ## Label model
 

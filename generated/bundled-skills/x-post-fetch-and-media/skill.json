@@ -3,6 +3,7 @@
   "id": "x-post-fetch-and-media",
   "name": "x-post-fetch-and-media",
   "description": "Use when the user supplies an X/Twitter status URL and wants its post or thread fetched, read, inspected, or summarized without interaction. Do not use for posting, liking, replying, feed browsing, or generic web research.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

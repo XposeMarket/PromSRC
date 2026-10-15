@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Diagnose an existing MCP server, preset, connection, discovery, authentication, schema, transport, or tool-execution failure. Use for MCP operations and recovery; use mcp-server-builder to create/register a new MCP server and integration-setup for broader service setup.",
   "triggers": [
     "mcp server not connecting",

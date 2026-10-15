@@ -1,2 +1,2 @@
-| Candidate | Frequency | Raul fit | Novelty | Specificity | Leverage | Evidence | Maintenance | Score |
+| Candidate | Frequency | User fit | Novelty | Specificity | Leverage | Evidence | Maintenance | Score |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

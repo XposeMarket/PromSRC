@@ -1,11 +1,11 @@
 ---
 name: "github-yeet"
-description: "Publish local changes from a non-Prometheus repository to GitHub: confirm scope, stage explicit paths, commit, push the branch, and open a pull request through the GitHub connector. Use when the user says push this and open a PR, ship these changes, or publish my branch. Not for Prometheus source changes (promsrc-pr-worktree) or for general git inspection (git-workflow)."
+description: "Publish local changes from a non-Prometheus repository to GitHub: confirm scope, stage explicit paths, commit, push the branch, and open a pull request through the GitHub connector. Use when the user says push this and open a PR, ship these changes, or publish my branch. Not for general git inspection (git-workflow)."
 ---
 
 # GitHub Publish (commit, push, open PR)
 
-Local git does branch, stage, commit, and push through `workspace_run`. The pull request is opened with `connector_github`. The `gh` CLI is not installed. For Prometheus source changes, use `promsrc-pr-worktree` instead.
+Local git does branch, stage, commit, and push through `workspace_run`. The pull request is opened with `connector_github`. The `gh` CLI is not installed.
 
 ## 1. Confirm scope
 

@@ -3,6 +3,7 @@
   "id": "design-critique-audit",
   "name": "Design Critique and Audit",
   "description": "Critique or audit an existing web interface from a URL, localhost, screenshot, or HTML file and return a scored, evidence-backed review of hierarchy, typography, color, layout, copy, interaction states, accessibility, responsiveness, and generated-template tells, ending in a prioritized fix list. Use for design reviews, critiques, roasts, or audits; do not use for building or redesigning UI, functional bug hunts, or brand strategy.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

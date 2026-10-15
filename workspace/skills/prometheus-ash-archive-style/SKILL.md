@@ -1,6 +1,6 @@
 ---
 name: "prometheus-ash-archive-style"
-description: "Prometheus house style. Default brand is Prometheus One (black + restrained metallic gold, bone type, P1 ring mark) for Prometheus UI, promos, release videos, motion graphics, and HyperFrames work. The legacy Ash & Archive ember/orange direction is opt-in only when Raul explicitly asks for it."
+description: "Prometheus house style. Default brand is Prometheus One (black + restrained metallic gold, bone type, P1 ring mark) for Prometheus UI, promos, release videos, motion graphics, and HyperFrames work. The legacy Ash & Archive ember/orange direction is opt-in only when the user explicitly asks for it."
 ---
 
 # Prometheus House Style: Prometheus One
@@ -22,7 +22,7 @@ Use the [Prometheus One brief](templates/prometheus-one-brief.md) before authori
 
 ## Legacy: Ash & Archive (explicit request only)
 
-The 2026 pre-rebrand direction (obsidian, charcoal, ember orange, oxblood, archival field-manual textures) is historical. Use it only when Raul explicitly asks for Ash & Archive / the old ember look. References: [palette](palettes/ash-archive.md), [detailed guide](references/detailed-guide.md), [HyperFrames brief](templates/hyperframes-brief.md), [mythic launch visuals](references/mythic-editorial-launch-visuals.md).
+The 2026 pre-rebrand direction (obsidian, charcoal, ember orange, oxblood, archival field-manual textures) is historical. Use it only when the user explicitly asks for Ash & Archive / the old ember look. References: [palette](palettes/ash-archive.md), [detailed guide](references/detailed-guide.md), [HyperFrames brief](templates/hyperframes-brief.md), [mythic launch visuals](references/mythic-editorial-launch-visuals.md).
 
 ## QA before delivery
 

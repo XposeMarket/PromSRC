@@ -3,6 +3,7 @@
   "id": "website-intelligence",
   "name": "website-intelligence",
   "description": "Audit a business website for SEO, content, conversion clarity, tech stack, and trust signals using the website analysis team for full audits or web_fetch for narrow checks. Use for site-specific intelligence; use competitor-profile for a company dossier and competitive-intelligence for multi-company market comparison.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

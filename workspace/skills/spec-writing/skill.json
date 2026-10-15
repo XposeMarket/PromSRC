@@ -3,6 +3,7 @@
   "id": "spec-writing",
   "name": "Spec Writing",
   "description": "Synthesize an already-discussed feature into a saved spec file: problem, solution, user stories, implementation decisions, confirmed test seams, and out-of-scope, optionally published as a GitHub issue via connector tools. Use after requirements-grilling or a design discussion when the user says write the spec or turn this into a spec. Do not use to interview from scratch (requirements-grilling), for the task-by-task build plan (implementation-plan-writing), or for product briefs (product-discovery).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

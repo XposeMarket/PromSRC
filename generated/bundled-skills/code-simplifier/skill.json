@@ -3,6 +3,7 @@
   "id": "code-simplifier",
   "name": "Code Simplifier",
   "description": "Simplify recently changed code while preserving exact behavior, project conventions, error semantics, and public contracts. Use after implementation or review when the user asks to simplify or clean up code; do not use for broad rewrites.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

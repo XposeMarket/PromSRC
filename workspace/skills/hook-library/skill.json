@@ -3,6 +3,7 @@
   "id": "hook-library",
   "name": "hook-library",
   "description": "Generate and evaluate opening hooks for social posts, short-form video, ads, newsletters, and creator content. Use only when the user explicitly wants hook ideation or optimization; do not auto-invoke for full articles, generic copywriting, or unrelated writing.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

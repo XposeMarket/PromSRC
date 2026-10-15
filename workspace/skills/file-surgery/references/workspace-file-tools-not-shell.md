@@ -16,4 +16,4 @@ When `workspace_read` grep/search returns zero matches, suspect the pattern (reg
 
 ## Prometheus src/
 
-For `src/` and `web-ui/` self-edits: exact paths and line evidence; follow **promsrc-pr-worktree** (worktree PR by default; direct edit only when Raul asks).
+For `src/` and `web-ui/` edits: use exact paths and line evidence, and work on a branch or linked worktree.

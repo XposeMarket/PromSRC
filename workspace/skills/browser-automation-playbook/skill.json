@@ -3,6 +3,7 @@
   "id": "browser-automation-playbook",
   "name": "browser-automation-playbook",
   "description": "Operate interactive websites with Prometheus browser tools, including navigation, clicking, forms, uploads, downloads, dynamic-page extraction, screenshots, and browser UI verification. Use for live browser interaction; do not use for ordinary web research, native desktop apps, or X-specific workflows that have their own skill.",
+  "visibility": "public",
   "version": "4.3.0",
   "entrypoint": "SKILL.md",
   "triggers": [

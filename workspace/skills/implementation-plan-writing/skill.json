@@ -3,6 +3,7 @@
   "id": "implementation-plan-writing",
   "name": "Implementation Plan Writing",
   "description": "Turn an approved spec or requirements into a saved task-by-task implementation plan: verified-API discovery phase, file map, tasks with exact files, interfaces, failing tests, expected command output, and a self-review. Use when the user asks to write an implementation plan or plan the build before coding a multi-step change. Do not use for requirements interviews (requirements-grilling), spec documents (spec-writing), executing a plan (implementation-plan-execution), or one-file fixes.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

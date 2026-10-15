@@ -37,7 +37,7 @@ All questions go through `ask_prometheus_questions`. Never post a prose list of 
 - For select questions, the FIRST option is your recommended answer, labelled like `Recommended: keep the existing REST shape`. Add 1 to 4 real alternatives and keep `allowOther` on.
 - Put the tradeoff in the question label in one line: what the choice affects and what each side costs.
 - A question whose answer depends on another still-open question belongs to a later round.
-- While a fact lookup runs (for example a `background_ops(action:"spawn")` explorer with `provider:"openai_codex", model:"gpt-6-sol"`), ask the frontier questions that do not depend on it. Only downstream questions wait.
+- While a fact lookup runs (for example a `background_ops(action:"spawn")` explorer), ask the frontier questions that do not depend on it. Only downstream questions wait.
 - After each card returns, update the tree, recompute the frontier, and send the next card. Keep exactly one card in flight.
 
 When the user's language is fuzzy or overloaded ("account", "job", "sync"), offer a precise term as the recommended option. When the user states how the system works, check the code; if the code disagrees, surface the contradiction in the next card.

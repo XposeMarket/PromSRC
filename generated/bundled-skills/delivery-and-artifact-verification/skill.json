@@ -3,6 +3,7 @@
   "id": "delivery-and-artifact-verification",
   "name": "delivery-and-artifact-verification",
   "description": "Deliver and verify an actual generated file, screenshot, report, or attachment through the requested channel. Use for presentation and receipt; not for finding old artifacts (artifact-registry).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

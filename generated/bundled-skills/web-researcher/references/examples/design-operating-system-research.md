@@ -5,14 +5,14 @@
 - The successful run used: `skill_list` → `skill_read(web-researcher)` → multiple varied `web_search` calls → targeted `web_fetch` calls → synthesis → `write_note`.
 
 ## When to use
-Use this as an example when the user asks to research design tools, UI inspiration systems, agent design skills, style packs, reference libraries, or how an external design workflow should map into Prometheus/Xpose website work.
+Use this as an example when the user asks to research design tools, UI inspiration systems, agent design skills, style packs, reference libraries, or how an external design workflow should map into Prometheus website work.
 
 ## Workflow
 1. Start with `web_search` broad discovery queries for each named tool or concept.
 2. Run at least one source-targeted query per important tool when official docs/sites exist.
 3. Fetch official or primary-source pages before making claims.
 4. Separate “what it is” from “how Prometheus should use it.”
-5. Map findings into Prometheus-native primitives: skills, resources/templates, style pickers, reference preflight, Creative/HTML Motion, Xpose website workflows, or approval-ready proposals.
+5. Map findings into Prometheus-native primitives: skills, resources/templates, style pickers, reference preflight, Creative/HTML Motion, website workflows, or approval-ready proposals.
 6. Be opinionated: do not recommend importing random style packs blindly. Prefer a curated Prometheus design operating system with cited references, named style constraints, do/don’t rules, and QA.
 
 ## Output shape

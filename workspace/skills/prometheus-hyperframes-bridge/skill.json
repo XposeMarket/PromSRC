@@ -3,6 +3,7 @@
   "id": "prometheus-hyperframes-bridge",
   "name": "prometheus-hyperframes-bridge",
   "description": "Integrate official HyperFrames authoring workflows with Prometheus Creative Mode’s canvas, asset library, native timeline, audio pipeline, QA, and export system. Use when building, importing, editing, compositing, validating, or rendering a HyperFrames composition inside a Prometheus creative project rather than operating only through the standalone CLI.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

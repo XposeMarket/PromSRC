@@ -18,7 +18,7 @@ Use this for important work involving subagents, background workers, teams, mana
 Do not create multiple workers for tightly coupled edits in the same dirty workspace.
 
 
-Spawn only `openai_codex/gpt-6-sol` or `openai_codex/gpt-6-luna` with fully qualified routing; review Luna output and preserve worker tool/approval boundaries.
+Spawn workers on the user's configured background model route (fully qualified `provider/model` when pinned); review worker output and preserve worker tool/approval boundaries.
 
 ## Handoff contract
 

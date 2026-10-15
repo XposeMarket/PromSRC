@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Research a market, customer segment, category, demand pattern, trend, or opportunity using current sourced evidence and explicit assumptions. Use for market-level questions; use competitor-profile for one company and social-intel for platform/account-specific research.",
   "triggers": [
     "customer pain points",

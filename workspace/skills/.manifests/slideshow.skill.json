@@ -13,6 +13,7 @@
   },
   "id": "slideshow",
   "name": "slideshow",
+  "visibility": "public",
   "description": "Author a HyperFrames slideshow — a presentation, pitch deck, or interactive deck with discrete slides, fragment reveals, branching, hotspot navigation, and built-in presenter mode with speaker notes; also converts an existing page into a deck. Output is a navigable deck, not a rendered MP4. If the user didn't explicitly ask for a slideshow, confirm before authoring. Unclear → /hyperframes.",
   "entrypoint": "SKILL.md",
   "triggers": [],

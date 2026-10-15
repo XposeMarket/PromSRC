@@ -3,6 +3,7 @@
   "id": "recovery-and-interruption-playbook",
   "name": "recovery-and-interruption-playbook",
   "description": "Recover interrupted Prometheus work from checkpoint evidence and side-effect state. Use for paused or interrupted flows; not for a general gateway outage (runtime-operations-incident-response).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

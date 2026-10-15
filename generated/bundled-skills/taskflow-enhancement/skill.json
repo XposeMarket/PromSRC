@@ -3,6 +3,7 @@
   "id": "taskflow-enhancement",
   "name": "taskflow-enhancement",
   "description": "Build, implement, or extend Prometheus task orchestration with child tasks, dependencies, waits, checkpoints, resumable summaries, progress, artifacts, and retry policy. Use for durable multi-step task flows or task-engine changes; do not use for a simple one-step task.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "implicitInvocation": true,

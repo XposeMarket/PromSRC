@@ -3,6 +3,7 @@
   "id": "spreadsheets",
   "name": "spreadsheets",
   "description": "Read, analyze, create, and edit XLSX, XLS, and CSV spreadsheet artifacts with SheetJS. Use when the task directly involves workbook sheets, tabular spreadsheet data, formulas, or an Excel-compatible deliverable; do not use for database queries or prose reports without a workbook.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "talking-head-recut",
   "name": "talking-head-recut",
   "description": "Add timed designed graphic overlays to an existing interview, podcast, or talking-head clip while keeping the footage intact. Use for titles, lower thirds, data callouts, side panels, quotes, or PiP; use embedded-captions for plain spoken-word subtitles, and a creation workflow for a new video.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [],

@@ -70,13 +70,12 @@ Escalate or pause before editing when the requested change is ambiguous, touches
 ### Prometheus Repo Facts to Preserve
 
 - Prometheus web UI is currently a static vanilla JS app, not React.
-- Do not introduce React, JSX, Tailwind, Next routing, or a new build step unless Raul explicitly requests it.
+- Do not introduce React, JSX, Tailwind, Next routing, or a new build step unless the user explicitly requests it.
 - Prefer vanilla JS ES modules for current `web-ui` work.
 - Desktop page switching uses `setMode()` in `web-ui/src/app.js`.
 - Static assets are served through Express routes in `src/gateway/core/app.ts`.
 - For `web-ui/src/**` or mobile edits, edit source first and run `npm run sync:web-ui`; do not hand-edit `generated/public-web-ui/**` except for emergency verification.
 - For backend/gateway `src/**`, run `npm run build:backend` or `npm run build` before expecting the running gateway to see changes.
-- In dev/server mode after source, web UI, or mobile edits, prefer `prom_apply_dev_changes` with accurate `changed_surfaces` when that tool is available; it handles sync/build/restart/reload consistently.
 
 ### Dependency and Architecture Discipline
 
@@ -122,7 +121,7 @@ When editing Prometheus itself:
 | Make directories | `mkdir(path)` |
 | List directories | `list_directory(path, max_depth?, max_entries?)` |
 
-For `src/`, `web-ui/`, or other Prometheus source, follow `promsrc-pr-worktree`: edit in a linked worktree under <user-home>\promsrc-pr and open a PR, or edit the live checkout directly only when Raul asks for a direct or live-hotfix edit.
+For application source under `src/` or `web-ui/`, work on a branch or linked worktree, keep the patch minimal, and verify before reporting.
 
 ---
 
@@ -418,7 +417,7 @@ For ordinary workspace scripts, use this skill plus extra verification:
 - If behavior changed, run the relevant test/build with `run_command` only after file edits are done.
 - If no targeted test exists, run the narrowest available static check or explain the manual verification performed.
 
-For Prometheus product source under `src/` or `web-ui/`, follow `promsrc-pr-worktree`. Its workflow still requires inspecting first, patching minimally, syncing/building when relevant, verifying, and reporting.
+For Prometheus product source under `src/` or `web-ui/`, work on a branch or linked worktree. That workflow still requires inspecting first, patching minimally, syncing/building when relevant, verifying, and reporting.
 
 If creating a new module:
 

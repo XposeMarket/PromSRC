@@ -26,7 +26,7 @@ Use the project's domain terms (from `GLOSSARY.md` or `CONTEXT.md` if present) f
 
 ## 2. Explore for friction
 
-Explore yourself or spawn 1 to 2 explorers with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")` (never Anthropic workers from an Anthropic main chat), with a reporting contract of file:line evidence. Look for:
+Explore yourself or spawn 1 to 2 explorers with `background_ops(action:"spawn")` (never Anthropic workers from an Anthropic main chat), with a reporting contract of file:line evidence. Look for:
 
 - Understanding one concept requires bouncing across many tiny modules.
 - Interfaces nearly as complex as their implementations.
@@ -57,7 +57,7 @@ Keep the domain model current as decisions land (domain-modeling discipline):
 - Update `GLOSSARY.md` immediately when a term is settled (create it lazily). Format: context heading, one-line description, then `**Term**: one to two sentence definition` with `_Avoid_: synonyms`. Only project-specific concepts; no implementation details.
 - Offer an ADR (`docs/adr/NNNN-<slug>.md`: context, decision, consequences) only when the decision is hard to reverse, surprising without context, and the result of a real tradeoff. When a candidate is rejected for a lasting reason, offer an ADR so future reviews do not re-suggest it.
 
-Glossary and ADR edits are repo writes: confirm with the user before committing them, and follow `promsrc-pr-worktree` for Prometheus source.
+Glossary and ADR edits are repo writes: confirm with the user before committing them.
 
 ## 5. Hand off
 

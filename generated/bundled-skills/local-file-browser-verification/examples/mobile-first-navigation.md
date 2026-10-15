@@ -15,4 +15,4 @@ Post-hoc `resize` without reload often leaves desktop React branches mounted (e.
 5. In final report, state explicitly whether narrow first paint was used vs desktop-then-resize.
 
 ## Evidence
-NebulaX 2026-07-05: desktop automation at ~3440px + JS resize to 390px still showed DexScreener iframe; real iPhone hard refresh required. See `repos/nebulax-test/reports/local-browser-verification-2026-07-05.md` §Mobile-specific.
+Observed: desktop automation at ~3440px plus a JS resize to 390px still showed desktop-only content (an embedded chart iframe); a real phone hard refresh was required.

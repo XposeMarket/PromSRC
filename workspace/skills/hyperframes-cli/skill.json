@@ -3,6 +3,7 @@
   "id": "hyperframes-cli",
   "name": "hyperframes-cli",
   "description": "HyperFrames CLI dev loop for scaffolding, validation, snapshots, preview, rendering, and environment troubleshooting. Use Prometheus's bundled wrapper inside the Prometheus source tree so FFmpeg and FFprobe are exposed correctly; use ambient `npx hyperframes` only for standalone projects outside Prometheus. Route media sourcing, TTS, transcription, captions, and background removal through `media-use`.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -2,7 +2,8 @@
     "schemaVersion":  "prometheus-skill-bundle-v1",
     "id":  "prometheus-ash-archive-style",
     "name":  "prometheus-ash-archive-style",
-    "description":  "Prometheus house style. Default brand is Prometheus One (black + restrained metallic gold, bone type, P1 ring mark) for Prometheus UI, promos, release videos, motion graphics, and HyperFrames work. The legacy Ash \u0026 Archive ember/orange direction is opt-in only when Raul explicitly asks for it.",
+    "description":  "Prometheus house style. Default brand is Prometheus One (black + restrained metallic gold, bone type, P1 ring mark) for Prometheus UI, promos, release videos, motion graphics, and HyperFrames work. The legacy Ash \u0026 Archive ember/orange direction is opt-in only when the user explicitly asks for it.",
+    "visibility": "public",
     "version":  "2.0.0",
     "entrypoint":  "SKILL.md",
     "triggers":  [

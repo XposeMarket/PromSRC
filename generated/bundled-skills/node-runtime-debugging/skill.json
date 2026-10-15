@@ -3,6 +3,7 @@
   "id": "node-runtime-debugging",
   "name": "node-runtime-debugging",
   "description": "Diagnose TypeScript and Node.js runtime behavior with reproducible launches, inspector attachment, stack and async-state inspection, source-map checks, memory or event-loop evidence, and bounded verification. Use for runtime debugging, not ordinary TypeScript implementation or generic test failures; not for unrelated general-purpose workflows.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

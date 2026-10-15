@@ -41,7 +41,7 @@ Check, and fix inline:
 ## 5. Review gate and publishing
 
 1. Report the absolute path and a 5-line summary. Send a card: `Recommended: approve spec as written` / `Request changes`.
-2. Only on request, publish to GitHub with `connector_github_create_issue` (title, body = spec, labels such as `ready-for-agent`). Prometheus source work goes to `XposeMarket/PromSRC` per `promsrc-pr-worktree`. The gh CLI is not installed; always use connector tools.
+2. Only on request, publish to GitHub with `connector_github_create_issue` (title, body = spec, labels such as `ready-for-agent`). The gh CLI is not installed; always use connector tools.
 3. Record a `write_note` with the spec path.
 4. Hand off: `implementation-plan-writing` for a multi-step build, or `issue-triage-and-tickets` to split it into tickets.
 

@@ -19,7 +19,7 @@ Before planning, confirm what actually exists. Never plan against an API you ass
 
 - Locate with one multi-pattern `workspace_read(action:"grep")`; read big windows in one batch (`fast-coding-loop`).
 - For external libraries, read real docs via `web_fetch` or the installed package source.
-- For wide surveys, spawn fact-gathering workers with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")` (route `openai_codex/gpt-6-luna` for cheap lookups). Never spawn Anthropic agents from an Anthropic main chat. Each worker must return: sources read, exact signatures and file:line locations, copyable example locations, and a confidence note with known gaps. Reject reports without sources. Keep synthesis and plan wording with yourself.
+- For wide surveys, spawn fact-gathering workers with `background_ops(action:"spawn")`. Never spawn Anthropic agents from an Anthropic main chat. Each worker must return: sources read, exact signatures and file:line locations, copyable example locations, and a confidence note with known gaps. Reject reports without sources. Keep synthesis and plan wording with yourself.
 - Produce an **Allowed APIs** list (with sources) and an **Anti-patterns** list (methods that do not exist, deprecated parameters).
 
 ## 2. File structure
@@ -74,7 +74,6 @@ What a step must contain: a test step has the test name and assertions with the 
 
 - No production code during planning.
 - No invented APIs or parameters; everything in a step is either in Allowed APIs or created by an earlier task.
-- Prometheus source changes still go through `promsrc-pr-worktree` at execution time.
 
 ## Exit criteria
 

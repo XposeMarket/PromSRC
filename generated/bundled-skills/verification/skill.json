@@ -3,6 +3,7 @@
   "id": "verification",
   "name": "Full-Story Verification",
   "description": "Verify a complete user story end to end across UI, client/server code, APIs, processes, data, external dependencies, and the final response. Use when the user asks whether a feature actually works or wants full-flow proof; do not use for unit-test-only requests.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

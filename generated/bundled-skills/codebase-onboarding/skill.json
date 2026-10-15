@@ -3,6 +3,7 @@
   "id": "codebase-onboarding",
   "name": "Codebase Onboarding",
   "description": "Get up to speed on an unfamiliar repository: measure size and language mix, map structure and entry points outline-first, trace core flows with file:line anchors (optionally with parallel openai_codex explorers), and save a reusable orientation file. Use for learn this codebase, get up to speed, how big is this repo, or before a first change in a new project. Do not use for one specific code question (fast-coding-loop), debugging (root-cause-debugging), or reviewing a diff (code-review).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

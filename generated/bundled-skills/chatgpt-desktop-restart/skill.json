@@ -17,6 +17,7 @@
     "lastVerified": "2026-07-12"
   },
   "id": "chatgpt-desktop-restart",
+  "visibility": "public",
   "description": "Close, relaunch, refocus, and visually verify the ChatGPT desktop app on Windows when the user explicitly asks to restart or reopen it. Do not invoke for ordinary ChatGPT or coding requests.",
   "entrypoint": "SKILL.md",
   "triggers": [],

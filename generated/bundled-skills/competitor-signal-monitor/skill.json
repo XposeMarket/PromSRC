@@ -3,6 +3,7 @@
   "id": "competitor-signal-monitor",
   "name": "competitor-signal-monitor",
   "description": "Monitor named competitors for meaningful changes across dated sources and deliver a cited change digest. Use for ongoing competitor surveillance; use competitor-profile for one-time dossiers, competitive-intelligence for cross-company comparisons, and change-and-price-watch for a single-source alert. Not for one-time competitor dossiers (competitor-profile) or a single-source alert (change-and-price-watch).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

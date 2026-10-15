@@ -9,6 +9,6 @@ For X posting requests, prefer the saved X post composite when it is available i
 1. Run `browser_doctor` once to gather the browser/Playwright state.
 2. Retry `browser_open` once with a lighter observation mode if appropriate.
 3. If it still times out before a session opens, stop rather than looping. Report that X/browser automation is unavailable, confirm nothing was posted, and preserve the exact intended tweet text for a retry.
-4. If the user asks to try again and escalate if it fails, do one fresh retry from current browser state, then use the dev-debugging handoff path if the same no-session/open-timeout blocker repeats.
+4. If the user asks to try again and escalate if it fails, do one fresh retry from current browser state, then report the exact blocker if the same no-session/open-timeout error repeats.
 
 This is distinct from the Chrome debug-port blocker: here the visible symptom is a 60s `browser_open` timeout with no active session, not an explicit port-9222 profile lock message.

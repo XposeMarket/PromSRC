@@ -3,6 +3,7 @@
   "id": "ghostwriter",
   "name": "ghostwriter",
   "description": "Draft publishable content in a specific person or brand voice from supplied samples, facts, intent, and boundaries. Use when voice fidelity is central; do not use to impersonate someone deceptively, invent personal experience, or replace a specialized legal/financial workflow.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

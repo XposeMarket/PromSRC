@@ -3,6 +3,7 @@
   "id": "business-entity-operations",
   "name": "business-entity-operations",
   "description": "Maintain structured business entity records and business context with provenance. Use for clients, projects, contacts, and dated entity events; not for personal memory governance (memory-governance-playbook).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

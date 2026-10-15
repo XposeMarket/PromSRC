@@ -48,7 +48,7 @@ Score each 1 to 5 with one sentence of evidence that cites a screenshot.
 
 Flag each one seen, with the screenshot:
 
-- Purple, blue, and cyan gradients, glow blobs, or glassmorphism used as default "tech" styling without a brand reason (Raul's standing rule: avoid this look; prefer editorial, industrial, real UI, and physical-material references).
+- Purple, blue, and cyan gradients, glow blobs, or glassmorphism used as default "tech" styling without a brand reason (avoid this look by default; prefer editorial, industrial, real UI, and physical-material references).
 - Every section wrapped in a rounded bordered card; cards nested in cards.
 - Hero built from a giant number, small label, and a gradient accent by default.
 - One word in the headline set in a different color, italic, or gradient.

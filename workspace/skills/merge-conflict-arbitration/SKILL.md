@@ -13,11 +13,11 @@ Whoever wrote one side tends to overwrite the other side or abandon their own ch
 - Parallel workers from `implementation-plan-execution` or `background-coding-agent-lanes` collided.
 - Not for lockfiles or generated files: regenerate those with the project's tool. Not for routine git chores: use `git-workflow`.
 
-Best shape in multi-agent work: a third, neutral worker arbitrates, not either author. Spawn it with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-sol")`, passing the repo path, both branch names, and both intent summaries verbatim, plus the instruction to follow this skill. Never spawn Anthropic workers from an Anthropic main chat. If you authored one side, say so and weigh the other side's intent deliberately.
+Best shape in multi-agent work: a third, neutral worker arbitrates, not either author. Spawn it with `background_ops(action:"spawn")`, passing the repo path, both branch names, and both intent summaries verbatim, plus the instruction to follow this skill. Never spawn Anthropic workers from an Anthropic main chat. If you authored one side, say so and weigh the other side's intent deliberately.
 
 ## 1. Gather both sides
 
-Using `workspace_run` / `workspace_git` in the repo (Prometheus source: the worktree from `promsrc-pr-worktree`, never the live checkout):
+Using `workspace_run` / `workspace_git` in the repo:
 
 - `git status` to confirm the conflicted state and list files. In a halted merge, `HEAD` is one side and `MERGE_HEAD` the other (during a rebase they are swapped: `HEAD` is the upstream being replayed onto).
 - `git merge-base A B`, then for each side `git log --oneline <base>..<side>` and `git diff <base>..<side> -- <file>` for each conflicted file.

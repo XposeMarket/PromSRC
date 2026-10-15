@@ -3,6 +3,7 @@
   "id": "memory-operations-playbook",
   "name": "Memory Operations Playbook",
   "description": "Retrieve, inspect, relate, write, consolidate, embed, and refresh Prometheus memory safely. Use for advanced memory search, timeline or graph queries, record provenance, claims review, embedding health, and index recovery.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

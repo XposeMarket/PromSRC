@@ -3,6 +3,7 @@
   "id": "runtime-operations-incident-response",
   "name": "runtime-operations-incident-response",
   "description": "Diagnose and safely recover Prometheus gateway and runtime incidents. Use for health checks, restart prerequisites, and post-recovery proof; not for deep timestamped root-cause analysis (prometheus-runtime-forensics).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "competitive-intelligence",
   "name": "competitive-intelligence",
   "description": "Compare multiple competitors or strategic alternatives to identify market structure, patterns, gaps, risks, and implications from current sourced evidence. Use for cross-company synthesis; use competitor-profile when the task is one company.",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

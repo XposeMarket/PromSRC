@@ -3,6 +3,7 @@
   "id": "hyperframes-catalog-assets",
   "name": "hyperframes-catalog-assets",
   "description": "Find, inspect, import, and adapt verified official HyperFrames registry blocks and components into Prometheus Creative Mode. Use for explicit catalog asset, registry source, reusable scene, or HyperFrames component requests; do not invoke for ordinary video creation.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Design or improve operating processes, SOPs, ownership, handoffs, checklists, recurring cadences, controls, and service metrics. Use for operations-system work; do not use for controlling Prometheus runtime tasks or schedules.",
   "triggers": [
     "organize this process",

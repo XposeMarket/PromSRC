@@ -3,6 +3,7 @@
   "id": "promsrc-pr-worktree",
   "name": "PromSRC PR Worktree Workflow",
   "description": "Raul's mandatory workflow for any Prometheus source change: linked worktree under C:\\Users\\rafel\\promsrc-pr, regression + tsc + sync:web-ui, PR via GitHub connector (pr_number), merge only on explicit ask, then pull/build/restart live PromSRC with the right restart scope and verify on the real device. Includes the live-hotfix mode and worktree cleanup.",
+  "visibility": "dev",
   "version": "1.2.0",
   "entrypoint": "SKILL.md",
   "triggers": [],

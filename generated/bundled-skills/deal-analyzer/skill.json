@@ -3,6 +3,7 @@
   "id": "deal-analyzer",
   "name": "deal-analyzer",
   "description": "Analyze the economics, obligations, incentives, risks, leverage, and negotiation options in a proposed business deal, offer, term sheet, acquisition, or partnership. Use for decision analysis; use legal-drafting for clause language and financial-model for a full quantitative model.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

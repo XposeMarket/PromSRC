@@ -3,6 +3,7 @@
   "id": "weekly-reset-planning",
   "name": "Weekly Reset Planning",
   "description": "Run a practical weekly review that gathers commitments, active projects, stalled work, deadlines, finances, and personal constraints, then turns them into a short prioritized plan with explicit next actions and review gates. Use for recurring weekly planning, not a generic status report.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

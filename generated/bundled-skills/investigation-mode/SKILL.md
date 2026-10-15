@@ -5,7 +5,7 @@ description: "Coordinate debugging when a user project, deployed site, API, or w
 
 # Investigation Mode — Orchestrated Debugging
 
-> **Routing:** if the thing that's broken is **Prometheus/Prom itself** (a turn, tool, connector, gateway, restart, steer, mobile app, spawn, model/provider error, Vita bridge), stop and use `prometheus-runtime-forensics`, which has the real log paths and methods. This skill covers user projects and deployed apps (Vercel, websites, APIs, workflows).
+> **Routing:** if the thing that's broken is **Prometheus/Prom itself** (a turn, tool, connector, gateway, restart, steer, mobile app, spawn, model/provider error), stop and use `prometheus-runtime-forensics`, which has the real log paths and methods. This skill covers user projects and deployed apps (Vercel, websites, APIs, workflows).
 
 When a user reports something stuck, hung, broken, or not responding, you are the **diagnostic coordinator**. Do not guess. Follow the triage order, report evidence at every step, and stop at a high-confidence root cause.
 

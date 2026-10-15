@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Develop brand positioning, audience, category, differentiation, promise, proof, personality, messaging architecture, naming direction, and strategic brand brief. Use only when the user explicitly requests brand strategy; do not auto-invoke for ordinary copy, design, or marketing tasks.",
   "triggers": [
     "make the brand sharper",

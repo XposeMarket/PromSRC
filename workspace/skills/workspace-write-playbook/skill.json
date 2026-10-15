@@ -3,6 +3,7 @@
   "id": "workspace-write-playbook",
   "name": "workspace-write-playbook",
   "description": "Choose safe Prometheus workspace read, edit, command, git, and recovery tools. Use for multi-step workspace operations; not for a single targeted file edit (file-surgery).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
