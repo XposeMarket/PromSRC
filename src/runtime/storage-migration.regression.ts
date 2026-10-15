@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolvePrometheusLayout } from './storage-layout.js';
-import { discoverStorageMigrationCandidates, executeStorageLayoutV2Migration, rewriteMigratedConfigPaths } from './storage-migration.js';
+import { discoverStorageMigrationCandidates, executeStorageLayoutV2Migration, isStorageCopyMarkerCurrent, rewriteMigratedConfigPaths } from './storage-migration.js';
 
 function write(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -167,6 +167,33 @@ function run(): void {
     assert.ok(overlap.errors.some((item) => item.message.includes('overlap')));
     assert.equal(fs.existsSync(overlapTarget), false, 'overlap rejection must occur before creating the target workspace');
     assert.equal(fs.existsSync(overlapLayout.runtime.root), false, 'overlap rejection must occur before creating migration/backup state');
+
+    // #259: a verified copy marker must not suppress refresh after legacy storage changes.
+    const staleRoot = path.join(root, 'stale');
+    const staleConfig = path.join(staleRoot, 'repo', '.prometheus');
+    const staleWorkspace = path.join(staleRoot, 'repo', 'workspace');
+    const staleLayout = layoutFor(staleRoot);
+    write(path.join(staleConfig, 'sessions', 's1.json'), '{"v":1}\n');
+    write(path.join(staleWorkspace, 'USER.md'), '# v1\n');
+    const staleOpts = { layout: staleLayout, sourceConfigRoot: staleConfig, sourceWorkspaceRoot: staleWorkspace };
+    const firstCopy = executeStorageLayoutV2Migration({ ...staleOpts, migrationId: 'stale-1' });
+    assert.equal(firstCopy.copyVerified, true, JSON.stringify(firstCopy.errors));
+    assert.equal(isStorageCopyMarkerCurrent(staleOpts).current, true, 'fresh marker certifies the current source');
+    write(path.join(staleWorkspace, 'USER.md'), '# v2 edited while legacy readers were still active\n');
+    const staleStatus = isStorageCopyMarkerCurrent(staleOpts);
+    assert.equal(staleStatus.current, false, 'mutated legacy source must make the marker stale');
+    assert.match(staleStatus.reason, /changed/);
+    write(path.join(staleConfig, 'sessions', 's2.json'), '{"v":2}\n');
+    const refreshed = executeStorageLayoutV2Migration({ ...staleOpts, migrationId: 'stale-2' });
+    assert.equal(refreshed.copyVerified, true, JSON.stringify(refreshed.errors));
+    assert.equal(fs.readFileSync(path.join(staleLayout.workspace.root, 'USER.md'), 'utf-8'), '# v2 edited while legacy readers were still active\n');
+    assert.ok(fs.existsSync(path.join(staleLayout.runtime.sessions, 's2.json')), 'new legacy session copied on refresh');
+    assert.equal(isStorageCopyMarkerCurrent(staleOpts).current, true, 'refreshed marker is current again');
+    const staleMarkerPath = path.join(staleLayout.runtime.migrations, 'storage-layout-v2-copy-verified.json');
+    const preFingerprintMarker = JSON.parse(fs.readFileSync(staleMarkerPath, 'utf-8'));
+    delete preFingerprintMarker.sourceFingerprint;
+    fs.writeFileSync(staleMarkerPath, JSON.stringify(preFingerprintMarker));
+    assert.equal(isStorageCopyMarkerCurrent(staleOpts).current, false, 'markers from older builds cannot suppress a refresh');
 
     console.log('storage migration regression passed');
   } finally {

@@ -3,23 +3,24 @@
   "slackLines": 300,
   "hardCaps": {
     "src/gateway/routes/chat.router.ts": 3000,
-    "src/gateway/agents-runtime/subagent-executor.ts": 4000
+    "src/gateway/agents-runtime/subagent-executor.ts": 4000,
+    "src/gateway/browser-tools.ts": 5000,
+    "src/gateway/desktop-tools.ts": 100
   },
   "largeFiles": {
-    "src/gateway/browser-tools.ts": 11886,
     "src/gateway/routes/canvas.router.ts": 8422,
-    "src/gateway/desktop-tools.ts": 8221,
     "src/gateway/comms/telegram-channel.ts": 7394,
-    "src/gateway/routes/chat/pipeline/handle-chat.ts": 6270,
-    "src/gateway/session.ts": 4337,
+    "src/gateway/routes/chat/pipeline/handle-chat.ts": 6282,
+    "src/gateway/browser-tools.ts": 4657,
+    "src/gateway/session.ts": 4350,
     "src/gateway/terminal-ui.ts": 3786,
-    "src/gateway/agents-runtime/subagent-executor.ts": 3695,
+    "src/gateway/agents-runtime/subagent-executor.ts": 3709,
     "src/gateway/creative/generative-pipeline.ts": 3536,
     "src/tools/web.ts": 3511,
     "src/gateway/tools/defs/creative-tools.ts": 3504,
     "src/gateway/agents-runtime/handlers/default-tools.ts": 3431,
-    "src/gateway/tasks/background-task-runner.ts": 3381,
-    "src/gateway/brain/brain-runner.ts": 3363,
+    "src/gateway/brain/brain-runner.ts": 3400,
+    "src/gateway/tasks/background-task-runner.ts": 3386,
     "src/gateway/teams/managed-teams.ts": 3316,
     "src/gateway/agents-runtime/handlers/creative.ts": 3300
   },

@@ -62,6 +62,51 @@ async function main(): Promise<void> {
     for (const [name, args] of writes) check(() => assert.equal(isExternalSideEffect(name, args), true, name));
     for (const [name, args] of [['connector_gmail', { action: 'list_emails' }], ['connector_github_get_pr', {}], ['connector_other_api_request', { method: 'GET' }], ['connector_other_api_request', {}], ['x_posts', { action: 'get_post' }], ['x_dm', { action: 'get_events' }], ['vercel_ops', { action: 'list_deployments' }], ['timer', { action: 'create' }], ['workspace_edit', { action: 'write' }]] as Array<[string, any]>) check(() => assert.equal(isExternalSideEffect(name, args), false, name));
     check(() => assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).every(line => JSON.parse(line).opId), true));
+    // --- Crash durability: torn tail must be repaired on disk before anything appends after it. ---
+    // Sequence from the 2026-10-15 review: intent -> torn commit -> reload -> recovery write -> second reload.
+    const tornFile = path.join(dir, 'torn.jsonl');
+    const t0 = Date.now() - 60_000;
+    const first = new OperationLedger(tornFile, () => t0);
+    const tornInput = { ...input, args: { body: 'torn-commit' } };
+    const tornId = first.beginOperation(tornInput);
+    const fullCommit = JSON.stringify({ opId: tornId, sessionId: 'session-a', toolName: input.toolName, idempotencyKey: 'k', status: 'committed', at: new Date(t0).toISOString() });
+    fs.appendFileSync(tornFile, fullCommit.slice(0, 37)); // crash mid-append: partial commit, no newline
+    const reload1 = new OperationLedger(tornFile, () => t0 + 1000);
+    check(() => assert.equal(reload1.findOpenOperations()[0]?.opId, tornId, 'valid intent preserved; torn commit ignored'));
+    check(() => assert.equal(fs.readFileSync(tornFile, 'utf8').endsWith('\n'), true, 'torn fragment truncated off before any append'));
+    check(() => assert.equal(fs.readdirSync(dir).filter(f => f.startsWith('torn.jsonl.torn-')).length, 1, 'fragment quarantined, not silently lost'));
+    const uncertain = reload1.markInterruptedOperations(t0 + 1000); // recovery write appends "uncertain"
+    check(() => assert.equal(uncertain.find(r => r.opId === tornId)?.status, 'uncertain'));
+    let reload2!: OperationLedger;
+    check(() => assert.doesNotThrow(() => { reload2 = new OperationLedger(tornFile, () => t0 + 2000); }, 'second restart parses the ledger'));
+    check(() => assert.equal(reload2.findOpenOperations().find(r => r.opId === tornId)?.status, 'uncertain'));
+    check(() => assert.match(reload2.refusal(tornInput)!, /Outcome uncertain/, 'uncertain op still blocks a blind retry'));
+    check(() => assert.equal(fs.readFileSync(tornFile, 'utf8').split('\n').filter(Boolean).every(line => !!JSON.parse(line).opId), true));
+
+    // A complete final record that only lost its newline is kept, and the newline is restored.
+    const nlFile = path.join(dir, 'no-newline.jsonl');
+    const nl = new OperationLedger(nlFile, () => t0);
+    const nlId = nl.beginOperation({ ...input, args: { body: 'nl' } });
+    const commitLine = JSON.stringify({ ...nl.findOpenOperations()[0], status: 'committed', resultSummary: 'sent', at: new Date(t0).toISOString() });
+    fs.appendFileSync(nlFile, commitLine); // fsync of the trailing "\n" never happened
+    const nlReload = new OperationLedger(nlFile, () => t0 + 1000);
+    check(() => assert.equal(nlReload.findOpenOperations().length, 0, 'complete record without newline is not discarded'));
+    check(() => assert.match(nlReload.refusal({ ...input, args: { body: 'nl' } })!, new RegExp(`Already executed \\(op ${nlId}\\)`)));
+    nlReload.beginOperation({ ...input, args: { body: 'after-nl' } });
+    check(() => assert.equal(new OperationLedger(nlFile).findOpenOperations().length, 1, 'next append lands on its own line'));
+    check(() => assert.equal(fs.readdirSync(dir).some(f => f.startsWith('no-newline.jsonl.torn-')), false));
+
+    // Corruption before the final line still fails closed (an intent is never silently dropped).
+    const midFile = path.join(dir, 'mid.jsonl');
+    fs.writeFileSync(midFile, `{"opId":"a","idempotencyKey":"k","status":"intent","at":"x"}\n{"opId":"b",garbage\n{"opId":"c","idempotencyKey":"k","status":"intent","at":"x"}\n`);
+    check(() => assert.throws(() => new OperationLedger(midFile)));
+
+    // startup.ts isolates ledger recovery so a damaged ledger cannot skip runtime recovery.
+    const startupSrc = fs.readFileSync(path.join(__dirname, 'core', 'startup.ts'), 'utf8');
+    const ledgerAt = startupSrc.indexOf('recoverOperationLedger()');
+    const runtimeAt = startupSrc.indexOf('recoverInterruptedRuntimes({');
+    check(() => assert.ok(ledgerAt > 0 && runtimeAt > ledgerAt, 'ledger recovery precedes runtime recovery'));
+    check(() => assert.match(startupSrc.slice(ledgerAt, runtimeAt), /\}\s*catch\s*\(/, 'ledger recovery has its own catch before runtime recovery'));
     console.log(`operation-ledger: ${checks}/${checks} passed`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }

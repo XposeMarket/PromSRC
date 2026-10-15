@@ -58,13 +58,13 @@ jobs:
         run: npm run check:file-budgets
       - name: Verify public skill bundle (visibility tags, no owner-specific content)
         run: npm run test:public-skills
-      - name: Verify scheduler misfire, leases, dedupe and script execution
+      - name: Verify scheduler misfire, leases, dedupe, script execution and crash-window lock recovery
         run: npm run test:scheduler-misfire
       - name: Verify proxied loopback requests (Tailscale Funnel) are not trusted
         run: npm run test:gateway-auth-proxy
       - name: Verify mandatory final-action gate and subagent tool ceiling
         run: npm run test:final-action-gate
-      - name: Verify external operation ledger and crash deduplication
+      - name: Verify external operation ledger, crash deduplication and torn-write repair
         run: npm run test:operation-ledger
       - name: Verify Codex image carrier-model fallback chain
         run: npm run test:codex-image-chat-model

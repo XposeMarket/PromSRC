@@ -95,15 +95,26 @@ from coming back into `dist/`.
 
 Stated plainly so reviewers do not have to discover it:
 
-- `chat.router.ts` (~22.8k lines) is still the largest file. The loop is
-  unified and importable (see `docs/EMBEDDING.md`), but its body has not yet
-  been split into smaller modules.
-- `subagent-executor.ts` (~20.4k lines) is being split by tool family into
-  `src/gateway/agents-runtime/handlers/`; browser and desktop handlers moved
-  first (-1.1k lines). Source-contract tests read executor and handlers
-  together (`scripts/lib/executor-source.mjs`).
+Sizes are physical lines on `main` as of 2026-10-15; `scripts/file-budgets.json`
+holds the enforced numbers (`npm run check:file-budgets`).
 
-Both are tracked work, not hidden assumptions.
+- The giant-file split is done for the router and executor. `chat.router.ts`
+  is ~2.8k lines (hard cap 3,000) and `subagent-executor.ts` is ~3.7k (hard cap
+  4,000); tool families live in `src/gateway/agents-runtime/handlers/`.
+  Source-contract tests read executor and handlers together
+  (`scripts/lib/executor-source.mjs`).
+- `browser-tools.ts` is ~4.7k lines (hard cap 5,000) and `desktop-tools.ts` is a
+  14-line facade (hard cap 100). See `docs/ARCHITECTURE_MODULES.md` for the
+  module map and shared-state owners.
+- Orchestration is now concentrated in `routes/chat/pipeline/handle-chat.ts`
+  (~6.3k), alongside `canvas.router.ts` (~8.4k), `telegram-channel.ts` (~7.4k)
+  and `session.ts` (~4.4k). The next target is explicit turn-state ownership
+  and lifecycle transitions in handle-chat, not line count for its own sake.
+- The budget checker ratchets: a recorded size more than the slack above a
+  file's real size, or an exemption for a file that is no longer oversized,
+  fails CI, so shrinking a file always tightens its allowance.
+
+These are tracked work, not hidden assumptions.
 
 ## Embedding and observability
 

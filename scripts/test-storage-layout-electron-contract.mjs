@@ -15,7 +15,9 @@ assert.ok(source.includes("const STORAGE_LAYOUT_V2_COPY_MARKER = path.join(STORA
 assert.ok(source.includes("const STORAGE_LAYOUT_V2_READY_FILE = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-ready.json');"));
 assert.ok(source.includes('function isStorageLayoutV2CopyVerified()'));
 assert.ok(source.includes("String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() !== '1'"));
-assert.ok(source.includes('Canonical copy already verified; live activation remains deferred'));
+// #259: the desktop must not skip refresh on a copy marker alone; the CLI proves freshness.
+assert.ok(source.includes("'--if-stale'"), 'desktop migration must pass --if-stale so a stale copy marker is refreshed');
+assert.equal(source.includes('Canonical copy already verified; live activation remains deferred'), false, 'marker-only skip must not return');
 assert.ok(source.includes('Canonical copy verification failed; continuing on legacy state'));
 assert.equal(source.includes('v2 migration did not activate; continuing on legacy state'), false);
 assert.ok(source.includes('runStorageLayoutV2Migration();'));
