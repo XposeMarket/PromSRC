@@ -49,6 +49,8 @@ jobs:
         run: npm run test:final-action-gate
       - name: Verify external operation ledger and crash deduplication
         run: npm run test:operation-ledger
+      - name: Verify Codex image carrier-model fallback chain
+        run: npm run test:codex-image-chat-model
       - name: Verify stranded timer restart recovery
         run: npm run test:timer-stranded
       - name: Verify task acceptance verifier failure classification

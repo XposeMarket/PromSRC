@@ -60,6 +60,7 @@
     "sync:hyperframes": "node scripts/sync-hyperframes-catalog.js",
     "test:fal-full-catalog": "tsx src/media-engine/fal-full-catalog.regression.ts",
     "test:image-size": "tsx src/image-generation/image-size.regression.ts",
+    "test:codex-image-chat-model": "tsx src/image-generation/codex-image-chat-model.regression.ts",
     "test:subagent-browser-profile": "tsx src/gateway/subagent-browser-profile.regression.ts",
     "test:codex-oauth-realtime": "npm run build:backend && node scripts/test-codex-oauth-realtime-bridge.mjs",
     "test:hyperframes-roundtrip": "node scripts/test-hyperframes-roundtrip.mjs",
