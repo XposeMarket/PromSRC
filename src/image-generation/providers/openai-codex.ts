@@ -29,19 +29,49 @@ const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 // ChatGPT/Codex OAuth accounts can reject the legacy bare `gpt-5.4` model
 // even though the image_generation tool itself is available. Use the same
 // account-compatible model family as the main Codex adapter.
-const CODEX_CHAT_MODEL = 'gpt-5.5';
-const CODEX_CHAT_MODEL_FALLBACKS: Record<string, string> = {
-  'gpt-5.5': 'gpt-5.4-codex',
-  'gpt-5.4': 'gpt-5.4-codex',
-};
+//
+// OpenAI periodically retires chat models for ChatGPT-account Codex access
+// (gpt-5.5 and gpt-5.4-codex were both dropped in Oct 2026, which broke image
+// generation even though the image tool itself was fine). So the carrier chat
+// model is an ordered chain, not a single pin: an explicit override first, then
+// current account-compatible models, then legacy ones. The first model the
+// account accepts is remembered for the life of the process.
+export const CODEX_IMAGE_CHAT_MODEL_CHAIN = [
+  'gpt-6.1-sol',
+  'gpt-6-sol',
+  'gpt-6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-codex',
+] as const;
+let lastWorkingCodexImageChatModel: string | undefined;
 
-function getCodexChatModelFallback(model: string): string | undefined {
-  const fallback = CODEX_CHAT_MODEL_FALLBACKS[String(model || '').trim()];
-  return fallback && fallback !== model ? fallback : undefined;
+export function resolveCodexImageChatModelChain(override?: string, remembered?: string): string[] {
+  const chain: string[] = [];
+  const push = (m?: string) => {
+    const v = String(m || '').trim();
+    if (v && v !== 'chatgpt' && !chain.includes(v)) chain.push(v);
+  };
+  push(override);
+  push(remembered);
+  for (const m of CODEX_IMAGE_CHAT_MODEL_CHAIN) push(m);
+  return chain;
 }
 
-function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
-  return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+function getConfiguredCodexImageChatModel(): string | undefined {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    return String(cfg?.image_generation?.providers?.openai_codex?.chat_model || process.env.CODEX_IMAGE_CHAT_MODEL || '').trim() || undefined;
+  } catch {
+    return String(process.env.CODEX_IMAGE_CHAT_MODEL || '').trim() || undefined;
+  }
+}
+
+export function isUnsupportedCodexImageChatModel(status: number, bodyText: string): boolean {
+  const text = String(bodyText || '');
+  if (status !== 400 && status !== 404) return false;
+  return /not supported when using Codex with a ChatGPT account/i.test(text)
+    || /model[^"]*(does not exist|not found|is not supported|unsupported)/i.test(text);
 }
 const DEFAULT_MODEL = 'gpt-image-2.5-flare-medium';
 const DEFAULT_API_MODEL = 'gpt-image-2';
@@ -435,7 +465,9 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         }
       };
 
-      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean, chatModel = CODEX_CHAT_MODEL, allowModelFallback = true): Promise<CodexImageRequestResult> => {
+      const chatModelChain = resolveCodexImageChatModelChain(getConfiguredCodexImageChatModel(), lastWorkingCodexImageChatModel);
+      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean, chainIndex = 0): Promise<CodexImageRequestResult> => {
+        const chatModel = chatModelChain[chainIndex];
         const content: any[] = [{ type: 'input_text', text: requestedCount > 1 ? promptForGeneration : prompt }];
         for (const reference of referenceImages) {
           content.push({ type: 'input_image', image_url: reference.imageUrl });
@@ -482,14 +514,12 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
 
         if (!response.ok) {
           const rawText = await response.text().catch(() => '');
-          if (allowModelFallback && isUnsupportedChatgptAccountCodexModel(response.status, rawText)) {
-            const fallbackModel = getCodexChatModelFallback(chatModel);
-            if (fallbackModel) {
-              return runCodexImageRequest(requestedCount, includeCountParam, fallbackModel, false);
-            }
+          if (isUnsupportedCodexImageChatModel(response.status, rawText) && chainIndex + 1 < chatModelChain.length) {
+            return runCodexImageRequest(requestedCount, includeCountParam, chainIndex + 1);
           }
           return { ok: false, response, rawText };
         }
+        lastWorkingCodexImageChatModel = chatModel;
         return { ok: true, result: await collectImageFromStream(response, async (partial) => {
           if (!request.on_partial_image || !request.stream) return;
           const persisted = await persistGeneratedImage({
