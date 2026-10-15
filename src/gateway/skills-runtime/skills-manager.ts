@@ -188,20 +188,48 @@ const SKILL_TRIGGER_STOPWORDS = new Set([
 // Pure and called per trigger x per skill on every ranking pass (skill_list,
 // composer routing, curator previews). Skill-side strings are stable across
 // calls, so a bounded memo turns repeated normalization into map lookups.
+//
+// Long strings are the user's message, and they are the ones re-normalized
+// once per trigger per skill inside a ranking pass. They live in a small
+// separate LRU so a long paste is normalized once per pass, not ~1,000 times
+// (2026-10-15: a 14k-char paste x 220 skills blocked the event loop 9-12s and
+// the stall watchdog restarted the gateway).
 const looseNormalizeCache = new Map<string, string>();
+const looseNormalizeLongCache = new Map<string, string>();
+const LOOSE_LONG_CACHE_MAX = 16;
 function normalizeSkillMatchTextLoose(value: string): string {
   const key = String(value ?? '');
-  const hit = looseNormalizeCache.get(key);
+  const long = key.length > 4000;
+  const cache = long ? looseNormalizeLongCache : looseNormalizeCache;
+  const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const out = normalizeSkillMatchText(value)
     .split(' ')
     .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
     .join(' ');
-  if (key.length <= 4000) {
-    if (looseNormalizeCache.size >= 8000) looseNormalizeCache.clear();
-    looseNormalizeCache.set(key, out);
+  if (long) {
+    if (looseNormalizeLongCache.size >= LOOSE_LONG_CACHE_MAX) {
+      const oldest = looseNormalizeLongCache.keys().next().value;
+      if (oldest !== undefined) looseNormalizeLongCache.delete(oldest);
+    }
+  } else if (looseNormalizeCache.size >= 8000) {
+    looseNormalizeCache.clear();
   }
+  cache.set(key, out);
   return out;
+}
+
+/**
+ * Routing only needs the intent of a message, not every byte of a giant paste.
+ * Keep the head (where requests usually start) and the tail (where the actual
+ * ask usually lands after pasted material) so ranking cost stays bounded.
+ */
+export const SKILL_ROUTING_TEXT_MAX_CHARS = 8000;
+export function capSkillRoutingText(value: string): string {
+  const text = String(value ?? '');
+  if (text.length <= SKILL_ROUTING_TEXT_MAX_CHARS) return text;
+  const half = Math.floor(SKILL_ROUTING_TEXT_MAX_CHARS / 2);
+  return `${text.slice(0, half)}\n${text.slice(-half)}`;
 }
 
 function skillTriggerMatchesText(trigger: string, rawText: string, words: string[]): boolean {
@@ -429,7 +457,8 @@ function exactPhraseInText(phrase: string, text: string): boolean {
   if (normalizedPhrase.length < 4) return false;
   const normalizedText = normalizeSkillMatchTextLoose(text);
   // Cheap substring precheck: the boundary regex can only match if the phrase occurs.
-  if (!normalizedText.toLowerCase().includes(normalizedPhrase.toLowerCase())) return false;
+  // Both sides are already lower-cased by normalization; no per-call copies.
+  if (!normalizedText.includes(normalizedPhrase)) return false;
   let pattern = exactPhraseRegexCache.get(normalizedPhrase);
   if (!pattern) {
     const escaped = normalizedPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -483,7 +512,7 @@ export function rankSkillMatches(
   messageText: string,
   options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; limit?: number },
 ): SkillRouteMatch[] {
-  const text = String(messageText || '').trim();
+  const text = capSkillRoutingText(String(messageText || '').trim());
   if (!text) return [];
   const normalized = normalizeSkillMatchTextLoose(text);
   const queryWords = composerWordSet(text);
