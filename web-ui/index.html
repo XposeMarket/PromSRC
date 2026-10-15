@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" data-skin="light">
+<html lang="en" data-theme="dark" data-skin="p1">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
@@ -256,7 +256,7 @@
 
     const initialTheme = savedTheme === 'custom'
       ? { id: 'custom', label: 'Custom theme', base: 'dark' }
-      : window.PROM_RESOLVE_THEME(savedTheme || 'light');
+      : window.PROM_RESOLVE_THEME(savedTheme || window.PROM_DEFAULT_THEME);
     document.documentElement.setAttribute('data-theme', initialTheme.base);
     document.documentElement.setAttribute('data-skin', initialTheme.id);
     try {
@@ -5700,8 +5700,10 @@
 
   // Per-theme ember palettes (outer glow RGB) + bright core color.
   // Keyed by data-skin so new themes can recolor the embers.
+  // Keyed by the registry theme's `ember` field (theme-registry.js), not by
+  // skin ID, so adding a theme never requires editing this canvas.
   const EMBER_THEMES = {
-    dark: {
+    ember: {
       palette: [
         [200, 100,  18],
         [170,  72,  10],
@@ -5739,13 +5741,17 @@
       || 'dark';
   }
 
+  function emberKey() {
+    const theme = typeof window.PROM_RESOLVE_THEME === 'function' ? window.PROM_RESOLVE_THEME(currentSkin()) : null;
+    return theme ? theme.ember : null;
+  }
+
   function emberTheme() {
-    return EMBER_THEMES[currentSkin()] || EMBER_THEMES.dark;
+    return EMBER_THEMES[emberKey()] || EMBER_THEMES.ember;
   }
 
   function embersEnabled() {
-    return document.documentElement.getAttribute('data-background-visuals') === 'on'
-      && ['dark', 'blue', 'purple', 'custom'].includes(currentSkin());
+    return document.documentElement.getAttribute('data-background-visuals') === 'on' && !!emberKey();
   }
 
   function isOnChatPage() {

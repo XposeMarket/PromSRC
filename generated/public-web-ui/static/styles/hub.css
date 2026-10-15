@@ -821,7 +821,7 @@
 .hub-heat-cell[data-level="1"] { background: #fed7aa; }
 .hub-heat-cell[data-level="2"] { background: #fdba74; }
 .hub-heat-cell[data-level="3"] { background: #fb923c; }
-.hub-heat-cell[data-level="4"] { background: #f97316; }
+.hub-heat-cell[data-level="4"] { background: var(--t-accent); }
 .hub-heat-cell[data-level="5"] { background: #c2410c; }
 .hub-heat-empty { background: transparent !important; pointer-events: none; }
 .hub-heat-empty:hover { outline: none; }
@@ -845,7 +845,7 @@
 .hub-legend-cell[data-level="1"] { background: #fed7aa; }
 .hub-legend-cell[data-level="2"] { background: #fdba74; }
 .hub-legend-cell[data-level="3"] { background: #fb923c; }
-.hub-legend-cell[data-level="4"] { background: #f97316; }
+.hub-legend-cell[data-level="4"] { background: var(--t-accent); }
 .hub-legend-cell[data-level="5"] { background: #c2410c; }
 .hub-legend-text { padding: 0 4px; }
 

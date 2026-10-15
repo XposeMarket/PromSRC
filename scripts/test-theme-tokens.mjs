@@ -65,24 +65,79 @@ function normalize(relative) { return relative.split(path.sep).join('/'); }
 
 function runFixtures() {
   assert.deepEqual([...declarations(['--t-bg: x; --t-text: y;'])].sort(), ['--t-bg', '--t-text']);
-  assert.equal(blocksForSelectors(':root, :root[data-skin="light"] { --t-bg: x; }', ':root[data-skin="light"]').length, 1);
+  assert.equal(blocksForSelectors(':root, :root[data-skin="p1"] { --t-bg: x; }', ':root[data-skin="p1"]').length, 1);
   assert.equal(countRaw('A{color: RGBA( 249, 115, 22, .2)}').orangeRgba, 1);
   assert.equal(countRaw('A{color: rgba(234, 106, 31, .2)}').emberRgba, 1);
   assert.throws(() => requireTokens('fixture', ['--t-bg: x;'], '--t-', ['bg', 'text']), /--t-text/);
   assert.throws(() => requireTokens('fixture bridge', ['--prom-bg: x;'], '--prom-', ['bg', 'accent']), /--prom-accent/);
 }
 
-function main() {
+// Executes theme-registry.js in a sandbox to prove the saved-theme migration
+// never changes what an existing user sees.
+async function runRegistryBehavior(source) {
+  const vm = await import('node:vm');
+  const boot = ({ saved, surface, schema }) => {
+    const store = new Map();
+    if (saved != null) store.set('prometheus_theme', saved);
+    if (schema != null) store.set('prometheus_theme_schema', schema);
+    const window = {
+      location: { pathname: surface === 'mobile' ? '/mobile' : '/' },
+      __PROM_SHOULD_BOOT_MOBILE: () => surface === 'mobile',
+    };
+    const localStorage = {
+      getItem: (key) => (store.has(key) ? store.get(key) : null),
+      setItem: (key, value) => store.set(key, String(value)),
+    };
+    vm.runInNewContext(source, { window, localStorage });
+    return { window, store };
+  };
+  const cases = [
+    // [saved, surface, expected read, expected persisted]
+    ['light', 'desktop', 'p1', 'p1'],
+    ['light', 'mobile', 'p1', 'p1'],
+    ['dark', 'mobile', 'p1', 'p1'],       // mobile stored P1 as `dark`
+    ['dark', 'desktop', 'dark', 'dark'],  // desktop Default Dark stays put
+    ['blue', 'mobile', 'blue', 'blue'],
+    ['custom', 'mobile', 'custom', 'custom'],
+    [null, 'mobile', '', null],
+  ];
+  for (const [saved, surface, expected, persisted] of cases) {
+    const { window, store } = boot({ saved, surface });
+    assert.equal(window.PROM_READ_SAVED_THEME(), expected, `read ${saved} on ${surface}`);
+    assert.equal(store.get('prometheus_theme') ?? null, persisted, `persisted ${saved} on ${surface}`);
+    assert.equal(store.get('prometheus_theme_schema'), '2', `schema marked for ${saved} on ${surface}`);
+  }
+  // Migration is one-shot: once marked, a later mobile `dark` is not rewritten.
+  const marked = boot({ saved: 'dark', surface: 'mobile', schema: '2' });
+  assert.equal(marked.store.get('prometheus_theme'), 'dark');
+  // Default Dark is desktop-only: mobile resolves it to P1 rather than showing it.
+  const mobile = boot({ saved: null, surface: 'mobile' }).window;
+  assert.ok(!mobile.PROM_THEMES.some((theme) => theme.id === 'dark'), 'mobile picker hides Default Dark');
+  assert.equal(mobile.PROM_RESOLVE_THEME('dark').id, 'p1');
+  assert.equal(mobile.PROM_RESOLVE_THEME('light').id, 'p1');
+  const desktop = boot({ saved: null, surface: 'desktop' }).window;
+  assert.ok(desktop.PROM_THEMES.some((theme) => theme.id === 'dark'), 'desktop keeps Default Dark');
+  for (const theme of desktop.PROM_ALL_THEMES) {
+    for (const key of ['id', 'label', 'base', 'description', 'surfaces', 'statusBar', 'chromeAccent']) {
+      assert.ok(Object.hasOwn(theme, key), `registry theme ${theme.id} defines ${key}`);
+    }
+  }
+}
+
+async function main() {
   runFixtures();
   const index = read('web-ui/index.html');
   const tokens = read('web-ui/src/styles/theme-tokens.css');
   const registry = read('web-ui/src/theme-registry.js');
   assert.ok(index.includes('src/theme-registry.js'), 'desktop loads shared registry');
   assert.ok(read('web-ui/mobile.html').includes('/src/theme-registry.js'), 'mobile loads shared registry');
-  const registryMatch = registry.match(/window\.PROM_THEMES\s*=\s*\[([\s\S]*?)\];/);
-  if (!registryMatch) fail('could not parse window.PROM_THEMES from web-ui/index.html');
+  const registryMatch = registry.match(/const THEMES\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/);
+  if (!registryMatch) fail('could not parse THEMES from web-ui/src/theme-registry.js');
   const skins = [...registryMatch[1].matchAll(/\bid\s*:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
-  if (!skins.length) fail('window.PROM_THEMES has no skins');
+  if (!skins.length) fail('theme registry has no skins');
+  if (skins.includes('light')) fail('Prometheus One must use canonical id p1, not light');
+  if (skins[0] !== 'p1') fail('Prometheus One (p1) must be the first/default registry theme');
+  await runRegistryBehavior(registry);
   const expectedSkins = [...new Set([...skins, 'custom'])];
 
   for (const skin of expectedSkins) {
@@ -115,7 +170,7 @@ function main() {
   for (const relative of Object.keys(baseline.files)) assert.ok(baseline.exceptions[relative], `missing exception rationale: ${relative}`);
   const mobileShell = read('web-ui/src/mobile/mobile-shell.js');
   assert.ok(!/\.\.\.p1,\s*id:\s*['"]dark/.test(mobileShell), 'mobile must not remap P1 to dark');
-  assert.ok(blocksForSelectors(read('web-ui/src/styles/mobile.css'), ':root[data-skin="light"]').some((block) => /--pm-accent:\s*var\(--pm-p1-gold\)/.test(block)), 'mobile P1 palette uses canonical light ID');
+  assert.ok(blocksForSelectors(read('web-ui/src/styles/mobile.css'), ':root[data-skin="p1"]').some((block) => /--pm-accent:\s*var\(--pm-p1-gold\)/.test(block)), 'mobile P1 palette uses canonical p1 ID');
   const actualFiles = Object.fromEntries(cssFiles(stylesRoot).map((absolute) => {
     const relative = normalize(path.relative(root, absolute));
     return [relative, countRaw(fs.readFileSync(absolute, 'utf8'))];
@@ -139,4 +194,4 @@ function main() {
   console.log(`Theme token guardrail passed: ${expectedSkins.length} skins × ${requiredTokens.length} semantic tokens, ${bridgeTokens.length} --prom bridges, raw accents at or below baseline.`);
 }
 
-main();
+main().catch((error) => { console.error(error); process.exit(1); });

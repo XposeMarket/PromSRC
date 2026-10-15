@@ -828,7 +828,10 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
 function _getThemeList() {
   // Registry is loaded by both entry documents before the mobile shell.
   // P1 is light; dark is never a compatibility alias for a different palette.
-  return (window.PROM_THEMES || []).map((theme) => ({ ...theme }));
+  const list = typeof window.PROM_THEMES_FOR_SURFACE === 'function'
+    ? window.PROM_THEMES_FOR_SURFACE('mobile')
+    : (window.PROM_THEMES || []);
+  return list.map((theme) => ({ ...theme }));
 }
 
 
@@ -862,17 +865,11 @@ function _startDrawerGatewayHeartbeat() {
 }
 
 function _resolveTheme(themeId) {
+  // Shared registry owns aliases (legacy `light` -> `p1`) and surface filtering
+  // (Default Dark is desktop-only), so mobile never invents its own mapping.
+  if (typeof window.PROM_RESOLVE_THEME === 'function') return window.PROM_RESOLVE_THEME(themeId, 'mobile');
   const themes = _getThemeList();
-  const byId = themes.find((t) => t.id === String(themeId || ''));
-  if (byId) return byId;
-
-  const direct = String(themeId || '').trim().toLowerCase();
-  if (direct === 'dark' || direct === 'light') {
-    const byBase = themes.find((t) => t.base === direct);
-    if (byBase) return byBase;
-  }
-
-  return themes[0] || { id: 'dark', label: 'Default Dark', base: 'dark' };
+  return themes.find((t) => t.id === String(themeId || '')) || themes[0] || { id: 'p1', label: 'Prometheus One', base: 'dark' };
 }
 
 function _getTheme() {
@@ -882,7 +879,7 @@ function _getTheme() {
   // can overwrite a valid blue/purple choice before the mobile shell starts.
   try {
     const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
-      ? window.PROM_READ_SAVED_THEME()
+      ? window.PROM_READ_SAVED_THEME('mobile')
       : localStorage.getItem(PM_THEME_KEY);
     if (saved) {
       const resolved = _resolveTheme(saved);
@@ -893,13 +890,7 @@ function _getTheme() {
   const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
-  const currentTheme = document.documentElement.getAttribute('data-theme');
-  if (currentTheme === 'dark' || currentTheme === 'light') {
-    const byBase = _resolveTheme(currentTheme);
-    if (byBase) return byBase.id;
-  }
-
-  return list[0]?.id || 'dark';
+  return list[0]?.id || 'p1';
 }
 
 function _applyMobileTheme(themeId) {

@@ -1872,7 +1872,7 @@
   background: radial-gradient(circle at 85% 20%, rgba(255,255,255,.14), transparent 34%), linear-gradient(135deg, rgba(255,255,255,.06), transparent 56%);
 }
 
-#settings-modal .theme-swatch[data-skin-preview="light"] .theme-preview { background: linear-gradient(135deg, #0a0a0a 0 46%, #15130f 46% 100%); }
+#settings-modal .theme-swatch[data-skin-preview="p1"] .theme-preview { background: linear-gradient(135deg, #0a0a0a 0 46%, #15130f 46% 100%); }
 #settings-modal .theme-swatch[data-skin-preview="dark"] .theme-preview { background: linear-gradient(135deg, #242424 0 46%, #383838 46% 100%); }
 #settings-modal .theme-swatch[data-skin-preview="blue"] .theme-preview { background: linear-gradient(135deg, #07101f 0 46%, #17335f 46% 100%); }
 #settings-modal .theme-swatch[data-skin-preview="purple"] .theme-preview { background: linear-gradient(135deg, #0c0518 0 46%, #2a1650 46% 100%); }
@@ -1932,7 +1932,7 @@
   opacity: .24;
 }
 
-#settings-modal .theme-swatch[data-skin-preview="light"] .theme-preview-card { background: var(--theme-palette-gold); }
+#settings-modal .theme-swatch[data-skin-preview="p1"] .theme-preview-card { background: var(--theme-palette-gold); }
 #settings-modal .theme-swatch[data-skin-preview="dark"] .theme-preview-card { background: var(--theme-palette-orange); }
 #settings-modal .theme-swatch[data-skin-preview="blue"] .theme-preview-card { background: #3d8bff; }
 #settings-modal .theme-swatch[data-skin-preview="purple"] .theme-preview-card { background: #8b5cf6; }

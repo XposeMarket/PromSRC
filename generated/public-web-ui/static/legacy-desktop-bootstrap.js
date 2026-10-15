@@ -4122,7 +4122,7 @@ function setButtonState(thinking) {
 function getThemeList() {
   return (window.PROM_THEMES && window.PROM_THEMES.length)
     ? window.PROM_THEMES
-    : [{ id: 'dark', label: 'Default Dark', base: 'dark' }, { id: 'light', label: 'Light', base: 'light' }];
+    : [{ id: 'p1', label: 'Prometheus One', base: 'dark' }];
 }
 
 function resolveTheme(id) {
@@ -4138,11 +4138,13 @@ function nextThemeId(currentId) {
 
 function getInitialTheme() {
   try {
-    const saved = localStorage.getItem(THEME_KEY);
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(THEME_KEY);
     if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
-  return 'light';
+  return window.PROM_DEFAULT_THEME || 'p1';
 }
 
 function applyTheme(themeId) {

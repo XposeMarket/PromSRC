@@ -8899,7 +8899,7 @@ html.pm-session-context-open * {
   --pm-voice-orb-grid: rgb(234 106 31 / .18);
 }
 
-:root[data-skin="light"] {
+:root[data-skin="p1"] {
   --pm-accent: var(--pm-p1-gold);
   --pm-accent-soft: var(--pm-p1-gold-soft);
   --pm-accent-dark: var(--pm-p1-gold-muted);
@@ -8929,7 +8929,7 @@ html.pm-session-context-open * {
 
 /* Voice keeps the active skin's color identity: P1 gold, Olympian blue, or
    Aether violet. These tokens feed both the SVG sphere and its canvas dust. */
-:root[data-skin="light"] {
+:root[data-skin="p1"] {
   --pm-voice-control-accent: var(--t-accent);
   --pm-voice-orb-light: #fff9e8;
   --pm-voice-orb-hot: #f0d98b;
@@ -8972,7 +8972,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 
 /* P1 chat: quiet graphite user panels, white conversation text, gold activity. */
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble {
   border: 0;
   background: #363638;
   color: #fff;
@@ -8980,28 +8980,28 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     inset 0 1px 0 rgba(255, 255, 255, .055),
     0 8px 20px rgba(0, 0, 0, .18);
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user.voice-worker-handoff .pm-bubble {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   border: 0;
   background: #363638;
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body.pm-mobile-active .pm-chat-body .pm-msg .pm-bubble {
   border: 0;
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
   color: #fff;
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai .pm-bubble,
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai .pm-bubble,
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
   color: #f7f5ef;
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-work-timer,
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-handoff-sender {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-work-timer,
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-handoff-sender {
   color: var(--pm-p1-gold-light);
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
   background: linear-gradient(90deg, rgba(214, 183, 94, .42), rgba(214, 183, 94, .06));
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
+:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
   border-color: rgba(240, 217, 139, .82);
   border-top-color: transparent;
 }
@@ -9145,7 +9145,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   white-space: nowrap;
 }
 
-:root[data-skin="light"] body.pm-mobile-active .pm-theme-toggle,
+:root[data-skin="p1"] body.pm-mobile-active .pm-theme-toggle,
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle {
   border: 0;
   background: linear-gradient(145deg, rgba(214, 183, 94, .08), rgba(255, 255, 255, .025));
@@ -9154,7 +9154,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     inset 0 1px 0 rgba(240, 217, 139, .08),
     0 8px 24px rgba(0, 0, 0, .32);
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-theme-toggle:active,
+:root[data-skin="p1"] body.pm-mobile-active .pm-theme-toggle:active,
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle:active {
   color: var(--p1-gold-light);
 }
@@ -15595,21 +15595,21 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
 
 /* Final Prometheus One mobile surfaces: the app/page backdrop should match
    the drawer's true black instead of inheriting the shared graphite dark. */
-:root[data-skin="light"] {
+:root[data-skin="p1"] {
   --pm-bg: #000;
   --pm-bg-soft: #000;
 }
-:root[data-skin="light"]:has(body.pm-mobile-active),
-:root[data-skin="light"] body.pm-mobile-active,
-:root[data-skin="light"] body.pm-mobile-active::before,
-:root[data-skin="light"] body.pm-mobile-active #mobile-root,
-:root[data-skin="light"] body.pm-mobile-active .pm-app,
-:root[data-skin="light"] body.pm-mobile-active .pm-page,
-:root[data-skin="light"] body.pm-mobile-active .pm-body {
+:root[data-skin="p1"]:has(body.pm-mobile-active),
+:root[data-skin="p1"] body.pm-mobile-active,
+:root[data-skin="p1"] body.pm-mobile-active::before,
+:root[data-skin="p1"] body.pm-mobile-active #mobile-root,
+:root[data-skin="p1"] body.pm-mobile-active .pm-app,
+:root[data-skin="p1"] body.pm-mobile-active .pm-page,
+:root[data-skin="p1"] body.pm-mobile-active .pm-body {
   background-color: #000 !important;
   background-image: none !important;
 }
-:root[data-skin="light"] body.pm-mobile-active .pm-drawer {
+:root[data-skin="p1"] body.pm-mobile-active .pm-drawer {
   background-color: #000 !important;
   background-image: none !important;
 }
