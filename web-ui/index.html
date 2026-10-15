@@ -9,6 +9,24 @@
 <meta name="apple-mobile-web-app-title" content="Prometheus">
 <meta name="theme-color" content="#0b0b0d">
 <meta name="color-scheme" content="dark light">
+<script>
+  // Before first paint: a mobile Settings handoff never exposes desktop chrome.
+  if (new URLSearchParams(location.search).has('settingsReturn')) {
+    document.documentElement.classList.add('mobile-settings-handoff');
+  }
+</script>
+<style>
+  html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
+  html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
+</style>
+<script>
+  if (document.documentElement.classList.contains('mobile-settings-handoff')) {
+    const preload = document.createElement('link');
+    preload.rel = 'modulepreload';
+    preload.href = '/src/pages/SettingsPage.js';
+    document.head.appendChild(preload);
+  }
+</script>
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
@@ -173,6 +191,11 @@
     };
 
     const closeSettingsShim = function closeSettingsShim() {
+      if (document.documentElement.classList.contains('mobile-settings-handoff')) {
+        if (window.__PROM_RETURN_FROM_MOBILE_SETTINGS?.()) return;
+        import('./src/settings-return.js').then(({ returnFromMobileSettings }) => returnFromMobileSettings(location));
+        return;
+      }
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'none';
       document.body.classList.remove('settings-page-open');

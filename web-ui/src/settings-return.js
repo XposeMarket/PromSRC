@@ -73,6 +73,19 @@ export function returnFromMobileSettings(locationLike = globalThis.location, win
   }
   if (!target) return false;
   try { store?.removeItem(RETURN_STORAGE_KEY); } catch {}
+  // A same-origin mobile referrer proves the preceding document is the app.
+  // Restore it via bfcache when possible; direct/deep links use replace below.
+  try {
+    const previous = new URL(windowRef?.document?.referrer || '');
+    const current = locationUrl(locationLike);
+    if (previous.origin === current.origin
+      && (previous.pathname === '/mobile' || previous.pathname.startsWith('/mobile/'))
+      && windowRef?.history?.length > 1
+      && typeof windowRef.history.back === 'function') {
+      windowRef.history.back();
+      return true;
+    }
+  } catch {}
   // replace (not assign): the desktop handoff document must leave history.
   // With assign, an iOS swipe-back or bfcache restore reopened that document
   // with Settings already closed, i.e. the full desktop UI on a phone.
@@ -104,6 +117,7 @@ export function installMobileSettingsReturnBridge(windowRef = globalThis.window)
   const closeSettings = windowRef.closeSettings;
   if (typeof closeSettings !== 'function' || closeSettings.__promMobileSettingsReturnBridge) return;
   const closeSettingsWithMobileReturn = (...args) => {
+    if (windowRef.__PROM_RETURN_FROM_MOBILE_SETTINGS()) return true;
     const result = closeSettings.apply(windowRef, args);
     windowRef.document?.body?.classList?.remove('pm-mobile-overlay-open');
     windowRef.__PROM_RETURN_FROM_MOBILE_SETTINGS();

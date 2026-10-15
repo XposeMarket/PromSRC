@@ -36,12 +36,10 @@ const earlyWindow = {
   closeSettings(value) { earlyCloseCalls.push(['close', value]); return 'closed'; },
 };
 installMobileSettingsReturnBridge(earlyWindow);
-assert.equal(earlyWindow.closeSettings('early'), 'closed');
+assert.equal(earlyWindow.closeSettings('early'), true);
 assert.deepEqual(earlyCloseCalls, [
-  ['close', 'early'],
-  ['remove', 'pm-mobile-overlay-open'],
   ['assign', '/mobile/more'],
-], 'the pre-lazy-load close shim must return to the lightweight mobile app');
+], 'navigate before invoking any modal-closing shim or revealing desktop');
 
 // Return must REPLACE the desktop handoff entry so iOS swipe-back / bfcache
 // can never land on the desktop UI, and a lost query must fall back to the
@@ -76,3 +74,32 @@ assert.deepEqual(earlyCloseCalls, [
 }
 
 console.log('mobile Settings return contract passed');
+
+// First-paint and close ordering are safety contracts: modal stays covering
+// the desktop document until navigation commits, including the lazy shim.
+const { readFileSync } = await import('node:fs');
+const source = (name) => readFileSync(new URL(`../web-ui/${name}`, import.meta.url), 'utf8');
+const index = source('index.html');
+assert.ok(index.indexOf("classList.add('mobile-settings-handoff')") < index.indexOf('<body'));
+assert.match(index, /html\.mobile-settings-handoff body > :not\(#settings-modal\)/);
+assert.match(index, /html\.mobile-settings-handoff #settings-modal \{ display: flex !important/);
+const settings = source('src/pages/SettingsPage.js');
+const close = settings.slice(settings.indexOf('function closeSettings()'));
+assert.ok(close.indexOf('if (returnFromMobileSettings(window.location)) return;') < close.indexOf("modal.style.display = 'none'"));
+assert.match(source('src/styles/settings.css'), /html\.mobile-settings-handoff #settings-modal \.settings-sidebar-top\s*\{\s*padding-top: max\(12px, env\(safe-area-inset-top\)\) !important/);
+console.log('mobile Settings first-paint, safe-area and exit ordering passed');
+
+{
+  const calls = [];
+  const win = {
+    location: { href: 'https://example.test/?settings=1&settingsReturn=%23mobile%2Fmore', replace() { calls.push('replace'); } },
+    document: { referrer: 'https://example.test/mobile/more' },
+    history: { length: 2, back() { calls.push('back'); } },
+    closeSettings() { calls.push('close'); },
+  };
+  installMobileSettingsReturnBridge(win);
+  win.closeSettings();
+  assert.deepEqual(calls, ['back'], 'same-origin mobile predecessor restores via history without closing modal');
+}
+
+assert.match(source('src/styles/mobile-shell.css'), /body\.pm-mobile-active\.pm-mobile-drawer-open \.pm-tabbar-haptic-gesture-surface\s*\{\s*display: none !important/, 'portaled tabbar haptics must not intercept drawer theme taps');

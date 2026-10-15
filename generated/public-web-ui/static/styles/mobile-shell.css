@@ -1230,3 +1230,9 @@ body.pm-model-badge-pressing * {
   letter-spacing: .01em;
   white-space: nowrap;
 }
+
+/* The native tab-bar haptic surface is portaled outside the translated app.
+   It must not intercept the drawer's bottom actions while the drawer is open. */
+body.pm-mobile-active.pm-mobile-drawer-open .pm-tabbar-haptic-gesture-surface {
+  display: none !important;
+}
