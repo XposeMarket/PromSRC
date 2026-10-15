@@ -4,11 +4,26 @@
 > **Read this when:** Building a developer or public desktop distribution, changing Electron packaging, bumping version, or modifying updater/release verification.
 
 ## TL;DR
+- **CI is the primary release path.** The local `npm run release` publish flow is a fallback only; use a session-scoped `GH_TOKEN` and remove it after use.
+- Prepare a version-bump release PR with `npm run release:prep -- <semver>` (use `--dry-run` first). It accepts stable, beta, and rc SemVer versions; updates only package/lockfile root versions; appends a PR-only grouped changelog section; and never tags or pushes.
+- Tag beta/RC candidates as prereleases, then require a 2–3 day soak and isolated smoke test. Stable promotion requires the version-bump release PR merged to `main`, followed by a stable tag from that merged commit—not a re-tagged beta/RC commit.
+- Standard cadence is 1–2 weeks; hotfixes are patch releases prepared from `main`.
+- Merge reviewed PRs so `main` is always releasable. For stable, merge the dedicated version-bump PR, then `git tag -a v<version> -m "Release v<version>" && git push origin v<version>`; the pushed tag automatically triggers CI. Beta/RC tags create GitHub prereleases, while the stable tag creates the full release—never promote by re-tagging a beta/RC commit.
+- Updater metadata aliases live in public `XposeMarket/prometheus-releases`: `latest` for stable and `beta`/`rc` for candidates. Channel switching is Raul's manual opt-in; never move users to prerelease channels automatically.
+
 - Package name/version/main entry on main: `prometheus` / `1.0.17` / `electron/main.js`.
 - `release/` and `release-public/` are separate build outputs/configurations; do not treat a dev/test build as the public distributable.
 - `npm run build:win`/`build:mac` use the internal Electron Builder config. `build:public` prepares public assets, helper, builder output, then verifies it.
 - `release` runs the public Windows build then Electron Builder's publish operation; publishing is externally visible and requires the release owner/process.
 - Public desktop prep includes backend compilation, extension descriptors, public web UI preparation/sync, Electron native patching and helper build.
+
+### Release pipeline notes
+
+- macOS is skipped unless all of `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` are present. Both architecture jobs are optional (`continue-on-error`).
+- `release-macos.yml` is a compatibility wrapper that triggers the full release pipeline. Metadata aliases `latest`, `beta`, and `rc` publish per release; the stable GitHub feed excludes prereleases.
+- `RELEASE_GH_TOKEN` belongs in **github.com/XposeMarket/PromSRC → Settings → Secrets and variables → Actions → New repository secret** and needs `contents: write` to the public `XposeMarket/prometheus-releases` repository. Azure signing variables (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERTIFICATE_PROFILE`) are placeholders only and do not activate signing.
+- Preserve the existing ASAR `path.sep` fix when touching packaging. See [`RELEASING.md`](../../RELEASING.md) for the complete procedure.
+
 - `npm run sync:web-ui` syncs/checks UI sources but does not itself package a desktop application.
 - **The auto-update path is live:** `src/update/canonical-updater.ts` (compiled to `dist/update/canonical-updater.js`) holds a file-based update request/status/lock protocol that `electron/main.js` loads and drives with `electron-updater`'s `autoUpdater`. Requests come from Settings (`settings.router.ts`), the Telegram channel, and the CLI. `server-v2.ts` runs `evaluateUpdatePreflight()`.
 - The read-only source checkout had unrelated dirty generated public-web files. Never clean/build over those without an explicitly owned clean tree.

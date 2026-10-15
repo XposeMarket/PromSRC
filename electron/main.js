@@ -44,6 +44,14 @@ const {
 const { getNativeBrowserViewImplementations } = require('./native-browser-view');
 const { normalizeSteps, runSteps } = require('./native-browser-input');
 const {
+  DEFAULT_UPDATE_CHANNEL,
+  UPDATE_CHANNELS,
+  normalizeUpdateChannel,
+  normalizeUpdaterSettings,
+  isReleaseInChannel,
+  applyUpdateChannelPreferences,
+} = require('./update-channel');
+const {
   getChromeProfileCatalog,
   getImportedChromeProfile,
   copyChromeProfile,
@@ -324,21 +332,19 @@ try {
 function readUpdaterSettings() {
   try {
     const parsed = JSON.parse(fs.readFileSync(UPDATER_SETTINGS_FILE, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return { autoUpdateEnabled: true };
-    return {
-      // Automatic updates are opt-out. Treat malformed/old settings as the
-      // default so an interrupted write cannot silently disable updates.
-      autoUpdateEnabled: parsed.autoUpdateEnabled !== false,
-    };
+    if (!parsed || typeof parsed !== 'object') return normalizeUpdaterSettings();
+    // Automatic updates are opt-out. Treat malformed/old settings as the
+    // default so an interrupted write cannot silently disable updates.
+    return normalizeUpdaterSettings(parsed);
   } catch {
-    return { autoUpdateEnabled: true };
+    return normalizeUpdaterSettings();
   }
 }
 
 function persistUpdaterSettings() {
   const tempPath = `${UPDATER_SETTINGS_FILE}.tmp`;
   try {
-    fs.writeFileSync(tempPath, JSON.stringify({ autoUpdateEnabled }, null, 2), 'utf8');
+    fs.writeFileSync(tempPath, JSON.stringify({ autoUpdateEnabled, updateChannel }, null, 2), 'utf8');
     fs.renameSync(tempPath, UPDATER_SETTINGS_FILE);
   } catch (error) {
     try { fs.rmSync(tempPath, { force: true }); } catch {}
@@ -346,7 +352,9 @@ function persistUpdaterSettings() {
   }
 }
 
-let autoUpdateEnabled = readUpdaterSettings().autoUpdateEnabled;
+const initialUpdaterSettings = readUpdaterSettings();
+let autoUpdateEnabled = initialUpdaterSettings.autoUpdateEnabled;
+let updateChannel = initialUpdaterSettings.updateChannel;
 
 function needsDependencySetup() {
   if (IS_PACKAGED_RUNTIME) return false;
@@ -393,12 +401,14 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
     // canonical backup/drain flow below before quitAndInstall is called.
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.autoRunAppAfterInstall = true;
+    // applyUpdaterPreferences below restores the persisted Stable/Beta choice.
     autoUpdater.allowDowngrade = false;
     // Public Windows packages are intentionally unsigned in this
     // distribution. The canonical updater still requires an explicit user
     // confirmation, a protected state backup, release validation, and a
     // matching SHA-512 digest before installation.
     autoUpdater.verifyUpdateCodeSignature = false;
+    applyUpdaterPreferences();
     autoUpdater.setFeedURL?.({ provider: 'github', owner: 'XposeMarket', repo: 'prometheus-releases' });
     autoUpdater.logger          = null;   // suppress console noise; surface via events only
   } catch (e) {
@@ -484,6 +494,7 @@ function getUpdaterState(extra = {}) {
   return {
     supported: !!autoUpdater && !!canonicalUpdaterApi && IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD,
     autoUpdateEnabled,
+    updateChannel,
     currentVersion: CURRENT_VERSION,
     status: updaterStatus,
     message: updaterStatus === 'error' && canonicalUpdaterApi?.sanitizeUpdateError
@@ -538,6 +549,9 @@ function writeCanonicalUpdaterStatus(extra = {}) {
 function validatePrometheusRelease(info) {
   if (!canonicalUpdaterApi?.validateReleaseInfo) {
     return { ok: false, message: 'The canonical release validator is unavailable; update is blocked.' };
+  }
+  if (!isReleaseInChannel(info, updateChannel)) {
+    return { ok: false, message: 'This release is not available on the selected Stable channel.' };
   }
   return canonicalUpdaterApi.validateReleaseInfo(CURRENT_VERSION, info || {});
 }
@@ -681,6 +695,7 @@ function applyUpdaterPreferences() {
   if (!autoUpdater) return;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
+  applyUpdateChannelPreferences(autoUpdater, updateChannel, CURRENT_VERSION);
 }
 
 function updateBusyState(source = 'manual') {
@@ -737,7 +752,12 @@ async function downloadPrometheusUpdate(source = 'manual', lockHeld = false) {
     const downloaded = await autoUpdater.downloadUpdate();
     const paths = Array.isArray(downloaded) ? downloaded : [];
     updaterInstallerPath = paths.find((candidate) => typeof candidate === 'string' && fs.existsSync(candidate)) || updaterInstallerPath;
-    await verifyDownloadedRelease(availableUpdate);
+    // A channel can change while a download is in flight. Never promote that
+    // old-channel artifact to ready; the next manual check uses the new feed.
+    const downloadedRelease = pendingUpdate || availableUpdate;
+    const downloadedCheck = validatePrometheusRelease(downloadedRelease);
+    if (!downloadedCheck.ok) throw new Error(downloadedCheck.message);
+    await verifyDownloadedRelease(downloadedRelease);
     pendingUpdate = pendingUpdate || availableUpdate;
     updaterStatus = 'ready';
     updaterMessage = 'Update downloaded and ready for your explicit confirmation.';
@@ -759,6 +779,27 @@ async function downloadPrometheusUpdate(source = 'manual', lockHeld = false) {
     console.error('[Updater] downloadUpdate failed:', updaterMessage);
     return sendUpdaterState({ source });
   }
+}
+
+async function setUpdateChannel(channel) {
+  const requested = String(channel || '').trim().toLowerCase();
+  if (!UPDATE_CHANNELS.has(requested)) {
+    throw new Error('Update channel must be Stable or Beta.');
+  }
+  updateChannel = requested;
+  persistUpdaterSettings();
+  applyUpdaterPreferences();
+  availableUpdate = null;
+  pendingUpdate = null;
+  updaterProgress = 0;
+  updaterStatus = autoUpdater ? 'idle' : 'unsupported';
+  updaterMessage = autoUpdater
+    ? `Update channel set to ${updateChannel === 'beta' ? 'Beta' : 'Stable'}.`
+    : 'Updates are available only in packaged public builds.';
+  if (autoUpdater && autoUpdateEnabled) {
+    return runLocalCanonicalUpdateOperation('channel-change', () => checkForPrometheusUpdates('settings', true));
+  }
+  return sendUpdaterState({ source: 'settings' });
 }
 
 async function setAutoUpdateEnabled(enabled) {
@@ -4202,6 +4243,10 @@ handleTrustedMain('updater:set-auto-update', async (_event, payload = {}) => (
   setAutoUpdateEnabled(payload?.enabled === true)
 ));
 
+handleTrustedMain('updater:set-channel', async (_event, payload = {}) => (
+  setUpdateChannel(payload?.channel)
+));
+
 handleTrustedMain('updater:install', async (_event, payload = {}) => {
   if (payload?.confirm !== true) {
     updaterStatus = 'error';
@@ -4389,9 +4434,20 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log(`[Updater] Update downloaded: v${info.version} — awaiting SHA-512 verification`);
+    const releaseCheck = validatePrometheusRelease(info);
+    if (!releaseCheck.ok) {
+      availableUpdate = null;
+      pendingUpdate = null;
+      updaterReleaseValidated = false;
+      updaterSha512Verified = false;
+      updaterStatus = 'error';
+      updaterMessage = releaseCheck.message;
+      sendUpdaterState({ errorCode: 'release_validation_failed' });
+      return;
+    }
     availableUpdate = info;
     pendingUpdate = info;
-    updaterReleaseValidated = validatePrometheusRelease(info).ok;
+    updaterReleaseValidated = true;
     updaterSha512Verified = false;
     updaterStatus = 'downloading';
     updaterMessage = 'Download complete. Verifying the release SHA-512 before it can be installed...';

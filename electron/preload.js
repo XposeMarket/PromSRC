@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   /** Enable/disable automatic release checks. Installation always needs confirmation. */
   setAutoUpdateEnabled: (enabled) => ipcRenderer.invoke('updater:set-auto-update', { enabled: enabled === true }),
+  /** Persist the desktop release channel. Only Stable and Beta are accepted by main. */
+  setUpdateChannel: (channel) => ipcRenderer.invoke('updater:set-channel', { channel: String(channel || '') }),
   /** Called whenever updater state changes. */
   onState: (cb) => {
     if (typeof cb !== 'function') return () => {};

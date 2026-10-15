@@ -1,0 +1,248 @@
+name: Tag-driven public release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      RELEASE_GH_TOKEN:
+        required: true
+      MAC_CSC_LINK:
+        required: false
+      MAC_CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      AZURE_SIGNING_ENDPOINT:
+        required: false
+      AZURE_SIGNING_ACCOUNT:
+        required: false
+      AZURE_CERTIFICATE_PROFILE:
+        required: false
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing source tag, exactly v<package.json version>'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-release-${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      prerelease: ${{ steps.validate.outputs.prerelease }}
+      mac: ${{ steps.validate.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - name: Validate immutable source tag and version
+        id: validate
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const tag = process.env.RELEASE_TAG;
+          const version = require('./package.json').version;
+          if (!/^v\d+\.\d+\.\d+(?:-(?:beta|rc)\.\d+)?$/.test(tag) || tag !== `v${version}`) throw Error('Tag must exactly match package.json version (stable, beta.N or rc.N)');
+          const head = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
+          const target = cp.execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], {encoding:'utf8'}).trim();
+          if (head !== target) throw Error('Checkout is not the requested existing source tag');
+          const mac = ['MAC_CSC_LINK','MAC_CSC_KEY_PASSWORD','APPLE_ID','APPLE_APP_SPECIFIC_PASSWORD','APPLE_TEAM_ID'].every(k => process.env[k]);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nprerelease=${/-(beta|rc)\./.test(tag)}\nmac=${mac}\n`);
+          NODE
+  regression:
+    needs: validate
+    uses: ./.github/workflows/pr-regression.yml
+    with:
+      ref: ${{ needs.validate.outputs.tag }}
+  privacy:
+    needs: validate
+    uses: ./.github/workflows/privacy-secret-scan.yml
+    with:
+      ref: ${{ needs.validate.outputs.tag }}
+  storage:
+    needs: validate
+    uses: ./.github/workflows/storage-layout-contract.yml
+    with:
+      ref: ${{ needs.validate.outputs.tag }}
+  windows:
+    needs: [validate, regression, privacy, storage]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Build public Windows installer and verify unpacked output
+        run: |
+          npm run prepare:public:desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:desktop-helper:win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --win --config electron-builder-public.yml --publish=never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run verify:public-release
+      # Placeholder only: wire Azure Trusted Signing into electron-builder's
+      # signing hook BEFORE enabling it. Signing only an already-generated
+      # installer would invalidate latest.yml hashes and blockmaps.
+      - name: Windows Azure Trusted Signing placeholder (not enabled)
+        if: ${{ env.AZURE_TENANT_ID != '' && env.AZURE_CLIENT_ID != '' && env.AZURE_CLIENT_SECRET != '' && env.AZURE_SIGNING_ENDPOINT != '' && env.AZURE_SIGNING_ACCOUNT != '' && env.AZURE_CERTIFICATE_PROFILE != '' }}
+        run: Write-Output 'Azure credentials configured; signing integration remains deliberately disabled. See RELEASING.md.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: |
+            release-public/*.exe
+            release-public/*.blockmap
+            release-public/*latest*.yml
+            release-public/beta*.yml
+            release-public/rc*.yml
+  macos:
+    needs: [validate, regression, privacy, storage]
+    if: ${{ needs.validate.outputs.mac == 'true' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      PROMETHEUS_REQUIRE_MAC_SIGNING: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Build, sign, notarize and verify public macOS output
+        env:
+          npm_config_python: ${{ steps.python.outputs.python-path }}
+        run: |
+          npm run prepare:public:desktop
+          npm run build:desktop-helper:mac
+          npx electron-builder --mac --${{ matrix.arch }} --config electron-builder-public.yml --publish=never --config.dmg.writeUpdateInfo=true
+          npm run verify:public-release:mac -- --arch=${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            release-public/Prometheus-*-mac-${{ matrix.arch }}.dmg
+            release-public/Prometheus-*-mac-${{ matrix.arch }}.zip
+            release-public/*.blockmap
+  publish:
+    needs: [validate, windows, macos]
+    if: ${{ always() && needs.windows.result == 'success' && needs.validate.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+      RELEASE_REPO: XposeMarket/prometheus-releases
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Merge complete macOS architecture set and normalize updater channels
+        shell: bash
+        run: |
+          if compgen -G 'artifacts/Prometheus-*-mac-arm64.zip' > /dev/null && compgen -G 'artifacts/Prometheus-*-mac-x64.zip' > /dev/null; then
+            node scripts/merge-macos-update-manifest.js --input=artifacts --output=artifacts/latest-mac.yml
+          else
+            # Never publish one architecture or metadata for missing binaries.
+            rm -f artifacts/*-mac-*.dmg artifacts/*-mac-*.zip artifacts/*-mac-*.blockmap
+          fi
+          node scripts/release-manifests.mjs artifacts "$RELEASE_TAG"
+      - name: Publish verified assets to public release repository
+        shell: bash
+        run: |
+          test -n "$GH_TOKEN" || { echo 'Missing RELEASE_GH_TOKEN source repository secret'; exit 1; }
+          flags=()
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease --latest=false); else flags+=(--latest); fi
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --draft --prerelease="$PRERELEASE" --latest=false
+          else
+            if [[ -f CHANGELOG.md ]]; then notes=(--notes-file CHANGELOG.md); else notes=(--notes "Public build $RELEASE_TAG. See source repository RELEASING.md for installation and update guidance."); fi
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" --title "$RELEASE_TAG" --draft "${notes[@]}" "${flags[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" artifacts/* --repo "$RELEASE_REPO" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --draft=false "${flags[@]}"

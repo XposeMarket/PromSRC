@@ -1,6 +1,11 @@
 name: Storage layout contract
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
   pull_request:
     paths:
       - 'src/runtime/storage-layout.ts'
@@ -45,6 +50,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
