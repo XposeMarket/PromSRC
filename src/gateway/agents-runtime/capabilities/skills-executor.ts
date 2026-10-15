@@ -10,7 +10,6 @@ import {
   sampleRoutingOffers,
   rollbackRoutingSuggestion,
   proposeRoutingTrigger,
-  type RoutingOriginal,
   listSkillCuratorSuggestions,
   getSkillCuratorStatus,
   rejectSkillCuratorSuggestion,
@@ -21,32 +20,8 @@ import {
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import { rankSkillMatches } from '../../skills-runtime/skills-manager';
 import { submitSkillRoutingFeedback, getSkillRoutingEvidence, sha } from '../../learning/turn-recorder';
+import { resolveRoutingOriginal } from '../../skills-runtime/routing-original';
 
-/** Read authoritative history only; never accept raw original/context or paths from tool callers. */
-function resolveRoutingOriginal(sessionId: string, requestHash: string): RoutingOriginal | null {
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)) return null;
-  try {
-    const file = path.join(getSessionStorageDirectory(), `${sessionId}.json`);
-    if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 4 * 1024 * 1024) return null;
-    const source = fs.readFileSync(file, 'utf8');
-    const history = JSON.parse(source).history;
-    if (!Array.isArray(history)) return null;
-    for (let i = history.length - 1; i >= 0; i--) {
-      const row = history[i];
-      if (row?.role !== 'user') continue;
-      const request = typeof row.content === 'string' ? row.content : Array.isArray(row.content) ? row.content.filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('\n') : '';
-      if (sha(request.trim()) === requestHash) {
-        const visible = history.slice(0, i + 1).filter((p: any) => p?.role === 'user' || p?.role === 'assistant').map((p: any) => ({
-          role: p.role,
-          content: scrubContextText(typeof p.content === 'string' ? p.content : Array.isArray(p.content) ? p.content.filter((part: any) => part?.type === 'text').map((part: any) => part.text).join('\n') : ''),
-        }));
-        const context = JSON.stringify(visible);
-        return { request, contextHash: sha(JSON.stringify(history.slice(0, i + 1))), context };
-      }
-    }
-  } catch {}
-  return null;
-}
 
 const SKILL_TOOL_NAMES = new Set([
   'skill_list',
@@ -780,7 +755,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             if (!id) return { name, args, result: 'skill_curator: id is required for apply', error: true };
             const suggestion = applySkillCuratorSuggestion(ctx.workspacePath, deps.skillsManager, id);
             if (!suggestion) return { name, args, result: `Suggestion "${id}" not found.`, error: true };
-            return { name, args, result: `Applied skill curator suggestion ${id}.`, error: false };
+            if (suggestion.status !== 'applied') return { name, args, result: `Skill suggestion ${id}: ${suggestion.status}. ${suggestion.replayEvaluation?.errors.join(' ') || ''}`, error: true };
+            return { name, args, result: `Applied skill curator suggestion ${id} after replay validation.`, error: false };
           }
           if (action === 'reject') {
             const id = String(args.id || '').trim();

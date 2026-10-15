@@ -474,6 +474,12 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   llm: LLMConfigSchema.optional(),
+  brain: z.object({
+    enabled: z.boolean().optional(),
+    skillLearning: z.object({
+      autoReview: z.boolean().optional(),
+    }).optional(),
+  }).passthrough().optional(),
   voice: z.object({
     agent: z.object({
       provider: z.enum(['openai_codex', 'openai_realtime', 'xai']).optional(),

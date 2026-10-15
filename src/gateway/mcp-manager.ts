@@ -8,6 +8,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { buildMcpServerEnv } from './mcp-server-env.js';
 import path from 'path';
 import fs from 'fs';
 import { log } from '../security/log-scrubber';
@@ -28,6 +29,7 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  envPassthrough?: string[];
   // sse/http transport
   url?: string;
   headers?: Record<string, string>;
@@ -229,6 +231,7 @@ export class MCPManager {
       if (Array.isArray((raw as any).args)) cfg.args = (raw as any).args.map((v: any) => String(v));
       const env = MCPManager.toStringMap((raw as any).env);
       if (Object.keys(env).length > 0) cfg.env = env;
+      if (Array.isArray(raw.envPassthrough)) cfg.envPassthrough = raw.envPassthrough.filter((key: unknown): key is string => typeof key === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
     } else {
       if (hasUrl) cfg.url = String((raw as any).url).trim();
       const headers = MCPManager.toStringMap((raw as any).headers);
@@ -523,7 +526,7 @@ export class MCPManager {
           return;
         }
         const safeUserEnv = MCPManager.sanitizeEnv(resolvedEnv.env);
-        const env = { ...process.env, ...safeUserEnv };
+        const env = buildMcpServerEnv({ env: safeUserEnv, envPassthrough: cfg.envPassthrough }, process.env);
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
         // This prevents metacharacter injection via cfg.args on all platforms.

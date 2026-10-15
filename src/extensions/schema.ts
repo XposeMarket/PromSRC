@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PluginPermissionsSchema } from './permission-manifest.js';
 import type { ExtensionDescriptor } from './types.js';
 
 const ExtensionKindSchema = z.enum(['provider', 'connector', 'mcp_preset', 'integration']);
@@ -147,10 +148,14 @@ export const ExtensionDescriptorSchema = z.object({
     })
     .optional(),
   compatibility: z.object({ pluginApi: z.string().optional(), prometheus: z.string().optional() }).optional(),
-  permissions: z.object({
+  permissions: z.union([PluginPermissionsSchema, z.object({
     network: z.array(z.string()).optional(), filesystem: z.array(z.string()).optional(),
     process: z.boolean().optional(), credentials: z.array(z.string()).optional(),
-  }).optional(),
+  }).strict().transform((p) => PluginPermissionsSchema.parse({
+    network: p.network ? { hosts: p.network } : undefined,
+    filesystem: p.filesystem ? { read: p.filesystem, write: p.filesystem } : undefined,
+    secrets: p.credentials,
+  }))]).optional(),
   connection: z.object({
     schemaVersion: z.literal(1),
     aliases: z.array(z.string().min(1)).optional(),

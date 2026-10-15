@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync('src/gateway/desktop-tools.ts', 'utf8');
+const { readDesktopGatewaySource } = await import('./lib/gateway-split-source.mjs');
+const source = readDesktopGatewaySource();
 
 assert.match(source, /const DESKTOP_SESSION_CACHE_LIMIT = Math\.max\(/, 'desktop session screenshot cache must have a hard entry bound');
 assert.match(source, /capturedAt \+ DESKTOP_PACKET_TTL_MS <= now/, 'desktop session screenshots must expire on the same TTL as screenshot IDs');

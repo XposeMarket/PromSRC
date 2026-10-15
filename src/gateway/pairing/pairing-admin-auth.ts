@@ -5,6 +5,7 @@ import { resolveGatewayPort } from '../../config/gateway-port';
 import {
   getGatewayRequestIp,
   isLoopbackAddress,
+  isProxiedRequest,
   resolveGatewayAuthToken,
 } from '../gateway-auth';
 
@@ -100,7 +101,10 @@ export function evaluatePairingAdminRequestWithPolicy(
   //   from loopback only.
   const gatewayHost = String(policy.gatewayHost || '').trim();
   const wildcardBind = gatewayHost === '0.0.0.0' || gatewayHost === '::';
-  if (wildcardBind || !isLoopbackHost(gatewayHost) || !isLoopbackAddress(getGatewayRequestIp(req))) {
+  // isProxiedRequest: a loopback-bound gateway published through Tailscale
+  // Funnel/Serve sees internet clients as 127.0.0.1; they must never be able
+  // to approve their own pairing requests.
+  if (wildcardBind || !isLoopbackHost(gatewayHost) || !isLoopbackAddress(getGatewayRequestIp(req)) || isProxiedRequest(req)) {
     return { ok: false, status: 403, message: 'Trusted desktop pairing authority required.' };
   }
 

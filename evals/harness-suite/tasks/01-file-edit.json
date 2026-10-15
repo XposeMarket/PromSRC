@@ -1,0 +1,1 @@
+{"id":"01-file-edit","category":"file-edit","prompt":"Edit config.json: change retries to 3, preserve name. Write compact JSON in existing key order with final newline. This directory is a fresh git repo.","setup":{"config.json":"{\"name\":\"demo\",\"retries\":0}\n"},"grader":{"files":{"config.json":"{\"name\":\"demo\",\"retries\":3}\n"}},"timeoutSec":120}
