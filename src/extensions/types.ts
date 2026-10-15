@@ -1,3 +1,4 @@
+import type { PluginPermissions } from './permission-manifest.js';
 import type { PromptSignalConfig } from '../runtime/prompt-signal-matcher.js';
 
 export type ExtensionKind = 'provider' | 'connector' | 'mcp_preset' | 'integration';
@@ -152,12 +153,7 @@ export type ExtensionDescriptor = {
     headersTemplate?: Record<string, string>;
   };
   compatibility?: { pluginApi?: string; prometheus?: string };
-  permissions?: {
-    network?: string[];
-    filesystem?: string[];
-    process?: boolean;
-    credentials?: string[];
-  };
+  permissions?: PluginPermissions;
   connection?: {
     schemaVersion: 1;
     /** Natural-language/provider identities accepted by universal connection discovery. */

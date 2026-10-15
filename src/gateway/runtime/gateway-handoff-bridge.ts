@@ -34,6 +34,7 @@ import {
 import { evictSessionFromCache, setSessionWriteObserver } from '../session';
 import { invalidateTaskIndexCaches } from '../tasks/task-store';
 import { GatewayHandoffHost, type GatewayHandoffControlResult } from './gateway-handoff-host';
+import { runtimeBelongsToLiveHandoffHost } from './handoff-replacement-bind';
 import {
   GatewayHandoffClient,
   adoptGatewayHandoffHosts,
@@ -167,8 +168,16 @@ export function isRuntimeHostedByLiveHandoffHost(runtime: Pick<LiveRuntimeSnapsh
   const hostPid = Number(runtime.remoteHostPid || runtime.pid || 0);
   if (!hostPid || hostPid === process.pid) return false;
   const client = adoptedHosts.get(hostPid);
-  if (!client) return false;
-  return client.currentState === 'connected' || client.currentState === 'reconnecting' || client.currentState === 'connecting';
+  if (client && (client.currentState === 'connected' || client.currentState === 'reconnecting' || client.currentState === 'connecting')) return true;
+  // The restart manifest can be visible before the socket's hello/remote_sync
+  // reaches this process. During the explicit hot-restart boot, keep a live
+  // predecessor's runtimes out of recovery until adoption catches up.
+  if (process.env.PROMETHEUS_HOT_RESTART !== '1') return false;
+  const expectedHostPid = Number(process.env.PROMETHEUS_HANDOFF_HOST_PID || 0);
+  if (expectedHostPid && hostPid !== expectedHostPid) return false;
+  return runtimeBelongsToLiveHandoffHost(runtime, hostPid, process.pid, (pid) => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  });
 }
 
 export function listAdoptedHandoffHosts(): Array<{ hostPid: number; state: string; lastHeartbeatAt: number }> {
@@ -255,6 +264,7 @@ export async function beginGatewayHandoffHost(input: { reason: string; restartTi
 export interface HandoffDrainWaitResult {
   timedOut: boolean;
   waitedMs: number;
+  aborted?: boolean;
 }
 
 /** Resolve once no locally owned runtime is still running (plus a settle grace), or at the deadline. */
@@ -263,6 +273,7 @@ export async function waitForGatewayHandoffDrain(options: {
   pollMs?: number;
   settleMs?: number;
   onTick?: (running: number, waitedMs: number) => void;
+  shouldAbort?: () => boolean;
 }): Promise<HandoffDrainWaitResult> {
   const startedAt = Date.now();
   const pollMs = Math.max(250, Number(options.pollMs || 2_000));
@@ -272,6 +283,7 @@ export async function waitForGatewayHandoffDrain(options: {
     const running = countLocalRunningRuntimes();
     const waitedMs = Date.now() - startedAt;
     try { options.onTick?.(running, waitedMs); } catch {}
+    try { if (options.shouldAbort?.()) return { timedOut: false, waitedMs, aborted: true }; } catch {}
     if (running === 0) {
       if (!idleSince) idleSince = Date.now();
       if (Date.now() - idleSince >= settleMs) return { timedOut: false, waitedMs };

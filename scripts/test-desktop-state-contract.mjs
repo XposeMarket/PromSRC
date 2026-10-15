@@ -154,7 +154,7 @@ for (const action of ['list_windows', 'get_window_state', 'accessibility_tree', 
   assert.ok(worker.includes(`$action -eq "${action}"`), `background worker missing ${action}`);
 }
 
-const desktopSource = await import('node:fs').then((fs) => fs.readFileSync(path.join(root, 'src/gateway/desktop-tools.ts'), 'utf8'));
+const desktopSource = await import('./lib/gateway-split-source.mjs').then((m) => m.readDesktopGatewaySource());
 const nativeHelperSource = await import('node:fs').then((fs) => fs.readFileSync(path.join(root, 'native/desktop-helper-windows/main.cpp'), 'utf8'));
 const helperClientSource = await import('node:fs').then((fs) => fs.readFileSync(path.join(root, 'src/gateway/desktop-platform-win32-helper.ts'), 'utf8'));
 assert.match(desktopSource, /const imagePath = process\.argv\[1\]/, 'node -e OCR child must read its first supplied argument from argv[1]');

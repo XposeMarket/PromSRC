@@ -12,6 +12,7 @@ import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
+import { recoverLocalToolCalls } from './local-tool-calls';
 
 // Remove the prompt-cache sentinel from any string message content. OpenAI/xAI
 // auto-cache on a stable prefix, so the marker has no API role here and must not
@@ -384,7 +385,9 @@ export class OpenAICompatAdapter implements LLMProvider {
     const message: ChatMessage = {
       role: 'assistant',
       content: choice?.message?.content ?? '',
-      tool_calls: choice?.message?.tool_calls,
+      tool_calls: ['lm_studio', 'llama_cpp'].includes(this.id)
+        ? recoverLocalToolCalls(contentToString(choice?.message?.content ?? ''), choice?.message?.tool_calls, options?.tools)
+        : choice?.message?.tool_calls,
     };
 	    return { message, usage: parseUsage(data) };
 	  }
@@ -514,7 +517,9 @@ export class OpenAICompatAdapter implements LLMProvider {
 	    const message: ChatMessage = {
 	      role: 'assistant',
 	      content,
-	      tool_calls: normalizedToolCalls.length > 0 ? normalizedToolCalls : undefined,
+	      tool_calls: ['lm_studio', 'llama_cpp'].includes(this.id)
+          ? recoverLocalToolCalls(content, normalizedToolCalls, options?.tools)
+          : normalizedToolCalls.length > 0 ? normalizedToolCalls : undefined,
 	    };
 	    return { message, thinking: thinking || undefined, usage };
 	  }

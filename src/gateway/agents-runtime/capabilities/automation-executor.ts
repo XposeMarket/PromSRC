@@ -605,9 +605,32 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         const jobId = String(args.job_id || args.jobId || '').trim();
 
         if (action === 'create') {
+          const jobKind = String(args.kind || 'agent').trim().toLowerCase();
+          if (jobKind !== 'agent' && jobKind !== 'script') {
+            return { name, args, result: 'schedule_job(create) kind must be "agent" or "script"', error: true };
+          }
           const instructionPrompt = String(args.instruction_prompt || args.prompt || '').trim();
-          if (!instructionPrompt) {
-            return { name, args, result: 'schedule_job(create) requires instruction_prompt', error: true };
+          const command = String(args.command || '').trim();
+          if (jobKind === 'script' ? !command : !instructionPrompt) {
+            return { name, args, result: jobKind === 'script' ? 'schedule_job(create) kind=script requires a nonempty command' : 'schedule_job(create) requires instruction_prompt', error: true };
+          }
+          const previewOnlyRaw = args.preview_only ?? args.previewOnly;
+          if (jobKind === 'script' && (
+            String(args.team_id || args.teamId || '').trim() ||
+            String(args.subagent_id || '').trim() ||
+            args.system_event === true || args.systemEvent === true ||
+            previewOnlyRaw === true || String(previewOnlyRaw).toLowerCase() === 'true'
+          )) {
+            return { name, args, result: 'schedule_job(create) kind=script cannot use team_id, subagent_id, systemEvent, or preview_only', error: true };
+          }
+          const misfirePolicy = String(args.misfire_policy ?? args.misfirePolicy ?? 'run_once').trim().toLowerCase();
+          if (!['skip', 'run_once', 'run_all'].includes(misfirePolicy)) {
+            return { name, args, result: 'schedule_job(create) misfire_policy must be skip, run_once, or run_all', error: true };
+          }
+          const timeoutMsRaw = args.timeout_ms ?? args.timeoutMs;
+          const timeoutMs = timeoutMsRaw === undefined ? undefined : Number(timeoutMsRaw);
+          if (timeoutMsRaw !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs! <= 0 || timeoutMs! > 3_600_000)) {
+            return { name, args, result: 'schedule_job(create) timeout_ms must be a positive integer no greater than 3600000', error: true };
           }
 
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
@@ -620,7 +643,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           try {
             const normalized = normalizeScheduleSpec({
               ...schedule,
-              kind: schedule.kind || args.kind || undefined,
+              kind: schedule.kind || (jobKind === 'script' ? undefined : args.kind) || undefined,
               cron: schedule.cron || args.cron,
               run_at: schedule.run_at || args.run_at,
             }, timezone);
@@ -673,12 +696,15 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           }
           const requestedSubagentId = requestedTeamId ? undefined : (String(args.subagent_id || '').trim() || undefined);
           const assignmentTarget = requestedTeamId ? 'team' : (requestedSubagentId ? 'subagent' : 'main');
-          const previewOnlyRaw = args.preview_only ?? args.previewOnly;
           const expectedOutputsRaw = args.expected_outputs ?? args.expectedOutputs;
 
           let created = deps.cronScheduler.createJob({
             name: nameValue,
-            prompt: instructionPrompt,
+            prompt: instructionPrompt || undefined,
+            kind: jobKind,
+            command: jobKind === 'script' ? command : undefined,
+            misfire_policy: misfirePolicy,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             type: kind,
             schedule: kind === 'recurring' ? cron : undefined,
             runAt: kind === 'one-shot' ? new Date(runAtRaw).toISOString() : undefined,
@@ -694,7 +720,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             ...((args.context_refs || args.contextReferences) ? { context_refs: args.context_refs || args.contextReferences } : {}),
             ...(expectedOutputsRaw !== undefined ? { expectedOutputs: normalizeExpectedOutputs(expectedOutputsRaw) } : {}),
           } as any);
-          if (requestedSubagentId) {
+          if (jobKind !== 'script' && requestedSubagentId) {
             ensureScheduleRuntimeForAgent(requestedSubagentId, {
               scheduleId: created.id,
               scheduleName: created.name,
@@ -710,9 +736,13 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               success: true,
               action: 'create',
               job: summarizeCronJob(created),
-              assigned_team: requestedTeamId || undefined,
-              assigned_owner: requestedSubagentId ? { subagent_id: requestedSubagentId, created: false } : { agent_id: 'main', created: false },
-              message: requestedTeamId
+              ...(jobKind === 'script' ? {} : {
+                assigned_team: requestedTeamId || undefined,
+                assigned_owner: requestedSubagentId ? { subagent_id: requestedSubagentId, created: false } : { agent_id: 'main', created: false },
+              }),
+              message: jobKind === 'script'
+                ? `Scheduled script job "${created.name}" created.`
+                : requestedTeamId
                 ? `Scheduled team job "${created.name}" created for team "${requestedTeamId}".`
                 : requestedSubagentId
                 ? `Scheduled job "${created.name}" created and assigned to subagent "${requestedSubagentId}".`
@@ -808,8 +838,50 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         }
 
         if (action === 'update') {
+          const existingJob = deps.cronScheduler.getJobs().find((j: any) => j.id === jobId);
+          if (!existingJob) return { name, args, result: `Job not found: ${jobId}`, error: true };
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
           const patch: Record<string, any> = {};
+          if (args.kind !== undefined) {
+            const jobKind = String(args.kind || '').trim().toLowerCase();
+            if (jobKind !== 'agent' && jobKind !== 'script') {
+              return { name, args, result: 'schedule_job(update) kind must be "agent" or "script"', error: true };
+            }
+            patch.kind = jobKind;
+          }
+          if (args.command !== undefined) patch.command = String(args.command || '').trim();
+          if (args.misfire_policy !== undefined || args.misfirePolicy !== undefined) {
+            const misfirePolicy = String(args.misfire_policy ?? args.misfirePolicy ?? '').trim().toLowerCase();
+            if (!['skip', 'run_once', 'run_all'].includes(misfirePolicy)) {
+              return { name, args, result: 'schedule_job(update) misfire_policy must be skip, run_once, or run_all', error: true };
+            }
+            patch.misfire_policy = misfirePolicy;
+          }
+          if (args.timeout_ms !== undefined || args.timeoutMs !== undefined) {
+            const timeoutMs = Number(args.timeout_ms ?? args.timeoutMs);
+            if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 3_600_000) {
+              return { name, args, result: 'schedule_job(update) timeout_ms must be a positive integer no greater than 3600000', error: true };
+            }
+            patch.timeoutMs = timeoutMs;
+          }
+          const effectiveKind = patch.kind || existingJob.kind || 'agent';
+          const effectiveCommand = patch.command !== undefined ? patch.command : String(existingJob.command || '').trim();
+          if (effectiveKind === 'script') {
+            if (!effectiveCommand) return { name, args, result: 'schedule_job(update) kind=script requires a nonempty command', error: true };
+            const previewOnlyRaw = args.preview_only ?? args.previewOnly;
+            const effectiveTeamId = args.team_id !== undefined || args.teamId !== undefined
+              ? String(args.team_id || args.teamId || '').trim()
+              : String(existingJob.team_id || '').trim();
+            const effectiveSubagentId = args.subagent_id !== undefined
+              ? String(args.subagent_id || '').trim()
+              : String(existingJob.subagent_id || '').trim();
+            const effectivePreviewOnly = previewOnlyRaw !== undefined
+              ? previewOnlyRaw === true || String(previewOnlyRaw).toLowerCase() === 'true'
+              : existingJob.previewOnly === true;
+            if (effectiveTeamId || effectiveSubagentId || args.system_event === true || args.systemEvent === true || existingJob.systemEvent === true || effectivePreviewOnly) {
+              return { name, args, result: 'schedule_job(update) kind=script cannot use team_id, subagent_id, systemEvent, or preview_only', error: true };
+            }
+          }
 
           if (args.name !== undefined) patch.name = String(args.name || '').trim();
           if (args.instruction_prompt !== undefined || args.prompt !== undefined) {
