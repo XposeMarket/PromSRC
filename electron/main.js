@@ -1003,7 +1003,7 @@ function sleep(ms) {
 // restarts; the child gateway uses a separate loopback backend port. A second
 // Electron profile can set PROMETHEUS_ELECTRON_DATA_DIR and receive its own
 // public relay port without clashing with this instance.
-function isGatewayPortAvailable(port) {
+function probeGatewayPortOnHost(port, host) {
   return new Promise((resolve) => {
     const probe = net.createServer();
     let settled = false;
@@ -1013,10 +1013,19 @@ function isGatewayPortAvailable(port) {
       resolve(available);
     };
     probe.once('error', () => done(false));
-    probe.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+    probe.listen({ port, host, exclusive: true }, () => {
       probe.close(() => done(true));
     });
   });
+}
+
+// The gateway may bind loopback (fresh-install default) or 0.0.0.0 (saved host
+// or "Allow access from other devices"). On Windows a loopback-only probe can
+// succeed while a wildcard listener still owns the port, so the port is only
+// free when both probes succeed.
+async function isGatewayPortAvailable(port) {
+  if (!(await probeGatewayPortOnHost(port, '127.0.0.1'))) return false;
+  return probeGatewayPortOnHost(port, '0.0.0.0');
 }
 
 function readPersistedGatewayPort() {
@@ -1872,7 +1881,12 @@ async function restartGatewayFromElectron(options = {}) {
     while (!(await isGatewayPortAvailable(gatewayPort)) && Date.now() < deadline) await sleep(100);
     await startGateway();
     await waitForGateway();
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GATEWAY_URL);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        if (!mainWindow.isDestroyed()) mainWindow.webContents.send('gateway-recovered', { reason });
+      });
+      mainWindow.loadURL(GATEWAY_URL);
+    }
     writeGatewayLog('[main] Gateway restart complete\n');
     return true;
   } catch (err) {

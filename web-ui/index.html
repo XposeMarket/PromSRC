@@ -2414,7 +2414,11 @@
       <!-- Hidden file input -->
       <input type="file" id="chat-file-input" multiple style="display:none" onchange="onChatFileInputChange(event)">
       <!-- Input row -->
-	      <div class="chat-input-row">
+	      <div id="connect-model-composer-cta" style="display:none;margin:0 0 8px;padding:9px 11px;border:1px solid color-mix(in srgb, var(--brand) 35%, transparent);border-radius:10px;background:color-mix(in srgb, var(--brand) 9%, transparent);align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--text)">
+        <span><strong>Connect a model</strong><span style="color:var(--muted)"> to start chatting with Prom.</span></span>
+        <button id="connect-model-composer-cta-button" class="btn btn-sm" type="button" style="background:var(--brand);color:#fff;border:none;white-space:nowrap">Connect a model</button>
+      </div>
+      <div class="chat-input-row">
         <button class="chat-attach-btn" onclick="document.getElementById('chat-file-input').click()" title="Attach file(s)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
@@ -5395,6 +5399,14 @@
         <div id="pairing-browser-admin-status" style="margin-top:7px;font-size:11px;color:var(--muted)">Electron desktop uses its protected authority automatically.</div>
       </div>
 
+      <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px 16px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div><div class="right-section-title" style="margin:0 0 4px">Local network pairing</div><div style="font-size:12px;color:var(--muted);line-height:1.45">Allow phones on this Wi-Fi/LAN to open a local pairing link. This can be turned off again at any time.</div></div>
+          <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;white-space:nowrap"><input type="checkbox" id="pairing-lan-enabled" /> Enable LAN</label>
+        </div>
+        <div id="pairing-lan-msg" style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.45"></div>
+      </div>
+
       <!-- Remote Access (Tailscale Funnel) -->
       <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:14px 16px;background:color-mix(in srgb, var(--text) 4%, transparent);margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -5454,7 +5466,8 @@
         <!-- LEFT: QR + status -->
         <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:16px;background:color-mix(in srgb, var(--text) 4%, transparent);text-align:center">
           <div class="right-section-title" style="margin-bottom:10px;text-align:left">Gateway Connections · Pair a phone</div>
-          <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
+          <div id="pairing-lan-disabled" style="display:none;margin:0 0 12px;padding:12px 14px;border:1px solid color-mix(in srgb, var(--warning, #d97706) 40%, transparent);border-radius:10px;background:color-mix(in srgb, var(--warning, #d97706) 10%, transparent);font-size:12px;color:var(--text);line-height:1.5">Local network pairing is off. Enable LAN access above to generate a local pairing QR code.</div>
+      <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
             <div style="color:var(--muted);font-size:12px">Loading QR…</div>
           </div>
           <div id="pairing-qr-meta" style="margin-top:10px;font-size:12px;color:var(--muted);line-height:1.5"></div>

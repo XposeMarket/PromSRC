@@ -18,7 +18,7 @@ import { markClientPerformance } from './performance.js';
  */
 
 import { state, THEME_KEY, APPEARANCE_KEY } from './state.js';
-import { runIfNeeded as runOnboardingIfNeeded, startOnBoot as startOnboardingOnBoot } from './onboarding/onboarding-controller.js';
+import { runIfNeeded as runOnboardingIfNeeded, startOnBoot as startOnboardingOnBoot, openModelConnection } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
 import { escHtml } from './utils.js';
 import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
@@ -1128,6 +1128,9 @@ initSidebarSectionToggles();
 
 window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
   console.warn('[onboarding] manual start failed:', err);
+});
+window.openPrometheusModelConnection = () => openModelConnection().catch((err) => {
+  console.warn('[onboarding] model connection failed:', err);
 });
 
 // First-start onboarding. desktop-entry.js calls this once the app is

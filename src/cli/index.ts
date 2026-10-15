@@ -157,7 +157,7 @@ function isGatewayPortAvailable(port: number): Promise<boolean> {
       resolve(available);
     };
     probe.once('error', () => done(false));
-    probe.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+    probe.listen({ port, host: '127.0.0.1', exclusive: true }, () => {
       probe.close(() => done(true));
     });
   });

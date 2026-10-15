@@ -33,6 +33,8 @@
     "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
     "test:onboarding-first-start": "tsx src/gateway/onboarding/first-start.regression.ts",
+    "test:first-install-p0": "tsx src/gateway/onboarding/first-install-p0.regression.ts",
+    "test:first-install-ui": "node scripts/test-first-install-ui.mjs",
     "build": "npm run build:backend && npm run build:web",
     "build:backend": "node scripts/prune-dist.js --quiet && tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js",
     "clean:dist": "node scripts/prune-dist.js --all",

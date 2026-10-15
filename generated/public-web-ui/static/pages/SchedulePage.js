@@ -359,11 +359,10 @@ function _renderBrainUsage() {
 
 function _renderBrainCards() {
   if (!brainStatus) return '';
-  return [brainStatus.thought, brainStatus.dream, brainStatus.cleanup].map(job => {
+  return [brainStatus.thought, brainStatus.dream].map(job => {
     if (!job) return '';
     const isThought = job.id === 'brain_thought';
-    const isCleanup = job.id === 'brain_cleanup';
-    const enabled   = job.enabled === true;
+    const enabled   = job.enabled !== false;
     const running   = job.running === true;
     const nextRun   = job.nextRun ? new Date(job.nextRun).toLocaleString() : '—';
     const lastRun   = job.lastRun ? new Date(job.lastRun).toLocaleString() : 'Never';
@@ -379,9 +378,12 @@ function _renderBrainCards() {
     const outcomeLabel = outcome === 'success' ? 'completed' : outcome === 'failed' ? 'failed' : outcome === 'aborted' ? 'aborted' : 'not run';
     const outcomeColor = outcome === 'success' ? '#0d5c2f' : outcome === 'failed' ? '#9b1c1c' : outcome === 'aborted' ? '#7d5700' : 'var(--muted)';
 
-    const type = isThought ? 'thought' : (isCleanup ? 'cleanup' : 'dream');
-    const toggleFn = `toggleBrainJob('${type}', ${!enabled})`;
-    const runFn = !isCleanup ? `runBrainNow('${type}')` : '';
+    const toggleFn = isThought
+      ? `toggleBrainJob('thought', ${!enabled})`
+      : `toggleBrainJob('dream', ${!enabled})`;
+    const runFn = isThought
+      ? `runBrainNow('thought')`
+      : `runBrainNow('dream')`;
 
     const runNote = job.lastError
       ? ` <span style="color:var(--muted)">— ${escHtml(String(job.lastError).slice(0, 220))}</span>`
@@ -389,7 +391,7 @@ function _renderBrainCards() {
     const outcomeNote = `<div style="font-size:11px;color:${outcomeColor}">Last outcome: <strong>${outcomeLabel}</strong>${runNote}</div>`;
     const extra = `${isThought && job.todayCount !== undefined
       ? `<div style="font-size:11px;color:var(--muted)">Thoughts today: <strong>${job.todayCount}</strong></div>`
-      : !isCleanup && job.ranToday !== undefined
+      : job.ranToday !== undefined
         ? `<div style="font-size:11px;color:var(--muted)">Dream ran tonight: <strong>${job.ranToday ? 'yes' : 'not yet'}</strong></div>`
         : ''}${outcomeNote}`;
 
@@ -414,13 +416,13 @@ function _renderBrainCards() {
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;padding-top:2px">
           ${_toggleHtml(enabled, toggleFn)}
-          ${isCleanup ? '<span style="font-size:10px;color:var(--muted);white-space:nowrap">Runs after Dream</span>' : `<button onclick="event.stopPropagation(); ${runFn}"
+          <button onclick="event.stopPropagation(); ${runFn}"
             style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);
                    border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;
                    cursor:pointer;white-space:nowrap"
             ${running ? 'disabled title="Already running"' : 'title="Run now"'}>
             Run Now
-          </button>`}
+          </button>
         </div>
       </div>`;
   }).join('');
@@ -678,7 +680,9 @@ async function toggleJobEnabled(jobId, enabled) {
 
 async function toggleBrainJob(type, enabled) {
   try {
-    const body = { [`${type}Enabled`]: !!enabled };
+    const body = type === 'thought'
+      ? { thoughtEnabled: !!enabled }
+      : { dreamEnabled:  !!enabled };
     const result = await api('/api/brain/config', {
       method: 'PATCH',
       body: JSON.stringify(body),
