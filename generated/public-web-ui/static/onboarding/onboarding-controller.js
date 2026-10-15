@@ -113,14 +113,6 @@ export function runIfNeeded(opts = {}) {
   return running;
 }
 
-/** Opens just the model connection step without restarting completed onboarding. */
-export async function openModelConnection() {
-  if (running) return running;
-  running = Promise.resolve(showModelPicker())
-    .finally(() => { running = null; });
-  return running;
-}
-
 /**
  * Boot entry point. Records the boot (telemetry only) and starts onboarding
  * when the install's persisted record says it is unfinished. Never runs on
@@ -143,4 +135,4 @@ export async function startOnBoot() {
   await runIfNeeded();
 }
 
-window.OnboardingController = { runIfNeeded, startOnBoot, openModelConnection };
+window.OnboardingController = { runIfNeeded, startOnBoot };

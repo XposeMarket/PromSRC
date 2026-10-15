@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(path.join(root, relative), 'utf8');
 
 const index = read('web-ui/index.html');
+const registry = read('web-ui/src/theme-registry.js');
 const app = read('web-ui/src/app.js');
 const themes = read('web-ui/src/styles/themes.css');
 const settings = read('web-ui/src/styles/settings.css');
@@ -15,7 +16,9 @@ const generatedApp = read('generated/public-web-ui/static/app.js');
 const generatedThemes = read('generated/public-web-ui/static/styles/themes.css');
 const generatedSettings = read('generated/public-web-ui/static/styles/settings.css');
 
-assert.match(index, /id: 'gray',\s+label: 'Ash & Ember',[\s\S]*?shared P1 shell/);
+assert.match(registry, /id: 'gray', label: 'Ash & Ember',[\s\S]*?shared P1 shell/);
+assert.match(registry, /id: 'p1', label: 'Prometheus One'/);
+assert.match(index, /src\/theme-registry\.js/);
 assert.match(app, /gray: \[46, 46, 46\]/);
 assert.match(app, /if \(activeId !== 'custom'\) return;/);
 assert.match(app, /export function editAppearanceAsCustom\(\)/);
