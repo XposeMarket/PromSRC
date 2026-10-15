@@ -49,6 +49,65 @@ try {
   }
 } catch {}
 
+function installGatewayStatusBanner() {
+  const bridge = window.prometheusGateway;
+  if (!bridge || typeof bridge.onState !== 'function') return;
+  const banner = document.createElement('div');
+  banner.id = 'prom-gateway-status-banner';
+  banner.setAttribute('role', 'status');
+  banner.setAttribute('aria-live', 'polite');
+  Object.assign(banner.style, {
+    display: 'none', position: 'fixed', zIndex: '99999', left: '50%', top: 'calc(var(--window-chrome-height, 0px) + 12px)', transform: 'translateX(-50%)', maxWidth: 'min(560px, calc(100vw - 24px))', padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--prom-border, var(--border))', background: 'var(--prom-surface, var(--panel))', color: 'var(--prom-text, var(--text))', boxShadow: '0 10px 28px color-mix(in srgb, #000 20%, transparent)', fontSize: '13px', lineHeight: '1.4',
+  });
+  document.body.appendChild(banner);
+  let recoveredTimer = null;
+  bridge.onState((event = {}) => {
+    clearTimeout(recoveredTimer);
+    if (event.state === 'restarting') {
+      banner.textContent = 'Restarting the local gateway… your workspace stays open.';
+      banner.style.display = 'block';
+      banner.style.borderColor = 'color-mix(in srgb, var(--prom-warning, #d97706) 55%, var(--prom-border, var(--border)))';
+    } else if (event.state === 'degraded') {
+      banner.textContent = `The local gateway is unavailable${event.reason ? `: ${event.reason}` : '.'} You can keep this window open and retry shortly.`;
+      banner.style.display = 'block';
+      banner.style.borderColor = 'color-mix(in srgb, var(--prom-danger, #dc2626) 55%, var(--prom-border, var(--border)))';
+    } else if (event.state === 'recovered') {
+      banner.textContent = 'Local gateway reconnected.';
+      banner.style.display = 'block';
+      banner.style.borderColor = 'color-mix(in srgb, var(--prom-success, #16a34a) 55%, var(--prom-border, var(--border)))';
+      recoveredTimer = setTimeout(() => { banner.style.display = 'none'; }, 3500);
+    }
+  });
+}
+
+installGatewayStatusBanner();
+function installModelConnectionCta() {
+  const cta = document.getElementById('connect-model-composer-cta');
+  const button = document.getElementById('connect-model-composer-cta-button');
+  if (!cta || !button) return;
+  const openModelStep = async () => {
+    await window.openPrometheusModelConnection?.();
+    await refresh();
+  };
+  button.addEventListener('click', openModelStep);
+  const refresh = async () => {
+    try {
+      const response = await fetch('/api/onboarding/status?surface=electron');
+      if (!response.ok) return;
+      const status = await response.json();
+      const connected = !!status?.record?.model?.firstConnectedAt;
+      cta.style.display = connected ? 'none' : 'flex';
+    } catch {}
+  };
+  window.addEventListener('focus', refresh);
+  window.addEventListener('prometheus-model-connected', refresh);
+  refresh();
+}
+
+installModelConnectionCta();
+
+
+
 function unlockApp() {
   document.body.classList.remove('auth-pending');
   document.getElementById('prometheus-auth-gate')?.remove();
