@@ -237,7 +237,7 @@ export function isOutOfExtraUsageError(raw: unknown): boolean {
 }
 import { join } from 'node:path';
 import type {
-  LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
+  LLMProvider, ChatMessage, ChatOptions, ChatResult,
   GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall, IncompleteStreamCause,
 } from './LLMProvider';
 import { PROMPT_CACHE_MARKER } from './LLMProvider';
@@ -251,7 +251,7 @@ import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 import { recordAnthropicRateLimitHeaders } from './usage-awareness';
-import { normalizeAnthropicImage } from './anthropic-image';
+import { normalizeAnthropicContent } from './anthropic-image';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
@@ -523,7 +523,7 @@ export class AnthropicAdapter implements LLMProvider {
             continue;
           }
           unresolved.delete(explicitId);
-          matchedResults.set(explicitId, { ...next, tool_call_id: explicitId, content });
+          matchedResults.set(explicitId, { ...next, tool_call_id: explicitId });
           continue;
         }
 
@@ -539,7 +539,7 @@ export class AnthropicAdapter implements LLMProvider {
           continue;
         }
         unresolved.delete(fallbackId);
-        matchedResults.set(fallbackId, { ...next, tool_call_id: fallbackId, content });
+        matchedResults.set(fallbackId, { ...next, tool_call_id: fallbackId });
       }
 
       repaired.push(assistantMessage);
@@ -590,10 +590,10 @@ export class AnthropicAdapter implements LLMProvider {
 
       if (m.role === 'assistant' && m.tool_calls?.length) {
         // Assistant message with tool use
-        const content: any[] = [];
+        const content: any[] = Array.isArray(m.content) ? await normalizeAnthropicContent(m.content) : [];
 
-        // If there's text content too, add it first
-        const textContent = contentToString(m.content);
+        // Preserve multimodal assistant history as well as plain text.
+        const textContent = Array.isArray(m.content) ? '' : contentToString(m.content);
         if (textContent) {
           content.push({ type: 'text', text: textContent });
         }
@@ -647,7 +647,7 @@ export class AnthropicAdapter implements LLMProvider {
           const toolResultBlock: any = {
             type: 'tool_result',
             tool_use_id: resolvedToolUseId,
-            content: toolContent,
+            content: Array.isArray(m.content) ? await normalizeAnthropicContent(m.content) : toolContent,
           };
           if ((m as any).error === true || /^ERROR[:\s]/i.test(toolContent)) {
             toolResultBlock.is_error = true;
@@ -670,40 +670,7 @@ export class AnthropicAdapter implements LLMProvider {
       }
       // Handle multimodal content (images)
       if (Array.isArray(m.content)) {
-        const parts: any[] = [];
-        for (const part of m.content as (ContentPart | any)[]) {
-          if (part?.type === 'text') {
-            const text = typeof part.text === 'string' ? part.text.trim() : '';
-            if (text) parts.push({ type: 'text', text });
-            continue;
-          }
-
-          if (part?.type === 'image' || part?.type === 'image_url') {
-            const imageUrl = part.type === 'image_url' ? String(part?.image_url?.url || '') : '';
-            const dataUriMatch = imageUrl.match(/^data:[^;,]+;base64,([\s\S]*)$/i);
-            if (part.type === 'image_url' && !imageUrl.startsWith('data:')) {
-              parts.push({ type: 'image', source: { type: 'url', url: imageUrl } });
-              continue;
-            }
-            if (part.type === 'image' && part?.source?.type === 'url' && typeof part.source.url === 'string') {
-              parts.push(part);
-              continue;
-            }
-            const data = part.type === 'image_url'
-              ? (dataUriMatch?.[1] || '')
-              : String(part?.source?.data || '');
-            const normalized = await normalizeAnthropicImage(data);
-            if (!normalized) {
-              parts.push({ type: 'text', text: '[Image omitted: the image data is empty, unsupported, or invalid.]' });
-              continue;
-            }
-            parts.push({
-              type: 'image',
-              source: { type: 'base64', media_type: normalized.media_type, data: normalized.data },
-            });
-            continue;
-          }
-        }
+        const parts = await normalizeAnthropicContent(m.content);
 
         if (parts.length === 0) continue;
         anthropicMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: parts });

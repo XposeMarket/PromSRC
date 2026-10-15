@@ -50,6 +50,8 @@ jobs:
         run: npm run test:public-skills --if-present
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify Anthropic history image normalization
+        run: npm run test:anthropic-continuation
       - name: Verify memory contradiction, freshness, deletion and poisoned recall
         run: npm run test:memory-recall
       - name: Verify replay-gated skill promotion

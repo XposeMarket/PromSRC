@@ -1,4 +1,30 @@
 import sharp from 'sharp';
+import { createHash } from 'crypto';
+
+// Bound retained encoded output; promises also deduplicate concurrent history replays.
+const imageCache = new Map<string, Promise<NormalizedAnthropicImage | null>>();
+const CACHE_ENTRIES = 16;
+export const OMITTED_IMAGE_TEXT = '[image omitted: unreadable or unsupported]';
+
+export async function normalizeAnthropicContent(content: any[]): Promise<any[]> {
+  const result: any[] = [];
+  for (const part of content) {
+    if (part?.type === 'image' || part?.type === 'image_url') {
+      const source = part.type === 'image_url' ? part.image_url?.url : (part.source?.data ?? part.source?.url);
+      // Remote URLs cannot be byte-validated without introducing server-side URL fetches.
+      // Fail closed rather than let the API fetch an unchecked/expired history image.
+      const normalized = await normalizeAnthropicImage(typeof source === 'string' ? source : '');
+      result.push(normalized
+        ? { type: 'image', source: { type: 'base64', ...normalized } }
+        : { type: 'text', text: OMITTED_IMAGE_TEXT });
+    } else if (part?.type === 'tool_result' && Array.isArray(part.content)) {
+      result.push({ ...part, content: await normalizeAnthropicContent(part.content) });
+    } else if (part?.type === 'text' || part?.type === 'tool_result' || part?.type === 'tool_use' || part?.type === 'thinking' || part?.type === 'redacted_thinking') {
+      result.push({ ...part });
+    }
+  }
+  return result;
+}
 
 const MAX_BASE64_CHARS = 4 * 1024 * 1024;
 const MAX_DIMENSION = 2000;
@@ -26,8 +52,24 @@ function hasSupportedImageSignature(bytes: Buffer): boolean {
  * provider can omit that image without failing the complete chat turn.
  */
 export async function normalizeAnthropicImage(base64: string, _declaredMediaType?: string): Promise<NormalizedAnthropicImage | null> {
+  const raw = String(base64 || '').trim();
+  const encoded = raw.replace(/^data:[^;,]+;base64,/i, '');
+  if (!encoded || encoded.length > Math.ceil(MAX_INPUT_BYTES * 4 / 3) + 8) return null;
+  const key = createHash('sha256').update(encoded).digest('hex');
+  const cached = imageCache.get(key);
+  if (cached) {
+    imageCache.delete(key);
+    imageCache.set(key, cached);
+    return cached;
+  }
+  const pending = encodeAnthropicImage(encoded);
+  imageCache.set(key, pending);
+  if (imageCache.size > CACHE_ENTRIES) imageCache.delete(imageCache.keys().next().value!);
+  return pending;
+}
+
+async function encodeAnthropicImage(encoded: string): Promise<NormalizedAnthropicImage | null> {
   try {
-    const encoded = String(base64 || '').trim();
     if (!encoded || encoded.length > Math.ceil(MAX_INPUT_BYTES * 4 / 3) + 8 || encoded.length % 4 !== 0
       || /[^A-Za-z0-9+/=]/.test(encoded)) return null;
     const paddingAt = encoded.indexOf('=');
