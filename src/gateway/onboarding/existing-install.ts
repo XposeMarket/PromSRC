@@ -5,7 +5,6 @@
 // the first-run flow on a restart.
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { getConfig } from '../../config/config';
 import { getPrometheusLayout } from '../../runtime/storage-layout.js';
@@ -44,7 +43,6 @@ function defaultProbe(): Required<ExistingInstallProbe> {
     layout?.runtime?.sessions || '',
   ].filter(Boolean)));
   const legacyOnboardingFiles = Array.from(new Set([
-    path.join(os.homedir(), '.prometheus', 'onboarding.json'),
     process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, 'onboarding.json') : '',
     configDir ? path.join(configDir, 'onboarding.json') : '',
   ].filter(Boolean)));
