@@ -95,7 +95,11 @@ function installModelConnectionCta() {
       const response = await fetch('/api/onboarding/status?surface=electron');
       if (!response.ok) return;
       const status = await response.json();
-      const connected = !!status?.record?.model?.firstConnectedAt;
+      // modelConnected also counts real credentials (OAuth / API key), so an
+      // install that skipped the onboarding model step is not nagged forever.
+      const connected = typeof status?.modelConnected === 'boolean'
+        ? status.modelConnected
+        : !!status?.record?.model?.firstConnectedAt;
       cta.style.display = connected ? 'none' : 'flex';
     } catch {}
   };

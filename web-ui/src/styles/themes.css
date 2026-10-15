@@ -1871,6 +1871,13 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area > .chat-composer-attac
   grid-area: staging;
 }
 
+/* The connect-model notice has no grid area of its own; without this it is
+   auto-placed into the 32px attach column and wraps one word per line. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area > #connect-model-composer-cta {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 body:not(.pm-mobile-active) #chat-view > .chat-input-area > .chat-input-row,
 body:not(.pm-mobile-active) #chat-view > .chat-input-area > .agent-toggle {
   display: contents;

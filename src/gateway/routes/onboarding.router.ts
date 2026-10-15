@@ -14,6 +14,7 @@ import { redoOnboarding } from '../onboarding/redo-onboarding';
 import { planSeed, applySeed, OnboardingProfile } from '../onboarding/memory-seed';
 import { checkModelHealth } from '../onboarding/model-health';
 import { detectExistingInstall } from '../onboarding/existing-install';
+import { hasActiveModelCredential } from '../onboarding/model-connected';
 
 export const router = Router();
 
@@ -61,6 +62,9 @@ function statusPayload(userId: string, req?: any) {
     installId: getInstallId(),
     userId,
     accountRequired: isAccountRequired(),
+    // True when the onboarding model step ran OR the active provider already
+    // has a credential. UI prompts key off this, not firstConnectedAt alone.
+    modelConnected: !!record.model.firstConnectedAt || hasActiveModelCredential(),
     record,
     nextStep: nextStep(record),
   };

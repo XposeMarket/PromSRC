@@ -2153,9 +2153,16 @@
 
 #settings-modal .appearance-switch {
   position: relative;
-  flex: 0 0 42px;
+  /* flex-basis must stay auto: inside a column row (phone layout) a 42px basis
+     becomes the switch HEIGHT and turns it into a circle. */
+  flex: 0 0 auto;
+  align-self: center;
+  box-sizing: border-box;
   width: 42px;
+  min-width: 42px;
   height: 24px;
+  min-height: 24px;
+  max-height: 24px;
   padding: 2px;
   border: 0;
   border-radius: 999px;
@@ -2215,6 +2222,17 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  /* Switch rows stay label-left / switch-right, like iOS Settings. */
+  #settings-modal .appearance-control-row:has(> .appearance-switch) {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+
+  #settings-modal .appearance-control-row:has(> .appearance-switch) > .appearance-control-copy {
+    flex: 1 1 auto;
   }
 
   #settings-modal .appearance-color-control,
