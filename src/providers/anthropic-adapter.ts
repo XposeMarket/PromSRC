@@ -251,16 +251,12 @@ import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 import { recordAnthropicRateLimitHeaders } from './usage-awareness';
+import { normalizeAnthropicImage } from './anthropic-image';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
 // prefix when it is comfortably large. ~1024 tokens � 3500 chars at 3.5 ch/tok.
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
-// Anthropic rejects the entire request when any image exceeds its size cap.
-// Images are normally resized well under this upstream; this only catches
-// stragglers (e.g. a raw phone screenshot replayed from history).
-const ANTHROPIC_MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024;
-
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
   'claude-fable-5-1',
@@ -562,7 +558,7 @@ export class AnthropicAdapter implements LLMProvider {
 
   // --- Convert Prometheus ChatMessage[] ? Anthropic messages format ------------
 
-  private buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): { system: string; messages: any[] } {
+  private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): Promise<{ system: string; messages: any[] }> {
     let systemPrompt = '';
     const anthropicMessages: any[] = [];
     const pendingToolUseIds: string[] = [];
@@ -672,59 +668,48 @@ export class AnthropicAdapter implements LLMProvider {
         });
         continue;
       }
-
       // Handle multimodal content (images)
       if (Array.isArray(m.content)) {
-        const parts: any[] = m.content
-          .map((part: ContentPart | any) => {
-            if (part.type === 'text') {
-              // Only include text parts that are non-empty
-              const text = typeof part.text === 'string' ? part.text.trim() : '';
-              return text ? { type: 'text', text } : null;
-            }
-            if (part.type === 'image') {
-              // Already in Anthropic native format (from buildVisionImagePart for Anthropic provider).
-              // Last-line guard: one oversized image rejects the whole request
-              // (400 "image exceeds 10 MB maximum"), so drop it with a note instead.
-              if (String(part?.source?.data || '').length > ANTHROPIC_MAX_IMAGE_BASE64_CHARS) {
-                return { type: 'text', text: '[Image omitted: too large for the model. Ask the user to resend it.]' };
-              }
-              return part;
-            }
-            if (part.type === 'image_url') {
-              // Convert OpenAI-style image_url to Anthropic source format
-              const url = part.image_url.url;
-              if (url.startsWith('data:')) {
-                // Base64 data URI
-                const match = url.match(/^data:(image\/\w+);base64,(.+)$/);
-                if (match && match[2].length > ANTHROPIC_MAX_IMAGE_BASE64_CHARS) {
-                  return { type: 'text', text: '[Image omitted: too large for the model. Ask the user to resend it.]' };
-                }
-                if (match) {
-                  return {
-                    type: 'image',
-                    source: {
-                      type: 'base64',
-                      media_type: match[1],
-                      data: match[2],
-                    },
-                  };
-                }
-              }
-              // URL-based image
-              return {
-                type: 'image',
-                source: { type: 'url', url },
-              };
-            }
-            return null;
-          })
-          .filter((part): part is Exclude<any, null> => part !== null);  // Remove null entries (empty text)
+        const parts: any[] = [];
+        for (const part of m.content as (ContentPart | any)[]) {
+          if (part?.type === 'text') {
+            const text = typeof part.text === 'string' ? part.text.trim() : '';
+            if (text) parts.push({ type: 'text', text });
+            continue;
+          }
 
-        if (parts.length === 0) continue;  // Skip if no content remains
+          if (part?.type === 'image' || part?.type === 'image_url') {
+            const imageUrl = part.type === 'image_url' ? String(part?.image_url?.url || '') : '';
+            const dataUriMatch = imageUrl.match(/^data:[^;,]+;base64,([\s\S]*)$/i);
+            if (part.type === 'image_url' && !imageUrl.startsWith('data:')) {
+              parts.push({ type: 'image', source: { type: 'url', url: imageUrl } });
+              continue;
+            }
+            if (part.type === 'image' && part?.source?.type === 'url' && typeof part.source.url === 'string') {
+              parts.push(part);
+              continue;
+            }
+            const data = part.type === 'image_url'
+              ? (dataUriMatch?.[1] || '')
+              : String(part?.source?.data || '');
+            const normalized = await normalizeAnthropicImage(data);
+            if (!normalized) {
+              parts.push({ type: 'text', text: '[Image omitted: the image data is empty, unsupported, or invalid.]' });
+              continue;
+            }
+            parts.push({
+              type: 'image',
+              source: { type: 'base64', media_type: normalized.media_type, data: normalized.data },
+            });
+            continue;
+          }
+        }
+
+        if (parts.length === 0) continue;
         anthropicMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: parts });
         continue;
       }
+
 
       // Plain text message - validate content is non-empty
       const textContent = typeof m.content === 'string' ? m.content.trim() : '';
@@ -961,7 +946,7 @@ export class AnthropicAdapter implements LLMProvider {
       ? loadTokens(this.configDir, this.accountId)
       : null;
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
-    const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
+    const { system, messages: anthropicMessages } = await this.buildMessages(messages, options?.omitIntradayNotes);
 
     const body: any = {
       model,
