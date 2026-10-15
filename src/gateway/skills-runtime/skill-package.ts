@@ -94,13 +94,33 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Signal terms are tiny and stable; the routed message is long and evaluated
+// once per skill per ranking pass. Memoize both so a long paste is normalized
+// once per pass instead of once per skill (2026-10-15 event-loop stalls).
+const promptSignalTermCache = new Map<string, string>();
+const promptSignalLongTextCache = new Map<string, string>();
 function normalizePromptSignalText(value: unknown): string {
-  return String(value || '')
+  const key = String(value || '');
+  const long = key.length > 512;
+  const cache = long ? promptSignalLongTextCache : promptSignalTermCache;
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  const out = key
     .toLowerCase()
     .replace(/[-_]+/g, ' ')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (long) {
+    if (cache.size >= 16) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+  } else if (cache.size >= 8000) {
+    cache.clear();
+  }
+  cache.set(key, out);
+  return out;
 }
 
 function promptSignalArray(value: unknown): unknown[] {
@@ -228,11 +248,21 @@ export function validateSkillPromptSignals(value: unknown): SkillPromptSignalVal
   };
 }
 
+const promptSignalTermRegexCache = new Map<string, RegExp>();
 function exactPromptSignalMatch(term: string, normalizedText: string): boolean {
   const normalizedTerm = normalizePromptSignalText(term);
   if (!normalizedTerm || !normalizedText) return false;
-  const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(normalizedText);
+  // Both sides are normalized (lower-case, single spaces): a substring miss
+  // proves a boundary miss, so skip the regex for the common no-match case.
+  if (!normalizedText.includes(normalizedTerm)) return false;
+  let pattern = promptSignalTermRegexCache.get(normalizedTerm);
+  if (!pattern) {
+    const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    pattern = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i');
+    if (promptSignalTermRegexCache.size >= 4000) promptSignalTermRegexCache.clear();
+    promptSignalTermRegexCache.set(normalizedTerm, pattern);
+  }
+  return pattern.test(normalizedText);
 }
 
 export function evaluateSkillPromptSignals(

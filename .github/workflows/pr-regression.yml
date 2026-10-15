@@ -54,6 +54,8 @@ jobs:
         run: npm run test:memory-recall
       - name: Verify replay-gated skill promotion
         run: npm run test:skill-promotion
+      - name: Verify skill routing stays fast on long pastes (event-loop stall guard)
+        run: npm run test:skill-matcher-perf
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
       - name: Verify public skill bundle (visibility tags, no owner-specific content)

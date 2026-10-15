@@ -25,6 +25,13 @@ export interface PromptSignalMatch {
   matchedNoneOf: string[];
 }
 
+// Terms are short and stable; message text is long and was re-normalized once
+// per term (and per extension). Memoize so a long paste costs one pass.
+// Declared before ACTION_TERM_REGEX, which normalizes at module init.
+const termCache = new Map<string, string>();
+const longTextCache = new Map<string, string>();
+const termRegexCache = new Map<string, RegExp>();
+
 export const DEFAULT_ACTION_TERMS = [
   'open', 'read', 'inspect', 'check', 'search', 'find', 'look', 'look into',
   'take a look', 'check out', 'review', 'show', 'list', 'use', 'work with',
@@ -54,20 +61,45 @@ function escapeRegExp(value: string): string {
 }
 
 export function normalizePromptSignalText(value: unknown): string {
-  return String(value || '')
+  const key = String(value || '');
+  const long = key.length > 512;
+  const cache = long ? longTextCache : termCache;
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  const out = key
     .toLowerCase()
     .replace(/[-_]+/g, ' ')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (long) {
+    if (cache.size >= 16) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+  } else if (cache.size >= 8000) {
+    cache.clear();
+  }
+  cache.set(key, out);
+  return out;
+}
+
+function normalizedTermMatch(normalizedTerm: string, normalizedText: string): boolean {
+  if (!normalizedTerm || !normalizedText) return false;
+  // Normalized text has single spaces, so a substring miss proves a miss.
+  if (!normalizedText.includes(normalizedTerm)) return false;
+  let pattern = termRegexCache.get(normalizedTerm);
+  if (!pattern) {
+    const escaped = escapeRegExp(normalizedTerm).replace(/\s+/g, '\\s+');
+    pattern = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i');
+    if (termRegexCache.size >= 4000) termRegexCache.clear();
+    termRegexCache.set(normalizedTerm, pattern);
+  }
+  return pattern.test(normalizedText);
 }
 
 export function exactPromptSignalMatch(term: string, rawText: string): boolean {
-  const normalizedTerm = normalizePromptSignalText(term);
-  const normalizedText = normalizePromptSignalText(rawText);
-  if (!normalizedTerm || !normalizedText) return false;
-  const escaped = escapeRegExp(normalizedTerm).replace(/\s+/g, '\\s+');
-  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(normalizedText);
+  return normalizedTermMatch(normalizePromptSignalText(term), normalizePromptSignalText(rawText));
 }
 
 export function evaluatePromptSignals(
@@ -87,18 +119,14 @@ export function evaluatePromptSignals(
   };
   if (!signals) return empty;
 
-  const matchedPhrases = (signals.phrases || [])
-    .filter((phrase) => exactPromptSignalMatch(String(phrase), rawText))
-    .map(String);
+  const text = normalizePromptSignalText(rawText);
+  const hit = (term: unknown) => normalizedTermMatch(normalizePromptSignalText(String(term)), text);
+  const matchedPhrases = (signals.phrases || []).filter(hit).map(String);
   const matchedAllOf = (signals.allOf || [])
-    .filter((group) => Array.isArray(group) && group.length > 0 && group.every((term) => exactPromptSignalMatch(String(term), rawText)))
+    .filter((group) => Array.isArray(group) && group.length > 0 && group.every(hit))
     .map((group) => group.map(String));
-  const matchedAnyOf = (signals.anyOf || [])
-    .filter((term) => exactPromptSignalMatch(String(term), rawText))
-    .map(String);
-  const matchedNoneOf = (signals.noneOf || [])
-    .filter((term) => exactPromptSignalMatch(String(term), rawText))
-    .map(String);
+  const matchedAnyOf = (signals.anyOf || []).filter(hit).map(String);
+  const matchedNoneOf = (signals.noneOf || []).filter(hit).map(String);
   const rawMinScore = Number(signals.minScore ?? 4);
   const minScore = Number.isFinite(rawMinScore) ? Math.max(1, Math.min(100, Math.round(rawMinScore))) : 4;
   const score = matchedPhrases.length * 4
