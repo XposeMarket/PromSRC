@@ -45,28 +45,32 @@ export class SchedulerAdmission {
     try { return JSON.parse(fs.readFileSync(path.join(this.root, `${key}.slots.json`), 'utf8')).includes(slot); }
     catch { return false; }
   }
+  /**
+   * Crash-safe ownership protocol:
+   *  - Leases and the recovery lock are published atomically: metadata is written
+   *    and fsynced to a private temp file, then hard-linked into place (link fails
+   *    with EEXIST, so it is an exclusive create that never exposes empty or partial
+   *    metadata). Filesystems without hard links fall back to `wx` + write.
+   *  - An unreadable lease/lock can therefore only be residue of a crash (or an old
+   *    build) between create and write. It is reclaimed only after LOCK_GRACE_MS of
+   *    no modification, so a live writer is never raced.
+   *  - Stealers are serialized by `.lease.recover`. An abandoned recovery lock is
+   *    reclaimed when its owner pid is dead, it is older than RECOVERY_MAX_AGE_MS,
+   *    or it is unreadable past the grace window.
+   *  - Every steal is compare-and-delete: rename the file aside, confirm it still
+   *    holds the exact bytes judged stale, and put it back otherwise.
+   *  - A lease whose owner pid is alive is never reclaimed, even after expiry.
+   */
   acquire(jobId: string, slot: string | undefined, timeoutMs: number, now = Date.now()): (() => void) | null {
     fs.mkdirSync(this.root, { recursive: true });
     const key = crypto.createHash('sha256').update(jobId).digest('hex');
     const leasePath = path.join(this.root, `${key}.lease`);
     const dedupePath = path.join(this.root, `${key}.slots.json`);
     const token = crypto.randomUUID();
-    let fd: number;
-    try { fd = fs.openSync(leasePath, 'wx'); }
-    catch (err: any) {
-      if (err.code !== 'EEXIST') throw err;
-      const recoveryPath = `${leasePath}.recover`;
-      let recovery: number;
-      try { recovery = fs.openSync(recoveryPath, 'wx'); } catch { return null; }
-      try {
-        let lease: { expiresAt: number; pid: number };
-        try { lease = JSON.parse(fs.readFileSync(leasePath, 'utf8')); } catch { return null; }
-        if (lease.expiresAt > now) return null;
-        // A live owner may still be unwinding cancellation. Never overlap it.
-        try { process.kill(lease.pid, 0); return null; } catch (e: any) { if (e.code !== 'ESRCH') return null; }
-        try { fs.unlinkSync(leasePath); } catch { return null; }
-        try { fd = fs.openSync(leasePath, 'wx'); } catch { return null; }
-      } finally { fs.closeSync(recovery); fs.unlinkSync(recoveryPath); }
+    const body = JSON.stringify({ jobId, token, pid: process.pid, expiresAt: now + timeoutMs });
+    if (!publishExclusive(leasePath, body)) {
+      if (!recoverStaleLease(leasePath, now)) return null;
+      if (!publishExclusive(leasePath, body)) return null; // another replacement won the race
     }
     const release = () => {
       try {
@@ -74,8 +78,6 @@ export class SchedulerAdmission {
       } catch { /* already recovered */ }
     };
     try {
-      fs.writeFileSync(fd, JSON.stringify({ jobId, token, pid: process.pid, expiresAt: now + timeoutMs }));
-      fs.closeSync(fd);
       if (slot) {
         let slots: string[] = [];
         try { slots = JSON.parse(fs.readFileSync(dedupePath, 'utf8')); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
@@ -86,8 +88,102 @@ export class SchedulerAdmission {
         fs.renameSync(tmp, dedupePath);
       }
       return release;
-    } catch (err) { try { fs.closeSync(fd); } catch {} release(); throw err; }
+    } catch (err) { release(); throw err; }
   }
+}
+
+/** A live writer finishes create+write in microseconds; unreadable files older than this are crash residue. */
+export const LOCK_GRACE_MS = 30_000;
+/** The recovery critical section is synchronous and takes milliseconds; a holder this old is abandoned (covers pid reuse). */
+export const RECOVERY_MAX_AGE_MS = 10 * 60_000;
+
+/** Exclusive create that only ever exposes complete, fsynced metadata. Returns false if the target exists. */
+export function publishExclusive(target: string, body: string): boolean {
+  const tmp = `${target}.${crypto.randomUUID()}.tmp`;
+  const fd = fs.openSync(tmp, 'wx');
+  try { fs.writeSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  try {
+    fs.linkSync(tmp, target);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'EEXIST') return false;
+    if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EXDEV', 'EOPNOTSUPP', 'EINVAL'].includes(err.code)) throw err;
+    // No hard links here: plain exclusive create; the grace rule covers its crash window.
+    let wfd: number;
+    try { wfd = fs.openSync(target, 'wx'); } catch (e: any) { if (e.code === 'EEXIST') return false; throw e; }
+    try { fs.writeSync(wfd, body); fs.fsyncSync(wfd); } finally { fs.closeSync(wfd); }
+    return true;
+  } finally { try { fs.unlinkSync(tmp); } catch { /* best effort */ } }
+}
+
+function readLock(file: string): { raw: Buffer; data: any | null; mtimeMs: number } | null {
+  try {
+    const raw = fs.readFileSync(file);
+    const mtimeMs = fs.statSync(file).mtimeMs;
+    let data: any = null;
+    try { data = JSON.parse(raw.toString('utf8')); } catch { data = null; }
+    if (!data || typeof data !== 'object' || typeof data.pid !== 'number') data = null;
+    return { raw, data, mtimeMs };
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function ownerDead(pid: number): boolean {
+  if (pid === process.pid) return false;
+  try { process.kill(pid, 0); return false; } catch (e: any) { return e.code === 'ESRCH'; }
+}
+
+/** Compare-and-delete: remove `file` only if it still holds exactly `expected`. */
+function removeIfUnchanged(file: string, expected: Buffer): boolean {
+  const aside = `${file}.stale-${crypto.randomUUID()}`;
+  try { fs.renameSync(file, aside); } catch { return false; }
+  let same = false;
+  try { same = fs.readFileSync(aside).equals(expected); } catch { same = false; }
+  if (same) { try { fs.unlinkSync(aside); } catch { /* best effort */ } return true; }
+  // We moved a newer owner's file: put it back without clobbering anything.
+  try { fs.linkSync(aside, file); } catch { /* a newer file exists; ours is stale data */ }
+  try { fs.unlinkSync(aside); } catch { /* best effort */ }
+  return false;
+}
+
+function acquireRecoveryLock(recoveryPath: string, now: number): string | null {
+  const token = crypto.randomUUID();
+  const body = JSON.stringify({ token, pid: process.pid, at: now });
+  if (publishExclusive(recoveryPath, body)) return token;
+  const held = readLock(recoveryPath);
+  if (!held) return publishExclusive(recoveryPath, body) ? token : null;
+  const age = now - (held.data && typeof held.data.at === 'number' ? held.data.at : held.mtimeMs);
+  const abandoned = held.data
+    ? ownerDead(held.data.pid) || age > RECOVERY_MAX_AGE_MS
+    : now - held.mtimeMs > LOCK_GRACE_MS;
+  if (!abandoned || !removeIfUnchanged(recoveryPath, held.raw)) return null;
+  return publishExclusive(recoveryPath, body) ? token : null;
+}
+
+function releaseRecoveryLock(recoveryPath: string, token: string): void {
+  const held = readLock(recoveryPath);
+  if (held?.data?.token === token) removeIfUnchanged(recoveryPath, held.raw);
+}
+
+/** Returns true when the existing lease was proven stale and removed (caller then re-publishes). */
+function recoverStaleLease(leasePath: string, now: number): boolean {
+  const recoveryPath = `${leasePath}.recover`;
+  const recoveryToken = acquireRecoveryLock(recoveryPath, now);
+  if (!recoveryToken) return false;
+  try {
+    const lease = readLock(leasePath);
+    if (!lease) return true; // released while we waited
+    if (lease.data) {
+      if (typeof lease.data.expiresAt === 'number' && lease.data.expiresAt > now) return false;
+      // A live owner may still be unwinding cancellation. Never overlap it.
+      if (!ownerDead(lease.data.pid)) return false;
+    } else if (now - lease.mtimeMs <= LOCK_GRACE_MS) {
+      return false; // possibly a live writer mid-create; reclaim only after the grace window
+    }
+    return removeIfUnchanged(leasePath, lease.raw);
+  } finally { releaseRecoveryLock(recoveryPath, recoveryToken); }
 }
 
 export function validateScheduledExecution(job: Pick<CronJob, 'kind' | 'command' | 'misfire_policy' | 'timeoutMs'>): void {

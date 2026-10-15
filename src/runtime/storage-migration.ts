@@ -706,6 +706,72 @@ function preflightMigrationPaths(
   return errors;
 }
 
+export const STORAGE_COPY_MARKER_FILE = 'storage-layout-v2-copy-verified.json';
+
+function fingerprintRoots(layout: PrometheusLayout, sourceConfigRoot: string, sourceWorkspaceRoot: string): string[] {
+  // Roots that ARE the canonical targets are written by the migration itself, so
+  // fingerprinting them would make every marker instantly stale.
+  return [sourceConfigRoot, sourceWorkspaceRoot]
+    .filter((root) => !samePath(root, layout.runtime.root) && !samePath(root, layout.workspace.root));
+}
+
+/**
+ * Cheap stat-only snapshot (relative path, type, size, mtime) of the legacy
+ * source trees. It lets a copy-verification marker prove the still-authoritative
+ * legacy storage has not changed since the copy it certifies (issue #259).
+ */
+export function computeSourceFingerprint(roots: string[]): string {
+  const hash = crypto.createHash('sha256');
+  const visit = (root: string, dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (error: any) {
+      if (error?.code === 'ENOENT') return;
+      throw error;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(root, full).split(path.sep).join('/');
+      if (entry.isDirectory()) { hash.update(`d\0${rel}\n`); visit(root, full); continue; }
+      let stat: fs.Stats;
+      try { stat = fs.lstatSync(full); } catch { hash.update(`gone\0${rel}\n`); continue; }
+      hash.update(`${entry.isSymbolicLink() ? 'l' : 'f'}\0${rel}\0${stat.size}\0${stat.mtimeMs}\n`);
+    }
+  };
+  for (const root of roots) {
+    const resolved = path.resolve(root);
+    hash.update(`r\0${normalizeForCompare(resolved)}\n`);
+    if (fs.existsSync(resolved)) visit(resolved, resolved);
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * True only when the copy marker certifies THIS source snapshot: same source and
+ * target roots, and an unchanged legacy source fingerprint. Markers written before
+ * fingerprinting existed are treated as stale so they cannot suppress a refresh.
+ */
+export function isStorageCopyMarkerCurrent(options: Pick<ExecuteStorageMigrationOptions, 'layout' | 'sourceConfigRoot' | 'sourceWorkspaceRoot'> = {}): { current: boolean; reason: string } {
+  const layout = options.layout || resolvePrometheusLayout();
+  const sourceConfigRoot = path.resolve(options.sourceConfigRoot || layout.legacy.activeConfig);
+  const sourceWorkspaceRoot = path.resolve(options.sourceWorkspaceRoot || layout.legacy.activeWorkspace);
+  let marker: any;
+  try { marker = JSON.parse(fs.readFileSync(path.join(layout.runtime.migrations, STORAGE_COPY_MARKER_FILE), 'utf8')); }
+  catch { return { current: false, reason: 'no readable copy-verification marker' }; }
+  if (marker?.copyVerified !== true) return { current: false, reason: 'marker is not copy-verified' };
+  const same = (a: unknown, b: string) => typeof a === 'string' && a.length > 0 && samePath(a, b);
+  if (!same(marker.sourceConfigRoot, sourceConfigRoot) || !same(marker.sourceWorkspaceRoot, sourceWorkspaceRoot)) {
+    return { current: false, reason: 'legacy source roots changed since verification' };
+  }
+  if (!same(marker.targetRuntimeRoot, layout.runtime.root) || !same(marker.targetWorkspaceRoot, layout.workspace.root)) {
+    return { current: false, reason: 'canonical target roots changed since verification' };
+  }
+  if (typeof marker.sourceFingerprint !== 'string') return { current: false, reason: 'marker predates source fingerprinting' };
+  const now = computeSourceFingerprint(fingerprintRoots(layout, sourceConfigRoot, sourceWorkspaceRoot));
+  if (now !== marker.sourceFingerprint) return { current: false, reason: 'legacy source changed since verification' };
+  return { current: true, reason: 'verified copy matches the current legacy source' };
+}
+
 function removeCopyMarker(filePath: string, acc: MigrationAccumulator): void {
   try {
     if (!fs.existsSync(filePath)) return;
@@ -742,7 +808,7 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
   const migrationId = safeMigrationSegment(options.migrationId || `${STORAGE_MIGRATION_ID}-${now.toISOString().replace(/[:.]/g, '-')}`);
   const backupRoot = path.join(layout.runtime.backups, STORAGE_MIGRATION_ID, migrationId);
   const migrationRoot = path.join(layout.runtime.migrations, migrationId);
-  const copyMarker = path.join(layout.runtime.migrations, 'storage-layout-v2-copy-verified.json');
+  const copyMarker = path.join(layout.runtime.migrations, STORAGE_COPY_MARKER_FILE);
   const startedAt = new Date().toISOString();
 
   const acc: MigrationAccumulator = {
@@ -789,6 +855,9 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
   // Invalidate any older stable marker before copying so a crash cannot leave a
   // stale success signal from a previous source snapshot.
   removeCopyMarker(copyMarker, acc);
+  // Snapshot the source BEFORE copying: anything that changes during or after the
+  // copy makes the marker stale, so the next start refreshes instead of trusting it.
+  const sourceFingerprint = computeSourceFingerprint(fingerprintRoots(layout, sourceConfigRoot, sourceWorkspaceRoot));
 
   const backupReady = ensureTargetDirectory(backupRoot, sourceConfigRoot, acc);
   const manifestReady = ensureTargetDirectory(migrationRoot, sourceConfigRoot, acc);
@@ -863,6 +932,7 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
           replaced: manifest.replaced.length,
         },
         rewrittenConfig: manifest.rewrittenConfig,
+        sourceFingerprint,
         copyVerified: true,
       });
     } catch (error: any) {

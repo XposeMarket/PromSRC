@@ -80,6 +80,14 @@ endless refused rounds, and check the runtime refuses them.
   selector-only clicks with no resolvable label are not classifiable and are
   not gated by it; keyboard submits are gated only when an approval id is
   supplied. Generic tool approvals still apply to those paths.
+- The final-action gate is a coverage control, not a universal guarantee: a
+  target with an empty or unclassifiable intent is allowed through it by
+  design. Do not describe it as blocking every consequential click.
+- Plugin permission manifests fail closed only when present. An extension with
+  no `permissions` manifest runs in **legacy unrestricted mode** (allowed, one
+  warning per extension per process) for compatibility. Treat an installed
+  extension without a manifest as fully trusted code; prefer extensions that
+  declare permissions. See `docs/PLUGIN_SDK.md`.
 - Shell confinement is a command/path policy, not an OS sandbox. Commands run
   as the host user. See THREAT_MODEL.md.
 - Lite permission mode deliberately trades some approval prompts for speed on a

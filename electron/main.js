@@ -269,12 +269,11 @@ function runStorageLayoutV2Migration() {
   // every desktop boot only delays startup and can never switch readers. Keep
   // the verified migration available as an explicit maintenance operation.
   if (String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() !== '1') return false;
-  if (isStorageLayoutV2CopyVerified()) {
-    console.log('[StorageMigration] Canonical copy already verified; live activation remains deferred and legacy readers remain active.');
-    return false;
-  }
+  // Never skip on the marker alone (#259): legacy readers stay authoritative and
+  // keep writing, so the CLI's --if-stale check compares the marker's source
+  // fingerprint against the live legacy tree and refreshes the copy when it moved.
   try {
-    const commonArgs = ['--execute', '--app-data', USER_DATA_DIR, '--migration-id', 'desktop-auto-v2'];
+    const commonArgs = ['--execute', '--if-stale', '--app-data', USER_DATA_DIR, '--migration-id', 'desktop-auto-v2'];
     const env = { ...process.env, PROMETHEUS_DATA_DIR: USER_DATA_DIR };
     if (IS_PACKAGED_RUNTIME) {
       const migrationEntry = path.join(getPackagedAppRoot(), 'dist', 'runtime', 'storage-migration-cli.js');

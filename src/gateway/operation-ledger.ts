@@ -44,24 +44,78 @@ export function isExternalSideEffect(toolName: string, args: any = {}): boolean 
 export class OperationLedger {
   private records = new Map<string, OperationRecord>();
   constructor(readonly filePath: string, readonly now: () => number = Date.now) {
-    if (fs.existsSync(filePath)) {
-      const text = fs.readFileSync(filePath, 'utf8');
-      const lines = text.split('\n').filter(Boolean);
-      for (let i = 0; i < lines.length; i += 1) {
-        let record: OperationRecord;
-        try {
-          record = JSON.parse(lines[i]) as OperationRecord;
-        } catch (err) {
-          // A crash mid-append can leave a torn final line. That write never
-          // completed, so its dispatch never started: skip it. Corruption anywhere
-          // else fails closed, never silently discarding an intent.
-          if (i === lines.length - 1 && !text.endsWith('\n')) break;
-          throw err;
+    if (fs.existsSync(filePath)) this.load();
+  }
+  /**
+   * Load and repair the file BEFORE any append is allowed. A crash mid-append can
+   * leave a torn final line; appending after it would glue the next record onto
+   * the fragment and make the following restart unparseable. So the tail is
+   * repaired on disk first:
+   *  - a complete JSON record missing only its newline is kept and the newline restored;
+   *  - a torn fragment is copied to `<ledger>.torn-<ts>-<pid>` and truncated off.
+   * A torn record never completed, so the dispatch it would have guarded never
+   * started (intent is fsynced before dispatch; a torn commit leaves the intent
+   * open, which recovery marks uncertain). Corruption before the final line still
+   * fails closed: an intent is never silently discarded.
+   */
+  private load(attempt = 0): void {
+    const buf = fs.readFileSync(this.filePath);
+    const parsed = new Map<string, OperationRecord>();
+    let start = 0;
+    while (start < buf.length) {
+      const nl = buf.indexOf(0x0a, start);
+      const isTail = nl === -1;
+      const line = buf.subarray(start, isTail ? buf.length : nl).toString('utf8').replace(/\r$/, '');
+      if (line.trim()) {
+        let record: any;
+        let parseError: unknown;
+        try { record = JSON.parse(line); } catch (err) { parseError = err; }
+        const valid = !!record && typeof record === 'object' && !!record.opId && !!record.idempotencyKey && !!record.status;
+        if (!valid) {
+          if (!isTail) {
+            if (parseError) throw parseError;
+            throw new Error('Invalid operation ledger record');
+          }
+          // A live writer (e.g. a draining gateway during handoff) may be mid-write.
+          // Its synchronous append finishes in microseconds; a crash fragment does not change.
+          if (attempt < 3) {
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+            if (!fs.readFileSync(this.filePath).equals(buf)) return this.load(attempt + 1);
+          }
+          if (!this.quarantineTail(buf, start)) {
+            // The file changed under us (a live writer appended). Never cut its records: re-read.
+            if (attempt >= 6) throw new Error(`Operation ledger tail is torn and still changing: ${this.filePath}`);
+            return this.load(attempt + 1);
+          }
+          break;
         }
-        if (!record.opId || !record.idempotencyKey || !record.status) throw new Error('Invalid operation ledger record');
-        this.records.set(record.opId, record);
+        parsed.set(record.opId, record as OperationRecord);
+        if (isTail) this.appendRaw('\n');
       }
+      if (isTail) break;
+      start = nl + 1;
     }
+    this.records = parsed;
+  }
+  /** Returns false (and changes nothing) if the file is no longer exactly the bytes inspected. */
+  private quarantineTail(buf: Buffer, offset: number): boolean {
+    const fd = fs.openSync(this.filePath, 'r+');
+    try {
+      // Only cut the exact fragment we inspected. If anything was appended since,
+      // truncating at `offset` would destroy those records, so bail and re-read.
+      if (fs.fstatSync(fd).size !== buf.length) return false;
+      const quarantine = `${this.filePath}.torn-${this.now()}-${process.pid}`;
+      const qfd = fs.openSync(quarantine, 'w');
+      try { fs.writeSync(qfd, buf.subarray(offset)); fs.fsyncSync(qfd); } finally { fs.closeSync(qfd); }
+      fs.ftruncateSync(fd, offset);
+      fs.fsyncSync(fd);
+      console.warn(`[operation-ledger] Repaired torn final record (${buf.length - offset} bytes) before appending; fragment kept at ${quarantine}`);
+      return true;
+    } finally { fs.closeSync(fd); }
+  }
+  private appendRaw(text: string): void {
+    const fd = fs.openSync(this.filePath, 'a');
+    try { fs.writeSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   }
   private append(record: OperationRecord): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });

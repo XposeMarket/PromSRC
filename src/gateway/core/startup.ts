@@ -375,9 +375,14 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   try {
     const { launchBackgroundTaskRunner, completePlainGatewayRestartTask } = require('../tasks/task-router') as typeof import('../tasks/task-router');
     const { isRuntimeHostedByLiveHandoffHost, setHandoffRecoveryHandler } = require('../runtime/gateway-handoff-bridge') as typeof import('../runtime/gateway-handoff-bridge');
-    const { recoverOperationLedger } = require('../operation-ledger') as typeof import('../operation-ledger');
-    const uncertainOperations = recoverOperationLedger();
-    if (uncertainOperations.length) console.warn(`[RuntimeRecovery] ${uncertainOperations.length} external operation(s) have uncertain outcomes; held for review, verify externally before retrying.`);
+    // Isolated: a damaged operation ledger must not skip runtime recovery below.
+    try {
+      const { recoverOperationLedger } = require('../operation-ledger') as typeof import('../operation-ledger');
+      const uncertainOperations = recoverOperationLedger();
+      if (uncertainOperations.length) console.warn(`[RuntimeRecovery] ${uncertainOperations.length} external operation(s) have uncertain outcomes; held for review, verify externally before retrying.`);
+    } catch (err: any) {
+      console.error('[RuntimeRecovery] Operation ledger recovery failed; continuing runtime recovery. External side-effect dedupe may be unavailable until repaired:', err?.message || err);
+    }
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,

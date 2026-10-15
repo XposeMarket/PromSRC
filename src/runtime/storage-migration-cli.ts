@@ -1,9 +1,10 @@
 import path from 'node:path';
-import { discoverStorageMigrationCandidates, executeStorageLayoutV2Migration } from './storage-migration.js';
+import { discoverStorageMigrationCandidates, executeStorageLayoutV2Migration, isStorageCopyMarkerCurrent } from './storage-migration.js';
 import { resolvePrometheusLayout } from './storage-layout.js';
 
 type ParsedArgs = {
   execute: boolean;
+  ifStale?: boolean;
   sourceConfig?: string;
   sourceWorkspace?: string;
   appData?: string;
@@ -22,6 +23,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       return path.resolve(value);
     };
     if (arg === '--execute') out.execute = true;
+    else if (arg === '--if-stale') out.ifStale = true;
     else if (arg === '--source-config') out.sourceConfig = next();
     else if (arg === '--source-workspace') out.sourceWorkspace = next();
     else if (arg === '--app-data') out.appData = next();
@@ -48,6 +50,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         '  --runtime <path>',
         '  --workspace <path>',
         '  --migration-id <id>',
+        '  --if-stale        skip only when the existing verified copy still matches the live legacy source',
         '',
         'Execution never deletes or renames source data. Differing inactive canonical files are preserved in the migration backup before replacement.',
         'A successful run verifies the canonical copy only; live activation is a separate phase.',
@@ -88,6 +91,12 @@ function main(): void {
   if (!args.execute) {
     console.log('\nDry run only. Re-run with --execute to create verified copies.');
     return;
+  }
+
+  if (args.ifStale) {
+    const status = isStorageCopyMarkerCurrent({ layout, sourceConfigRoot: args.sourceConfig, sourceWorkspaceRoot: args.sourceWorkspace });
+    console.log(`\nExisting copy marker: ${status.current ? 'current' : 'stale'} (${status.reason})`);
+    if (status.current) return;
   }
 
   const manifest = executeStorageLayoutV2Migration({

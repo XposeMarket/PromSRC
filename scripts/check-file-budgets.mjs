@@ -6,6 +6,9 @@
 //   2. New oversized files: any src/**/*.ts over maxNewFileLines must already be
 //      listed in largeFiles. Listed files may grow by at most slackLines over their
 //      recorded size, so ordinary edits pass but a file cannot quietly balloon.
+//   2b. Ratchet: a recorded size may not sit more than slackLines ABOVE the
+//      file's real size (or list a file that is no longer oversized). Shrinking
+//      a file must tighten its allowance, never leave the old one available.
 //   3. anyGroups: the number of `any` type annotations inside each split area
 //      (chat router family, tool executor family) may not grow. Remove an `any`
 //      elsewhere in the group or type the new code properly.
@@ -54,6 +57,8 @@ export function countAny(src) {
   return (stripCommentsAndStrings(src).match(ANY_RE) || []).length;
 }
 
+export function staleAllowance(recorded, lines, slack) { return recorded - lines > slack; }
+
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -91,6 +96,7 @@ function selfTest() {
   assert(countAny('// any comment\nconst s = "any tool"; const t = `any ${x}`;') === 0, 'comments/strings ignored');
   assert(countAny('function f(x: string, y: any): Record<string, any> { return {}; }') === 2, 'params + generics');
   assert(countAny('const many = 1; const anyway = 2; company: string') === 0, 'word boundaries');
+  assert(staleAllowance(5000, 4000, 300) === true && staleAllowance(4200, 4000, 300) === false, 'ratchet');
   assert(countLines('a\nb\n') === 2 && countLines('a\nb') === 2 && countLines('') === 0, 'line counting');
   console.log('file-budgets self-test passed');
 }
@@ -123,6 +129,12 @@ function main() {
     const recorded = config.largeFiles?.[f.file];
     if (recorded === undefined) failures.push(`${f.file}: ${f.lines} lines; new files may not exceed ${config.maxNewFileLines}. Split it into modules.`);
     else if (f.lines > recorded + config.slackLines) failures.push(`${f.file}: ${f.lines} lines grew past its recorded ${recorded} + ${config.slackLines} slack. Split before adding more.`);
+  }
+  for (const [file, recorded] of Object.entries(config.largeFiles || {})) {
+    const lines = byFile.get(file);
+    if (lines === undefined) failures.push(`${file}: listed in largeFiles but missing. Run --write-baseline.`);
+    else if (lines <= config.maxNewFileLines) failures.push(`${file}: ${lines} lines is no longer oversized; remove its largeFiles exemption (run --write-baseline).`);
+    else if (recorded - lines > config.slackLines) failures.push(`${file}: recorded ${recorded} is stale (now ${lines}); the unused allowance lets it regrow. Run --write-baseline.`);
   }
   for (const [name, group] of Object.entries(config.anyGroups || {})) {
     if (groups[name] > group.max) failures.push(`any budget "${name}": ${groups[name]} \`any\` annotations > baseline ${group.max}. Type the new code (or remove an existing any in ${group.paths.join(', ')}).`);
