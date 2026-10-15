@@ -90,3 +90,7 @@ endless refused rounds, and check the runtime refuses them.
 Open a private security advisory on the GitHub repository
 (Security → Advisories → Report a vulnerability). Please do not file public
 issues for security problems.
+
+## Plugin permissions and MCP environment isolation
+
+Extension manifests constrain SDK tool dispatch, credential access, and connector raw API requests. MCP processes inherit only a minimal environment plus explicitly configured values or `envPassthrough` names. See [Plugin SDK security contract](docs/PLUGIN_SDK.md) for compatibility and isolation limits.

@@ -231,3 +231,5 @@ jobs:
         run: npm run test:chat-artifact-lifecycle
       - name: Verify stale tool-result elision
         run: npm run test:tool-result-elision
+      - name: Verify plugin manifests and MCP environment isolation
+        run: npm run test:platform-wave5a
