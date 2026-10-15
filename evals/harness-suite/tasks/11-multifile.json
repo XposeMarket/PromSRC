@@ -1,0 +1,1 @@
+{"id":"11-multifile","category":"multi-file-edit","prompt":"Change OLD to NEW in a.txt and nested/b.txt. Preserve keep.txt byte-for-byte.","setup":{"a.txt":"OLD one\n","nested/b.txt":"two OLD\n","keep.txt":"OLD unchanged\n"},"grader":{"files":{"a.txt":"NEW one\n","nested/b.txt":"two NEW\n","keep.txt":"OLD unchanged\n"}},"timeoutSec":120}

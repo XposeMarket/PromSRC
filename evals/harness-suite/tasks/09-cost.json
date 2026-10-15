@@ -1,0 +1,1 @@
+{"id":"09-cost","category":"cost-budget","prompt":"Budget ceiling USD 0.01. Write cost.txt containing done and newline with the smallest possible action. No network or dependency installs.","setup":{},"grader":{"files":{"cost.txt":"done\n"}},"timeoutSec":30,"maxCostUsd":0.01}
