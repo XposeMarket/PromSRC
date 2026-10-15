@@ -110,6 +110,7 @@
     "test:perf-budgets": "tsx scripts/test-perf-budgets.mjs && node scripts/test-stream-persistence-budget.mjs && tsx src/gateway/routes/perf-projections.regression.ts",
     "test:process-store-order": "tsx src/gateway/process/store-order.regression.ts",
     "test:handoff-restart-forward": "tsx src/gateway/runtime/handoff-restart-forward.regression.ts",
+    "test:handoff-replacement-bind": "tsx src/gateway/runtime/handoff-replacement-bind.regression.ts",
     "test:web-ui-image-budget": "node scripts/test-web-ui-image-budget.mjs",
     "test:git-no-index-write": "tsx src/gateway/coding/git-no-index-write.regression.ts",
     "test:git-read-cache": "tsx src/gateway/coding/git-read-cache.regression.ts && tsx src/gateway/coding/git-read-cache-warm.regression.ts",
