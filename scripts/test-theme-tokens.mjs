@@ -30,6 +30,8 @@ const rawPatterns = {
   orangeRgba: /rgba\s*\(\s*249\s*,\s*115\s*,\s*22\s*,/gi,
   emberRgba: /rgba\s*\(\s*234\s*,\s*106\s*,\s*31\s*,/gi,
   goldHex: /#d6b75e/gi,
+  blueHex: /#3d8bff/gi,
+  violetHex: /#8b5cf6/gi,
 };
 
 function stripCssComments(css) { return css.replace(/\/\*[\s\S]*?\*\//g, ''); }
@@ -124,6 +126,51 @@ async function runRegistryBehavior(source) {
   }
 }
 
+// Phase 4-6 ratchets: typography, legacy ids, and single-writer theme attributes.
+function runArchitectureGuards(actualFiles) {
+  const stylesRoot = path.join(root, 'web-ui/src/styles');
+  const offenders = [];
+  for (const relative of Object.keys(actualFiles)) {
+    if (relative.endsWith('/theme-tokens.css')) continue;
+    // Blank out comments but keep their newlines so reported line numbers are real.
+    const css = fs.readFileSync(path.join(root, relative), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '));
+    const lines = css.split('\n');
+    lines.forEach((line, index) => {
+      const where = `${relative}:${index + 1}`;
+      if (/data-skin=["']?light["'\]]/.test(line)) offenders.push(`${where} uses legacy data-skin="light" (use p1)`);
+      if (/^\s*--[\w-]+\s*:/.test(line)) return;
+      if (/['"]Manrope['"]\s*,\s*sans-serif/.test(line)) offenders.push(`${where} hard-codes Manrope (use var(--t-font-ui))`);
+      if (/font-family:\s*[^;]*(Plex Mono|JetBrains Mono|SFMono|Menlo|Consolas)/i.test(line) && !/var\(/.test(line)) offenders.push(`${where} hard-codes a mono stack (use var(--t-font-mono))`);
+      if (/(^|\/)mobile[\w-]*\.css$/.test(relative) && /\bfont(-size)?:[^;]*\b(\d|10|10\.5|9\.5)px/.test(line) && /\bfont(-size)?:\s*(\d{3}\s+)?(\d|10|10\.5|9\.5)px/.test(line)) offenders.push(`${where} sets mobile text below the 11px floor (use var(--t-fs-2xs))`);
+    });
+  }
+  const tokens = read('web-ui/src/styles/theme-tokens.css');
+  for (const token of ['--t-fs-2xs', '--theme-font-ui', '--theme-font-mono', '--theme-palette-blue', '--theme-palette-violet']) {
+    if (!tokens.includes(`${token}:`)) offenders.push(`theme-tokens.css must define ${token}`);
+  }
+  const jsRoots = ['web-ui/src', 'web-ui/index.html', 'web-ui/mobile.html'];
+  const jsFiles = [];
+  const walk = (absolute) => {
+    const stat = fs.statSync(absolute);
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(absolute)) if (!['vendor', 'generated', 'build'].includes(name)) walk(path.join(absolute, name));
+    } else if (/\.(js|html)$/.test(absolute)) jsFiles.push(absolute);
+  };
+  for (const entry of jsRoots) walk(path.join(root, entry));
+  for (const absolute of jsFiles) {
+    const relative = normalize(path.relative(root, absolute));
+    const source = fs.readFileSync(absolute, 'utf8');
+    if (relative === 'web-ui/src/theme-registry.js') continue;
+    const writes = source.match(/setAttribute\(\s*['"]data-skin['"]/g) || [];
+    const guarded = source.match(/PROM_APPLY_THEME_ATTRIBUTES/g) || [];
+    if (writes.length > guarded.length) offenders.push(`${relative} writes data-skin without PROM_APPLY_THEME_ATTRIBUTES (${writes.length} writes, ${guarded.length} registry calls)`);
+    if (/getAttribute\(\s*['"]data-skin['"]\s*\)\s*\|\|\s*['"]light['"]/.test(source)) offenders.push(`${relative} falls back to legacy skin id light`);
+  }
+  if (offenders.length) fail(`architecture ratchet failed:\n  ${offenders.slice(0, 40).join('\n  ')}`);
+  void stylesRoot;
+}
+
 async function main() {
   runFixtures();
   const index = read('web-ui/index.html');
@@ -191,6 +238,7 @@ async function main() {
       if (count > 0) fail(`new stylesheet ${relative} introduces ${count} raw ${name} literal(s); use semantic tokens or add a reviewed baseline`);
     }
   }
+  runArchitectureGuards(actualFiles);
   console.log(`Theme token guardrail passed: ${expectedSkins.length} skins × ${requiredTokens.length} semantic tokens, ${bridgeTokens.length} --prom bridges, raw accents at or below baseline.`);
 }
 

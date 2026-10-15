@@ -324,8 +324,8 @@ function applyCustomTheme(customTheme, { persist = true } = {}) {
   clearCustomThemeVariables();
   applyCustomThemeVariables(custom);
   const root = document.documentElement;
-  root.setAttribute('data-theme', 'dark');
-  root.setAttribute('data-skin', 'custom');
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES('custom', root);
+  else { root.setAttribute('data-theme', 'dark'); root.setAttribute('data-skin', 'custom'); }
   try { localStorage.setItem(THEME_KEY, 'custom'); } catch {}
   applyBackgroundPreferences(preferences, 'custom');
   updateThemeToggle('custom', 'dark', 'Custom theme');
@@ -341,8 +341,11 @@ export function applyTheme(themeId) {
   }
   const theme = resolveTheme(themeId);
   clearCustomThemeVariables();
-  document.documentElement.setAttribute('data-theme', theme.base);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base);
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
   const preferences = readAppearancePreferences();
   applyBackgroundPreferences(preferences, theme.id);

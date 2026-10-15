@@ -1,19 +1,21 @@
 {
-  "version": 2,
+  "version": 3,
   "scope": "web-ui/src/styles/*.css",
   "patterns": {
     "orangeHex": "#f97316",
     "orangeRgba": "rgba(249,115,22,",
     "emberRgba": "rgba(234,106,31,",
-    "goldHex": "#d6b75e"
+    "goldHex": "#d6b75e",
+    "blueHex": "#3d8bff",
+    "violetHex": "#8b5cf6"
   },
-  "totals": { "orangeHex": 3, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1 },
+  "totals": { "orangeHex": 3, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1, "blueHex": 1, "violetHex": 1 },
   "exceptions": {
-    "web-ui/src/styles/theme-tokens.css": "One orange and one gold literal define the shared primitive palettes; token definitions cannot reference themselves.",
+    "web-ui/src/styles/theme-tokens.css": "One literal per accent defines the shared primitive palettes (orange, gold, blue, violet); token definitions cannot reference themselves.",
     "web-ui/src/styles/themes.css": "Two orange literals are attribute-selector matches for legacy inline color strings, not painted colors. Keep compatibility for third-party/legacy controls."
   },
   "files": {
-    "web-ui/src/styles/theme-tokens.css": { "orangeHex": 1, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1 },
-    "web-ui/src/styles/themes.css": { "orangeHex": 2, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 }
+    "web-ui/src/styles/theme-tokens.css": { "orangeHex": 1, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1, "blueHex": 1, "violetHex": 1 },
+    "web-ui/src/styles/themes.css": { "orangeHex": 2, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0, "blueHex": 0, "violetHex": 0 }
   }
 }

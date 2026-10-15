@@ -4151,8 +4151,11 @@ function applyTheme(themeId) {
   const theme = themeId === 'custom'
     ? { id: 'custom', label: 'Custom theme', base: 'dark' }
     : resolveTheme(themeId);
-  document.documentElement.setAttribute('data-theme', theme.base);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(themeId === 'custom' ? 'custom' : theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base);
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try {
     const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
     const opacity = Number(appearance.backgroundOpacity);

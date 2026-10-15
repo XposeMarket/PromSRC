@@ -895,9 +895,11 @@ function _getTheme() {
 
 function _applyMobileTheme(themeId) {
   const theme = _resolveTheme(themeId);
-  const resolved = theme.base === 'light' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', resolved);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base === 'light' ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
 
   // Safari paints its translucent top chrome from the document/theme color,

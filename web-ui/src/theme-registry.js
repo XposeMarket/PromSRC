@@ -35,11 +35,11 @@
     }),
     Object.freeze({
       id: 'blue', label: 'Olympian Blue', base: 'dark', description: 'Electric navy · shared P1 shell',
-      surfaces: ['desktop', 'mobile'], ember: 'blue', statusBar: '#07101f', chromeAccent: 'own',
+      surfaces: ['desktop', 'mobile'], ember: 'blue', statusBar: '#07101f', chromeAccent: 'p1-gold',
     }),
     Object.freeze({
       id: 'purple', label: 'Aether Violet', base: 'dark', description: 'Deep violet · shared P1 shell',
-      surfaces: ['desktop', 'mobile'], ember: 'purple', statusBar: '#0c0518', chromeAccent: 'own',
+      surfaces: ['desktop', 'mobile'], ember: 'purple', statusBar: '#0c0518', chromeAccent: 'p1-gold',
     }),
   ]);
   const CUSTOM = Object.freeze({
@@ -102,6 +102,18 @@
     return '';
   }
 
+  // The one place that writes theme attributes. `chromeAccent` is explicit
+  // data: 'own' keeps the skin accent everywhere; 'p1-gold' keeps the skin's
+  // accent in Chat/Voice and uses P1 gold chrome on other mobile routes.
+  function applyAttributes(themeOrId, root = document.documentElement) {
+    const theme = themeOrId && typeof themeOrId === 'object' ? themeOrId : resolve(themeOrId);
+    root.setAttribute('data-theme', theme.base || 'dark');
+    root.setAttribute('data-skin', theme.id);
+    root.setAttribute('data-chrome-accent', theme.chromeAccent || 'own');
+    return theme;
+  }
+
+  window.PROM_APPLY_THEME_ATTRIBUTES = applyAttributes;
   window.PROM_THEME_KEY = THEME_KEY;
   window.PROM_DEFAULT_THEME = DEFAULT_ID;
   window.PROM_ALL_THEMES = THEMES;

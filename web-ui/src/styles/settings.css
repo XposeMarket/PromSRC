@@ -679,7 +679,7 @@
 
 #settings-modal .settings-import-path-input {
   width: 100%;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--t-font-mono);
   font-size: 10px;
 }
 
@@ -1934,8 +1934,8 @@
 
 #settings-modal .theme-swatch[data-skin-preview="p1"] .theme-preview-card { background: var(--theme-palette-gold); }
 #settings-modal .theme-swatch[data-skin-preview="dark"] .theme-preview-card { background: var(--theme-palette-orange); }
-#settings-modal .theme-swatch[data-skin-preview="blue"] .theme-preview-card { background: #3d8bff; }
-#settings-modal .theme-swatch[data-skin-preview="purple"] .theme-preview-card { background: #8b5cf6; }
+#settings-modal .theme-swatch[data-skin-preview="blue"] .theme-preview-card { background: var(--theme-palette-blue); }
+#settings-modal .theme-swatch[data-skin-preview="purple"] .theme-preview-card { background: var(--theme-palette-violet); }
 #settings-modal .theme-swatch[data-skin-preview="custom"] .theme-preview-card { background: #ef9a9a; }
 
 #settings-modal .theme-swatch-meta {
@@ -2302,7 +2302,7 @@
 #settings-modal .settings-agent-field input,
 #settings-modal .settings-agent-row input[type="number"],
 #settings-modal .settings-agent-control select {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--t-font-mono);
 }
 
 #settings-modal .settings-agent-profile-panel > .settings-agent-row {
@@ -2443,7 +2443,7 @@
 #settings-modal .settings-agent-path {
   margin-top: 6px;
   color: var(--muted);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--t-font-mono);
   font-size: 11px;
   overflow-wrap: anywhere;
 }

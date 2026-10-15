@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" data-skin="p1">
+<html lang="en" data-theme="dark" data-skin="p1" data-chrome-accent="own">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
@@ -257,8 +257,7 @@
     const initialTheme = savedTheme === 'custom'
       ? { id: 'custom', label: 'Custom theme', base: 'dark' }
       : window.PROM_RESOLVE_THEME(savedTheme || window.PROM_DEFAULT_THEME);
-    document.documentElement.setAttribute('data-theme', initialTheme.base);
-    document.documentElement.setAttribute('data-skin', initialTheme.id);
+    window.PROM_APPLY_THEME_ATTRIBUTES(initialTheme);
     try {
       const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
       const opacity = Number(appearance.backgroundOpacity);

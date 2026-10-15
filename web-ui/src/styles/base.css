@@ -144,7 +144,7 @@
 
 body {
   height: 100vh;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
   color: var(--text);
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--t-accent) 6%, transparent), transparent 32%),
@@ -239,7 +239,7 @@ body {
   gap: 7px;
 }
 .status-pill.stat-compact {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--t-font-mono);
   font-size: 10px;
 }
 
@@ -638,7 +638,7 @@ body.right-canvas-open .page-title {
   cursor: pointer;
   color: var(--sidebar-text);
   font-size: 12px;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
   box-shadow: 0 0 8px color-mix(in srgb, var(--t-accent) 10%, transparent);
   transition: .18s ease;
 }
@@ -666,7 +666,7 @@ body.right-canvas-open .page-title {
   background: transparent;
   color: var(--sidebar-text);
   font-size: 11px;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
   outline: none;
 }
 .sidebar-search input::placeholder { color: var(--sidebar-muted); }
@@ -771,7 +771,7 @@ body.right-canvas-open .page-title {
   transition: .18s ease;
   white-space: nowrap;
   text-align: center;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
 }
 .seg-btn.active {
   background: var(--sidebar-seg-active);
@@ -881,7 +881,7 @@ body.right-canvas-open .page-title {
   font-size: 12px;
   font-weight: 500;
   transition: .15s ease;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
 }
 .more-popover-item:hover { background: rgba(255,255,255,0.08); border-color: color-mix(in srgb, var(--t-accent) 30%, transparent); }
 .more-popover-item.active { background: var(--sidebar-active-bg); border-color: var(--flame-border); }
@@ -1088,7 +1088,7 @@ main,
   font-size: 11px;
   color: var(--sidebar-text);
   cursor: pointer;
-  font-family: 'Manrope', sans-serif;
+  font-family: var(--t-font-ui);
   transition: .15s ease;
 }
 .sidebar-action:hover { background: rgba(255,255,255,0.14); }

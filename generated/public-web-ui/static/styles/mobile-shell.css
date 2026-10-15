@@ -148,18 +148,18 @@ body .pm-more-skeleton.pm-tasks-skel span { height: 56px; }
 
 :root[data-skin="blue"] {
   /* Use the brighter desktop panel family for the mobile app backdrop. */
-  --pm-bg:            #122444;
-  --pm-bg-soft:       #16294e;
+  --pm-bg:            var(--skin-panel);
+  --pm-bg-soft:       var(--skin-panel-2);
   --pm-surface:       #1b3765;
   --pm-surface-strong:#254a7d;
   --pm-ios-popover-base: #2b4d7a;
-  --pm-border:        rgba(120, 170, 255, 0.12);
-  --pm-border-strong: rgba(120, 170, 255, 0.22);
-  --pm-text:          #dde8ff;
+  --pm-border:        var(--skin-line);
+  --pm-border-strong: var(--skin-line-strong);
+  --pm-text:          var(--skin-text);
   --pm-text-soft:     #b8c9ee;
-  --pm-muted:         #8da5ca;
-  --pm-accent:        #3d8bff;
-  --pm-accent-soft:   rgba(61, 139, 255, 0.14);
+  --pm-muted:         var(--skin-muted);
+  --pm-accent:        var(--theme-palette-blue);
+  --pm-accent-soft:   color-mix(in srgb, var(--skin-accent) 14%, transparent);
   --pm-accent-dark:   #256fd8;
   --pm-orange:        var(--pm-accent);
   --pm-orange-soft:   var(--pm-accent-soft);
@@ -171,18 +171,18 @@ body .pm-more-skeleton.pm-tasks-skel span { height: 56px; }
 }
 :root[data-skin="purple"] {
   /* Use the brighter desktop panel family for the mobile app backdrop. */
-  --pm-bg:            #1e1138;
-  --pm-bg-soft:       #261545;
+  --pm-bg:            var(--skin-panel);
+  --pm-bg-soft:       var(--skin-panel-2);
   --pm-surface:       #33205b;
   --pm-surface-strong:#432d73;
   --pm-ios-popover-base: #4c3472;
-  --pm-border:        rgba(170, 120, 255, 0.12);
-  --pm-border-strong: rgba(170, 120, 255, 0.22);
-  --pm-text:          #e8ddff;
+  --pm-border:        var(--skin-line);
+  --pm-border-strong: var(--skin-line-strong);
+  --pm-text:          var(--skin-text);
   --pm-text-soft:     #d4c6ea;
-  --pm-muted:         #ab9dc7;
-  --pm-accent:        #8b5cf6;
-  --pm-accent-soft:   rgba(139, 92, 246, 0.14);
+  --pm-muted:         var(--skin-muted);
+  --pm-accent:        var(--theme-palette-violet);
+  --pm-accent-soft:   color-mix(in srgb, var(--skin-accent) 14%, transparent);
   --pm-accent-dark:   #6d3fd8;
   --pm-orange:        var(--pm-accent);
   --pm-orange-soft:   var(--pm-accent-soft);
@@ -194,25 +194,25 @@ body .pm-more-skeleton.pm-tasks-skel span { height: 56px; }
 }
 :root[data-skin="gray"] {
   /* Ash & Ember: the restored gray/orange mobile skin. */
-  --pm-bg:            #2e2e2e;
-  --pm-bg-soft:       #363636;
-  --pm-surface:       #3d3d3d;
-  --pm-surface-strong:#484848;
+  --pm-bg:            var(--skin-bg);
+  --pm-bg-soft:       var(--skin-bg-soft);
+  --pm-surface:       var(--skin-panel);
+  --pm-surface-strong:var(--skin-panel-2);
   --pm-ios-popover-base: #555555;
-  --pm-border:        rgba(255, 255, 255, .14);
-  --pm-border-strong: rgba(255, 255, 255, .23);
-  --pm-text:          #f1eee8;
+  --pm-border:        var(--skin-line);
+  --pm-border-strong: var(--skin-line-strong);
+  --pm-text:          var(--skin-text);
   --pm-text-soft:     #ddd8cf;
-  --pm-muted:         #aaa49a;
-  --pm-accent:        var(--theme-palette-orange);
-  --pm-accent-soft:   color-mix(in srgb, var(--theme-palette-orange) 15%, transparent);
+  --pm-muted:         var(--skin-muted);
+  --pm-accent:        var(--skin-accent);
+  --pm-accent-soft:   color-mix(in srgb, var(--skin-accent) 15%, transparent);
   --pm-accent-dark:   #c2410c;
   --pm-orange:        var(--pm-accent);
   --pm-orange-soft:   var(--pm-accent-soft);
   --pm-orange-dark:   var(--pm-accent-dark);
   --sidebar-bg:       #171717;
-  --sidebar-text:     #f1eee8;
-  --sidebar-muted:    #aaa49a;
+  --sidebar-text:     var(--skin-text);
+  --sidebar-muted:    var(--skin-muted);
   --pm-shadow-sm:     0 1px 2px rgba(0, 0, 0, .30), 0 1px 1px rgba(0, 0, 0, .20);
   --pm-shadow-md:     0 8px 22px rgba(0, 0, 0, .32);
   --pm-shadow-lg:     0 18px 48px rgba(0, 0, 0, .46);
@@ -1109,7 +1109,7 @@ body.pm-model-badge-pressing * {
 .pm-msheet-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-msheet-row-raw {
   font-size: 11px; font-weight: 500; color: var(--pm-muted);
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-family: var(--t-font-mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%;
 }
 .pm-msheet-check { color: var(--pm-green); font-weight: 800; }
