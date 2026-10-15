@@ -7,6 +7,7 @@
 import { Ollama } from 'ollama';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { stripCacheMarker } from './content-utils';
+import { recoverLocalToolCalls } from './local-tool-calls';
 
 /**
  * Coerce a message's content to a plain string.
@@ -117,7 +118,8 @@ export class OllamaAdapter implements LLMProvider {
             }
             if (chunk?.message?.tool_calls?.length) {
               const calls = chunk.message.tool_calls;
-              tool_calls = calls;
+              // Ollama streams complete calls in separate chunks; retain earlier calls.
+              tool_calls = [...(tool_calls || []), ...calls];
               for (const [idx, tc] of calls.entries()) {
                 const name = String(tc?.function?.name || tc?.name || '').trim();
                 const args = typeof tc?.function?.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc?.function?.arguments || tc?.arguments || {});
@@ -130,7 +132,7 @@ export class OllamaAdapter implements LLMProvider {
 	          const message = {
             role: 'assistant' as const,
             content: fullContent,
-            ...(tool_calls ? { tool_calls } : {}),
+            ...(recoverLocalToolCalls(fullContent, tool_calls, options?.tools) ? { tool_calls: recoverLocalToolCalls(fullContent, tool_calls, options?.tools) } : {}),
           };
           return { message, thinking: fullThinking || undefined, usage: parseOllamaUsage(lastChunk) };
         }
@@ -161,12 +163,12 @@ export class OllamaAdapter implements LLMProvider {
           lastChunk = chunk;
           fullContent += chunk?.message?.content || '';
           fullThinking += chunk?.message?.thinking || '';
-          if (chunk?.message?.tool_calls?.length) tool_calls = chunk.message.tool_calls;
+          if (chunk?.message?.tool_calls?.length) tool_calls = [...(tool_calls || []), ...chunk.message.tool_calls];
         }
         const message = {
           role: 'assistant' as const,
           content: fullContent,
-          ...(tool_calls ? { tool_calls } : {}),
+          ...(recoverLocalToolCalls(fullContent, tool_calls, options?.tools) ? { tool_calls: recoverLocalToolCalls(fullContent, tool_calls, options?.tools) } : {}),
         };
         return { message, thinking: fullThinking || undefined, usage: parseOllamaUsage(lastChunk) };
       } catch (error: any) {

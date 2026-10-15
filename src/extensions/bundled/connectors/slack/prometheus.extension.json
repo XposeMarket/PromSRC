@@ -1,5 +1,6 @@
 {
   "id": "slack",
+  "permissions": { "network": { "hosts": ["slack.com"] }, "sideEffects": "external" },
   "kind": "connector",
   "name": "Slack",
   "description": "Connect Slack so Prometheus can read channels, search history, and send messages with approval.",

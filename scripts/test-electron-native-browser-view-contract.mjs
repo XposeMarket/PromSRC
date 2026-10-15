@@ -51,13 +51,21 @@ assert.match(mainSource, /nativeBrowserNetworkSessions/, 'native network diagnos
 const preloadSource = fs.readFileSync(new URL('../electron/preload.js', import.meta.url), 'utf8');
 assert.match(preloadSource, /native-browser:close/, 'native browser preload bridge must expose session close');
 
-const gatewaySource = fs.readFileSync(new URL('../src/gateway/browser-tools.ts', import.meta.url), 'utf8');
+const { readBrowserGatewaySource } = await import('./lib/gateway-split-source.mjs');
+const gatewaySource = readBrowserGatewaySource();
 assert.match(gatewaySource, /recoverInHouseSessionMapping\(/, 'gateway must recover native mappings from Electron state');
 assert.match(gatewaySource, /callInHouseBrowser\('console'/, 'gateway must route console diagnostics to the native lane');
 assert.match(gatewaySource, /callInHouseBrowser\('network'/, 'gateway must route network diagnostics to the native lane');
 assert.match(gatewaySource, /browserScrollCollectInHouse\(/, 'gateway must support native bulk scroll collection');
 assert.match(gatewaySource, /browserRunSmokeStepsInHouse\(/, 'gateway smoke tests must execute steps in the native lane');
-assert.doesNotMatch(gatewaySource, /browserScrollCollect\(.*inHouseUnsupportedToolMessage/s, 'bulk scroll collection must not remain an in-house unsupported stub');
+// Scope the stub check to the browserScrollCollect body itself: the gateway
+// source is now a multi-module layer, so a dotall match across the whole
+// concatenation would hit unrelated tools that still use the stub message.
+const scrollCollectStart = gatewaySource.indexOf('export async function browserScrollCollect(');
+assert.ok(scrollCollectStart >= 0, 'browserScrollCollect must exist in the gateway layer');
+const scrollCollectNext = gatewaySource.indexOf('\nexport ', scrollCollectStart + 1);
+const scrollCollectBody = gatewaySource.slice(scrollCollectStart, scrollCollectNext === -1 ? undefined : scrollCollectNext);
+assert.doesNotMatch(scrollCollectBody, /inHouseUnsupportedToolMessage/, 'bulk scroll collection must not remain an in-house unsupported stub');
 assert.match(gatewaySource, /recoverStuckPrometheusChrome\(/, 'gateway must have a scoped recovery path for wedged managed CDP targets');
 
 console.log('Electron native browser view wrapper contract passed.');
