@@ -122,7 +122,7 @@
     "test:ws-fanout": "node --import tsx scripts/benchmark-gateway-stream-load.mjs",
     "test:live-source-state": "tsx src/gateway/diagnostics/live-source-state.regression.ts",
     "test:degraded-turn-finish": "tsx src/gateway/chat/degraded-turn-finish.regression.ts",
-    "test:anthropic-continuation": "tsx src/providers/anthropic-adapter.regression.ts && tsx src/gateway/chat/model-response-recovery.regression.ts",
+    "test:anthropic-continuation": "tsx src/providers/anthropic-adapter.regression.ts && tsx src/gateway/chat/model-response-recovery.regression.ts && tsx src/providers/anthropic-image.regression.ts",
     "test:anthropic-tool-cache": "tsx src/gateway/anthropic-tool-cache.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",
     "test:thread-handoff": "tsx src/gateway/threads/thread-handoff.regression.ts",
