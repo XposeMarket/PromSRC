@@ -41,6 +41,12 @@
   padding: 12px 14px 8px;
 }
 
+@media (max-width: 767px) {
+  html.mobile-settings-handoff #settings-modal .settings-sidebar-top {
+    padding-top: max(12px, env(safe-area-inset-top)) !important;
+  }
+}
+
 #settings-modal .settings-back-btn,
 #settings-modal .settings-close-btn {
   display: inline-flex;

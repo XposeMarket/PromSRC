@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "790b8b7eca66b2ca",
-  "sourceDigest": "790b8b7eca66b2ca2049bffd892f100c03e95b5452976714c6adf5dcea5495d8",
+  "buildId": "f8c465c79614b82f",
+  "sourceDigest": "f8c465c79614b82fcfb3943ce69590f1721dd5587821340d2b0e56b43ef4345d",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -10,20 +10,20 @@
   "entries": {
     "desktop": {
       "html": "/index.html",
-      "js": "/build/entries/desktop-KEVTS2QO.js",
-      "css": "/build/styles/desktop-ET62WQCC.css",
+      "js": "/build/entries/desktop-RT2HXGZR.js",
+      "css": "/build/styles/desktop-TKU3QRQY.css",
       "modulePreloads": [
         "/build/chunks/chunk-6FFPACLU.js",
         "/build/chunks/chunk-DJBPOZDJ.js",
         "/build/chunks/chunk-EPSJJCWL.js",
-        "/build/chunks/chunk-HJADIT6Y.js",
-        "/build/chunks/chunk-JF4LWGNM.js"
+        "/build/chunks/chunk-JF4LWGNM.js",
+        "/build/chunks/chunk-VIPO6N7H.js"
       ]
     },
     "mobile": {
       "html": "/mobile.html",
-      "js": "/build/entries/mobile-RW6ANG5T.js",
-      "css": "/build/styles/mobile-QPD6DTYX.css",
+      "js": "/build/entries/mobile-KIFI6Z2V.js",
+      "css": "/build/styles/mobile-7LNDXVKD.css",
       "modulePreloads": []
     }
   },
@@ -43,7 +43,7 @@
     "src/components/video-project-card.js": "/build/chunks/video-project-card-4MUF76NF.js",
     "src/context-review.js": "/build/chunks/context-review-FEXKUOBC.js",
     "src/context-window-live-tracking.js": "/build/chunks/context-window-live-tracking-X3KLCDXF.js",
-    "src/desktop-entry.js": "/build/entries/desktop-KEVTS2QO.js",
+    "src/desktop-entry.js": "/build/entries/desktop-RT2HXGZR.js",
     "src/features/chat/canonical-desktop-composer.js": "/build/chunks/canonical-desktop-composer-ABD6TDHD.js",
     "src/features/chat/desktop-turn-file-diff.js": "/build/chunks/desktop-turn-file-diff-I2A35HSD.js",
     "src/features/chat/multi-chat-intent.js": "/build/chunks/multi-chat-intent-Z4RPASAZ.js",
@@ -56,21 +56,21 @@
     "src/mobile/mobile-api.js": "/build/chunks/mobile-api-WK735RCI.js",
     "src/mobile/mobile-chat-page-runtime.js": "/build/chunks/mobile-chat-page-runtime-7UAB4EDR.js",
     "src/mobile/mobile-chat-renderer-runtime.js": "/build/chunks/mobile-chat-renderer-runtime-XNGDZP4W.js",
-    "src/mobile/mobile-creative-pages.js": "/build/chunks/mobile-creative-pages-DR3FYCAL.js",
-    "src/mobile/mobile-entry.js": "/build/entries/mobile-RW6ANG5T.js",
-    "src/mobile/mobile-gateways-page.js": "/build/chunks/mobile-gateways-page-NIVRTTUE.js",
-    "src/mobile/mobile-hub-pages.js": "/build/chunks/mobile-hub-pages-M63KVACA.js",
+    "src/mobile/mobile-creative-pages.js": "/build/chunks/mobile-creative-pages-QKTG5BR7.js",
+    "src/mobile/mobile-entry.js": "/build/entries/mobile-KIFI6Z2V.js",
+    "src/mobile/mobile-gateways-page.js": "/build/chunks/mobile-gateways-page-6X4IXBSJ.js",
+    "src/mobile/mobile-hub-pages.js": "/build/chunks/mobile-hub-pages-RYBONHJQ.js",
     "src/mobile/mobile-model-badge.js": "/build/chunks/mobile-model-badge-SX3QC7WH.js",
-    "src/mobile/mobile-pages.js": "/build/chunks/mobile-pages-ZYU4NAIF.js",
-    "src/mobile/mobile-pairing-page.js": "/build/chunks/mobile-pairing-page-GGNV4H2K.js",
-    "src/mobile/mobile-plugins-page.js": "/build/chunks/mobile-plugins-page-IYI7GQ6L.js",
-    "src/mobile/mobile-proposals-pages.js": "/build/chunks/mobile-proposals-pages-JUJAFPF3.js",
-    "src/mobile/mobile-router.js": "/build/chunks/mobile-router-V6NHU7ZH.js",
-    "src/mobile/mobile-schedule-pages.js": "/build/chunks/mobile-schedule-pages-RHOYUJNR.js",
-    "src/mobile/mobile-settings.js": "/build/chunks/mobile-settings-AQMVC25M.js",
-    "src/mobile/mobile-subagent-pages.js": "/build/chunks/mobile-subagent-pages-QZDZ526Y.js",
-    "src/mobile/mobile-tasks-pages.js": "/build/chunks/mobile-tasks-pages-QFHN2SCA.js",
-    "src/mobile/mobile-teams-pages.js": "/build/chunks/mobile-teams-pages-YKD746DP.js",
+    "src/mobile/mobile-pages.js": "/build/chunks/mobile-pages-TY5XZ3NS.js",
+    "src/mobile/mobile-pairing-page.js": "/build/chunks/mobile-pairing-page-7IGMC33F.js",
+    "src/mobile/mobile-plugins-page.js": "/build/chunks/mobile-plugins-page-VOZAB775.js",
+    "src/mobile/mobile-proposals-pages.js": "/build/chunks/mobile-proposals-pages-5Z4EVH3F.js",
+    "src/mobile/mobile-router.js": "/build/chunks/mobile-router-XIYGFIFB.js",
+    "src/mobile/mobile-schedule-pages.js": "/build/chunks/mobile-schedule-pages-BTEQ2IKY.js",
+    "src/mobile/mobile-settings.js": "/build/chunks/mobile-settings-RD77LFNZ.js",
+    "src/mobile/mobile-subagent-pages.js": "/build/chunks/mobile-subagent-pages-XLLXH7FP.js",
+    "src/mobile/mobile-tasks-pages.js": "/build/chunks/mobile-tasks-pages-L5LMAQWK.js",
+    "src/mobile/mobile-teams-pages.js": "/build/chunks/mobile-teams-pages-4TEHDL2T.js",
     "src/mobile/mobile-voice-page.js": "/build/chunks/mobile-voice-page-U5RCQUGM.js",
     "src/mobile/mobile-voice-runtime.js": "/build/chunks/mobile-voice-runtime-NOZ476TH.js",
     "src/onboarding/claude-connect.js": "/build/chunks/claude-connect-CF4LIL6X.js",
@@ -82,7 +82,7 @@
     "src/pages/ProjectsPage.js": "/build/chunks/ProjectsPage-LLFGHMBD.js",
     "src/pages/ProposalsPage.js": "/build/chunks/ProposalsPage-RU64GBNO.js",
     "src/pages/SchedulePage.js": "/build/chunks/SchedulePage-TGF2MPRY.js",
-    "src/pages/SettingsPage.js": "/build/entries/settings-3KYBDCVZ.js",
+    "src/pages/SettingsPage.js": "/build/entries/settings-XNWBWHGH.js",
     "src/pages/SubagentsPage.js": "/build/chunks/SubagentsPage-GN6S7MDY.js",
     "src/pages/TasksPage.js": "/build/chunks/TasksPage-XMDX6YZ4.js",
     "src/pages/TeamsPage.js": "/build/chunks/TeamsPage-CIWJVSSC.js",
@@ -106,35 +106,36 @@
         "/build/chunks/chunk-6FFPACLU.js",
         "/build/chunks/chunk-DJBPOZDJ.js",
         "/build/chunks/chunk-EPSJJCWL.js",
-        "/build/chunks/chunk-HJADIT6Y.js",
         "/build/chunks/chunk-JF4LWGNM.js",
-        "/build/entries/desktop-KEVTS2QO.js",
-        "/build/inline/index-inline-01-57964227a42d.js",
-        "/build/inline/index-inline-02-1bf1d7b50712.js",
-        "/build/inline/index-inline-03-8635bb2ffd03.js",
-        "/build/inline/index-inline-04-d0bf4f36f509.js",
-        "/build/inline/index-inline-05-2ba5ab66be67.js",
-        "/build/inline/index-inline-06-0b108e28f4b7.js",
-        "/build/inline/index-inline-07-716f958618af.js",
-        "/build/inline/index-inline-08-ecc8cfa8ff4d.js",
-        "/build/inline/index-inline-09-4550e6a395a8.js",
-        "/build/inline/index-inline-10-047d20aba693.js",
-        "/build/styles/desktop-ET62WQCC.css"
+        "/build/chunks/chunk-VIPO6N7H.js",
+        "/build/entries/desktop-RT2HXGZR.js",
+        "/build/inline/index-inline-01-213bcef90a36.js",
+        "/build/inline/index-inline-02-452f39851499.js",
+        "/build/inline/index-inline-03-57964227a42d.js",
+        "/build/inline/index-inline-04-947cd70adf3e.js",
+        "/build/inline/index-inline-05-8635bb2ffd03.js",
+        "/build/inline/index-inline-06-d0bf4f36f509.js",
+        "/build/inline/index-inline-07-2ba5ab66be67.js",
+        "/build/inline/index-inline-08-0b108e28f4b7.js",
+        "/build/inline/index-inline-09-716f958618af.js",
+        "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
+        "/build/inline/index-inline-11-4550e6a395a8.js",
+        "/build/inline/index-inline-12-047d20aba693.js",
+        "/build/styles/desktop-TKU3QRQY.css"
       ],
-      "files": 17,
-      "bytes": 911120,
-      "gzipBytes": 172732,
-      "jsBytes": 207029,
-      "jsGzipBytes": 64254,
-      "cssBytes": 704091,
-      "cssGzipBytes": 108478
+      "files": 19,
+      "bytes": 912158,
+      "gzipBytes": 173258,
+      "jsBytes": 207918,
+      "jsGzipBytes": 64742,
+      "cssBytes": 704240,
+      "cssGzipBytes": 108516
     },
     "mobile": {
       "paths": [
         "/build/chunks/chunk-3RYJ625D.js",
-        "/build/chunks/chunk-DVBI5UG7.js",
         "/build/chunks/chunk-EPSJJCWL.js",
-        "/build/chunks/chunk-HJADIT6Y.js",
+        "/build/chunks/chunk-I72SOCLL.js",
         "/build/chunks/chunk-I7ZJTRGE.js",
         "/build/chunks/chunk-JF4LWGNM.js",
         "/build/chunks/chunk-KSCM72TY.js",
@@ -143,21 +144,22 @@
         "/build/chunks/chunk-Q3X4BHCF.js",
         "/build/chunks/chunk-QOVQ3TSE.js",
         "/build/chunks/chunk-QZKNPMSB.js",
+        "/build/chunks/chunk-VIPO6N7H.js",
         "/build/chunks/chunk-YMT6MSCC.js",
-        "/build/chunks/mobile-router-V6NHU7ZH.js",
-        "/build/entries/mobile-RW6ANG5T.js",
+        "/build/chunks/mobile-router-XIYGFIFB.js",
+        "/build/entries/mobile-KIFI6Z2V.js",
         "/build/inline/mobile-inline-01-8635bb2ffd03.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
-        "/build/styles/mobile-QPD6DTYX.css"
+        "/build/styles/mobile-7LNDXVKD.css"
       ],
       "files": 19,
-      "bytes": 1015912,
-      "gzipBytes": 232086,
-      "jsBytes": 457773,
-      "jsGzipBytes": 143519,
-      "cssBytes": 558139,
-      "cssGzipBytes": 88567
+      "bytes": 1016336,
+      "gzipBytes": 232226,
+      "jsBytes": 458096,
+      "jsGzipBytes": 143636,
+      "cssBytes": 558240,
+      "cssGzipBytes": 88590
     }
   },
   "assets": [
@@ -935,84 +937,10 @@
       ]
     },
     {
-      "path": "/build/chunks/chunk-BPLMUUTK.js",
-      "bytes": 6717,
-      "gzipBytes": 2310,
-      "sha256": "a1bc0eab36537510fa49b30f4b84f2768663296a8ec6f443a048f0a89504f2af",
-      "entryPoint": null,
-      "imports": [
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-KSCM72TY.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-N4XQFN62.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-JF4LWGNM.js"
-        }
-      ]
-    },
-    {
-      "path": "/build/chunks/chunk-CUCDWB4G.js",
-      "bytes": 1833,
-      "gzipBytes": 755,
-      "sha256": "4ff036caf5621711608c478a4121e8a8102a39340e83ec49ed828fbbe890a700",
-      "entryPoint": null,
-      "imports": []
-    },
-    {
-      "path": "/build/chunks/chunk-DJBPOZDJ.js",
-      "bytes": 12520,
-      "gzipBytes": 5158,
-      "sha256": "28119f551f3139efd789b1d9ce1a8e9d61e02c3c0adfa20ac5fa0a4404029f29",
-      "entryPoint": null,
-      "imports": []
-    },
-    {
-      "path": "/build/chunks/chunk-DVBI5UG7.js",
-      "bytes": 144690,
-      "gzipBytes": 41891,
-      "sha256": "e86cee5c127393180d2413ad1aec08cc2125b2b1430c12ba88d22d520f52a34b",
-      "entryPoint": null,
-      "imports": [
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-Q3X4BHCF.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-QZKNPMSB.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-3RYJ625D.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-KSCM72TY.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-EPSJJCWL.js"
-        }
-      ]
-    },
-    {
-      "path": "/build/chunks/chunk-EPSJJCWL.js",
-      "bytes": 1271,
-      "gzipBytes": 680,
-      "sha256": "90f66f96e0bc2f3ecff24d3e29cd238aa993386d3923c85dcdf7d9457214e1d5",
-      "entryPoint": null,
-      "imports": []
-    },
-    {
-      "path": "/build/chunks/chunk-FOSMWUY4.js",
+      "path": "/build/chunks/chunk-B75VI5XS.js",
       "bytes": 30390,
-      "gzipBytes": 9169,
-      "sha256": "d3151fb319a6379e72300f614fd88a4441333c37de22f3e0d49ee443d662db1a",
+      "gzipBytes": 9167,
+      "sha256": "ff2dedcc208a188bbe5f8e0097a09e203bbf2e40c61a108266c2f325ab92668c",
       "entryPoint": null,
       "imports": [
         {
@@ -1021,7 +949,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -1029,7 +957,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -1053,9 +981,204 @@
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-plugins-page-IYI7GQ6L.js"
+          "path": "/build/chunks/mobile-plugins-page-VOZAB775.js"
         }
       ]
+    },
+    {
+      "path": "/build/chunks/chunk-BGHRNWMT.js",
+      "bytes": 357341,
+      "gzipBytes": 104744,
+      "sha256": "dc5531f5d7146278abfafeca3eb5399318b4d73446a6a3bfd973167073b050cd",
+      "entryPoint": null,
+      "imports": [
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-J5HXEABW.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-JJNBKPNI.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-35CAQ6TV.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-I72SOCLL.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-Q3X4BHCF.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-QZKNPMSB.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-ZAHN4ZJJ.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-VBW7UNI7.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-4YDNJ6HZ.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-2DW2MRIR.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-CUCDWB4G.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-ZIZ27Q5R.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-3RYJ625D.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-UP2754S3.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-XREJVKMI.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-KSCM72TY.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-N4XQFN62.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-I7ZJTRGE.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/thinking-orb-4SZJWLYT.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/question-controller-7AQLVOPK.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/mobile-question-transport-SG24FLHQ.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/mobile-chat-renderer-runtime-XNGDZP4W.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/mobile-chat-page-runtime-7UAB4EDR.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/mobile-voice-page-U5RCQUGM.js"
+        },
+        {
+          "kind": "dynamic-import",
+          "path": "/build/chunks/mobile-voice-runtime-NOZ476TH.js"
+        }
+      ]
+    },
+    {
+      "path": "/build/chunks/chunk-BPLMUUTK.js",
+      "bytes": 6717,
+      "gzipBytes": 2310,
+      "sha256": "a1bc0eab36537510fa49b30f4b84f2768663296a8ec6f443a048f0a89504f2af",
+      "entryPoint": null,
+      "imports": [
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-KSCM72TY.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-N4XQFN62.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-JF4LWGNM.js"
+        }
+      ]
+    },
+    {
+      "path": "/build/chunks/chunk-BU5HBCCR.js",
+      "bytes": 54352,
+      "gzipBytes": 16681,
+      "sha256": "f2cff47a751c95b8453334caf6c5498ee2d17188b436e857693de3835dc33679",
+      "entryPoint": null,
+      "imports": [
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-J5HXEABW.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-35CAQ6TV.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-I72SOCLL.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-QZKNPMSB.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-YYIW5LHB.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-3RYJ625D.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-N4XQFN62.js"
+        }
+      ]
+    },
+    {
+      "path": "/build/chunks/chunk-CUCDWB4G.js",
+      "bytes": 1833,
+      "gzipBytes": 755,
+      "sha256": "4ff036caf5621711608c478a4121e8a8102a39340e83ec49ed828fbbe890a700",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
+      "path": "/build/chunks/chunk-DJBPOZDJ.js",
+      "bytes": 12520,
+      "gzipBytes": 5158,
+      "sha256": "28119f551f3139efd789b1d9ce1a8e9d61e02c3c0adfa20ac5fa0a4404029f29",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
+      "path": "/build/chunks/chunk-EPSJJCWL.js",
+      "bytes": 1271,
+      "gzipBytes": 680,
+      "sha256": "90f66f96e0bc2f3ecff24d3e29cd238aa993386d3923c85dcdf7d9457214e1d5",
+      "entryPoint": null,
+      "imports": []
     },
     {
       "path": "/build/chunks/chunk-G2ISGWIW.js",
@@ -1079,12 +1202,33 @@
       "imports": []
     },
     {
-      "path": "/build/chunks/chunk-HJADIT6Y.js",
-      "bytes": 2122,
-      "gzipBytes": 949,
-      "sha256": "e69e462d993473bb1b29cf8732decb116905ececd23255cc207431620932384a",
+      "path": "/build/chunks/chunk-I72SOCLL.js",
+      "bytes": 144730,
+      "gzipBytes": 41907,
+      "sha256": "48f30e2fa17f279eb5fa218622006721898f6d4977d36893c3c11210773e49fd",
       "entryPoint": null,
-      "imports": []
+      "imports": [
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-Q3X4BHCF.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-QZKNPMSB.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-3RYJ625D.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-KSCM72TY.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-EPSJJCWL.js"
+        }
+      ]
     },
     {
       "path": "/build/chunks/chunk-I7ZJTRGE.js",
@@ -1124,15 +1268,19 @@
       "imports": []
     },
     {
-      "path": "/build/chunks/chunk-K5GCLH7C.js",
-      "bytes": 54352,
-      "gzipBytes": 16682,
-      "sha256": "04235381da0289c2c5b02a09868bc83c198ebec0734f7b3444dfb23fbc285b21",
+      "path": "/build/chunks/chunk-JKY6WDFB.js",
+      "bytes": 19690,
+      "gzipBytes": 6936,
+      "sha256": "4ff0ee0ae26f5e98f1692fadb57f59bf9bc17c45e96a15908141721a8f701aa3",
       "entryPoint": null,
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BU5HBCCR.js"
+        },
+        {
+          "kind": "import-statement",
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -1144,15 +1292,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-QZKNPMSB.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-YYIW5LHB.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -1333,115 +1473,6 @@
       ]
     },
     {
-      "path": "/build/chunks/chunk-SHPIRQ5P.js",
-      "bytes": 357341,
-      "gzipBytes": 104746,
-      "sha256": "43ac555dbbb269f3336275a51ceed01604163ae0bbd13111a6ddb3956d6999bb",
-      "entryPoint": null,
-      "imports": [
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-J5HXEABW.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-JJNBKPNI.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-35CAQ6TV.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-Q3X4BHCF.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-QZKNPMSB.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-ZAHN4ZJJ.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-VBW7UNI7.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-4YDNJ6HZ.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-2DW2MRIR.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-CUCDWB4G.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-ZIZ27Q5R.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-3RYJ625D.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-UP2754S3.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-XREJVKMI.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-KSCM72TY.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-N4XQFN62.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-I7ZJTRGE.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/thinking-orb-4SZJWLYT.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/question-controller-7AQLVOPK.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-question-transport-SG24FLHQ.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-chat-renderer-runtime-XNGDZP4W.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-chat-page-runtime-7UAB4EDR.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-voice-page-U5RCQUGM.js"
-        },
-        {
-          "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-voice-runtime-NOZ476TH.js"
-        }
-      ]
-    },
-    {
       "path": "/build/chunks/chunk-STJ2LPKS.js",
       "bytes": 4696,
       "gzipBytes": 2371,
@@ -1480,49 +1511,20 @@
       ]
     },
     {
+      "path": "/build/chunks/chunk-VIPO6N7H.js",
+      "bytes": 2405,
+      "gzipBytes": 1050,
+      "sha256": "bed79812805493237c59a4635ed4317185aff71e72d6cc55dd756c978bdf7940",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
       "path": "/build/chunks/chunk-W5C3O2WF.js",
       "bytes": 3343,
       "gzipBytes": 1451,
       "sha256": "9017ad55d2a923cca9a3e69285ef02c60255ce50dffbf0d33f86b314a43722b1",
       "entryPoint": null,
       "imports": []
-    },
-    {
-      "path": "/build/chunks/chunk-W77B2GSZ.js",
-      "bytes": 19690,
-      "gzipBytes": 6938,
-      "sha256": "a468f39dd842b4d42445d0e789f0df9b344bd92b3cc04429875f54d65e686329",
-      "entryPoint": null,
-      "imports": [
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-K5GCLH7C.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-J5HXEABW.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-35CAQ6TV.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-3RYJ625D.js"
-        },
-        {
-          "kind": "import-statement",
-          "path": "/build/chunks/chunk-N4XQFN62.js"
-        }
-      ]
     },
     {
       "path": "/build/chunks/chunk-X7QQFLQC.js",
@@ -1867,10 +1869,10 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-creative-pages-DR3FYCAL.js",
+      "path": "/build/chunks/mobile-creative-pages-QKTG5BR7.js",
       "bytes": 35666,
-      "gzipBytes": 10973,
-      "sha256": "074107fdfa3667b049e7caf90eddc4d982368e8ef3ad2c0b0930dd6be9078c2c",
+      "gzipBytes": 10971,
+      "sha256": "2479c8d0ee7963012e0e179753a2b960c013ac231354cb56630d1a8549fb2dad",
       "entryPoint": "web-ui/src/mobile/mobile-creative-pages.js",
       "imports": [
         {
@@ -1883,7 +1885,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -1924,15 +1926,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-gateways-page-NIVRTTUE.js",
+      "path": "/build/chunks/mobile-gateways-page-6X4IXBSJ.js",
       "bytes": 6275,
-      "gzipBytes": 2184,
-      "sha256": "4c735d52e19cf1c6dbb20251be809de75372dadc69697a54a53112987ebb08c6",
+      "gzipBytes": 2182,
+      "sha256": "593b4705122e89ab88ca0e01da6511dfeb87a9a5432190191b020b0df05ef36f",
       "entryPoint": "web-ui/src/mobile/mobile-gateways-page.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -1973,15 +1975,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-hub-pages-M63KVACA.js",
+      "path": "/build/chunks/mobile-hub-pages-RYBONHJQ.js",
       "bytes": 1009,
-      "gzipBytes": 400,
-      "sha256": "2ee68709e67d79b797d58f9c14601b7416d9b6b16d89f221c0281f77ee9a442d",
+      "gzipBytes": 399,
+      "sha256": "0b2df20f4d624d69ffffb5bfe9dfa80fbaac927480614cfb0f319f7f795654d7",
       "entryPoint": "web-ui/src/mobile/mobile-hub-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-FOSMWUY4.js"
+          "path": "/build/chunks/chunk-B75VI5XS.js"
         },
         {
           "kind": "import-statement",
@@ -1989,7 +1991,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2005,7 +2007,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2131,15 +2133,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-pages-ZYU4NAIF.js",
+      "path": "/build/chunks/mobile-pages-TY5XZ3NS.js",
       "bytes": 4875,
-      "gzipBytes": 1964,
-      "sha256": "b2140681477b292b94773ead6d05fc3ed3f093278b2f793576e4825fd8aec2b5",
+      "gzipBytes": 1965,
+      "sha256": "3fd3999a5fbf09c43c921beda2c9b3b20d5dc9c9c69a336fe788abd9775261f1",
       "entryPoint": "web-ui/src/mobile/mobile-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2155,7 +2157,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2244,15 +2246,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-pairing-page-GGNV4H2K.js",
+      "path": "/build/chunks/mobile-pairing-page-7IGMC33F.js",
       "bytes": 16384,
-      "gzipBytes": 5333,
-      "sha256": "c90992407602f2bc68a32dbeb1607c3641eceebdb3a7d806cb727df8066e8e50",
+      "gzipBytes": 5332,
+      "sha256": "aa949360e940bb29c0541464ebaf1b0f78f6a9ae7fc2897cd979a7eb1c417d3e",
       "entryPoint": "web-ui/src/mobile/mobile-pairing-page.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2297,15 +2299,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-plugins-page-IYI7GQ6L.js",
+      "path": "/build/chunks/mobile-plugins-page-VOZAB775.js",
       "bytes": 16541,
       "gzipBytes": 5709,
-      "sha256": "4dce4835ef166c526c0fba170d336f67eebf74932600af52a553f41c36d6847e",
+      "sha256": "ca75c0293db4129276b970e5eb55972432802747a00dbe11d2287aeaf2969be2",
       "entryPoint": "web-ui/src/mobile/mobile-plugins-page.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2321,7 +2323,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2410,15 +2412,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-proposals-pages-JUJAFPF3.js",
+      "path": "/build/chunks/mobile-proposals-pages-5Z4EVH3F.js",
       "bytes": 6905,
       "gzipBytes": 2135,
-      "sha256": "cc3065e7900b8c385a7d4ef6afe726157264b5ebc9be0e60eda6b704295c8851",
+      "sha256": "c65faa7db76234b2aaecdb0cb788a297fbcaf32eccd77b4f0df5760b1ac95306",
       "entryPoint": "web-ui/src/mobile/mobile-proposals-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-FOSMWUY4.js"
+          "path": "/build/chunks/chunk-B75VI5XS.js"
         },
         {
           "kind": "import-statement",
@@ -2426,7 +2428,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2442,7 +2444,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2539,10 +2541,10 @@
       "imports": []
     },
     {
-      "path": "/build/chunks/mobile-router-V6NHU7ZH.js",
+      "path": "/build/chunks/mobile-router-XIYGFIFB.js",
       "bytes": 14931,
       "gzipBytes": 5094,
-      "sha256": "ae9b5e113be206cd2a541a50139aa79fc6155eaada8249fd855aa771a59e0413",
+      "sha256": "a1734d7b2a102fe78ccc6d2b6958e8477010f1782e66defd557f147ffa5c8936",
       "entryPoint": "web-ui/src/mobile/mobile-router.js",
       "imports": [
         {
@@ -2551,7 +2553,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2587,7 +2589,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-HJADIT6Y.js"
+          "path": "/build/chunks/chunk-VIPO6N7H.js"
         },
         {
           "kind": "import-statement",
@@ -2599,67 +2601,67 @@
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-pairing-page-GGNV4H2K.js"
+          "path": "/build/chunks/mobile-pairing-page-7IGMC33F.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-gateways-page-NIVRTTUE.js"
+          "path": "/build/chunks/mobile-gateways-page-6X4IXBSJ.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-pages-ZYU4NAIF.js"
+          "path": "/build/chunks/mobile-pages-TY5XZ3NS.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-pages-ZYU4NAIF.js"
+          "path": "/build/chunks/mobile-pages-TY5XZ3NS.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-schedule-pages-RHOYUJNR.js"
+          "path": "/build/chunks/mobile-schedule-pages-BTEQ2IKY.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-teams-pages-YKD746DP.js"
+          "path": "/build/chunks/mobile-teams-pages-4TEHDL2T.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-tasks-pages-QFHN2SCA.js"
+          "path": "/build/chunks/mobile-tasks-pages-L5LMAQWK.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-settings-AQMVC25M.js"
+          "path": "/build/chunks/mobile-settings-RD77LFNZ.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-hub-pages-M63KVACA.js"
+          "path": "/build/chunks/mobile-hub-pages-RYBONHJQ.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-hub-pages-M63KVACA.js"
+          "path": "/build/chunks/mobile-hub-pages-RYBONHJQ.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-proposals-pages-JUJAFPF3.js"
+          "path": "/build/chunks/mobile-proposals-pages-5Z4EVH3F.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-creative-pages-DR3FYCAL.js"
+          "path": "/build/chunks/mobile-creative-pages-QKTG5BR7.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-subagent-pages-QZDZ526Y.js"
+          "path": "/build/chunks/mobile-subagent-pages-XLLXH7FP.js"
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/entries/settings-3KYBDCVZ.js"
+          "path": "/build/entries/settings-XNWBWHGH.js"
         }
       ]
     },
     {
-      "path": "/build/chunks/mobile-schedule-pages-RHOYUJNR.js",
+      "path": "/build/chunks/mobile-schedule-pages-BTEQ2IKY.js",
       "bytes": 16487,
-      "gzipBytes": 5529,
-      "sha256": "9267da351e3358fc1812ac212b8fadb49cc45fbc2a26fbb186fba67b37750b52",
+      "gzipBytes": 5528,
+      "sha256": "153ef10b2aad162a43dc845cc607080726298f6aabbecca4dee7555899d48147",
       "entryPoint": "web-ui/src/mobile/mobile-schedule-pages.js",
       "imports": [
         {
@@ -2668,7 +2670,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2709,15 +2711,15 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-settings-AQMVC25M.js",
+      "path": "/build/chunks/mobile-settings-RD77LFNZ.js",
       "bytes": 41306,
-      "gzipBytes": 11887,
-      "sha256": "f32a26cba9a6546505a147123fd75c7cb7360c1d4196f08c35e77ab686fd685f",
+      "gzipBytes": 11884,
+      "sha256": "2b431a3807c058a71beefafa8506ea010776811be17dc118d6aa6a3452a9da26",
       "entryPoint": "web-ui/src/mobile/mobile-settings.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2762,23 +2764,23 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-subagent-pages-QZDZ526Y.js",
+      "path": "/build/chunks/mobile-subagent-pages-XLLXH7FP.js",
       "bytes": 41820,
-      "gzipBytes": 12933,
-      "sha256": "622bdc7bfb1a92b38e0d441e438346c120671229aeaec7e586f747f00c1347fd",
+      "gzipBytes": 12931,
+      "sha256": "8b3f2445c6ae330a9778a06c6aa639019cdad6e2ef8a8cd1b275c1d2c92ca88d",
       "entryPoint": "web-ui/src/mobile/mobile-subagent-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-W77B2GSZ.js"
+          "path": "/build/chunks/chunk-JKY6WDFB.js"
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-K5GCLH7C.js"
+          "path": "/build/chunks/chunk-BU5HBCCR.js"
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2794,7 +2796,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -2883,23 +2885,23 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-tasks-pages-QFHN2SCA.js",
+      "path": "/build/chunks/mobile-tasks-pages-L5LMAQWK.js",
       "bytes": 963,
       "gzipBytes": 377,
-      "sha256": "d4c789824233be0a93b6bec9b0d4612e8b87828798d3a1fb245999aea7148c48",
+      "sha256": "bd6f6d2046bc1d292dd996cdab6cff96e99f2dc0f0e4d574064ab4e958b5e9b2",
       "entryPoint": "web-ui/src/mobile/mobile-tasks-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-W77B2GSZ.js"
+          "path": "/build/chunks/chunk-JKY6WDFB.js"
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-K5GCLH7C.js"
+          "path": "/build/chunks/chunk-BU5HBCCR.js"
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -2915,7 +2917,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -3004,19 +3006,19 @@
       ]
     },
     {
-      "path": "/build/chunks/mobile-teams-pages-YKD746DP.js",
+      "path": "/build/chunks/mobile-teams-pages-4TEHDL2T.js",
       "bytes": 1010,
-      "gzipBytes": 411,
-      "sha256": "0bdb796b94701e85677ddb17f9db4e4d5b44806d468243e2885e6ff41c668faa",
+      "gzipBytes": 410,
+      "sha256": "2708645ac07fad8f0292eeca6945f60048c1224162134c850914bc6273c96c0a",
       "entryPoint": "web-ui/src/mobile/mobile-teams-pages.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-K5GCLH7C.js"
+          "path": "/build/chunks/chunk-BU5HBCCR.js"
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-SHPIRQ5P.js"
+          "path": "/build/chunks/chunk-BGHRNWMT.js"
         },
         {
           "kind": "import-statement",
@@ -3032,7 +3034,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-DVBI5UG7.js"
+          "path": "/build/chunks/chunk-I72SOCLL.js"
         },
         {
           "kind": "import-statement",
@@ -3403,15 +3405,15 @@
       ]
     },
     {
-      "path": "/build/entries/desktop-KEVTS2QO.js",
+      "path": "/build/entries/desktop-RT2HXGZR.js",
       "bytes": 135505,
-      "gzipBytes": 37279,
-      "sha256": "16f5827a1b2c0afae0220fd6d51ea079617b065cb96e42bdc785208459099957",
+      "gzipBytes": 37278,
+      "sha256": "a929700fca48c1a2424a73af86981d78a2e7b628e37da615e0a8e88c59557e62",
       "entryPoint": "web-ui/src/desktop-entry.js",
       "imports": [
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-HJADIT6Y.js"
+          "path": "/build/chunks/chunk-VIPO6N7H.js"
         },
         {
           "kind": "import-statement",
@@ -3431,7 +3433,7 @@
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-router-V6NHU7ZH.js"
+          "path": "/build/chunks/mobile-router-XIYGFIFB.js"
         },
         {
           "kind": "dynamic-import",
@@ -3464,23 +3466,23 @@
       ]
     },
     {
-      "path": "/build/entries/mobile-RW6ANG5T.js",
+      "path": "/build/entries/mobile-KIFI6Z2V.js",
       "bytes": 9519,
       "gzipBytes": 3711,
-      "sha256": "815873a6c624869d87654667667017aa55cabb9f4099d76eb792cec42da371ee",
+      "sha256": "911e27f938e17137bf59b854ee98c4e256ffb54b096ec886138b9d3022ec205f",
       "entryPoint": "web-ui/src/mobile/mobile-entry.js",
       "imports": [
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-router-V6NHU7ZH.js"
+          "path": "/build/chunks/mobile-router-XIYGFIFB.js"
         }
       ]
     },
     {
-      "path": "/build/entries/settings-3KYBDCVZ.js",
-      "bytes": 234215,
-      "gzipBytes": 61584,
-      "sha256": "34e6080748fa8112a8849c6e42ddb99168287951df6cf31850a525bb17df93ff",
+      "path": "/build/entries/settings-XNWBWHGH.js",
+      "bytes": 234245,
+      "gzipBytes": 61585,
+      "sha256": "cb8845ec106d860e9480114eac75b423446bf3e109b785b8d05529956fe770fc",
       "entryPoint": "web-ui/src/pages/SettingsPage.js",
       "imports": [
         {
@@ -3513,7 +3515,7 @@
         },
         {
           "kind": "import-statement",
-          "path": "/build/chunks/chunk-HJADIT6Y.js"
+          "path": "/build/chunks/chunk-VIPO6N7H.js"
         },
         {
           "kind": "import-statement",
@@ -3534,7 +3536,23 @@
       ]
     },
     {
-      "path": "/build/inline/index-inline-01-57964227a42d.js",
+      "path": "/build/inline/index-inline-01-213bcef90a36.js",
+      "bytes": 127,
+      "gzipBytes": 124,
+      "sha256": "213bcef90a3664bd11798c6e58df24b984a02bc0a629087dd8960e8372b7efbc",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
+      "path": "/build/inline/index-inline-02-452f39851499.js",
+      "bytes": 235,
+      "gzipBytes": 177,
+      "sha256": "452f39851499e642c36ea3fed93bd53af79d359f4a5fceae61df129032a31371",
+      "entryPoint": null,
+      "imports": []
+    },
+    {
+      "path": "/build/inline/index-inline-03-57964227a42d.js",
       "bytes": 670,
       "gzipBytes": 377,
       "sha256": "57964227a42dba58d4343ae6a086bc8acc4e45de2317720ad009c0d1ff3c8333",
@@ -3542,15 +3560,15 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-02-1bf1d7b50712.js",
-      "bytes": 7095,
-      "gzipBytes": 2110,
-      "sha256": "1bf1d7b507122414e0b90db3014f6a93d404dfd17ea4666b62b519148b2e992d",
+      "path": "/build/inline/index-inline-04-947cd70adf3e.js",
+      "bytes": 7339,
+      "gzipBytes": 2197,
+      "sha256": "947cd70adf3e0d562a1f417b4b246e6e7bb759a75bec7834d1383b07071c8c2e",
       "entryPoint": null,
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-03-8635bb2ffd03.js",
+      "path": "/build/inline/index-inline-05-8635bb2ffd03.js",
       "bytes": 18587,
       "gzipBytes": 6612,
       "sha256": "8635bb2ffd03335bd4a610b9bceefa62970243f07ea2561e6d7593104d1c994d",
@@ -3558,7 +3576,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-04-d0bf4f36f509.js",
+      "path": "/build/inline/index-inline-06-d0bf4f36f509.js",
       "bytes": 787,
       "gzipBytes": 401,
       "sha256": "d0bf4f36f5096a815429be2b2ff3b6d3ef8dc584f89a28a993989e2becac9edb",
@@ -3566,7 +3584,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-05-2ba5ab66be67.js",
+      "path": "/build/inline/index-inline-07-2ba5ab66be67.js",
       "bytes": 473,
       "gzipBytes": 268,
       "sha256": "2ba5ab66be67af7cb026046c60c2ff37bd38ac902ad565ff4d744f500056483b",
@@ -3574,7 +3592,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-06-0b108e28f4b7.js",
+      "path": "/build/inline/index-inline-08-0b108e28f4b7.js",
       "bytes": 35,
       "gzipBytes": 55,
       "sha256": "0b108e28f4b78b7423792392b2f8f40ea7237f9b4390dca6b83a6f760bbc3804",
@@ -3582,7 +3600,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-07-716f958618af.js",
+      "path": "/build/inline/index-inline-09-716f958618af.js",
       "bytes": 227,
       "gzipBytes": 164,
       "sha256": "716f958618af37608e9d5db2eb225e2a25941c6e74bcd4a4714ec43bae82293f",
@@ -3590,7 +3608,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-08-ecc8cfa8ff4d.js",
+      "path": "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
       "bytes": 793,
       "gzipBytes": 471,
       "sha256": "ecc8cfa8ff4d8e344c4fd838eaae0ca5a89ca52c4b5c251750d726cba445c3cc",
@@ -3598,7 +3616,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-09-4550e6a395a8.js",
+      "path": "/build/inline/index-inline-11-4550e6a395a8.js",
       "bytes": 1688,
       "gzipBytes": 792,
       "sha256": "4550e6a395a8fb12ddc358e2cef971062df2e219c5429bcf539ca15907560173",
@@ -3606,7 +3624,7 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-10-047d20aba693.js",
+      "path": "/build/inline/index-inline-12-047d20aba693.js",
       "bytes": 5083,
       "gzipBytes": 1990,
       "sha256": "047d20aba693f3180a265477622a00ae948805f03e73e0a544b44085e3fb29bd",
@@ -3654,10 +3672,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-ET62WQCC.css",
-      "bytes": 704091,
-      "gzipBytes": 108478,
-      "sha256": "c3cc3d7f23297907e4a114d418f6e0bc6bd837748854a625d2dd984f0311120b",
+      "path": "/build/styles/desktop-TKU3QRQY.css",
+      "bytes": 704240,
+      "gzipBytes": 108516,
+      "sha256": "e126f9b1f23c06a76fbce10cb721ecec86e17484b23bc08133dbdf62a265e63d",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
@@ -3699,10 +3717,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-QPD6DTYX.css",
-      "bytes": 558139,
-      "gzipBytes": 88567,
-      "sha256": "1a816ccaf406ab12523a5c93c3c9ef5a957a3e47fa58d286d0757931c83fffa6",
+      "path": "/build/styles/mobile-7LNDXVKD.css",
+      "bytes": 558240,
+      "gzipBytes": 88590,
+      "sha256": "cf0ce14b8c1c9866a4e24f9a1e14b9a1b3efd9cd5d01fe922644ed046243a4b3",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }

@@ -3203,6 +3203,8 @@ async function openSettings(tab) {
 }
 
 function closeSettings() {
+  // Navigate while Settings still covers the document; never paint desktop.
+  if (returnFromMobileSettings(window.location)) return;
   setSettingsSaveFeedback();
   const modal = document.getElementById('settings-modal');
   if (modal) modal.style.display = 'none';

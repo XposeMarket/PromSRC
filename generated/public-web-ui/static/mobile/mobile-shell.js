@@ -970,7 +970,12 @@ function _toggleMobileTheme() {
     return;
   }
 
-  const currentThemeId = _getTheme();
+  // Match system is not a cycle stop: advance from its resolved palette.
+  // Use the current painted skin, including aliases and desktop-only choices.
+  const choice = _getTheme();
+  const currentThemeId = choice === 'system'
+    ? _resolveTheme('system').id
+    : _resolveTheme(choice).id;
   const currentIndex = themes.findIndex((t) => t.id === currentThemeId);
   const nextTheme = themes[(currentIndex + 1) % themes.length] || themes[0];
   _applyMobileTheme(nextTheme?.id || 'dark');
