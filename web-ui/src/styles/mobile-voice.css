@@ -95,7 +95,7 @@
     line-height: .9;
   }
   .pm-voice-snap-arrow small {
-    font-size: 9px;
+    font-size: var(--t-fs-2xs);
     font-weight: 800;
     letter-spacing: .09em;
     line-height: 1;

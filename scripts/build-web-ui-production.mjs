@@ -279,6 +279,10 @@ async function buildDocument({ sourceName, jsSource, cssSource, jsMetafile, cssM
   const preloads = modulePreloads(jsMetafile, jsOutput);
   let html = fs.readFileSync(sourcePath, 'utf8');
   html = replaceLocalStyles(html, cssPath);
+  // The synchronous shared registry must run before first-paint preferences.
+  // Inline it into the normal content-hashed classic-script extraction path.
+  html = html.replace(/<script src=["']\/?src\/theme-registry\.js["']><\/script>/,
+    () => `<script>${fs.readFileSync(path.join(WEB_UI_ROOT, 'src/theme-registry.js'), 'utf8')}</script>`);
   const sourceEntry = sourceName === 'mobile.html' ? 'mobile/mobile-entry.js' : 'desktop-entry.js';
   const entryPattern = new RegExp(`src=["']\\/?src\\/${sourceEntry.replace('.', '\\.')}["']`, 'i');
   if (!entryPattern.test(html)) throw new Error(`[web-production] Missing ${sourceEntry} in ${sourceName}`);

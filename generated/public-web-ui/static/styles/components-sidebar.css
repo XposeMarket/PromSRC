@@ -29,7 +29,7 @@
 }
 
 :root {
-  --pm-orange: #f97316;
+  --pm-orange: var(--theme-palette-orange);
   --pm-orange-hot: #ff5a00;
   --pm-ember: #b45309;
   --pm-gold: #facc15;
@@ -42,7 +42,7 @@
 }
 
 :root[data-theme="dark"] {
-  --pm-orange: #f97316;
+  --pm-orange: var(--theme-palette-orange);
   --pm-orange-hot: #fb5607;
   --pm-ember: #7c2d12;
   --pm-gold: #f59e0b;
@@ -699,7 +699,7 @@ body:not(.pm-mobile-active) :is(
 }
 
 .session-search-highlight {
-  background: rgba(249, 115, 22, 0.26);
+  background: color-mix(in srgb, var(--t-accent) 26%, transparent);
   color: inherit;
   border-radius: 3px;
   padding: 0 2px;
@@ -749,7 +749,7 @@ body:not(.pm-mobile-active) :is(
 .chat-settle-btn:hover,
 .chat-settle-btn.active {
   color: var(--brand);
-  background: rgba(249,115,22,0.12);
+  background: color-mix(in srgb, var(--t-accent) 12%, transparent);
 }
 .chat-session-rename-btn {
   right: 56px;
@@ -760,11 +760,11 @@ body:not(.pm-mobile-active) :is(
 .chat-pin-btn:hover,
 .chat-pin-btn.active {
   color: var(--brand);
-  background: rgba(249,115,22,0.12);
+  background: color-mix(in srgb, var(--t-accent) 12%, transparent);
 }
 .chat-session-rename-btn:hover {
   color: var(--brand);
-  background: rgba(249,115,22,0.12);
+  background: color-mix(in srgb, var(--t-accent) 12%, transparent);
 }
 .chat-session-delete-btn:hover {
   color: #f87171;
