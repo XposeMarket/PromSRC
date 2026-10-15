@@ -14653,7 +14653,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
       ? `<div class="unified-live-progress">${msg.liveProgressLines.map((line) => `<div>• ${escHtml(line)}</div>`).join('')}</div>`
       : '';
     const liveThinkingHtml = !isUser && options.live === true && !liveTraceHtml && !liveProgressHtml && !String(msg?.content || '').trim()
-      ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>${window.PROM_THEME_ENGINE?.loadingWordHtml(String(msg?.id || msg?.timestamp || '')) || ''}</div>`
+      ? (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(msg?.id || msg?.timestamp || '')) || '')
       : '';
     const assistantWorkTimerHtml = !isUser
       ? (options.live === true
@@ -14889,7 +14889,7 @@ function renderSessionThinkingBodyHtml(sessionId) {
             ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>${window.PROM_THEME_ENGINE?.loadingWordHtml(String(st.turnStartedAt || '')) || ''}</div>`)
+              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || ''))
             }
             ${liveApprovalsHtml}
             ${inlinePlanHtml}`;

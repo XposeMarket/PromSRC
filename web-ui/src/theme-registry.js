@@ -359,6 +359,11 @@
     const cls = String(className || '').replace(/[^\w -]/g, '') || 'prom-loading-word';
     return word ? `<${el} class="${cls}" aria-live="off">${word.replace(/[&<>"]/g, '')}</${el}>` : '';
   }
+  // Shared "thinking" indicator (three dots + the theme's loading word) so chat
+  // renderers don't each inline the markup.
+  function thinkingDotsHtml(key = '') {
+    return `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>${loadingWordHtml(key)}</div>`;
+  }
 
   // ── Theme share codes (Codex-style copy/import) ───────────────────────────
   // PROM1-<7 colors as 42 hex chars><contrast as 2 hex>-<url-encoded name>
@@ -484,7 +489,7 @@
     palette: paletteFor, completePalette, toneOf, contrastRatio, mix, hex,
     prefs: themePrefs, setPrefs: (patch) => { const prefs = writeThemePrefs(patch); refresh(); return prefs; },
     refresh, setTheme, choice: () => savedChoice() || DEFAULT_ID, systemPrefersDark, systemTarget: systemTargetId,
-    loadingWord, loadingWordHtml,
+    loadingWord, loadingWordHtml, thinkingDotsHtml,
     encodeShareCode, decodeShareCode, activeShareCode, importVsCodeTheme, importTheme,
     paletteKeys: PALETTE_KEYS,
   });
