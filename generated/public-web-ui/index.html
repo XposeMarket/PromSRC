@@ -15,9 +15,9 @@
   <script src="/build/inline/index-inline-01-57964227a42d.js"></script>
 <script src="/build/inline/index-inline-02-1bf1d7b50712.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
-<script src="/build/inline/index-inline-03-48de0e9de22c.js"></script>
+<script src="/build/inline/index-inline-03-8eac7aafd161.js"></script>
 <script src="/build/inline/index-inline-04-d0bf4f36f509.js"></script>
-<link rel="stylesheet" href="/build/styles/desktop-HECRR23A.css">
+<link rel="stylesheet" href="/build/styles/desktop-IGOVDFTD.css">
 
 
 
@@ -3618,6 +3618,45 @@
           <div id="appearance-active-theme" class="appearance-active-theme" role="status" aria-live="polite"></div>
         </section>
 
+        <section class="settings-section appearance-tools-section">
+          <div class="settings-section-heading">
+            <h2>Theme tools</h2>
+            <span class="settings-help" tabindex="0" aria-label="Theme tools technical details" data-settings-help="Contrast and loading words apply to every preset. Match system follows your device light/dark setting. Share codes and VS Code theme files import into your custom theme.">?</span>
+          </div>
+          <div class="settings-section-panel appearance-preferences-panel">
+            <div class="appearance-control-list">
+              <div class="appearance-control-row appearance-range-row">
+                <div class="appearance-control-copy"><label for="appearance-global-contrast">Contrast</label><span>Separate surfaces and borders more clearly on any preset</span></div>
+                <div class="appearance-range-control"><input id="appearance-global-contrast" type="range" min="0" max="100" step="1" value="50" oninput="updateAppearanceThemePref('contrast', this.value)" aria-label="Theme contrast"><output id="appearance-global-contrast-value" for="appearance-global-contrast">50</output></div>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-loading-words">Loading words</label><span>Each theme has its own words while Prom works, like Ares “forging…”</span></div>
+                <button id="appearance-loading-words" class="appearance-switch is-on" type="button" role="switch" aria-checked="true" aria-label="Theme loading words" onclick="updateAppearanceThemePref('loadingWords')"><span class="appearance-switch-thumb"></span></button>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-system-dark">Match system · dark</label><span>Theme used when your device is in dark mode</span></div>
+                <select id="appearance-system-dark" class="appearance-select" onchange="updateAppearanceThemePref('systemDark', this.value)"></select>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-system-light">Match system · light</label><span>Theme used when your device is in light mode</span></div>
+                <select id="appearance-system-light" class="appearance-select" onchange="updateAppearanceThemePref('systemLight', this.value)"></select>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-share-code">Share code</label><span>Copy the active theme as a short code anyone can import</span></div>
+                <div class="appearance-share-control"><input id="appearance-share-code" class="appearance-hex-input appearance-share-input" type="text" readonly aria-label="Theme share code"><button class="appearance-secondary-button" type="button" onclick="copyAppearanceShareCode()">Copy</button></div>
+              </div>
+              <div class="appearance-control-row appearance-import-row">
+                <div class="appearance-control-copy"><label for="appearance-import-text">Import</label><span>Paste a PROM1 share code or a VS Code theme JSON file. It becomes your custom theme.</span></div>
+                <div class="appearance-import-control">
+                  <textarea id="appearance-import-text" class="appearance-import-text" rows="3" spellcheck="false" placeholder="PROM1-… or { &quot;colors&quot;: { … } }"></textarea>
+                  <div class="appearance-import-actions"><button class="appearance-secondary-button" type="button" onclick="importAppearanceTheme()">Import</button><label class="appearance-secondary-button appearance-file-button">Choose file<input type="file" accept=".json,.jsonc,.txt,application/json" hidden onchange="importAppearanceThemeFile(this)"></label></div>
+                  <div id="appearance-import-status" class="appearance-import-status" role="status" aria-live="polite"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-section appearance-custom-section">
           <div class="settings-section-heading">
             <h2>Customize</h2>
@@ -5325,10 +5364,10 @@
 <link rel="modulepreload" href="/build/chunks/chunk-EPSJJCWL.js">
 <link rel="modulepreload" href="/build/chunks/chunk-HJADIT6Y.js">
 <link rel="modulepreload" href="/build/chunks/chunk-JF4LWGNM.js">
-<script type="module" src="/build/entries/desktop-FU4VXE7Q.js"></script>
+<script type="module" src="/build/entries/desktop-SIL3FNCF.js"></script>
 <script src="/build/inline/index-inline-09-4550e6a395a8.js"></script>
 
-<script src="/build/inline/index-inline-10-533bd4c45def.js"></script>
+<script src="/build/inline/index-inline-10-047d20aba693.js"></script>
 
 </body>
 </html>

@@ -2983,7 +2983,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
     #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat !important;
 }
 
-:root[data-background-visuals="on"][data-skin="custom"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
+:root[data-background-visuals="on"][data-skin-kind="palette"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     var(--bg) url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
@@ -2991,37 +2991,37 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 
 /* Custom theme surface layer. The editor writes the shared design tokens so
    the rest of the desktop UI continues to use its normal component styles. */
-:root[data-skin="custom"] body:not(.pm-mobile-active) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) {
   background: var(--bg) !important;
   color: var(--text);
   font-family: var(--pm-custom-font, var(--t-font-ui));
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) :is(main, .main-shell-wrap, .page-view) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) :is(main, .main-shell-wrap, .page-view) {
   background: var(--bg) !important;
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
   background: var(--sidebar-bg) !important;
   border-color: var(--line) !important;
   color: var(--sidebar-text);
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) :is(.sidebar, .topbar, .main-shell, .right-panel, #chat-view, #settings-modal) :is(button, input, textarea, select) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) :is(.sidebar, .topbar, .main-shell, .right-panel, #chat-view, #settings-modal) :is(button, input, textarea, select) {
   font-family: inherit;
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) .right-panel {
   background: var(--bg) !important;
   border-left-color: var(--line-strong) !important;
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
   background: var(--bg) !important;
   border-color: var(--line) !important;
   color: var(--text);
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
   background: var(--panel-2) !important;
   border-color: var(--line) !important;
   color: var(--text);
 }
-:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
+:root[data-skin-kind="palette"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
   background: var(--panel) !important;
   border-color: var(--line) !important;
   color: var(--text) !important;
@@ -3061,7 +3061,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   --pm-pinned-chat-bg: #2a1650;
 }
 
-:root[data-skin="custom"] {
+:root[data-skin-kind="palette"] {
   --pm-chat-page-bg: color-mix(in srgb, var(--panel) 82%, var(--brand) 18%);
   --pm-unread-chat-bg: var(--pm-chat-page-bg);
   --pm-pinned-chat-bg: var(--panel-2);
@@ -3073,26 +3073,26 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   --composer-input: var(--pm-pinned-chat-bg);
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: var(--pm-chat-page-bg) !important;
   background-image: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-session-item.job-item.unread:not(.active),
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #jobs-list .chat-session-item.job-item.unread:not(.active),
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #channels-list .chat-session-item.job-item.unread:not(.active) {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-session-item.job-item.unread:not(.active),
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #jobs-list .chat-session-item.job-item.unread:not(.active),
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #channels-list .chat-session-item.job-item.unread:not(.active) {
   background: var(--pm-unread-chat-bg) !important;
   border-color: transparent !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #pinned-chats-list .chat-session-item.job-item {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #pinned-chats-list .chat-session-item.job-item {
   background: var(--pm-pinned-chat-bg) !important;
   border-color: var(--line) !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-input-area {
   background: var(--pm-pinned-chat-bg) !important;
   background-image: none !important;
   backdrop-filter: none !important;
@@ -3100,7 +3100,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   box-shadow: 0 8px 22px rgba(0, 0, 0, .18) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
   background: var(--pm-pinned-chat-bg) !important;
   background-image: none !important;
   backdrop-filter: none !important;
@@ -3136,129 +3136,129 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   background-image: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
   transform: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar:hover,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar:focus-within {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .topbar:hover,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .topbar:focus-within {
   --pm-glow: transparent !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn, .status-pill):is(:hover, :focus-visible) {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn, .status-pill):is(:hover, :focus-visible) {
   box-shadow: none !important;
 }
 
 /* Theme the secondary navigation and studio shells from the same structural
    surface as the desktop header/sidebar. Buttons and content previews keep
    their own accent and artwork treatment. */
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) {
   --pm-studio-surface: var(--sidebar-bg);
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .more-popover {
   background: var(--pm-studio-surface) !important;
   border-color: var(--line-strong) !important;
   box-shadow: var(--shadow-md) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover-item:hover {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .more-popover-item:hover {
   background: var(--sidebar-item-hover) !important;
   border-color: var(--line-strong) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover-item.active {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .more-popover-item.active {
   background: var(--sidebar-active-bg) !important;
   border-color: var(--flame-border) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover .nav-icon {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .more-popover .nav-icon {
   background: var(--sidebar-icon-bg) !important;
   border-color: var(--sidebar-icon-border) !important;
   color: var(--brand) !important;
 }
 
 /* Code Canvas shell and editor surface. */
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:first-child,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2),
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2) > div:last-child,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-header-mode-rail,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-sidebar,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-header,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-actions,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-empty-state,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-file-browser,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-shell,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-toolbar,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-stage {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-panel,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-panel > div:first-child,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2),
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2) > div:last-child,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-tabs,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-header-mode-rail,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-workspace-sidebar,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-workspace-header,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-workspace-actions,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-empty-state,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-file-browser,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-editor-wrap,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-preview-shell,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-preview-toolbar,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-preview-stage {
   background: var(--pm-studio-surface) !important;
   background-image: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab {
   background: transparent !important;
   color: var(--muted) !important;
   border-color: var(--line) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab:hover,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab.active {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab:hover,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab.active {
   background: var(--panel) !important;
   color: var(--text) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-scroll,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-gutters {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-scroll,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-gutters {
   background: var(--pm-studio-surface) !important;
   color: var(--text) !important;
   border-color: var(--line) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-linenumber {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-linenumber {
   color: var(--muted) !important;
 }
 
 /* Creative studio outer surfaces; the stage itself remains the artwork. */
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-toolbar,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-layout,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-library,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-nav,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-center,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-properties,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel-header,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-panel-header,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-wrap,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-viewport,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-inspector-tabs,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-shell,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-header,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-track-list {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-toolbar,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-layout,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-library,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-nav,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-center,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-properties,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel-header,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-panel-header,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-wrap,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-viewport,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-inspector-tabs,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-shell,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-header,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-track-list {
   background: var(--pm-studio-surface) !important;
   background-image: none !important;
 }
 
 /* Browser workspace outer surfaces; the live page/frame remains untouched. */
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell > div:first-child,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-layout,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-native-tabs,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card > div:first-child,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-empty,
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-side-col > div {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-browser-shell,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #canvas-browser-shell > div:first-child,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-layout,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-native-tabs,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-live-card,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-live-card > div:first-child,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-empty,
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-side-col > div {
   background: var(--pm-studio-surface) !important;
   background-image: none !important;
   border-color: var(--line) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-frame-wrap {
+:root:is([data-skin="p1"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #browser-canvas-frame-wrap {
   background: var(--pm-studio-surface) !important;
 }
 
@@ -3271,7 +3271,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
    the legacy shell; these final parity rules close that gap without touching
    the mobile document.
    ───────────────────────────────────────────────────────────────────────── */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) {
   --pm-shell-gold: var(--theme-palette-gold);
   --pm-shell-gold-light: #f0d98b;
   --pm-shell-gold-muted: #a98a3b;
@@ -3323,28 +3323,28 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   --pm-shell-accent-muted: #6d3fd1;
 }
 
-:root[data-skin="custom"] {
+:root[data-skin-kind="palette"] {
   --pm-shell-surface: var(--sidebar-bg);
   --pm-shell-accent: var(--brand);
   --pm-shell-accent-light: var(--brand);
   --pm-shell-accent-muted: var(--muted);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-fixed {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar-fixed {
   gap: 8px;
   padding: 10px 8px 6px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-top {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar-top {
   min-height: 0;
   padding: 2px 4px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .brand {
   gap: 8px;
 }
 
-:root:is([data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo {
+:root:is([data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .logo {
   width: 44px;
   height: 44px;
   border-radius: 0;
@@ -3352,16 +3352,16 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   filter: drop-shadow(0 0 12px color-mix(in srgb, var(--pm-shell-accent) 24%, transparent));
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo img {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .logo img {
   opacity: 0;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.collapsed .logo {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar.collapsed .logo {
   width: 38px;
   height: 38px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-title {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .brand-title {
   color: var(--sidebar-text);
   font-size: 0;
   font-family: Georgia, 'Times New Roman', serif;
@@ -3369,42 +3369,42 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   letter-spacing: 0;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
   content: "PROMETHEUS 1";
   color: var(--sidebar-text);
   font-size: 11px;
   letter-spacing: 2px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
   color: var(--pm-shell-accent-muted);
   font-size: 0;
   font-weight: 700;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
   content: "1 Program. Unlimited abilities.";
   color: var(--pm-shell-accent-muted);
   font-size: 7px;
   letter-spacing: .1px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-search {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar-search {
   min-height: 0;
   padding: 6px 10px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-scroll {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar-scroll {
   gap: 8px;
   padding: 8px 8px 10px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .seg-tabs {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .seg-tabs {
   gap: 2px;
   padding: 2px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .section-title {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .section-title {
   min-height: 27px;
   padding: 8px 6px 4px;
   font-family: Georgia, 'Times New Roman', serif;
@@ -3414,7 +3414,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   color: var(--pm-shell-gold-muted);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .section-title::after {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .section-title::after {
   content: "✦";
   flex: 1;
   overflow: hidden;
@@ -3425,38 +3425,38 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold-muted) 45%, transparent), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .session-list,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #jobs-list,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-list,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #channels-list {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .session-list,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #skills-list,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #channels-list {
   gap: 5px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #jobs-list {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #jobs-list {
   padding: 0 10px 10px 0;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-list,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #channels-list {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #skills-list,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #channels-list {
   padding: 10px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#jobs-list, #skills-list, #skills-search-results) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(#jobs-list, #skills-list, #skills-search-results) {
   display: block;
   gap: normal;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
   min-height: 0;
   margin: 0 0 2px;
   padding: 6px 26px 6px 8px;
   border-radius: 8px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon {
   width: 22px;
   height: 22px;
   padding-right: 0;
@@ -3466,13 +3466,13 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   color: var(--pm-shell-gold);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon svg {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon svg {
   width: 12px;
   height: 12px;
   stroke-width: 1.7;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon {
   width: 24px;
   height: 20px;
   padding-right: 8px;
@@ -3483,69 +3483,69 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   color: var(--pm-shell-gold-light);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
   display: none;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
   content: "✦";
   font: 17px/1 Georgia, 'Times New Roman', serif;
   text-shadow: 0 0 8px color-mix(in srgb, var(--pm-shell-gold) 38%, transparent);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::before,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::after {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::before,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::after {
   content: none !important;
   display: none !important;
   animation: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .sidebar-footer) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .sidebar-footer) {
   background: var(--pm-shell-surface) !important;
   border-color: var(--line) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, .main-shell-wrap, .page-view, #connector-view) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(main.main-shell, .main-shell-wrap, .page-view, #connector-view) {
   background: var(--bg) !important;
   background-image: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: var(--pm-chat-page-bg) !important;
   background-image: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-input-area {
   background: var(--pm-pinned-chat-bg) !important;
   background-image: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
   transform: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome h2,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg-content,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .markdown-body :is(h1, h2, h3, h4, strong) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-welcome,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-welcome h2,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .msg-content,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .markdown-body :is(h1, h2, h3, h4, strong) {
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
   width: 72px;
   height: 72px;
   background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
   filter: drop-shadow(0 0 14px color-mix(in srgb, var(--pm-shell-accent) 24%, transparent));
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar img {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar img {
   opacity: 0 !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {
   border-color: color-mix(in srgb, var(--pm-shell-accent) 36%, transparent);
   background:
     url("../assets/prometheus-one/prometheus-avatar-column-gold.png") center / 24px 24px no-repeat,
@@ -3553,49 +3553,49 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--pm-shell-accent-light) 10%, transparent), 0 5px 14px rgba(0, 0, 0, .24);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
   background: var(--pm-brain-card-bg) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
   background: color-mix(in srgb, var(--pm-brain-card-bg), var(--pm-shell-accent) 5%) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel {
   background: var(--bg) !important;
   border-left-color: var(--line-strong) !important;
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
   background: var(--bg) !important;
   border-color: var(--line) !important;
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
   background: var(--panel-2) !important;
   border-color: var(--line) !important;
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
   background: var(--panel) !important;
   border-color: var(--line) !important;
   color: var(--text) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal :is(.settings-page-card, .settings-page-sidebar, .settings-page-main) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #settings-modal :is(.settings-page-card, .settings-page-sidebar, .settings-page-main) {
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal .settings-page-sidebar {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #settings-modal .settings-page-sidebar {
   background: var(--pm-shell-surface) !important;
   border-right-color: var(--line-strong) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal .settings-page-main {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #settings-modal .settings-page-main {
   background: var(--bg) !important;
 }
 
@@ -3612,41 +3612,41 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
    preset. The source drawer follows the same 56px header rhythm as the main
    topbar, while its active tab uses the preset's own shell accent.
    ───────────────────────────────────────────────────────────────────────── */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.project-sidebar-row .project-card-icon, .project-chat-icon-line, .project-chat-folder) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.project-sidebar-row .project-card-icon, .project-chat-icon-line, .project-chat-folder) {
   color: var(--pm-shell-gold) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .chat-pin-btn:is(:hover, .active) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .chat-pin-btn:is(:hover, .active) {
   color: var(--pm-shell-gold-light) !important;
   background: color-mix(in srgb, var(--pm-shell-gold) 10%, transparent) !important;
 }
 
 /* Pinned rows use the same flat treatment as ordinary session rows. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
   border: 1px solid transparent !important;
   background: transparent !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:hover {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:hover {
   border-color: transparent !important;
   background: var(--sidebar-item-hover) !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:is(.active, .unread.active) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:is(.active, .unread.active) {
   border-color: transparent !important;
   background: var(--sidebar-active-bg) !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.unread:not(.active):not(.is-working) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.unread:not(.active):not(.is-working) {
   border-color: transparent !important;
   background: color-mix(in srgb, var(--sidebar-active-bg) 52%, transparent) !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.is-working {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.is-working {
   border-color: transparent !important;
   background: color-mix(in srgb, var(--sidebar-active-bg) 70%, transparent) !important;
   box-shadow:
@@ -3657,14 +3657,14 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 /* Pinned chats, projects, and ordinary sessions share the exact same usable
    row width. Older theme blocks inset only #jobs-list on the right, which made
    the three neighboring sections visibly disagree. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) {
   width: 100%;
   box-sizing: border-box;
   padding-left: 0;
   padding-right: 0;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) > :is(.chat-session-item, .project-chat-group) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) > :is(.chat-session-item, .project-chat-group) {
   width: 100%;
   box-sizing: border-box;
 }
@@ -3672,17 +3672,17 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 /* Reserve the full timestamp footprint inside the title line. The row already
    owns the old action-button inset; constraining the title wrapper makes its
    ellipsis resolve before the idle time instead of underneath it. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item:not(.project-chat-row) .job-item-title-wrap {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item:not(.project-chat-row) .job-item-title-wrap {
   box-sizing: border-box;
   padding-right: 42px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.is-editing {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.is-editing {
   padding-right: 82px;
 }
 
 /* The source drawer header is the same size and surface as the main topbar. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
   height: 56px;
   min-height: 56px;
   background: var(--pm-shell-surface) !important;
@@ -3690,36 +3690,36 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   color: var(--text) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
   color: var(--text) !important;
   font-size: 14px;
   font-weight: 700;
   letter-spacing: -.02em;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-shell {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-shell {
   color: var(--text);
   background: var(--bg) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tabs {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-tabs {
   border-bottom-color: var(--line) !important;
   background: var(--bg) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab {
   color: var(--muted);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab:hover {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab:hover {
   color: var(--text);
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active {
   color: var(--pm-shell-accent-light) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active::after {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active::after {
   background: var(--pm-shell-accent) !important;
 }
 
@@ -3866,41 +3866,41 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 /* Every desktop skin uses one heading ornament: label, divider, spark. The
    collapsible headings and the static Sessions heading already own a real
    ornament node, so suppress theme-generated pseudo sparks on those rows. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) :is(.sidebar-section-toggle, .sidebar-section-static)::after {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) :is(.sidebar-section-toggle, .sidebar-section-static)::after {
   content: none !important;
   display: none !important;
   background: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-decoration::before {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-decoration::before {
   content: "" !important;
   display: block !important;
   background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 58%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 16%, transparent) 84%, transparent) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-icon {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-icon {
   color: var(--pm-shell-gold, var(--brand)) !important;
 }
 
 /* The collapsed Pages row follows the same gold baseline and lets its label
    size the first grid column, keeping the rule centered between text/chevron. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle {
   grid-template-columns: max-content minmax(0, 1fr) max-content;
   color: var(--pm-shell-gold-muted, var(--brand)) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle::before {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle::before {
   background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 58%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 16%, transparent) 84%, transparent) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle svg {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle svg {
   color: var(--pm-shell-gold, var(--brand)) !important;
 }
 
 /* Page navigation stays semantically active for keyboard/screen-reader state,
    but the current page itself should not be painted like a selected chat. Keep
    hover/focus feedback available when the user is actually interacting. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-group > .nav-item, .nav-more-wrap > .nav-item, .more-popover-item).active:not(:hover):not(:focus-visible) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.nav-group > .nav-item, .nav-more-wrap > .nav-item, .more-popover-item).active:not(:hover):not(:focus-visible) {
   background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
@@ -3911,25 +3911,25 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
    no longer reads as an extra tab above Chat. The divider remains visible in
    the collapsed state so Pages can still be reopened. */
 @media (min-width: 901px) {
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.pages-collapsed) .sidebar-pages-toggle::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.pages-collapsed) .sidebar-pages-toggle::before {
     opacity: 0 !important;
   }
 }
 
 /* Source-panel utility actions are icon affordances, not framed controls. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn),
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn):is(:hover, :focus-visible) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn),
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn):is(:hover, :focus-visible) {
   border: 0 !important;
   background: transparent !important;
   background-image: none !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live {
   color: var(--muted) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live:is(:hover, :focus-visible) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live:is(:hover, :focus-visible) {
   color: var(--text) !important;
 }
 
@@ -4572,7 +4572,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
 /* Shared desktop chat/source context rail. Keep the active chat visible under
    the app chrome and give the Sources drawer the same compact rhythm. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.chat-context-header, .right-panel .source-panel-topbar) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.chat-context-header, .right-panel .source-panel-topbar) {
   box-sizing: border-box;
   height: 40px;
   min-height: 40px;
@@ -4583,14 +4583,14 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-header {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-header {
   display: flex;
   align-items: center;
   padding: 0 14px;
   overflow: hidden;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-copy {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -4598,7 +4598,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   gap: 2px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-context-title {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-context-title {
   display: block;
   overflow: hidden;
   color: var(--text);
@@ -4610,7 +4610,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   white-space: nowrap;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-project {
   display: inline-flex;
   min-width: 0;
   align-items: center;
@@ -4622,30 +4622,30 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   white-space: nowrap;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project[hidden] {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-project[hidden] {
   display: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project svg {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-project svg {
   width: 12px;
   height: 12px;
   flex: 0 0 12px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project-name {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .chat-context-project-name {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
   padding: 0 12px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
   font-size: 12px;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.source-panel-icon-btn, .source-panel-close-btn) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.source-panel-icon-btn, .source-panel-close-btn) {
   width: 24px;
   height: 24px;
   border-radius: 7px;
@@ -4653,24 +4653,24 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
 /* The chat context rail replaces the browser-mode duplicate title in the
    app header; Electron already hides that title in its native chrome. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).chat-mode-active .topbar .page-title {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active).chat-mode-active .topbar .page-title {
   display: none;
 }
 
 /* Let the sidebar and app header read as one surface. The conversation gets
    the soft Codex-style corner while the left panel is open; when the panel is
    closed, the chat expands to the edge and stays square. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
   border-right-color: transparent !important;
   border-bottom-color: transparent !important;
   box-shadow: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.main-shell-wrap, .main-shell) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) :is(.main-shell-wrap, .main-shell) {
   border-left: 0 !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) ~ .workspace .main-shell-wrap {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) ~ .workspace .main-shell-wrap {
   border-top-left-radius: 14px;
   overflow: hidden;
 }
@@ -4678,7 +4678,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 /* Final empty-chat polish: the selector is a back shelf for the composer,
    not a second foreground card. Inherit the actual rendered composer surface
    so skins cannot drift apart after a theme switch. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > .chat-new-context-dock {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > .chat-new-context-dock {
   z-index: 0 !important;
   border: 0 !important;
   border-color: transparent !important;
@@ -4689,15 +4689,15 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   -webkit-backdrop-filter: none !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > :is(.chat-input-row, .agent-toggle, .queued-prompts-panel, .chat-composer-attachment-stack, .chat-skill-trigger-pill) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > :is(.chat-input-row, .agent-toggle, .queued-prompts-panel, .chat-composer-attachment-stack, .chat-skill-trigger-pill) {
   z-index: 2 !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
   z-index: 20 !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-new-context-popover {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-new-context-popover {
   background: inherit !important;
   background-image: none !important;
   border: 0 !important;
@@ -4709,7 +4709,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
 /* Brain cards are compact rounded surfaces again. They keep their separation
    through spacing and shadow rather than a visible outline. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) {
   --pm-brain-card-surface: var(--pm-brain-card-bg, var(--panel-2));
 }
 
@@ -4718,14 +4718,14 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 :root[data-skin="dark"] { --pm-brain-card-surface: #333333; }
 :root[data-skin="blue"] { --pm-brain-card-surface: #17335f; }
 :root[data-skin="purple"] { --pm-brain-card-surface: #2a1650; }
-:root[data-skin="custom"] { --pm-brain-card-surface: var(--panel-2); }
+:root[data-skin-kind="palette"] { --pm-brain-card-surface: var(--panel-2); }
 
 @media (min-width: 901px) {
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-welcome {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-welcome {
     width: min(780px, 100%) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-cards {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-cards {
     width: 100% !important;
     max-width: 780px !important;
     align-self: center;
@@ -4733,8 +4733,8 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     margin-top: 9px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card,
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card:is(:hover, :focus-visible) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card,
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card:is(:hover, :focus-visible) {
     position: relative;
     min-height: 36px !important;
     box-sizing: border-box;
@@ -4747,12 +4747,12 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     box-shadow: 0 6px 18px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .035) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-icon {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-icon {
     position: absolute;
     left: 14px;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-body {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-body {
     flex: 0 1 auto;
     max-width: 100%;
     text-align: center;
@@ -4761,16 +4761,16 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 }
 
 /* The minimized Sources peek belongs to the chat surface, not the titlebar. */
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sources-minimized-panel {
   top: 50% !important;
   transform: translateX(calc(100% + 28px)) translateY(-50%) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-visible {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-visible {
   transform: translateX(0) translateY(-50%) !important;
 }
 
-:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-closing {
+:root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-closing {
   transform: translateX(calc(100% + 28px)) translateY(-50%) !important;
 }
 
@@ -4784,7 +4784,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
    geometry. Projects, pinned chats, and the priority rail use the same boxes,
    glyph sizes, right insets, and vertical centering. */
 @media (min-width: 901px) {
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .chat-session-item:not(.project-chat-row) .chat-session-action-btn,
     #pinned-chats-list .chat-session-action-btn,
     .project-chat-row .project-chat-new-btn,
@@ -4813,7 +4813,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     transform: translateY(-50%) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .chat-session-item:not(.project-chat-row) .chat-session-action-btn svg,
     #pinned-chats-list .chat-session-action-btn svg,
     .project-chat-row .project-chat-pin-btn svg,
@@ -4825,7 +4825,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     height: 13px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .chat-session-item:not(.project-chat-row) .chat-settle-btn,
     #pinned-chats-list .chat-settle-btn,
     .project-chat-row .project-chat-new-btn,
@@ -4835,7 +4835,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     right: 34px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .chat-session-item:not(.project-chat-row) .chat-pin-btn,
     #pinned-chats-list .chat-pin-btn,
     .project-chat-row .project-chat-pin-btn,
@@ -4845,14 +4845,14 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     right: 8px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .project-chat-new-btn,
     .project-card-add-btn
   ) {
     font: 600 14px/0 var(--t-font-ui) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     .chat-session-item:not(.project-chat-row) .chat-session-action-btn:is(:hover, .active),
     #pinned-chats-list .chat-session-action-btn:is(:hover, .active),
     .project-chat-row :is(.project-chat-new-btn, .project-chat-pin-btn):is(:hover, .active),
@@ -4863,7 +4863,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     color: var(--brand) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(
     #pinned-chats-list .job-item,
     #sidebar-projects-section .project-chat-row,
     #sidebar-projects-section .project-chat-children .project-chat-session-card,
@@ -4874,13 +4874,13 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
   /* The priority chat card keeps its horizontal action group, but each
      control now uses the same 20px/13px treatment as the regular list. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions {
     top: 8px !important;
     right: 6px !important;
     gap: 4px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn {
     position: static !important;
     width: 20px !important;
     height: 20px !important;
@@ -4890,7 +4890,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     transform: none !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn svg {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn svg {
     display: block;
     width: 13px !important;
     height: 13px !important;
@@ -4901,11 +4901,11 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
    transparent surface and restore the highlighted ring that the shared job
    row provides; only the outline changes, never the row fill. */
 @media (min-width: 901px) {
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card) {
     isolation: isolate;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working {
     background: transparent !important;
     border-color: transparent !important;
     box-shadow:
@@ -4913,14 +4913,14 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
       0 0 14px color-mix(in srgb, var(--pm-orange, var(--brand)) 30%, transparent) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working) {
     background: transparent !important;
     border-color: color-mix(in srgb, var(--brand) 62%, transparent) !important;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 20%, transparent) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before,
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before,
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
     content: "" !important;
     display: block !important;
     position: absolute;
@@ -4939,7 +4939,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     -webkit-mask-composite: xor;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before {
     background: conic-gradient(
       from var(--pm-angle, 0deg),
       rgba(255,255,255,.30),
@@ -4953,7 +4953,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     animation: prometheus-liquid-spin 2.8s linear infinite;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
     background: linear-gradient(135deg,
       color-mix(in srgb, var(--brand) 78%, transparent),
       color-mix(in srgb, var(--brand) 38%, transparent) 58%,
@@ -4962,7 +4962,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     opacity: .92;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .session-unread-dot {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .session-unread-dot {
     display: inline-block;
     flex: 0 0 7px;
     width: 7px;
@@ -4975,41 +4975,41 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
   /* Priority metadata carries the word label beside the message count, while
      regular rows use the compact left-side dot. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-status {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-status {
     font-size: inherit;
     font-weight: 800;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-unread {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-unread {
     color: var(--brand) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-working {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-working {
     color: var(--pm-orange, var(--brand)) !important;
     text-transform: lowercase;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working,
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working,
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
     background: transparent !important;
     border-width: 1px !important;
     border-style: solid !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working {
     border-color: transparent !important;
     box-shadow:
       0 0 0 1px color-mix(in srgb, var(--pm-orange, var(--brand)) 22%, transparent),
       0 0 14px color-mix(in srgb, var(--pm-orange, var(--brand)) 30%, transparent) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
     border-color: color-mix(in srgb, var(--brand) 62%, transparent) !important;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 20%, transparent) !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before,
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before,
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
     content: "" !important;
     display: block !important;
     position: absolute;
@@ -5028,7 +5028,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     -webkit-mask-composite: xor;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before {
     background: conic-gradient(
       from var(--pm-angle, 0deg),
       rgba(255,255,255,.30),
@@ -5042,7 +5042,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     animation: prometheus-liquid-spin 2.8s linear infinite;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
     background: linear-gradient(135deg,
       color-mix(in srgb, var(--brand) 78%, transparent),
       color-mix(in srgb, var(--brand) 38%, transparent) 58%,
@@ -5054,25 +5054,25 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   /* The selector dock remains a back shelf even while its menu is open. The
      menu keeps its own local stacking order without lifting the whole shelf
      over the composer. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
     z-index: 0 !important;
   }
 
   /* Move only the empty-chat welcome group upward; the composer remains in
      its existing flow position. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages > #chat-welcome {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages > #chat-welcome {
     transform: translateY(clamp(-44px, -3.6vh, -14px)) !important;
   }
 
   /* Give the desktop composer the same breathing room as the reference UI,
      and keep the first line close to the upper-left rather than vertically
      centered in a short one-line box. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-input {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-input {
     max-height: 300px !important;
     padding: 5px 2px 9px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-composer-rich-preview {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-composer-rich-preview {
     max-height: 300px !important;
     padding: 5px 2px 9px !important;
   }
@@ -5171,7 +5171,7 @@ body:not(.pm-mobile-active) :where(
 
   /* Queue and project selection are intentionally just a shade darker than
      the composer so they read as the recessed layer in the same stack. */
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"]) body:not(.pm-mobile-active) #chat-view .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
     background: color-mix(in srgb, var(--pm-pinned-chat-bg) 90%, #000 10%) !important;
     background-image: none !important;
   }
@@ -5195,7 +5195,7 @@ body:not(.pm-mobile-active) :is(
    the composer so it can genuinely sit beneath the composer's painted surface
    instead of competing inside the same background/stacking context. */
 @media (min-width: 901px) {
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5204,7 +5204,7 @@ body:not(.pm-mobile-active) :is(
     gap: 8px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5215,7 +5215,7 @@ body:not(.pm-mobile-active) :is(
     transform: none !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5225,7 +5225,7 @@ body:not(.pm-mobile-active) :is(
     margin-bottom: 0 !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5234,7 +5234,7 @@ body:not(.pm-mobile-active) :is(
     line-height: 1.35 !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5246,7 +5246,7 @@ body:not(.pm-mobile-active) :is(
     margin: 12px auto 22px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5259,7 +5259,7 @@ body:not(.pm-mobile-active) :is(
     border-radius: 9px !important;
   }
 
-  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+  :root:is([data-skin="p1"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin-kind="palette"])
     body:not(.pm-mobile-active)
     #chat-view:has(> #chat-messages > #chat-welcome)
     > #chat-messages
@@ -5409,4 +5409,38 @@ body:not(.pm-mobile-active) :is(
     border-left-width: 0 !important;
     border-left-color: transparent !important;
   }
+}
+
+/* Palette presets (Ares, Kiln, Obsidian, ...): the composer's liquid-metal
+   attach/send buttons follow the theme accent instead of the legacy ember
+   gradient, so every preset only needs its registry palette. */
+:root[data-skin-kind="palette"] .chat-input-area :is(.chat-attach-btn, .send-btn) {
+  background: conic-gradient(
+    from var(--pm-angle, 0deg),
+    color-mix(in srgb, var(--t-accent) 62%, #000),
+    var(--t-accent),
+    color-mix(in srgb, var(--t-accent) 55%, #fff),
+    color-mix(in srgb, var(--t-accent) 80%, #000),
+    color-mix(in srgb, var(--t-accent) 62%, #000)
+  );
+  color: var(--t-text-on-accent);
+  box-shadow: none;
+}
+:root[data-skin-kind="palette"] .chat-input-area .send-btn.voice-mode-btn {
+  background:
+    radial-gradient(circle at 35% 28%, rgba(255,255,255,.38), transparent 34%),
+    conic-gradient(
+      from var(--pm-angle, 0deg),
+      color-mix(in srgb, var(--t-accent) 62%, #000),
+      var(--t-accent),
+      color-mix(in srgb, var(--t-accent) 55%, #fff),
+      color-mix(in srgb, var(--t-accent) 62%, #000)
+    );
+}
+:root[data-skin-kind="palette"] .chat-input-area :is(.chat-attach-btn, .send-btn) :is(svg, iconify-icon) {
+  color: var(--t-text-on-accent) !important;
+}
+/* Light presets: the white mic glyph disappears on bone/ivory/white composers. */
+:root[data-skin-kind="palette"][data-tone="light"] .chat-input-area .chat-voice-btn:not(.recording):not(.voice-mode-active) {
+  color: var(--t-muted);
 }

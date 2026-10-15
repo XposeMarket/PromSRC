@@ -881,6 +881,7 @@ function _getTheme() {
     const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
       ? window.PROM_READ_SAVED_THEME('mobile')
       : localStorage.getItem(PM_THEME_KEY);
+    if (saved === 'system') return 'system';
     if (saved) {
       const resolved = _resolveTheme(saved);
       if (list.some((t) => t.id === resolved.id)) return resolved.id;
@@ -894,13 +895,20 @@ function _getTheme() {
 }
 
 function _applyMobileTheme(themeId) {
-  const theme = _resolveTheme(themeId);
-  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
-  else {
-    document.documentElement.setAttribute('data-theme', theme.base === 'light' ? 'light' : 'dark');
-    document.documentElement.setAttribute('data-skin', theme.id);
+  // The registry persists the choice (`system` stays `system`) and writes attributes.
+  const viaRegistry = typeof window.PROM_SET_THEME === 'function';
+  const theme = viaRegistry ? window.PROM_SET_THEME(themeId) : _resolveTheme(themeId);
+  if (!viaRegistry) {
+    if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+    else {
+      document.documentElement.setAttribute('data-theme', theme.base === 'light' ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-skin', theme.id);
+    }
+    try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
   }
-  try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
+  // Was an undefined identifier, so the prom-theme-change dispatch below
+  // threw (silently caught) on every mobile theme change.
+  const resolved = document.documentElement.getAttribute('data-theme') || theme.base || 'dark';
 
   // Safari paints its translucent top chrome from the document/theme color,
   // not from the nested .pm-app background. Keep that native-composited area
@@ -944,6 +952,16 @@ function _applyMobileTheme(themeId) {
     document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: resolved } }));
   } catch {}
 }
+
+// Settings → Appearance uses the same path as the drawer toggle.
+export function applyMobileTheme(themeId) {
+  _applyMobileTheme(themeId);
+}
+
+// Match system: re-sync the status bar/meta color when the device flips.
+document.addEventListener('prom-system-scheme-change', () => {
+  setTimeout(() => _applyMobileTheme('system'), 0);
+});
 
 function _toggleMobileTheme() {
   const themes = _getThemeList();

@@ -126,6 +126,118 @@ async function runRegistryBehavior(source) {
   }
 }
 
+// Palette presets, Match system, contrast, loading words, share codes and
+// VS Code import all live in theme-registry.js; exercise them in a sandbox.
+async function runThemeEngineBehavior(source) {
+  const vm = await import('node:vm');
+  const boot = ({ saved = null, prefersDark = true, appearance = null, surface = 'desktop' } = {}) => {
+    const store = new Map();
+    if (saved != null) store.set('prometheus_theme', saved);
+    if (appearance) store.set('prometheus_appearance_v1', JSON.stringify(appearance));
+    store.set('prometheus_theme_schema', '2');
+    const attrs = new Map();
+    const props = new Map();
+    const documentElement = {
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      removeAttribute: (k) => attrs.delete(k),
+      style: { setProperty: (k, v) => props.set(k, String(v)), removeProperty: (k) => props.delete(k) },
+    };
+    const listeners = [];
+    const document = { documentElement, addEventListener: (type, fn) => listeners.push([type, fn]), dispatchEvent: () => true };
+    const window = {
+      location: { pathname: surface === 'mobile' ? '/mobile' : '/' },
+      __PROM_SHOULD_BOOT_MOBILE: () => surface === 'mobile',
+      matchMedia: () => ({ matches: prefersDark, addEventListener: () => {} }),
+    };
+    const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
+    vm.runInNewContext(source, { window, localStorage, document, CustomEvent: class {} });
+    return { window, store, attrs, props };
+  };
+
+  // Every palette preset is complete, readable, and paints before first frame.
+  const { window, attrs, props } = boot({ saved: 'ares' });
+  const engine = window.PROM_THEME_ENGINE;
+  assert.equal(attrs.get('data-skin'), 'ares', 'saved palette theme paints at registry load');
+  assert.equal(attrs.get('data-skin-kind'), 'palette');
+  assert.equal(props.get('--skin-accent'), '#cd7f32');
+  for (const theme of window.PROM_ALL_THEMES.filter((t) => t.kind === 'palette')) {
+    const p = theme.palette;
+    for (const key of engine.paletteKeys) assert.match(p[key], /^#[0-9a-f]{6}$/, `${theme.id}.${key} is a hex color`);
+    assert.ok(engine.contrastRatio(p.text, p.bg) >= 7, `${theme.id} body text contrast ${engine.contrastRatio(p.text, p.bg).toFixed(2)} >= 7`);
+    assert.ok(engine.contrastRatio(p.muted, p.bg) >= 3.5, `${theme.id} muted contrast ${engine.contrastRatio(p.muted, p.bg).toFixed(2)} >= 3.5`);
+    assert.ok(engine.contrastRatio(p.ink, p.accent) >= 3, `${theme.id} accent ink contrast ${engine.contrastRatio(p.ink, p.accent).toFixed(2)} >= 3`);
+    assert.equal(engine.toneOf(p.bg), theme.tone, `${theme.id} declared tone matches its background`);
+    assert.ok(theme.loadingWords.length >= 2, `${theme.id} has loading words`);
+    assert.ok(theme.surfaces.includes('desktop') && theme.surfaces.includes('mobile'), `${theme.id} ships on both surfaces`);
+  }
+  // Light palettes report a light base so dark-only CSS paths do not apply.
+  const day = boot({ saved: 'olympus-day' });
+  assert.equal(day.attrs.get('data-theme'), 'light');
+  assert.equal(day.attrs.get('data-tone'), 'light');
+
+  // Match system follows the OS and remembers the user's picks.
+  const sysDark = boot({ saved: 'system', prefersDark: true });
+  assert.equal(sysDark.attrs.get('data-skin'), 'p1');
+  assert.equal(sysDark.attrs.get('data-theme-choice'), 'system');
+  const sysLight = boot({ saved: 'system', prefersDark: false, appearance: { systemLight: 'parchment' } });
+  assert.equal(sysLight.attrs.get('data-skin'), 'parchment');
+  assert.equal(sysLight.window.PROM_READ_SAVED_THEME(), 'system');
+  const badPick = boot({ saved: 'system', prefersDark: false, appearance: { systemLight: 'ares' } });
+  assert.equal(badPick.attrs.get('data-skin'), 'olympus-day', 'a dark theme cannot be the light pick');
+
+  // Contrast is clamped and exposed to CSS as 0..1.
+  assert.equal(boot({ saved: 'kiln', appearance: { contrast: 250 } }).props.get('--skin-contrast'), '1');
+
+  // Loading words: themed, deterministic per key, and switchable off.
+  const word = engine.loadingWord('msg-1');
+  assert.match(word, /^(Forging|Marching|Tempering steel|Sharpening the blade)…$/);
+  assert.equal(engine.loadingWord('msg-1'), word, 'same message keeps the same word');
+  assert.equal(boot({ saved: 'ares', appearance: { loadingWords: false } }).window.PROM_THEME_ENGINE.loadingWord('x'), '');
+  const hostile = engine.loadingWordHtml('x', 'a"><script>', 'script');
+  assert.ok(!/<script|"></.test(hostile) && /^<span class="ascript" aria-live="off">[^<>]+<\/span>$/.test(hostile), `loading word html never emits markup from args: ${hostile}`);
+
+  // Share codes round-trip and reject garbage.
+  const code = engine.encodeShareCode(window.PROM_RESOLVE_THEME('hearth').palette, { name: 'Hearth & co', contrast: 72 });
+  assert.match(code, /^PROM1-[0-9a-f]{44}-/);
+  const decoded = engine.decodeShareCode(code);
+  assert.equal(decoded.name, 'Hearth & co');
+  assert.equal(decoded.contrast, 72);
+  assert.deepEqual({ ...decoded.palette }, { ...window.PROM_RESOLVE_THEME('hearth').palette });
+  assert.equal(engine.decodeShareCode('PROM1-zz'), null);
+  assert.equal(engine.decodeShareCode('hello'), null);
+
+  // VS Code import: JSONC with comments, trailing commas and #rrggbbaa.
+  const vscode = `{
+    // Tokyo-ish
+    "name": "Night Test", "type": "dark",
+    "colors": {
+      "editor.background": "#1a1b26", "editor.foreground": "#c0caf5",
+      "sideBar.background": "#16161eff", "button.background": "#3d59a1",
+      "descriptionForeground": "#7f86a8", /* trailing */
+    },
+  }`;
+  const imported = engine.importVsCodeTheme(vscode);
+  assert.equal(imported.name, 'Night Test');
+  assert.equal(imported.palette.bg, '#1a1b26');
+  assert.equal(imported.palette.sidebar, '#16161e');
+  assert.equal(imported.palette.accent, '#3d59a1');
+  assert.equal(imported.palette.ink, '#ffffff', 'ink is derived for readability');
+  assert.match(engine.importVsCodeTheme('{').error, /valid theme JSON/);
+  assert.match(engine.importVsCodeTheme('{"tokenColors":[]}').error, /colors/);
+
+  // importTheme writes the custom theme without clobbering other appearance prefs.
+  const imp = boot({ saved: 'p1', appearance: { backgroundEffects: true, custom: { font: 'Inter' } } });
+  const result = imp.window.PROM_THEME_ENGINE.importTheme(code);
+  assert.equal(result.ok, true);
+  const stored = JSON.parse(imp.store.get('prometheus_appearance_v1'));
+  assert.equal(stored.backgroundEffects, true);
+  assert.equal(stored.custom.font, 'Inter');
+  assert.equal(stored.custom.accent, window.PROM_RESOLVE_THEME('hearth').palette.accent);
+  assert.equal(stored.custom.contrast, 72);
+  assert.equal(imp.window.PROM_THEME_ENGINE.palette('custom').sidebar, window.PROM_RESOLVE_THEME('hearth').palette.sidebar);
+}
+
 // Phase 4-6 ratchets: typography, legacy ids, and single-writer theme attributes.
 function runArchitectureGuards(actualFiles) {
   const stylesRoot = path.join(root, 'web-ui/src/styles');
@@ -178,18 +290,39 @@ async function main() {
   const registry = read('web-ui/src/theme-registry.js');
   assert.ok(index.includes('src/theme-registry.js'), 'desktop loads shared registry');
   assert.ok(read('web-ui/mobile.html').includes('/src/theme-registry.js'), 'mobile loads shared registry');
-  const registryMatch = registry.match(/const THEMES\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/);
-  if (!registryMatch) fail('could not parse THEMES from web-ui/src/theme-registry.js');
-  const skins = [...registryMatch[1].matchAll(/\bid\s*:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+  // Evaluate the registry instead of regex-parsing it: palette presets are
+  // declared positionally (preset('ares', ...)), not with `id:` keys.
+  const { window: registryWindow } = await (async () => {
+    const vm = await import('node:vm');
+    const store = new Map();
+    const window = { location: { pathname: '/' }, __PROM_SHOULD_BOOT_MOBILE: () => false };
+    vm.runInNewContext(registry, { window, localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) } });
+    return { window };
+  })();
+  const allThemes = registryWindow.PROM_ALL_THEMES || [];
+  const skins = allThemes.map((theme) => theme.id);
   if (!skins.length) fail('theme registry has no skins');
   if (skins.includes('light')) fail('Prometheus One must use canonical id p1, not light');
   if (skins[0] !== 'p1') fail('Prometheus One (p1) must be the first/default registry theme');
   await runRegistryBehavior(registry);
-  const expectedSkins = [...new Set([...skins, 'custom'])];
+  await runThemeEngineBehavior(registry);
+  const legacySkins = allThemes.filter((theme) => theme.kind !== 'palette').map((theme) => theme.id);
+  const paletteSkins = allThemes.filter((theme) => theme.kind === 'palette').map((theme) => theme.id);
 
-  for (const skin of expectedSkins) {
+  for (const skin of [...legacySkins, 'custom']) {
     requireTokens(`skin ${skin}`, blocksForSelectors(tokens, `:root[data-skin="${skin}"]`), '--t-', requiredTokens);
   }
+  // Palette themes: one shared semantic block plus the derived desktop/mobile layers.
+  requireTokens('palette skins', blocksForSelectors(tokens, ':root[data-skin-kind="palette"]'), '--t-', requiredTokens);
+  const paletteDesktop = declarations(blocksForSelectors(tokens, ':root[data-skin-kind="palette"][data-skin]'));
+  for (const token of ['--bg', '--panel', '--panel-2', '--line', '--text', '--muted', '--brand', '--sidebar-bg', '--composer-bg']) {
+    if (!paletteDesktop.has(token)) fail(`palette desktop layer must derive ${token}`);
+  }
+  const paletteMobile = declarations(blocksForSelectors(read('web-ui/src/styles/mobile-shell.css'), ':root[data-skin-kind="palette"][data-skin]'));
+  for (const token of ['--pm-bg', '--pm-surface', '--pm-border', '--pm-text', '--pm-muted', '--pm-accent', '--pm-orange']) {
+    if (!paletteMobile.has(token)) fail(`palette mobile layer must derive ${token}`);
+  }
+  if (paletteSkins.length < 12) fail(`expected the 12-theme pack, found ${paletteSkins.length} palette presets`);
   requireTokens('common :root bridge', blocksForSelectors(tokens, ':root'), '--prom-', bridgeTokens);
   for (const mobileSelector of [':root:has(body.pm-mobile-active)', 'body.pm-mobile-active']) {
     requireTokens(`mobile semantic aliases (${mobileSelector})`, blocksForSelectors(tokens, mobileSelector), '--t-', requiredTokens);
@@ -239,7 +372,7 @@ async function main() {
     }
   }
   runArchitectureGuards(actualFiles);
-  console.log(`Theme token guardrail passed: ${expectedSkins.length} skins × ${requiredTokens.length} semantic tokens, ${bridgeTokens.length} --prom bridges, raw accents at or below baseline.`);
+  console.log(`Theme token guardrail passed: ${legacySkins.length + 1} legacy skins + ${paletteSkins.length} palette presets × ${requiredTokens.length} semantic tokens, ${bridgeTokens.length} --prom bridges, theme engine behavior, raw accents at or below baseline.`);
 }
 
 main().catch((error) => { console.error(error); process.exit(1); });

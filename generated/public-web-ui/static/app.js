@@ -113,6 +113,11 @@ function normalizeCustomTheme(raw, fallback = CUSTOM_THEME_DEFAULTS.p1) {
     translucentSidebar: source.translucentSidebar !== false,
     contrast: Math.round(clampNumber(source.contrast, 0, 100, base.contrast)),
     sourceTheme: getThemeList().some((theme) => theme.id === source.sourceTheme) ? source.sourceTheme : base.sourceTheme,
+    // Optional roles from an imported share code / VS Code theme.
+    ...Object.fromEntries(['sidebar', 'panel', 'muted', 'ink']
+      .map((key) => [key, normalizeHex(source[key], '')])
+      .filter(([, value]) => value)),
+    ...(typeof source.name === 'string' && source.name.trim() ? { name: source.name.trim().slice(0, 40) } : {}),
   };
 }
 
@@ -122,6 +127,10 @@ function normalizeAppearancePreferences(raw) {
     backgroundEffects: source.backgroundEffects === true,
     backgroundOpacity: clampNumber(source.backgroundOpacity, 0, 1, APPEARANCE_DEFAULTS.backgroundOpacity),
     custom: normalizeCustomTheme(source.custom, CUSTOM_THEME_DEFAULTS.p1),
+    // Theme-engine prefs (theme-registry.js owns their validation).
+    ...Object.fromEntries(['contrast', 'loadingWords', 'systemDark', 'systemLight']
+      .filter((key) => source[key] !== undefined)
+      .map((key) => [key, source[key]])),
   };
 }
 
@@ -174,7 +183,14 @@ function mixHex(first, second, amount) {
 }
 
 function presetCustomDefaults(themeId) {
-  return normalizeCustomTheme(CUSTOM_THEME_DEFAULTS[themeId] || CUSTOM_THEME_DEFAULTS.p1, CUSTOM_THEME_DEFAULTS.p1);
+  if (CUSTOM_THEME_DEFAULTS[themeId]) return normalizeCustomTheme(CUSTOM_THEME_DEFAULTS[themeId], CUSTOM_THEME_DEFAULTS.p1);
+  // Palette presets seed the editor from their registry colors.
+  const palette = window.PROM_THEME_ENGINE?.palette(themeId);
+  if (!palette) return normalizeCustomTheme(CUSTOM_THEME_DEFAULTS.p1, CUSTOM_THEME_DEFAULTS.p1);
+  return normalizeCustomTheme({
+    ...CUSTOM_THEME_DEFAULTS.p1, accent: palette.accent, background: palette.bg, foreground: palette.text,
+    sidebar: palette.sidebar, panel: palette.panel, muted: palette.muted, ink: palette.ink, sourceTheme: 'p1',
+  }, CUSTOM_THEME_DEFAULTS.p1);
 }
 
 function customDraftForCurrentTheme(preferences) {
@@ -194,10 +210,11 @@ function applyCustomThemeVariables(custom) {
   const foreground = custom.foreground;
   const accent = custom.accent;
   const contrast = custom.contrast / 100;
-  const panel = mixHex(background, foreground, 0.08 + contrast * 0.10);
-  const panel2 = mixHex(background, foreground, 0.13 + contrast * 0.13);
+  const panel = custom.panel || mixHex(background, foreground, 0.08 + contrast * 0.10);
+  const panel2 = mixHex(panel, foreground, 0.05 + contrast * 0.08);
   const bgSoft = mixHex(background, foreground, 0.045 + contrast * 0.07);
-  const muted = mixHex(foreground, background, 0.48);
+  const muted = custom.muted || mixHex(foreground, background, 0.48);
+  const sidebarBase = custom.sidebar || background;
   const fontStack = custom.font === 'system-ui'
     ? 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     : `'${custom.font}', sans-serif`;
@@ -222,7 +239,7 @@ function applyCustomThemeVariables(custom) {
   root.style.setProperty('--flame-mid', mixHex(accent, foreground, 0.28));
   root.style.setProperty('--flame-glow', rgba(accent, 0.22));
   root.style.setProperty('--flame-border', rgba(accent, 0.48));
-  root.style.setProperty('--sidebar-bg', custom.translucentSidebar ? rgba(background, 0.78) : panel);
+  root.style.setProperty('--sidebar-bg', custom.translucentSidebar ? rgba(sidebarBase, 0.82) : (custom.sidebar || panel));
   root.style.setProperty('--sidebar-text', foreground);
   root.style.setProperty('--sidebar-muted', muted);
   root.style.setProperty('--sidebar-icon-bg', rgba(foreground, 0.08));
@@ -259,7 +276,7 @@ function applyBackgroundPreferences(preferences, skinId = document.documentEleme
     blue: [6, 13, 30],
     purple: [10, 4, 24],
     custom: hexRgb(normalized.custom.background),
-  }[skinId] || [26, 26, 26];
+  }[skinId] || (window.PROM_THEME_ENGINE?.palette(skinId) ? hexRgb(window.PROM_THEME_ENGINE.palette(skinId).bg) : [26, 26, 26]);
   const overlayAlpha = (1 - normalized.backgroundOpacity).toFixed(3);
   root.setAttribute('data-background-visuals', normalized.backgroundEffects ? 'on' : 'off');
   root.style.setProperty('--pm-background-opacity', String(normalized.backgroundOpacity));
@@ -310,7 +327,7 @@ export function getInitialTheme() {
     const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
       ? window.PROM_READ_SAVED_THEME()
       : localStorage.getItem(THEME_KEY);
-    if (saved === 'custom') return saved;
+    if (saved === 'custom' || saved === 'system') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
   return window.PROM_DEFAULT_THEME || 'p1';
@@ -324,9 +341,10 @@ function applyCustomTheme(customTheme, { persist = true } = {}) {
   clearCustomThemeVariables();
   applyCustomThemeVariables(custom);
   const root = document.documentElement;
-  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES('custom', root);
-  else { root.setAttribute('data-theme', 'dark'); root.setAttribute('data-skin', 'custom'); }
+  // Persist first so the registry records the choice as `custom`, not `system`.
   try { localStorage.setItem(THEME_KEY, 'custom'); } catch {}
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES('custom', root, 'custom');
+  else { root.setAttribute('data-theme', 'dark'); root.setAttribute('data-skin', 'custom'); }
   applyBackgroundPreferences(preferences, 'custom');
   updateThemeToggle('custom', 'dark', 'Custom theme');
   dispatchAppearanceChange({ id: 'custom', base: 'dark' });
@@ -339,14 +357,20 @@ export function applyTheme(themeId) {
     applyCustomTheme(readAppearancePreferences().custom);
     return;
   }
-  const theme = resolveTheme(themeId);
   clearCustomThemeVariables();
-  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
-  else {
-    document.documentElement.setAttribute('data-theme', theme.base);
-    document.documentElement.setAttribute('data-skin', theme.id);
+  let theme;
+  if (typeof window.PROM_SET_THEME === 'function') {
+    // Registry persists the choice (`system` stays `system`) and writes attributes.
+    theme = window.PROM_SET_THEME(themeId);
+  } else {
+    theme = resolveTheme(themeId);
+    if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+    else {
+      document.documentElement.setAttribute('data-theme', theme.base);
+      document.documentElement.setAttribute('data-skin', theme.id);
+    }
+    try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
   }
-  try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
   const preferences = readAppearancePreferences();
   applyBackgroundPreferences(preferences, theme.id);
   updateThemeToggle(theme.id, theme.base, theme.label);
@@ -444,33 +468,156 @@ function syncAppearanceSettingsForm() {
       ? 'Active theme: Custom theme'
       : `Active theme: ${activeTheme.label} · ${activeTheme.description || 'Official desktop preset'}`;
   }
+  syncAppearanceThemeTools();
+}
+
+function themeEngine() {
+  return window.PROM_THEME_ENGINE || null;
+}
+
+// `system` stays selected in the picker even though data-skin is the resolved theme.
+function activeThemeChoice() {
+  const root = document.documentElement;
+  return root.getAttribute('data-theme-choice') === 'system' ? 'system' : (root.getAttribute('data-skin') || 'p1');
+}
+
+function themeCardHtml(theme, activeId) {
+  const engine = themeEngine();
+  const active = theme.id === activeId;
+  let previewStyle = '';
+  let accent = '';
+  if (theme.id === 'system' && engine) {
+    const prefs = engine.prefs();
+    const dark = engine.palette(prefs.systemDark);
+    const light = engine.palette(prefs.systemLight);
+    if (dark && light) previewStyle = `background:linear-gradient(135deg, ${dark.bg} 0 50%, ${light.bg} 50% 100%)`;
+    accent = dark ? dark.accent : '';
+  } else if (engine) {
+    const palette = engine.palette(theme.id);
+    if (palette) {
+      previewStyle = `background:linear-gradient(135deg, ${palette.bg} 0 46%, ${palette.panel} 46% 100%)`;
+      accent = palette.accent;
+    }
+  }
+  return (
+    '<button type="button" class="theme-swatch theme-swatch--large' + (active ? ' is-active' : '') + '"'
+    + ' data-theme-id="' + theme.id + '" data-skin-preview="' + theme.id + '"'
+    + ' onclick="selectTheme(\'' + theme.id + '\')"'
+    + ' aria-pressed="' + (active ? 'true' : 'false') + '">'
+    + '<span class="theme-preview" aria-hidden="true"' + ((previewStyle || accent) ? ' style="' + [previewStyle, accent ? '--preview-accent:' + accent : ''].filter(Boolean).join(';') + '"' : '') + '>'
+    + '<span class="theme-preview-topline"></span><span class="theme-preview-window">'
+    + '<span class="theme-preview-line theme-preview-line--wide"></span><span class="theme-preview-line"></span>'
+    + '<span class="theme-preview-card"></span><span class="theme-preview-card theme-preview-card--small"></span>'
+    + '</span>'
+    + (accent ? '<span class="theme-preview-accent" style="background:' + accent + '"></span>' : '')
+    + '</span>'
+    + '<span class="theme-swatch-meta"><span class="theme-swatch-label">' + theme.label + '</span><span class="theme-swatch-description">' + (theme.description || '') + '</span></span>'
+    + (active ? '<span class="theme-swatch-check" aria-hidden="true">✓</span>' : '')
+    + '</button>'
+  );
 }
 
 // Render the theme cards and the live Appearance controls.
 export function renderThemePicker() {
   const grid = document.getElementById('theme-picker-grid');
   if (!grid) return;
-  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
-  const themes = [...getThemeList(), { id: 'custom', label: 'Custom theme', base: 'dark' }];
-  grid.innerHTML = themes.map((theme) => {
-    const active = theme.id === activeId;
-    const description = theme.description || (theme.id === 'p1' ? 'Black & gold · shared P1 shell' : theme.id === 'gray' ? 'Light graphite & ember · shared P1 shell' : theme.id === 'dark' ? 'Warm graphite · shared P1 shell' : theme.id === 'blue' ? 'Electric navy · shared P1 shell' : theme.id === 'purple' ? 'Deep violet · shared P1 shell' : 'Your palette');
-    return (
-      '<button type="button" class="theme-swatch theme-swatch--large' + (active ? ' is-active' : '') + '"'
-      + ' data-theme-id="' + theme.id + '" data-skin-preview="' + theme.id + '"'
-      + ' onclick="selectTheme(\'' + theme.id + '\')"'
-      + ' aria-pressed="' + (active ? 'true' : 'false') + '">'
-      + '<span class="theme-preview" aria-hidden="true">'
-      + '<span class="theme-preview-topline"></span><span class="theme-preview-window">'
-      + '<span class="theme-preview-line theme-preview-line--wide"></span><span class="theme-preview-line"></span>'
-      + '<span class="theme-preview-card"></span><span class="theme-preview-card theme-preview-card--small"></span>'
-      + '</span></span>'
-      + '<span class="theme-swatch-meta"><span class="theme-swatch-label">' + theme.label + '</span><span class="theme-swatch-description">' + description + '</span></span>'
-      + (active ? '<span class="theme-swatch-check" aria-hidden="true">✓</span>' : '')
-      + '</button>'
-    );
-  }).join('');
+  const activeId = activeThemeChoice();
+  const system = window.PROM_SYSTEM_THEME || { id: 'system', label: 'Match system', description: 'Follows your device light/dark setting' };
+  const themes = [system, ...getThemeList(), { id: 'custom', label: 'Custom theme', description: 'Your palette' }];
+  grid.innerHTML = themes.map((theme) => themeCardHtml(theme, activeId)).join('');
   syncAppearanceSettingsForm();
+}
+
+// Theme tools: global contrast, loading words, Match-system picks, share/import.
+function syncAppearanceThemeTools() {
+  const engine = themeEngine();
+  if (!engine) return;
+  const prefs = engine.prefs();
+  const customActive = document.documentElement.getAttribute('data-skin') === 'custom';
+  const contrast = document.getElementById('appearance-global-contrast');
+  if (contrast) {
+    contrast.value = String(prefs.contrast);
+    contrast.disabled = customActive;
+  }
+  const contrastValue = document.getElementById('appearance-global-contrast-value');
+  if (contrastValue) contrastValue.textContent = customActive ? 'Custom' : String(prefs.contrast);
+  setAppearanceSwitch('appearance-loading-words', prefs.loadingWords);
+  const fill = (id, tone, value) => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const options = (window.PROM_ALL_THEMES || []).filter((theme) => theme.tone === tone && theme.surfaces.includes('desktop'));
+    select.innerHTML = options.map((theme) => `<option value="${theme.id}"${theme.id === value ? ' selected' : ''}>${theme.label}</option>`).join('');
+  };
+  fill('appearance-system-dark', 'dark', prefs.systemDark);
+  fill('appearance-system-light', 'light', prefs.systemLight);
+  const code = document.getElementById('appearance-share-code');
+  if (code) code.value = engine.activeShareCode();
+}
+
+function setImportStatus(text, tone = 'ok') {
+  const status = document.getElementById('appearance-import-status');
+  if (!status) return;
+  status.textContent = text;
+  status.dataset.tone = tone;
+}
+
+export function updateAppearanceThemePref(key, value) {
+  const engine = themeEngine();
+  if (!engine) return;
+  const patch = {};
+  if (key === 'contrast') patch.contrast = Number(value);
+  else if (key === 'loadingWords') patch.loadingWords = !engine.prefs().loadingWords;
+  else if (key === 'systemDark' || key === 'systemLight') patch[key] = String(value || '');
+  else return;
+  engine.setPrefs(patch);
+  const skin = document.documentElement.getAttribute('data-skin') || 'p1';
+  applyBackgroundPreferences(readAppearancePreferences(), skin);
+  dispatchAppearanceChange({ id: skin, base: 'dark' });
+  if (key === 'systemDark' || key === 'systemLight') renderThemePicker();
+  else syncAppearanceThemeTools();
+}
+
+export async function copyAppearanceShareCode() {
+  const code = themeEngine()?.activeShareCode() || '';
+  if (!code) {
+    setImportStatus('This theme has no shareable palette.', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(code);
+    setImportStatus('Share code copied. Paste it into Import on any Prometheus.');
+  } catch {
+    const field = document.getElementById('appearance-share-code');
+    if (field) { field.focus(); field.select(); }
+    setImportStatus('Clipboard is blocked here. The code is selected, so copy it manually.', 'error');
+  }
+}
+
+export function importAppearanceTheme(text) {
+  const engine = themeEngine();
+  const field = document.getElementById('appearance-import-text');
+  const raw = text ?? field?.value ?? '';
+  const result = engine ? engine.importTheme(raw) : { error: 'Theme engine is not loaded.' };
+  if (result.error) {
+    setImportStatus(result.error, 'error');
+    return result;
+  }
+  applyTheme('custom');
+  if (field) field.value = '';
+  setImportStatus(`Imported "${result.name}" as your custom theme${result.source === 'vscode' ? ' from a VS Code theme' : ''}.`);
+  return result;
+}
+
+export function importAppearanceThemeFile(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    importAppearanceTheme(String(reader.result || ''));
+    input.value = '';
+  };
+  reader.onerror = () => setImportStatus('Could not read that file.', 'error');
+  reader.readAsText(file);
 }
 
 export function renderAppearanceSettings() {
@@ -1085,6 +1232,19 @@ window.editAppearanceAsCustom = editAppearanceAsCustom;
 window.resetAppearanceCustomTheme = resetAppearanceCustomTheme;
 window.toggleAppearanceBackgrounds = toggleAppearanceBackgrounds;
 window.updateAppearanceBackgroundOpacity = updateAppearanceBackgroundOpacity;
+window.updateAppearanceThemePref = updateAppearanceThemePref;
+window.copyAppearanceShareCode = copyAppearanceShareCode;
+window.importAppearanceTheme = importAppearanceTheme;
+window.importAppearanceThemeFile = importAppearanceThemeFile;
+
+// Match system: the registry re-applies on an OS scheme flip; refresh the UI.
+document.addEventListener('prom-theme-change', (event) => {
+  if (event?.detail?.reason !== 'system') return;
+  clearCustomThemeVariables();
+  applyBackgroundPreferences(readAppearancePreferences(), document.documentElement.getAttribute('data-skin') || 'p1');
+  syncElectronTitlebarTheme();
+  renderThemePicker();
+});
 window.toggleMoreMenu = toggleMoreMenu;
 window.toggleMorePopover = toggleMorePopover;
 window.closeMorePopover = closeMorePopover;
