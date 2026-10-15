@@ -76,6 +76,8 @@
     "test:git-index-lock-timeout": "tsx src/gateway/coding/git-index-lock-timeout.regression.ts",
     "test:embed": "npm run build:backend && node scripts/test-embed-consumer.mjs --online-install",
     "test:small-context-fit": "tsx src/gateway/tools/small-context-fit.regression.ts",
+    "test:eval-graders": "tsx evals/harness-suite/run.ts --adapter dry --self-test",
+    "test:local-tool-loop": "tsx src/providers/local-tool-loop.regression.ts",
     "test:evals-selftest": "npm run build:backend && node evals/run-evals.mjs --model scripted:oracle --timeout-ms 60000 --out .tmp/evals-selftest",
     "test:turn-trace": "tsx src/gateway/observability/turn-trace.regression.ts",
     "test:crash-recovery": "tsx src/gateway/runtime/crash-fault-injection.regression.ts",

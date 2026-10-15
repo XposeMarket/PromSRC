@@ -1,0 +1,1 @@
+{"id":"02-shell","category":"multi-step-shell","prompt":"Read numbers.txt, sort numerically, remove duplicates, write sorted.txt one integer per line ending with newline. Preserve input.","setup":{"numbers.txt":"8\n2\n8\n1\n"},"grader":{"files":{"numbers.txt":"8\n2\n8\n1\n","sorted.txt":"1\n2\n8\n"}},"timeoutSec":120}
