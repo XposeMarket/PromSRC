@@ -6276,7 +6276,7 @@ function ensureModelsSections() {
     title.parentElement.insertBefore(section, title);
 
     let cursor = title.nextElementSibling;
-    while (cursor && !cursor.classList.contains('model-default-section-title') && cursor.id !== 'amd-status') {
+    while (cursor && !cursor.classList.contains('model-default-section-title') && cursor.id !== 'amd-status' && cursor.id !== 'brain-model-status') {
       const next = cursor.nextElementSibling;
       panel.appendChild(cursor);
       cursor = next;
@@ -6946,42 +6946,9 @@ function syncBrainReasoning(type, selectedValue) {
   select.title = select.disabled ? 'This provider/model does not expose selectable reasoning effort.' : 'Reasoning effort for this Brain run.';
 }
 
-async function setBrainScheduleEnabled(type, enabled) {
-  const checkbox = document.getElementById(`brain-${type}-enabled`);
-  if (checkbox) checkbox.disabled = true;
-  try {
-    const result = await api('/api/brain/config', {
-      method: 'PATCH',
-      body: JSON.stringify({ [`${type}Enabled`]: !!enabled }),
-    });
-    if (result?.success === false) throw new Error(result.error || `Failed to update Brain ${type}`);
-    return result;
-  } catch (error) {
-    if (checkbox) checkbox.checked = !enabled;
-    showToast('Brain update failed', error.message || String(error), 'error');
-    throw error;
-  } finally {
-    if (checkbox) checkbox.disabled = false;
-  }
-}
-
-function wireBrainScheduleControls() {
-  for (const type of ['thought', 'dream', 'cleanup']) {
-    const checkbox = document.getElementById(`brain-${type}-enabled`);
-    if (!checkbox || checkbox.dataset.brainScheduleWired === 'true') continue;
-    checkbox.dataset.brainScheduleWired = 'true';
-    checkbox.addEventListener('change', () => { setBrainScheduleEnabled(type, checkbox.checked).catch(() => {}); });
-  }
-}
-
 async function loadBrainModelConfig() {
   try {
     const data = await api('/api/brain/status');
-    for (const type of ['thought', 'dream', 'cleanup']) {
-      const checkbox = document.getElementById(`brain-${type}-enabled`);
-      if (checkbox) checkbox.checked = data?.[type]?.enabled === true;
-    }
-    wireBrainScheduleControls();
     for (const type of ['thought', 'dream']) {
       const raw = type === 'thought'
         ? (data?.thoughtModel || data?.thought?.model || data?.thought?.thoughtModel || '')
@@ -7060,7 +7027,6 @@ window.goalRoutingProviderChange = goalRoutingProviderChange;
 window.syncGoalRoutingReasoning = syncGoalRoutingReasoning;
 window.loadBrainModelConfig = loadBrainModelConfig;
 window.saveBrainModelConfig = saveBrainModelConfig;
-window.setBrainScheduleEnabled = setBrainScheduleEnabled;
 window.loadAgentHeartbeat = loadAgentHeartbeat;
 window.loadAgentModelDefaultTemplates = loadAgentModelDefaultTemplates;
 window.loadAgentModelOptions = loadAgentModelOptions;

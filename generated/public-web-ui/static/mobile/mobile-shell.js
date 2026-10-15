@@ -826,31 +826,14 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
 
 
 function _getThemeList() {
-  const themes = (window.PROM_THEMES && window.PROM_THEMES.length)
-    ? window.PROM_THEMES
-    : [
-      { id: 'dark', label: 'Default Dark', base: 'dark' },
-      { id: 'blue', label: 'Olympian Blue', base: 'dark' },
-      { id: 'purple', label: 'Aether Violet', base: 'dark' },
-    ];
-
-  // Mobile keeps the P1 skin as its first entry, restores the ash-gray/ember
-  // skin in the middle, then follows the blue and purple systems. The desktop
-  // registry uses `light` for P1, while older mobile builds persisted `dark`
-  // for that same visual system, so keep the compatibility mapping here.
-  const p1 = themes.find((theme) => theme?.id === 'light')
-    || themes.find((theme) => theme?.id === 'dark')
-    || { id: 'dark', label: 'Prometheus One', base: 'dark' };
-  const gray = themes.find((theme) => theme?.id === 'gray')
-    || themes.find((theme) => theme?.id === 'dark')
-    || { id: 'gray', label: 'Ash & Ember', base: 'dark' };
-  const themed = themes.filter((theme) => ['blue', 'purple'].includes(theme?.id));
-  return [
-    { ...p1, id: 'dark', label: 'Prometheus One' },
-    { ...gray, id: 'gray', label: 'Ash & Ember' },
-    ...themed.map((theme) => ({ ...theme })),
-  ];
+  // Registry is loaded by both entry documents before the mobile shell.
+  // P1 is light; dark is never a compatibility alias for a different palette.
+  const list = typeof window.PROM_THEMES_FOR_SURFACE === 'function'
+    ? window.PROM_THEMES_FOR_SURFACE('mobile')
+    : (window.PROM_THEMES || []);
+  return list.map((theme) => ({ ...theme }));
 }
+
 
 function _stopDrawerGatewayHeartbeat() {
   if (_drawerGatewayHeartbeatTimer) clearInterval(_drawerGatewayHeartbeatTimer);
@@ -882,17 +865,11 @@ function _startDrawerGatewayHeartbeat() {
 }
 
 function _resolveTheme(themeId) {
+  // Shared registry owns aliases (legacy `light` -> `p1`) and surface filtering
+  // (Default Dark is desktop-only), so mobile never invents its own mapping.
+  if (typeof window.PROM_RESOLVE_THEME === 'function') return window.PROM_RESOLVE_THEME(themeId, 'mobile');
   const themes = _getThemeList();
-  const byId = themes.find((t) => t.id === String(themeId || ''));
-  if (byId) return byId;
-
-  const direct = String(themeId || '').trim().toLowerCase();
-  if (direct === 'dark' || direct === 'light') {
-    const byBase = themes.find((t) => t.base === direct);
-    if (byBase) return byBase;
-  }
-
-  return themes[0] || { id: 'dark', label: 'Default Dark', base: 'dark' };
+  return themes.find((t) => t.id === String(themeId || '')) || themes[0] || { id: 'p1', label: 'Prometheus One', base: 'dark' };
 }
 
 function _getTheme() {
@@ -902,7 +879,7 @@ function _getTheme() {
   // can overwrite a valid blue/purple choice before the mobile shell starts.
   try {
     const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
-      ? window.PROM_READ_SAVED_THEME()
+      ? window.PROM_READ_SAVED_THEME('mobile')
       : localStorage.getItem(PM_THEME_KEY);
     if (saved) {
       const resolved = _resolveTheme(saved);
@@ -913,20 +890,16 @@ function _getTheme() {
   const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
-  const currentTheme = document.documentElement.getAttribute('data-theme');
-  if (currentTheme === 'dark' || currentTheme === 'light') {
-    const byBase = _resolveTheme(currentTheme);
-    if (byBase) return byBase.id;
-  }
-
-  return list[0]?.id || 'dark';
+  return list[0]?.id || 'p1';
 }
 
 function _applyMobileTheme(themeId) {
   const theme = _resolveTheme(themeId);
-  const resolved = theme.base === 'light' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', resolved);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base === 'light' ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try { localStorage.setItem(PM_THEME_KEY, theme.id); } catch {}
 
   // Safari paints its translucent top chrome from the document/theme color,

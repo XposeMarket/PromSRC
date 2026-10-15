@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" data-skin="light">
+<html lang="en" data-theme="dark" data-skin="p1" data-chrome-accent="own">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
@@ -13,10 +13,11 @@
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-01-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-02-f38d86171286.js"></script>
+<script src="/build/inline/index-inline-02-7defea606ed9.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
-<script src="/build/inline/index-inline-03-e9885749b55f.js"></script>
-<link rel="stylesheet" href="/build/styles/desktop-LL2QQQUO.css">
+<script src="/build/inline/index-inline-03-48de0e9de22c.js"></script>
+<script src="/build/inline/index-inline-04-d0bf4f36f509.js"></script>
+<link rel="stylesheet" href="/build/styles/desktop-HECRR23A.css">
 
 
 
@@ -42,14 +43,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap" rel="stylesheet">
-<script src="/build/inline/index-inline-04-2ba5ab66be67.js"></script>
-<script src="/build/inline/index-inline-05-0b108e28f4b7.js"></script>
+<script src="/build/inline/index-inline-05-2ba5ab66be67.js"></script>
+<script src="/build/inline/index-inline-06-0b108e28f4b7.js"></script>
 </head>
 <body class="auth-pending">
-<script src="/build/inline/index-inline-06-716f958618af.js"></script>
+<script src="/build/inline/index-inline-07-716f958618af.js"></script>
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
 <div id="mobile-root" hidden></div>
-<script src="/build/inline/index-inline-07-ecc8cfa8ff4d.js"></script>
+<script src="/build/inline/index-inline-08-ecc8cfa8ff4d.js"></script>
 
 <style>
   /* First-paint guard: keeps the mobile launch frame black before mobile.css arrives. */
@@ -103,7 +104,7 @@
     width: 32px;
     height: 32px;
     border: 3px solid rgba(255,255,255,0.12);
-    border-top-color: #f97316;
+    border-top-color: var(--t-accent);
     border-radius: 50%;
     animation: pag-spin 0.75s linear infinite;
   }
@@ -891,7 +892,7 @@
   }
   .creative-inspector-tab.active {
     color: #fb923c;
-    border-bottom-color: #f97316;
+    border-bottom-color: var(--t-accent);
   }
   .creative-layer-list {
     display: flex;
@@ -1193,10 +1194,10 @@
     gap: 8px;
   }
   .creative-form-toggle input {
-    accent-color: #f97316;
+    accent-color: var(--t-accent);
   }
   #canvas-creative-shell input[type="range"] {
-    accent-color: #f97316;
+    accent-color: var(--t-accent);
   }
   .creative-info-note {
     margin-top: 12px;
@@ -1978,7 +1979,7 @@
       display:none;cursor:pointer;position:relative;z-index:10020;
       background:rgba(249,115,22,0.10);
       border-color:rgba(249,115,22,0.35);
-      color:#f97316;
+      color:var(--t-accent);
       user-select:none;
     " onclick="toggleUpdateDropdown(event)" title="Update available">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0">
@@ -2005,14 +2006,14 @@
         <div id="update-version-text" style="font-size:15px;font-weight:700;color:var(--fg,#e2e8f0);margin-bottom:8px">Checking for updates</div>
         <div id="update-status-text" style="font-size:11px;line-height:1.5;color:var(--muted,#64748b);margin-bottom:12px">Prometheus will download the latest release before installing.</div>
         <div id="update-progress-wrap" style="display:none;height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;margin-bottom:12px">
-          <div id="update-progress-fill" style="height:100%;width:0%;background:#f97316;border-radius:999px;transition:width .2s ease"></div>
+          <div id="update-progress-fill" style="height:100%;width:0%;background:var(--t-accent);border-radius:999px;transition:width .2s ease"></div>
         </div>
         <button id="update-action-btn" onclick="handleUpdateAction(event)" style="
-          width:100%;background:#f97316;color:#0a0a0a;
+          width:100%;background:var(--t-accent);color:#0a0a0a;
           border:none;border-radius:8px;padding:9px 14px;
           font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;
           transition:background .15s;
-        " onmouseover="this.style.background='#ea6c10'" onmouseout="this.style.background='#f97316'">
+        " onmouseover="this.style.background='#ea6c10'" onmouseout="this.style.background='var(--t-accent)'">
           Check for Update
         </button>
         <div id="update-footnote" style="font-size:10px;color:var(--muted,#64748b);margin-top:8px;text-align:center">
@@ -4526,13 +4527,7 @@
               <select id="brain-dream-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>
             </div>
           </div>
-          <div style="font-size:11px;color:var(--muted);margin:4px 0 6px;order:83">Brain runs use model credits and are off by default.</div>
-          <div id="brain-schedule-controls" style="display:grid;gap:6px;margin-bottom:8px;order:84">
-            <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer"><span style="font-size:12px">Enable Brain Thought</span><input id="brain-thought-enabled" type="checkbox" aria-label="Enable Brain Thought"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer"><span style="font-size:12px">Enable Brain Dream</span><input id="brain-dream-enabled" type="checkbox" aria-label="Enable Brain Dream"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer"><span style="font-size:12px">Enable Brain Cleanup</span><input id="brain-cleanup-enabled" type="checkbox" aria-label="Enable Brain Cleanup"></label>
-          </div>
-          <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:85"></div>
+          <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:83"></div>
 
           <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:90"></div>
 	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;order:91"></div>
@@ -5301,10 +5296,10 @@
 <link rel="modulepreload" href="/build/chunks/chunk-EPSJJCWL.js">
 <link rel="modulepreload" href="/build/chunks/chunk-HJADIT6Y.js">
 <link rel="modulepreload" href="/build/chunks/chunk-JF4LWGNM.js">
-<script type="module" src="/build/entries/desktop-3BSNLIJE.js"></script>
-<script src="/build/inline/index-inline-08-4550e6a395a8.js"></script>
+<script type="module" src="/build/entries/desktop-SXTMK3H7.js"></script>
+<script src="/build/inline/index-inline-09-4550e6a395a8.js"></script>
 
-<script src="/build/inline/index-inline-09-4ae0a1e9d247.js"></script>
+<script src="/build/inline/index-inline-10-533bd4c45def.js"></script>
 
 </body>
 </html>

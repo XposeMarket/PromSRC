@@ -573,7 +573,7 @@ body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head 
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head span,
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-counts {
   gap: 5px;
-  font-size: 10px;
+  font-size: var(--t-fs-2xs);
 }
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-row {
   min-height: 30px;
@@ -586,16 +586,16 @@ body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-main {
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-status {
   min-width: 43px;
   padding: 2px 5px;
-  font-size: 7px;
+  font-size: var(--t-fs-2xs);
 }
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-path {
-  font-size: 10px;
+  font-size: var(--t-fs-2xs);
   line-height: 1.2;
 }
 body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-more summary {
   min-height: 30px;
   padding: 7px 10px;
-  font-size: 10px;
+  font-size: var(--t-fs-2xs);
 }
 
 /* Keep the expanded editor's real controls above the glass decoration and
@@ -1012,7 +1012,7 @@ body.pm-mobile-active .pm-composer .pm-skill-trigger-pill.expanded {
 .pm-mobile-side-title-wrap strong .pm-provider-logo { width: 17px; height: 17px; margin-right: 7px; vertical-align: -3px; }
 .pm-background-spawn-main strong { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .pm-background-spawn-main strong b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.pm-background-spawn-main strong small { flex: 0 1 auto; color: var(--pm-muted); font-size: 10.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.pm-background-spawn-main strong small { flex: 0 1 auto; color: var(--pm-muted); font-size: var(--t-fs-2xs); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
 .tool-activity-provider-logo { color: var(--pm-text, var(--text)); }
 
 /* / and $ popovers + skills pill: open-composer glass over an opaque tint.

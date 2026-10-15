@@ -44,8 +44,14 @@ function ensureThemeColorMeta() {
 }
 
 function readMobileBackground() {
-  const value = getComputedStyle(document.documentElement).getPropertyValue('--pm-bg').trim();
-  return value || '#0b0b0d';
+  const root = document.documentElement;
+  const value = getComputedStyle(root).getPropertyValue('--pm-bg').trim();
+  if (value) return value;
+  // Registry-declared status-bar color is the fallback before CSS settles.
+  const theme = typeof window.PROM_RESOLVE_THEME === 'function'
+    ? window.PROM_RESOLVE_THEME(root.getAttribute('data-skin'), 'mobile')
+    : null;
+  return theme?.statusBar || '#0b0b0d';
 }
 
 function syncStatusBarTheme(reason = 'sync') {

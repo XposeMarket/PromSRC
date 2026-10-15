@@ -143,8 +143,8 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
   transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
 }
 .prom-onb-option:hover, .prom-onb-option:focus-visible {
-  border-color: var(--brand, #f97316);
-  background: color-mix(in srgb, var(--brand, #f97316) 7%, transparent);
+  border-color: var(--brand, var(--t-accent));
+  background: color-mix(in srgb, var(--brand, var(--t-accent)) 7%, transparent);
   outline: none;
 }
 .prom-onb-option:active { transform: translateY(1px); }
@@ -153,7 +153,7 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-onb-pill {
   font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
   padding: 2px 7px; border-radius: 999px;
-  color: var(--brand, #f97316); background: color-mix(in srgb, var(--brand, #f97316) 14%, transparent);
+  color: var(--brand, var(--t-accent)); background: color-mix(in srgb, var(--brand, var(--t-accent)) 14%, transparent);
 }
 .prom-onb-panel { margin: 14px 0 4px; }
 .prom-onb-progress { display: flex; gap: 14px; align-items: flex-start; padding: 6px 0; }
@@ -161,8 +161,8 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-onb-progress-sub { font-size: 13px; color: var(--muted, #666); margin-top: 4px; line-height: 1.5; }
 .prom-onb-spinner {
   width: 20px; height: 20px; flex: 0 0 20px; margin-top: 2px; border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--brand, #f97316) 25%, transparent);
-  border-top-color: var(--brand, #f97316);
+  border: 2px solid color-mix(in srgb, var(--brand, var(--t-accent)) 25%, transparent);
+  border-top-color: var(--brand, var(--t-accent));
   animation: prom-onb-spin 800ms linear infinite;
 }
 @keyframes prom-onb-spin { to { transform: rotate(360deg); } }
@@ -172,14 +172,14 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
   flex: 1; min-width: 0; padding: 9px 12px; border-radius: 9px; font: inherit; font-size: 13px;
   border: 1px solid var(--line-strong, #ccc); background: var(--bg-soft, #fff); color: var(--text, #222);
 }
-.prom-onb-input:focus { outline: none; border-color: var(--brand, #f97316); }
+.prom-onb-input:focus { outline: none; border-color: var(--brand, var(--t-accent)); }
 .prom-onb-hint { font-size: 11.5px; color: var(--muted, #777); margin-top: 8px; line-height: 1.5; }
 .prom-onb-seg { display: inline-flex; border: 1px solid var(--line, #ddd); border-radius: 9px; overflow: hidden; }
 .prom-onb-seg-btn {
   font: inherit; font-size: 12.5px; padding: 7px 14px; cursor: pointer; border: none;
   background: transparent; color: var(--muted, #666);
 }
-.prom-onb-seg-btn.active { background: var(--brand, #f97316); color: #fff; }
+.prom-onb-seg-btn.active { background: var(--brand, var(--t-accent)); color: #fff; }
 .prom-onb-row-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
 .prom-onb-link {
   border: none; background: none; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px;
@@ -192,7 +192,7 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-onb-status[data-tone="err"]  { color: var(--err, #d64545); }
 .prom-onb-skip:hover { background: color-mix(in srgb, var(--text, #222) 7%, transparent); }
 .prom-onb-btn:hover { background: color-mix(in srgb, var(--text, #222) 6%, var(--panel, #fff)); }
-.prom-onb-btn.primary:hover { background: color-mix(in srgb, #000 12%, var(--brand, #f97316)); }
+.prom-onb-btn.primary:hover { background: color-mix(in srgb, #000 12%, var(--brand, var(--t-accent))); }
 .prom-onb-model .prom-onb-footer { justify-content: space-between; }
 
 /* Guided tour */
@@ -201,7 +201,7 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-tour-shade { position: absolute; inset: 0; background: rgba(8, 10, 14, 0.62); pointer-events: auto; }
 .prom-tour-spot {
   position: absolute; border-radius: 12px; pointer-events: auto;
-  box-shadow: 0 0 0 9999px rgba(8, 10, 14, 0.62), 0 0 0 2px var(--brand, #f97316);
+  box-shadow: 0 0 0 9999px rgba(8, 10, 14, 0.62), 0 0 0 2px var(--brand, var(--t-accent));
   transition: left 260ms cubic-bezier(.2,.8,.2,1), top 260ms cubic-bezier(.2,.8,.2,1),
               width 260ms cubic-bezier(.2,.8,.2,1), height 260ms cubic-bezier(.2,.8,.2,1);
 }
@@ -217,7 +217,7 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-tour-card.enter .prom-tour-title, .prom-tour-card.enter .prom-tour-body { animation: prom-tour-in 220ms ease-out; }
 @keyframes prom-tour-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .prom-tour-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.prom-tour-count { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--brand, #f97316); }
+.prom-tour-count { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--brand, var(--t-accent)); }
 .prom-tour-skip {
   border: none; background: none; cursor: pointer; font: inherit; font-size: 12px;
   color: var(--muted, #777); padding: 2px 4px; border-radius: 6px;
@@ -228,8 +228,8 @@ body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
 .prom-tour-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; gap: 10px; }
 .prom-tour-dots { display: flex; gap: 5px; }
 .prom-tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong, #ccc); transition: all 160ms ease; }
-.prom-tour-dot.active { background: var(--brand, #f97316); transform: scale(1.35); }
-.prom-tour-dot.done { background: var(--brand, #f97316); opacity: .45; }
+.prom-tour-dot.active { background: var(--brand, var(--t-accent)); transform: scale(1.35); }
+.prom-tour-dot.done { background: var(--brand, var(--t-accent)); opacity: .45; }
 .prom-tour-actions { display: flex; gap: 8px; }
 .prom-tour-actions .prom-onb-btn { padding: 7px 14px; font-size: 12.5px; }
 @media (prefers-reduced-motion: reduce) {

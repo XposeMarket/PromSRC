@@ -1,38 +1,21 @@
 {
-  "version": 1,
+  "version": 3,
   "scope": "web-ui/src/styles/*.css",
   "patterns": {
     "orangeHex": "#f97316",
     "orangeRgba": "rgba(249,115,22,",
     "emberRgba": "rgba(234,106,31,",
-    "goldHex": "#d6b75e"
+    "goldHex": "#d6b75e",
+    "blueHex": "#3d8bff",
+    "violetHex": "#8b5cf6"
   },
-  "totals": {
-    "orangeHex": 58,
-    "orangeRgba": 106,
-    "emberRgba": 2,
-    "goldHex": 79
+  "totals": { "orangeHex": 3, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1, "blueHex": 1, "violetHex": 1 },
+  "exceptions": {
+    "web-ui/src/styles/theme-tokens.css": "One literal per accent defines the shared primitive palettes (orange, gold, blue, violet); token definitions cannot reference themselves.",
+    "web-ui/src/styles/themes.css": "Two orange literals are attribute-selector matches for legacy inline color strings, not painted colors. Keep compatibility for third-party/legacy controls."
   },
   "files": {
-    "web-ui/src/styles/base.css": { "orangeHex": 8, "orangeRgba": 29, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/components-sidebar.css": { "orangeHex": 2, "orangeRgba": 4, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/components.css": { "orangeHex": 10, "orangeRgba": 34, "emberRgba": 0, "goldHex": 22 },
-    "web-ui/src/styles/context-review.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/desktop-entry.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/fonts.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/hub.css": { "orangeHex": 2, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/mobile-composer-stack.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/mobile-entry.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/mobile-shell.css": { "orangeHex": 1, "orangeRgba": 1, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/mobile.css": { "orangeHex": 5, "orangeRgba": 0, "emberRgba": 0, "goldHex": 17 },
-    "web-ui/src/styles/multi-chat-workspace.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/onboarding.css": { "orangeHex": 13, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/pages.css": { "orangeHex": 5, "orangeRgba": 29, "emberRgba": 1, "goldHex": 0 },
-    "web-ui/src/styles/projects.css": { "orangeHex": 0, "orangeRgba": 1, "emberRgba": 0, "goldHex": 1 },
-    "web-ui/src/styles/settings.css": { "orangeHex": 1, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1 },
-    "web-ui/src/styles/surfaces-polish.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/theme-tokens.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 },
-    "web-ui/src/styles/themes.css": { "orangeHex": 11, "orangeRgba": 8, "emberRgba": 1, "goldHex": 38 },
-    "web-ui/src/styles/workspace-file-tree.css": { "orangeHex": 0, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0 }
+    "web-ui/src/styles/theme-tokens.css": { "orangeHex": 1, "orangeRgba": 0, "emberRgba": 0, "goldHex": 1, "blueHex": 1, "violetHex": 1 },
+    "web-ui/src/styles/themes.css": { "orangeHex": 2, "orangeRgba": 0, "emberRgba": 0, "goldHex": 0, "blueHex": 0, "violetHex": 0 }
   }
 }
