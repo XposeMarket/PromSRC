@@ -56,14 +56,32 @@ adversarial replay scenarios (`src/testing/replay/scenarios.ts`) that force a
 scripted model to request unknown tools, un-offered tools, malformed JSON and
 endless refused rounds, and check the runtime refuses them.
 
+## Mandatory final actions and worker ceilings
+
+| Control | Enforced in | Behaviour |
+|---|---|---|
+| **Final-action gate** | `src/gateway/final-action-gate.ts`, called from every consequential handler in `agents-runtime/handlers/browser-desktop.ts` | Before a click / accessibility invoke / click-by-text runs, the runtime classifies the *runtime-derived* target label with `ui-action-policy.ts`. Send/post/publish/purchase/delete/account-creation/financial/permission/install targets fail closed unless the call carries a one-shot grant from `request_final_action_approval` (bound to session, tool and arguments, single use). CAPTCHA, password-change and safety-bypass targets are refused and handed to the user. Lite mode does not disable it; the owner can (`security.final_action_gate: "off"` or `PROMETHEUS_FINAL_ACTION_GATE=off`). |
+| **Worker tool ceiling** | `src/gateway/agents-runtime/tool-ceiling.ts`, `routes/chat/pipeline/handle-chat.ts`, `tasks/task-runner.ts` | Every restricted session records its effective allowlist. Background workers run under their spawner's allowlist, and the ceiling propagates down spawn chains, so a narrowed agent cannot spawn a worker with tools it lacks. An empty intersection is deny-all, never unrestricted. |
+| **Proxy-aware network auth** | `src/gateway/gateway-auth.ts` (`isProxiedRequest`), `core/server.ts` | Loopback trust applies only to direct local sockets with no forwarding headers. Covers HTTP, WebSocket, voice sockets, pairing admin and the raw status fast path. |
+
 ## Limitations (stated, not hidden)
 
 - Extensions and connectors run in the gateway process. Installing one is
   trusting its code. Their *tool calls* still go through dispatch policy and
   approvals; their *code* is not sandboxed.
-- Prometheus is single-user and local-first. The gateway is not designed to be
-  exposed to untrusted networks; remote access goes through an authenticated
-  tunnel (Tailscale) with pairing.
+- Prometheus is single-user and local-first. Remote access through Tailscale
+  Funnel is a **public** HTTPS URL, not an authenticated tunnel: the gateway
+  itself must authenticate every request. Requests relayed by a local reverse
+  proxy (Funnel/Serve, tunnels, nginx; detected by forwarding headers) never
+  receive loopback trust and must carry a paired-device token or the gateway
+  token. Unauthenticated callers get only a liveness stub from `/api/status`.
+- The final-action gate classifies targets it can label (DOM snapshot refs,
+  accessibility names, OCR text, set-of-marks labels). Raw pixel clicks and
+  selector-only clicks with no resolvable label are not classifiable and are
+  not gated by it; keyboard submits are gated only when an approval id is
+  supplied. Generic tool approvals still apply to those paths.
+- Shell confinement is a command/path policy, not an OS sandbox. Commands run
+  as the host user. See THREAT_MODEL.md.
 - Lite permission mode deliberately trades some approval prompts for speed on a
   trusted machine. It never bypasses hard-denied commands or elevated approval.
 
@@ -72,3 +90,7 @@ endless refused rounds, and check the runtime refuses them.
 Open a private security advisory on the GitHub repository
 (Security → Advisories → Report a vulnerability). Please do not file public
 issues for security problems.
+
+## Plugin permissions and MCP environment isolation
+
+Extension manifests constrain SDK tool dispatch, credential access, and connector raw API requests. MCP processes inherit only a minimal environment plus explicitly configured values or `envPassthrough` names. See [Plugin SDK security contract](docs/PLUGIN_SDK.md) for compatibility and isolation limits.

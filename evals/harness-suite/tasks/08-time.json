@@ -1,0 +1,1 @@
+{"id":"08-time","category":"time-budget","prompt":"Within 30 seconds, write budget.txt containing done and newline. Do not use network or install dependencies.","setup":{},"grader":{"files":{"budget.txt":"done\n"}},"timeoutSec":30}

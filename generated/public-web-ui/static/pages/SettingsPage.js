@@ -368,13 +368,12 @@ function setQuickThinkingEffort(level) {
   addProcessEntry('info', `Thinking effort set to ${quickThinkingEffort} (UI preference).`);
 }
 
-let _desktopUpdaterState = { supported: false, autoUpdateEnabled: true, updateChannel: 'stable', status: 'unsupported' };
+let _desktopUpdaterState = { supported: false, autoUpdateEnabled: true, status: 'unsupported' };
 let _desktopUpdaterEventsBound = false;
 
 function desktopUpdaterElements() {
   return {
     toggle: document.getElementById('settings-auto-update-toggle'),
-    channel: document.getElementById('settings-update-channel'),
     status: document.getElementById('settings-update-status'),
     version: document.getElementById('settings-update-version'),
     check: document.getElementById('settings-update-check'),
@@ -391,7 +390,6 @@ function applyDesktopUpdateState(nextState = {}) {
 
   const supported = _desktopUpdaterState.supported === true;
   const enabled = _desktopUpdaterState.autoUpdateEnabled !== false;
-  const channel = _desktopUpdaterState.updateChannel === 'beta' ? 'beta' : 'stable';
   const status = String(_desktopUpdaterState.status || (supported ? 'idle' : 'unsupported'));
   const version = String(_desktopUpdaterState.version || '').trim();
   const currentVersion = String(_desktopUpdaterState.currentVersion || '').trim();
@@ -402,14 +400,10 @@ function applyDesktopUpdateState(nextState = {}) {
     els.toggle.classList.toggle('is-on', enabled);
     els.toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
   }
-  if (els.channel) {
-    els.channel.disabled = !supported || busy;
-    els.channel.value = channel;
-  }
   if (els.version) {
     els.version.textContent = currentVersion
-      ? `Installed version ${currentVersion} · ${channel === 'beta' ? 'Beta' : 'Stable'} channel${version ? ` · release ${version}` : ''}`
-      : `Installed version — · ${channel === 'beta' ? 'Beta' : 'Stable'} channel`;
+      ? `Installed version ${currentVersion}${version ? ` · release ${version}` : ''}`
+      : 'Installed version —';
   }
   if (els.status) {
     els.status.textContent = !supported
@@ -472,23 +466,6 @@ async function setDesktopAutoUpdate(enabled) {
 
 function toggleDesktopAutoUpdate() {
   return setDesktopAutoUpdate(_desktopUpdaterState.autoUpdateEnabled === false);
-}
-
-async function setDesktopUpdateChannel(channel) {
-  const bridge = window.prometheusUpdater;
-  if (!bridge || typeof bridge.setUpdateChannel !== 'function') return;
-  const requested = String(channel || '').trim().toLowerCase();
-  if (requested !== 'stable' && requested !== 'beta') {
-    applyDesktopUpdateState({ updateChannel: 'stable', status: 'error', message: 'Choose Stable or Beta for desktop updates.' });
-    return;
-  }
-  const select = desktopUpdaterElements().channel;
-  if (select) select.disabled = true;
-  try {
-    applyDesktopUpdateState(await bridge.setUpdateChannel(requested));
-  } catch (error) {
-    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Could not save the update channel.' });
-  }
 }
 
 async function checkDesktopForUpdates() {
@@ -6299,7 +6276,7 @@ function ensureModelsSections() {
     title.parentElement.insertBefore(section, title);
 
     let cursor = title.nextElementSibling;
-    while (cursor && !cursor.classList.contains('model-default-section-title') && cursor.id !== 'amd-status' && cursor.id !== 'brain-model-status') {
+    while (cursor && !cursor.classList.contains('model-default-section-title') && cursor.id !== 'amd-status') {
       const next = cursor.nextElementSibling;
       panel.appendChild(cursor);
       cursor = next;
@@ -6969,9 +6946,42 @@ function syncBrainReasoning(type, selectedValue) {
   select.title = select.disabled ? 'This provider/model does not expose selectable reasoning effort.' : 'Reasoning effort for this Brain run.';
 }
 
+async function setBrainScheduleEnabled(type, enabled) {
+  const checkbox = document.getElementById(`brain-${type}-enabled`);
+  if (checkbox) checkbox.disabled = true;
+  try {
+    const result = await api('/api/brain/config', {
+      method: 'PATCH',
+      body: JSON.stringify({ [`${type}Enabled`]: !!enabled }),
+    });
+    if (result?.success === false) throw new Error(result.error || `Failed to update Brain ${type}`);
+    return result;
+  } catch (error) {
+    if (checkbox) checkbox.checked = !enabled;
+    showToast('Brain update failed', error.message || String(error), 'error');
+    throw error;
+  } finally {
+    if (checkbox) checkbox.disabled = false;
+  }
+}
+
+function wireBrainScheduleControls() {
+  for (const type of ['thought', 'dream', 'cleanup']) {
+    const checkbox = document.getElementById(`brain-${type}-enabled`);
+    if (!checkbox || checkbox.dataset.brainScheduleWired === 'true') continue;
+    checkbox.dataset.brainScheduleWired = 'true';
+    checkbox.addEventListener('change', () => { setBrainScheduleEnabled(type, checkbox.checked).catch(() => {}); });
+  }
+}
+
 async function loadBrainModelConfig() {
   try {
     const data = await api('/api/brain/status');
+    for (const type of ['thought', 'dream', 'cleanup']) {
+      const checkbox = document.getElementById(`brain-${type}-enabled`);
+      if (checkbox) checkbox.checked = data?.[type]?.enabled === true;
+    }
+    wireBrainScheduleControls();
     for (const type of ['thought', 'dream']) {
       const raw = type === 'thought'
         ? (data?.thoughtModel || data?.thought?.model || data?.thought?.thoughtModel || '')
@@ -7050,6 +7060,7 @@ window.goalRoutingProviderChange = goalRoutingProviderChange;
 window.syncGoalRoutingReasoning = syncGoalRoutingReasoning;
 window.loadBrainModelConfig = loadBrainModelConfig;
 window.saveBrainModelConfig = saveBrainModelConfig;
+window.setBrainScheduleEnabled = setBrainScheduleEnabled;
 window.loadAgentHeartbeat = loadAgentHeartbeat;
 window.loadAgentModelDefaultTemplates = loadAgentModelDefaultTemplates;
 window.loadAgentModelOptions = loadAgentModelOptions;
@@ -7137,7 +7148,6 @@ window.sendSelectedChannelTest = sendSelectedChannelTest;
 window.setAgentForm = setAgentForm;
 window.setButtonBusy = setButtonBusy;
 window.toggleDesktopAutoUpdate = toggleDesktopAutoUpdate;
-window.setDesktopUpdateChannel = setDesktopUpdateChannel;
 window.toggleChromeProfileImportPanel = toggleChromeProfileImportPanel;
 window.selectInHouseBrowserProfile = selectInHouseBrowserProfile;
 window.importSelectedChromeProfile = importSelectedChromeProfile;
@@ -7333,7 +7343,14 @@ function _stopFunnelStatusPoll() {
 async function loadRemoteAccessSettings() {
   try {
     const r = await pairingAdminApi('/api/pairing/remote-access');
-    const ra = (r && r.remoteAccess) || { enabled: false, mode: 'tailscale-funnel', publicUrl: '' };
+    const ra = (r && r.remoteAccess) || { enabled: false, mode: 'tailscale-funnel', publicUrl: '', lanEnabled: true };
+    const lanEnabledEl = document.getElementById('pairing-lan-enabled');
+    const lanMsg = document.getElementById('pairing-lan-msg');
+    if (lanEnabledEl) lanEnabledEl.checked = ra.lanEnabled !== false;
+    if (lanMsg) lanMsg.textContent = ra.lanEnabled === false
+      ? 'LAN pairing is off. Remote Tailscale URLs remain available when remote access is enabled.'
+      : 'LAN pairing is enabled for this gateway.';
+    _setPairingLanQrState(ra.lanEnabled !== false, ra.enabled === true, ra.lanRestartRequired === true);
     const enabledEl = document.getElementById('pairing-remote-enabled');
     const modeEl    = document.getElementById('pairing-remote-mode');
     const urlEl     = document.getElementById('pairing-remote-url');
@@ -7449,11 +7466,49 @@ async function _detectTailscale() {
   }
 }
 
+function _setPairingLanQrState(lanEnabled, remoteEnabled, restartRequired = false) {
+  const disabled = document.getElementById('pairing-lan-disabled');
+  const wrap = document.getElementById('pairing-qr-wrap');
+  // A configured remote URL is deliberately allowed even with LAN disabled.
+  // Newly enabled LAN remains unavailable until Electron restarts and rebinds.
+  const blockLocalQr = (lanEnabled === false || restartRequired === true) && remoteEnabled !== true;
+  if (disabled) disabled.style.display = blockLocalQr ? '' : 'none';
+  if (wrap) wrap.style.display = blockLocalQr ? 'none' : 'flex';
+}
+
+async function _saveLanAccess() {
+  const lanEnabledEl = document.getElementById('pairing-lan-enabled');
+  const msg = document.getElementById('pairing-lan-msg');
+  if (!lanEnabledEl) return;
+  const lanEnabled = !!lanEnabledEl.checked;
+  lanEnabledEl.disabled = true;
+  if (msg) msg.textContent = 'Saving LAN access…';
+  try {
+    const r = await pairingAdminApi('/api/pairing/remote-access', {
+      method: 'PUT', body: JSON.stringify({ lanEnabled }),
+    });
+    if (!r?.success) throw new Error(r?.error || 'Failed to save LAN access');
+    const remote = r.remoteAccess || {};
+    _setPairingLanQrState(remote.lanEnabled !== false, remote.enabled === true, remote.lanRestartRequired === true);
+    if (msg) msg.textContent = remote.lanRestartRequired
+      ? 'Saved. Restart Prometheus to apply the local network listener change.'
+      : (lanEnabled ? 'LAN pairing is enabled.' : 'LAN pairing is off. Remote Tailscale URLs remain available.');
+    refreshPairingQR().catch(() => {});
+  } catch (err) {
+    lanEnabledEl.checked = !lanEnabled;
+    if (msg) msg.innerHTML = `<span style="color:var(--danger, #f87171)">${escHtml(err.message || 'Save failed')}</span>`;
+  } finally {
+    lanEnabledEl.disabled = false;
+  }
+}
+
 function _wireRemoteAccessHandlers() {
   const save        = document.getElementById('pairing-remote-save-btn');
   const detect      = document.getElementById('pairing-remote-detect-btn');
   const enableBtn   = document.getElementById('pairing-funnel-enable-btn');
   const disableBtn  = document.getElementById('pairing-funnel-disable-btn');
+  const lanEnabled  = document.getElementById('pairing-lan-enabled');
+  if (lanEnabled && !lanEnabled.__wired) { lanEnabled.__wired = true; lanEnabled.addEventListener('change', _saveLanAccess); }
   if (save       && !save.__wired)       { save.__wired       = true; save.addEventListener('click', _saveRemoteAccess); }
   if (detect     && !detect.__wired)     { detect.__wired     = true; detect.addEventListener('click', _detectTailscale); }
   if (enableBtn  && !enableBtn.__wired)  { enableBtn.__wired  = true; enableBtn.addEventListener('click', _enableFunnel); }
@@ -7477,6 +7532,12 @@ async function refreshPairingQR() {
   if (wrap) wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">Generating QR…</div>';
   try {
     const r = await pairingAdminApi('/api/pairing/qr', { method: 'POST', body: JSON.stringify({}) });
+    if (r?.code === 'lan_access_off') {
+      if (wrap) wrap.style.display = 'none';
+      const disabled = document.getElementById('pairing-lan-disabled');
+      if (disabled) { disabled.textContent = r.error || 'Local network pairing is off. Enable LAN access above, then restart Prometheus.'; disabled.style.display = ''; }
+      return;
+    }
     if (!r?.success) throw new Error(r?.error || 'Failed to generate QR');
     _pairingCurrentChallenge = r;
     if (wrap) {

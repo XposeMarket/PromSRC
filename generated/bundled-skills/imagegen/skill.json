@@ -3,6 +3,7 @@
   "id": "imagegen",
   "name": "imagegen",
   "description": "Generate or edit raster images in Prometheus with native image providers and asset-aware output handling. Use for AI photos, illustrations, textures, sprites, mockups, hero images, transparent cutouts, background replacement, concept art, and image variants. Prefer repo-native SVG, HTML/CSS, canvas, or direct compositing when exact geometry, text, icons, or logos must remain deterministic.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

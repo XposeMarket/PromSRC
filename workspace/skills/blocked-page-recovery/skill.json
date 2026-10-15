@@ -3,6 +3,7 @@
   "id": "blocked-page-recovery",
   "name": "Blocked Page Recovery",
   "description": "Recover readable content when a page fetch fails with 403, 429, a Cloudflare or bot-check interstitial, a soft paywall, a captcha, or an empty JS shell, using a cheapest-first ladder of retry, Wayback and archive.today snapshots, feeds and APIs, a real browser, and user hand-off, with provenance labels. Use when a fetch is blocked; do not use for ordinary scraping that already works or to defeat access controls the user has no right to pass.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

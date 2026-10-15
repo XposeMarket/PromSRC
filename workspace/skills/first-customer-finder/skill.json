@@ -3,6 +3,7 @@
   "id": "first-customer-finder",
   "name": "first-customer-finder",
   "description": "Find and qualify evidence-backed first customers or design partners from recent public pain and buying signals. Use for an offer-to-prospect shortlist and shareable report; use local-lead-hunting for Maps-first local business discovery and cold-outreach-writer for message-level drafting.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

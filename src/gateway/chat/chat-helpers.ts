@@ -18,6 +18,7 @@ import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, captureToolCategoryActivationState, getActivatedToolCategories, restoreToolCategoryActivationState, type ToolCategoryActivationSnapshot } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
+import { startupModelReady } from '../onboarding/startup-model-ready';
 import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
 import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
 import {
@@ -551,6 +552,10 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
     console.error(`[startup-hook] +${Date.now() - startupProfileStartedAt}ms ${label}`);
   };
   startupProfileMark('gateway:startup handler entered');
+  // Only the BOOT model turn needs a connected model. Restart finalization and
+  // crash-goal recovery below must still run when the model is missing/down.
+  const modelReady = await startupModelReady();
+  if (!modelReady) console.debug('[startup-hook] Skipping startup model work: no connected model.');
   const pendingRestartContext = readRestartContext();
   const explicitQuickRestart = pendingRestartContext?.quickRestart === true
     && (!Array.isArray(pendingRestartContext.affectedFiles) || pendingRestartContext.affectedFiles.length === 0)
@@ -559,10 +564,10 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
   // build the normal BOOT snapshot or enter the model path just because the
   // previous session happened to contain a large conversation.
   startupProfileMark(`BOOT snapshot build begin (quick=${explicitQuickRestart})`);
-  const startupSnapshot = explicitQuickRestart ? '' : buildBootStartupSnapshot(workspacePath);
+  const startupSnapshot = explicitQuickRestart || !modelReady ? '' : buildBootStartupSnapshot(workspacePath);
   startupProfileMark(`BOOT snapshot build complete (${startupSnapshot.length} chars)`);
   let bootResult: Awaited<ReturnType<typeof runBootMd>> | undefined;
-  try {
+  if (modelReady) try {
     startupProfileMark('runBootMd begin');
     bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE, callerContext) => {
       const bootContext = [

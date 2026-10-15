@@ -9,7 +9,7 @@ Review feedback is a set of claims to check, not orders to follow or praise to a
 
 ## 1. Collect the whole review first
 
-- Gather every item before reacting. For a GitHub PR: `connector_github_get_pr`, plus `connector_github_api_request` for `GET /repos/{owner}/{repo}/pulls/{n}/comments` (inline) and `/pulls/{n}/reviews`. The gh CLI is not installed. For Prometheus source PRs, the repo is `XposeMarket/PromSRC` and work happens in the worktree per `promsrc-pr-worktree`.
+- Gather every item before reacting. For a GitHub PR: `connector_github_get_pr`, plus `connector_github_api_request` for `GET /repos/{owner}/{repo}/pulls/{n}/comments` (inline) and `/pulls/{n}/reviews`. The gh CLI is not installed.
 - Number the items. For each, restate the technical requirement in one line in your own words.
 
 ## 2. Clarify before implementing anything
@@ -49,7 +49,7 @@ After each item, run the narrowest relevant test (`workspace_run`). For behavior
 
 - Report to the user: a table of item, verdict (fixed / pushed back / needs decision / deferred), evidence, and test results.
 - Reply on GitHub only when the user authorizes it. Reply in the inline thread, not as a top-level comment: `connector_github_api_request` with `POST /repos/{owner}/{repo}/pulls/{n}/comments/{comment_id}/replies`. Use `connector_github_comment` only for general PR comments. For thread resolution state, see `github-gh-address-comments`.
-- Commit and push through `workspace_git` (or the `promsrc-pr-worktree` flow).
+- Commit and push through `workspace_git`.
 
 ## Exit criteria
 

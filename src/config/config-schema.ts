@@ -391,6 +391,7 @@ export const PrometheusConfigSchema = z.object({
     embedding_model: z.string(),
     embeddings: z.object({
       provider: z.string().optional(),
+      allow_cloud: z.boolean().optional(),
       auto_backfill: z.boolean().optional(),
       auto_backfill_limit: z.number().int().min(0).max(2000).optional(),
       providers: z.record(z.record(z.unknown())).optional(),
@@ -473,6 +474,12 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   llm: LLMConfigSchema.optional(),
+  brain: z.object({
+    enabled: z.boolean().optional(),
+    skillLearning: z.object({
+      autoReview: z.boolean().optional(),
+    }).optional(),
+  }).passthrough().optional(),
   voice: z.object({
     agent: z.object({
       provider: z.enum(['openai_codex', 'openai_realtime', 'xai']).optional(),

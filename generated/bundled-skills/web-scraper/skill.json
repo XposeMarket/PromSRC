@@ -3,6 +3,7 @@
   "id": "web-scraper",
   "name": "web-scraper",
   "description": "Search, fetch, read, scrape, or extract information from websites with Prometheus-native web and browser tools. Use for web research, source collection, full-page extraction, repeated listings, JavaScript-rendered pages, infinite scrolling, structured DOM data, or clean summaries derived from extracted content.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

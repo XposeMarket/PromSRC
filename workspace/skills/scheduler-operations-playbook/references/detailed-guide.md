@@ -123,7 +123,7 @@ A good scheduled job prompt includes:
 - Verification requirements.
 
 Bad: "Send the user a morning brief."
-Good: "Read `signal-radar/x/latest-daily-x-signal.md`; if missing, report the exact missing path and do not invent signals; deliver exactly this phone-friendly markdown format..."
+Good: "Read `reports/x/latest-daily-signal.md`; if missing, report the exact missing path and do not invent signals; deliver exactly this phone-friendly markdown format..."
 
 ---
 
@@ -197,13 +197,13 @@ Expected outputs are how scheduled jobs avoid false success. Use when a job shou
   - `schedule_job_outputs(action:"check", job_id:"...")`
 
 Expected output entries may be either:
-- a workspace-relative path string, e.g. `"signal-radar/x/latest-daily-x-signal.md"`
-- an object, e.g. `{path:"signal-radar/x/latest-daily-x-signal.md", requiredText:"# Daily X Signal Radar", absentText:"[obsolete brand]"}`
+- a workspace-relative path string, e.g. `"reports/x/latest-daily-signal.md"`
+- an object, e.g. `{path:"reports/x/latest-daily-signal.md", requiredText:"# Daily X Signal Brief", absentText:"[obsolete brand]"}`
 
 Use `requiredText` for must-have headers/markers and `absentText` for stale brands, known bad placeholders, or previous failure strings. If delivery depends on a file, require enough text to prove it is the fresh intended artifact, not just any file at that path.
 
 Good expected output examples:
-- `{path:"signal-radar/x/latest-daily-x-signal.md", requiredText:"# Daily X Signal Radar", absentText:"[obsolete brand]"}`
+- `{path:"reports/x/latest-daily-signal.md", requiredText:"# Daily X Signal Brief", absentText:"[obsolete brand]"}`
 - `{path:"opportunity-radar/latest-weekly-opportunity-brief.md", requiredText:"## Top opportunities"}`
 
 Expected output checks do not replace reading the file when the content is high-stakes; they are a guardrail, not full judgment.

@@ -3,6 +3,7 @@
   "id": "spike-and-prototype",
   "name": "Spike and Prototype",
   "description": "Build clearly-labelled throwaway experiments (feasibility spikes, A-vs-B comparisons, logic/state-model HTML demos, UI variant prototypes) ordered by risk, each ending in a VALIDATED/PARTIAL/INVALIDATED verdict that is captured into the spec or plan. Use for is this even possible, try X vs Y, quick proof of concept, or see how this feels. Do not use for production implementation, questions answerable from docs or code, or already-validated ideas.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "desktop-automation-playbook",
   "name": "desktop-automation-playbook",
   "description": "Inspect or operate native Windows applications through Prometheus's six desktop wrappers, including exact-window actions, native-resolution region recapture, accessibility controls, deterministic waits, macros, and isolated background automation. Use for native apps, OS UI, or desktop modals; use browser tools for ordinary web pages and terminal tools for shell work.",
+  "visibility": "public",
   "version": "6.4.0",
   "entrypoint": "SKILL.md",
   "triggers": [

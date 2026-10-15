@@ -3,6 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { hashMemoryEmbeddingProvider } from './embeddings/hash-provider';
+import { orderedMemoryEmbeddingProviders } from './embeddings/registry';
+import type { MemoryEmbeddingProvider } from './embeddings/types';
 import { rerankMmr } from './ranking/mmr';
 import { temporalDecayMultiplier } from './ranking/temporal-decay';
 import { consolidateMemory, reviewMemoryClaim } from './consolidation/runner';
@@ -14,6 +16,24 @@ async function testHashProvider() {
   assert.equal(result.providerId, 'hash');
   assert.equal(result.dimensions, 96);
   assert.equal(result.vector.length, 96);
+}
+
+function testCloudEmbeddingsRequireOptIn() {
+  const local = { id: 'ollama', local: true } as MemoryEmbeddingProvider;
+  const cloud = { id: 'openai', local: false } as MemoryEmbeddingProvider;
+  const providers = [cloud, local, hashMemoryEmbeddingProvider];
+  assert.deepEqual(
+    orderedMemoryEmbeddingProviders('auto', false, providers).map(provider => provider.id),
+    ['ollama', 'hash'],
+  );
+  assert.deepEqual(
+    orderedMemoryEmbeddingProviders('openai', false, providers).map(provider => provider.id),
+    ['hash'],
+  );
+  assert.deepEqual(
+    orderedMemoryEmbeddingProviders('cloud', true, providers).map(provider => provider.id),
+    ['openai', 'hash'],
+  );
 }
 
 function testMmr() {
@@ -69,6 +89,7 @@ function testConsolidation() {
 
 async function main() {
   await testHashProvider();
+  testCloudEmbeddingsRequireOptIn();
   testMmr();
   testTemporalDecay();
   testConsolidation();

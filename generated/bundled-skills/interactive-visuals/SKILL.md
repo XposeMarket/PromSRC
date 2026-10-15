@@ -58,7 +58,31 @@ ui.fmt(v, 'compact'|'int'|'usd'|'usd0'|'usd2'|'pct'|'pct1'|'delta'|'ms'|'dur'|'b
 ui.state.get(key, fallback) / ui.state.set(key, value)   // persists across reloads
 ui.ask('prompt')                                          // sends a follow-up into chat (drill-down CTA)
 ui.color.cat(i) / ui.color.seq(t) / ui.color.theme()      // theme-aware palettes
+
+// 1.1: controls, simulations, flows, forms, export
+ui.slider(t, {label, min, max, step, value, format, key, onChange:(v)=>{}})
+ui.params(t, {params:[{key, label, min, max, step, value, format}], onChange:(values)=>{}})   // "what if" panel in a card
+const L = ui.loop(t, {step:(dt, t, frame)=>{}, reset:()=>{}, autoplay:false})  // Play/Pause/Reset/0.5-2x; L.pause()
+ui.timeline(t, {items:[{lane, label, start, end?, status:'ok'|'bad'|'warn'|'run', note}], markers:[{at, label}], format:'time'|'date'|'num'})
+ui.sankey(t, {links:[{source, target, value}], format, valueLabel, height})
+ui.form(t, {title, fields:[{key, label, type:'text'|'number'|'textarea'|'select'|'toggle'|'chips'|'slider', options, multiple, required}],
+            submit:'Send to Prom', prompt:'Lead line {key}'})   // sends lead line + ```json values``` into chat
+ui.exportBar(null, {name, csv:rows})          // PNG / X post (1600x900) / CSV buttons; hidden in the export itself
+ui.insert(text, {send:false})                 // put text in the chat composer (send:true sends it)
 ```
+
+**Tap-to-ask (use it on every analytical view).** Pass `ask` to chart, bars, heatmap, treemap, table, timeline or sankey. Tapping a point puts a filled-in question into the user's composer, so they can drill down without typing:
+```js
+ui.bars(s, {items, ask:'Why is {label} at {value}?'})            // ctx: label, value, note, rank
+ui.chart(s, {..., ask:'What happened on {x}? ({values})'})       // ctx: x, label, values, title
+ui.heatmap(s, {..., ask:'Why so busy {row} at {col} ({value})?'}) // ctx: row, col, value
+ui.table(s, {..., ask:'Explain this commit: {row}'})              // ctx: every row key + row summary
+ui.timeline(s, {..., ask:'What was "{label}"?'})                 // ctx: label, lane, start, end, duration, status
+ui.sankey(s, {..., ask:'Why did {name} take {value}?'})          // ctx: name, value (+source/target for flows)
+```
+`ask` can also be a function `(ctx)=>string`. Add `askSend:true` only when sending immediately is clearly what the user wants.
+
+**Simulations.** Use `ui.params` for inputs and recompute on every change. For anything that evolves over time (projections, physics, queues, compounding), add `ui.loop` with `autoplay:false` and redraw the chart from the loop state. Keep a pure `model(params)` function so slider changes and playback share one code path.
 `target` may be `null` (append to page), a selector, or an element (e.g. a section body). Redraw on control change by clearing the element: `el.innerHTML=''; ui.chart(el, {...})`.
 
 Formats: values like `85000` render `85.0k`, `24000000` → `24.0M`. Pass numbers, not pre-formatted strings.
@@ -94,6 +118,8 @@ ui.treemap(s3,{data:D.tree});
 
 ## 8. Before sending
 - Data is real (or labeled est.), the title states a finding, every view has a caption.
+- Analytical views have `ask` templates; dashboards a user may share get `ui.exportBar`.
+- Need a decision or structured input from the user inside the visual? Use `ui.form`, not hand-rolled inputs (the sandbox blocks native form submit).
 - Works at 320px (grid collapses, tables scroll).
 - No hardcoded light/dark backgrounds; text on accent uses on-accent.
 - Refining an existing visual: keep its structure and `ui.state` keys stable.

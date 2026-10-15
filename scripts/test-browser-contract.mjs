@@ -36,7 +36,7 @@ const valid = browser.resolveBrowserExtractionSchemaForUrl('https://example.com'
 assert.equal(valid.schema.containerSelector, 'body');
 assert.equal(valid.schema.fields.title.type, 'text');
 
-const source = await import('node:fs').then((fs) => fs.readFileSync(path.join(root, 'src/gateway/browser-tools.ts'), 'utf8'));
+const source = await import('./lib/gateway-split-source.mjs').then((m) => m.readBrowserGatewaySource());
 assert.match(source, /session\.context\.on\('response', handler\)/, 'network interception must be context-scoped across page changes');
 assert.doesNotMatch(source, /session\.page\.on\('response', handler\)/, 'network interception must not attach only to the current page');
 assert.match(source, /Personal Chrome extension/, 'user_chrome must describe the extension transport rather than a real-profile CDP launch');

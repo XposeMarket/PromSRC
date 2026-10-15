@@ -80,6 +80,8 @@ async function main(): Promise<void> {
   } finally {
     // Transcript writes are asynchronous; let them settle before removing fixtures.
     await new Promise((resolve) => setTimeout(resolve, 1000));
+    (await import('../memory-index/recall-index')).closeRecallIndex(process.env.PROMETHEUS_WORKSPACE_DIR!);
+    (await import('../memory-index/sqlite-store')).closeSqliteMemoryConnections(process.env.PROMETHEUS_WORKSPACE_DIR!);
     if (previousDataDir === undefined) delete process.env.PROMETHEUS_DATA_DIR;
     else process.env.PROMETHEUS_DATA_DIR = previousDataDir;
     if (previousWorkspaceDir === undefined) delete process.env.PROMETHEUS_WORKSPACE_DIR;

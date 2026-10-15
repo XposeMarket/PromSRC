@@ -157,7 +157,7 @@ function isGatewayPortAvailable(port: number): Promise<boolean> {
       resolve(available);
     };
     probe.once('error', () => done(false));
-    probe.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+    probe.listen({ port, host: '127.0.0.1', exclusive: true }, () => {
       probe.close(() => done(true));
     });
   });
@@ -817,6 +817,16 @@ async function runSupervisedGateway(): Promise<void> {
       if (stopping) return;
       if (launched.pid && drainingChildren.delete(launched.pid)) {
         console.error(`[GatewaySupervisor] Drained gateway ${launched.pid} exited (${signal || (code ?? 'unknown')}).`);
+        // The handoff host can time out waiting for a replacement and exit so
+        // the supervisor can recover. If the replacement also exited, do not
+        // treat this as an ordinary completed drain and leave the port empty.
+        if (!child && !stopping) {
+          const probe = await probeGatewayHealth(1200);
+          if (!probe.healthy) {
+            console.error('[GatewaySupervisor] Draining host exited without a live replacement; relaunching the gateway.');
+            scheduleLaunch(true);
+          }
+        }
         return;
       }
       if (child === launched) {

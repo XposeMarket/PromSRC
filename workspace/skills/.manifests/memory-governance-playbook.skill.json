@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Decide whether durable information belongs in user memory, project/business context, daily notes, Brain evidence, a skill, or nowhere; then safely write, correct, prune, or audit it. Use for memory-governance decisions, not ordinary document ingestion or skill curation.",
   "triggers": [
     "where should this go in memory",

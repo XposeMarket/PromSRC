@@ -674,6 +674,7 @@ function pickEmoji(job) {
   const id = String(job.id || '').toLowerCase();
   const name = String(job.name || '').toLowerCase();
   if (id === 'brain_thought' || name.includes('thought')) return '🧠';
+  if (id === 'brain_cleanup' || name.includes('cleanup')) return '🧹';
   if (id === 'brain_dream'   || name.includes('dream'))   return '💤';
   if (name.includes('collector') || name.includes('signal')) return '📡';
   if (name.includes('radar') || name.includes('opportunity')) return '🎯';
@@ -688,26 +689,27 @@ function _normalizeBrainJob(job, kind) {
   const enabled = job.enabled !== false;
   const running = job.running === true;
   const isThought = kind === 'thought';
+  const isCleanup = kind === 'cleanup';
   const sessionId = String(job.lastOutputSessionId || job.last_output_session_id || '').trim() || null;
   return {
-    id: isThought ? 'brain_thought' : 'brain_dream',
+    id: isThought ? 'brain_thought' : (isCleanup ? 'brain_cleanup' : 'brain_dream'),
     kind: 'brain',
     brainType: kind,
-    emoji: isThought ? '🧠' : '💤',
-    name: isThought ? 'Brain Thought' : 'Brain Dream',
+    emoji: isThought ? '🧠' : (isCleanup ? '🧹' : '💤'),
+    name: isThought ? 'Brain Thought' : (isCleanup ? 'Brain Cleanup' : 'Brain Dream'),
     color: 'purple',
     status: running ? 'running' : (enabled ? 'active' : 'disabled'),
     builtin: true,
     enabled,
     description: isThought
       ? 'Observes the last 6h of activity and writes a reflection.'
-      : 'Nightly synthesis plus a second-pass memory cleanup 30m later.',
+      : (isCleanup ? 'Second-pass memory cleanup after a Dream run.' : 'Nightly synthesis plus a second-pass memory cleanup 30m later.'),
     next: fmtDate(job.nextRun) || '—',
     last: fmtDate(job.lastRun) || 'Never',
-    footLeft: isThought ? 'Every 6 hours' : 'Nightly at 23:30 local, cleanup about 30m later',
+    footLeft: isThought ? 'Every 6 hours' : (isCleanup ? 'After Brain Dream' : 'Nightly at 23:30 local, cleanup about 30m later'),
     footRight: isThought
       ? (job.todayCount !== undefined ? `Thoughts today: ${job.todayCount}` : '')
-      : (job.ranTonight ? 'Dream ran tonight: yes' : 'Dream ran tonight: not yet'),
+      : (isCleanup ? '' : (job.ranTonight ? 'Dream ran tonight: yes' : 'Dream ran tonight: not yet')),
     sessionId,
   };
 }
@@ -809,8 +811,10 @@ export async function loadMobileSchedules({ force = false } = {}) {
   if (brainResult?.success) {
     const t = _normalizeBrainJob(brainResult.thought, 'thought');
     const d = _normalizeBrainJob(brainResult.dream,   'dream');
+    const c = _normalizeBrainJob(brainResult.cleanup, 'cleanup');
     if (t) items.push(t);
     if (d) items.push(d);
+    if (c) items.push(c);
   }
   if (schedResult?.success && Array.isArray(schedResult.schedules)) {
     for (const job of schedResult.schedules) items.push(_normalizeCronJob(job));
@@ -822,9 +826,7 @@ export async function loadMobileSchedules({ force = false } = {}) {
 
 export async function toggleSchedule(item, nextEnabled) {
   if (item.kind === 'brain') {
-    const body = item.brainType === 'thought'
-      ? { thoughtEnabled: !!nextEnabled }
-      : { dreamEnabled:   !!nextEnabled };
+    const body = { [`${item.brainType}Enabled`]: !!nextEnabled };
     const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(body) });
     _invalidateMobilePageData('schedules');
     return result;
@@ -838,6 +840,7 @@ export async function toggleSchedule(item, nextEnabled) {
 
 export async function runScheduleNow(item) {
   if (item.kind === 'brain') {
+    if (item.brainType === 'cleanup') throw new Error('Brain Cleanup runs after Dream and cannot be run manually');
     return api('/api/brain/run', {
       method: 'POST', body: JSON.stringify({ type: item.brainType }),
     });

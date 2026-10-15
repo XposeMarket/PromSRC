@@ -3,6 +3,7 @@
   "id": "thread-and-session-operations",
   "name": "thread-and-session-operations",
   "description": "Manage Prometheus peer sessions and supervised threads with exact routing and status verification. Use for session creation, steering, and reopening; not for standalone agent runs (agent-team-operations).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

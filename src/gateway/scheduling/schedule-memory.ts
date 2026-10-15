@@ -91,6 +91,9 @@ export interface StructuredRunRecord {
 }
 
 export interface RunLogEntry {
+  reason?: 'scheduled' | 'catch_up';
+  missedCount?: number;
+  output?: string;
   runId: string;
   scheduledAt: number;
   startedAt: number;
@@ -346,7 +349,7 @@ export function appendRunLog(scheduleId: string, entry: RunLogEntry): void {
 export function updateRunLogEntry(
   scheduleId: string,
   runId: string,
-  updates: Partial<Pick<RunLogEntry, 'completedAt' | 'status' | 'summary' | 'errorIfAny' | 'errorType' | 'attempts' | 'evidenceWritten' | 'chatSessionId'>>,
+  updates: Partial<Pick<RunLogEntry, 'completedAt' | 'status' | 'summary' | 'errorIfAny' | 'errorType' | 'attempts' | 'evidenceWritten' | 'chatSessionId' | 'output'>>,
 ): void {
   const log = loadRunLog(scheduleId);
   const entry = log.runs.find(r => r.runId === runId);
@@ -360,6 +363,8 @@ export function updateRunLogEntry(
  * Returns the runId for later updates.
  */
 export function startRunLogEntry(input: {
+  reason?: 'scheduled' | 'catch_up';
+  missedCount?: number;
   scheduleId: string;
   taskId: string;
   scheduledAt: number;
@@ -369,6 +374,8 @@ export function startRunLogEntry(input: {
   appendRunLog(input.scheduleId, {
     runId,
     scheduledAt: input.scheduledAt,
+    reason: input.reason,
+    missedCount: input.missedCount,
     startedAt: Date.now(),
     status: 'running',
     taskId: input.taskId,

@@ -1,6 +1,6 @@
 # Repeated no-activity scheduled job failures (2026-05-21)
 
-Observed on 2026-05-21 during the Daily X Signal Radar morning brief schedule: the same scheduled job failed repeatedly across several runs with `Error: openai_codex stream had no activity for 75s` before producing any useful brief.
+Observed on 2026-05-21 during a daily X signal morning-brief schedule: the same scheduled job failed repeatedly across several runs with `Error: openai_codex stream had no activity for 75s` before producing any useful brief.
 
 ## Guardrail
 

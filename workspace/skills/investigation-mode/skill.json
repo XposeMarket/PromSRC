@@ -3,6 +3,7 @@
   "id": "investigation-mode",
   "name": "investigation-mode",
   "description": "Coordinate debugging when a user project, deployed site, API, or workflow is stuck, hung, broken, or not responding: triage runtime logs, workflow status, live browser state, then deploy/env, reporting evidence at each step. Use for 'it's stuck / not loading / broke' reports about apps and sites. Not for Prometheus itself (prometheus-runtime-forensics), failing GitHub checks (github-gh-fix-ci), or a known code bug (root-cause-debugging).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [],

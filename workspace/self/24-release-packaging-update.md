@@ -40,6 +40,7 @@
 | Public build | `package.json` → `build:public`, platform variants | `electron-builder-public.yml`, verifier. |
 | Publish | `package.json` → `release` | `--publish=always`; public side effect. |
 | Public web production | `scripts/prepare-public-build.js`, `scripts/build-web-ui-production.mjs` | Generated output under public-web tree. |
+| Public bundled skills | `scripts/public-skill-policy.js`, `scripts/prepare-public-build.js --skills-only` → `generated/bundled-skills/` | Every skill declares `"visibility": "public" \| "personal" \| "dev"` in `skill.json` (or `.manifests/<id>.skill.json`). Only `public` ships; `publicExcludeResources` strips owner-specific files. Build and CI (`npm run test:public-skills`) fail on a missing tag, owner-specific text (names, handles, clients, home paths, pinned model routes, dev tools), or a reference to a non-public skill. Skills created at runtime default to `personal`. |
 | UI sync/check | `npm run sync:web-ui`, `check:web-ui` | See [17 Desktop web UI](17-desktop-web-ui.md). |
 | Build configurations | `electron-builder.yml`, `electron-builder-public.yml` | Packaging policy/artifacts differ. |
 | Release folders | `release/`, `release-public/` | Local builder vs public distributable output. |

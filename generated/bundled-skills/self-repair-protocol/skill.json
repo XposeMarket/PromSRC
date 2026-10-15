@@ -3,6 +3,7 @@
   "id": "self-repair-protocol",
   "name": "self-repair-protocol",
   "description": "Diagnose and recover Prometheus internal operational problems involving tasks, agents, teams, schedules, providers, connections, configuration, workspace state, startup, or runtime health. Use only when the user explicitly asks Prometheus to diagnose or repair itself; do not invoke for an ordinary isolated tool error.",
+  "visibility": "public",
   "version": "3.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

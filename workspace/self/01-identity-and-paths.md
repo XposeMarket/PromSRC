@@ -64,7 +64,7 @@ For the currently active desktop installation, the legacy workspace at `%APPDATA
 | `SOUL.md` | Workspace-local persona/context additions; distinct from source-owned default soul. |
 | `MEMORY.md` | Durable, curated cross-session facts. |
 | `BUSINESS.md` | Business-specific state, loaded only when business context is enabled. |
-| `Brain/` | Durable agent-created thought, dream, carry-forward, context-capsule and research artifacts. |
+| `Brain/` | Durable agent-created Thought, Dream, cleanup, carry-forward, context-capsule and research artifacts. Phase 0 keeps Thought/Dream/cleanup off by default; explicit opt-in may create artifacts, but they are not prompt-injected. |
 | `audit/` | Audit trail, task/chat/system/restart and other evidence indexes. |
 | `notes/` | Intraday notes and short-lived continuity. Not a replacement for durable MEMORY.md. |
 | `teams-test/` | Team test artifacts/workspaces, if present. |

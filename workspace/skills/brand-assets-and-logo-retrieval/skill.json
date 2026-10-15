@@ -3,6 +3,7 @@
   "id": "brand-assets-and-logo-retrieval",
   "name": "Brand Assets and Logo Retrieval",
   "description": "Find, verify, download, normalize, and provenance-track existing official brand logos, icons, and wordmarks. Use when an authoritative asset must be sourced; use exact-logo-brand-kit-workflow to compose a supplied or sourced logo into a board or mockup, not to find the asset.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

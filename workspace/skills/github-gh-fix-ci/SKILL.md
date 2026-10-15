@@ -10,7 +10,7 @@ CI is evidence from another machine. Read its log before forming a theory, repro
 ## 1. Resolve the target
 
 - Owner, repo, and PR number or branch come from the user's URL or words. For "my PR" on the current checkout, read `git remote get-url origin` and `git branch --show-current`, then `connector_github({action:"list_prs", owner, repo, state:"open"})` and match `head`.
-- `connector_github({action:"get_pr", owner, repo, pr_number})` gives the head sha and branch. For Prometheus source, follow `promsrc-pr-worktree` instead of this generic PR flow.
+- `connector_github({action:"get_pr", owner, repo, pr_number})` gives the head sha and branch.
 
 ## 2. Find what failed
 

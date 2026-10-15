@@ -187,3 +187,9 @@ When the user asks for a workflow that combines these layers (e.g. nightly sched
 - [08 Agents, tasks & background](08-agents-tasks-background.md) · [09 Teams](09-teams.md) · [11 Memory, notes & Brain](11-memory-notes-brain.md)
 - [03 Prompt assembly & context](03-prompt-assembly-and-context.md) · [05 Tools & categories](05-tools-and-categories.md) · [25 Sharp edges](25-sharp-edges.md)
 - [tools inventory](generated/tools.md) · [routes inventory](generated/routes.md) · [test inventory](generated/tests.md) · [merged PR history](generated/changelog.md)
+
+## Wave 4 execution controls
+
+`schedule_job` create/update supports `kind: "agent" | "script"` (default agent), `command`, `timeoutMs` (1..3,600,000), and `misfire_policy: "skip" | "run_once" | "run_all"` (default run_once). Script jobs require a nonempty command instead of a prompt and execute through the existing policy/approval-gated command runner with no model call. Output and errors are captured in run history. No agent/team/systemEvent/preview target is allowed for scripts.
+
+The persisted next expected occurrence anchors missed-run recovery on ticks after restart. Skip advances without execution; run_once runs the latest due slot; run_all runs at most the latest three, sequentially. History records catch_up reason and missedCount. Single-slot lateness under 60 seconds is tick jitter. Counts are truncated after 100,000 scanned slots. Same-job filesystem leases survive crashes and recover after timeout plus owner PID death; live owners never overlap. Persistent ISO-slot dedupe keeps the latest 256 slots and uses at-most-once admission (a crash after admission does not replay that slot). Preserve the jobs.json.admission directory when migrating the store. Shared gateway behavior applies to desktop, web/mobile and agent tool callers; list/detail, update, pause/resume and delete remain available.

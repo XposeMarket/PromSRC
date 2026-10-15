@@ -4,7 +4,7 @@ This reference preserves the full operating detail that was moved out of the con
 
 # Exact-Logo Brand-Kit Workflow
 
-This skill prevents a critical client-facing failure mode: image generation hallucinating or recreating logos even when reference images are supplied. Use this workflow for client brand kits, logo boards, pitch mockups, Xpose assets, and any project where the exact logo must appear pixel-perfect.
+This skill prevents a critical client-facing failure mode: image generation hallucinating or recreating logos even when reference images are supplied. Use this workflow for client brand kits, logo boards, pitch mockups, agency assets, and any project where the exact logo must appear pixel-perfect.
 
 ---
 
@@ -14,7 +14,7 @@ Use this skill when:
 
 - Client brand kits or logo boards are requested
 - Mockups, pitch decks, or presentation assets need exact logo placement
-- Xpose assets or sales collateral require brand identity fidelity
+- Agency assets or sales collateral require brand identity fidelity
 - User says "use this exact logo," "the real logo," or "our actual brand mark"
 - Black/transparent logos or logos with unusual backgrounds are involved
 - Generated brand boards need logo verification before delivery
@@ -47,7 +47,7 @@ Use this skill when:
 
 **Example:**
 ```
-Source logo: downloads/logos/frederick-roof-repair-logo-footer.png
+Source logo: downloads/logos/acme-roofing-logo-footer.png
 (Confirmed: circular crossed-hammers badge, black-on-transparent, 414×392px)
 ```
 
@@ -63,7 +63,7 @@ Source logo: downloads/logos/frederick-roof-repair-logo-footer.png
 
 **Example:**
 ```
-Logo file: uploads/frederick-roof-repair-logo-footer.png
+Logo file: uploads/acme-roofing-logo-footer.png
 - Type: PNG with alpha channel
 - Bounds: 70, 48, 414, 392 (344×344 logical)
 - Color: RGB all 0 (black), alpha 0–255 (transparent background)
@@ -84,8 +84,8 @@ If the logo is black/transparent or low-contrast, create a reference preview by 
 
 **Example:**
 ```
-Original: uploads/frederick-roof-repair-logo-footer.png (black-on-transparent, invisible preview)
-Preview: uploads/frederick-roof-repair-logo-preview-white.png (same logo on white background, clearly visible)
+Original: uploads/acme-roofing-logo-footer.png (black-on-transparent, invisible preview)
+Preview: uploads/acme-roofing-logo-preview-white.png (same logo on white background, clearly visible)
 → Use preview for image model and vision analysis
 → Use original for final compositing
 ```
@@ -132,13 +132,13 @@ Do NOT generate or draw logos — I will place exact logo assets."
 **Example (Canvas approach):**
 ```
 1. Load generated layout: generated/images/brand-kits/layout-draft.png
-2. Load exact logo: uploads/frederick-roof-repair-logo-footer.png
+2. Load exact logo: uploads/acme-roofing-logo-footer.png
 3. Composite at positions:
    - Business card: (50, 30)
    - Truck decal: (200, 100)
    - Yard sign: (150, 50)
    - Social: top-left (20, 20) and top-right (360, 20)
-4. Save final: generated/images/brand-kits/frederick-roof-repair-brand-kit-FINAL.png
+4. Save final: generated/images/brand-kits/acme-roofing-brand-kit-FINAL.png
 ```
 
 ### 6. Visually Compare Against Source and Check for Hallucination Risks
@@ -191,9 +191,9 @@ Caveats: (if any)
 
 On 2026-05-07, the user requested a brand-kit mockup using the client organization's logo. The process revealed a critical failure mode:
 
-1. **Initial attempts (14:31–15:06):** Generated brand kits looked polished but did NOT contain the actual Frederick logo. Instead, the image model hallucinated a different logo (a horizontal roofline mark that doesn't match the real brand identity).
+1. **Initial attempts (14:31–15:06):** Generated brand kits looked polished but did NOT contain the actual client logo. Instead, the image model hallucinated a different logo (a horizontal roofline mark that doesn't match the real brand identity).
 
-2. **Root cause:** The exact logo file was supplied via `generate_image.reference_images`, but the model treated it as a visual suggestion, not a hard asset. The uploaded file `uploads/frederick-roof-repair-logo-footer.png` is a black circular badge with crossed hammers on a transparent background.
+2. **Root cause:** The exact logo file was supplied via `generate_image.reference_images`, but the model treated it as a visual suggestion, not a hard asset. The uploaded file `uploads/acme-roofing-logo-footer.png` is a black circular badge with crossed hammers on a transparent background.
 
 3. **Black-on-transparent trap:** When Prom analyzed the logo preview, the analyzer reported "solid black rectangle — no visible logo" because the preview was rendered against a black background. This bad analysis led to incorrect claims that the logo was present when it wasn't.
 

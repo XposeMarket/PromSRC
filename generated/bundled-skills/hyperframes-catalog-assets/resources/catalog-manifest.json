@@ -202,7 +202,7 @@
         "height": 1080
       },
       "duration": 6,
-      "prometheusUse": "Logo reveal/outro template for Prometheus/Xpose/client videos."
+      "prometheusUse": "Logo reveal/outro template for Prometheus/client videos."
     },
     {
       "slug": "grain-overlay",

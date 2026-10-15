@@ -3,6 +3,7 @@
   "id": "browse-sh-web-skills",
   "name": "browse-sh-web-skills",
   "description": "Research and manually adapt a Browse.sh or Browserbase browse-skill pattern for a repeated, complex web extraction problem. Use only when Browse.sh is explicitly requested or native Prometheus web/browser tools are insufficient; do not auto-invoke for ordinary browsing, research, or scraping.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

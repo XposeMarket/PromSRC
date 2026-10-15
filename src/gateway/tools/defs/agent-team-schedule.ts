@@ -967,7 +967,11 @@ export function getAgentTeamScheduleTools(): any[] {
             action: { type: 'string', description: 'One of: list, create, update, pause, resume, delete, run_now' },
             job_id: { type: 'string', description: 'Required for update/pause/resume/delete/run_now' },
             name: { type: 'string', description: 'Job name (create/update)' },
-            instruction_prompt: { type: 'string', description: 'Required for create. Self-contained instructions the future run receives; include steps, constraints, and success criteria.' },
+            kind: { type: 'string', enum: ['agent', 'script'], description: 'Job payload kind. Defaults to agent. Script jobs require command and cannot use team_id, subagent_id, systemEvent, or preview_only.' },
+            instruction_prompt: { type: 'string', description: 'Required for agent create. Self-contained instructions the future run receives; include steps, constraints, and success criteria.' },
+            command: { type: 'string', description: 'Required nonempty command for script create/update when kind is script.' },
+            misfire_policy: { type: 'string', enum: ['skip', 'run_once', 'run_all'], description: 'How to handle missed invocations. Defaults to run_once.' },
+            timeout_ms: { type: 'number', minimum: 1, maximum: 3600000, description: 'Optional script command timeout in milliseconds; positive integer no greater than 3600000.' },
             schedule: {
               type: 'object',
               description: 'Recurring/one-shot schedule. Accepts cron/run_at or friendly fields like repeat/time, days_of_week/time, every_hours, every_days, or text.',

@@ -3,6 +3,7 @@
   "id": "competitor-profile",
   "name": "competitor-profile",
   "description": "Create or update a sourced profile of one named competitor covering facts, product, pricing, positioning, customers, distribution, evidence, changes, strengths, and weaknesses. Use for a single-company dossier; use competitive-intelligence for cross-competitor synthesis.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

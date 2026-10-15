@@ -3,6 +3,7 @@
   "id": "independent-fresh-context-review",
   "name": "Independent Fresh-Context Review",
   "description": "Get a genuinely independent second opinion on finished work (code, a report, a plan, a design, research) by handing a written brief to a fresh-context reviewer agent that never saw how the work was produced. Use when the user wants an independent, fresh-eyes, or second-opinion review before shipping. Not for a normal diff review in the current context (code-review) or for acting on review feedback (receiving-code-review).",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

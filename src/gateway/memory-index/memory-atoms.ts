@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { boundRetrievalTrace, type RetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'node:fs';
 import path from 'node:path';
+import { sanitizeMemoryRecallText } from './memory-recall.js';
+
 
 export type MemoryAtomKind = 'project_fact' | 'decision' | 'workflow_rule' | 'continuity';
 
@@ -283,7 +285,9 @@ function loadSnapshot(workspacePath: string): { snapshot: AtomSnapshot; cacheHit
     return { snapshot: cached, cacheHit: true };
   }
 
-  const raw = fs.readFileSync(memoryPath, 'utf-8');
+  // Use the same active-only, poison-safe projection as the recall index so
+  // MEMORY.md atom injection cannot bypass supersession/quarantine policy.
+  const raw = sanitizeMemoryRecallText(fs.readFileSync(memoryPath, 'utf-8'));
   const atoms = parseMemoryAtoms(raw);
   const snapshot: AtomSnapshot = {
     mtimeMs: stat.mtimeMs,

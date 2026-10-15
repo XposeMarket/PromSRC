@@ -31,7 +31,7 @@ Use `workspace_run` with PowerShell, excluding dependency and build folders (`.g
 
 Pick 2 to 4 core flows (a request, a job, the main user action) and trace each end to end: trigger, routing, business logic, persistence, external calls, response. Record file:line anchors. Note tests that cover each flow and how to run them.
 
-For a big repo, run the passes in parallel: spawn 2 to 3 explorers with `background_ops(action:"spawn", provider:"openai_codex", model:"gpt-6-luna")` (`gpt-6-sol` for deep flows), each with a disjoint scope (structure and entry points; data flow and state; tests, build, and conventions) and a reporting contract: sources read, file:line anchors, confidence, gaps, at most 20 bullets. Never spawn Anthropic workers from an Anthropic main chat. Read the cited lines yourself before accepting a claim.
+For a big repo, run the passes in parallel: spawn 2 to 3 explorers with `background_ops(action:"spawn")`, each with a disjoint scope (structure and entry points; data flow and state; tests, build, and conventions) and a reporting contract: sources read, file:line anchors, confidence, gaps, at most 20 bullets. Never spawn Anthropic workers from an Anthropic main chat. Read the cited lines yourself before accepting a claim.
 
 "Read every file in full" is allowed only when the user explicitly asks for it and the repo is small; even then, outline first and skip generated and vendored code.
 

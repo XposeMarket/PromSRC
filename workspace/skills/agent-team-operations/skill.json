@@ -3,6 +3,7 @@
   "id": "agent-team-operations",
   "name": "agent-team-operations",
   "description": "Coordinate Prometheus subagents, background workers, and managed teams. Use for ownership, delegation, steering, and worker recovery; not for choosing execution mode alone (execution-mode-routing).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

@@ -3,6 +3,7 @@
   "id": "api-integration",
   "name": "api-integration",
   "description": "Build, call, connect, or debug REST/HTTP APIs with secret-safe authentication, response validation, pagination, rate-limit handling, bounded retries, and clear failure reporting.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

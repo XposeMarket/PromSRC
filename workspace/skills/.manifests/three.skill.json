@@ -2,6 +2,7 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
   "name": "three",
+  "visibility": "public",
   "description": "Three.js adapter patterns for deterministic HyperFrames compositions. Use only when a HyperFrames scene needs a Three.js/WebGL canvas, hf-seek-driven rendering, AnimationMixer seeking, camera or shader motion derived from composition time, or pinned renderer settings for reproducible frames. Use threejs-mobile-webgl instead for desktop-versus-iOS texture and control failures.",
   "triggers": [
     "three.js product spin in hyperframes",

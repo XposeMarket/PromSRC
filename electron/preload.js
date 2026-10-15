@@ -65,6 +65,16 @@ contextBridge.exposeInMainWorld('prometheusGateway', {
   restart: (reason = '') => ipcRenderer.invoke('gateway:restart', {
     reason: String(reason || '').slice(0, 160),
   }),
+  onState: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const listeners = [
+      ['gateway-restarting', (_event, payload) => cb({ state: 'restarting', ...(payload || {}) })],
+      ['gateway-degraded', (_event, payload) => cb({ state: 'degraded', ...(payload || {}) })],
+      ['gateway-recovered', (_event, payload) => cb({ state: 'recovered', ...(payload || {}) })],
+    ];
+    listeners.forEach(([channel, handler]) => ipcRenderer.on(channel, handler));
+    return () => listeners.forEach(([channel, handler]) => ipcRenderer.removeListener(channel, handler));
+  },
 });
 
 // External links are an explicit escape hatch. Ordinary HTTP/HTTPS links are

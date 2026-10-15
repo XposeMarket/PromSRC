@@ -36,38 +36,35 @@ export function getMemoryEmbeddingPreference(): MemoryEmbeddingPreference {
   return String(data.memory?.embeddings?.provider || process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto') as MemoryEmbeddingPreference;
 }
 
-function orderedProviders(preferred: MemoryEmbeddingPreference): MemoryEmbeddingProvider[] {
-  const providers = listMemoryEmbeddingProviders();
+export function cloudMemoryEmbeddingsEnabled(): boolean {
+  const data = getConfig().getConfig() as any;
+  return data.memory?.embeddings?.allow_cloud === true
+    || process.env.PROMETHEUS_MEMORY_ALLOW_CLOUD_EMBEDDINGS === '1';
+}
+
+export function orderedMemoryEmbeddingProviders(
+  preferred: MemoryEmbeddingPreference,
+  cloudEnabled = cloudMemoryEmbeddingsEnabled(),
+  providers = listMemoryEmbeddingProviders(),
+): MemoryEmbeddingProvider[] {
+  const localProviders = providers.filter(provider => provider.local && provider.id !== 'hash');
+  const cloudProviders = providers.filter(provider => !provider.local && provider.id !== 'hash');
+  const withHash = (candidates: MemoryEmbeddingProvider[]) => [...candidates, hashMemoryEmbeddingProvider];
+
   if (preferred && !['auto', 'local-first', 'cloud', 'hash'].includes(preferred)) {
-    return [
-      ...providers.filter(provider => provider.id === preferred),
-      hashMemoryEmbeddingProvider,
-    ];
+    const requested = providers.filter(provider => provider.id === preferred);
+    return withHash(cloudEnabled ? requested : requested.filter(provider => provider.local));
   }
   if (preferred === 'hash') return [hashMemoryEmbeddingProvider];
-  if (preferred === 'local-first') {
-    return [
-      ...providers.filter(provider => provider.local && provider.id !== 'hash'),
-      ...providers.filter(provider => !provider.local),
-      hashMemoryEmbeddingProvider,
-    ];
-  }
-  if (preferred === 'cloud') {
-    return [
-      ...providers.filter(provider => !provider.local),
-      ...providers.filter(provider => provider.local && provider.id !== 'hash'),
-      hashMemoryEmbeddingProvider,
-    ];
-  }
-  return [
-    ...providers.filter(provider => provider.id === 'openai'),
-    ...providers.filter(provider => provider.id === 'openai_codex_oauth'),
-    ...providers.filter(provider => provider.id === 'ollama'),
-    ...providers.filter(provider => provider.id === 'lmstudio'),
-    ...providers.filter(provider => provider.id === 'voyage'),
-    ...providers.filter(provider => provider.id === 'jina'),
-    hashMemoryEmbeddingProvider,
-  ];
+  if (preferred === 'cloud') return withHash(cloudEnabled ? cloudProviders : localProviders);
+  if (preferred === 'local-first') return withHash(cloudEnabled ? [...localProviders, ...cloudProviders] : localProviders);
+  // `auto` must never turn a background refresh into an unexpected paid
+  // request. Prefer local/ONNX-capable providers and otherwise stay on hash.
+  return withHash(localProviders);
+}
+
+function orderedProviders(preferred: MemoryEmbeddingPreference): MemoryEmbeddingProvider[] {
+  return orderedMemoryEmbeddingProviders(preferred);
 }
 
 export async function getActiveMemoryEmbeddingProvider(requested?: MemoryEmbeddingPreference): Promise<MemoryEmbeddingProvider> {
@@ -94,19 +91,16 @@ export async function getAutomaticMemoryEmbeddingProvider(requested?: MemoryEmbe
   if (pref === 'hash') return null;
 
   const explicitProvider = pref && !['auto', 'local-first', 'cloud'].includes(String(pref));
+  const cloudEnabled = cloudMemoryEmbeddingsEnabled();
   const providers = listMemoryEmbeddingProviders();
-  const connectedOpenAiCandidates = [
-    ...providers.filter(provider => provider.id === 'openai'),
-    ...providers.filter(provider => provider.id === 'openai_codex_oauth'),
-  ];
   const candidates = explicitProvider || pref === 'cloud'
     ? orderedProviders(pref).filter(provider => provider.id !== 'hash')
-    : [
-      ...connectedOpenAiCandidates,
-      ...providers.filter(provider => provider.local && provider.id !== 'hash'),
-    ];
+    : providers.filter(provider => provider.local && provider.id !== 'hash');
 
-  for (const provider of candidates) {
+  // Explicit provider choices still need the cloud opt-in; without it, auto
+  // backfill may only use local providers and never fall back to the cloud.
+  const eligibleCandidates = cloudEnabled ? candidates : candidates.filter(provider => provider.local);
+  for (const provider of eligibleCandidates) {
     try {
       const status = await provider.status();
       if (status.ok) return provider;

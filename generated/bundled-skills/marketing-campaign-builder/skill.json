@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Plan an integrated marketing campaign with audience, positioning, channel roles, content, timeline, budget assumptions, measurement, and launch operations. Use for campaign systems; do not use for one standalone email, article, social post, or brand-strategy exercise.",
   "triggers": [
     "build a campaign",

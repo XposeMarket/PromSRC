@@ -4,7 +4,7 @@ Use this note when a scheduled/background job fails with an image-input or visio
 
 ## Evidence
 
-The Daily X Signal Radar collector repeatedly failed while routed to `openai_codex/gpt-5.3-codex-spark` with:
+The daily X signal brief collector repeatedly failed while routed to `openai_codex/gpt-5.3-codex-spark` with:
 
 > Model 'gpt-5.3-codex-spark' does not support image inputs.
 

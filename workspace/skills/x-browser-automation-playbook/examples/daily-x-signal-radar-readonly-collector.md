@@ -1,4 +1,4 @@
-# Daily X Signal Radar — Read-Only Collector Example
+# Daily X Signal Brief — Read-Only Collector Example
 
 Use this example when a scheduled or delegated agent must read the user's authenticated X context and write a signal report without taking social actions.
 
@@ -13,7 +13,7 @@ Use this example when a scheduled or delegated agent must read the user's authen
 1. Read this X browser automation skill before opening X.
 2. Verify/create local signal paths before collection, for example:
    - `signal-radar/x/daily-x-signal-YYYY-MM-DD.md`
-   - `signal-radar/x/latest-daily-x-signal.md`
+   - `reports/x/latest-daily-signal.md`
    - `signal-radar/x/source-preferences.md`
 3. Read `signal-radar/x/source-preferences.md` if present so boosted/downranked source guidance shapes the run.
 4. For scheduled collectors, prefer a **text-first/no-screenshot** collection plan unless the job is explicitly pinned to a vision-capable model. Do not call `browser_vision_screenshot`, screenshot observation modes, desktop screenshots, image-analysis tools, or the configured messaging channel screenshot tools in the scheduled collector path when text/DOM collection is sufficient.
@@ -44,7 +44,7 @@ A successful 2026-05-12 scheduled run used this safer prompt shape after earlier
 - Strict read-only rules were explicit.
 - It required text-first collection and prohibited screenshots/vision tools.
 - It used `file_stats`/`read_file`, then `browser_open` + `browser_scroll_collect` across home and five search buckets.
-- It wrote both `signal-radar/x/daily-x-signal-2026-05-12.md` and `signal-radar/x/latest-daily-x-signal.md`.
+- It wrote both `signal-radar/x/daily-x-signal-2026-05-12.md` and `reports/x/latest-daily-signal.md`.
 - It verified file stats after writing.
 - It reported run health: X auth worked, no screenshots/vision tools, no social actions, no blockers.
 
@@ -61,7 +61,7 @@ What worked:
 - It used compact/no-screenshot browser observations and `browser_scroll_collect` across home plus varied search buckets.
 - It wrote and verified:
   - `signal-radar/x/daily-x-signal-2026-05-16.md`
-  - `signal-radar/x/latest-daily-x-signal.md`
+  - `reports/x/latest-daily-signal.md`
 - It recorded a continuity note with the top signal clusters.
 
 The useful 2026-05-17 signal clusters were Hermes + xAI OAuth/X Premium search validation, `/steer`-style mid-run correction UX, desktop agents for messy no-API workflows, Xpose missed-call/Monday local growth brief opportunities, and post-loss trading reset phrasing. This confirms the collector is valuable when it produces cross-domain signals, not just raw X summaries.
@@ -84,7 +84,7 @@ A good final report says exactly what was saved, run health, auth state, searche
 ```text
 Saved/updated:
 - signal-radar/x/daily-x-signal-YYYY-MM-DD.md
-- signal-radar/x/latest-daily-x-signal.md
+- reports/x/latest-daily-signal.md
 Run health:
 - X authenticated as @raulinvests
 - Home timeline collection worked

@@ -3,6 +3,7 @@
   "id": "connector-builder",
   "name": "connector-builder",
   "description": "Use this skill when building, editing, or designing a Prometheus connector/plugin for an external app or service, including tool contracts, auth, polling, webhooks, data mapping, tests, and integration UX.",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

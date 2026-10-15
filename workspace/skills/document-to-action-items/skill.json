@@ -3,6 +3,7 @@
   "id": "document-to-action-items",
   "name": "Document to Action Items",
   "description": "Turn contracts, reports, policies, RFPs, scanned forms, or attachment bundles into page-cited facts and a reviewable list of proposed actions with owners, due dates, dependencies, and risks, then push approved items to a tracker, calendar, sheet, or memory and read them back. Use for extracting obligations, deadlines, and tasks from documents; do not use for meeting transcripts, plain extraction or summaries, or knowledge-base import.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

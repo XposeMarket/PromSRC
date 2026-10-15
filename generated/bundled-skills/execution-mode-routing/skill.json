@@ -3,6 +3,7 @@
   "id": "execution-mode-routing",
   "name": "execution-mode-routing",
   "description": "Choose how new Prometheus work should execute: inline, planned, ephemeral background, durable task, delegated subagent, coordinated team, or scheduled job. Use when execution mode, persistence, parallelism, ownership, or restart survival is unclear; do not use merely to inspect or control work already running.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

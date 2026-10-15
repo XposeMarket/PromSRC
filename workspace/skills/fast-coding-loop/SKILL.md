@@ -1,6 +1,6 @@
 ---
 name: "fast-coding-loop"
-description: "Default coding workflow for Prometheus main chat and every coding agent: locate with one multi-pattern search, read big windows in batches, edit in batches, verify once. Use for any bug fix, feature edit, refactor, or read-only code investigation in PromSRC or any repo. Not for UI/desktop automation or non-code research."
+description: "Default coding workflow for Prometheus main chat and every coding agent: locate with one multi-pattern search, read big windows in batches, edit in batches, verify once. Use for any bug fix, feature edit, refactor, or read-only code investigation in any repo. Not for UI/desktop automation or non-code research."
 ---
 
 # Fast Coding Loop (default coding workflow)

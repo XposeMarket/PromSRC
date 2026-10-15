@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Process, clean, transform, merge, validate, deduplicate, aggregate, convert, or export CSV, JSON, JSONL, Excel, logs, and other datasets. Use for repeatable ETL-style file workflows, especially when data quality and output verification matter.",
   "triggers": [
     "clean this dataset",

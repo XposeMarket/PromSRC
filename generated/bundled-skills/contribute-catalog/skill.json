@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Author and prepare an upstream HyperFrames registry block or component when the user explicitly wants to contribute it to the public HyperFrames catalog. Do not use for installing catalog items or for ordinary in-project video authoring.",
   "triggers": [
     "contribute hyperframes catalog item",

@@ -1,6 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "visibility": "public",
   "description": "Build or review a structured financial forecast, budget, scenario model, unit-economics model, pricing model, or cash plan. Use when the deliverable is a model with linked assumptions and outputs; use financial-analyst for interpreting existing performance.",
   "triggers": [
     "build a financial model",

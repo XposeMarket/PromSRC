@@ -4122,7 +4122,7 @@ function setButtonState(thinking) {
 function getThemeList() {
   return (window.PROM_THEMES && window.PROM_THEMES.length)
     ? window.PROM_THEMES
-    : [{ id: 'dark', label: 'Default Dark', base: 'dark' }, { id: 'light', label: 'Light', base: 'light' }];
+    : [{ id: 'p1', label: 'Prometheus One', base: 'dark' }];
 }
 
 function resolveTheme(id) {
@@ -4138,19 +4138,24 @@ function nextThemeId(currentId) {
 
 function getInitialTheme() {
   try {
-    const saved = localStorage.getItem(THEME_KEY);
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(THEME_KEY);
     if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
-  return 'light';
+  return window.PROM_DEFAULT_THEME || 'p1';
 }
 
 function applyTheme(themeId) {
   const theme = themeId === 'custom'
     ? { id: 'custom', label: 'Custom theme', base: 'dark' }
     : resolveTheme(themeId);
-  document.documentElement.setAttribute('data-theme', theme.base);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(themeId === 'custom' ? 'custom' : theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base);
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try {
     const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
     const opacity = Number(appearance.backgroundOpacity);

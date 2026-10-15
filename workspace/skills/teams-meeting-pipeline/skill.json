@@ -3,6 +3,7 @@
   "id": "teams-meeting-pipeline",
   "name": "teams-meeting-pipeline",
   "description": "Design or implement a Microsoft Graph-backed Teams meeting ingestion pipeline, or process a transcript the user already supplied. Use for Teams-specific integration work; use meeting-notes for ordinary meeting summaries and document-to-action-items for extracting tasks from an available transcript.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

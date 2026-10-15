@@ -1,4 +1,4 @@
-# Recovery note: apply_dev_source_patchset failed: ERROR: Text not found in web-ui/src/pages/ChatPage.js. L
+# Recovery note: find_replace failed: ERROR: Text not found in web-ui/src/pages/ChatPage.js. L
 
 Source candidate: sg_35558b489d041935
 Captured: 2026-06-13T18:43:19.875Z
@@ -6,7 +6,7 @@ Lesson type: recovery
 Confidence: medium
 
 ## Future Trigger
-Use this when file-surgery hits this failure pattern: apply_dev_source_patchset failed: ERROR: Text not found in web-ui/src/pages/ChatPage.js. Likely intended locations: 1) same text with normalized whitespace, lines 10160-10165: 10158: .filter(Boolean); 10159: } 1016
+Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in web-ui/src/pages/ChatPage.js. Likely intended locations: 1) same text with normalized whitespace, lines 10160-10165: 10158: .filter(Boolean); 10159: } 1016
 
 ## Learned Behavior
 After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.
@@ -23,9 +23,9 @@ Prevents Prometheus from rerendering, abandoning a valid result, or wandering in
 
 ---
 
-## recovery note apply dev source patchset failed web ui src mobile mobile 2026 06 13
+## recovery note find replace failed web ui src mobile mobile 2026 06 13
 
-# Recovery note: apply_dev_source_patchset failed: --- web-ui/src/mobile/mobile-pages.js via find_replace_w
+# Recovery note: find_replace failed: --- web-ui/src/mobile/mobile-pages.js via find_replace_w
 
 Source candidate: sg_8cf5f23dffee9341
 Captured: 2026-06-13T18:59:01.308Z
@@ -33,7 +33,7 @@ Lesson type: recovery
 Confidence: medium
 
 ## Future Trigger
-Use this when file-surgery hits this failure pattern: apply_dev_source_patchset failed: --- web-ui/src/mobile/mobile-pages.js via find_replace_webui_source --- ERROR: Text not found in web-ui/src/mobile/mobile-pages.js. Likely intended locations: 1) same text with nor
+Use this when file-surgery hits this failure pattern: find_replace failed: --- web-ui/src/mobile/mobile-pages.js via find_replace_webui_source --- ERROR: Text not found in web-ui/src/mobile/mobile-pages.js. Likely intended locations: 1) same text with nor
 
 ## Learned Behavior
 After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.
@@ -134,9 +134,9 @@ Prevents Prometheus from rerendering, abandoning a valid result, or wandering in
 
 ---
 
-## recovery note find replace failed error text not found in repos nebulax 2026 07 05
+## recovery note find replace failed error text not found in repos example app 2026 07 05
 
-# Recovery note: find_replace failed: ERROR: Text not found in repos/nebulax-test/assets/js/inline-02.jsx. 
+# Recovery note: find_replace failed: ERROR: Text not found in repos/example-app/assets/js/inline-02.jsx. 
 
 Source candidate: sg_c5b7ddadd11c127f
 Captured: 2026-07-05T04:00:39.019Z
@@ -144,7 +144,7 @@ Lesson type: recovery
 Confidence: medium
 
 ## Future Trigger
-Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in repos/nebulax-test/assets/js/inline-02.jsx. Likely intended locations: 1) same text with normalized whitespace, lines 200-202: 198: </div> 199: ); 200: } 2
+Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in repos/example-app/assets/js/inline-02.jsx. Likely intended locations: 1) same text with normalized whitespace, lines 200-202: 198: </div> 199: ); 200: } 2
 
 ## Learned Behavior
 After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.
@@ -161,9 +161,9 @@ Prevents Prometheus from rerendering, abandoning a valid result, or wandering in
 
 ---
 
-## recovery note find replace failed error text not found in repos promsrc 2026 07 08
+## recovery note find replace failed error text not found in repos app compare 2026 07 08
 
-# Recovery note: find_replace failed: ERROR: Text not found in repos/PromSRC-compare/src/gateway/agents-run
+# Recovery note: find_replace failed: ERROR: Text not found in repos/app-compare/src/gateway/agents-run
 
 Source candidate: sg_cac62ef362a90469
 Captured: 2026-07-08T00:24:34.945Z
@@ -171,7 +171,7 @@ Lesson type: recovery
 Confidence: medium
 
 ## Future Trigger
-Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in repos/PromSRC-compare/src/gateway/agents-runtime/subagent-manager.ts. Likely intended locations: 1) same text with normalized whitespace, lines 3-3: 1: /**
+Use this when file-surgery hits this failure pattern: find_replace failed: ERROR: Text not found in repos/app-compare/src/gateway/agents-runtime/subagent-manager.ts. Likely intended locations: 1) same text with normalized whitespace, lines 3-3: 1: /**
 
 ## Learned Behavior
 After patch/context drift, re-read the exact surrounding lines, make the patch smaller, and run the narrowest syntax or validation check before continuing.

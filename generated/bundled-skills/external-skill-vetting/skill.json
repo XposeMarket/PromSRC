@@ -3,6 +3,7 @@
   "id": "external-skill-vetting",
   "name": "External Skill Vetting",
   "description": "Inspect a third-party or downloaded agent skill before enabling it. Review the complete bundle for scripts, network access, credential use, prompt injection, permissions, provenance, destructive behavior, and catalog overlap, then issue an evidence-backed trust decision or recommend a local rewrite. Do not use for ordinary skill discovery or for creating a skill without an external source.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

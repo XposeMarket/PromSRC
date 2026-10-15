@@ -3,6 +3,7 @@
   "id": "task-lifecycle",
   "name": "task-lifecycle",
   "description": "Inspect and manage existing Prometheus tasks, background runs, agents, jobs, and team work through their lifecycle, including status interpretation, pause/resume, retry, cancellation, recovery, deduplication, and completion verification. Use for lifecycle control; use execution-mode-routing when deciding how new work should run.",
+  "visibility": "public",
   "version": "4.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

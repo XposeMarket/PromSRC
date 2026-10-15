@@ -3,6 +3,7 @@
   "id": "implementation-plan-execution",
   "name": "Implementation Plan Execution",
   "description": "Execute a saved implementation plan or ticket graph task by task with a durable progress ledger that survives compaction, test-first steps, Expected-output checks, recorded rulings, optional parallel openai_codex workers per frontier task, a final fresh review, and a user-chosen integration path. Use when the user says execute, continue, or resume a plan. Do not use to write the plan (implementation-plan-writing), for ad hoc single edits (fast-coding-loop), or when no saved plan exists.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

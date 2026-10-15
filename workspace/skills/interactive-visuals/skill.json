@@ -3,6 +3,7 @@
     "id":  "interactive-visuals",
     "name":  "interactive-visuals",
     "description":  "Build analyst-grade inline visuals in chat (dashboards, multi-view breakdowns, design-variant mocks, explainers) with the preloaded Prometheus Viz Kit (window.ui) in html blocks; also routes /visual to chart, Mermaid, SVG, or HTML.",
+    "visibility": "public",
     "version":  "3.0.0",
     "entrypoint":  "SKILL.md",
     "triggers":  [

@@ -1,6 +1,6 @@
 ---
 name: "social-intel"
-description: "Analyze a named social account's public or connected analytics and suggest evidence-backed growth actions. Use for profile and content-performance analysis; use x-growth-engine for @Raulinvests team drafting and prometheus-x-growth-operator for the separate Prometheus-owned account workflow."
+description: "Analyze a named social account's public or connected analytics and suggest evidence-backed growth actions. Use for profile and content-performance analysis; not for drafting or posting."
 ---
 
 # Social Media Intelligence

@@ -18,7 +18,7 @@ import { markClientPerformance } from './performance.js';
  */
 
 import { state, THEME_KEY, APPEARANCE_KEY } from './state.js';
-import { runIfNeeded as runOnboardingIfNeeded, startOnBoot as startOnboardingOnBoot } from './onboarding/onboarding-controller.js';
+import { runIfNeeded as runOnboardingIfNeeded, startOnBoot as startOnboardingOnBoot, openModelConnection } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
 import { escHtml } from './utils.js';
 import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
@@ -55,9 +55,9 @@ const APPEARANCE_DEFAULTS = Object.freeze({
 });
 
 const CUSTOM_THEME_DEFAULTS = Object.freeze({
-  light: {
+  p1: {
     accent: '#d6b75e', background: '#050505', foreground: '#f2ebdd',
-    font: 'Manrope', translucentSidebar: true, contrast: 60, sourceTheme: 'light',
+    font: 'Manrope', translucentSidebar: true, contrast: 60, sourceTheme: 'p1',
   },
   dark: {
     accent: '#f97316', background: '#1a1a1a', foreground: '#e8e6e1',
@@ -101,9 +101,9 @@ function normalizeHex(value, fallback) {
   return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : fallback;
 }
 
-function normalizeCustomTheme(raw, fallback = CUSTOM_THEME_DEFAULTS.light) {
+function normalizeCustomTheme(raw, fallback = CUSTOM_THEME_DEFAULTS.p1) {
   const source = raw && typeof raw === 'object' ? raw : {};
-  const base = fallback || CUSTOM_THEME_DEFAULTS.light;
+  const base = fallback || CUSTOM_THEME_DEFAULTS.p1;
   const font = APPEARANCE_FONT_OPTIONS.has(source.font) ? source.font : base.font;
   return {
     accent: normalizeHex(source.accent, base.accent),
@@ -121,7 +121,7 @@ function normalizeAppearancePreferences(raw) {
   return {
     backgroundEffects: source.backgroundEffects === true,
     backgroundOpacity: clampNumber(source.backgroundOpacity, 0, 1, APPEARANCE_DEFAULTS.backgroundOpacity),
-    custom: normalizeCustomTheme(source.custom, CUSTOM_THEME_DEFAULTS.light),
+    custom: normalizeCustomTheme(source.custom, CUSTOM_THEME_DEFAULTS.p1),
   };
 }
 
@@ -142,7 +142,7 @@ function writeAppearancePreferences(preferences) {
 function getThemeList() {
   return (window.PROM_THEMES && window.PROM_THEMES.length)
     ? window.PROM_THEMES
-    : [{ id: 'light', label: 'Prometheus One', base: 'dark' }, { id: 'dark', label: 'Default Dark', base: 'dark' }];
+    : [{ id: 'p1', label: 'Prometheus One', base: 'dark' }];
 }
 
 function resolveTheme(id) {
@@ -174,11 +174,11 @@ function mixHex(first, second, amount) {
 }
 
 function presetCustomDefaults(themeId) {
-  return normalizeCustomTheme(CUSTOM_THEME_DEFAULTS[themeId] || CUSTOM_THEME_DEFAULTS.light, CUSTOM_THEME_DEFAULTS.light);
+  return normalizeCustomTheme(CUSTOM_THEME_DEFAULTS[themeId] || CUSTOM_THEME_DEFAULTS.p1, CUSTOM_THEME_DEFAULTS.p1);
 }
 
 function customDraftForCurrentTheme(preferences) {
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   if (activeId === 'custom') return normalizeCustomTheme(preferences.custom, preferences.custom);
   return presetCustomDefaults(activeId);
 }
@@ -249,11 +249,11 @@ function applyCustomThemeVariables(custom) {
   root.style.setProperty('--pm-gold', mixHex(accent, foreground, 0.35));
 }
 
-function applyBackgroundPreferences(preferences, skinId = document.documentElement.getAttribute('data-skin') || 'dark') {
+function applyBackgroundPreferences(preferences, skinId = document.documentElement.getAttribute('data-skin') || 'p1') {
   const root = document.documentElement;
   const normalized = normalizeAppearancePreferences(preferences);
   const palette = {
-    light: [5, 5, 5],
+    p1: [5, 5, 5],
     gray: [46, 46, 46],
     dark: [26, 26, 26],
     blue: [6, 13, 30],
@@ -313,7 +313,7 @@ export function getInitialTheme() {
     if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
-  return 'light';
+  return window.PROM_DEFAULT_THEME || 'p1';
 }
 
 function applyCustomTheme(customTheme, { persist = true } = {}) {
@@ -324,8 +324,8 @@ function applyCustomTheme(customTheme, { persist = true } = {}) {
   clearCustomThemeVariables();
   applyCustomThemeVariables(custom);
   const root = document.documentElement;
-  root.setAttribute('data-theme', 'dark');
-  root.setAttribute('data-skin', 'custom');
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES('custom', root);
+  else { root.setAttribute('data-theme', 'dark'); root.setAttribute('data-skin', 'custom'); }
   try { localStorage.setItem(THEME_KEY, 'custom'); } catch {}
   applyBackgroundPreferences(preferences, 'custom');
   updateThemeToggle('custom', 'dark', 'Custom theme');
@@ -341,8 +341,11 @@ export function applyTheme(themeId) {
   }
   const theme = resolveTheme(themeId);
   clearCustomThemeVariables();
-  document.documentElement.setAttribute('data-theme', theme.base);
-  document.documentElement.setAttribute('data-skin', theme.id);
+  if (typeof window.PROM_APPLY_THEME_ATTRIBUTES === 'function') window.PROM_APPLY_THEME_ATTRIBUTES(theme);
+  else {
+    document.documentElement.setAttribute('data-theme', theme.base);
+    document.documentElement.setAttribute('data-skin', theme.id);
+  }
   try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
   const preferences = readAppearancePreferences();
   applyBackgroundPreferences(preferences, theme.id);
@@ -375,7 +378,7 @@ function syncAppearanceSettingsForm() {
   const grid = document.getElementById('theme-picker-grid');
   if (!grid) return;
   const preferences = readAppearancePreferences();
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   const activeTheme = activeId === 'custom'
     ? { id: 'custom', label: 'Custom theme', base: 'dark', description: 'Your palette' }
     : resolveTheme(activeId);
@@ -447,11 +450,11 @@ function syncAppearanceSettingsForm() {
 export function renderThemePicker() {
   const grid = document.getElementById('theme-picker-grid');
   if (!grid) return;
-  const activeId = document.documentElement.getAttribute('data-skin') || 'dark';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   const themes = [...getThemeList(), { id: 'custom', label: 'Custom theme', base: 'dark' }];
   grid.innerHTML = themes.map((theme) => {
     const active = theme.id === activeId;
-    const description = theme.description || (theme.id === 'light' ? 'Black & gold · shared P1 shell' : theme.id === 'gray' ? 'Light graphite & ember · shared P1 shell' : theme.id === 'dark' ? 'Warm graphite · shared P1 shell' : theme.id === 'blue' ? 'Electric navy · shared P1 shell' : theme.id === 'purple' ? 'Deep violet · shared P1 shell' : 'Your palette');
+    const description = theme.description || (theme.id === 'p1' ? 'Black & gold · shared P1 shell' : theme.id === 'gray' ? 'Light graphite & ember · shared P1 shell' : theme.id === 'dark' ? 'Warm graphite · shared P1 shell' : theme.id === 'blue' ? 'Electric navy · shared P1 shell' : theme.id === 'purple' ? 'Deep violet · shared P1 shell' : 'Your palette');
     return (
       '<button type="button" class="theme-swatch theme-swatch--large' + (active ? ' is-active' : '') + '"'
       + ' data-theme-id="' + theme.id + '" data-skin-preview="' + theme.id + '"'
@@ -477,7 +480,7 @@ export function renderAppearanceSettings() {
 
 export function updateAppearanceCustomField(field, value) {
   const preferences = readAppearancePreferences();
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = normalizeCustomTheme(activeId === 'custom' ? preferences.custom : presetCustomDefaults(seedId), presetCustomDefaults(seedId));
@@ -491,7 +494,7 @@ export function updateAppearanceCustomField(field, value) {
 export function toggleAppearanceCustomSwitch(field) {
   if (field !== 'translucentSidebar') return;
   const preferences = readAppearancePreferences();
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = normalizeCustomTheme(activeId === 'custom' ? preferences.custom : presetCustomDefaults(seedId), presetCustomDefaults(seedId));
@@ -502,7 +505,7 @@ export function toggleAppearanceCustomSwitch(field) {
 
 export function editAppearanceAsCustom() {
   const preferences = readAppearancePreferences();
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   if (activeId === 'custom') return;
   const draft = presetCustomDefaults(activeId);
   preferences.custom = { ...draft, sourceTheme: activeId };
@@ -512,7 +515,7 @@ export function editAppearanceAsCustom() {
 
 export function resetAppearanceCustomTheme() {
   const preferences = readAppearancePreferences();
-  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeId = document.documentElement.getAttribute('data-skin') || 'p1';
   if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = presetCustomDefaults(seedId);
@@ -527,7 +530,7 @@ export function toggleAppearanceBackgrounds(nextValue) {
   writeAppearancePreferences(preferences);
   applyBackgroundPreferences(preferences);
   dispatchAppearanceChange({
-    id: document.documentElement.getAttribute('data-skin') || 'dark',
+    id: document.documentElement.getAttribute('data-skin') || 'p1',
     base: document.documentElement.getAttribute('data-theme') || 'dark',
   });
   syncAppearanceSettingsForm();
@@ -1125,6 +1128,9 @@ initSidebarSectionToggles();
 
 window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
   console.warn('[onboarding] manual start failed:', err);
+});
+window.openPrometheusModelConnection = () => openModelConnection().catch((err) => {
+  console.warn('[onboarding] model connection failed:', err);
 });
 
 // First-start onboarding. desktop-entry.js calls this once the app is

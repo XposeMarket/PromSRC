@@ -851,8 +851,15 @@ export function planGatewayHandoff(ctx: RestartContext): GatewayHandoffPlan {
   return { eligible: true, reason: 'carrying_live_runtimes', launcher, carried };
 }
 
-function spawnDetachedReplacementGateway(root: string): { entry?: string } {
-  const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
+function spawnDetachedReplacementGateway(root: string, handoffHostPid: number | null = process.pid): { entry?: string } {
+  const replacementEnv = { ...process.env } as NodeJS.ProcessEnv;
+  if (handoffHostPid) {
+    replacementEnv.PROMETHEUS_HOT_RESTART = '1';
+    replacementEnv.PROMETHEUS_HANDOFF_HOST_PID = String(handoffHostPid);
+  } else {
+    delete replacementEnv.PROMETHEUS_HOT_RESTART;
+    delete replacementEnv.PROMETHEUS_HANDOFF_HOST_PID;
+  }
   delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
   // A restart is a replacement of this exact instance, never a request for
   // the auto-instance allocator. Pin the replacement to the current port so
@@ -982,19 +989,60 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   void runGatewayHandoffDrain(host, carriedRuntimeIds.length);
 }
 
+async function restartAfterFailedHandoff(): Promise<void> {
+  await completeGatewayHandoffHost([]);
+  const restartContext = readRestartContext();
+  if (restartContext?.handoff) {
+    const { handoff: _handoff, ...withoutHandoff } = restartContext;
+    writeRestartContext(withoutHandoff);
+  }
+  if (process.env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD === '1') {
+    // Exit as a failed gateway child so the existing supervisor relaunches only
+    // the gateway; code 42 would unnecessarily restart the entire desktop app.
+    setTimeout(() => process.exit(1), 250);
+    return;
+  }
+  if (process.env.PROMETHEUS_ELECTRON_MANAGED === '1') {
+    setTimeout(() => process.exit(42), 250);
+    return;
+  }
+  try {
+    spawnDetachedReplacementGateway(getProjectRoot(), null);
+    setTimeout(() => process.exit(0), 250);
+  } catch (error: any) {
+    console.error(`[lifecycle] Could not restart after failed handoff: ${error?.message || error}`);
+    setTimeout(() => process.exit(1), 250);
+  }
+}
+
 async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise<boolean>; status(): { connected: boolean } }, carriedCount: number): Promise<void> {
   const maxMs = handoffMaxDrainMs();
   const connected = await host.waitForClient(90_000);
-  if (!connected) console.warn('[lifecycle] Replacement gateway has not connected to the handoff channel yet; continuing to drain.');
+  if (!connected) {
+    console.error('[lifecycle] Replacement gateway did not connect; restarting the draining host through its launcher.');
+    await restartAfterFailedHandoff();
+    return;
+  }
   let lastLogAt = 0;
+  let disconnectedAt = 0;
   const drain = await waitForGatewayHandoffDrain({
     maxMs,
+    shouldAbort: () => {
+      if (host.status().connected) { disconnectedAt = 0; return false; }
+      if (!disconnectedAt) disconnectedAt = Date.now();
+      return Date.now() - disconnectedAt >= 30_000;
+    },
     onTick: (running, waitedMs) => {
       if (Date.now() - lastLogAt < 60_000) return;
       lastLogAt = Date.now();
       console.log(`[lifecycle] Handoff drain: ${running} runtime(s) still running after ${Math.round(waitedMs / 1000)}s${host.status().connected ? '' : ' (replacement not connected)'}.`);
     },
   });
+  if (drain.aborted) {
+    console.error('[lifecycle] Replacement stayed disconnected for 30s; restarting through the normal handoff fallback.');
+    await restartAfterFailedHandoff();
+    return;
+  }
   let interruptedIds: string[] = [];
   if (drain.timedOut) {
     console.warn(`[lifecycle] Handoff drain deadline (${Math.round(maxMs / 60_000)} min) reached; checkpointing remaining runtimes for recovery.`);

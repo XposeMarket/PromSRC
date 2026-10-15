@@ -3,6 +3,7 @@
   "id": "product-carousel-builder",
   "name": "product-carousel-builder",
   "description": "Use when the user asks to find, compare, recommend, or display real purchasable products as product cards or a carousel. Do not use for non-shopping research or generic visual cards.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

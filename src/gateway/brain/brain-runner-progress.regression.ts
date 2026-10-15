@@ -97,6 +97,7 @@ async function main(): Promise<void> {
     assert.equal(leaseApi.readGatewayProgressLease(leasePath)?.state, 'idle');
 
     const staleState = brainStateApi.loadLatestState();
+    staleState.thoughtEnabled = true; // Explicit opt-in: this test exercises enabled retry backoff.
     staleState.lastThoughtAttemptAt = new Date(Date.now() - 5_000).toISOString();
     staleState.lastThoughtStatus = 'idle';
     staleState.lastThoughtError = null;

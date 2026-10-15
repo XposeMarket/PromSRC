@@ -2,7 +2,9 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "file-surgery",
   "name": "file-surgery",
-  "description": "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery; use promsrc-pr-worktree for Prometheus source changes.",
+  "description": "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery.",
+  "visibility": "public",
+  "publicExcludeResources": ["references/creative-artifact-presentation.md"],
   "version": "3.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

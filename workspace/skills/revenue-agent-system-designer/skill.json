@@ -3,6 +3,7 @@
   "id": "revenue-agent-system-designer",
   "name": "revenue-agent-system-designer",
   "description": "Design a measurable, permission-aware agent system spanning lead intake, qualification, sales, and retention. Use for multi-agent revenue automation architecture; use sdr-sales for one prospecting process and revenue-manager for pipeline operations.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

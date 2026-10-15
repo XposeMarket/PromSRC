@@ -46,10 +46,9 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   version: '1.0.2',
   gateway: {
     port: getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
-    // Mobile pairing is a LAN feature. Bind the gateway to IPv4 interfaces by
-    // default so a phone on the same Wi-Fi can reach the origin in the QR.
-    // Gateway auth and paired-device tokens still protect API access.
-    host: process.env.GATEWAY_HOST ?? '0.0.0.0',
+    // Fresh installs stay local; LAN access is an explicit, reversible opt-in.
+    // Explicit hosts in saved configs are preserved by the config merge.
+    host: process.env.GATEWAY_HOST ?? '127.0.0.1',
     https: {
       enabled: process.env.GATEWAY_HTTPS_ENABLED === '1' || process.env.GATEWAY_HTTPS_ENABLED === 'true',
       port: process.env.GATEWAY_HTTPS_PORT ? parseInt(process.env.GATEWAY_HTTPS_PORT, 10) : 18790,
@@ -117,6 +116,13 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       executor: 'qwen3:4b',
       verifier: 'qwen3:4b'
     }
+  },
+  // Brain-owned learning remains fully opt-in; review is disabled by default.
+  brain: {
+    enabled: false,
+    skillLearning: {
+      autoReview: false,
+    },
   },
   image_generation: {
     provider: process.env.PROMETHEUS_IMAGE_PROVIDER ?? 'auto',
@@ -270,6 +276,9 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     path: path.join(CONFIG_DIR, 'memory'),
     embedding_model: 'nomic-embed-text',
     embeddings: {
+      // Remote/paid embeddings must be explicitly enabled. Automatic memory
+      // indexing otherwise uses a local provider or remains disabled.
+      allow_cloud: process.env.PROMETHEUS_MEMORY_ALLOW_CLOUD_EMBEDDINGS === '1',
       provider: process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto',
       auto_backfill: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS !== '0',
       auto_backfill_limit: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT

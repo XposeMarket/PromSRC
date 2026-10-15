@@ -3,6 +3,7 @@
   "id": "webhook-receiver-framework",
   "name": "webhook-receiver-framework",
   "description": "Use when configuring or extending Prometheus inbound webhook endpoints, including authenticated wake events and agent dispatch. Do not invoke for ordinary API calls or outbound integrations.",
+  "visibility": "public",
   "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

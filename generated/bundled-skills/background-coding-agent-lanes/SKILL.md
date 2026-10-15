@@ -37,7 +37,7 @@ Each lane should track:
 - Avoid passing secrets to external agents unless the user explicitly authorizes the integration.
 - On cancellation, preserve logs and partial diffs.
 - Workers never spawn their own reviewers. Prometheus dispatches reviewers separately and owns the review order.
-- If main chat runs on Anthropic, never spawn an Anthropic worker. Prefer `openai_codex/gpt-6-sol` by default; use `openai_codex/gpt-6-luna` for maximum reasoning and review its output before accepting it.
+- Use the configured background worker model unless the user names one, and review worker output before accepting it.
 
 ## Lane execution and review
 

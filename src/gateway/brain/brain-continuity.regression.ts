@@ -158,7 +158,7 @@ assert.match(note, /A live note that must survive/);
 assert.doesNotMatch(note, /BRAIN_CARRY_FORWARD_START|old block|Galaxy Drift/);
 const injectedCarry = readCarryForwardForPrompt(root, '2026-07-19');
 assert.match(injectedCarry, /Galaxy Drift controls/);
-const injectedNotes = processIntradayNotes(note, 12, 250, 10_000);
+const injectedNotes = processIntradayNotes(note, 12, 250);
 assert.match(injectedNotes, /A live note that must survive/);
 
 const updated = { ...decision!, generatedAt: '2026-07-19T00:10:00.000Z', items: [] };

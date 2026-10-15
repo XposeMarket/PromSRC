@@ -3,6 +3,7 @@
   "id": "capability-finder",
   "name": "Capability Finder",
   "description": "Find the existing Prometheus capability (skill, tool category, connected app or MCP tool, connection, or plugin) that covers a need before building or importing anything. Use when the user asks whether a skill or tool exists for a task, asks what Prometheus can use for X, or a task needs a capability that is not loaded. Do not use for authoring a skill (skill-creator), deep safety review of an external bundle (external-skill-vetting), or tasks whose tools are already loaded.",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

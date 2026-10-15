@@ -3,6 +3,7 @@
   "id": "external-apps-operations",
   "name": "external-apps-operations",
   "description": "Operate connected external services with read-first checks, side-effect boundaries, and readback. Use for cross-app tool execution; not for onboarding a new connection (integration-setup).",
+  "visibility": "public",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [

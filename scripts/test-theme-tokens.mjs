@@ -30,6 +30,8 @@ const rawPatterns = {
   orangeRgba: /rgba\s*\(\s*249\s*,\s*115\s*,\s*22\s*,/gi,
   emberRgba: /rgba\s*\(\s*234\s*,\s*106\s*,\s*31\s*,/gi,
   goldHex: /#d6b75e/gi,
+  blueHex: /#3d8bff/gi,
+  violetHex: /#8b5cf6/gi,
 };
 
 function stripCssComments(css) { return css.replace(/\/\*[\s\S]*?\*\//g, ''); }
@@ -65,21 +67,124 @@ function normalize(relative) { return relative.split(path.sep).join('/'); }
 
 function runFixtures() {
   assert.deepEqual([...declarations(['--t-bg: x; --t-text: y;'])].sort(), ['--t-bg', '--t-text']);
-  assert.equal(blocksForSelectors(':root, :root[data-skin="light"] { --t-bg: x; }', ':root[data-skin="light"]').length, 1);
+  assert.equal(blocksForSelectors(':root, :root[data-skin="p1"] { --t-bg: x; }', ':root[data-skin="p1"]').length, 1);
   assert.equal(countRaw('A{color: RGBA( 249, 115, 22, .2)}').orangeRgba, 1);
   assert.equal(countRaw('A{color: rgba(234, 106, 31, .2)}').emberRgba, 1);
   assert.throws(() => requireTokens('fixture', ['--t-bg: x;'], '--t-', ['bg', 'text']), /--t-text/);
   assert.throws(() => requireTokens('fixture bridge', ['--prom-bg: x;'], '--prom-', ['bg', 'accent']), /--prom-accent/);
 }
 
-function main() {
+// Executes theme-registry.js in a sandbox to prove the saved-theme migration
+// never changes what an existing user sees.
+async function runRegistryBehavior(source) {
+  const vm = await import('node:vm');
+  const boot = ({ saved, surface, schema }) => {
+    const store = new Map();
+    if (saved != null) store.set('prometheus_theme', saved);
+    if (schema != null) store.set('prometheus_theme_schema', schema);
+    const window = {
+      location: { pathname: surface === 'mobile' ? '/mobile' : '/' },
+      __PROM_SHOULD_BOOT_MOBILE: () => surface === 'mobile',
+    };
+    const localStorage = {
+      getItem: (key) => (store.has(key) ? store.get(key) : null),
+      setItem: (key, value) => store.set(key, String(value)),
+    };
+    vm.runInNewContext(source, { window, localStorage });
+    return { window, store };
+  };
+  const cases = [
+    // [saved, surface, expected read, expected persisted]
+    ['light', 'desktop', 'p1', 'p1'],
+    ['light', 'mobile', 'p1', 'p1'],
+    ['dark', 'mobile', 'p1', 'p1'],       // mobile stored P1 as `dark`
+    ['dark', 'desktop', 'dark', 'dark'],  // desktop Default Dark stays put
+    ['blue', 'mobile', 'blue', 'blue'],
+    ['custom', 'mobile', 'custom', 'custom'],
+    [null, 'mobile', '', null],
+  ];
+  for (const [saved, surface, expected, persisted] of cases) {
+    const { window, store } = boot({ saved, surface });
+    assert.equal(window.PROM_READ_SAVED_THEME(), expected, `read ${saved} on ${surface}`);
+    assert.equal(store.get('prometheus_theme') ?? null, persisted, `persisted ${saved} on ${surface}`);
+    assert.equal(store.get('prometheus_theme_schema'), '2', `schema marked for ${saved} on ${surface}`);
+  }
+  // Migration is one-shot: once marked, a later mobile `dark` is not rewritten.
+  const marked = boot({ saved: 'dark', surface: 'mobile', schema: '2' });
+  assert.equal(marked.store.get('prometheus_theme'), 'dark');
+  // Default Dark is desktop-only: mobile resolves it to P1 rather than showing it.
+  const mobile = boot({ saved: null, surface: 'mobile' }).window;
+  assert.ok(!mobile.PROM_THEMES.some((theme) => theme.id === 'dark'), 'mobile picker hides Default Dark');
+  assert.equal(mobile.PROM_RESOLVE_THEME('dark').id, 'p1');
+  assert.equal(mobile.PROM_RESOLVE_THEME('light').id, 'p1');
+  const desktop = boot({ saved: null, surface: 'desktop' }).window;
+  assert.ok(desktop.PROM_THEMES.some((theme) => theme.id === 'dark'), 'desktop keeps Default Dark');
+  for (const theme of desktop.PROM_ALL_THEMES) {
+    for (const key of ['id', 'label', 'base', 'description', 'surfaces', 'statusBar', 'chromeAccent']) {
+      assert.ok(Object.hasOwn(theme, key), `registry theme ${theme.id} defines ${key}`);
+    }
+  }
+}
+
+// Phase 4-6 ratchets: typography, legacy ids, and single-writer theme attributes.
+function runArchitectureGuards(actualFiles) {
+  const stylesRoot = path.join(root, 'web-ui/src/styles');
+  const offenders = [];
+  for (const relative of Object.keys(actualFiles)) {
+    if (relative.endsWith('/theme-tokens.css')) continue;
+    // Blank out comments but keep their newlines so reported line numbers are real.
+    const css = fs.readFileSync(path.join(root, relative), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '));
+    const lines = css.split('\n');
+    lines.forEach((line, index) => {
+      const where = `${relative}:${index + 1}`;
+      if (/data-skin=["']?light["'\]]/.test(line)) offenders.push(`${where} uses legacy data-skin="light" (use p1)`);
+      if (/^\s*--[\w-]+\s*:/.test(line)) return;
+      if (/['"]Manrope['"]\s*,\s*sans-serif/.test(line)) offenders.push(`${where} hard-codes Manrope (use var(--t-font-ui))`);
+      if (/font-family:\s*[^;]*(Plex Mono|JetBrains Mono|SFMono|Menlo|Consolas)/i.test(line) && !/var\(/.test(line)) offenders.push(`${where} hard-codes a mono stack (use var(--t-font-mono))`);
+      if (/(^|\/)mobile[\w-]*\.css$/.test(relative) && /\bfont(-size)?:[^;]*\b(\d|10|10\.5|9\.5)px/.test(line) && /\bfont(-size)?:\s*(\d{3}\s+)?(\d|10|10\.5|9\.5)px/.test(line)) offenders.push(`${where} sets mobile text below the 11px floor (use var(--t-fs-2xs))`);
+    });
+  }
+  const tokens = read('web-ui/src/styles/theme-tokens.css');
+  for (const token of ['--t-fs-2xs', '--theme-font-ui', '--theme-font-mono', '--theme-palette-blue', '--theme-palette-violet']) {
+    if (!tokens.includes(`${token}:`)) offenders.push(`theme-tokens.css must define ${token}`);
+  }
+  const jsRoots = ['web-ui/src', 'web-ui/index.html', 'web-ui/mobile.html'];
+  const jsFiles = [];
+  const walk = (absolute) => {
+    const stat = fs.statSync(absolute);
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(absolute)) if (!['vendor', 'generated', 'build'].includes(name)) walk(path.join(absolute, name));
+    } else if (/\.(js|html)$/.test(absolute)) jsFiles.push(absolute);
+  };
+  for (const entry of jsRoots) walk(path.join(root, entry));
+  for (const absolute of jsFiles) {
+    const relative = normalize(path.relative(root, absolute));
+    const source = fs.readFileSync(absolute, 'utf8');
+    if (relative === 'web-ui/src/theme-registry.js') continue;
+    const writes = source.match(/setAttribute\(\s*['"]data-skin['"]/g) || [];
+    const guarded = source.match(/PROM_APPLY_THEME_ATTRIBUTES/g) || [];
+    if (writes.length > guarded.length) offenders.push(`${relative} writes data-skin without PROM_APPLY_THEME_ATTRIBUTES (${writes.length} writes, ${guarded.length} registry calls)`);
+    if (/getAttribute\(\s*['"]data-skin['"]\s*\)\s*\|\|\s*['"]light['"]/.test(source)) offenders.push(`${relative} falls back to legacy skin id light`);
+  }
+  if (offenders.length) fail(`architecture ratchet failed:\n  ${offenders.slice(0, 40).join('\n  ')}`);
+  void stylesRoot;
+}
+
+async function main() {
   runFixtures();
   const index = read('web-ui/index.html');
   const tokens = read('web-ui/src/styles/theme-tokens.css');
-  const registryMatch = index.match(/window\.PROM_THEMES\s*=\s*\[([\s\S]*?)\];/);
-  if (!registryMatch) fail('could not parse window.PROM_THEMES from web-ui/index.html');
+  const registry = read('web-ui/src/theme-registry.js');
+  assert.ok(index.includes('src/theme-registry.js'), 'desktop loads shared registry');
+  assert.ok(read('web-ui/mobile.html').includes('/src/theme-registry.js'), 'mobile loads shared registry');
+  const registryMatch = registry.match(/const THEMES\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/);
+  if (!registryMatch) fail('could not parse THEMES from web-ui/src/theme-registry.js');
   const skins = [...registryMatch[1].matchAll(/\bid\s*:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
-  if (!skins.length) fail('window.PROM_THEMES has no skins');
+  if (!skins.length) fail('theme registry has no skins');
+  if (skins.includes('light')) fail('Prometheus One must use canonical id p1, not light');
+  if (skins[0] !== 'p1') fail('Prometheus One (p1) must be the first/default registry theme');
+  await runRegistryBehavior(registry);
   const expectedSkins = [...new Set([...skins, 'custom'])];
 
   for (const skin of expectedSkins) {
@@ -108,6 +213,11 @@ function main() {
 
   const baseline = JSON.parse(read('scripts/theme-token-raw-accent-baseline.json'));
   const stylesRoot = path.join(root, 'web-ui/src/styles');
+  assert.ok(baseline.exceptions, 'remaining raw entries must document their exception');
+  for (const relative of Object.keys(baseline.files)) assert.ok(baseline.exceptions[relative], `missing exception rationale: ${relative}`);
+  const mobileShell = read('web-ui/src/mobile/mobile-shell.js');
+  assert.ok(!/\.\.\.p1,\s*id:\s*['"]dark/.test(mobileShell), 'mobile must not remap P1 to dark');
+  assert.ok(blocksForSelectors(read('web-ui/src/styles/mobile.css'), ':root[data-skin="p1"]').some((block) => /--pm-accent:\s*var\(--pm-p1-gold\)/.test(block)), 'mobile P1 palette uses canonical p1 ID');
   const actualFiles = Object.fromEntries(cssFiles(stylesRoot).map((absolute) => {
     const relative = normalize(path.relative(root, absolute));
     return [relative, countRaw(fs.readFileSync(absolute, 'utf8'))];
@@ -128,7 +238,8 @@ function main() {
       if (count > 0) fail(`new stylesheet ${relative} introduces ${count} raw ${name} literal(s); use semantic tokens or add a reviewed baseline`);
     }
   }
+  runArchitectureGuards(actualFiles);
   console.log(`Theme token guardrail passed: ${expectedSkins.length} skins × ${requiredTokens.length} semantic tokens, ${bridgeTokens.length} --prom bridges, raw accents at or below baseline.`);
 }
 
-main();
+main().catch((error) => { console.error(error); process.exit(1); });

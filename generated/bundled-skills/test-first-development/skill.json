@@ -3,6 +3,7 @@
   "id": "test-first-development",
   "name": "Test-First Development",
   "description": "Guide feature and bug work through a practical test-first loop: define observable behavior, write a failing test, make the smallest implementation pass, refactor safely, and verify the surrounding contract. Use when tests should drive implementation, not for visual exploration or a review-only request.",
+  "visibility": "public",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [

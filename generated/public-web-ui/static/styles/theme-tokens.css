@@ -1,12 +1,68 @@
-/* Phase 1: additive semantic contract; existing rendering remains authoritative.
- * Values are copied by reference from base.css/themes.css (including custom
- * properties derived inline by app.js). Do not invert these aliases until the
- * phase-2 migration: doing so would create cycles and change the legacy cascade.
+/* Semantic contract: palette producers remain authoritative.
+ * Values reference base.css/themes.css and custom properties set by app.js.
+ * Producers use primitive palette tokens; consumers use semantic aliases.
+ * Never point a producer back at its semantic alias (a dependency cycle).
  * All registry skins explicitly opt into the same complete mapping. Their
  * existing skin-specific values, not a second palette, supply the differences.
  */
+/* Shared primitive palette definitions are the only raw accent sources.
+ * p1 = Prometheus One (black/gold), dark = warm graphite/orange, gray = ash/ember,
+ * blue = Olympian Blue, purple = Aether Violet, custom = user palette.
+ * Both surfaces use these IDs; mobile preserves its liquid-glass surfaces. */
+:root {
+  --theme-palette-orange: #f97316;
+  --theme-palette-gold: #d6b75e;
+  --theme-palette-ember: #ea6a1f;
+  --theme-palette-blue: #3d8bff;
+  --theme-palette-violet: #8b5cf6;
+  /* Type primitives. One UI stack, one mono stack, one 6-step scale.
+   * --t-fs-2xs (11px) is the readable floor; nothing on mobile goes below it. */
+  --theme-font-ui: 'Manrope', sans-serif;
+  --theme-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --theme-font-system: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --theme-font-system-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --t-fs-2xs: 11px;
+}
+
+/* Per-skin primitive palettes, shared by desktop (themes.css) and mobile
+ * (mobile-shell.css). Mobile may layer its own glass surfaces on top, but the
+ * backdrop, text, muted, border and accent families come only from here. */
+:root[data-skin="gray"] {
+  --skin-bg: #2e2e2e;
+  --skin-bg-soft: #363636;
+  --skin-panel: #3d3d3d;
+  --skin-panel-2: #484848;
+  --skin-line: rgba(255,255,255,.12);
+  --skin-line-strong: rgba(255,255,255,.20);
+  --skin-text: #f1eee8;
+  --skin-muted: #aaa49a;
+  --skin-accent: var(--theme-palette-orange);
+}
+:root[data-skin="blue"] {
+  --skin-bg: #07101f;
+  --skin-bg-soft: #0c1730;
+  --skin-panel: #122444;
+  --skin-panel-2: #16294e;
+  --skin-line: rgba(120,170,255,0.12);
+  --skin-line-strong: rgba(120,170,255,0.22);
+  --skin-text: #dde8ff;
+  --skin-muted: #8da3c9;
+  --skin-accent: var(--theme-palette-blue);
+}
+:root[data-skin="purple"] {
+  --skin-bg: #0c0518;
+  --skin-bg-soft: #150a28;
+  --skin-panel: #1e1138;
+  --skin-panel-2: #261545;
+  --skin-line: rgba(170,120,255,0.12);
+  --skin-line-strong: rgba(170,120,255,0.22);
+  --skin-text: #e8ddff;
+  --skin-muted: #a892cf;
+  --skin-accent: var(--theme-palette-violet);
+}
+
 :root,
-:root[data-skin="light"],
+:root[data-skin="p1"],
 :root[data-skin="gray"],
 :root[data-skin="dark"],
 :root[data-skin="blue"],
@@ -36,9 +92,10 @@
   --t-warn: var(--warn);
   --t-err: var(--err);
   --t-info: var(--log-info);
-  --t-font-ui: var(--pm-custom-font, 'Manrope', sans-serif);
-  --t-font-display: var(--pm-custom-font, 'Manrope', sans-serif);
-  --t-font-mono: 'IBM Plex Mono', monospace;
+  --t-font-ui: var(--pm-custom-font, var(--theme-font-ui));
+  --t-font-display: var(--pm-custom-font, var(--theme-font-ui));
+  --t-font-mono: var(--theme-font-mono);
+  --t-fs-2xs: 11px;
   --t-fs-xs: 12px;
   --t-fs-sm: 13px;
   --t-fs-md: 14px;
@@ -48,9 +105,8 @@
   --t-shadow: var(--shadow-md);
 }
 
-/* The mobile legacy palette is intentionally different from desktop. P1 is
- * still `dark` on mobile and `light` on desktop. Read the actually displayed
- * --pm-* cascade, without changing IDs, selectors, or stored preferences.
+/* Mobile shares canonical skin IDs with desktop; its glass material remains
+ * surface-specific. Read the actually displayed --pm-* cascade.
  * Root aliases support generated visuals/root probes; body aliases re-resolve
  * page-local gold chrome overrides on Settings and other non-chat routes.
  */
@@ -82,7 +138,8 @@ body.pm-mobile-active {
   --t-info: var(--pm-blue);
   --t-font-ui: var(--pm-font);
   --t-font-display: var(--pm-font);
-  --t-font-mono: var(--pm-font-mono, 'IBM Plex Mono', monospace);
+  --t-font-mono: var(--pm-font-mono, var(--theme-font-system-mono));
+  --t-fs-2xs: 11px;
   --t-fs-xs: 12px;
   --t-fs-sm: 13px;
   --t-fs-md: 14px;
