@@ -7,7 +7,8 @@
 import type { BrowserDesktopHandlerContext } from './browser-desktop-context';
 import { browserClick, browserClickAndDownload, browserClose, browserCloseTab, browserDoctor, browserDrag, browserElementWatch, browserExtractStructured, browserFill, browserGetFocusedItem, browserGetPageText, browserInspectConsole, browserInterceptNetwork, browserListTabs, browserNewTab, browserOpen, browserPressKey, browserRunJs, browserRunSmokeSteps, browserScroll, browserScrollCollect, browserScrollCollectV2, browserSelectTab, browserSetProfileTarget, browserSnapshot, browserSnapshotDelta, browserTeachVerify, browserType, browserUploadFile, browserVisionClick, browserVisionScreenshot, browserVisionType, browserWait, resolveBrowserObserveMode } from '../../browser-tools';
 import { buildToolBenchmarkAggregate } from '../../tool-observations';
-import { consumeFinalActionApproval } from '../../final-action-approvals.js';
+import { buildUiActionIntent, enforceFinalActionGate, somLabelFromSourceNote } from '../../final-action-gate';
+import { getBrowserRefLabel } from '../../browser-tools';
 import { desktopAccessibilityAction, desktopAccessibilityFindAndAct, desktopBackgroundCommand, desktopBackgroundPrepareSandbox, desktopBackgroundStatus, desktopClick, desktopClickText, desktopCloseApp, desktopDiffScreenshot, desktopDoctor, desktopDrag, desktopFindInstalledApp, desktopFindWindow, desktopFocusWindowCanonical, desktopFocusWindowVerified, desktopGetAccessibilityState, desktopGetAccessibilityTree, desktopGetClipboard, desktopGetMonitorsSummary, desktopGetProcessList, desktopGetWindowState, desktopGetWindowText, desktopLaunchApp, desktopListApps, desktopListInstalledApps, desktopListMacros, desktopListWindowsCanonical, desktopLocateText, desktopPixelWatch, desktopPressKey, desktopRecordMacro, desktopReplayMacro, desktopScreenshotWithHistory, desktopScroll, desktopSetClipboard, desktopStopMacro, desktopType, desktopTypeRaw, desktopWait, desktopWaitForChange, desktopWindowClick, desktopWindowControl, desktopWindowDrag, desktopWindowPressKey, desktopWindowScreenshot, desktopWindowScroll, desktopWindowType, getDesktopAdvisorPacketById, parseDesktopPointerMonitorArgs, parseDesktopScreenshotToolArgs, resolveCanonicalWindow, resolveDesktopActionPoint } from '../../desktop-tools';
 import { executeDeliverySendScreenshot } from '../../delivery-screenshot.js';
 import { executeTool, resolveBoundedToolTimeoutMs, withBoundedToolTimeout } from '../subagent-executor';
@@ -78,12 +79,20 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_click': {
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        const hasFinalActionApproval = !!finalActionApprovalId;
-        if (finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
-          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
-        }
+        const gate = enforceFinalActionGate({
+          sessionId,
+          toolName: name,
+          args,
+          surface: 'browser',
+          intent: buildUiActionIntent([
+            getBrowserRefLabel(sessionId, args.ref != null ? Number(args.ref) : undefined),
+            args.element,
+            args.element_name,
+            args.selector,
+          ]),
+        });
+        if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        const hasFinalActionApproval = gate.approved;
         const observeMode = resolveBrowserObserveMode('browser_click', hasFinalActionApproval ? 'snapshot' : (args.capture_after === true ? 'snapshot' : args.observe));
         const result = await browserClick(sessionId, {
           ref: args.ref != null ? Number(args.ref) : undefined,
@@ -120,12 +129,9 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
       case 'browser_press_key':
       case 'browser_key': {
         const keyToolName = name === 'browser_key' ? 'browser_key' : 'browser_press_key';
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        const hasFinalActionApproval = !!finalActionApprovalId;
-        if (finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: keyToolName, toolArgs: args });
-          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
-        }
+        const gate = enforceFinalActionGate({ sessionId, toolName: keyToolName, args, surface: 'browser', intent: '' });
+        if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        const hasFinalActionApproval = gate.approved;
         const observeMode = resolveBrowserObserveMode(keyToolName, hasFinalActionApproval ? 'snapshot' : args.observe);
         const result = await browserPressKey(sessionId, String(args.key || 'Enter'), {
           observe: observeMode,
@@ -564,12 +570,18 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
           }
         }
 
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        if (resolved.ok && finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+        let hasFinalActionApproval = false;
+        if (resolved.ok) {
+          const gate = enforceFinalActionGate({
+            sessionId,
+            toolName: name,
+            args,
+            surface: 'desktop',
+            intent: somLabelFromSourceNote(resolved.point.sourceNote),
+          });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+          hasFinalActionApproval = gate.approved;
         }
-        const hasFinalActionApproval = !!finalActionApprovalId;
         let result = !resolved.ok
           ? `ERROR: ${resolved.message}`
           : await desktopClick(
@@ -650,12 +662,9 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_press_key': {
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        const hasFinalActionApproval = !!finalActionApprovalId;
-        if (finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
-          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
-        }
+        const gate = enforceFinalActionGate({ sessionId, toolName: name, args, surface: 'desktop', intent: '' });
+        if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        const hasFinalActionApproval = gate.approved;
         let result = await desktopPressKey(String(args.key || 'Enter'));
         if (!result.startsWith('ERROR') && hasFinalActionApproval) {
           const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
@@ -766,6 +775,8 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_click_text': {
+        const clickTextGate = enforceFinalActionGate({ sessionId, toolName: name, args, surface: 'desktop', intent: buildUiActionIntent([args.query]) });
+        if (!clickTextGate.ok) return { name, args, result: `ERROR: ${clickTextGate.message}`, error: true };
         const result = await desktopClickText(sessionId, {
           screenshot_id: String(args.screenshot_id || ''),
           query: String(args.query || ''),
@@ -786,6 +797,18 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_accessibility_action': {
+        const a11yAction = String(args.semantic_action || 'invoke').toLowerCase();
+        if (a11yAction === 'invoke' || a11yAction === 'click' || a11yAction === 'toggle' || a11yAction === 'select' || a11yAction === 'expand') {
+          const a11yGate = enforceFinalActionGate({
+            sessionId,
+            toolName: name,
+            args,
+            surface: 'desktop',
+            classifyAs: 'desktop_accessibility_click',
+            intent: buildUiActionIntent([args.element_name, args.automation_id]),
+          });
+          if (!a11yGate.ok) return { name, args, result: `ERROR: ${a11yGate.message}`, error: true };
+        }
         if (args.atomic === true || (args.state_id == null && (args.element_name != null || args.automation_id != null))) {
           const result = await desktopAccessibilityFindAndAct({
             selector: { window_token: args.window_token, window_id: args.window_id, window_handle: args.window_handle, app_id: args.app_id, title: args.title },
@@ -817,11 +840,8 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
           app_id: args.app_id == null ? undefined : String(args.app_id),
           title: args.title == null ? undefined : String(args.title),
         };
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        if (finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
-          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
-        }
+        const gate = enforceFinalActionGate({ sessionId, toolName: name, args, surface: 'desktop', intent: '' });
+        if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         const result = await desktopWindowClick(
           selector,
           {
@@ -860,11 +880,8 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_window_press_key': {
-        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
-        if (finalActionApprovalId) {
-          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
-          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
-        }
+        const gate = enforceFinalActionGate({ sessionId, toolName: name, args, surface: 'desktop', intent: '' });
+        if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         const result = await desktopWindowPressKey(
           {
             window_token: args.window_token == null ? undefined : String(args.window_token),

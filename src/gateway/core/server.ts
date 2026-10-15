@@ -462,6 +462,16 @@ function tryRawGatewayFastPath(
     return true;
   }
 
+  // /api/status and /api/system-stats expose workspace paths, models and queue
+  // state. Only authenticated callers (local desktop, paired device, gateway
+  // token) get the full payload; anyone else, e.g. the public Funnel URL, gets a
+  // liveness stub (status) or falls through to the auth-guarded express route.
+  if (!evaluateGatewayRequest(req as any).ok) {
+    if (pathname !== '/api/status') return false;
+    sendRawJson(res, { status: 'ok', version: 'v2-tools', authRequired: true, fastPath: true });
+    return true;
+  }
+
   const rawCfg = getConfig().getConfig() as any;
   const provider = String(rawCfg.llm?.provider || 'ollama');
   const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
@@ -634,6 +644,10 @@ export function createServer(
   server.on('error', (err: any) => {
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
+      if (process.env.PROMETHEUS_HOT_RESTART === '1') {
+        console.warn('[Gateway] Handoff replacement will retry the listener bind while its predecessor releases the port.');
+        return;
+      }
       console.error('[Gateway] Another gateway instance is likely already running or the port is stuck.');
       console.error('[Gateway] Close the other process or run: prom gateway stop');
       process.exit(1);

@@ -1,0 +1,1 @@
+{"id":"06-memory","category":"memory-recall","prompt":"Remember for the next message: project kestrel has launch code violet-731. Do not write any files yet.","turns":["Now recall the launch code I stated earlier, without asking me. Write it into recall.txt ending with newline."],"setup":{},"grader":{"files":{"recall.txt":"violet-731\n"}},"timeoutSec":180}

@@ -45,6 +45,35 @@ export function isLoopbackAddress(rawAddress: string | undefined | null): boolea
   );
 }
 
+// Headers that a reverse proxy (Tailscale Funnel/Serve, Cloudflare tunnel,
+// nginx, ...) adds when it forwards a request. Such proxies connect to the
+// gateway from 127.0.0.1, so the socket address alone would make every
+// internet request look local. A request carrying any of these is treated as
+// remote: it must present a paired-device token or the gateway token.
+// Spoofing is not a concern: adding these headers only removes trust.
+const PROXY_FORWARDING_HEADERS = [
+  'tailscale-funnel-request',
+  'tailscale-user-login',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-real-ip',
+  'forwarded',
+  'cf-connecting-ip',
+  'true-client-ip',
+];
+
+export function isProxiedRequest(req: Pick<GatewayRequestLike, 'headers'>): boolean {
+  const headers = req?.headers;
+  if (!headers || typeof headers !== 'object') return false;
+  const present = new Set(Object.keys(headers).map((name) => String(name).toLowerCase()));
+  return PROXY_FORWARDING_HEADERS.some((name) => present.has(name));
+}
+
+/** True only for a request made directly from this machine, not relayed by a local reverse proxy. */
+export function isDirectLoopbackRequest(req: GatewayRequestLike): boolean {
+  return isLoopbackAddress(getGatewayRequestIp(req)) && !isProxiedRequest(req);
+}
+
 export function getGatewayRequestIp(req: GatewayRequestLike): string {
   return String(
     req.ip ||
@@ -238,6 +267,15 @@ export function evaluateGatewayRequest(
       ok: false,
       status: 401,
       message: 'Unauthorized: configure gateway.auth.token to enable remote access.',
+    };
+  }
+  // Loopback socket but relayed by a reverse proxy (e.g. Tailscale Funnel):
+  // this is an internet/tailnet client, never ambient-local trust.
+  if (isProxiedRequest(req)) {
+    return {
+      ok: false,
+      status: 401,
+      message: 'Unauthorized: proxied remote requests require a paired device or gateway token.',
     };
   }
 

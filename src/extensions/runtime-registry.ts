@@ -1,3 +1,5 @@
+import { assertPluginPermission, withPluginPermissions } from './permission-manifest.js';
+
 import { resolveConnectorCredential } from './credential-access.js';
 import { listExtensionDescriptors } from './registry.js';
 import type {
@@ -443,12 +445,16 @@ export class PrometheusExtensionRuntimeRegistry {
     const connectorId = this.connectorIdForTool(tool);
     const connectorScope = connectorId || tool.extensionId;
     try {
-      const result = await tool.execute(args || {}, {
-      extensionId: tool.extensionId,
-      trustLevel: extension?.trustLevel || 'local',
-      getCredential: (fieldKey: string, connectorId?: string) =>
-        resolveConnectorCredential(connectorId || connectorScope, fieldKey),
-      });
+      const permissionManifest = extension?.manifest || { id: tool.extensionId };
+      assertPluginPermission(permissionManifest, { kind: 'tool', name });
+      const result = await withPluginPermissions(permissionManifest, () => tool.execute(args || {}, {
+        extensionId: tool.extensionId,
+        trustLevel: extension?.trustLevel || 'local',
+        getCredential: (fieldKey: string, connectorId?: string) => {
+          assertPluginPermission(permissionManifest, { kind: 'secret', name: fieldKey });
+          return resolveConnectorCredential(connectorId || connectorScope, fieldKey);
+        },
+      }));
       const message = String(result?.result || '');
       if (result?.error && /token refresh failed|invalid_request|invalid_grant|token was invalid|unauthori[sz]ed|invalid token|token revoked|\b401\b/i.test(message)) {
         this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });

@@ -1,0 +1,1 @@
+{"id":"10-json","category":"data-transform","prompt":"Read items.json. Write total.txt containing sum of quantities followed by newline; preserve input.","setup":{"items.json":"[{\"qty\":2},{\"qty\":7},{\"qty\":4}]\n"},"grader":{"files":{"total.txt":"13\n","items.json":"[{\"qty\":2},{\"qty\":7},{\"qty\":4}]\n"}},"timeoutSec":120}

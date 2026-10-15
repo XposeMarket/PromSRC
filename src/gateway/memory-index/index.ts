@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { getConfig } from '../../config/config.js';
 import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord, getRelatedOperationalRecords } from './operational.js';
 import { parseMemoryNoteDocument } from './memory-note.js';
+import { sanitizeMemoryRecallText } from './memory-recall.js';
 import {
   backfillMemoryEmbeddingsInWorker,
   getMemoryIndexRefreshWorkerStatus,
@@ -1144,7 +1145,12 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
       confidence: type === 'memory_root' ? 1 : type === 'chat_transcript' || type === 'chat_session' ? 0.62 : 0.8,
       status: 'active',
     };
-    const chunks = makeChunks(rec, parsed.text);
+    // Memory files retain their source history, but inactive or instruction-like
+    // bullets must not become model-facing recall evidence.
+    const recallText = relPath === `${WORKSPACE_FILE_PREFIX}MEMORY.md` || relPath === `${WORKSPACE_FILE_PREFIX}USER.md` || relPath === `${WORKSPACE_FILE_PREFIX}SOUL.md`
+      ? sanitizeMemoryRecallText(parsed.text)
+      : parsed.text;
+    const chunks = makeChunks(rec, recallText);
     const previousChunkCount = prev?.chunkIds?.length || 0;
     const previousChunkTextChars = (prev?.chunkIds || []).reduce(
       (sum, cid) => sum + String(store.chunks[cid]?.text || '').length,

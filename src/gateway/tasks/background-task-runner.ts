@@ -40,6 +40,7 @@ import {
   shouldAppendWriteNoteCompletionStep,
   WRITE_NOTE_COMPLETION_MARKER,
 } from './task-completion-protocol.js';
+import { assessTaskVerification } from './task-verifier.js';
 import {
   clearHistory,
   addMessage,
@@ -3217,10 +3218,14 @@ export class BackgroundTaskRunner {
         undefined, 'background_task',
         undefined, undefined, undefined, undefined,
       );
-      const text = (verifyResult?.text || '').trim();
-      if (!text || /^error:/i.test(text)) {
+      const text = String(verifyResult?.text || '').trim();
+      const assessment = assessTaskVerification({
+        text,
+        status: (verifyResult as any)?.status ?? (verifyResult as any)?.data?.status,
+      });
+      if (assessment.failed) {
         verificationFailed = true;
-        if (text) console.warn(`[RunOnce] Verification returned an error for task ${task.id}: ${text.slice(0, 200)}`);
+        console.warn(`[RunOnce] Verification failed for task ${task.id}: ${(assessment.reason || text || 'unknown reason').slice(0, 200)}`);
       } else {
         verificationText = text;
       }

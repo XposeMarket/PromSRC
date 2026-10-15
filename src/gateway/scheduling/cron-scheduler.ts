@@ -13,6 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
+import { SchedulerAdmission, planDueSlots, validateScheduledExecution, type ScheduledSlot } from './scheduler-admission';
 import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
@@ -60,6 +61,10 @@ export interface CronJob {
   id: string;
   name: string;
   prompt: string;
+  kind?: 'agent' | 'script';
+  command?: string;
+  misfire_policy?: 'skip' | 'run_once' | 'run_all';
+  timeoutMs?: number;
   skillIds?: string[];
   context_refs?: Array<{
     id: string;
@@ -870,6 +875,7 @@ export class CronScheduler {
   // so a single schedule cannot accidentally run twice at the same time.
   private runningJobIds: Set<string> = new Set();
   private storeMtimeMs = 0;
+  private admission: SchedulerAdmission;
   private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
   private defaultStore(): CronStore {
@@ -887,6 +893,7 @@ export class CronScheduler {
   constructor(deps: SchedulerDeps) {
     this.deps = deps;
     this.storePath = deps.storePath;
+    this.admission = new SchedulerAdmission(this.storePath);
     this.store = this.loadStore();
     try { this.storeMtimeMs = fs.statSync(this.storePath).mtimeMs; } catch { this.storeMtimeMs = 0; }
     this.normalizeDisabledJobStatuses();
@@ -1073,6 +1080,7 @@ export class CronScheduler {
 
   createJob(partial: Partial<CronJob> & { name: string; prompt: string }): CronJob {
     this.refreshStoreFromDiskIfChanged();
+    validateScheduledExecution(partial);
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date();
     const normalizedType: CronJob['type'] = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
@@ -1087,6 +1095,10 @@ export class CronScheduler {
       id,
       name: partial.name,
       prompt: partial.prompt,
+      kind: partial.kind || 'agent',
+      command: partial.command,
+      misfire_policy: partial.misfire_policy || 'run_once',
+      timeoutMs: partial.timeoutMs,
       skillIds: normalizeScheduleSkillIds((partial as any).skillIds),
       context_refs: normalizeScheduleContextRefs((partial as any).context_refs || (partial as any).contextReferences),
       type: normalizedType,
@@ -1144,6 +1156,7 @@ export class CronScheduler {
       if (normalizedPartial.type === 'one-shot' && partial.schedule === undefined) normalizedPartial.schedule = null;
     }
     const current = this.store.jobs[idx];
+    validateScheduledExecution({ ...current, ...normalizedPartial });
     const nextTz = normalizedPartial.tz !== undefined ? normalizedPartial.tz : current.tz;
     const tzError = normalizedPartial.tz !== undefined ? validateScheduleTimezone(normalizedPartial.tz) : null;
     if (tzError) throw new Error(tzError);
@@ -1343,8 +1356,8 @@ export class CronScheduler {
     for (const job of overdue) {
       if (this.runningJobIds.has(job.id)) continue;
       console.log(`[CronScheduler] Tick — starting scheduled job "${job.name}"`);
-      // Fire async but don't await — tick returns immediately
-      this.executeJob(job).catch(err =>
+      // Recovery is serialized per job, but unrelated schedules remain parallel.
+      this.executeDueJob(job, now).catch(err =>
         console.error(`[CronScheduler] Job "${job.name}" crashed:`, err?.message || err)
       );
     }
@@ -1352,19 +1365,91 @@ export class CronScheduler {
 
   // ─── Job Execution ────────────────────────────────────────────────────────────
 
-  private async executeJob(job: CronJob): Promise<void> {
+  private async executeDueJob(job: CronJob, now: Date): Promise<void> {
+    const plan = planDueSlots(job, now);
+    if (!plan.slots.length) {
+      if (plan.missedCount) {
+        const log = startRunLogEntry({ scheduleId: job.id, taskId: `skip_${job.id}_${+now}`, reason: 'catch_up', missedCount: plan.missedCount, scheduledAt: Date.parse(job.nextRun!) });
+        updateRunLogEntry(job.id, log, { status: 'skipped', completedAt: +now, summary: `Skipped ${plan.missedCount} missed occurrence(s)` });
+      }
+      job.nextRun = plan.nextRun;
+      if (job.type === 'one-shot' && !job.nextRun) { job.status = 'completed'; job.enabled = false; }
+      this.saveStore();
+      return;
+    }
+    for (const slot of plan.slots) {
+      if (!job.enabled || job.status === 'paused') break;
+      await this.executeJob(job, slot, plan.nextRun);
+    }
+  }
+
+  private async executeJob(job: CronJob, slot?: ScheduledSlot, nextRun?: string | null): Promise<void> {
     // Always release the per-job guard in finally so a crashed run can never
     // wedge future runs of that schedule.
     if (this.runningJobIds.has(job.id)) return;
+    const release = this.admission.acquire(job.id, slot?.scheduledAt, job.timeoutMs || (job.kind === 'script' ? 120000 : 3600000));
+    if (!release) {
+      // A crash after admission must not wedge the persisted due cursor forever.
+      if (slot && this.admission.isConsumed(job.id, slot.scheduledAt) && !this.admission.isLeased(job.id)) {
+        job.nextRun = nextRun ?? null;
+        if (job.type === 'one-shot') { job.status = 'completed'; job.enabled = false; }
+        this.saveStore();
+      }
+      return;
+    }
     this.runningJobIds.add(job.id);
     try {
-      await this.executeJobInner(job);
+      await this.executeJobInner(job, slot);
+      if (slot && job.status !== 'paused') {
+        job.nextRun = nextRun ?? null;
+        this.saveStore();
+      }
     } finally {
+      release();
       this.runningJobIds.delete(job.id);
     }
   }
 
-  private async executeJobInner(job: CronJob): Promise<void> {
+  private async executeScriptJob(job: CronJob, slot?: ScheduledSlot): Promise<void> {
+    validateScheduledExecution(job);
+    const start = Date.now();
+    const sessionId = `cron_script_${job.id}_${start}`;
+    const runId = startRunLogEntry({ scheduleId: job.id, taskId: sessionId, scheduledAt: slot ? Date.parse(slot.scheduledAt) : start, reason: slot?.reason, missedCount: slot?.missedCount });
+    job.status = 'running';
+    job.runningPid = process.pid;
+    job.lastRunStartedAt = new Date(start).toISOString();
+    this.saveStore();
+    let output = '';
+    let failed = false;
+    try {
+      const { executeTool } = await import('../chat/chat-helpers');
+      const workspace = getConfig().getConfig().workspace.path;
+      // Use exactly the interactive command path: command/path policy and approval
+      // gates remain authoritative. No approval token is synthesized for cron.
+      const result = await executeTool('run_command', { command: job.command, cwd: workspace, timeoutMs: job.timeoutMs || 120000 }, workspace, {}, sessionId);
+      output = String(result.result ?? '');
+      failed = !!result.error;
+    } catch (err: any) { output = String(err?.message || err); failed = true; }
+    finally {
+      const duration = Date.now() - start;
+      updateRunLogEntry(job.id, runId, { status: failed ? 'failed' : 'complete', completedAt: Date.now(), output: output.slice(0, 64000), summary: output.slice(0, 2000), errorIfAny: failed ? output.slice(0, 2000) : undefined });
+      job.lastRun = new Date().toISOString();
+      job.lastResult = output.slice(0, 64000);
+      job.lastDuration = duration;
+      job.lastRunnerDurationMs = duration;
+      job.runningPid = null;
+      const paused = (job.status as CronJob['status']) === 'paused';
+      if (!paused) job.status = job.type === 'one-shot' ? 'completed' : 'scheduled';
+      if (job.type === 'one-shot') { job.enabled = false; job.nextRun = null; }
+      else if (!paused) job.nextRun = getNextRun(job.schedule, new Date(), job.tz).toISOString();
+      this.saveStore();
+      this.deps.broadcast({ type: 'task_done', jobId: job.id, jobName: job.name, isOk: !failed, duration, jobs: this.store.jobs, config: this.store.heartbeat });
+    }
+  }
+
+
+  private async executeJobInner(job: CronJob, slot?: ScheduledSlot): Promise<void> {
+    if (job.kind === 'script') { await this.executeScriptJob(job, slot); return; }
     const start = Date.now();
     const queuedAt = job.queuedAt ? new Date(job.queuedAt).getTime() : start;
 
@@ -1515,7 +1600,7 @@ export class CronScheduler {
           activeCronTaskId = cronTask.id;
           updateTaskStatus(cronTask.id, 'running');
           setTaskStepRunning(cronTask.id, 0);
-          const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+          const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt: slot ? Date.parse(slot.scheduledAt) : scheduledAt, reason: slot?.reason, missedCount: slot?.missedCount });
           activeRunId = runId;
           activeScheduledAt = scheduledAt;
           try {
@@ -1691,7 +1776,7 @@ export class CronScheduler {
             activeCronTaskId = cronTask.id;
             updateTaskStatus(cronTask.id, 'running');
             setTaskStepRunning(cronTask.id, 0);
-            runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+            runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt: slot ? Date.parse(slot.scheduledAt) : scheduledAt, reason: slot?.reason, missedCount: slot?.missedCount });
             activeRunId = runId;
             activeScheduledAt = scheduledAt;
             try {
@@ -1989,7 +2074,7 @@ export class CronScheduler {
 
         // Log this run start
         const scheduledAt = Date.now();
-        const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+        const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt: slot ? Date.parse(slot.scheduledAt) : scheduledAt, reason: slot?.reason, missedCount: slot?.missedCount });
         activeRunId = runId;
         activeScheduledAt = scheduledAt;
         const abortSignal = { aborted: false };

@@ -1,5 +1,6 @@
 {
   "id": "notion",
+  "permissions": { "network": { "hosts": ["api.notion.com"] }, "sideEffects": "external" },
   "kind": "connector",
   "name": "Notion",
   "description": "Connect Notion so Prometheus can read pages, databases, and workspace documents.",
