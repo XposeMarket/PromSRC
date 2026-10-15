@@ -826,31 +826,11 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
 
 
 function _getThemeList() {
-  const themes = (window.PROM_THEMES && window.PROM_THEMES.length)
-    ? window.PROM_THEMES
-    : [
-      { id: 'dark', label: 'Default Dark', base: 'dark' },
-      { id: 'blue', label: 'Olympian Blue', base: 'dark' },
-      { id: 'purple', label: 'Aether Violet', base: 'dark' },
-    ];
-
-  // Mobile keeps the P1 skin as its first entry, restores the ash-gray/ember
-  // skin in the middle, then follows the blue and purple systems. The desktop
-  // registry uses `light` for P1, while older mobile builds persisted `dark`
-  // for that same visual system, so keep the compatibility mapping here.
-  const p1 = themes.find((theme) => theme?.id === 'light')
-    || themes.find((theme) => theme?.id === 'dark')
-    || { id: 'dark', label: 'Prometheus One', base: 'dark' };
-  const gray = themes.find((theme) => theme?.id === 'gray')
-    || themes.find((theme) => theme?.id === 'dark')
-    || { id: 'gray', label: 'Ash & Ember', base: 'dark' };
-  const themed = themes.filter((theme) => ['blue', 'purple'].includes(theme?.id));
-  return [
-    { ...p1, id: 'dark', label: 'Prometheus One' },
-    { ...gray, id: 'gray', label: 'Ash & Ember' },
-    ...themed.map((theme) => ({ ...theme })),
-  ];
+  // Registry is loaded by both entry documents before the mobile shell.
+  // P1 is light; dark is never a compatibility alias for a different palette.
+  return (window.PROM_THEMES || []).map((theme) => ({ ...theme }));
 }
+
 
 function _stopDrawerGatewayHeartbeat() {
   if (_drawerGatewayHeartbeatTimer) clearInterval(_drawerGatewayHeartbeatTimer);

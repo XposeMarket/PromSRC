@@ -78,7 +78,7 @@
 .project-card.active-project {
   border-color: var(--flame-border);
   background: color-mix(in srgb, var(--flame-glow) 55%, var(--panel) 45%);
-  box-shadow: 0 0 0 1px rgba(249,115,22,0.08);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--t-accent) 8%, transparent);
 }
 
 .project-card-header {
@@ -1021,7 +1021,7 @@ body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-pin-btn.acti
   background: var(--sidebar-active-bg);
   color: var(--brand);
 }
-.project-chat-icon-line { display: inline-flex; align-items: center; gap: 3px; margin-right: 2px; color: var(--brand, #d6b75e); vertical-align: -2px; }
+.project-chat-icon-line { display: inline-flex; align-items: center; gap: 3px; margin-right: 2px; color: var(--brand, var(--t-accent)); vertical-align: -2px; }
 .project-chat-icon-line .imported-source-logo { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; vertical-align: -4px; }
 .project-chat-icon-line .imported-source-logo-fallback { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; }
 .project-chat-folder { display: inline-flex; width: 18px; height: 18px; }

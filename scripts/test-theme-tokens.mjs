@@ -76,7 +76,10 @@ function main() {
   runFixtures();
   const index = read('web-ui/index.html');
   const tokens = read('web-ui/src/styles/theme-tokens.css');
-  const registryMatch = index.match(/window\.PROM_THEMES\s*=\s*\[([\s\S]*?)\];/);
+  const registry = read('web-ui/src/theme-registry.js');
+  assert.ok(index.includes('src/theme-registry.js'), 'desktop loads shared registry');
+  assert.ok(read('web-ui/mobile.html').includes('/src/theme-registry.js'), 'mobile loads shared registry');
+  const registryMatch = registry.match(/window\.PROM_THEMES\s*=\s*\[([\s\S]*?)\];/);
   if (!registryMatch) fail('could not parse window.PROM_THEMES from web-ui/index.html');
   const skins = [...registryMatch[1].matchAll(/\bid\s*:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
   if (!skins.length) fail('window.PROM_THEMES has no skins');
@@ -108,6 +111,11 @@ function main() {
 
   const baseline = JSON.parse(read('scripts/theme-token-raw-accent-baseline.json'));
   const stylesRoot = path.join(root, 'web-ui/src/styles');
+  assert.ok(baseline.exceptions, 'remaining raw entries must document their exception');
+  for (const relative of Object.keys(baseline.files)) assert.ok(baseline.exceptions[relative], `missing exception rationale: ${relative}`);
+  const mobileShell = read('web-ui/src/mobile/mobile-shell.js');
+  assert.ok(!/\.\.\.p1,\s*id:\s*['"]dark/.test(mobileShell), 'mobile must not remap P1 to dark');
+  assert.ok(blocksForSelectors(read('web-ui/src/styles/mobile.css'), ':root[data-skin="light"]').some((block) => /--pm-accent:\s*var\(--pm-p1-gold\)/.test(block)), 'mobile P1 palette uses canonical light ID');
   const actualFiles = Object.fromEntries(cssFiles(stylesRoot).map((absolute) => {
     const relative = normalize(path.relative(root, absolute));
     return [relative, countRaw(fs.readFileSync(absolute, 'utf8'))];

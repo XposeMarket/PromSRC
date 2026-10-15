@@ -1208,9 +1208,9 @@ html.pm-session-context-open * {
 .pm-project-group { display: flex; flex-direction: column; gap: 0; }
 .pm-project-row { cursor: pointer; }
 .pm-project-row .pm-session-row-top { align-items: center; }
-.pm-project-folder-icon { display: inline-flex; width: 15px; height: 15px; margin-right: 5px; color: var(--pm-p1-gold, var(--pm-gold, #d6b75e)); flex: 0 0 auto; }
+.pm-project-folder-icon { display: inline-flex; width: 15px; height: 15px; margin-right: 5px; color: var(--pm-p1-gold, var(--pm-gold, var(--t-accent))); flex: 0 0 auto; }
 .pm-project-folder-icon svg { width: 100%; height: 100%; }
-.pm-project-pin { appearance: none; border: 0; background: transparent; color: var(--pm-p1-gold, var(--pm-gold, #d6b75e)); opacity: .76; display: inline-flex; width: 18px; height: 18px; padding: 1px; margin-left: 6px; flex: 0 0 auto; }
+.pm-project-pin { appearance: none; border: 0; background: transparent; color: var(--pm-p1-gold, var(--pm-gold, var(--t-accent))); opacity: .76; display: inline-flex; width: 18px; height: 18px; padding: 1px; margin-left: 6px; flex: 0 0 auto; }
 .pm-project-pin svg { width: 100%; height: 100%; }
 .pm-project-pin:active { transform: scale(.9); }
 .pm-project-chat-list { margin: 0 0 3px 15px; padding-left: 10px; border-left: 1px solid color-mix(in srgb, var(--pm-p1-gold, var(--pm-border-strong)) 48%, transparent); display: flex; flex-direction: column; gap: 1px; }
@@ -3996,12 +3996,12 @@ html.pm-session-context-open * {
   transition: background .1s;
 }
 .pm-msg-lp-btn:active {
-  background: color-mix(in srgb, var(--pm-orange, #f97316) 14%, transparent);
+  background: color-mix(in srgb, var(--pm-orange, var(--t-accent)) 14%, transparent);
 }
 .pm-msg-lp-btn svg {
   width: 20px;
   height: 20px;
-  color: var(--pm-orange, #f97316);
+  color: var(--pm-orange, var(--t-accent));
 }
 .pm-msg-lp-divider {
   width: 1px;
@@ -8791,7 +8791,7 @@ html.pm-session-context-open * {
     conic-gradient(
       from var(--pm-angle, 0deg),
       #ff7a18,
-      #f97316,
+      var(--t-accent),
       #ea580c,
       #fb923c,
       #ff7a18
@@ -8836,7 +8836,7 @@ html.pm-session-context-open * {
   border-radius: 50%;
   background:
     radial-gradient(circle at 35% 28%, rgba(255,255,255,.38), transparent 34%),
-    conic-gradient(from var(--pm-angle, 0deg), #ff7a18, #f97316, #ea580c, #fb923c, #ff7a18);
+    conic-gradient(from var(--pm-angle, 0deg), #ff7a18, var(--t-accent), #ea580c, #fb923c, #ff7a18);
 }
 .pm-composer .pm-send.is-voice .pm-send-voice-icon {
   position: relative;
@@ -8887,7 +8887,7 @@ html.pm-session-context-open * {
 :root {
   --pm-p1-gold-deep: #6d5a2b;
   --pm-p1-gold-muted: #a98a3b;
-  --pm-p1-gold: #d6b75e;
+  --pm-p1-gold: var(--theme-palette-gold);
   --pm-p1-gold-light: #f0d98b;
   --pm-p1-gold-soft: rgba(214, 183, 94, .14);
   --pm-gold: var(--pm-p1-gold);
@@ -8899,7 +8899,7 @@ html.pm-session-context-open * {
   --pm-voice-orb-grid: rgb(234 106 31 / .18);
 }
 
-:root[data-skin="dark"] {
+:root[data-skin="light"] {
   --pm-accent: var(--pm-p1-gold);
   --pm-accent-soft: var(--pm-p1-gold-soft);
   --pm-accent-dark: var(--pm-p1-gold-muted);
@@ -8910,7 +8910,7 @@ html.pm-session-context-open * {
   --pm-border-strong: rgba(240, 217, 139, .38);
   --pm-voice-orb-light: #fff9e8;
   --pm-voice-orb-hot: #f0d98b;
-  --pm-voice-orb-accent: #d6b75e;
+  --pm-voice-orb-accent: var(--t-accent);
   --pm-voice-orb-deep: #6d5a2b;
   --pm-voice-orb-glow: #f0d98b;
   --pm-voice-orb-grid: rgba(214, 183, 94, .22);
@@ -8921,7 +8921,7 @@ html.pm-session-context-open * {
   --pm-voice-control-accent: var(--pm-p1-gold);
   --pm-voice-orb-light: #fff9e8;
   --pm-voice-orb-hot: #f0d98b;
-  --pm-voice-orb-accent: #d6b75e;
+  --pm-voice-orb-accent: var(--t-accent);
   --pm-voice-orb-deep: #6d5a2b;
   --pm-voice-orb-glow: #f0d98b;
   --pm-voice-orb-grid: rgba(214, 183, 94, .22);
@@ -8929,11 +8929,11 @@ html.pm-session-context-open * {
 
 /* Voice keeps the active skin's color identity: P1 gold, Olympian blue, or
    Aether violet. These tokens feed both the SVG sphere and its canvas dust. */
-:root[data-skin="dark"] {
-  --pm-voice-control-accent: #d6b75e;
+:root[data-skin="light"] {
+  --pm-voice-control-accent: var(--t-accent);
   --pm-voice-orb-light: #fff9e8;
   --pm-voice-orb-hot: #f0d98b;
-  --pm-voice-orb-accent: #d6b75e;
+  --pm-voice-orb-accent: var(--t-accent);
   --pm-voice-orb-deep: #6d5a2b;
   --pm-voice-orb-glow: #f0d98b;
   --pm-voice-orb-grid: rgba(214, 183, 94, .24);
@@ -8957,8 +8957,7 @@ html.pm-session-context-open * {
   --pm-voice-orb-grid: rgba(187, 128, 255, .28);
 }
 
-/* Outside Chat and Voice, every retained mobile skin uses P1 gold chrome while
-   preserving its own black, navy, or violet surface palette. */
+/* Non-chat routes retain P1 gold chrome over each skin's surfaces. */
 :root:is([data-skin="blue"], [data-skin="purple"])
 body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat"]):not([data-mobile-page="voice"])) {
   --pm-accent: var(--pm-p1-gold);
@@ -8973,7 +8972,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 
 /* P1 chat: quiet graphite user panels, white conversation text, gold activity. */
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble {
   border: 0;
   background: #363638;
   color: #fff;
@@ -8981,28 +8980,28 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     inset 0 1px 0 rgba(255, 255, 255, .055),
     0 8px 20px rgba(0, 0, 0, .18);
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user.voice-worker-handoff .pm-bubble {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   border: 0;
   background: #363638;
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body.pm-mobile-active .pm-chat-body .pm-msg .pm-bubble {
   border: 0;
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
   color: #fff;
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai .pm-bubble,
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai .pm-bubble,
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
   color: #f7f5ef;
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-work-timer,
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-handoff-sender {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-work-timer,
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-handoff-sender {
   color: var(--pm-p1-gold-light);
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
   background: linear-gradient(90deg, rgba(214, 183, 94, .42), rgba(214, 183, 94, .06));
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
+:root[data-skin="light"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
   border-color: rgba(240, 217, 139, .82);
   border-top-color: transparent;
 }
@@ -9016,10 +9015,10 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     conic-gradient(
       from var(--pm-angle, 0deg),
       #f0d98b,
-      #d6b75e,
+      var(--t-accent),
       #8d7333,
       #f4df99,
-      #d6b75e,
+      var(--t-accent),
       #f0d98b
     );
   color: #fff;
@@ -9089,7 +9088,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   --p1-graphite: #24211c;
   --p1-bronze: #6d5a2b;
   --p1-gold-muted: #a98a3b;
-  --p1-gold: #d6b75e;
+  --p1-gold: var(--theme-palette-gold);
   --p1-gold-light: #f0d98b;
   --p1-bone: #f2ebdd;
   --p1-bone-muted: #b9b0a0;
@@ -9146,7 +9145,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   white-space: nowrap;
 }
 
-:root[data-skin="dark"] body.pm-mobile-active .pm-theme-toggle,
+:root[data-skin="light"] body.pm-mobile-active .pm-theme-toggle,
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle {
   border: 0;
   background: linear-gradient(145deg, rgba(214, 183, 94, .08), rgba(255, 255, 255, .025));
@@ -9155,7 +9154,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     inset 0 1px 0 rgba(240, 217, 139, .08),
     0 8px 24px rgba(0, 0, 0, .32);
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-theme-toggle:active,
+:root[data-skin="light"] body.pm-mobile-active .pm-theme-toggle:active,
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle:active {
   color: var(--p1-gold-light);
 }
@@ -15555,9 +15554,9 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
   flex: 0 0 auto;
   width: 15px;
   height: 15px;
-  border: 2px solid color-mix(in srgb, var(--pm-accent, #d6b75e) 28%, transparent);
-  border-top-color: var(--pm-accent, #d6b75e);
-  border-right-color: color-mix(in srgb, var(--pm-accent, #d6b75e) 72%, white);
+  border: 2px solid color-mix(in srgb, var(--pm-accent, var(--t-accent)) 28%, transparent);
+  border-top-color: var(--pm-accent, var(--t-accent));
+  border-right-color: color-mix(in srgb, var(--pm-accent, var(--t-accent)) 72%, white);
   border-radius: 50%;
   animation: pm-session-working-spin .8s linear infinite;
 }
@@ -15570,8 +15569,8 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
    chats their original panel treatment. Outline shadows do not alter layout. */
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
-  background: color-mix(in srgb, var(--pm-bg, #101827) 88%, var(--pm-accent, #d6b75e) 12%) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-accent, #d6b75e) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, .04), 0 7px 18px rgba(0, 0, 0, .15) !important;
+  background: color-mix(in srgb, var(--pm-bg, #101827) 88%, var(--pm-accent, var(--t-accent)) 12%) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-accent, var(--t-accent)) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, .04), 0 7px 18px rgba(0, 0, 0, .15) !important;
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry) {
   box-shadow: 0 0 0 1px rgba(214, 183, 94, .66), inset 0 1px 0 rgba(255, 255, 255, .08), 0 7px 18px rgba(0, 0, 0, .18) !important;
@@ -15596,21 +15595,21 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
 
 /* Final Prometheus One mobile surfaces: the app/page backdrop should match
    the drawer's true black instead of inheriting the shared graphite dark. */
-:root[data-skin="dark"] {
+:root[data-skin="light"] {
   --pm-bg: #000;
   --pm-bg-soft: #000;
 }
-:root[data-skin="dark"]:has(body.pm-mobile-active),
-:root[data-skin="dark"] body.pm-mobile-active,
-:root[data-skin="dark"] body.pm-mobile-active::before,
-:root[data-skin="dark"] body.pm-mobile-active #mobile-root,
-:root[data-skin="dark"] body.pm-mobile-active .pm-app,
-:root[data-skin="dark"] body.pm-mobile-active .pm-page,
-:root[data-skin="dark"] body.pm-mobile-active .pm-body {
+:root[data-skin="light"]:has(body.pm-mobile-active),
+:root[data-skin="light"] body.pm-mobile-active,
+:root[data-skin="light"] body.pm-mobile-active::before,
+:root[data-skin="light"] body.pm-mobile-active #mobile-root,
+:root[data-skin="light"] body.pm-mobile-active .pm-app,
+:root[data-skin="light"] body.pm-mobile-active .pm-page,
+:root[data-skin="light"] body.pm-mobile-active .pm-body {
   background-color: #000 !important;
   background-image: none !important;
 }
-:root[data-skin="dark"] body.pm-mobile-active .pm-drawer {
+:root[data-skin="light"] body.pm-mobile-active .pm-drawer {
   background-color: #000 !important;
   background-image: none !important;
 }
@@ -17038,7 +17037,7 @@ body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-ne
 .pm-new-chat-context-option-check { display: grid; place-items: center; color: var(--pm-green, #42d392); }
 .pm-new-chat-context-option-check svg { width: 18px; height: 18px; }
 .pm-new-chat-context-loading { padding: 10px; color: var(--pm-muted); font-size: 12px; }
-.pm-new-chat-context-popover .pm-new-project-option { color: var(--pm-orange, #f97316); }
+.pm-new-chat-context-popover .pm-new-project-option { color: var(--pm-orange, var(--t-accent)); }
 .pm-new-chat-context-popover .pm-haptic-host > .pm-new-project-option { flex: 1 1 auto; min-width: 0; }
 .pm-new-project-form { display: grid; gap: 8px; padding: 2px 10px 6px; }
 .pm-new-project-label { color: var(--pm-text-soft); font-size: 11px; font-weight: 700; }
@@ -17068,7 +17067,7 @@ body.pm-mobile-active .pm-drawer .pm-session-title {
   font-weight: 800;
 }
 body.pm-mobile-active .pm-drawer :is(.pm-drawer-section-title, .pm-session-gateway, .pm-session-state) {
-  color: var(--pm-p1-gold, #d6b75e) !important;
+  color: var(--pm-p1-gold, var(--t-accent)) !important;
 }
 body.pm-mobile-active .pm-drawer .pm-session-computer,
 body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill,
@@ -17080,7 +17079,7 @@ body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill-label {
 }
 body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
-  background: var(--pm-p1-gold, #d6b75e) !important;
+  background: var(--pm-p1-gold, var(--t-accent)) !important;
 }
 
 @media (max-width: 420px) {

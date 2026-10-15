@@ -1932,8 +1932,8 @@
   opacity: .24;
 }
 
-#settings-modal .theme-swatch[data-skin-preview="light"] .theme-preview-card { background: #d6b75e; }
-#settings-modal .theme-swatch[data-skin-preview="dark"] .theme-preview-card { background: #f97316; }
+#settings-modal .theme-swatch[data-skin-preview="light"] .theme-preview-card { background: var(--theme-palette-gold); }
+#settings-modal .theme-swatch[data-skin-preview="dark"] .theme-preview-card { background: var(--theme-palette-orange); }
 #settings-modal .theme-swatch[data-skin-preview="blue"] .theme-preview-card { background: #3d8bff; }
 #settings-modal .theme-swatch[data-skin-preview="purple"] .theme-preview-card { background: #8b5cf6; }
 #settings-modal .theme-swatch[data-skin-preview="custom"] .theme-preview-card { background: #ef9a9a; }
