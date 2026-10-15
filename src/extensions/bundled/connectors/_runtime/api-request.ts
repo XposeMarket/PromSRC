@@ -1,3 +1,5 @@
+import { assertCurrentPluginPermission } from '../../../permission-manifest.js';
+
 // Shared raw-API escape hatch for native bundled connectors.
 //
 // Every native connector ships a small set of first-class tools. Anything the
@@ -96,6 +98,8 @@ export async function executeConnectorApiRequest<C>(spec: ConnectorApiRequestSpe
   let token: string;
   try {
     url = `${await resolveBase(spec, c, baseName)}${path}`;
+    assertCurrentPluginPermission({ kind: 'network', url });
+    assertCurrentPluginPermission({ kind: 'sideEffect', level: method === 'GET' || method === 'HEAD' ? 'read' : 'external' });
     token = spec.getToken ? await spec.getToken(c) : await (c as any).getValidAccessToken();
   } catch (err: any) {
     return toolError(err?.message || `${spec.displayName} credentials are unavailable.`);
