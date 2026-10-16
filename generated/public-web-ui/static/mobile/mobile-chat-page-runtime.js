@@ -4,7 +4,7 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
-import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
+import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 
@@ -2778,6 +2778,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           || (Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)
           || (Array.isArray(aiTurn.liveTraceEntries) && aiTurn.liveTraceEntries.length)
         ));
+        // Reuse the request's existing empty placeholder before allocating one.
+        if (!aiTurn || !aiTurn.streaming) aiTurn = reuseEmptyLive(activeThread, recoveryClientRequestId) || aiTurn;
         if (!aiTurn || !aiTurn.streaming) {
           const recoveredStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0);
           const startedAt = Number.isFinite(recoveredStartedAt) && recoveredStartedAt > 0 ? recoveredStartedAt : Date.now();
@@ -2800,6 +2802,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
+        collapseEmpty(activeThread, aiTurn);
         if (activeRunSource === 'internal_watch') aiTurn.messageKind = 'internal_watch_review';
         const statusRuntimeId = String(status?.run?.id || status?.activeRun?.id || '').trim();
         const localRuntimeId = String(aiTurn.runtimeId || remembered?.runtimeId || '').trim();
@@ -3070,7 +3073,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           fallback: remembered,
         });
         _rememberMobileActiveRun(requestedSession, { disconnected: true });
-        setChatConnectionStatus(true, 'Reconnecting to Prometheus');
+        // Waiting on run status is not a lost connection; only say so when it is.
+        if (window.ws?.readyState !== 1) setChatConnectionStatus(true, 'Reconnecting to Prometheus');
+        collapseEmpty(__pmChat.threads[requestedSession], localAiTurn);
         setBusy(true);
         renderThreadNow();
         const uncertainSince = Number(__pmChat.mobileRecoveryUncertainSince[requestedSession] || 0) || Date.now();
@@ -7621,6 +7626,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (handoffIndex >= 0) activeThread.splice(handoffIndex + 1, 0, aiTurn);
       else activeThread.push(aiTurn);
     }
+    collapseEmpty(activeThread, aiTurn);
     _adoptMobileActiveRunState(requestedSession, {
       run: {
         id: data?.runtimeId || data?.run?.id || data?.activeRun?.id,

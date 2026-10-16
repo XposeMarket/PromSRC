@@ -362,7 +362,11 @@ export function findLiveSteerContinuation(thread, clientRequestId = '', { create
 function isEmptyLiveRow(row) {
   if (!row || row.role !== 'ai') return false;
   if (row._pmFinalReceived === true || row._pmServerAuthoredFinal === true || row._pmAbortAcknowledged === true) return false;
-  if (row.questionRequest || row.errorPresentation) return false;
+  if (row.questionRequest) return false;
+  // A dropped-stream notice is transient recovery state, not content. Treating
+  // it as content made every reconnect skip the old placeholder and push a new
+  // one, stacking empty "Working for 2s / 4s / 7s" rows (IMG_0684).
+  if (row.errorPresentation && row.errorPresentation.key !== 'chat-connection-dropped') return false;
   if (String(row.workflowPart || '') === 'before_interruption') return false;
   if (rowText(row)) return false;
   return !(Array.isArray(row.liveTraceEntries) && row.liveTraceEntries.length);
@@ -396,10 +400,31 @@ export function reuseEmptyLiveRow(thread, clientRequestId = '') {
     if (index >= 0) thread.splice(index, 1);
   }
   if (cid && !String(keep._clientRequestId || '').trim()) keep._clientRequestId = cid;
+  if (keep.errorPresentation?.key === 'chat-connection-dropped') delete keep.errorPresentation;
   keep.streaming = true;
   delete keep.workEndedAt;
   delete keep.workDurationMs;
   return keep;
+}
+
+/**
+ * Remove every empty live placeholder of the current request except `keep`.
+ * One request owns exactly one live row; stale empty siblings left by earlier
+ * reconnects stay "streaming" forever and keep run recovery (and its
+ * Reconnecting pill) looping even while the socket is healthy.
+ */
+export function collapseEmptyLiveRows(thread, keep) {
+  if (!Array.isArray(thread) || !keep) return 0;
+  let removed = 0;
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const row = thread[i];
+    if (row?.role === 'user' && !isChatSteerUser(row)) break;
+    if (row && row !== keep && isEmptyLiveRow(row)) {
+      thread.splice(i, 1);
+      removed += 1;
+    }
+  }
+  return removed;
 }
 
 /** Drop empty duplicate live rows of the current request that are not `keep`. */
