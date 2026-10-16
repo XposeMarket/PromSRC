@@ -300,6 +300,8 @@ router.get('/api/realtime/status', async (_req, res) => {
     codexBridgeVoiceVersion: codexBridge.voiceVersion,
     codexBridgeActiveVoices: codexBridge.activeVoices,
     codexBridgeDefaultVoice: codexBridge.defaultVoice,
+    codexBridgeRealtimeModel: codexBridge.realtimeModel,
+    codexBridgeRealtimeModelCandidates: codexBridge.realtimeModelCandidates,
     codexBridgeError: codexBridge.error,
   });
 });

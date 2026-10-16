@@ -21,6 +21,7 @@
     "test:platform-wave5a": "tsx src/extensions/platform-wave5a.regression.ts",
     "test:memory-recall": "tsx src/gateway/memory-recall.regression.ts",
     "test:skill-promotion": "tsx src/gateway/skills-runtime/skill-promotion.regression.ts && tsx src/gateway/brain/post-task-skill-review.regression.ts",
+    "test:codex-realtime-model-fallback": "tsx src/gateway/realtime/codex-realtime-model-fallback.regression.ts",
     "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
     "test:gateway-auth-proxy": "tsx src/gateway/gateway-auth-proxy.regression.ts",
     "test:final-action-gate": "tsx src/gateway/final-action-gate.regression.ts",
