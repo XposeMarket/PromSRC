@@ -27,6 +27,7 @@ import {
 } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, formatModelWithReasoning, formatReasoningDisplayName } from '../model-display.js';
 import { renderReasoningSelector, reasoningSliderFillWidth, reasoningProgressFromPointer } from '../components/reasoning-selector.js';
+import { reasoningSheetViewportPlacement } from './mobile-reasoning-sheet-geometry.js';
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const BUILTIN_LABELS = {
@@ -161,8 +162,10 @@ export function pmHaptic(strength = 12) {
   // event is the only web-only fallback available for drag boundary ticks.
   try {
     const sw = _ensureHapticSwitch();
+    // A single trusted/synchronous click is the only native-switch attempt.
+    // Flipping `checked` again immediately cancels the state transition and
+    // made fallback ticks look like two changes to DOM observers.
     sw.click?.();
-    sw.checked = !sw.checked;
   } catch {}
 }
 
@@ -274,21 +277,26 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     flippedDirection = false;
     positionSurface(event, false);
     try { input.setPointerCapture?.(pointerId); } catch {}
-    let requestNativeHaptic = false;
+    let requestedNativeTicks = 0;
     handlers.onPointerDown?.(event, {
-      requestNativeHaptic: () => { requestNativeHaptic = true; },
+      requestNativeHaptic: () => { requestedNativeTicks += 1; },
     });
-    if (requestNativeHaptic) nativeHaptic(event, false);
+    for (let tick = 0; tick < requestedNativeTicks; tick += 1) nativeHaptic(event, false);
   };
 
   const onPointerMove = (event) => {
     if (pointerId == null || event.pointerId !== pointerId) return;
-    let requestNativeHaptic = false;
+    let requestedNativeTicks = 0;
     handlers.onPointerMove?.(event, {
-      requestNativeHaptic: () => { requestNativeHaptic = true; },
+      requestNativeHaptic: () => { requestedNativeTicks += 1; },
     });
-    if (handlers.nativeHapticsOnMove !== false || requestNativeHaptic) nativeHaptic(event);
-    else positionSurface(event, true);
+    // Continuous surfaces retain their legacy one-tick-per-move behavior.
+    // Step controls opt out and request exactly one shared native-switch tick
+    // for each crossed value boundary.
+    const nativeTicks = requestedNativeTicks || (handlers.nativeHapticsOnMove !== false ? 1 : 0);
+    if (nativeTicks) {
+      for (let tick = 0; tick < nativeTicks; tick += 1) nativeHaptic(event);
+    } else positionSurface(event, true);
   };
 
   proxy.addEventListener('pointerdown', onPointerDown, true);
@@ -724,17 +732,31 @@ function _closeSheet() {
   }, 220);
 }
 
+function _visibleComposerModelBadge() {
+  const viewport = window.visualViewport;
+  const viewportTop = Math.max(0, Number(viewport?.offsetTop) || 0);
+  const viewportBottom = viewportTop + Math.max(0, Number(viewport?.height) || Number(window.innerHeight) || 0);
+  return Array.from(document.querySelectorAll('.pm-composer-model-badge')).find((badge) => {
+    const rect = badge.getBoundingClientRect?.();
+    return rect && rect.width > 0 && rect.height > 0 && rect.bottom > viewportTop && rect.top < viewportBottom;
+  }) || null;
+}
+
 function _positionSheetNearBadge(sheet) {
   if (!sheet) return;
   const margin = 10;
   const badge = document.querySelector('.pm-model-badge');
   const rect = badge?.getBoundingClientRect?.();
-  const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2));
-  const center = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
-  const left = Math.max(margin, Math.min(window.innerWidth - width - margin, center - width / 2));
+  const viewport = window.visualViewport;
+  const viewportLeft = Math.max(0, Number(viewport?.offsetLeft) || 0);
+  const viewportWidth = Math.max(0, Number(viewport?.width) || Number(window.innerWidth) || 0);
+  const width = Math.min(360, Math.max(280, viewportWidth - margin * 2));
+  const center = rect ? rect.left + rect.width / 2 : viewportLeft + viewportWidth / 2;
+  const left = Math.max(viewportLeft + margin, Math.min(viewportLeft + viewportWidth - width - margin, center - width / 2));
   const preferredTop = rect ? rect.bottom + 10 : Math.max(70, Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('env(safe-area-inset-top)')) || 70);
-  const top = Math.max(margin, Math.min(preferredTop, window.innerHeight - 260));
-  const maxHeight = Math.max(240, window.innerHeight - top - margin);
+  const visualBottom = Math.max(0, Number(viewport?.offsetTop) || 0) + Math.max(0, Number(viewport?.height) || Number(window.innerHeight) || 0);
+  const top = Math.max(margin, Math.min(preferredTop, visualBottom - 260));
+  const maxHeight = Math.max(240, visualBottom - top - margin);
   sheet.style.setProperty('--pm-msheet-left', `${left}px`);
   sheet.style.setProperty('--pm-msheet-top', `${top}px`);
   sheet.style.setProperty('--pm-msheet-width', `${width}px`);
@@ -766,14 +788,23 @@ function _openSheet(titleHtml, bodyHtml) {
   if (previousFocus?.id === 'pm-composer-input') sheet.classList.add('has-composer-keyboard');
   const positionSheet = () => {
     if (sheet.classList.contains('is-reasoning') || sheet.classList.contains('is-model-switch')) {
-      // Follow the chat keyboard controller's stable offset. Reading the
-      // visual viewport here made the modal chase Safari's page panning and
-      // left the composer at a stale position when the modal closed.
-      const app = document.querySelector('.pm-app');
-      const offset = sheet.classList.contains('has-composer-keyboard') && app?.classList.contains('pm-keyboard-open')
-        ? Math.max(0, Number.parseFloat(app.style.getPropertyValue('--pm-keyboard-offset')) || 0)
-        : 0;
-      sheet.style.setProperty('bottom', `${offset}px`, 'important');
+      // Anchor the reasoning sheet to the visual viewport, not the layout
+      // viewport. The old keyboard-offset-only path put the sheet under the
+      // composer trigger during short keyboard viewports and Safari panning.
+      // Never anchor to the hidden header badge: its top-edge rect produces a
+      // near-zero space above it. The visible composer badge is the trigger
+      // while typing; without it, use the full visual viewport below header UI.
+      const trigger = _visibleComposerModelBadge();
+      const placement = reasoningSheetViewportPlacement({
+        visualViewport: window.visualViewport,
+        layoutHeight: Math.max(Number(window.innerHeight) || 0, Number(document.documentElement?.clientHeight) || 0),
+        triggerRect: trigger?.getBoundingClientRect?.(),
+      });
+      const sheetHeight = Math.min(280, Math.max(0, Math.floor(placement.maxHeight)));
+      sheet.style.setProperty('bottom', `${Math.round(placement.bottom)}px`, 'important');
+      sheet.style.setProperty('height', `${sheetHeight}px`, 'important');
+      sheet.style.setProperty('max-height', `${Math.max(0, Math.floor(placement.maxHeight))}px`, 'important');
+      sheet.classList.toggle('pm-msheet-short-viewport', placement.isShortViewport);
       return;
     }
     _positionSheetNearBadge(sheet);
@@ -808,11 +839,13 @@ function _openSheet(titleHtml, bodyHtml) {
   document.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('resize', reposition, { passive: true });
   window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
+  window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true });
   sheet.__pmModelSheetCleanup = () => {
     if (positionRaf) cancelAnimationFrame(positionRaf);
     sheet.__pmReasoningGestureDispose?.();
     window.removeEventListener('resize', reposition);
     window.visualViewport?.removeEventListener?.('resize', reposition);
+    window.visualViewport?.removeEventListener?.('scroll', reposition);
     document.removeEventListener('keydown', onKeyDown, true);
   };
   sheet.__pmModelSheetRestoreFocus = previousFocus;
@@ -962,10 +995,16 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         segment.classList.toggle('is-filled', segmentIndex <= safeIndex);
       });
       if (safeIndex !== lastIndex) {
-        const step = safeIndex > lastIndex ? 1 : -1;
-        for (let tick = lastIndex + step; tick !== safeIndex + step; tick += step) {
-          requestGestureNativeHaptic?.();
-          pmHaptic(8);
+        // The gesture surface moves one real native switch under the finger.
+        // Request it once per crossed step; unchanged pointer moves request
+        // no tick. pmHaptic remains the non-gesture fallback.
+        const stepsCrossed = Math.abs(safeIndex - lastIndex);
+        for (let tick = 0; tick < stepsCrossed; tick += 1) {
+          // Only a gesture-surface callback puts the switch under the active
+          // finger. pmHaptic is the fallback for taps/keyboard and platforms
+          // without that native path.
+          if (requestGestureNativeHaptic) requestGestureNativeHaptic();
+          else pmHaptic(8);
         }
         lastIndex = safeIndex;
       }

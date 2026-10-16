@@ -3,6 +3,7 @@ import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { ensureMobileShellStyles } from './mobile-style-owners.js';
 import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
 import { renderMd, timeAgo } from '../utils.js';
+import { bindMobileThemePicker } from './mobile-theme-picker.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 import {
@@ -970,12 +971,14 @@ function _toggleMobileTheme() {
     return;
   }
 
-  // Match system is not a cycle stop: advance from its resolved palette.
-  // Use the current painted skin, including aliases and desktop-only choices.
-  const choice = _getTheme();
-  const currentThemeId = choice === 'system'
-    ? _resolveTheme('system').id
-    : _resolveTheme(choice).id;
+  // Preserve registry order, including Match system when it is offered.
+  // Step from the theme actually on screen; the persisted choice can be
+  // `system` or lag behind, and stepping from a stale base looked like taps
+  // stopping after one change.
+  const shown = document.documentElement.getAttribute('data-skin');
+  const choice = themes.some((theme) => theme.id === shown) ? shown : _getTheme();
+  const currentThemeId = themes.some((theme) => theme.id === choice)
+    ? choice : _resolveTheme(choice).id;
   const currentIndex = themes.findIndex((t) => t.id === currentThemeId);
   const nextTheme = themes[(currentIndex + 1) % themes.length] || themes[0];
   _applyMobileTheme(nextTheme?.id || 'dark');
@@ -1835,8 +1838,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // swallows the tap and calls the action directly, so there is no double fire.
   const _drawerThemeBtn = _drawerEl.querySelector('[data-mobile-theme-toggle]');
   if (_drawerThemeBtn) {
-    _drawerThemeBtn.addEventListener('click', _toggleMobileTheme);
-    try { attachMobileButtonHaptic(_drawerThemeBtn, _toggleMobileTheme); } catch {}
+    bindMobileThemePicker(_drawerThemeBtn, { themes: _getThemeList, current: _getTheme, apply: _applyMobileTheme, cycle: _toggleMobileTheme });
   }
   const _drawerPriorityBtn = _drawerEl.querySelector('[data-drawer-priority-toggle]');
   if (_drawerPriorityBtn) {
