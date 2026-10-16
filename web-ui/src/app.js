@@ -1239,6 +1239,9 @@ window.importAppearanceThemeFile = importAppearanceThemeFile;
 
 // Match system: the registry re-applies on an OS scheme flip; refresh the UI.
 document.addEventListener('prom-theme-change', (event) => {
+  // Registry repainted from storage (bfcache restore / other tab): re-run the
+  // full apply so custom variables, backgrounds and the picker follow.
+  if (event?.detail?.reason === 'sync') { applyTheme(getInitialTheme()); return; }
   if (event?.detail?.reason !== 'system') return;
   clearCustomThemeVariables();
   applyBackgroundPreferences(readAppearancePreferences(), document.documentElement.getAttribute('data-skin') || 'p1');

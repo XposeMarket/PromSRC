@@ -1,5 +1,6 @@
 @import './mobile-shell.css';
 @import './mobile-connection-pill.css';
+@import './mobile-light-tone.css';
 /* Voice-mode-style reasoning/model takeover: centered controls cover the lower third of chat. */
 .pm-msheet-scrim.is-reasoning,
 .pm-msheet-scrim.is-model-switch {

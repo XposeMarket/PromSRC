@@ -964,6 +964,12 @@ document.addEventListener('prom-system-scheme-change', () => {
   setTimeout(() => _applyMobileTheme('system'), 0);
 });
 
+// Registry repainted from the stored choice (bfcache restore after Settings,
+// app resumed, other tab): re-sync status bar, meta color and toggle labels.
+document.addEventListener('prom-theme-change', (event) => {
+  if (event?.detail?.reason === 'sync') setTimeout(() => _applyMobileTheme(_getTheme()), 0);
+});
+
 function _toggleMobileTheme() {
   const themes = _getThemeList();
   if (!themes.length) {

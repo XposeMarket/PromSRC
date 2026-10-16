@@ -468,6 +468,32 @@
       const theme = refresh();
       try { document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base, reason: 'system' } })); } catch {}
     });
+    // The stored choice is authoritative. A back/forward-cache restore (mobile
+    // Settings -> Back to app uses history.back()), another tab, or an app that
+    // was backgrounded can show a document still painted with the theme from
+    // before the change; the next toggle tap then stepped from that stale theme
+    // and overwrote the user's pick. Repaint from storage when they disagree.
+    const syncFromStorage = () => {
+      const choice = savedChoice();
+      if (!choice) return;
+      const root = document.documentElement;
+      const target = choice === 'custom' ? 'custom' : resolve(choice).id;
+      if (root.getAttribute('data-theme-choice') === choice && root.getAttribute('data-skin') === target) return;
+      const theme = applyAttributes(choice, root, choice === SYSTEM_ID ? SYSTEM_ID : undefined);
+      try { document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base, reason: 'sync' } })); } catch {}
+    };
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('pageshow', (event) => { if (event.persisted) syncFromStorage(); });
+      window.addEventListener('storage', (event) => {
+        if (!event.key || event.key === THEME_KEY || event.key === APPEARANCE_KEY) syncFromStorage();
+      });
+    }
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') syncFromStorage();
+      });
+    }
+    window.PROM_SYNC_THEME_FROM_STORAGE = syncFromStorage;
   }
 
   window.PROM_APPLY_THEME_ATTRIBUTES = applyAttributes;
