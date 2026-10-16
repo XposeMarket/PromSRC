@@ -972,7 +972,11 @@ function _toggleMobileTheme() {
   }
 
   // Preserve registry order, including Match system when it is offered.
-  const choice = _getTheme();
+  // Step from the theme actually on screen; the persisted choice can be
+  // `system` or lag behind, and stepping from a stale base looked like taps
+  // stopping after one change.
+  const shown = document.documentElement.getAttribute('data-skin');
+  const choice = themes.some((theme) => theme.id === shown) ? shown : _getTheme();
   const currentThemeId = themes.some((theme) => theme.id === choice)
     ? choice : _resolveTheme(choice).id;
   const currentIndex = themes.findIndex((t) => t.id === currentThemeId);
