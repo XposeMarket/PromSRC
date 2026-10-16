@@ -32,6 +32,9 @@ export type CodexRealtimeBridgeStatus = {
   voiceVersion?: string;
   activeVoices?: string[];
   defaultVoice?: string;
+  /** Model the next connect will try first (or the one that last succeeded). */
+  realtimeModel?: string;
+  realtimeModelCandidates?: string[];
   error?: string;
 };
 
@@ -44,6 +47,10 @@ export type CodexRealtimeBridgeSession = {
   voice?: string;
   realtimeVersion?: string;
   voiceVersion?: string;
+  /** Codex Live model that actually accepted this session. */
+  model?: string;
+  /** Preferred models that were rejected before `model` was accepted. */
+  modelFallbackFrom?: string[];
 };
 
 export type CodexRealtimeBridgeEvent = {
@@ -76,9 +83,59 @@ const REQUEST_TIMEOUT_MS = Math.max(5_000, Number(process.env.PROMETHEUS_CODEX_R
 const REALTIME_START_TIMEOUT_MS = Math.max(10_000, Number(process.env.PROMETHEUS_CODEX_REALTIME_START_TIMEOUT_MS || 45_000) || 45_000);
 const STATUS_CACHE_TTL_MS = Math.max(2_000, Number(process.env.PROMETHEUS_CODEX_STATUS_CACHE_TTL_MS || 15_000) || 15_000);
 const REALTIME_CONVERSATION_VERSION = 'v3';
-const REALTIME_VOICE_CATALOG_VERSION = 'v1';
-const REALTIME_CODEX_MODEL = 'gpt-live-1-codex';
+// Codex Live model order. GPT-Live-1.1 (2026-10-15) is preferred; GPT-Live-1
+// stays as the guaranteed fallback because ChatGPT-OAuth accounts reject model
+// IDs the upstream Codex realtime service has not enabled for them yet
+// ("Field `session.model` is not allowed for this Codex realtime session").
+export const CODEX_REALTIME_PREFERRED_MODEL = 'gpt-live-1.1-codex';
+export const CODEX_REALTIME_FALLBACK_MODEL = 'gpt-live-1-codex';
+const REALTIME_MODEL_RETRY_MS = Math.max(
+  60_000,
+  Number(process.env.PROMETHEUS_CODEX_REALTIME_MODEL_RETRY_MS || 30 * 60_000) || 30 * 60_000,
+);
 const MIN_CODEX_LIVE_VERSION = [0, 149, 1] as const;
+const REALTIME_MODEL_ID_PATTERN = /^[a-zA-Z0-9._:-]{1,80}$/;
+
+/**
+ * Ordered Codex Live models to try. `PROMETHEUS_CODEX_REALTIME_MODELS`
+ * (comma-separated) or `PROMETHEUS_CODEX_REALTIME_MODEL` override the preferred
+ * models; GPT-Live-1 is always appended last as the fallback.
+ */
+export function codexRealtimeModelCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+  const configured = String(env.PROMETHEUS_CODEX_REALTIME_MODELS || env.PROMETHEUS_CODEX_REALTIME_MODEL || '')
+    .split(',')
+    .map((model) => model.trim())
+    .filter((model) => REALTIME_MODEL_ID_PATTERN.test(model));
+  const preferred = configured.length ? configured : [CODEX_REALTIME_PREFERRED_MODEL];
+  return [...new Set([...preferred.filter((model) => model !== CODEX_REALTIME_FALLBACK_MODEL), CODEX_REALTIME_FALLBACK_MODEL])];
+}
+
+/** True when the upstream rejected the requested model rather than failing for another reason. */
+export function isCodexRealtimeModelRejection(message: string): boolean {
+  const text = String(message || '');
+  return /session\.model[`'"]?\s+is not allowed/i.test(text)
+    || /model[`'"\s][^\n]{0,80}\b(?:is not supported|not supported|is not allowed|does not exist|not found|unknown|invalid)\b/i.test(text)
+    || /\b(?:unknown|unsupported|invalid)\s+(?:realtime\s+)?model\b/i.test(text);
+}
+
+/**
+ * Pick the voice catalog for Frameless Bidi v3. Codex 0.163+ advertises a `v3`
+ * catalog (original Codex voices plus the GPT-Live-1.1 voices); older runtimes
+ * only expose `v1`, which v3 sessions also accept.
+ */
+export function selectCodexRealtimeVoiceCatalog(voices: any): { version: string; activeVoices: string[]; defaultVoice: string } {
+  const clean = (list: unknown) => (Array.isArray(list) ? list.map((voice) => String(voice || '').trim()).filter(Boolean) : []);
+  const v3 = clean(voices?.v3);
+  const v1 = clean(voices?.v1);
+  const useV3 = v3.length > 0;
+  const activeVoices = useV3 ? v3 : v1;
+  const advertised = String(voices?.defaultV3 || voices?.defaultV1 || '').trim();
+  return {
+    version: useV3 ? 'v3' : 'v1',
+    activeVoices,
+    defaultVoice: activeVoices.includes(advertised) ? advertised : (activeVoices.includes('cove') ? 'cove' : (activeVoices[0] || '')),
+  };
+}
 
 function detectCodexRuntimeVersion(executable: string): string {
   const useShell = process.platform === 'win32' && /\.cmd$/i.test(executable);
@@ -180,6 +237,9 @@ export class CodexAppServerBridge {
   private pendingDynamicToolRequests = new Map<string, PendingDynamicToolRequest>();
   private nextRealtimeEventId = 1;
   private cachedStatus: { value: CodexRealtimeBridgeStatus; at: number } | null = null;
+  // model -> time it was last rejected upstream; skipped until REALTIME_MODEL_RETRY_MS passes.
+  private rejectedRealtimeModels = new Map<string, number>();
+  private lastRealtimeModel = '';
 
   private async ensureStarted(): Promise<void> {
     if (this.child && !this.child.killed) return;
@@ -463,6 +523,7 @@ export class CodexAppServerBridge {
             : 'Codex is not signed in with a ChatGPT account.',
         );
       }
+      const catalog = selectCodexRealtimeVoiceCatalog(voicesResult?.voices);
       const value: CodexRealtimeBridgeStatus = {
         available: true,
         executable: this.executable,
@@ -471,11 +532,11 @@ export class CodexAppServerBridge {
         runtimeVersion: this.runtimeVersion,
         voices: voicesResult?.voices,
         realtimeVersion: REALTIME_CONVERSATION_VERSION,
-        // Frameless Bidi v3 deliberately preserves the original Codex Voice
-        // behavior and therefore uses the listVoices `v1` catalog.
-        voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
-        activeVoices: Array.isArray(voicesResult?.voices?.v1) ? voicesResult.voices.v1 : [],
-        defaultVoice: String(voicesResult?.voices?.defaultV1 || ''),
+        voiceVersion: catalog.version,
+        activeVoices: catalog.activeVoices,
+        defaultVoice: catalog.defaultVoice,
+        realtimeModel: this.lastRealtimeModel || this.realtimeModelAttemptOrder()[0],
+        realtimeModelCandidates: codexRealtimeModelCandidates(),
       };
       this.cachedStatus = { value, at: Date.now() };
       return value;
@@ -511,6 +572,7 @@ export class CodexAppServerBridge {
     const resolvedVoice = activeVoices.includes(requestedVoice)
       ? requestedVoice
       : (String(bridgeStatus.defaultVoice || '').trim() || activeVoices[0] || 'cove');
+    const voiceVersion = String(bridgeStatus.voiceVersion || 'v1');
     // A token refresh round-trips to OpenAI (~350-450 ms per connect). status()
     // already confirmed a ChatGPT account within STATUS_CACHE_TTL_MS, and the
     // app-server refreshes an expired token on demand, so only force a refresh
@@ -521,6 +583,63 @@ export class CodexAppServerBridge {
       throw new Error('The Codex OAuth bridge requires Codex to be signed in with ChatGPT.');
     }
 
+    // Prefer the newest Codex Live model and fall back to the previous one
+    // when the upstream service rejects the model for this account/session.
+    // The SDP offer has not been answered on a rejected attempt, so the same
+    // offer is safe to reuse on a fresh thread.
+    const candidates = this.realtimeModelAttemptOrder();
+    let lastError: unknown = null;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const model = candidates[index];
+      try {
+        const session = await this.startRealtimeAttempt(input, model, resolvedVoice, voiceVersion);
+        this.rejectedRealtimeModels.delete(model);
+        this.lastRealtimeModel = model;
+        return {
+          ...session,
+          model,
+          ...(index > 0 ? { modelFallbackFrom: candidates.slice(0, index) } : {}),
+        };
+      } catch (error) {
+        lastError = error;
+        const message = String((error as any)?.message || error || '');
+        if (index < candidates.length - 1 && isCodexRealtimeModelRejection(message)) {
+          this.rejectedRealtimeModels.set(model, Date.now());
+          console.warn(
+            `[codex-realtime-bridge] ${model} was rejected by Codex realtime (${message.slice(0, 200)}); `
+            + `falling back to ${candidates[index + 1]}.`,
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Codex realtime session failed.');
+  }
+
+  /**
+   * Model order for the next connect. Models rejected recently are skipped so
+   * every connect does not pay an extra upstream round-trip, but they are
+   * retried after REALTIME_MODEL_RETRY_MS so a server-side rollout is picked
+   * up without a restart. The final fallback is never skipped.
+   */
+  private realtimeModelAttemptOrder(now = Date.now()): string[] {
+    const candidates = codexRealtimeModelCandidates();
+    const usable = candidates.filter((model, index) => {
+      if (index === candidates.length - 1) return true;
+      const rejectedAt = this.rejectedRealtimeModels.get(model);
+      return !rejectedAt || now - rejectedAt >= REALTIME_MODEL_RETRY_MS;
+    });
+    return usable.length ? usable : candidates;
+  }
+
+  private async startRealtimeAttempt(input: {
+    sdp: string;
+    prompt: string;
+    cwd: string;
+    ownerSessionId?: string;
+    tools?: any[];
+  }, model: string, resolvedVoice: string, voiceVersion: string): Promise<CodexRealtimeBridgeSession> {
     const threadStart = await this.request('thread/start', {
       cwd: path.resolve(input.cwd),
       ephemeral: true,
@@ -552,9 +671,10 @@ export class CodexAppServerBridge {
 
       await this.request('thread/realtime/start', {
         threadId,
-        // Frameless Bidi v3 uses the original Codex Voice (`v1`) catalog.
+        // Frameless Bidi v3 protocol. Voices come from the listVoices `v3`
+        // catalog when the runtime exposes it (GPT-Live-1.1 voices), else `v1`.
         version: REALTIME_CONVERSATION_VERSION,
-        model: REALTIME_CODEX_MODEL,
+        model,
         outputModality: 'audio',
         voice: resolvedVoice,
         prompt: input.prompt,
@@ -592,7 +712,7 @@ export class CodexAppServerBridge {
         realtimeReady: !!started,
         voice: resolvedVoice,
         realtimeVersion: REALTIME_CONVERSATION_VERSION,
-        voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
+        voiceVersion,
       };
     } catch (error) {
       // Notifications can arrive before the browser session is materialized.
