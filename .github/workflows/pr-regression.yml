@@ -168,6 +168,8 @@ jobs:
         run: npm run test:web-ui-refresh-loop
       - name: Verify August 12 mobile Liquid Glass restore
         run: node scripts/test-mobile-liquid-glass-live-demo-material.mjs
+      - name: Verify dynamic require paths resolve
+        run: node scripts/test-dynamic-require-paths.mjs
       - name: Verify web UI architecture guardrails
         run: node scripts/test-web-ui-architecture-guardrails.mjs
       - name: Verify mobile agent activity presentation

@@ -4629,7 +4629,7 @@ export class TelegramChannel {
     // Helper: read the canonical per-agent AGENT.md identity prompt.
     const readAgentPrompt = (agentId: string): { text: string; filePath: string } => {
       try {
-        const { getAgentById, resolveAgentWorkspace } = require('../config/config.js');
+        const { getAgentById, resolveAgentWorkspace } = require('../../config/config.js');
         const agent = getAgentById(agentId);
         if (!agent) return { text: '(agent not found)', filePath: '' };
         const ws = resolveAgentWorkspace(agent);
@@ -4685,7 +4685,7 @@ export class TelegramChannel {
       for (const agId of agents) {
         const agK = tmKey(agId, teamId!);
         let agName = agId;
-        try { const { getAgentById } = require('../config/config.js'); agName = getAgentById(agId)?.name || agId; } catch {}
+        try { const { getAgentById } = require('../../config/config.js'); agName = getAgentById(agId)?.name || agId; } catch {}
         kb.push([{ text: `🤖 ${agName}`, callback_data: `tm:ag:${agK}` }]);
       }
       kb.push([{ text: '🗓 Team Schedules', callback_data: `tm:sched:${mgrK}` }]);
@@ -4750,7 +4750,7 @@ export class TelegramChannel {
       let agModel = 'default';
       let agDesc = '';
       try {
-        const { getAgentById } = require('../config/config.js');
+        const { getAgentById } = require('../../config/config.js');
         const ag = getAgentById(agentId!);
         if (ag) {
           agName = ag.name || agName;
@@ -4764,7 +4764,7 @@ export class TelegramChannel {
       // Recent run status
       let lastRunLine = 'No runs yet';
       try {
-        const { getAgentRunHistory } = require('../scheduler.js');
+        const { getAgentRunHistory } = require('../../scheduler.js');
         const runs = getAgentRunHistory(agentId!, 1);
         if (runs && runs.length > 0) {
           const r = runs[0];
@@ -4906,11 +4906,11 @@ export class TelegramChannel {
       const { agentId, teamId } = ids;
 
       let agName = agentId || 'Agent';
-      try { const { getAgentById } = require('../config/config.js'); agName = getAgentById(agentId!)?.name || agName; } catch {}
+      try { const { getAgentById } = require('../../config/config.js'); agName = getAgentById(agentId!)?.name || agName; } catch {}
 
       const lines: string[] = [];
       try {
-        const { getAgentRunHistory } = require('../scheduler.js');
+        const { getAgentRunHistory } = require('../../scheduler.js');
         const runs = getAgentRunHistory(agentId!, 8);
         if (!runs || runs.length === 0) {
           lines.push('No run history yet.');
@@ -5013,7 +5013,7 @@ export class TelegramChannel {
       const lines: string[] = [];
       for (const agId of (team.subagentIds || [])) {
         try {
-          const { getAgentById } = require('../config/config.js');
+          const { getAgentById } = require('../../config/config.js');
           const ag = getAgentById(agId);
           const agName = ag?.name || agId;
           const sched = String(ag?.cronSchedule || '').trim() || '(none)';
@@ -5076,7 +5076,7 @@ export class TelegramChannel {
       const { agentId, teamId } = ids;
 
       let agName = agentId || 'Agent';
-      try { const { getAgentById } = require('../config/config.js'); agName = getAgentById(agentId!)?.name || agName; } catch {}
+      try { const { getAgentById } = require('../../config/config.js'); agName = getAgentById(agentId!)?.name || agName; } catch {}
       let teamName = '';
       try { teamName = this.teamDeps.getManagedTeam(teamId!)?.name || ''; } catch {}
 
@@ -5129,7 +5129,7 @@ export class TelegramChannel {
     };
 
     const listAgents = () => {
-      const { getAgents } = require('../config/config.js');
+      const { getAgents } = require('../../config/config.js');
       return (getAgents() || []).map((a: any) => ({
         id: String(a.id || ''),
         name: String(a.name || a.id || 'Agent'),
@@ -5141,7 +5141,7 @@ export class TelegramChannel {
 
     const readAgentPrompt = (agentId: string): string => {
       try {
-        const { getAgentById, resolveAgentWorkspace } = require('../config/config.js');
+        const { getAgentById, resolveAgentWorkspace } = require('../../config/config.js');
         const ag = getAgentById(agentId);
         if (!ag) return '';
         const ws = resolveAgentWorkspace(ag);
@@ -5152,7 +5152,7 @@ export class TelegramChannel {
 
     const upsertAgent = async (agentId: string, patch: Record<string, any>): Promise<{ ok: boolean; error?: string }> => {
       try {
-        const { getConfig, getAgentById, ensureAgentWorkspace } = require('../config/config.js');
+        const { getConfig, getAgentById, ensureAgentWorkspace } = require('../../config/config.js');
         const cm = getConfig();
         const raw = cm.getConfig() as any;
         const agents = Array.isArray(raw.agents) ? [...raw.agents] : [];
@@ -5165,7 +5165,7 @@ export class TelegramChannel {
           agents.push({ ...existing, ...patch, id: agentId });
         }
         cm.updateConfig({ agents } as any);
-        const saved = (require('../config/config.js').getAgentById(agentId));
+        const saved = (require('../../config/config.js').getAgentById(agentId));
         if (saved) ensureAgentWorkspace(saved);
         return { ok: true };
       } catch (err: any) {
@@ -5207,7 +5207,7 @@ export class TelegramChannel {
     if (data.startsWith('ag:chat:') || data.startsWith('ag:disp:')) {
       const agentId = idResolve(data.split(':')[2] || '');
       if (!agentId) { await edit('❌ Session expired. Use /agents again.', []); return; }
-      const { getAgentById } = require('../config/config.js');
+      const { getAgentById } = require('../../config/config.js');
       const ag = getAgentById(agentId);
       this.pendingChat.set(userId, { type: 'agent_direct', agentId, agentName: ag?.name || agentId });
       await edit(
@@ -5223,7 +5223,7 @@ export class TelegramChannel {
       if (!this.spawnAgentFn) { await edit('❌ Agent dispatch is not available.', []); return; }
       const prompt = readAgentPrompt(agentId).trim();
       if (!prompt) { await edit('❌ No instruction prompt found for this agent.', []); return; }
-      const { getAgentById } = require('../config/config.js');
+      const { getAgentById } = require('../../config/config.js');
       const ag = getAgentById(agentId);
       await edit(`⏳ Running one-off task for <b>${ag?.name || agentId}</b>...`, []);
       try {
@@ -5259,7 +5259,7 @@ export class TelegramChannel {
     if (data.startsWith('ag:editprompt:')) {
       const agentId = idResolve(data.slice('ag:editprompt:'.length));
       if (!agentId) { await edit('❌ Session expired. Use /agents again.', []); return; }
-      const { getAgentById } = require('../config/config.js');
+      const { getAgentById } = require('../../config/config.js');
       const ag = getAgentById(agentId);
       this.pendingChat.set(userId, { type: 'agent_edit_prompt', agentId, agentName: ag?.name || agentId });
       await edit(
@@ -5272,8 +5272,8 @@ export class TelegramChannel {
     if (data.startsWith('ag:model:')) {
       const agentId = idResolve(data.slice('ag:model:'.length));
       if (!agentId) { await edit('❌ Session expired. Use /agents again.', []); return; }
-      const { getAgentById, getConfig } = require('../config/config.js');
-      const { buildProviderById } = require('../providers/factory.js');
+      const { getAgentById, getConfig } = require('../../config/config.js');
+      const { buildProviderById } = require('../../providers/factory.js');
       const ag = getAgentById(agentId);
       const cfg = getConfig().getConfig() as any;
       const activeProvider = String(cfg?.llm?.provider || 'ollama');
@@ -5316,7 +5316,7 @@ export class TelegramChannel {
     if (data.startsWith('ag:editmodel:')) {
       const agentId = idResolve(data.slice('ag:editmodel:'.length));
       if (!agentId) { await edit('❌ Session expired. Use /agents again.', []); return; }
-      const { getAgentById } = require('../config/config.js');
+      const { getAgentById } = require('../../config/config.js');
       const ag = getAgentById(agentId);
       this.pendingChat.set(userId, { type: 'agent_edit_model', agentId, agentName: ag?.name || agentId });
       await edit(
@@ -6108,7 +6108,7 @@ export class TelegramChannel {
         }
       } else if (pending.type === 'agent_edit_prompt') {
         try {
-          const { getAgentById, resolveAgentWorkspace } = require('../config/config.js');
+          const { getAgentById, resolveAgentWorkspace } = require('../../config/config.js');
           const ag = getAgentById(pending.agentId!);
           if (!ag) {
             await this.sendMessage(chatId, `❌ Agent not found: <code>${pending.agentId}</code>`);
@@ -6127,7 +6127,7 @@ export class TelegramChannel {
             await this.sendMessage(chatId, '❌ Model cannot be empty.');
             return;
           }
-          const { getConfig, getAgentById } = require('../config/config.js');
+          const { getConfig, getAgentById } = require('../../config/config.js');
           const cm = getConfig();
           const raw = cm.getConfig() as any;
           const agents = Array.isArray(raw.agents) ? [...raw.agents] : [];
@@ -6286,7 +6286,7 @@ export class TelegramChannel {
     // ── /agents command — browse agents, dispatch, edit prompt/model ──────────
     if (text === '/agents' || text === '/agents ') {
       try {
-        const { getAgents } = require('../config/config.js');
+        const { getAgents } = require('../../config/config.js');
         const agents = getAgents() || [];
         if (agents.length === 0) {
           await this.sendMessage(chatId, '🤖 No agents configured.');

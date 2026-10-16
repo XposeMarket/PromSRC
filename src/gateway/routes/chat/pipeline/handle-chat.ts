@@ -1025,13 +1025,13 @@ export async function handleChatUntraced(
         fullRuntimeToolNames = new Set<string>();
       }
       try {
-        const { getBrainThoughtToolDefinitions } = require('../brain/brain-thought-runtime');
+        const { getBrainThoughtToolDefinitions } = require('../../../brain/brain-thought-runtime');
         for (const n of toolNameSetOf(getBrainThoughtToolDefinitions())) fullRuntimeToolNames.add(n);
       } catch { /* brain runtime optional */ }
     }
     if (fullRuntimeToolNames.has(name)) return true;
     try {
-      const { buildToolCatalog } = require('../tool-search');
+      const { buildToolCatalog } = require('../../../tool-search');
       return (buildToolCatalog() as Array<{ name: string }>).some((entry) => entry?.name === name);
     } catch {
       return false;
