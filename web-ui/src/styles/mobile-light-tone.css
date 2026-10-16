@@ -1,0 +1,45 @@
+/* Light palette themes on mobile (Olympus Day, Parchment, Daylight, and any
+ * custom palette with a light background, i.e. :root[data-tone="light"]).
+ *
+ * Mobile chrome hard-codes white ink for the dark glass look. On bone/white
+ * backgrounds that ink disappears (titles, drawer rows, the selected tab).
+ * These rules only apply to the light tone; dark themes are untouched.
+ * Specificity is higher than the unlayered `#fff !important` rules in
+ * mobile.css, so import order does not matter. */
+
+:root[data-tone="light"] body.pm-mobile-active :is(
+  .pm-page .pm-title,
+  .pm-page .pm-detail-head h1,
+  .pm-drawer .pm-session-title,
+  .pm-drawer .pm-session-computer,
+  .pm-drawer .pm-drawer-gateway-pill,
+  .pm-drawer .pm-drawer-gateway-pill-label
+) {
+  color: var(--pm-text) !important;
+  -webkit-text-fill-color: var(--pm-text) !important;
+}
+
+:root[data-tone="light"] body.pm-mobile-active .pm-drawer-search {
+  color: var(--pm-muted);
+  background: color-mix(in srgb, var(--pm-text) 5%, transparent);
+  border-color: var(--pm-border);
+}
+:root[data-tone="light"] body.pm-mobile-active .pm-drawer-search input::placeholder,
+:root[data-tone="light"] body.pm-mobile-active .pm-drawer-item .pm-chev {
+  color: var(--pm-muted);
+}
+
+/* Selected tab: the magnified clone under the indicator was white on white.
+   Use the theme accent so the active tab reads as selected. */
+:root[data-tone="light"] body.pm-mobile-active .pm-tab-magnify-cell svg,
+:root[data-tone="light"] body.pm-mobile-active .pm-tab-magnify-label {
+  color: var(--pm-accent);
+  text-shadow: none;
+  filter: none;
+}
+
+/* Chat markdown emphasis/table headers were pure white. */
+:root[data-tone="light"] body.pm-mobile-active .pm-msg.from-ai :is(.markdown-body, .pm-live-md) strong,
+:root[data-tone="light"] body.pm-mobile-active .pm-bubble .markdown-body th {
+  color: var(--pm-text);
+}
