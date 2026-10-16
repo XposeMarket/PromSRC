@@ -787,7 +787,22 @@ function _openSheet(titleHtml, bodyHtml) {
   document.body.appendChild(sheet);
   if (previousFocus?.id === 'pm-composer-input') sheet.classList.add('has-composer-keyboard');
   const positionSheet = () => {
-    if (sheet.classList.contains('is-reasoning') || sheet.classList.contains('is-model-switch')) {
+    if (sheet.classList.contains('is-model-switch')) {
+      // The Advanced (provider/model/intelligence) sheet is a full-width
+      // bottom sheet. Only the compact reasoning slider floats above the
+      // composer; anchoring this one too left it hovering mid-screen with its
+      // rows clipped by the slider's 280px height.
+      const app = document.querySelector('.pm-app');
+      const offset = sheet.classList.contains('has-composer-keyboard') && app?.classList.contains('pm-keyboard-open')
+        ? Math.max(0, Number.parseFloat(app.style.getPropertyValue('--pm-keyboard-offset')) || 0)
+        : 0;
+      sheet.style.setProperty('bottom', `${offset}px`, 'important');
+      sheet.style.removeProperty('height');
+      sheet.style.removeProperty('max-height');
+      sheet.classList.remove('pm-msheet-short-viewport');
+      return;
+    }
+    if (sheet.classList.contains('is-reasoning')) {
       // Anchor the reasoning sheet to the visual viewport, not the layout
       // viewport. The old keyboard-offset-only path put the sheet under the
       // composer trigger during short keyboard viewports and Safari panning.
