@@ -1545,7 +1545,7 @@ router.post('/api/teams/:id/changes/:changeId/apply', async (req, res) => {
           return res.status(403).json({ success: false, error: 'Target agent is not a member of this team' });
         }
       }
-      const { applyChangeToAgent } = require('../team-manager-runner');
+      const { applyChangeToAgent } = require('../teams/team-manager-runner');
       const applied = await applyChangeToAgent(pending, req.params.id);
       if (!applied) {
         return res.status(400).json({ success: false, error: 'Change could not be applied (invalid or unsafe)' });

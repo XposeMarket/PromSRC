@@ -168,7 +168,7 @@ export function buildContextCompactionPrompt(input: ContextCompactorRunInput & {
 }
 
 export async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' }> {
-  const { resolveModelContextProfile } = require('../context/model-context') as typeof import('../../../context/model-context');
+  const { resolveModelContextProfile } = require('../../../context/model-context') as typeof import('../../../context/model-context');
   const compactorProfile = input.routeSnapshot?.contextProfile || resolveModelContextProfile(String(input.provider || resolveActiveModelContextProfile().providerId), input.model || resolveActiveModelContextProfile().model);
   // Provider-safe reserve: leave most of the window for source ingestion.
   input = { ...input, numCtx: Math.min(input.numCtx, compactorProfile.contextWindowTokens), numPredict: Math.max(1, Math.floor(Math.min(compactorProfile.maxOutputTokens, Math.min(input.numCtx, compactorProfile.contextWindowTokens) * 0.2))) };

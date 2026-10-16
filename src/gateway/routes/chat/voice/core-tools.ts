@@ -219,7 +219,7 @@ export function isKnownVoiceRuntimeTool(name: string): boolean {
   }
   if (voiceKnownToolNames.names.has(name)) return true;
   try {
-    const { buildToolCatalog } = require('../tool-search');
+    const { buildToolCatalog } = require('../../../tool-search');
     return (buildToolCatalog() as Array<{ name: string }>).some((entry) => entry?.name === name);
   } catch {
     return false;

@@ -415,7 +415,7 @@ export async function executeVoiceAgentControl(sessionId: string, args: Record<s
 
   if (action === 'chat') {
     if (!agent || !message) return voiceToolResult(false, 'agent_control chat requires agent_id and message.');
-    const { runSubagentChatTurnFromChannel } = require('./channels.router') as typeof import('../.././channels.router');
+    const { runSubagentChatTurnFromChannel } = require('../../channels.router') as typeof import('../../channels.router');
     const ownerLabel = ownerTarget.kind === 'subagent'
       ? compactVoiceText(ownerTarget.label || agent.name || agentId, 120)
       : 'Prometheus';

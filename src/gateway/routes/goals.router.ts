@@ -75,7 +75,7 @@ router.post('/api/goals/:id/approve', requireGatewayAuth, (req, res) => {
 
 router.post('/api/goals/:id/reject', requireGatewayAuth, (req, res) => {
   try {
-    const { saveGoal } = require('./goal-decomposer');
+    const { saveGoal } = require('../goal-decomposer');
     const goal = loadGoal(req.params.id);
     if (!goal) { res.status(404).json({ success: false, error: 'Goal not found' }); return; }
     goal.status = 'archived';
@@ -106,7 +106,7 @@ hookBus.register('gateway:approve_goal', ({ goalId, chatId }: any) => {
 
 router.get('/api/prompt-mutations/:jobId', (req, res) => {
   try {
-    const { loadMutationState } = require('./prompt-mutation');
+    const { loadMutationState } = require('../scheduling/prompt-mutation');
     const state = loadMutationState(req.params.jobId);
     res.json({ success: true, state });
   } catch (err: any) {
