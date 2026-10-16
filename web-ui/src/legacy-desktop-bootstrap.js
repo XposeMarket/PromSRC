@@ -4034,6 +4034,41 @@ function finishStoppedGenerationUI(sessionId) {
   if (session && typeof window.saveChatSessions === 'function') window.saveChatSessions();
 }
 
+// Sidebar "Working" comes from window._sessionThinking, which only clears on a
+// done/error frame this tab actually received. A turn that finished while the
+// socket was down (or in another surface) stayed Working forever. Reconcile
+// against the server's live-run registry; a chat must be missing from it on
+// two consecutive checks (start-of-turn race) and have no local request in
+// flight before its Working state is cleared.
+const _staleWorkingMisses = new Map();
+async function reconcileStaleWorkingSessions() {
+  const thinking = window._sessionThinking || {};
+  const candidates = Object.keys(thinking).filter((sid) => thinking[sid] === true);
+  if (!candidates.length || document.hidden) { _staleWorkingMisses.clear(); return; }
+  let active;
+  try {
+    const res = await fetch('/api/mobile/chat/runs', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data?.activeSessionIds)) return;
+    active = new Set(data.activeSessionIds.map((id) => String(id || '')));
+  } catch { return; }
+  let changed = false;
+  for (const sid of candidates) {
+    const inFlight = !!window._sessionAbortControllers?.[sid];
+    if (active.has(sid) || inFlight) { _staleWorkingMisses.delete(sid); continue; }
+    const misses = (_staleWorkingMisses.get(sid) || 0) + 1;
+    _staleWorkingMisses.set(sid, misses);
+    if (misses < 2) continue;
+    _staleWorkingMisses.delete(sid);
+    finishStoppedGenerationUI(sid);
+    changed = true;
+  }
+  if (changed && typeof window.renderSessionsList === 'function') window.renderSessionsList();
+}
+setInterval(() => { void reconcileStaleWorkingSessions(); }, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void reconcileStaleWorkingSessions(); });
+
 function scheduleStoppedGenerationReconcile(sessionId, delayMs = 2500) {
   const sid = String(sessionId || '').trim();
   if (!sid) return;

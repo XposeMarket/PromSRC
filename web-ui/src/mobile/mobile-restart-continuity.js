@@ -181,7 +181,7 @@ export function createReconnectStatusController(context = {}) {
         setSuccessTimer?.(setTimeout(() => {
           clearSuccessTimer?.();
           setChatConnectionStatus?.(false, 'Prometheus Reconnected', { mode: 'success', delayMs: 180 });
-        }, 950));
+        }, 1500)); // spinner -> ring -> green fill -> check needs ~0.8s; hold it long enough to read
         return;
       }
       setChatConnectionStatus?.(false, 'Reconnecting to Prometheus', { delayMs: 180 });
@@ -306,6 +306,17 @@ const rowText = (row) => String(row?.body?.text || row?.content || '').trim();
  * Walks back from the end inside the current request only. With `create`, a
  * trailing steer row that has no continuation yet gets one.
  */
+/**
+ * A pre-steer row frozen by a live steer. It is not a completed turn: the
+ * same request keeps streaming on the same stream into its continuation, so
+ * completed-turn lookups must never match it (that dropped every tool event
+ * after a steer as a duplicate until the chat was reopened).
+ */
+export function isSteerFrozenRow(row) {
+  return !!row && row.role === 'ai'
+    && (row._steerFrozenTrace === true || String(row.workflowPart || '') === 'before_interruption');
+}
+
 export function findLiveSteerContinuation(thread, clientRequestId = '', { create = false } = {}) {
   const list = Array.isArray(thread) ? thread : [];
   const cid = String(clientRequestId || '').trim();
@@ -325,6 +336,7 @@ export function findLiveSteerContinuation(thread, clientRequestId = '', { create
         workflowGroupId: row.workflowGroupId, workflowPart: 'interruption_response',
         workflowLabel: 'Response after steer', workflowBoundarySeq: row.workflowBoundarySeq,
         workflowStreamId: row.workflowStreamId,
+        _streamId: String(before?._streamId || row.workflowStreamId || ''),
         _clientRequestId: cid || String(before?._clientRequestId || ''),
       };
       list.splice(i + 1, 0, continuation);

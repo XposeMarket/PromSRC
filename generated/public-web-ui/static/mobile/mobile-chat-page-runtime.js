@@ -691,7 +691,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       </div>
     ` : ''}
     <div class="pm-chat-connection-status" id="pm-chat-connection-status" hidden aria-live="polite">
-      <span class="pm-chat-connection-spinner" aria-hidden="true"></span>
+      <span class="pm-chat-connection-spinner" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><circle class="pm-conn-track" cx="8" cy="8" r="7"/><circle class="pm-conn-fill" cx="8" cy="8" r="7"/><circle class="pm-conn-arc" cx="8" cy="8" r="7"/><path class="pm-conn-check" d="M4.8 8.3l2.2 2.2 4.2-4.6"/></svg></span>
       <span class="pm-chat-connection-text">Reconnecting to Prometheus</span>
     </div>
     ${isVoiceRoomTranscript ? `
@@ -3497,8 +3497,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
   const updateScrollLatestButton = () => {
     if (!scrollLatestBtn || !body) return;
-    const { distanceFromBottom } = _mobileChatScrollSnapshot(body, 0);
-    scrollLatestBtn.hidden = distanceFromBottom < 150;
+    // The snapshot reports `gap` (px below the viewport). Reading a missing
+    // field made the comparison always false, so the arrow showed even when
+    // the thread had nothing to scroll.
+    const { gap } = _mobileChatScrollSnapshot(body, 0) || {};
+    scrollLatestBtn.hidden = !(Number.isFinite(gap) && gap >= 150);
   };
   const syncBackgroundDockOnScroll = () => syncMobileBackgroundSpawnDockToComposer();
   let lastHistoryScrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);

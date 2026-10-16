@@ -3,7 +3,7 @@
 // row was spliced ABOVE the frozen pre-steer stream while "Response after
 // steer" sat on "..." (IMG_0211, 2026-10-04).
 import assert from 'node:assert/strict';
-import { findLiveSteerContinuation, dropOrphanLiveRows } from '../web-ui/src/mobile/mobile-restart-continuity.js';
+import { findLiveSteerContinuation, dropOrphanLiveRows, isSteerFrozenRow } from '../web-ui/src/mobile/mobile-restart-continuity.js';
 
 const cid = 'req-1';
 const g1 = 'chat_steer_a';
@@ -54,5 +54,20 @@ t = base();
 t.push({ role: 'ai', workflowGroupId: g1, workflowPart: 'interruption_response', _clientRequestId: 'other' });
 assert.equal(findLiveSteerContinuation(t, cid), null, 'other request is not claimed');
 assert.equal(findLiveSteerContinuation(base(), cid), null, 'no create without the flag');
+
+// 6. Live steer: the frozen pre-steer row is never a "completed turn" (that
+// dropped every tool frame after a steer as a duplicate until reopen), and the
+// continuation carries the live stream id so terminal frames still match.
+assert.equal(isSteerFrozenRow({ role: 'ai', _steerFrozenTrace: true }), true);
+assert.equal(isSteerFrozenRow({ role: 'ai', workflowPart: 'before_interruption' }), true);
+assert.equal(isSteerFrozenRow({ role: 'ai', workflowPart: 'interruption_response' }), false);
+assert.equal(isSteerFrozenRow({ role: 'user', workflowPart: 'before_interruption' }), false);
+t = [
+  { role: 'user', content: 'do the thing', _clientRequestId: cid },
+  { role: 'ai', workflowGroupId: g1, workflowPart: 'before_interruption', _streamId: 'stream-1', _steerFrozenTrace: true },
+  { role: 'user', workflowGroupId: g1, workflowPart: 'interruption', workflowStreamId: 'stream-1', content: 'steer 1' },
+];
+row = findLiveSteerContinuation(t, cid, { create: true });
+assert.equal(row._streamId, 'stream-1', 'continuation inherits the live stream id');
 
 console.log('mobile steer live continuation: ok');

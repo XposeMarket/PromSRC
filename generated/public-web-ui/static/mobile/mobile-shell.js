@@ -1467,7 +1467,9 @@ function _drawerSessionStateView(session) {
     || (has('activeRun') && session?.activeRunKnown !== false);
   const activeRun = session?.activeRun === true
     || _drawerLiveActiveRun(sessionIds)
-    || localRunFresh
+    // A remembered run record only counts while the server state is unknown;
+    // otherwise a turn that ended while backgrounded showed Working for 2h.
+    || (!activeRunKnown && localRunFresh)
     || (!activeRunKnown && cachedRunFresh && cached.activeRun === true);
   const mobileUnreadKnown = session?.mobileUnreadKnown === true
     || (has('mobileUnread') && session?.mobileUnreadKnown !== false);
@@ -2260,6 +2262,9 @@ function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
     return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id);
   });
   pinnedSessions.sort(function(a, b) {
+    // Server sidebarOrder (shared with desktop drag) beats pin time.
+    var orderDelta = Number(b && b.sidebarOrder || 0) - Number(a && a.sidebarOrder || 0);
+    if (orderDelta) return orderDelta;
     var timeDelta = Number(b && b.pinnedAt || 0) - Number(a && a.pinnedAt || 0);
     if (timeDelta) return timeDelta;
     return localOrder.indexOf(String(a && a.id)) - localOrder.indexOf(String(b && b.id));
@@ -4459,12 +4464,18 @@ function _finishDrawerSessionReorder() {
 
 async function _persistDrawerSessionOrder(kind, ids) {
   if (kind === 'pinned') {
+    // Pinned order used to live only in this phone's localStorage, so a list
+    // refresh that loaded pins the saved order didn't know (or a reload on
+    // another device) put the dragged chat back. Persist it on the server too.
     try { localStorage.setItem(PM_PINNED_MANUAL_ORDER_KEY, JSON.stringify(ids)); } catch {}
-    if (Array.isArray(_drawerPinnedSessions)) _drawerPinnedSessions = _sortSessionsByIds(_drawerPinnedSessions, ids);
-    return;
-  }
-  if (kind !== 'sessions') return;
-  const state = _drawerPageStateFor();
+    const base = Date.now() * 1000 + ids.length + 1;
+    const rank = new Map(ids.map((id, index) => [id, base - index]));
+    if (Array.isArray(_drawerPinnedSessions)) {
+      _drawerPinnedSessions.forEach((s) => { if (rank.has(String(s?.id || ''))) s.sidebarOrder = rank.get(String(s.id)); });
+      _drawerPinnedSessions = _sortSessionsByIds(_drawerPinnedSessions, ids);
+    }
+  } else if (kind !== 'sessions') return;
+  const state = kind === 'sessions' ? _drawerPageStateFor() : null;
   if (Array.isArray(state?.sessions)) {
     const positions = new Map(ids.map((id, index) => [id, index]));
     const slots = [];
@@ -4472,7 +4483,7 @@ async function _persistDrawerSessionOrder(kind, ids) {
     const reordered = _sortSessionsByIds(state.sessions.filter((session) => positions.has(String(session?.id || ''))), ids);
     slots.forEach((slot, index) => { state.sessions[slot] = reordered[index]; });
   }
-  const pinnedIds = (Array.isArray(_drawerPinnedSessions) ? _drawerPinnedSessions : []).map((s) => String(s?.id || '')).filter(Boolean);
+  const pinnedIds = kind === 'pinned' ? [] : (Array.isArray(_drawerPinnedSessions) ? _drawerPinnedSessions : []).map((s) => String(s?.id || '')).filter(Boolean);
   const groups = new Map();
   [...pinnedIds, ...ids].forEach((id) => {
     const parsed = parseTargetNamespacedId(id);

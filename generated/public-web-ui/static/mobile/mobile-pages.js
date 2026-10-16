@@ -1500,6 +1500,12 @@ async function enrichMobileSessionGroupsForDrawer(loadSessions) {
   try {
     const status = typeof loadMobileChatRunStatuses === 'function' ? await loadMobileChatRunStatuses() : null;
     const serverIds = Array.isArray(status?.activeSessionIds) ? status.activeSessionIds : [];
+    // The server answer is authoritative. Re-unioning the previous drawer set
+    // kept a finished chat on Working forever; only a run this page is still
+    // streaming may add to it.
+    if (Array.isArray(status?.activeSessionIds)) {
+      activeIds = new Set(Object.entries(__pmChat.activeRuns || {}).filter(([, run]) => run?.busy).map(([id]) => String(id)));
+    }
     activeIds = new Set([...activeIds, ...serverIds.map((id) => String(id || '').trim()).filter(Boolean)]);
     __pmChat.drawerRunSessionIds = activeIds;
   } catch {}
@@ -2748,6 +2754,8 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
       agentExecutionMode: 'execute',
       suppressWorkTimer: true,
       _clientRequestId: latestAi._clientRequestId || data?.clientRequestId || '',
+      // Same live stream continues after a steer; terminal frames match on it.
+      _streamId: String(latestAi._streamId || workflowStreamId || '').trim(),
       workflowGroupId,
       workflowPart: 'interruption_response',
       workflowLabel: 'Response after steer',

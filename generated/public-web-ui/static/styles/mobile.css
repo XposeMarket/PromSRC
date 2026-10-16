@@ -1,4 +1,5 @@
 @import './mobile-shell.css';
+@import './mobile-connection-pill.css';
 /* Voice-mode-style reasoning/model takeover: centered controls cover the lower third of chat. */
 .pm-msheet-scrim.is-reasoning,
 .pm-msheet-scrim.is-model-switch {
@@ -6270,44 +6271,6 @@ html.pm-session-context-open * {
 .pm-chat-connection-status .pm-chat-connection-text {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-.pm-chat-connection-spinner {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 13px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--pm-orange) 22%, transparent);
-  border-top-color: var(--pm-orange);
-  animation: pm-spin .85s linear infinite;
-}
-.pm-chat-connection-status.activity .pm-chat-connection-spinner {
-  border-color: color-mix(in srgb, var(--pm-orange) 65%, transparent);
-  background: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  animation: none;
-}
-.pm-chat-connection-status.success {
-  color: var(--pm-green);
-  border-color: rgba(47,174,102,.28);
-}
-.pm-chat-connection-status.success .pm-chat-connection-spinner {
-  width: 14px;
-  height: 14px;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(47,174,102,.18);
-  animation: none;
-  position: relative;
-}
-.pm-chat-connection-status.success .pm-chat-connection-spinner::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 2px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--pm-green);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
 }
 :root[data-theme="dark"] .pm-chat-connection-status {
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
