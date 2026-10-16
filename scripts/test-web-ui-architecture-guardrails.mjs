@@ -16,7 +16,7 @@ const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/mobile/mobile-pages.js': 898464,
   // Reviewed against the 2026-10-01 main UI: these are tracked LF-byte
   // boundaries, not dynamic baselines. Future growth still fails CI.
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 256913,
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 256943, // Reviewed: steer-frozen rows are never completed-turn targets (#683, +30 LF bytes)
   'web-ui/src/styles/mobile.css': 641881,
   'web-ui/src/styles/components.css': 292703,
   'web-ui/index.html': 558138,

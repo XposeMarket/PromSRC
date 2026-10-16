@@ -1,0 +1,91 @@
+/* Mobile chat connection pill: one morphing reconnect -> reconnected indicator. */
+/* One morphing indicator: spinning arc -> arc closes into a ring -> green
+   disc pops in -> check draws. The arc keeps rotating the whole time, so the
+   ring closing never jumps (a closed ring looks identical at any angle). */
+.pm-chat-connection-status {
+  transition: color .35s ease, border-color .35s ease;
+}
+.pm-chat-connection-spinner {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  animation: none;
+}
+.pm-chat-connection-spinner svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+}
+.pm-conn-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--pm-orange) 22%, transparent);
+  stroke-width: 2.2;
+  transition: opacity .3s ease;
+}
+.pm-conn-arc {
+  fill: none;
+  stroke: var(--pm-orange);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 11 44;
+  transform-box: view-box;
+  transform-origin: 8px 8px;
+  animation: pm-conn-spin .85s linear infinite;
+  transition: stroke-dasharray .42s cubic-bezier(.4,0,.2,1), stroke .35s ease, opacity .3s ease;
+}
+.pm-conn-fill {
+  fill: var(--pm-green);
+  transform-box: view-box;
+  transform-origin: 8px 8px;
+  transform: scale(0);
+  opacity: 0;
+}
+.pm-conn-check {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10;
+  stroke-dashoffset: 10;
+  opacity: 0;
+}
+.pm-chat-connection-status.activity .pm-conn-arc {
+  stroke-dasharray: 44 0;
+  opacity: .65;
+}
+.pm-chat-connection-status.activity .pm-conn-fill {
+  fill: var(--pm-orange);
+  transform: scale(1);
+  opacity: .18;
+}
+.pm-chat-connection-status.success {
+  color: var(--pm-green);
+  border-color: rgba(47,174,102,.28);
+}
+.pm-chat-connection-status.success .pm-conn-track { opacity: 0; }
+.pm-chat-connection-status.success .pm-conn-arc {
+  stroke-dasharray: 44 0;
+  stroke: var(--pm-green);
+}
+.pm-chat-connection-status.success .pm-conn-fill {
+  animation: pm-conn-fill .34s cubic-bezier(.34,1.56,.64,1) .34s forwards;
+}
+.pm-chat-connection-status.success .pm-conn-check {
+  animation: pm-conn-check .3s ease-out .56s forwards;
+}
+@keyframes pm-conn-spin { to { transform: rotate(360deg); } }
+@keyframes pm-conn-fill { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes pm-conn-check { from { opacity: 1; stroke-dashoffset: 10; } to { opacity: 1; stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .pm-conn-arc { animation-duration: 1.6s; transition: none; }
+  .pm-chat-connection-status.success .pm-conn-fill,
+  .pm-chat-connection-status.success .pm-conn-check { animation-duration: .01s; animation-delay: 0s; }
+}

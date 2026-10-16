@@ -11,6 +11,7 @@ import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
@@ -3169,8 +3170,7 @@ function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
   const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
   if (!clientRequestId && !streamId) return null;
   const sid = String(sessionId || evt?.sessionId || '').trim();
-  // A restart resumes the same clientRequestId on a new stream; a request-id
-  // match on a different known stream is a continuation unless already final.
+  // Restart resumes this clientRequestId on a new stream: a continuation unless final.
   const requestMatchIsCompleted = (turn) => {
     if (!clientRequestId || String(turn?._clientRequestId || '').trim() !== clientRequestId) return false;
     const turnStreamId = String(turn?._streamId || turn?._pmLastStreamId || '').trim();
@@ -3178,13 +3178,13 @@ function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
     return true;
   };
   const pinned = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
-  if (pinned && Date.now() - Number(pinned.at || 0) <= 120_000) {
+  if (pinned && !isSteerFrozenRow(pinned.turn) && Date.now() - Number(pinned.at || 0) <= 120_000) {
     const pinnedTurn = pinned.turn;
     if (requestMatchIsCompleted(pinnedTurn)) return pinnedTurn;
     if (streamId && String(pinnedTurn?._streamId || pinnedTurn?._pmLastStreamId || '').trim() === streamId) return pinnedTurn;
   }
   return [...thread].reverse().find((turn) => {
-    if (turn?.role !== 'ai' || turn.streaming === true) return false;
+    if (turn?.role !== 'ai' || turn.streaming === true || isSteerFrozenRow(turn)) return false;
     if (requestMatchIsCompleted(turn)) return true;
     return !!streamId && String(turn._streamId || turn._pmLastStreamId || '').trim() === streamId;
   }) || null;

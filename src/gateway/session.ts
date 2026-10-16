@@ -3462,6 +3462,8 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
   const timestamp = Number.isFinite(Number(readAt)) ? Number(readAt) : Date.now();
   session.mobileLastReadAt = Math.max(Number(session.mobileLastReadAt || 0) || 0, timestamp);
   saveSession(sessionId);
+  // Session lists read the index; don't make them wait for the debounced save.
+  updateSessionSummaryInMemory(session);
   return buildSessionSummary(session);
 }
 
@@ -3955,6 +3957,9 @@ export function markSessionUnreadForMobile(id: string): SessionSummary | null {
   const session = getSession(sessionId);
   session.mobileLastReadAt = 0;
   saveSession(sessionId);
+  // Without this the drawer's immediate re-list read the stale index summary
+  // (still read), cached it, and "Mark as unread" looked like it did nothing.
+  updateSessionSummaryInMemory(session);
   return buildSessionSummary(session);
 }
 
