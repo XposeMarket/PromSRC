@@ -92,16 +92,41 @@ export function hasCardFence(text) {
  * ([1], [source], or the site's own hostname) renders as a small favicon pill
  * like ChatGPT's "NBA.com +1" chips. Ordinary prose links are left alone.
  */
-const CITE_TEXT_RE = /^(?:\[?\d{1,2}\]?|source|src|ref|link)$/i;
+const CITE_TEXT_RE = /^(?:\[?\d{1,2}\]?|source|src|ref|link|via)$/i;
+const SQUASH = (s) => String(s || '').toLowerCase().replace(/^www\./, '').replace(/[^a-z0-9]/g, '');
+/** Short brand-ish label that names the linked site: "Reuters" -> reuters.com, "NWS" -> weather.gov is NOT matched. */
+function labelNamesHost(label, host) {
+  const l = SQUASH(label);
+  if (!l || l.length > 24 || /\s{2,}/.test(label) || label.split(/\s+/).length > 3) return false;
+  const parts = host.split('.');
+  const brand = SQUASH(parts.length > 2 && parts[parts.length - 2].length <= 3 ? parts[parts.length - 3] : parts[parts.length - 2]);
+  return l === SQUASH(host) || l === brand || (brand.length >= 4 && (l.startsWith(brand) || brand.startsWith(l) && l.length >= 4));
+}
 export function citeChips(html) {
   if (!html || html.indexOf('<a ') === -1) return html;
   return html.replace(/<a ([^>]*?)href="(https?:\/\/[^"]+)"([^>]*)>([^<]{1,48})<\/a>/g, (whole, pre, href, post, text) => {
     const label = text.trim();
     let host = '';
     try { host = new URL(href.replace(/&amp;/g, '&')).hostname.replace(/^www\./, ''); } catch { return whole; }
-    const isCite = CITE_TEXT_RE.test(label) || label.toLowerCase().replace(/^www\./, '') === host;
+    const isCite = CITE_TEXT_RE.test(label) || label.toLowerCase().replace(/^www\./, '') === host || labelNamesHost(label, host);
     if (!isCite) return whole;
-    const name = host.split('.').slice(-2).join('.');
+    const short = host.split('.').slice(-2).join('.');
+    const name = CITE_TEXT_RE.test(label) || label.includes('.') ? short : label;
     return `<a class="pc-cite" href="${href}" target="_blank" rel="noopener noreferrer" title="${href}"><img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&amp;sz=32" alt="" loading="lazy" referrerpolicy="no-referrer">${name}</a>`;
   });
+}
+
+/** Compact favicon pill row for `sources` artifacts with layout "pills" (end-of-turn fetched pages). Shared by desktop + mobile. */
+export function renderSourcePills(artifact, esc) {
+  const items = Array.isArray(artifact?.items) ? artifact.items.filter((it) => it && it.url) : [];
+  if (!items.length) return '';
+  const e = typeof esc === 'function' ? esc : (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const pills = items.map((it, i) => {
+    let host = '';
+    try { host = new URL(String(it.url)).hostname.replace(/^www\./, ''); } catch { return ''; }
+    const title = String(it.title || host).trim();
+    const label = title && title !== host ? title : host;
+    return `<a class="pc-src-pill" href="${e(it.url)}" target="_blank" rel="noopener noreferrer" title="${e(title)}\n${e(it.url)}"><span class="pc-src-n">${i + 1}</span><img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&amp;sz=32" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="pc-src-host">${e(host.split('.').slice(-2).join('.'))}</span><span class="pc-src-title">${e(label)}</span></a>`;
+  }).join('');
+  return `<div class="pc-src-pills"><div class="pc-src-pills-head">${e(artifact.title || 'Sources')} <span>${items.length}</span></div><div class="pc-src-pills-row">${pills}</div></div>`;
 }

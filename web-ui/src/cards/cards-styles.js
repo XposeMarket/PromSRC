@@ -164,6 +164,17 @@ export const CARD_CSS = `
 /* inline citation chips */
 .pc-cite{display:inline-flex;align-items:center;gap:3px;vertical-align:1px;margin:0 2px;padding:1px 7px;border-radius:999px;background:var(--pc-soft,rgba(127,127,127,.12));color:var(--pc-muted,inherit);font-size:11.5px;font-weight:600;text-decoration:none;white-space:nowrap}
 .pc-cite:hover{color:var(--pc-accent,inherit)}.pc-cite img{width:12px;height:12px;border-radius:3px}
+/* end-of-turn fetched source pills */
+.pc-src-pills{--pc-line:var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));--pc-soft:var(--prom-surface-secondary,var(--pm-bg-soft,var(--panel-2,rgba(127,127,127,.11))));--pc-muted:var(--prom-muted,var(--pm-muted,var(--muted,#8a8a8a)));--pc-accent:var(--prom-accent,var(--pm-orange,var(--brand,#ff7a1a)));margin:12px 0 4px;max-width:100%}
+.pc-src-pills-head{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--pc-muted);margin-bottom:6px}.pc-src-pills-head span{opacity:.7;font-weight:600}
+.pc-src-pills-row{display:flex;flex-wrap:wrap;gap:6px}
+.pc-src-pill{display:inline-flex;align-items:center;gap:5px;max-width:min(100%,300px);padding:4px 10px 4px 5px;border:1px solid var(--pc-line);border-radius:999px;background:var(--pc-soft);color:inherit;font-size:12px;line-height:1.2;text-decoration:none;min-width:0;transition:border-color .15s}
+.pc-src-pill:hover{border-color:var(--pc-accent)}
+.pc-src-n{flex:none;display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--pc-line);font-size:10px;font-weight:700;color:var(--pc-muted)}
+.pc-src-pill img{flex:none;width:14px;height:14px;border-radius:3px}
+.pc-src-host{flex:none;font-weight:700}
+.pc-src-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--pc-muted)}
+@media (max-width:520px){.pc-src-pill{max-width:100%}.pc-src-pills-row{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.pc-src-pill{flex:none;max-width:240px}}
 /* inline visual expand-to-fullscreen (desktop + mobile; kept out of the ratcheted legacy stylesheets) */
 .visual-block{position:relative}
 .visual-expand-btn{position:absolute;top:4px;right:4px;z-index:3;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--prom-border,var(--pm-border,var(--line,rgba(127,127,127,.25))));background:var(--pm-surface,var(--panel,rgba(127,127,127,.1)));color:var(--pm-muted,var(--muted,#8a8a8a));cursor:pointer;opacity:0;transition:opacity .15s ease,color .15s ease;-webkit-tap-highlight-color:transparent}

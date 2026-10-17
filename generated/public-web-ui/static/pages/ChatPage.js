@@ -1,5 +1,6 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
@@ -12245,6 +12246,7 @@ function renderChartArtifact(a) {
 function renderSourcesArtifact(artifact) {
   const items = Array.isArray(artifact?.items) ? artifact.items.filter(Boolean) : [];
   if (!items.length) return '';
+  if (artifact?.layout === 'pills') return renderSourcePills(artifact, escHtml);
   const title = String(artifact?.title || '').trim();
   const layout = artifact?.layout === 'list' ? 'list' : 'cards';
   const cards = items.map((it) => {
