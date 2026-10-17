@@ -4916,7 +4916,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       }
       // Every page fetched this turn shows as compact source pills under the reply.
       if (!explicitVisualOutput) {
-        const turnSources = buildTurnSourcesArtifact(allToolResults as any[], finalRichArtifacts as any[]);
+        const turnSources = buildTurnSourcesArtifact(allToolResults, finalRichArtifacts);
         if (turnSources) finalRichArtifacts.push(turnSources);
       }
       const priorVisualArtifacts = getHistory(sessionId)
