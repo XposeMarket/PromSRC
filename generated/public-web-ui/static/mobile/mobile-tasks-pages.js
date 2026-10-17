@@ -45,22 +45,137 @@ function needsYouSummary(payload = {}) {
 }
 
 // Needs you: items blocked on the user. Resolved through the same endpoints chat uses.
-function renderNeedsYouCard(item) {
-  const id = escapeHtml(String(item.id || ''));
+// Item ids are namespaced by the aggregator ("approval:<id>", "task:<id>"); the
+// resolve endpoints need the raw store id, which lives on payload.id.
+const NY_KIND_LABEL = {
+  final_action_approval: 'Final action',
+  tool_approval: 'Tool approval',
+  question: 'Question',
+  browser_login: 'Login needed',
+  dev_source_edit_proposal: 'Source edit proposal',
+  needs_user_supervision: 'Thread blocked',
+  team_escalation: 'Team needs you',
+  paused_agent_run: 'Paused agent run',
+  video_approval: 'Paid video run',
+};
+const NY_PAUSE_REASON = {
+  error: 'Stopped on an error',
+  awaiting_user_input: 'Waiting for your reply',
+  awaiting_approval: 'Waiting for an approval',
+  awaiting_command_approval: 'Waiting for command approval',
+  awaiting_final_action_approval: 'Waiting for final-action approval',
+  awaiting_prometheus_question_response: 'Waiting for a question answer',
+};
+
+function nyRawId(item) {
+  const fromPayload = String(item?.payload?.id || '').trim();
+  if (fromPayload) return fromPayload;
+  return String(item?.id || '').replace(/^[a-z-]+:/i, '');
+}
+
+function nyRelTime(value) {
+  const t = typeof value === 'number' ? value : Date.parse(String(value || ''));
+  if (!Number.isFinite(t) || t <= 0) return '';
+  const diff = Date.now() - t;
+  const s = Math.abs(diff) / 1000;
+  const label = s < 60 ? `${Math.max(1, Math.round(s))}s`
+    : s < 3600 ? `${Math.round(s / 60)}m`
+      : s < 86400 ? `${Math.round(s / 3600)}h`
+        : `${Math.round(s / 86400)}d`;
+  return diff < 0 ? `in ${label}` : `${label} ago`;
+}
+
+const nyCap = (s) => { const v = String(s || '').trim(); return v ? v.charAt(0).toUpperCase() + v.slice(1) : ''; };
+
+/** Headline + labelled facts so the card says what will happen without opening the thread. */
+export function needsYouDetails(item = {}) {
   const kind = String(item.kind || '');
+  const p = item.payload || {};
+  const rows = [];
+  let headline = '';
+  const push = (label, value) => { const v = String(value ?? '').trim(); if (v) rows.push([label, v]); };
+  if (kind === 'final_action_approval' || kind === 'tool_approval') {
+    const fa = p.finalAction || {};
+    const args = p.toolArgs && typeof p.toolArgs === 'object' ? p.toolArgs : {};
+    const actionKind = String(fa.actionKind || args.action_kind || '').trim();
+    const surface = String(fa.surface || args.surface || (Array.isArray(p.affectedSystems) ? p.affectedSystems[0] : '') || '').trim();
+    if (kind === 'final_action_approval') {
+      headline = actionKind ? `${nyCap(actionKind)}${surface ? ` on ${surface}` : ''}` : 'Approve final action';
+      push('Button', fa.targetLabel || args.target_label);
+      push('Next step', fa.nextToolName || args.next_tool_name);
+    } else {
+      headline = String(p.action || '').trim() || `Run ${String(p.toolName || 'tool').replace(/_/g, ' ')}`;
+      push('Tool', p.toolName);
+      push('Command', args.command);
+      push('Path', args.path || args.filename || p.pathAccess?.requestedPath);
+      push('Directory', args.cwd);
+      if (!actionKind) push('Where', surface);
+    }
+    if (p.riskScore != null && p.riskScore !== '') push('Risk', `${p.riskScore}/10${p.policyTier ? ` · ${p.policyTier}` : ''}`);
+    push('Requested', nyRelTime(p.createdAt || item.createdAt));
+    const exp = Number(fa.expiresAt || p.expiresAt || 0);
+    if (exp > Date.now()) push('Expires', nyRelTime(exp));
+  } else if (kind === 'paused_agent_run') {
+    const status = String(p.pauseReason || p.status || '').toLowerCase();
+    headline = NY_PAUSE_REASON[status] || nyCap(String(p.status || 'paused').replace(/_/g, ' '));
+    const plan = Array.isArray(p.plan) ? p.plan : [];
+    const idx = Number(p.currentStepIndex);
+    const step = Number.isFinite(idx) && plan[idx] ? String(plan[idx].description || plan[idx].title || plan[idx].text || '') : '';
+    if (plan.length) push('Step', `${Math.min(plan.length, (Number.isFinite(idx) ? idx : 0) + 1)} of ${plan.length}${step ? `: ${step.slice(0, 90)}` : ''}`);
+    const items = Array.isArray(p.runtimeProgress?.items) ? p.runtimeProgress.items : [];
+    if (items.length) push('Progress', `${items.filter((x) => x?.status === 'done').length}/${items.length} tool steps done`);
+    push('Model', p.executorProvider);
+    push('Last activity', nyRelTime(p.lastProgressAt));
+    push('Started', nyRelTime(p.startedAt || item.createdAt));
+  } else {
+    push('Requested', nyRelTime(item.createdAt));
+  }
+  return { headline, rows };
+}
+
+function renderNeedsYouCard(item) {
+  const kind = String(item.kind || '');
+  const rawId = escapeHtml(nyRawId(item));
   const origin = escapeHtml(String(item.sessionId || ''));
   const payload = item.payload || {};
-  const title = escapeHtml(String(item.source || 'Chat'));
-  const summary = escapeHtml(needsYouSummary(payload));
+  const source = escapeHtml(String(item.source || 'Chat'));
+  const kindLabel = escapeHtml(NY_KIND_LABEL[kind] || nyCap(kind.replace(/_/g, ' ')));
+  const when = escapeHtml(nyRelTime(item.createdAt));
+  const { headline, rows } = needsYouDetails(item);
+  const isApproval = kind === 'tool_approval' || kind === 'final_action_approval';
+  const summaryText = needsYouSummary(payload);
+  const summary = escapeHtml(isApproval ? String(payload.finalAction?.summary || payload.reason || summaryText) : summaryText);
   let actions = '';
-  if (kind === 'tool_approval' || kind === 'final_action_approval') {
-    actions = `<button class="pm-btn" data-ny-deny="${id}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${id}">Approve</button>`;
+  if (isApproval) {
+    actions = `<button class="pm-btn" data-ny-deny="${rawId}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${rawId}">Approve</button>`;
   } else if (kind === 'question' || kind === 'browser_login') {
-    actions = `<button class="pm-btn" data-ny-skip="${id}">Cancel</button><button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Answer in chat</button>`;
+    actions = `<button class="pm-btn" data-ny-skip="${rawId}">Cancel</button><button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Answer in chat</button>`;
+  } else if (kind === 'paused_agent_run') {
+    actions = `<button class="pm-btn" data-ny-run="${rawId}">Details</button><button class="pm-btn pm-btn-primary" data-ny-resume="${rawId}">Resume</button>`;
   } else {
     actions = `<button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Open thread</button>`;
   }
-  return `<div class="pm-card needs-you-card" data-needs-you-id="${id}"><div class="pm-card-head"><strong>${escapeHtml(kind.replace(/_/g, ' '))}</strong> <span>from ${title}</span></div><div class="pm-card-body">${summary}</div><div class="pm-card-actions">${actions}${origin && !actions.includes('data-ny-open') ? `<button class="pm-btn" data-ny-link="${origin}" aria-label="Open source thread" title="Open source thread">Thread</button>` : ''}</div></div>`;
+  const threadBtn = origin && !actions.includes('data-ny-open')
+    ? `<button class="pm-btn" data-ny-link="${origin}" aria-label="Open source thread" title="Open source thread">Thread</button>`
+    : '';
+  const facts = rows.length
+    ? `<dl class="ny-facts">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
+    : '';
+  return `<div class="pm-card needs-you-card" data-kind="${escapeHtml(kind)}" data-needs-you-id="${escapeHtml(String(item.id || ''))}">
+    <div class="pm-card-head"><span class="ny-dot" aria-hidden="true"></span><strong>${kindLabel}</strong>${when ? `<time>${when}</time>` : ''}</div>
+    <div class="ny-source">from ${source}</div>
+    ${headline ? `<div class="ny-headline">${escapeHtml(headline)}</div>` : ''}
+    ${summary ? `<div class="pm-card-body">${summary}</div>` : ''}
+    ${facts}
+    <div class="pm-card-actions">${actions}${threadBtn}</div>
+  </div>`;
+}
+
+function nyOpenThread(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (typeof window.pmOpenPrometheusThread === 'function') window.pmOpenPrometheusThread(sid);
+  else window.location.hash = `#mobile/chat/${encodeURIComponent(sid)}`;
 }
 
 async function paintNeedsYouSection(page) {
@@ -71,22 +186,37 @@ async function paintNeedsYouSection(page) {
   host.innerHTML = items.length
     ? `<h3 class="pm-section-title">Needs you</h3>${items.map(renderNeedsYouCard).join('')}`
     : '';
-  host.querySelectorAll('[data-ny-approve]').forEach((el) => el.addEventListener('click', async () => {
-    await approveMobileApproval(el.dataset.nyApprove, '', { source: 'mobile' });
+  // Every action shows a busy state and surfaces failures; a swallowed 404 used
+  // to make Approve/Reject look dead.
+  const wire = (selector, run, okMessage) => host.querySelectorAll(selector).forEach((el) => el.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (el.disabled) return;
+    const card = el.closest('.needs-you-card');
+    card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    el.classList.add('is-busy');
+    try {
+      await run(el);
+      if (okMessage) pmToast(okMessage, 'success');
+    } catch (err) {
+      pmToast(String(err?.message || err || 'Action failed'), 'error');
+      card?.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      el.classList.remove('is-busy');
+      return;
+    }
     await paintNeedsYouSection(page);
   }));
-  host.querySelectorAll('[data-ny-deny]').forEach((el) => el.addEventListener('click', async () => {
-    await denyMobileApproval(el.dataset.nyDeny, { source: 'mobile' });
-    await paintNeedsYouSection(page);
-  }));
-  host.querySelectorAll('[data-ny-skip]').forEach((el) => el.addEventListener('click', async () => {
-    await cancelMobileQuestion(el.dataset.nySkip).catch(() => null);
-    await paintNeedsYouSection(page);
-  }));
+  wire('[data-ny-approve]', (el) => approveMobileApproval(el.dataset.nyApprove, '', { source: 'mobile' }), 'Approved');
+  wire('[data-ny-deny]', (el) => denyMobileApproval(el.dataset.nyDeny, { source: 'mobile' }), 'Rejected');
+  wire('[data-ny-skip]', (el) => cancelMobileQuestion(el.dataset.nySkip), 'Cancelled');
+  wire('[data-ny-resume]', (el) => runBgTaskAction(el.dataset.nyResume, 'resume'), 'Resumed');
   host.querySelectorAll('[data-ny-open],[data-ny-link]').forEach((el) => el.addEventListener('click', (e) => {
     e.preventDefault();
-    const sid = el.dataset.nyOpen || el.dataset.nyLink;
-    if (sid) window.location.hash = `#chat/${encodeURIComponent(sid)}`;
+    nyOpenThread(el.dataset.nyOpen || el.dataset.nyLink);
+  }));
+  host.querySelectorAll('[data-ny-run]').forEach((el) => el.addEventListener('click', (e) => {
+    e.preventDefault();
+    const id = el.dataset.nyRun;
+    if (id) window.location.hash = `#mobile/tasks/${encodeURIComponent(id)}`;
   }));
 }
 
