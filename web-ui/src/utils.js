@@ -1270,6 +1270,28 @@ const RENDER_MD_CACHE_MAX = 600;
 const RENDER_MD_CACHEABLE_MAX_CHARS = 200000;
 const renderMdCache = new Map();
 
+/**
+ * GPT models sometimes emit ChatGPT's private UI markup (<row>, <box>,
+ * <AsyncImage/>, <Entity value="X"/>). We have no renderer for it, so labels
+ * vanished, bold kept raw ** and image slots left gaps. Keep Entity text, drop
+ * the layout/image tags. Code fences are left untouched. Mirrors
+ * src/gateway/comms/chat-ui-markup.ts (server-side cleanup of new replies);
+ * this copy also repairs replies already saved in history.
+ */
+const CHAT_UI_MARKUP_TEST_RE = /<(?:Entity|AsyncImage)\b|<\/?(?:row|box)\b/;
+export function stripChatUiMarkup(text) {
+  const s = String(text ?? '');
+  if (!CHAT_UI_MARKUP_TEST_RE.test(s)) return s;
+  return s.split(/(```[\s\S]*?```)/).map((part, i) => (i % 2 ? part : part
+    .replace(/<Entity\b[^>]*?\bvalue=(?:"([^"]*)"|'([^']*)')[^>]*?\/?>/g, (_, a, b) => a ?? b ?? '')
+    .replace(/<Entity\b[^>]*?\/?>/g, '')
+    .replace(/<AsyncImage\b[^>]*?\/?>[ \t]*\n?/g, '')
+    .replace(/^[ \t]*<\/?(?:row|box)\b[^>]*>[ \t]*(?:\n|$)/gm, '')
+    .replace(/<\/?(?:row|box)\b[^>]*>/g, '')
+    .replace(/^[ \t]+(?=\*\*|\[|[A-Za-z])/gm, '')
+  )).join('').replace(/\n{3,}/g, '\n\n');
+}
+
 export function renderMd(text, options = {}) {
   if (!text) return '';
   const source = String(text);
@@ -1326,7 +1348,7 @@ function renderMdUncached(text, options = {}) {
   try {
     const visuals = [];
     const placeholderPrefix = `PROMVISUAL${Math.random().toString(36).slice(2)}X`;
-    text = String(text)
+    text = stripChatUiMarkup(String(text))
       .replace(VIDEO_PROJECT_FENCE_RE, (_, body) => {
         vpCards.push(videoProjectCardHtml(body));
         return `\n\n${vpPrefix}${vpCards.length - 1}END\n\n`;
