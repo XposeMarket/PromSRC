@@ -108,7 +108,7 @@ export function getVoiceProviderRegistry(config: any = getConfig().getConfig()):
   ];
   let provider = text(defaults.provider || defaults.providerId || legacy.provider, 80);
   if (provider === 'openai_realtime' || provider === 'openai_codex') provider = 'openai';
-  if (!providers.some((candidate) => candidate.id === provider && candidate.connected)) provider = (providers.find((candidate) => candidate.id === 'openai' && candidate.connected)?.id || providers.find((candidate) => candidate.id === 'xai' && candidate.connected)?.id || 'openai') as VoiceProviderId;
+  if (!providers.some((candidate) => candidate.id === provider && candidate.connected)) provider = (providers.find((candidate) => candidate.id === 'openai' && candidate.connected)?.id || providers.find((candidate) => candidate.id === 'xai' && candidate.connected)?.id || providers.find((candidate) => !candidate.builtIn && candidate.connected)?.id || 'openai') as VoiceProviderId;
   const selected = providers.find((candidate) => candidate.id === provider) || providers[0];
   return { providers, catalog: [
     { id: 'elevenlabs', label: 'ElevenLabs', available: false, adapter: 'unavailable', reason: 'adapter not implemented yet' },

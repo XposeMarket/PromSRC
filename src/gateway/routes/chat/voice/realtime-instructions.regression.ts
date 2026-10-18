@@ -9,7 +9,14 @@ const source = fs.readFileSync(path.join(process.cwd(), 'src/gateway/routes/chat
 const ast = ts.createSourceFile('realtime.ts', source, ts.ScriptTarget.Latest, true);
 const names = new Set(['budgetRealtimeInstructions', 'buildRealtimeVoiceAgentInstructions']);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text || '')).map((node) => node.getText(ast).replace(/^export /, '')).join('\n');
-const sandbox: any = {
+interface InstructionInput {
+  contextBlock: string;
+  contextPacket: Record<string, unknown>;
+  conversationSummary?: string;
+  conversationTranscript?: string;
+}
+const sandbox = {
+  buildRealtimeVoiceAgentInstructions: (_input: InstructionInput): string => { throw new Error('builder not loaded'); },
   REALTIME_AGENT_INSTRUCTIONS_MAX: 36000,
   buildVoiceTimeContext: () => ({ source: 'test' }),
   voiceAgentTargetIdentity: () => ({ isSubagent: false, label: 'Prometheus' }),
