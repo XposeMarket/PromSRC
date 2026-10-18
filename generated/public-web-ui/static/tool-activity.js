@@ -802,9 +802,17 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
       || (resultActivity.stepNum != null && entry.activity.stepNum === resultActivity.stepNum
         && sameStreamScope(resultActivity.streamId, entry.activity.streamId))));
   if (existingResult) {
-    existingResult.activity = resultActivity;
-    existingResult.type = resultActivity.ok ? 'result' : 'error';
-    existingResult.text = activityText(resultActivity);
+    // A reconnect replays reduced recovery entries (checkpoint process rows)
+    // for results already rendered live. Merge onto the existing result so a
+    // poorer payload never erases the live duration, args preview or output
+    // ("Memory completed · 1.6 s" must not become "Memory completed").
+    const merged = makeActivity(payload, 'result', { ...operationEntry.activity, ...existingResult.activity });
+    merged.kind = 'result';
+    if (!String(merged.result || '').trim() && existingResult.activity.result) merged.result = existingResult.activity.result;
+    merged.diffPreview = merged.diffPreview || existingResult.activity.diffPreview || editActivityDiff(merged);
+    existingResult.activity = merged;
+    existingResult.type = merged.ok ? 'result' : 'error';
+    existingResult.text = activityText(merged);
     return existingResult;
   }
   const resultEntry = {

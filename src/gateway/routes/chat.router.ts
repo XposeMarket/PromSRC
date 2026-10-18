@@ -1220,6 +1220,19 @@ export function describeTurnAbortCause(abortSignal: { aborted?: boolean; reason?
 }
 
 
+/** Recovery checkpoints must keep the same tool detail the live stream showed. */
+export function runtimeToolDetailMetadata(data: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const duration = Number(data?.durationMs ?? data?.elapsedMs ?? data?.elapsed_ms);
+  if (Number.isFinite(duration) && duration >= 0) out.durationMs = duration;
+  if (typeof data?.ok === 'boolean') out.ok = data.ok;
+  const summary = typeof data?.summary === 'string' ? data.summary.trim() : '';
+  if (summary) out.summary = summary.slice(0, 1_200);
+  const streamId = String(data?.streamId || '').trim();
+  if (streamId) out.streamId = streamId;
+  return out;
+}
+
 export function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
@@ -1358,6 +1371,7 @@ export function runtimeProcessEntryFromSseEvent(type: string, data: any): Record
         args: data?.args,
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
+        ...runtimeToolDetailMetadata(data),
       },
     };
   }
@@ -1381,6 +1395,7 @@ export function runtimeProcessEntryFromSseEvent(type: string, data: any): Record
         error: data?.ok === false || data?.success === false || Boolean(data?.error),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
+        ...runtimeToolDetailMetadata(data),
         ...compactRuntimeWorkspaceChangeMetadata(data),
       },
     };
