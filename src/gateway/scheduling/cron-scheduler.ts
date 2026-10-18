@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { SchedulerAdmission, planDueSlots, validateScheduledExecution, type ScheduledSlot } from './scheduler-admission';
+import { quarantineCorruptStateFile } from '../state-file-quarantine';
 import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
@@ -982,7 +983,9 @@ export class CronScheduler {
         jobs,
         legacyAutomatedSessionsConsolidated: parsed?.legacyAutomatedSessionsConsolidated === true,
       };
-    } catch {
+    } catch (err) {
+      // Never let the next save silently overwrite a torn/corrupt schedule file.
+      quarantineCorruptStateFile(this.storePath, 'CronScheduler', err);
       return this.defaultStore();
     }
   }

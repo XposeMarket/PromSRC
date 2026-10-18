@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { writeFileAtomicSync } from './state-file-quarantine';
 
 export type DesktopTargetState = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
 export type DesktopTargetOwnership = 'owned' | 'external' | 'unknown';
@@ -525,12 +526,13 @@ export class DesktopTargetLeaseManager {
     try {
       const status = this.status();
       fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
-      fs.writeFileSync(this.statePath, JSON.stringify({
+      // Atomic: a torn lease file made startup skip stale-lease recovery.
+      writeFileAtomicSync(this.statePath, JSON.stringify({
         ...status,
         instanceId: this.instanceId || undefined,
         lastEvent: lastEvent?.event || this.lastEvent,
         updatedAt: this.now(),
-      }), 'utf8');
+      }));
     } catch {
       // Diagnostics must never break desktop work.
     }

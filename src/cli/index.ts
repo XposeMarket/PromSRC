@@ -654,6 +654,9 @@ async function runMissionThroughGateway(mission: string): Promise<void> {
   }
 }
 
+const GATEWAY_CRASH_LOOP_THRESHOLD = 8;
+const GATEWAY_CRASH_LOOP_BACKOFF_MS = 60_000;
+
 async function runSupervisedGateway(): Promise<void> {
   let stopping = false;
   let restartCount = 0;
@@ -734,7 +737,18 @@ async function runSupervisedGateway(): Promise<void> {
   const scheduleLaunch = (explicitQuickRestart = false) => {
     if (stopping || restartTimer || launchInFlight) return;
     restartCount++;
-    const delayMs = explicitQuickRestart ? 100 : Math.min(10_000, 1000 + restartCount * 1000);
+    // restartCount only resets on a healthy probe, so a gateway that dies on
+    // every boot (corrupt state, bad build) used to relaunch every 10s forever.
+    // Back off hard after a sustained loop and point at the diagnostics.
+    const crashLooping = !explicitQuickRestart && restartCount > GATEWAY_CRASH_LOOP_THRESHOLD;
+    const delayMs = explicitQuickRestart
+      ? 100
+      : crashLooping
+        ? GATEWAY_CRASH_LOOP_BACKOFF_MS
+        : Math.min(10_000, 1000 + restartCount * 1000);
+    if (crashLooping) {
+      console.error(`[GatewaySupervisor] Gateway has failed ${restartCount} consecutive launches without a healthy probe (crash loop). Backing off to ${Math.round(delayMs / 1000)}s between attempts; see logs/gateway-exit-diagnostics.ndjson and *.corrupt-* state copies.`);
+    }
     console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms${explicitQuickRestart ? ' (explicit quick restart)' : ''}...`);
     fastLaunchPending = explicitQuickRestart;
     restartTimer = setTimeout(() => {

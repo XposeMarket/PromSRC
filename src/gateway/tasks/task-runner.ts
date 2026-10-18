@@ -12,7 +12,7 @@
 
 import crypto from 'crypto';
 import { getSessionToolCeiling } from '../agents-runtime/tool-ceiling';
-import { persistBackgroundSpawnReceipt } from './background-spawn-continuity';
+import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
@@ -927,9 +927,44 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 }
 
+/**
+ * Live background records are process-local. After a gateway restart the
+ * worker is gone, but its durable receipt survives. Answer status/wait/join
+ * from that receipt instead of "not found", and report a worker that was still
+ * running at shutdown as an explicit interruption so the parent neither waits
+ * forever nor assumes the worker never launched.
+ */
+export const BACKGROUND_INTERRUPTED_BY_RESTART_ERROR =
+  'Interrupted by a gateway restart before finishing. Its partial work is not recoverable; re-spawn it if the result is still needed.';
+
+export function backgroundStatusFromReceipt(backgroundId: string): EphemeralBackgroundStatus | null {
+  const id = String(backgroundId || '').trim();
+  if (!id) return null;
+  let receipt: ReturnType<typeof readBackgroundSpawnReceipts>[number] | undefined;
+  try { receipt = readBackgroundSpawnReceipts().find((item) => item.id === id); } catch { receipt = undefined; }
+  if (!receipt) return null;
+  const wasLive = receipt.state === 'queued' || receipt.state === 'in_progress';
+  const state: EphemeralBackgroundState = wasLive
+    ? 'failed'
+    : (['completed', 'failed', 'timed_out'].includes(receipt.state) ? receipt.state as EphemeralBackgroundState : 'failed');
+  return {
+    id: receipt.id,
+    state,
+    joinPolicy: 'wait_until_timeout',
+    timeoutMs: DEFAULT_BACKGROUND_TIMEOUT_MS,
+    spawnerSessionId: receipt.spawnerSessionId,
+    promptPreview: receipt.promptPreview,
+    startedAt: receipt.startedAt,
+    completedAt: receipt.completedAt,
+    result: receipt.result,
+    error: wasLive ? BACKGROUND_INTERRUPTED_BY_RESTART_ERROR : receipt.error,
+    restoredFromReceipt: true,
+  } as EphemeralBackgroundStatus;
+}
+
 export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatus | null {
   const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
-  if (!rec) return null;
+  if (!rec) return backgroundStatusFromReceipt(backgroundId);
   return {
     id: rec.id,
     state: rec.state,
@@ -1197,9 +1232,22 @@ export async function backgroundWait(input: {
   timeoutMs?: number;
 }): Promise<EphemeralBackgroundWaitResult> {
   const records = listBackgroundRecordsForWait(input);
+  // Explicit ids with no live record (gateway restarted since the spawn) are
+  // settled from their durable receipts instead of being silently dropped,
+  // which used to make a resumed parent wait the full timeout for nothing.
+  const liveIds = new Set(records.map((rec) => rec.id));
+  const restoredStatuses = [
+    String(input?.backgroundId || '').trim(),
+    ...(Array.isArray(input?.backgroundIds) ? input.backgroundIds.map((id) => String(id || '').trim()) : []),
+  ]
+    .filter((id, index, all) => id && all.indexOf(id) === index && !liveIds.has(id))
+    .map((id) => backgroundStatusFromReceipt(id))
+    .filter(Boolean) as EphemeralBackgroundStatus[];
   const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs);
   const startedAt = Date.now();
-  if (records.length > 0) {
+  if (records.length === 0 && restoredStatuses.length > 0) {
+    // Nothing live to wait on: answer immediately from the receipts.
+  } else if (records.length > 0) {
     await Promise.race([
       Promise.all(records.map((rec) => rec.promise.catch(() => undefined))),
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
@@ -1208,7 +1256,7 @@ export async function backgroundWait(input: {
     await new Promise((resolve) => setTimeout(resolve, timeoutMs));
   }
   const waitedMs = Date.now() - startedAt;
-  const statuses = records.map(statusFromRecord);
+  const statuses = [...records.map(statusFromRecord), ...restoredStatuses];
   const completed = statuses.filter((status) => status.state === 'completed').length;
   const failed = statuses.filter((status) => status.state === 'failed').length;
   const running = statuses.filter((status) => status.state === 'in_progress' || status.state === 'queued').length;
@@ -1242,7 +1290,21 @@ export async function backgroundJoin(input: {
   timeoutMs?: number;
 }): Promise<EphemeralBackgroundJoinResult | null> {
   const rec = _ephemeralBackgroundRuns.get(String(input?.backgroundId || '').trim());
-  if (!rec) return null;
+  if (!rec) {
+    // Restarted gateway: settle the join from the durable receipt (terminal
+    // result, or an explicit interruption) instead of returning "not found".
+    const restored = backgroundStatusFromReceipt(String(input?.backgroundId || ''));
+    if (!restored) return null;
+    return {
+      id: restored.id,
+      joinPolicy: restored.joinPolicy,
+      state: restored.state,
+      merged: false,
+      timedOut: false,
+      result: restored.result,
+      error: restored.error,
+    };
+  }
 
   const policy: BackgroundJoinPolicy =
     input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'wait_until_timeout' || input?.joinPolicy === 'best_effort_merge'

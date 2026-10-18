@@ -619,10 +619,37 @@ function finalizeInterruptedRuntimesForRestart(interrupted: LiveRuntimeSnapshot[
   return interrupted;
 }
 
+/**
+ * Crash-loop guard for task auto-resume. Main chat caps automatic replays at
+ * two; formal tasks had no cap, so a task that itself kills the gateway (OOM,
+ * native crash) was auto-resumed on every boot forever. Planned restarts the
+ * task asked for (gateway_restart / prom_apply_dev_changes) are expected
+ * boundaries and do not count; only unplanned interruptions do.
+ */
+export const MAX_TASK_CRASH_AUTO_RESUMES = 2;
+
+export function countTaskCrashAutoResumes(task: Pick<TaskRecord, 'journal'>): number {
+  const journal = Array.isArray((task as any)?.journal) ? (task as any).journal : [];
+  return journal.filter((entry: any) => entry?.type === 'resume'
+    && /^Auto-resumed after gateway (crash|interruption)/.test(String(entry?.content || ''))).length;
+}
+
+export function isUnplannedTaskInterruption(runtime: LiveRuntimeSnapshot): boolean {
+  if (taskOwnedRestartToolName(runtime)) return false;
+  const reason = String(runtime.interruptReason || runtime.recoveryData?.interruptReason || '').toLowerCase();
+  // Signal shutdowns, planned restarts and handoffs are deliberate; anything
+  // else (or no recorded reason at all) means the process died under the task.
+  return !/^(gateway_restart|gateway_shutdown|signal_|handoff|planned)/.test(reason);
+}
+
 function shouldAutoResumeTask(task: TaskRecord, runtime: LiveRuntimeSnapshot): boolean {
   if (task.status !== 'paused') return false;
   if (task.pauseReason !== 'gateway_restart') return false;
   if (task.pendingClarificationQuestion) return false;
+  if (isUnplannedTaskInterruption(runtime) && countTaskCrashAutoResumes(task) >= MAX_TASK_CRASH_AUTO_RESUMES) {
+    console.warn(`[RuntimeRecovery] Task ${task.id} was interrupted by ${MAX_TASK_CRASH_AUTO_RESUMES}+ unplanned gateway exits; leaving it paused for manual resume (possible crash loop).`);
+    return false;
+  }
   // A task that intentionally crossed a restart boundary or explicitly carries
   // the normal restart-safe "resume" policy must continue on the replacement
   // gateway. Pending clarification and do_not_resume remain hard stops.
@@ -1028,7 +1055,14 @@ export function recoverInterruptedRuntimes(opts: {
               detail: [restartArgs, restartResult].filter(Boolean).join('\n').slice(0, 2400) || undefined,
             });
           }
-          appendJournal(latest.id, { type: 'resume', content: 'Auto-resumed after gateway restart.' });
+          appendJournal(latest.id, {
+            type: 'resume',
+            // The wording is load-bearing: countTaskCrashAutoResumes() counts
+            // unplanned resumes to stop crash loops.
+            content: isUnplannedTaskInterruption(runtime)
+              ? 'Auto-resumed after gateway crash.'
+              : 'Auto-resumed after gateway restart.',
+          });
           opts.launchBackgroundTaskRunner(latest.id);
           resumedTasks.push(latest.id);
           markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'task_auto_resumed', taskId: latest.id });

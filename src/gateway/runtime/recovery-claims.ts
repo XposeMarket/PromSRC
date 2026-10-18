@@ -75,3 +75,24 @@ export function claimRuntimeRecovery(runtimeId: string, kind = 'recovery'): bool
     return true;
   }
 }
+
+/**
+ * Give back a claim this process won but could not act on (e.g. the session
+ * was already busy). Without this, a claim is permanent for 24h and every
+ * later recovery attempt for the runtime is silently suppressed instead of
+ * re-evaluating (and, if the user moved on, retiring) the interrupted turn.
+ * Only removes a claim owned by this pid.
+ */
+export function releaseRuntimeRecoveryClaim(runtimeId: string, kind = 'recovery'): boolean {
+  const id = safeId(runtimeId);
+  if (!id) return false;
+  const file = path.join(claimDir(), `${id}.${safeId(kind)}.claim`);
+  try {
+    const owner = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Number(owner?.pid) !== process.pid) return false;
+    fs.unlinkSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
