@@ -410,3 +410,20 @@ const {
 }
 
 console.log('[tool-activity-stream] two-row lifecycle, compact tool/result rows, and terminal output passed');
+
+// A returned tool observation is not evidence that its supervised process exited.
+for (const [name, observation, state] of [
+  ['still-running', { runId: 'active-run', result: '[still running]' }, 'running'],
+  ['running-status', { runId: 'active-run', status: 'running', result: 'Process started' }, 'running'],
+  ['explicit-running', { terminal: { runId: 'active-run', state: 'running' }, result: 'Process started' }, 'running'],
+  ['exited', { runId: 'active-run', result: 'done [exit 0]' }, 'exited'],
+  ['exit-code', { runId: 'active-run', exitCode: 0, result: 'done' }, 'exited'],
+  ['killed', { runId: 'active-run', status: 'killed', result: 'Stopped' }, 'exited'],
+]) {
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', { toolCallId: name, action: 'workspace_run', args: { action: 'run', command: 'node worker.js' } });
+  const entry = applyToolActivityEvent(entries, 'result', { toolCallId: name, action: 'workspace_run', args: { action: 'run' }, ...observation });
+  assert.equal(entry.activity.terminal.state, state, name);
+  assert.equal(entry.activity.terminal.completed === true, state === 'exited', name);
+  assert.match(renderToolActivityEntry(entry), state === 'exited' ? /completed/i : /running/i, name);
+}

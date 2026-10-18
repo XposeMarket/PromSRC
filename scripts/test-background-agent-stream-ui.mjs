@@ -39,7 +39,7 @@ assert.doesNotMatch(mobileRenderer, /_renderMobileProcess\(entries\)/, 'mobile b
 assert.match(mobileRenderer, /latency:\\s\*provider_/, 'mobile trace must recognize provider latency diagnostics');
 assert.match(mobilePages, /function _isMobileInternalToolProtocolText\(/, 'mobile recovery must recognize provider protocol diagnostics');
 assert.match(desktopPage, /function isDesktopInternalToolProtocolTraceEntry\(/, 'desktop trace must recognize provider protocol diagnostics');
-assert.match(desktopPage, /function mergeBackgroundReasoningSummary\(/, 'desktop background streams must own one mutable reasoning summary');
+assert.match(read('web-ui/src/background-stream-summary.js'), /function mergeBackgroundReasoningSummary\(/, 'desktop background streams must own one mutable reasoning summary');
 assert.match(desktopPage, /liveTraceEntries: Array\.isArray\(record\.liveTraceEntries\)/, 'desktop side panes must prefer persisted structured traces');
 assert.match(
   desktopPage,
@@ -51,8 +51,8 @@ assert.match(
   /function backgroundAgentEventsToLiveTraceEntries\(events = \[\]\) \{[\s\S]*?if \(eventType === 'reasoning_summary' \|\| eventType === 'reasoning_summary_delta' \|\| eventType === 'reasoning_delta'\) \{\s*const text = String\(extra\.thinking \|\| extra\.text \|\| extra\.message \|\| entry\.content \|\| ''\)\.trim\(\);\s*mergeBackgroundReasoningSummary\(trace, text, \{\s*\.\.\.extra,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
   'summary deltas must be tagged mutable so they cannot become a second stream row',
 );
-assert.match(desktopPage, /function backgroundSpawnCollapsedDetail\(/, 'background summaries need a stable dock detail selector');
-assert.match(desktopPage, /const detail = backgroundSpawnCollapsedDetail\(lane\)/, 'reasoning summary updates must not replace the collapsed background-agent header preview');
+assert.match(read('web-ui/src/background-stream-summary.js'), /function backgroundSpawnCollapsedDetail\(/, 'background summaries need a stable dock detail selector');
+assert.match(desktopPage, /const detail = backgroundSpawnCollapsedDetail\(lane, backgroundAgentPreview\)/, 'reasoning summary updates must not replace the collapsed background-agent header preview');
 assert.match(
   desktopPage,
   /case 'reasoning_summary_delta':[\s\S]{0,450}eventType,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
@@ -65,3 +65,16 @@ assert.match(
 
 
 console.log('[background-agent-stream-ui] grouped trace, reasoning summary, protocol filtering, and identity recovery passed');
+
+const { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } = await import('../web-ui/src/background-stream-summary.js');
+assert.equal(backgroundSpawnCollapsedDetail({ events: [
+  { content: 'Editing files', extra: { eventType: 'tool_call' } },
+  { content: 'Private summary', extra: { reasoningKind: 'summary' } },
+] }), 'Editing files');
+assert.equal(backgroundSpawnCollapsedDetail({ result: 'done' }, (value, max) => `${value}:${max}`), 'done:120');
+const summaryTrace = [];
+mergeBackgroundReasoningSummary(summaryTrace, 'Checking', {}, 0);
+mergeBackgroundReasoningSummary(summaryTrace, ' files', {}, 1, { delta: true });
+assert.equal(summaryTrace.length, 1);
+assert.equal(summaryTrace[0].text, 'Checkingfiles');
+assert.equal(summaryTrace[0].extra.reasoningKind, 'summary');
