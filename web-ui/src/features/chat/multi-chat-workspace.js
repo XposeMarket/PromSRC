@@ -12,8 +12,8 @@ let state = {
 };
 let installed = false;
 let dragPayload = null;
-let observer = null;
-let activeSessionPoll = null;
+let paneVisible = true;
+let paneObserver = null;
 let pendingDrawerOpen = false;
 
 function clean(value) {
@@ -258,6 +258,13 @@ function renderTabStrip() {
   strip.hidden = state.tabs.length < 2 && !state.sideSessionId;
 }
 
+function syncSidePaneActivity() {
+  const frame = document.getElementById('prom-multi-chat-side-frame');
+  if (!frame?.contentWindow) return;
+  const active = !!state.sideSessionId && paneVisible && !document.hidden && document.activeElement === frame;
+  frame.contentWindow.postMessage({ type: 'prom-side-pane-activity', active }, location.origin);
+}
+
 function ensureSidePane() {
   let pane = document.getElementById('prom-multi-chat-side-pane');
   const chatView = document.getElementById('chat-view');
@@ -268,6 +275,14 @@ function ensureSidePane() {
     pane.className = 'prom-multi-chat-side-pane';
     pane.innerHTML = '<header class="prom-multi-chat-side-header"><div><span class="prom-multi-chat-side-kicker">SIDE CHAT</span><strong id="prom-multi-chat-side-title">Chat</strong></div><button type="button" id="prom-multi-chat-side-close" aria-label="Close side chat" title="Close side chat">×</button></header><iframe id="prom-multi-chat-side-frame" title="Side chat"></iframe>';
     chatView.appendChild(pane);
+    pane.querySelector('iframe').addEventListener('load', syncSidePaneActivity);
+    if (typeof IntersectionObserver !== 'undefined') {
+      paneObserver = new IntersectionObserver(([entry]) => {
+        paneVisible = entry.isIntersecting;
+        syncSidePaneActivity();
+      });
+      paneObserver.observe(pane);
+    }
   }
   return pane;
 }
@@ -278,6 +293,7 @@ function renderSidePane() {
   const sid = clean(state.sideSessionId);
   document.body.classList.toggle('prom-multi-chat-side-open', Boolean(sid));
   pane.hidden = !sid;
+  syncSidePaneActivity();
   if (!sid) return;
   const title = titleForSession(sid);
   const titleEl = pane.querySelector('#prom-multi-chat-side-title');
@@ -488,25 +504,51 @@ function installParentWorkspace() {
   document.addEventListener('dragover', handleDragOver, true);
   document.addEventListener('dragleave', handleDragLeave, true);
   document.addEventListener('drop', handleDrop, true);
-  let observerFramePending = false;
-  observer = new MutationObserver(() => {
-    if (observerFramePending || document.hidden) return;
-    observerFramePending = true;
+  let framePending = false;
+  const sync = () => {
+    if (framePending || document.hidden) return;
+    framePending = true;
     window.requestAnimationFrame(() => {
-      observerFramePending = false;
-      if (document.hidden) return;
+      framePending = false;
       syncMainSession();
       if (!document.getElementById('prom-multi-chat-tabs')) render();
+      syncSidePaneActivity();
     });
+  };
+  for (const name of ['chat-session-activated', 'chat-session-deleted', 'chat-rendered', 'side-chat-state']) {
+    window.addEventListener(`prometheus:${name}`, sync);
+  }
+  window.addEventListener('popstate', sync);
+  window.addEventListener('hashchange', sync);
+  window.addEventListener('focus', syncSidePaneActivity);
+  window.addEventListener('blur', syncSidePaneActivity);
+  document.addEventListener('focusin', syncSidePaneActivity);
+  document.addEventListener('visibilitychange', sync);
+  window.addEventListener('message', (event) => {
+    const frame = document.getElementById('prom-multi-chat-side-frame');
+    if (event.origin === location.origin && event.source === frame?.contentWindow && event.data?.type === 'prom-side-pane-ready') syncSidePaneActivity();
   });
-  observer.observe(document.body, { childList: true, subtree: true });
-  activeSessionPoll = window.setInterval(() => { if (!document.hidden) syncMainSession(); }, 900);
   render();
 }
 
 function installEmbeddedSidePane() {
   ensureStylesheet();
   document.body.classList.add('prom-multi-chat-embedded-side');
+  let parentActive = false;
+  const syncActivity = () => {
+    const suspended = !parentActive || document.hidden;
+    if (window.__promSidePaneSuspended === suspended) return;
+    window.__promSidePaneSuspended = suspended;
+    window.dispatchEvent(new CustomEvent('prometheus:pane-activity'));
+  };
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'prom-side-pane-activity') return;
+    parentActive = event.data.active === true;
+    syncActivity();
+  });
+  document.addEventListener('visibilitychange', syncActivity);
+  syncActivity();
+  window.parent.postMessage({ type: 'prom-side-pane-ready' }, location.origin);
   const params = new URLSearchParams(location.search);
   const sid = clean(params.get(SESSION_PARAM));
   if (!sid) return;
