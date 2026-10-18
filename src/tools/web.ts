@@ -1912,6 +1912,17 @@ async function executeXWebFetch(
   if (!payload) {
     const raw = await fetchXThread('web_fetch', url);
     payload = parseXFetchPayload(raw, url);
+    // Logged-out X often shows a login wall instead of the thread. Keep the
+    // exact post via oEmbed rather than failing the whole fetch.
+    if (isXStatusUrl(url) && !(Array.isArray(payload?.tweets) && payload.tweets.length)) {
+      const oembed = await fetchXStatusViaOEmbed(url).catch(() => null);
+      if (oembed?.success && Array.isArray(oembed.tweets) && oembed.tweets.length) {
+        payload = {
+          ...oembed,
+          message: `${oembed.message || 'Captured exact X status via oEmbed'}. Replies/thread were login-gated; for replies use x_search_ops or x_posts.`,
+        };
+      }
+    }
   }
   const payloadError = validateXFetchPayload(payload, url);
   if (payloadError) {
@@ -1999,8 +2010,21 @@ export async function executeWebFetch(
   }
 
   const searchCfg = getSearchConfig();
-  if (!searchCfg.tinyfishKey || !isTinyFishFetchEligible(url)) return fetchDirectContent(url, maxChars);
-  return fetchWithDirectHeadStart(url, maxChars, searchCfg.tinyfishKey as string);
+  const result = (!searchCfg.tinyfishKey || !isTinyFishFetchEligible(url))
+    ? await fetchDirectContent(url, maxChars)
+    : await fetchWithDirectHeadStart(url, maxChars, searchCfg.tinyfishKey as string);
+  if (result.success && typeof result.stdout === 'string') result.stdout = decodeNumericHtmlEntities(result.stdout);
+  return result;
+}
+
+/** Decode numeric/hex HTML entities (&#x27; &#8217; ...) left behind by page extraction. */
+export function decodeNumericHtmlEntities(text: string): string {
+  const cp = (n: number, raw: string) => (Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : raw);
+  return String(text || '')
+    .replace(/&#x([0-9a-f]{1,6});/gi, (raw, h) => cp(parseInt(h, 16), raw))
+    .replace(/&#(\d{1,7});/g, (raw, d) => cp(Number(d), raw))
+    .replace(/&(?:rsquo|lsquo);/g, "'").replace(/&(?:rdquo|ldquo);/g, '"')
+    .replace(/&mdash;/g, '\u2014').replace(/&ndash;/g, '\u2013').replace(/&hellip;/g, '...');
 }
 
 // Direct fetch of an ordinary page is ~50-400 ms; TinyFish Fetch is ~1.5-2 s.
@@ -2626,9 +2650,15 @@ function canonicalProductUrl(url: string): string {
 
 export function validateXFetchPayload(payload: XFetchPayload, url: string): string | null {
   if (!payload.success) return payload.error || `X fetch failed for ${url}.`;
-  if (!isXStatusUrl(url)) return null;
   const tweets = Array.isArray(payload.tweets) ? payload.tweets : [];
   const count = Number.isFinite(Number(payload.count)) ? Number(payload.count) : tweets.length;
+  if (!isXStatusUrl(url)) {
+    // Profile/search pages are login-gated for logged-out fetches; an empty
+    // capture used to report success with 0 posts.
+    return tweets.length === 0
+      ? `X fetch captured no posts from ${url}. X profile/search pages are login-gated for web_fetch; use x_users (profile + timeline) or x_search_ops instead, or fetch a specific /status/ URL.`
+      : null;
+  }
   if (tweets.length === 0 || count <= 0) {
     return `X fetch returned no posts for ${url}. The post may be deleted, unavailable, login-gated, or extraction may have been blocked.`;
   }

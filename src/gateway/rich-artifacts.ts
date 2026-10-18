@@ -145,7 +145,7 @@ export interface SourceItem {
 
 export interface SourcesArtifact extends BaseRichArtifact {
   type: 'sources';
-  layout?: 'cards' | 'list';
+  layout?: 'cards' | 'list' | 'pills';
   items: SourceItem[];
 }
 
