@@ -10,14 +10,21 @@ const PROM_BOT_BUTTON_ID = 'sidebarPromBotToggle';
 const PROM_BOT_SECTION_ID = 'prom-bot-sidebar-section';
 const PROM_BOT_LIST_ID = 'prom-bot-subagents-list';
 const PROM_BOT_SURFACE_ID = 'prom-bot-main-surface';
+const PROM_BOT_TEAMS_LIST_ID = 'prom-bot-teams-list';
+const TEAM_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="5.5" cy="5.5" r="2"/><circle cx="11" cy="6" r="1.7"/><path d="M1.8 13c.4-2.2 1.9-3.4 3.7-3.4s3.3 1.2 3.7 3.4"/><path d="M9.6 9.9c.4-.2.9-.3 1.4-.3 1.5 0 2.7 1 3 2.9"/></svg>`;
 
 let promBotMode = false;
 let promBotAgents = [];
+let promBotTeams = [];
 let activePromBotAgentId = '';
+let activePromBotTeamId = '';
 let promBotRefreshPromise = null;
+let promBotTeamsRefreshPromise = null;
 let subagentRuntimePromise = null;
-let originalBoardParent = null;
-let originalBoardNextSibling = null;
+let teamsRuntimePromise = null;
+// Board id -> its home in the DOM. Prom Bot borrows the Subagents board
+// (#subagent-board) or the Teams board (#team-board) and puts it back on close.
+const boardHomes = new Map();
 let displacedMainChatChildren = [];
 let sidebarCaptureBound = false;
 
@@ -75,6 +82,14 @@ function installPromBotStyles() {
     #${PROM_BOT_LIST_ID} { display: flex; flex-direction: column; gap: 2px; }
     #${PROM_BOT_LIST_ID}[hidden] { display: none !important; }
     #${PROM_BOT_SECTION_ID}.is-collapsed > :not(.sidebar-section-toggle) { display: none !important; }
+    #${PROM_BOT_TEAMS_LIST_ID} { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+    #${PROM_BOT_TEAMS_LIST_ID}:empty { display: none; }
+    .prom-bot-teams-label { padding:3px 8px 4px; font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; color:var(--sidebar-muted,var(--muted)); }
+    .prom-bot-team-avatar { font-size: 15px; line-height: 1; }
+    .prom-bot-agent-state.paused { opacity: .45; }
+    /* Inside Prom Bot the team board is the chat; its close button would
+       blank the surface, so the sidebar is the way out. */
+    #${PROM_BOT_SURFACE_ID}[data-kind="team"] #team-board-header button[onclick="closeTeamBoard()"] { display: none !important; }
     .prom-bot-agent-row {
       width: 100%;
       display: grid;
@@ -213,9 +228,90 @@ function ensurePromBotSection() {
     writeBool(PROM_BOT_COLLAPSED_KEY, nextCollapsed);
   });
 
-  section.append(header, list);
+  const teamsList = document.createElement('div');
+  teamsList.id = PROM_BOT_TEAMS_LIST_ID;
+  teamsList.className = 'prom-bot-teams-list';
+
+  section.append(header, list, teamsList);
   pinnedSection.parentElement.insertBefore(section, pinnedSection);
   return section;
+}
+
+function teamSearchQuery() {
+  return String(document.getElementById('prom-bot-roster-search')?.value || '').trim().toLowerCase();
+}
+
+function renderPromBotTeams() {
+  const host = document.getElementById(PROM_BOT_TEAMS_LIST_ID);
+  if (!host) return;
+  host.replaceChildren();
+  const query = teamSearchQuery();
+  const visible = promBotTeams.filter((team) => {
+    if (!query) return true;
+    return `${team?.name || ''} ${team?.description || ''}`.toLowerCase().includes(query);
+  });
+  if (!visible.length) return;
+
+  const label = document.createElement('div');
+  label.className = 'prom-bot-teams-label';
+  label.textContent = 'Teams';
+  host.appendChild(label);
+
+  for (const team of visible) {
+    const id = String(team?.id || '').trim();
+    if (!id) continue;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'prom-bot-agent-row prom-bot-team-row';
+    row.dataset.teamId = id;
+    row.classList.toggle('active', id === activePromBotTeamId);
+    row.setAttribute('aria-current', id === activePromBotTeamId ? 'page' : 'false');
+
+    const avatar = document.createElement('span');
+    avatar.className = 'prom-bot-agent-avatar prom-bot-team-avatar';
+    const emoji = String(team?.emoji || '').trim();
+    if (emoji && emoji.toLowerCase() !== 'team') avatar.textContent = emoji;
+    else avatar.innerHTML = TEAM_ICON;
+
+    const copy = document.createElement('span');
+    copy.className = 'prom-bot-agent-copy';
+    const name = document.createElement('span');
+    name.className = 'prom-bot-agent-name';
+    name.textContent = String(team?.name || id);
+    const meta = document.createElement('span');
+    meta.className = 'prom-bot-agent-meta';
+    const members = Array.isArray(team?.subagentIds) ? team.subagentIds.length : 0;
+    const paused = team?.manager?.paused === true;
+    meta.textContent = `${members} member${members === 1 ? '' : 's'} + manager${paused ? ' · paused' : ''}`;
+    copy.append(name, meta);
+
+    const state = document.createElement('span');
+    state.className = `prom-bot-agent-state${paused ? ' paused' : ''}`;
+    state.title = paused ? 'Paused' : 'Ready';
+    state.setAttribute('aria-label', state.title);
+
+    row.append(avatar, copy, state);
+    row.addEventListener('click', () => void openPromBotTeam(id));
+    host.appendChild(row);
+  }
+}
+
+async function refreshPromBotTeams({ force = false } = {}) {
+  if (promBotTeamsRefreshPromise && !force) return promBotTeamsRefreshPromise;
+  promBotTeamsRefreshPromise = (async () => {
+    try {
+      const data = await api('/api/teams', { timeoutMs: 8000 });
+      promBotTeams = Array.isArray(data?.teams) ? data.teams.filter((team) => team && team.id) : [];
+    } catch (error) {
+      // Teams are additive to the roster; a failed fetch keeps the last list.
+      console.warn('[Prom Bot] Failed to load teams:', error);
+    } finally {
+      promBotTeamsRefreshPromise = null;
+    }
+    renderPromBotTeams();
+    return promBotTeams;
+  })();
+  return promBotTeamsRefreshPromise;
 }
 
 function agentModelLabel(agent) {
@@ -357,48 +453,129 @@ function restoreMainChatSurface() {
   displacedMainChatChildren = [];
 }
 
-function mountSubagentBoardAsMainChatSurface() {
-  const board = document.getElementById('subagent-board');
+function restoreBoardHome(boardId) {
+  const home = boardHomes.get(boardId);
+  const board = document.getElementById(boardId);
+  if (board && home?.parent && board.parentNode !== home.parent) {
+    if (home.next?.parentNode === home.parent) home.parent.insertBefore(board, home.next);
+    else home.parent.appendChild(board);
+  }
+  boardHomes.delete(boardId);
+}
+
+function mountBoardAsMainChatSurface(boardId, kind) {
+  const board = document.getElementById(boardId);
   const chatView = document.getElementById('chat-view');
   const surface = getPromBotSurface();
   if (!board || !chatView || !surface) throw new Error('Prom Bot chat surface is unavailable.');
 
-  if (!originalBoardParent) {
-    originalBoardParent = board.parentNode;
-    originalBoardNextSibling = board.nextSibling;
+  // Only one borrowed board is mounted at a time.
+  for (const otherId of Array.from(boardHomes.keys())) {
+    if (otherId !== boardId) restoreBoardHome(otherId);
   }
+  if (!boardHomes.has(boardId)) boardHomes.set(boardId, { parent: board.parentNode, next: board.nextSibling });
   displaceMainChatSurface(chatView, surface);
   if (board.parentNode !== surface) surface.appendChild(board);
   board.style.display = 'flex';
   board.style.width = '100%';
   board.style.opacity = '1';
   board.style.borderLeft = '0';
+  surface.dataset.kind = kind;
   chatView.classList.add('prom-bot-chat-active');
 }
 
-function restoreSubagentBoard() {
-  const board = document.getElementById('subagent-board');
-  if (board && originalBoardParent && board.parentNode !== originalBoardParent) {
-    if (originalBoardNextSibling?.parentNode === originalBoardParent) originalBoardParent.insertBefore(board, originalBoardNextSibling);
-    else originalBoardParent.appendChild(board);
-  }
+function mountSubagentBoardAsMainChatSurface() {
+  mountBoardAsMainChatSurface('subagent-board', 'subagent');
+}
+
+function restoreBorrowedBoards() {
+  for (const boardId of Array.from(boardHomes.keys())) restoreBoardHome(boardId);
   restoreMainChatSurface();
   document.getElementById(PROM_BOT_SURFACE_ID)?.remove();
   document.getElementById('chat-view')?.classList.remove('prom-bot-chat-active');
 }
 
+// Back-compat name used by older callers.
+const restoreSubagentBoard = restoreBorrowedBoards;
+
 function closePromBotChat({ keepMode = true } = {}) {
-  if (!activePromBotAgentId && !document.getElementById(PROM_BOT_SURFACE_ID)) {
+  if (!activePromBotAgentId && !activePromBotTeamId && !document.getElementById(PROM_BOT_SURFACE_ID)) {
     clearPromChatTitleOverride('prom-bot');
     return;
   }
-  restoreSubagentBoard();
+  const hadTeam = !!activePromBotTeamId || boardHomes.has('team-board');
+  const hadAgent = !!activePromBotAgentId || boardHomes.has('subagent-board') || !hadTeam;
+  restoreBorrowedBoards();
   clearPromChatTitleOverride('prom-bot');
   activePromBotAgentId = '';
+  activePromBotTeamId = '';
   window.promBotActiveAgentId = '';
+  window.promBotActiveTeamId = '';
   renderPromBotAgents();
-  try { window.closeSubagentDetail?.(); } catch (error) { console.warn('[Prom Bot] Could not close subagent detail:', error); }
+  renderPromBotTeams();
+  if (hadAgent) {
+    try { window.closeSubagentDetail?.(); } catch (error) { console.warn('[Prom Bot] Could not close subagent detail:', error); }
+  }
+  if (hadTeam) {
+    // Stops team chat polling and resets the Teams page board state.
+    try { window.closeTeamBoard?.(); } catch (error) { console.warn('[Prom Bot] Could not close team board:', error); }
+  }
   if (!keepMode) setPromBotMode(false);
+}
+
+async function ensureTeamsRuntime() {
+  if (!teamsRuntimePromise) {
+    teamsRuntimePromise = import('./pages/TeamsPage.js').then(() => {
+      if (typeof window.openTeamBoard !== 'function' || typeof window.switchTeamTab !== 'function') {
+        throw new Error('Team chat runtime is unavailable.');
+      }
+      return true;
+    }).catch((error) => {
+      teamsRuntimePromise = null;
+      throw error;
+    });
+  }
+  return teamsRuntimePromise;
+}
+
+async function openPromBotTeam(teamId) {
+  const id = String(teamId || '').trim();
+  if (!id) return;
+  if (!promBotMode) setPromBotMode(true);
+
+  try {
+    window.closePromBotGroup?.();
+    // Team -> team switches reuse the mounted board: closeTeamBoard() hides
+    // the board on a 350ms timer, which would blank the next team's chat.
+    if (activePromBotAgentId) closePromBotChat({ keepMode: true });
+    await ensureTeamsRuntime();
+    if (typeof window.setMode === 'function') window.setMode('chat');
+    // TeamsPage owns team state (teamsData, room state, streaming, composer).
+    // Hydrate it from the Chat page the same way Prom Bot hydrates Subagents.
+    await window.refreshTeams?.();
+    const teams = Array.isArray(window.teamsData) ? window.teamsData : [];
+    const team = teams.find((candidate) => String(candidate?.id || '') === id);
+    if (!team) throw new Error('That team no longer exists.');
+    await window.openTeamBoard(id);
+    await window.switchTeamTab('chat', id);
+    mountBoardAsMainChatSurface('team-board', 'team');
+
+    activePromBotTeamId = id;
+    window.promBotActiveTeamId = id;
+    setPromChatTitleOverride(team.name || id, 'Prom Bot · Team chat', 'prom-bot');
+    renderPromBotAgents();
+    renderPromBotTeams();
+    void refreshPromBotTeams({ force: true });
+    requestAnimationFrame(() => document.getElementById('team-chat-input')?.focus({ preventScroll: true }));
+  } catch (error) {
+    console.error('[Prom Bot] Could not open team chat:', error);
+    restoreBorrowedBoards();
+    clearPromChatTitleOverride('prom-bot');
+    activePromBotTeamId = '';
+    window.promBotActiveTeamId = '';
+    renderPromBotTeams();
+    if (typeof window.showToast === 'function') window.showToast('Prom Bot', error?.message || 'Could not open team chat.', 'error');
+  }
 }
 
 async function openPromBotAgent(agentId) {
@@ -410,6 +587,7 @@ async function openPromBotAgent(agentId) {
     // Direct and group rooms share the primary chat surface; never leave a
     // group host mounted behind the direct Prom Bot surface during a switch.
     window.closePromBotGroup?.();
+    if (activePromBotTeamId) closePromBotChat({ keepMode: true });
     await ensureSubagentRuntime();
     if (!promBotAgents.some((agent) => String(agent?.id || '') === id)) await refreshPromBotAgents({ force: true });
 
@@ -460,8 +638,10 @@ function setPromBotMode(enabled, { persist = true } = {}) {
   window.promBotMode = promBotMode;
   if (persist) writeBool(PROM_BOT_MODE_KEY, promBotMode);
   syncPromBotControls();
-  if (promBotMode) void refreshPromBotAgents();
-  else {
+  if (promBotMode) {
+    void refreshPromBotAgents();
+    void refreshPromBotTeams();
+  } else {
     window.closePromBotGroup?.();
     closePromBotChat({ keepMode: true });
   }
@@ -474,7 +654,7 @@ function bindSidebarExitCapture() {
   if (!sidebar) return;
   sidebarCaptureBound = true;
   sidebar.addEventListener('click', (event) => {
-    if (!activePromBotAgentId) return;
+    if (!activePromBotAgentId && !activePromBotTeamId) return;
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     if (target.closest(`#${PROM_BOT_BUTTON_ID}`) || target.closest(`#${PROM_BOT_SECTION_ID}`)) return;
@@ -489,6 +669,10 @@ function initPromBot() {
   ensurePromBotButton();
   ensurePromBotSection();
   bindSidebarExitCapture();
+  // The roster search box is created later by prom-bot-roster.js; delegate.
+  document.addEventListener('input', (event) => {
+    if (event.target instanceof Element && event.target.id === 'prom-bot-roster-search') renderPromBotTeams();
+  });
   setPromBotMode(readBool(PROM_BOT_MODE_KEY, false), { persist: false });
 }
 
@@ -496,7 +680,10 @@ window.setPromBotMode = setPromBotMode;
 window.togglePromBotMode = () => setPromBotMode(!promBotMode);
 window.refreshPromBotAgents = refreshPromBotAgents;
 window.openPromBotAgent = openPromBotAgent;
+window.refreshPromBotTeams = refreshPromBotTeams;
+window.openPromBotTeam = openPromBotTeam;
 window.closePromBotChat = closePromBotChat;
+window.promBotActiveTeamId = '';
 window.setPromChatTitleOverride = setPromChatTitleOverride;
 window.clearPromChatTitleOverride = clearPromChatTitleOverride;
 window.promBotActiveAgentId = '';

@@ -81,7 +81,20 @@ assert.doesNotMatch(source, /api\(`\/api\/agents\/\$\{[^}]+\}\/chat/, 'Prom Bot 
 assert.match(source, /closePromBotChat\(\{ keepMode: true \}\)/);
 assert.match(source, /restoreSubagentBoard\(\)/);
 assert.match(source, /restoreMainChatSurface\(\)/);
-assert.match(source, /originalBoardParent\.insertBefore/);
+assert.match(source, /home\.parent\.insertBefore\(board, home\.next\)/, 'borrowed boards must return to their original DOM home');
 assert.match(source, /sidebar\.addEventListener\('click'/);
+
+// Managed Teams show up in Prom Bot and open the canonical TeamsPage chat in
+// the main chat region (no forked team transport).
+assert.match(source, /PROM_BOT_TEAMS_LIST_ID = 'prom-bot-teams-list'/);
+assert.match(source, /api\('\/api\/teams'/, 'Prom Bot must list managed teams');
+assert.match(source, /import\('\.\/pages\/TeamsPage\.js'\)/, 'team chat must reuse the TeamsPage runtime');
+assert.match(source, /await window\.refreshTeams\?\.\(\);[\s\S]*?await window\.openTeamBoard\(id\);[\s\S]*?await window\.switchTeamTab\('chat', id\);[\s\S]*?mountBoardAsMainChatSurface\('team-board', 'team'\)/,
+  'team rows must hydrate teams, open the board on its chat tab, then mount it as the main chat surface');
+assert.match(source, /setPromChatTitleOverride\(team\.name \|\| id, 'Prom Bot · Team chat', 'prom-bot'\)/);
+assert.match(source, /window\.closeTeamBoard\?\.\(\)/, 'leaving a Prom Bot team chat must stop TeamsPage chat polling');
+assert.match(source, /if \(activePromBotTeamId\) closePromBotChat\(\{ keepMode: true \}\)/, 'opening a subagent must release a mounted team board');
+assert.match(source, /data-kind="team"\] #team-board-header button\[onclick="closeTeamBoard\(\)"\]/, 'team board close button must not blank the Prom Bot surface');
+assert.doesNotMatch(source, /api\(`\/api\/teams\/\$\{[^}]+\}\/chat/, 'Prom Bot shell must not fork the team chat transport');
 
 console.log('[test-desktop-prom-bot] passed: persistent sidebar bots replace the main chat region without an overlay and reuse durable subagent threads');
