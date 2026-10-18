@@ -13296,16 +13296,13 @@ function liveTraceGroups(entries) {
       return;
     }
     if (isLiveTraceThoughtEntry(entry)) {
-      // A live agent_progress packet is the mutable summary for the tool
-      // group that is currently running. Keep it owned by that group so the
-      // real model narration updates the expandable header instead of
-      // becoming a second thought group that displaces the tool stream.
-      const isMutableProgress = isDesktopMutableProgressTraceEntry(entry)
-        && desktopTraceThoughtKind(entry) === 'summary';
-      // Public reasoning is a chronological block, not a tool header update.
-      // Runtime progress is filtered before it reaches this journal.
+      // Narration, reasoning and tools each own chronological segments.
+      // Runtime lifecycle status never belongs to this journal.
       activeToolGroup = null;
-      const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
+      const type = String(entry?.type || '').toLowerCase();
+      const groupKind = type === 'preamble' || type === 'assistant'
+        ? 'narration'
+        : (desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought');
       const previous = groups[groups.length - 1];
       if (previous?.kind === groupKind) previous.entries.push(entry);
       else groups.push({ kind: groupKind, entries: [entry] });
@@ -13603,6 +13600,9 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     group.kind === 'tools' ? index : latest
   ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
+    if (group.kind === 'narration') {
+      return `<div class="live-turn-narration" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    }
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
       const isLiveThought = streaming && index === groups.length - 1;
@@ -13620,10 +13620,11 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const bodyHtml = bodyEntries.length
         ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
         : '';
-      return `<div class="live-turn-thought-group"${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      return `<details class="live-turn-thought-group"${openThoughts ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+        <summary class="live-turn-tool-summary">Thinking</summary>
         ${summaryMarkup}
         ${bodyHtml}
-      </div>`;
+      </details>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');

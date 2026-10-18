@@ -78,3 +78,42 @@ mergeBackgroundReasoningSummary(summaryTrace, ' files', {}, 1, { delta: true });
 assert.equal(summaryTrace.length, 1);
 assert.equal(summaryTrace[0].text, 'Checkingfiles');
 assert.equal(summaryTrace[0].extra.reasoningKind, 'summary');
+
+// Execute the real desktop adapter/grouping functions with presentation-only
+// dependencies stubbed; chronological boundaries must survive tool updates.
+const functionSource = (name) => {
+  const start = desktopPage.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `missing ${name}`);
+  const end = desktopPage.indexOf('\nfunction ', start + 1);
+  return desktopPage.slice(start, end < 0 ? undefined : end);
+};
+const groupsFor = new Function('visibleLiveTraceEntries', 'isLiveTraceCompactionEntry',
+  'renderLiveTracePreview', 'isLiveTraceThoughtEntry', 'desktopTraceThoughtKind',
+  'liveTraceGroupStableKey', `${functionSource('liveTraceGroups')}; return liveTraceGroups;`)(
+  (entries) => entries, () => false, () => '',
+  (entry) => ['think', 'preamble', 'assistant'].includes(entry.type),
+  () => 'summary', (group, index) => `${group.kind}:${index}`);
+assert.deepEqual(groupsFor([
+  { type: 'think', text: 'Checking the implementation' },
+  { type: 'tool', text: 'Read files' },
+  { type: 'preamble', text: 'The desktop adapter needs a change.' },
+  { type: 'tool', text: 'Edit files' },
+  { type: 'think', text: 'Verify the result' },
+]).map((group) => group.kind), ['thought-summary', 'tools', 'narration', 'tools', 'thought-summary']);
+const recoverTrace = new Function('mergeBackgroundReasoningSummary',
+  'applyToolActivityEvent', 'chatProgressVisibility',
+  `${functionSource('backgroundAgentEventsToLiveTraceEntries')}; return backgroundAgentEventsToLiveTraceEntries;`)(
+  mergeBackgroundReasoningSummary,
+  (trace, kind, payload) => trace.push({ type: 'tool', text: payload.action }),
+  () => 'user');
+const recovered = recoverTrace([
+  { type: 'info', content: 'Preparing Prometheus runtime…', extra: { eventType: 'ui_preflight' } },
+  { type: 'info', content: 'Loading tool schemas…', extra: { eventType: 'info' } },
+  { type: 'think', content: 'Inspecting the desktop renderer', extra: { eventType: 'reasoning_summary' } },
+  { type: 'tool', extra: { eventType: 'tool_call', action: 'read_file' } },
+  { type: 'preamble', content: 'Found the problem.' },
+]);
+assert.deepEqual(recovered.map((entry) => entry.type), ['think', 'tool', 'preamble']);
+assert.ok(!JSON.stringify(recovered).includes('Loading tool schemas'));
+assert.match(desktopPage, /<details class="live-turn-thought-group"/, 'reasoning must use the shared collapsible desktop thinking component');
+console.log('[background-agent-stream-ui] desktop runtime filtering and narration/tool/reasoning boundaries passed');
