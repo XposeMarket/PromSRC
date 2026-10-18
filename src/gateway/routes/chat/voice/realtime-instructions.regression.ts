@@ -35,5 +35,12 @@ assert.ok(output.length <= 36000);
 for (const marker of ['[USER]', '[/USER]', '[SOUL]', '[/SOUL]', '[VOICE_SOUL]', '[MEMORY_REFERENCE]', '[ACTIVE_SKILLS]', 'Protected continuity summary']) assert.ok(output.includes(marker), `preserves ${marker}`);
 assert.ok(output.indexOf('[USER]') < output.indexOf('## This conversation so far'));
 assert.ok(!output.includes('packet '.repeat(1000)), 'packet JSON is trimmed first');
-assert.throws(() => sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: 'protected '.repeat(5000), contextPacket: {} }), /personal context and continuity exceed/, 'never silently tail-truncate protected context');
-console.log('realtime instructions regression: context priority, cap, continuity and oversized-context checks passed');
+// Oversized protected context must never kill the voice session (it used to throw).
+const bigBlock = `[USER]\n${'user fact '.repeat(3000)}\n[/USER]\n[SOUL]\n${'soul line '.repeat(2000)}\n[/SOUL]\n[MEMORY_REFERENCE]\n${'memory atom '.repeat(1500)}\n[/MEMORY_REFERENCE]\n[ACTIVE_SKILLS]\nshort skills\n[/ACTIVE_SKILLS]`;
+const compacted = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: bigBlock, contextPacket: {}, conversationSummary: 'Kept continuity summary' });
+assert.ok(compacted.length <= 36000, `oversized context fits the cap (${compacted.length})`);
+for (const marker of ['[USER]', '[/USER]', '[SOUL]', '[/SOUL]', '[MEMORY_REFERENCE]', '[/MEMORY_REFERENCE]', 'short skills', 'Kept continuity summary', '## Current time', 'Personality:']) assert.ok(compacted.includes(marker), `oversized: preserves ${marker}`);
+assert.ok(compacted.includes('[trimmed to fit the realtime voice budget]'), 'oversized blocks are visibly trimmed');
+const unbracketed = sandbox.buildRealtimeVoiceAgentInstructions({ contextBlock: 'protected '.repeat(5000), contextPacket: {} });
+assert.ok(unbracketed.length <= 36000 && unbracketed.includes('## Current time'), 'unbracketed oversized context is capped without throwing');
+console.log('realtime instructions regression: context priority, cap, continuity and oversized-context compaction checks passed');

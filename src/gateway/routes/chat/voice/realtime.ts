@@ -177,9 +177,46 @@ export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_I
   trimSection('### Recent messages', '### End recent messages');
   trimSection('## Shared Voice Room transcript', '## End shared voice room transcript');
   if (text.length <= max) return text;
-  // Fail explicitly rather than silently losing identity, personal memory, skills,
-  // or continuity when the caller supplies more protected text than the cap.
-  throw new Error(`Realtime personal context and continuity exceed the ${max}-character instruction budget. Increase OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS.`);
+  // Protected personal context alone is over budget (large USER/SOUL/MEMORY/skills).
+  // Never fail the voice session over it: compact bracketed context blocks evenly so
+  // every block keeps its markers and opening lines, then hard-cap the section, and
+  // only then the whole text. Continuity, tool rules and current time stay intact.
+  const originalLength = text.length;
+  const note = '\n...[trimmed to fit the realtime voice budget]';
+  const header = '## Prometheus personal context\n';
+  const start = text.indexOf(header);
+  if (start >= 0) {
+    const bodyStart = start + header.length;
+    const ends = ['\n## ', '\nPersonality: '].map((marker) => text.indexOf(marker, bodyStart)).filter((index) => index >= 0);
+    const bodyEnd = ends.length ? Math.min(...ends) : text.length;
+    const head = text.slice(0, bodyStart);
+    const tail = text.slice(bodyEnd);
+    let body = text.slice(bodyStart, bodyEnd);
+    const excess = text.length - max;
+    const blockRe = /(\[([A-Z0-9_]+)\]\n?)([\s\S]*?)(\n?\[\/\2\])/g;
+    const lengths = Array.from(body.matchAll(blockRe)).map((match) => match[3].length);
+    if (lengths.length) {
+      const removable = (cap: number) => lengths.reduce((sum, len) => sum + (len > cap + note.length ? len - cap - note.length : 0), 0);
+      // Largest per-block cap that still frees enough room (water-filling).
+      let lo = 0;
+      let hi = Math.max(...lengths);
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (removable(mid) >= excess) lo = mid; else hi = mid - 1;
+      }
+      body = body.replace(blockRe, (_all: string, open: string, _name: string, inner: string, close: string) => (
+        inner.length > lo + note.length ? `${open}${inner.slice(0, lo).trimEnd()}${note}${close}` : `${open}${inner}${close}`
+      ));
+    }
+    text = head + body + tail;
+    if (text.length > max) {
+      body = `${body.slice(0, Math.max(0, body.length - (text.length - max) - note.length)).trimEnd()}${note}`;
+      text = head + body + tail;
+    }
+  }
+  if (text.length > max) text = `${text.slice(0, Math.max(0, max - 18)).trimEnd()}\n...[truncated]`;
+  (globalThis as any).console?.warn?.('[voice-agent-realtime] personal context exceeded the instruction budget; compacted to fit', { max, originalLength, finalLength: text.length });
+  return text;
 }
 
 // Convert the chat-completions style Voice definitions to Realtime format. The
