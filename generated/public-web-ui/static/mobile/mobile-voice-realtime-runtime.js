@@ -37,6 +37,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
     _mobileRealtimeAudioPlaybackMs,
     _mobileRealtimeBootstrapSupersededError,
     _mobileRealtimeCurrentStagedAttachmentTurn,
+    _mobileRealtimeProviderKeyFromSettings,
     _mobileRealtimeRawTranscriptDelta,
     _mobileRealtimeTurnDetectionForListenMode,
     _mobileRealtimeVoice,
@@ -960,7 +961,8 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
   }
 
   function _wantsMobileXaiRealtime() {
-    return String(__pmVoice?.settings?.protocol || '').trim() === 'xai_realtime';
+    return String(__pmVoice?.settings?.protocol || '').trim() === 'xai_realtime'
+      || _mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) === 'xai';
   }
 
   function _mobileVoiceDeviceTimeContext() {
