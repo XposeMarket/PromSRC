@@ -14,16 +14,16 @@
   html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
   html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
 </style>
-<script src="/build/inline/index-inline-02-31a70b9f156b.js"></script>
+<script src="/build/inline/index-inline-02-ad0c1186d8db.js"></script>
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-03-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-04-3548ad05bdf7.js"></script>
+<script src="/build/inline/index-inline-04-16ebca3d4bf6.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script src="/build/inline/index-inline-05-606d0eb0eaa3.js"></script>
 <script src="/build/inline/index-inline-06-d0bf4f36f509.js"></script>
-<link rel="stylesheet" href="/build/styles/desktop-TKU3QRQY.css">
+<link rel="stylesheet" href="/build/styles/desktop-ARBOQFI4.css">
 
 
 
@@ -3836,6 +3836,10 @@
           <h2>Search provider keys</h2>
           <span class="settings-help" tabindex="0" aria-label="Search provider keys technical details" data-settings-help="Values are loaded from the existing search settings endpoint. Stored key values remain masked; enter a new value only when replacing one.">?</span>
         </div>
+        <div class="settings-search-filter">
+          <input id="cred-search-filter" type="search" placeholder="Search providers (e.g. Exa, Google, free)" aria-label="Search providers" oninput="filterSearchProviderRows(this.value)" autocomplete="off" />
+          <span id="cred-search-filter-empty" class="settings-search-filter-empty" hidden>No providers match.</span>
+        </div>
         <div class="settings-section-panel settings-credentials-panel">
           <div class="settings-credential-row">
             <label for="cred-tinyfish-key" class="settings-credential-label"><span>TinyFish API key</span><span class="settings-help" tabindex="0" aria-label="TinyFish API key technical details" data-settings-help="Encrypted TinyFish credential used by the TinyFish search provider.">?</span></label>
@@ -3871,6 +3875,7 @@
               <button id="cred-brave-visibility-toggle" onclick="toggleCredVis('cred-brave-key',this)" title="Show value" aria-label="Show value"></button>
             </div>
           </div>
+          <div id="cred-extra-search-rows" style="display:contents"></div>
         </div>
       </section>
     </div>
@@ -5370,7 +5375,7 @@
 <link rel="modulepreload" href="/build/chunks/chunk-EPSJJCWL.js">
 <link rel="modulepreload" href="/build/chunks/chunk-JF4LWGNM.js">
 <link rel="modulepreload" href="/build/chunks/chunk-VIPO6N7H.js">
-<script type="module" src="/build/entries/desktop-Q56VWSIA.js"></script>
+<script type="module" src="/build/entries/desktop-AJPHTPAR.js"></script>
 <script src="/build/inline/index-inline-11-4550e6a395a8.js"></script>
 
 <script src="/build/inline/index-inline-12-047d20aba693.js"></script>

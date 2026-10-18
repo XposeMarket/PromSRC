@@ -1,6 +1,7 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
 import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
+import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
@@ -587,14 +588,6 @@ if (window.currentProgressThinkingText === undefined) window.currentProgressThin
 window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex) ? window.editingUserMessageIndex : -1;
 let voicePendingTurnSeq = 0;
 let voicePendingProcessing = false;
-
-function dispatchDesktopChatLifecycle(name, detail = {}) {
-  try {
-    window.dispatchEvent(new CustomEvent(`prometheus:${name}`, { detail }));
-  } catch {}
-}
-
-
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
 }
@@ -8902,6 +8895,7 @@ async function deleteChatSession(id, ev) {
   saveChatSessions();
   syncActiveChat();
   saveComposerDraft(composerDraftKey('desktop', id), '');
+  dispatchDesktopChatLifecycle('chat-session-deleted', { sessionId: id });
   if (typeof window.loadProjects === 'function') window.loadProjects();
   if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
