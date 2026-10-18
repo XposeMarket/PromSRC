@@ -6,7 +6,7 @@ import { mobileReplayFrameAfterSteer } from '../web-ui/src/mobile/mobile-chat-pa
 
 const file = 'web-ui/src/mobile/mobile-pages.js';
 const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const names = new Set(['_appendMobileQueuedSteerTurn', '_settleMobileChatSteerWorkflow', '_isMobileMessagePersistable']);
+const names = new Set(['_appendMobileQueuedSteerTurn', '_rollbackMobileQueuedSteerTurn', '_markMobileQueuedSteerDeliveryPending', '_steerMobileQueuedPrompt', '_settleMobileChatSteerWorkflow', '_isMobileMessagePersistable']);
 const functions = [];
 for (const statement of source.statements) {
   if (ts.isFunctionDeclaration(statement) && names.has(statement.name?.text)) functions.push(statement.getText(source));
@@ -16,7 +16,7 @@ const original = { role: 'ai', streaming: true, _clientRequestId: 'request_1',
   workStartedAt: 1000, timestamp: 1000, body: { text: '' }, content: '', processEntries: [], liveTraceEntries: [{ type: 'tool', text: 'Earlier call' }] };
 const thread = [original];
 const sandbox = {
-  __pmChat: { threads: { session: thread }, activeSessionId: 'other' },
+  __pmChat: { threads: { session: thread }, activeSessionId: 'other', activeRuns: {} },
   _findLatestAssistantTurn: (items) => [...items].reverse().find((item) => item.role === 'ai'),
   _appendMobileProcess: (item, type, text) => item.processEntries.push({ type, text }),
   _nowTime: () => '11:00',
@@ -27,6 +27,21 @@ const sandbox = {
   _isMobileChatSteerWorkflowGroup: (value) => /^chat_steer_/.test(value),
   _mobileAssistantHasVisibleAnswer: () => false,
   document: { getElementById: () => null },
+  MOBILE_CHAT_SESSION_ID: 'session',
+  _getMobileQueuedPrompts: () => sandbox.queue,
+  _readMobileActiveRun: () => null,
+  loadMobileChatRunStatus: async () => null,
+  _adoptMobileActiveRunState: () => null,
+  _uploadMobileChatAttachments: async () => [],
+  _buildMobileFileContextNote: () => '',
+  _sanitizeMobileAttachmentPreviewForServer: (file) => file,
+  mobileGatewayFetch: async () => { const err = new Error('Bad request'); err.status = 400; throw err; },
+  _renderMobileQueuedPromptsPanel: () => { sandbox.queueRenders += 1; },
+  _commitMobileTranscriptCache: () => {},
+  _renderThread: () => {},
+  pmToast: (message) => { sandbox.toasts.push(message); },
+  Date,
+  queue: [], queueRenders: 0, toasts: [],
 };
 vm.createContext(sandbox);
 vm.runInContext(functions.join('\n'), sandbox);
@@ -60,7 +75,23 @@ assert.equal(JSON.parse(JSON.stringify(thread2[0])).steerContinuationMessageId, 
 // The WS echo of the same steer must not split twice.
 assert.equal(sandbox._appendMobileQueuedSteerTurn('s2', 'Go left', { workflowGroupId: 'chat_steer_9', messageId: 'chat-steer:9' }), true);
 assert.equal(thread2.length, 3, 'duplicate steer (WS + POST) is idempotent');
-console.log('[mobile steer boundary] durable split, frozen prefix and replay filtering passed');
+const rollbackThread = [{ role: 'ai', streaming: true, workStartedAt: 1, timestamp: 1, body: { text: '' }, content: '', processEntries: [], liveTraceEntries: [] }];
+sandbox.__pmChat.threads.rollback = rollbackThread;
+assert.equal(sandbox._appendMobileQueuedSteerTurn('rollback', 'Retry later', { clientSteerId: 'reject_1', workflowGroupId: 'chat_steer_pending_reject_1' }), true);
+assert.equal(rollbackThread.length, 3, 'optimistic steer adds a split before transport resolves');
+assert.equal(sandbox._rollbackMobileQueuedSteerTurn('rollback', 'reject_1'), true);
+assert.equal(rollbackThread.length, 1, 'definitive rejection removes the optimistic split');
+assert.equal(rollbackThread[0].streaming, true, 'definitive rejection restores the interrupted stream state');
+assert.equal(rollbackThread[0]._steerFrozenTrace, undefined, 'rollback restores the previous frozen-trace state');
+sandbox.__pmChat.threads.catchPath = [{ role: 'ai', streaming: true, workStartedAt: 1, timestamp: 1, body: { text: '' }, content: '', processEntries: [], liveTraceEntries: [] }];
+sandbox.__pmChat.activeSessionId = 'catchPath';
+sandbox.__pmChat.activeRuns.catchPath = { busy: true, lastSeq: 3, streamId: 'stream' };
+sandbox.queue = [{ id: 'reject-catch', message: 'Reject me', files: [] }];
+await sandbox._steerMobileQueuedPrompt('catchPath', 0);
+assert.equal(sandbox.__pmChat.threads.catchPath.length, 1, 'POST 4xx catch rolls back the optimistic split');
+assert.equal(sandbox.queue.length, 1, 'POST 4xx catch retains the queued prompt');
+assert.match(sandbox.toasts.at(-1), /Steer rejected: Bad request/, 'POST 4xx catch surfaces definitive rejection');
+console.log('[mobile steer boundary] durable split, frozen prefix, replay filtering and rejection rollback passed');
 
 // Restart recovery can be waiting on an agent: neither WS acknowledgement nor
 // POST reconciliation may depend on a subsequent stream/tool frame.

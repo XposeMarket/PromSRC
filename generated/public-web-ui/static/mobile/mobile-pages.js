@@ -2731,6 +2731,27 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     try {
       Object.defineProperty(latestAi, '_steerTimerAnchorTurn', { value: timerAnchor, configurable: true, writable: true, enumerable: false });
     } catch { /* frozen object: timer anchoring is cosmetic */ }
+    const mobileSteerRollback = {
+      streaming: latestAi.streaming,
+      workEndedAt: latestAi.workEndedAt,
+      workDurationMs: latestAi.workDurationMs,
+      time: latestAi.time,
+      timestamp: latestAi.timestamp,
+      content: latestAi.content,
+      workflowGroupId: latestAi.workflowGroupId,
+      workflowPart: latestAi.workflowPart,
+      workflowLabel: latestAi.workflowLabel,
+      workflowBoundarySeq: latestAi.workflowBoundarySeq,
+      workflowStreamId: latestAi.workflowStreamId,
+      messageId: latestAi.messageId,
+      steerContinuationMessageId: latestAi.steerContinuationMessageId,
+      _steerFrozenTrace: latestAi._steerFrozenTrace,
+      _steerContinuationTurn: latestAi._steerContinuationTurn,
+      _steerTimerAnchorTurn: latestAi._steerTimerAnchorTurn,
+    };
+    try {
+      Object.defineProperty(latestAi, '_mobileSteerRollback', { value: mobileSteerRollback, configurable: true, writable: true, enumerable: false });
+    } catch { latestAi._mobileSteerRollback = mobileSteerRollback; }
     latestAi._steerFrozenTrace = true;
     latestAi.workflowGroupId = workflowGroupId;
     latestAi.workflowPart = 'before_interruption';
@@ -2808,6 +2829,48 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   return true;
 }
 
+function _rollbackMobileQueuedSteerTurn(sessionId, clientSteerId, reason = '') {
+  const sid = String(sessionId || '').trim();
+  const thread = sid ? __pmChat.threads?.[sid] : null;
+  if (!sid || !clientSteerId || !Array.isArray(thread)) return false;
+  const steerIndex = thread.findIndex((turn) => turn?.clientSteerId === clientSteerId);
+  if (steerIndex < 0) return false;
+  const before = thread[steerIndex - 1];
+  const snapshot = before?._mobileSteerRollback;
+  if (before && snapshot) {
+    Object.assign(before, snapshot);
+    delete before._mobileSteerRollback;
+  }
+  const continuation = thread[steerIndex + 1];
+  const removeCount = continuation?._steerSourceTurn === before || continuation?.workflowGroupId === thread[steerIndex]?.workflowGroupId
+    ? 2
+    : 1;
+  thread.splice(steerIndex, removeCount);
+  _saveMobileThreadCache(sid, thread);
+  if (String(__pmChat.activeSessionId || '') === sid) {
+    const host = document.getElementById('pm-chat-thread');
+    if (host) { _commitMobileTranscriptCache(sid, 'mobile-steer-rollback'); _renderThread(host, sid); }
+  }
+  return true;
+}
+
+function _markMobileQueuedSteerDeliveryPending(sessionId, clientSteerId, reason = '') {
+  const sid = String(sessionId || '').trim();
+  const thread = sid ? __pmChat.threads?.[sid] : null;
+  const steer = Array.isArray(thread) ? thread.find((turn) => turn?.clientSteerId === clientSteerId) : null;
+  if (!steer) return false;
+  steer.steerDeliveryState = 'pending';
+  steer.workflowPart = 'interruption_pending';
+  steer.workflowLabel = 'Steer delivery pending — retry if needed';
+  steer.deliveryError = String(reason || '').trim();
+  _saveMobileThreadCache(sid, thread);
+  if (String(__pmChat.activeSessionId || '') === sid) {
+    const host = document.getElementById('pm-chat-thread');
+    if (host) { _commitMobileTranscriptCache(sid, 'mobile-steer-pending'); _renderThread(host, sid); }
+  }
+  return true;
+}
+
 async function _steerMobileQueuedPrompt(sessionId, index) {
   const sid = String(sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   const queue = _getMobileQueuedPrompts(sid);
@@ -2831,13 +2894,14 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     pmToast('No active run to steer. This prompt will run normally when the chat is idle.', 'info');
     return;
   }
+  let clientSteerId = '';
   try {
     const files = Array.isArray(item.files) ? item.files : [];
     const uploadResults = files.length ? await _uploadMobileChatAttachments(files) : [];
     const steerMessage = `${message}${_buildMobileFileContextNote(uploadResults)}`;
     const workflowBoundarySeq = Math.max(0, Math.floor(Number(__pmChat.activeRuns?.[sid]?.lastSeq || localRun?.lastSeq || 0) || 0));
     const workflowStreamId = String(__pmChat.activeRuns?.[sid]?.streamId || localRun?.streamId || '').trim();
-    const clientSteerId = String(item.id || '').trim() || `mobile_steer_${Date.now()}`;
+    clientSteerId = String(item.id || '').trim() || `mobile_steer_${Date.now()}`;
     const attachmentPreviews = files.map(_sanitizeMobileAttachmentPreviewForServer);
     // Paint before awaiting transport: a suspended/background-waiting turn may
     // emit no subsequent tool event to wake up the transcript renderer.
@@ -2861,6 +2925,11 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
         workflowStreamId,
       }),
     });
+    if (result?.ok === false || result?.success === false || result?.rejected === true) {
+      const err = new Error(String(result?.error || result?.message || 'Steer was rejected.'));
+      err.definitive = true;
+      throw err;
+    }
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
     // The steer just emptied the queue under the user's thumb; don't let the
@@ -2871,12 +2940,22 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     const errorText = String(err?.message || err || '');
-    if (/no active steerable chat turn/i.test(errorText)) {
-      try { window.__pmMobileRecoverActiveChatRun?.(sid, { force: true, fullRefresh: false }); } catch {}
-      pmToast('Prometheus is reconnecting the active turn. The queued prompt was kept.', 'info');
+    const definitive = err?.definitive === true
+      || (Number(err?.status || 0) >= 400 && Number(err?.status || 0) < 500)
+      || err?.retryable === false;
+    if (definitive) {
+      _rollbackMobileQueuedSteerTurn(sid, clientSteerId, errorText);
+      _renderMobileQueuedPromptsPanel(sid);
+      pmToast(`Steer rejected: ${errorText}`, 'error');
       return;
     }
-    pmToast(`Steer failed: ${errorText}`, 'error');
+    _markMobileQueuedSteerDeliveryPending(sid, clientSteerId, errorText);
+    if (/no active steerable chat turn/i.test(errorText)) {
+      try { window.__pmMobileRecoverActiveChatRun?.(sid, { force: true, fullRefresh: false }); } catch {}
+      pmToast('Prometheus is reconnecting the active turn. The queued prompt was kept; steer delivery is pending.', 'info');
+      return;
+    }
+    pmToast(`Steer delivery pending: ${errorText}`, 'error');
   }
 }
 
