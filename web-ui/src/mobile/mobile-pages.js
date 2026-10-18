@@ -269,7 +269,8 @@ if (!window.__pmMobileCompletionToastBridgeInstalled) {
     const sid = String(msg.sessionId || '').trim();
     const text = String(msg.displayMessage || msg.message || '').trim();
     if (!sid || !text || !msg.messageId || !Array.isArray(__pmChat.threads?.[sid])) return;
-    if (!__pmChat.activeRuns?.[sid]?.busy && !_readMobileActiveRun(sid)) return;
+    // A restart can clear the local busy marker while the recovered runtime
+    // waits on an agent. The accepted server steer is authoritative.
     try { _appendMobileQueuedSteerTurn(sid, text, msg); } catch (err) { console.warn('[mobile chat] steer split failed:', err); }
   });
   wsEventBus.on('main_chat_stream_event', (msg = {}) => {
@@ -2683,18 +2684,41 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   const thread = sid ? __pmChat.threads?.[sid] : null;
   if (!sid || !text || !Array.isArray(thread)) return false;
   const durableMessageId = String(data?.messageId || '').trim();
-  if (durableMessageId && thread.some((turn) => String(turn?.messageId || '') === durableMessageId)) return true;
+  const existingSteer = thread.find((turn) => (durableMessageId && String(turn?.messageId || '') === durableMessageId)
+    || (data.clientSteerId && turn?.clientSteerId === data.clientSteerId));
+  if (existingSteer) {
+    // The optimistic split already exists. Adopt the server identities without
+    // adding a second boundary when its broadcast beats the POST response.
+    const oldGroup = existingSteer.workflowGroupId;
+    if (data.workflowGroupId) thread.forEach((turn) => {
+      if (!oldGroup || turn.workflowGroupId !== oldGroup) return;
+      turn.workflowGroupId = data.workflowGroupId;
+      if (turn.workflowPart === 'before_interruption') {
+        if (data.beforeMessageId) turn.messageId = data.beforeMessageId;
+        turn.steerContinuationMessageId = `${data.workflowGroupId}:continuation`;
+      }
+      if (turn.workflowPart === 'interruption_response') turn.messageId = `${data.workflowGroupId}:continuation`;
+      if (data.workflowBoundarySeq !== undefined) turn.workflowBoundarySeq = data.workflowBoundarySeq;
+      if (data.workflowStreamId) turn.workflowStreamId = data.workflowStreamId;
+    });
+    if (durableMessageId) existingSteer.messageId = durableMessageId;
+    if (Array.isArray(data.attachmentPreviews)) {
+      existingSteer.attachmentPreviews = data.attachmentPreviews;
+      existingSteer.body = { ...(existingSteer.body || {}), attachments: data.attachmentPreviews };
+    }
+    _saveMobileThreadCache(sid, thread);
+    if (String(__pmChat.activeSessionId || '') === sid) {
+      const host = document.getElementById('pm-chat-thread');
+      if (host) { _commitMobileTranscriptCache(sid, 'mobile-steer-ack'); _renderThread(host, sid); }
+    }
+    return true;
+  }
   const latestAi = _findLatestAssistantTurn(thread);
   const workflowGroupId = String(data?.workflowGroupId || '').trim()
     || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const workflowBoundarySeq = Math.max(0, Math.floor(Number(data?.workflowBoundarySeq || 0) || 0));
   const workflowStreamId = String(data?.workflowStreamId || '').trim();
   if (latestAi) {
-    _appendMobileProcess(latestAi, 'info', `Chat steer: ${text.slice(0, 180)}`, {
-      actor: 'Chat Steer',
-      eventId: data?.eventId || data?.steerEventId || '',
-      runtimeId: data?.runtimeId || data?.activeRun?.id || '',
-    });
     // Freeze the already-rendered stream in place. Future runtime events are
     // routed to the continuation below, so the second trace contains only
     // work performed after this steer.
@@ -2731,9 +2755,11 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   thread.push({
     role: 'user',
     messageId: durableMessageId || undefined,
+    clientSteerId: data.clientSteerId || undefined,
     time: _nowTime(),
     timestamp: Number(data?.timestamp || 0) || Date.now(),
-    body: { text, source: 'mobile_queue_steer' },
+    body: { text, source: 'mobile_queue_steer', attachments: data.attachmentPreviews || [] },
+    attachmentPreviews: data.attachmentPreviews || [],
     content: text,
     workflowGroupId,
     workflowPart: 'interruption',
@@ -2811,14 +2837,25 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     const steerMessage = `${message}${_buildMobileFileContextNote(uploadResults)}`;
     const workflowBoundarySeq = Math.max(0, Math.floor(Number(__pmChat.activeRuns?.[sid]?.lastSeq || localRun?.lastSeq || 0) || 0));
     const workflowStreamId = String(__pmChat.activeRuns?.[sid]?.streamId || localRun?.streamId || '').trim();
+    const clientSteerId = String(item.id || '').trim() || `mobile_steer_${Date.now()}`;
+    const attachmentPreviews = files.map(_sanitizeMobileAttachmentPreviewForServer);
+    // Paint before awaiting transport: a suspended/background-waiting turn may
+    // emit no subsequent tool event to wake up the transcript renderer.
+    _appendMobileQueuedSteerTurn(sid, message, {
+      clientSteerId, messageId: `pending-steer:${clientSteerId}`,
+      workflowGroupId: `chat_steer_pending_${clientSteerId}`,
+      workflowBoundarySeq, workflowStreamId, attachmentPreviews,
+    });
     const result = await mobileGatewayFetch('/api/chat/steer', {
       method: 'POST',
       body: JSON.stringify({
         sessionId: sid,
         message: steerMessage,
         displayMessage: message,
-        clientSteerId: String(item.id || '').trim() || undefined,
-        attachmentPreviews: files.map(_sanitizeMobileAttachmentPreviewForServer),
+        clientSteerId,
+        attachments: uploadResults.filter((file) => file.isImage && file.base64)
+          .map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 })),
+        attachmentPreviews,
         source: 'mobile_queue_button',
         workflowBoundarySeq,
         workflowStreamId,
@@ -2830,7 +2867,7 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     // next tap land on Stop.
     __pmChat.stopSoftLockUntil = Date.now() + 2500;
     // Server boundary (stream position at acceptance) wins over the client guess.
-    _appendMobileQueuedSteerTurn(sid, message, { workflowBoundarySeq, workflowStreamId, ...(result || {}) });
+    _appendMobileQueuedSteerTurn(sid, message, { clientSteerId, attachmentPreviews, workflowBoundarySeq, workflowStreamId, ...(result || {}) });
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     const errorText = String(err?.message || err || '');
@@ -6085,6 +6122,28 @@ function _mobileCanonicalTextIsTrailingFragment(localValue, canonicalValue) {
   return !localText.startsWith(canonicalText) && localText.endsWith(canonicalText);
 }
 
+// Recovery can serialize the active trace under a new history row identity.
+// Match runtime evidence, not wall-clock position: otherwise the history-page
+// next-anchor insertion can mount that same live stream above the first user.
+function _mobileRecoveredLiveTraceTarget(rows, candidate) {
+  if (candidate?.role !== 'ai' || candidate._pmFinalReceived || candidate._done
+    || candidate.workflowPart === 'before_interruption') return null;
+  const live = [...rows].reverse().find((row) => row?.role === 'ai' && row.streaming === true
+    && !row._pmFinalReceived && !row._done && row.workflowPart !== 'before_interruption');
+  if (!live) return null;
+  if ((candidate.workflowGroupId || live.workflowGroupId)
+    && (candidate.workflowGroupId !== live.workflowGroupId || candidate.workflowPart !== live.workflowPart)) return null;
+  const request = (row) => String(row._clientRequestId || row.clientRequestId || '').trim();
+  if (request(candidate) && request(live) && request(candidate) !== request(live)) return null;
+  const stream = (row) => String(row._streamId || row._pmLastStreamId || row.workflowStreamId || '').trim();
+  if (stream(candidate) && stream(live)) return stream(candidate) === stream(live) ? live : null;
+  const entries = (row) => [...(row.liveTraceEntries || []), ...(row.processEntries || [])];
+  const entryKey = (entry) => String(entry?.eventId || entry?.id || '').trim();
+  const liveIds = new Set(entries(live).map(entryKey).filter(Boolean));
+  return entries(candidate).some((entry) => entryKey(entry) && liveIds.has(entryKey(entry))) ? live : null;
+}
+
+
 function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false, serverAuthoritativeText = false } = {}) {
   const next = [];
   const incoming = Array.isArray(secondary) ? secondary : [];
@@ -6092,6 +6151,12 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
     if (!candidate || typeof candidate !== 'object') return;
     const existingIndex = next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, candidate));
     if (existingIndex < 0) {
+      const recoveredLiveTarget = preferIncoming && appendOnlyNewer
+        ? _mobileRecoveredLiveTraceTarget(next, candidate) : null;
+      if (recoveredLiveTarget) {
+        _mergeMobileAssistantTurnDetails(recoveredLiveTarget, candidate, { preserveTargetText: true });
+        return;
+      }
       // Keep the painted transcript as the spine. A server page may use a
       // different clock, so place unmatched rows next to matched neighbors in
       // that page instead of inserting by timestamp.
