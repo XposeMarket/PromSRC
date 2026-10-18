@@ -15237,6 +15237,10 @@ function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
+  if (container) {
+    container.dataset.streamSession = String(window.activeChatSessionId || '');
+    container.dataset.streamHistoryCount = String((window.chatHistory || []).length);
+  }
   // All desktop threads share #chat-messages, and no row key survives a thread
   // switch, so reconcile deleted every row (live tool stream included) and
   // rebuilt the incoming thread from HTML. Park the outgoing thread's row nodes
@@ -15687,36 +15691,74 @@ function patchStreamingAnswerText(content, nextContent) {
 function patchStreamingChatBubble(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== String(window.activeChatSessionId || '') || !isSessionThinking(sid)) return false;
-  const bubble = document.getElementById('thinking-msg');
-  const content = bubble?.querySelector?.('[data-live-stream-content]');
-  if (!bubble || !content) return false;
-  if (content.querySelector('.chat-question-card, .chat-approval-card')) return false;
-
   const container = document.getElementById('chat-messages');
-  const shouldFollow = !!container && (container.scrollHeight - (container.scrollTop + container.clientHeight)) <= 60;
+  if (!container) return false;
+  if (container.dataset.streamSession !== sid
+    || container.dataset.streamHistoryCount !== String((window.chatHistory || []).length)) {
+    return false; // The frame scheduler owns the coalesced structural fallback.
+  }
+  const list = container.querySelector('.side-chat-main-messages') || container;
+  let bubble = Array.from(list.querySelectorAll('[data-live-stream-body]'))
+    .find((node) => node.dataset.liveStreamBody === sid)?.closest('.msg');
+  if (!bubble) {
+    // A pending question may deliberately suppress the placeholder. Insert only
+    // the live row when text/tools subsequently arrive, never rebuild history.
+    const html = renderSessionThinkingHtml(sid);
+    if (!html) return true;
+    list.querySelector('#chat-welcome')?.remove();
+    document.getElementById('chat-view')?.classList.remove('chat-empty');
+    list.insertAdjacentHTML('beforeend', html);
+    bubble = Array.from(list.querySelectorAll('[data-live-stream-body]'))
+      .find((node) => node.dataset.liveStreamBody === sid)?.closest('.msg');
+  }
+  const content = bubble?.querySelector('[data-live-stream-content]');
+  if (!content) return false;
+  const shouldFollow = (list.scrollHeight - (list.scrollTop + list.clientHeight)) <= 60;
   const nextContent = document.createElement('div');
   nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
+  // Keep placeholder styling in sync when the first answer/tool arrives.
+  const st = getSessionStreamState(sid) || {};
+  bubble.classList.toggle('thinking-only', !String(st.streamingAIText || '').trim()
+    && !(st.liveTraceEntries || []).length && !(st.currentProgressLines || []).length
+    && !(st.pendingApprovals || []).length && !getRuntimePlanItems(st.runtimeProgressState).length);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
   const hasTimeline = !!directLiveTraceChild(content, (node) => node.classList.contains('live-turn-timeline'))
     || !!directLiveTraceChild(nextContent, (node) => node.classList.contains('live-turn-timeline'));
   const patchedTimeline = !hasTimeline || patchLiveTurnTimeline(content, nextContent);
-  if (!patchedAnswer || !patchedTimeline) {
+  if ((!patchedAnswer || !patchedTimeline
+    || content.querySelector('.chat-question-card, .chat-approval-card')
+    || nextContent.querySelector('.chat-question-card, .chat-approval-card')
+    || !hasTimeline) && content.innerHTML !== nextContent.innerHTML) {
+    // Structural transitions affect the live body only, never historical rows.
+    // Reuse unchanged interactive cards so token paints do not reset their UI.
+    const cards = Array.from(content.querySelectorAll('.chat-question-card, .chat-approval-card'));
+    Array.from(nextContent.querySelectorAll('.chat-question-card, .chat-approval-card')).forEach((card) => {
+      const previous = cards.find((node) => node.outerHTML === card.outerHTML);
+      if (previous) card.replaceWith(previous);
+    });
     const disclosures = captureLiveTraceDisclosureState(content);
-    content.innerHTML = nextContent.innerHTML;
+    content.replaceChildren(...Array.from(nextContent.childNodes));
     restoreLiveTraceDisclosureState(content, disclosures);
   }
 
   // Only follow the stream when the reader was already at the bottom. Opening
   // a tool summary or reading its metadata must never pull the chat away.
-  if (container && shouldFollow) container.scrollTop = container.scrollHeight;
+  if (shouldFollow) list.scrollTop = list.scrollHeight;
   // Scrolled-up readers retain their scrollTop without another layout write.
   return true;
 }
 
+const streamingChatFrames = new Map();
 function renderStreamingChatUpdate(sessionId) {
-  if (document.hidden) return; // Latest stream state is painted when the tab becomes visible.
-  if (!patchStreamingChatBubble(sessionId)) renderChatMessages();
+  const sid = String(sessionId || '').trim();
+  if (!sid || document.hidden || sid !== String(window.activeChatSessionId || '')) return;
+  if (streamingChatFrames.has(sid)) return;
+  streamingChatFrames.set(sid, requestAnimationFrame(() => {
+    streamingChatFrames.delete(sid);
+    if (document.hidden || sid !== String(window.activeChatSessionId || '')) return;
+    if (!patchStreamingChatBubble(sid)) renderChatMessages();
+  }));
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && window.activeChatSessionId && isSessionThinking(window.activeChatSessionId)) {
@@ -15726,10 +15768,19 @@ document.addEventListener('visibilitychange', () => {
 
 function syncAssistantWorkTimer() {
   const active = isSessionThinking(window.activeChatSessionId);
+  document.getElementById('chat-messages')?.classList.toggle('is-streaming', active);
   if (active) {
     if (!window._assistantWorkTimer) {
       window._assistantWorkTimer = setInterval(() => {
-        renderStreamingChatUpdate(window.activeChatSessionId);
+        // Stream events own body updates. Keep only the elapsed label alive;
+        // never reparse markdown or reconcile history on this idle timer.
+        if (document.hidden) return;
+        const sid = window.activeChatSessionId;
+        const startedAt = Number(getSessionStreamState(sid)?.turnStartedAt || 0);
+        if (!startedAt) return;
+        const timer = document.querySelector('[data-live-stream-content] .assistant-work-timer');
+        const label = `Working for ${formatAssistantWorkDuration(Date.now() - startedAt)}`;
+        if (timer && timer.textContent !== label) timer.textContent = label;
       }, 2500);
     }
   } else if (window._assistantWorkTimer) {
@@ -18916,13 +18967,41 @@ function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId)
   return source;
 }
 
+let backgroundDetailFrame = null;
 function renderBackgroundAgentDetail() {
-  const id = String(window.backgroundAgentDetailId || '').trim();
-  const record = id ? backgroundSpawnDetailRecord(id) : null;
-  if (!id) return;
-  if (!record) window.backgroundAgentDetailId = '';
-  updateSideChatChrome();
-  renderChatMessages();
+  if (document.hidden || backgroundDetailFrame !== null) return;
+  backgroundDetailFrame = requestAnimationFrame(() => {
+    backgroundDetailFrame = null;
+    if (document.hidden) return;
+    const id = String(window.backgroundAgentDetailId || '').trim();
+    if (!id) return;
+    const record = backgroundSpawnDetailRecord(id);
+    const pane = document.querySelector('.background-agent-side-pane');
+    if (!record || !pane || pane.dataset.chatPaneKey !== `side:background:${id}`) {
+      if (!record) window.backgroundAgentDetailId = '';
+      updateSideChatChrome();
+      renderChatMessages(); // Opening/closing a split pane is structural.
+      return;
+    }
+    const list = pane.querySelector('#background-agent-side-messages');
+    if (!list) return;
+    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}`;
+    if (list.dataset.streamVersion === signature) return;
+    const template = document.createElement('div');
+    template.innerHTML = renderBackgroundAgentSidePaneHtml(record);
+    const nextList = template.querySelector('#background-agent-side-messages');
+    if (!nextList) return;
+    reconcileKeyedTimelineRows(list, nextList.innerHTML, {
+      scroller: list,
+      scrollState: captureKeyedScrollState(list, list),
+      followBottom: list.scrollHeight - list.scrollTop - list.clientHeight <= 60,
+      setContents: setInnerHTMLPreservingVisuals,
+    });
+    const header = pane.querySelector('.side-chat-kicker');
+    const nextHeader = template.querySelector('.side-chat-kicker');
+    if (header && nextHeader && header.innerHTML !== nextHeader.innerHTML) header.innerHTML = nextHeader.innerHTML;
+    list.dataset.streamVersion = signature;
+  });
 }
 
 function openBackgroundAgentDetail(id) {

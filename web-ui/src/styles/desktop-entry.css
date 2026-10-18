@@ -9,3 +9,50 @@
 @import './themes.css';
 @import './settings.css';
 @import './surfaces-polish.css';
+
+/* Desktop chat paint isolation. Do not apply to mobile liquid glass. Layout
+   containment (not paint clipping) keeps menus/glows outside rows intact. */
+@media (min-width: 769px) {
+  #chat-messages, .side-chat-main-messages, #background-agent-side-messages {
+    contain: layout;
+  }
+  #chat-messages .msg-shell {
+    contain: layout style;
+  }
+  /* Let Chromium retain each measured height; live rows and rich interactive
+     visuals are excluded so stream scrolling and embedded canvases stay live. */
+  #chat-messages .msg-shell:not(:has([data-live-stream-body], iframe, canvas, video, input, textarea, [contenteditable])) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 160px;
+  }
+  #chat-messages .chat-paint-paused *,
+  #chat-messages .chat-paint-paused *::before,
+  #chat-messages .chat-paint-paused *::after,
+  .chat-document-hidden #chat-messages *,
+  .chat-document-hidden #chat-messages *::before,
+  .chat-document-hidden #chat-messages *::after {
+    animation-play-state: paused !important;
+  }
+}
+@media (min-width: 769px) and (prefers-reduced-motion: reduce) {
+  #chat-messages *, #chat-messages *::before, #chat-messages *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Freeze decorative paint during a live turn; status text remains visible. */
+@media (min-width: 769px) {
+  #chat-messages.is-streaming *,
+  #chat-messages.is-streaming *::before,
+  #chat-messages.is-streaming *::after {
+    animation-play-state: paused !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  #chat-messages.is-streaming [data-live-stream-body] .thinking-orb,
+  #chat-messages.is-streaming [data-live-stream-body] .thinking-dots {
+    filter: none !important;
+  }
+}
