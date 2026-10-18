@@ -12965,7 +12965,11 @@ function isDesktopTransientReasoningTraceEntry(entry) {
   // A provider may carry summary visibility/source fields onto a following
   // curated thought packet. An explicit full_thought marker is authoritative;
   // never let the summary cleanup path delete that durable thought.
+  if (visibility === 'private' || visibility === 'internal') return true;
   if (reasoningKind === 'full_thought') return false;
+  if (source === 'agent_progress' || source === 'reasoning_summary'
+    || type === 'reasoning_summary' || event === 'reasoning_summary'
+    || (reasoningKind === 'summary' && ['user', 'summary'].includes(visibility))) return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -12999,10 +13003,9 @@ function desktopTracePresentationEntries(entries) {
         },
       };
     }
-    // Summary packets are transient transport updates. Keep one mutable
-    // agent_progress entry as the live summary owner and discard stale copies
-    // before grouping, so recovery cannot place them back in the timeline.
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return null;
+    // Preserve explicit public reasoning prose, but never allow a mutable
+    // progress marker to override private/internal visibility.
+    if (isDesktopTransientReasoningTraceEntry(entry)) return null;
     return entry;
   }).filter(Boolean);
 }
@@ -13158,7 +13161,7 @@ function visibleLiveTraceEntries(entries) {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
       || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return false;
+    if (isDesktopTransientReasoningTraceEntry(entry)) return false;
     const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
     if (!hasContent) return false;
     if (isDesktopTraceThoughtType(type)) {
@@ -13292,18 +13295,13 @@ function liveTraceGroups(entries) {
       return;
     }
     if (isLiveTraceThoughtEntry(entry)) {
-      // A live agent_progress packet is the mutable summary for the tool
-      // group that is currently running. Keep it owned by that group so the
-      // real model narration updates the expandable header instead of
-      // becoming a second thought group that displaces the tool stream.
-      const isMutableProgress = isDesktopMutableProgressTraceEntry(entry)
-        && desktopTraceThoughtKind(entry) === 'summary';
-      if (isMutableProgress && activeToolGroup) {
-        activeToolGroup.entries.push(entry);
-        return;
-      }
+      // Narration, reasoning and tools each own chronological segments.
+      // Runtime lifecycle status never belongs to this journal.
       activeToolGroup = null;
-      const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
+      const type = String(entry?.type || '').toLowerCase();
+      const groupKind = type === 'preamble' || type === 'assistant'
+        ? 'narration'
+        : (desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought');
       const previous = groups[groups.length - 1];
       if (previous?.kind === groupKind) previous.entries.push(entry);
       else groups.push({ kind: groupKind, entries: [entry] });
@@ -13601,6 +13599,9 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     group.kind === 'tools' ? index : latest
   ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
+    if (group.kind === 'narration') {
+      return `<div class="live-turn-narration" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    }
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
       const isLiveThought = streaming && index === groups.length - 1;
@@ -13618,10 +13619,11 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const bodyHtml = bodyEntries.length
         ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
         : '';
-      return `<div class="live-turn-thought-group"${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      return `<details class="live-turn-thought-group"${openThoughts ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+        <summary class="live-turn-tool-summary">Thinking</summary>
         ${summaryMarkup}
         ${bodyHtml}
-      </div>`;
+      </details>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
@@ -18612,17 +18614,9 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       }
       return;
     }
-    if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') {
-      const text = String(extra.message || extra.current_step || extra.state || entry.content || '').trim();
-      if (!text || /^processing$/i.test(text)) return;
-      trace.push({
-        id: `background_trace_${index}`,
-        type: 'think',
-        text,
-        ts: String(entry.ts || ''),
-        extra: { ...extra, source: 'agent_progress', visibility: 'user' },
-      });
-    }
+    // Runtime lifecycle packets belong to the working status, not the
+    // chronological assistant/reasoning journal (same contract as mobile).
+    if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') return;
   });
   return trace;
 }
