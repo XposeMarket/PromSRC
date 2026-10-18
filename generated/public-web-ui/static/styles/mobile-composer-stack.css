@@ -1026,3 +1026,18 @@ body.pm-mobile-active .pm-chat-slash-popover {
   -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) brightness(var(--pm-lg-glass-brightness, 1)) !important;
   border-radius: 18px;
 }
+
+/* Long steer placeholders must shrink within the 390px agent sheet. */
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-composer-row {
+  min-width: 0;
+}
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-composer-input-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-composer-input {
+  min-width: 0;
+}
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-composer-row > button {
+  flex-shrink: 0;
+}

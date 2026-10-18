@@ -50,7 +50,8 @@ import { browserOpenInHouse, browserSnapshotInHouse, browserClickInHouse, browse
 import { browserKnowledgeHostFromUrl, rememberPageMetadata, resolveBrowserObserveMode, BrowserCompactState, shouldUseCompactObservation, captureCompactBrowserState, syncPageMetadata, shouldReturnSnapshot, rememberSnapshot, attachShortcutsContext, buildCompactBrowserObservation, buildMinimalBrowserAck, shouldUseFastBrowserAck } from './browser/observation.js';
 import { getOrCreateSession, isSessionAlive, replaceDetachedBrowserSession } from './browser/profiles.js';
 import { buildBrowserSessionMetadataPayload, getBrowserSessionMetadata, releaseUserChromeTabLocks, registerBrowserSessionMetadata, formatBrowserSessionOriginLabel } from './browser/sessions.js';
-import { normalizeBrowserProfileKind, getBrowserProfileLabel } from './browser/chrome.js';
+import { normalizeBrowserProfileKind, getBrowserProfileLabel, terminateLaunchedChrome, findChromeProcessesByProfilePrefix, killProcessTree } from './browser/chrome.js';
+import { getPersistentBrowserProfileRoot } from './browser/profiles.js';
 import { inHouseProfilePreferences, inHouseOptOutSessions, inHouseTargetSessions, sessions, browserLinkNavigationInFlight, browserSessionMetadata, browserSessionInitInFlight, setLastBrowserScreenshot, getLastBrowserScreenshot, inHouseSessions, browserTeachSessions, browserInteractionStates } from './browser/state.js';
 import { browserSetProfileTarget } from './browser/tabs.js';
 import { getMainBrowserTarget } from './browser/target.js';
@@ -1350,6 +1351,15 @@ export async function browserClose(sessionId: string): Promise<string> {
     await stopBrowserLiveStream(resolved, 'Live browser stream stopped because the browser tab closed.').catch(() => {});
     await session.page.close();
     if (session.ownsBrowser) {
+      // browser.close() only disconnects from a CDP-attached Chrome, so an
+      // isolated Chrome we launched must be shut down explicitly or it leaks
+      // as a stray window. Never kill the main Prometheus Chrome here, and
+      // never kill a Chrome another live session is still using.
+      const sharedPort = !!session.debugPort && Array.from(sessions.entries())
+        .some(([id, other]) => id !== resolved && other !== session && other.debugPort === session.debugPort);
+      if (session.isolated && session.transport !== 'extension' && !sharedPort) {
+        await terminateLaunchedChrome(session.browser, session.debugPort, session.profileDir).catch(() => false);
+      }
       try { await session.browser.close(); } catch {}
     }
     clearBrowserSessionEphemeralState(resolved, session);
@@ -4562,11 +4572,70 @@ function buildSnapshotDelta(prevSnapshot: string, newSnapshot: string, pass: num
   };
 }
 
+const X_SCRAPE_PROFILE_PREFIX = 'detached-x_scrape_';
+let xScrapeOrphanSweep: Promise<{ killed: number; removedProfiles: number }> | undefined;
+
+function isLiveXScrapeProfile(profileDir: string, debugPort?: number, pid?: number): boolean {
+  const resolved = path.resolve(profileDir).toLowerCase();
+  return Array.from(sessions.values()).some((session) =>
+    (session.profileDir && path.resolve(session.profileDir).toLowerCase() === resolved)
+    || (debugPort && session.debugPort === debugPort)
+    || (pid && session.browser?.process?.()?.pid === pid),
+  );
+}
+
+function removeXScrapeProfileDir(profileDir: string): void {
+  const root = path.resolve(getPersistentBrowserProfileRoot());
+  const resolved = path.resolve(profileDir);
+  if (path.dirname(resolved).toLowerCase() !== root.toLowerCase()) return;
+  if (!path.basename(resolved).startsWith(X_SCRAPE_PROFILE_PREFIX)) return;
+  if (isLiveXScrapeProfile(resolved)) return;
+  try { fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }); } catch {}
+}
+
+/**
+ * Kill X-scrape Chromes left behind by earlier gateway runs (each scrape used to
+ * leak one visible Chrome window) and delete their throwaway profiles. Only
+ * touches `detached-x_scrape_*` profiles under the Prometheus profile root that
+ * no live session in this gateway owns.
+ */
+export function sweepOrphanedXScrapeChromes(): Promise<{ killed: number; removedProfiles: number }> {
+  // Publish the shared promise before enumeration starts; every scraper waits.
+  return xScrapeOrphanSweep ??= Promise.resolve().then(runXScrapeOrphanSweep);
+}
+
+async function runXScrapeOrphanSweep(): Promise<{ killed: number; removedProfiles: number }> {
+  const root = getPersistentBrowserProfileRoot();
+  let killed = 0;
+  const procs = await findChromeProcessesByProfilePrefix(root, X_SCRAPE_PROFILE_PREFIX);
+  for (const proc of procs) {
+    if (isLiveXScrapeProfile(proc.profileDir, proc.debugPort, proc.pid)) continue;
+    if (await killProcessTree(proc.pid)) killed += 1;
+  }
+  let removedProfiles = 0;
+  try {
+    if (killed) await new Promise((r) => setTimeout(r, 750));
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith(X_SCRAPE_PROFILE_PREFIX)) continue;
+      const dir = path.join(root, entry.name);
+      if (isLiveXScrapeProfile(dir)) continue;
+      removeXScrapeProfileDir(dir);
+      if (!fs.existsSync(dir)) removedProfiles += 1;
+    }
+  } catch {}
+  if (killed || removedProfiles) {
+    console.log(`[Browser] X scrape sweep: killed ${killed} orphaned Chrome(s), removed ${removedProfiles} stale profile(s).`);
+  }
+  return { killed, removedProfiles };
+}
+
 export async function fetchXThread(sessionId: string, url: string): Promise<string> {
   // Normalize /video/N direct links to base tweet URL for proper extraction
   const normalizedUrl = url.replace(/\/video\/\d+(\?|$)/, '$1');
+  await sweepOrphanedXScrapeChromes().catch(() => null);
   // Use unique session ID for X scraping, isolated from main session
   const xSessionId = `x_scrape_${Date.now()}`;
+  let xProfileDir = '';
   const resolvedXSessionId = resolveSessionId(xSessionId);
   const tweets: ExtractedTweet[] = [];
   const snapshotDeltas: XSnapshotDelta[] = [];
@@ -4588,6 +4657,7 @@ export async function fetchXThread(sessionId: string, url: string): Promise<stri
 
   try {
     const session = await getOrCreateSession(resolvedXSessionId);
+    xProfileDir = String(session.profileDir || '');
     await session.page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 });
     await Promise.race([
       session.page.waitForSelector('article[data-testid="tweet"]', { timeout: 2500 }).catch(() => null),
@@ -4651,7 +4721,9 @@ export async function fetchXThread(sessionId: string, url: string): Promise<stri
     try {
       await browserClose(xSessionId);
     } catch {
-      // Silent fail � browser may have already closed
+      // Silent fail: browser may have already closed
     }
+    // Each scrape gets a throwaway profile; don't let hundreds pile up on disk.
+    if (xProfileDir) removeXScrapeProfileDir(xProfileDir);
   }
 }

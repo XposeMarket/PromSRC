@@ -674,12 +674,24 @@ function makeActivity(payload, phase, previous = null) {
   const extra = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
   const incomingTerminal = payload.terminal && typeof payload.terminal === 'object' ? payload.terminal : null;
   const runId = compact(payload.runId || payload.run_id || extra.runId || extra.run_id || incomingTerminal?.runId || previous?.terminal?.runId, 180);
-  const terminal = previous?.terminal || incomingTerminal || (runId ? {
-    runId,
-    state: phase === 'result' && normalizeAction(args.action) !== 'start' ? 'exited' : 'running',
-    output: '',
-    sequence: 0,
+  const commandResult = phase === 'result' && description.family === 'command';
+  const resultData = result && typeof result === 'object' ? result : {};
+  const explicitState = String(incomingTerminal?.state || payload.status || resultData.status || resultData.state || previous?.terminal?.state || '').toLowerCase();
+  const exitCode = incomingTerminal?.exitCode ?? payload.exitCode ?? extra.exitCode ?? resultData.exitCode;
+  const terminated = incomingTerminal?.completed === true || exitCode != null
+    || ['exited', 'completed', 'failed', 'cancelled', 'terminated', 'killed'].includes(explicitState)
+    || /\[exit\s+-?\d+\]/i.test(String(result));
+  const active = ['running', 'starting', 'started', 'active'].includes(explicitState)
+    || /\[still running\]/i.test(String(result));
+  const terminal = previous?.terminal || incomingTerminal || (runId || commandResult ? {
+    runId, state: 'running', completed: false, output: '', sequence: 0,
   } : undefined);
+  if (terminal) {
+    Object.assign(terminal, incomingTerminal || {});
+    if (terminated) Object.assign(terminal, { state: 'exited', completed: true });
+    else if (active) Object.assign(terminal, { state: 'running', completed: false });
+    if (commandResult && !terminal.output && result) terminal.output = boundTerminalText(String(result));
+  }
   return {
     ...(previous || {}),
     kind: phase === 'result' ? 'result' : 'operation',
@@ -852,6 +864,7 @@ export function applyCommandProcessEvent(entriesInput, eventTypeRaw, payload = {
   terminal.command = command || terminal.command || firstValue(operationEntry.activity.args, ['command', 'cmd', 'script'], 500);
   terminal.cwd = compact(run.cwd || terminal.cwd, 300);
   terminal.state = String(run.state || terminal.state || (eventType === 'process_run_exited' ? 'exited' : 'running'));
+  if (['exited', 'completed', 'failed', 'cancelled', 'terminated'].includes(terminal.state.toLowerCase())) terminal.completed = true;
   terminal.exitCode = run.exitCode ?? terminal.exitCode;
   terminal.durationMs = run.durationMs ?? terminal.durationMs;
 
@@ -892,7 +905,10 @@ function legacyPayload(entry = {}) {
     ...extra,
     action: extra.action || extra.toolName || entry.action || entry.toolName || '',
     args: extra.args || entry.args || {},
-    result: entry.type === 'result' || entry.type === 'error' ? text : extra.result,
+    result: extra.result ?? extra.output ?? (entry.type === 'result' || entry.type === 'error' ? text : undefined),
+    terminal: entry.terminal || extra.terminal || nested.terminal,
+    runId: entry.runId || extra.runId || nested.runId,
+    callId: entry.callId || extra.callId || nested.callId,
     error: entry.type === 'error' || extra.error === true,
     tool_call_id: extra.tool_call_id || extra.toolCallId || entry.tool_call_id || '',
     durationMs: extra.durationMs ?? extra.elapsedMs ?? entry.durationMs,

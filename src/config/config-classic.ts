@@ -7,6 +7,7 @@ import { getConfigErrors } from './config-schema.js';
 import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
+import { EXTRA_SEARCH_SECRET_FIELDS } from '../tools/search-provider-registry.js';
 import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
 import { seedLegacyMainChatRoute } from './main-chat-route.js';
 import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from './gateway-port.js';
@@ -734,6 +735,7 @@ const SECRET_FIELD_MAP: Array<[string[], string]> = [
   [['search', 'google_api_key'],                  'search.google_api_key'],
   [['search', 'google_cx'],                       'search.google_cx'],
   [['search', 'brave_api_key'],                   'search.brave_api_key'],
+  ...EXTRA_SEARCH_SECRET_FIELDS.map((field) => [['search', field], `search.${field}`] as [string[], string]),
   ...listProviderSecretFieldPaths().map(([providerId, field]) => (
     [['llm', 'providers', providerId, field], `llm.${providerId}.${field}`] as [string[], string]
   )),

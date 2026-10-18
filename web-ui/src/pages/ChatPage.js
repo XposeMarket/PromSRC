@@ -1,5 +1,7 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
+import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
@@ -31,6 +33,7 @@ import {
 import { createQuestionController } from '../features/chat/questions/question-controller.js';
 import { createDesktopQuestionTransport } from '../features/chat/questions/desktop-question-transport.js';
 import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '../features/chat/runtime/recovered-trace.js';
+import { appendChatSteerWorkflowSplit as appendChatSteerWorkflowSplitRuntime, appendRemoteChatSteer, steerAttachmentsToPreviews } from '../features/chat/runtime/chat-steer-events.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
@@ -585,14 +588,6 @@ if (window.currentProgressThinkingText === undefined) window.currentProgressThin
 window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex) ? window.editingUserMessageIndex : -1;
 let voicePendingTurnSeq = 0;
 let voicePendingProcessing = false;
-
-function dispatchDesktopChatLifecycle(name, detail = {}) {
-  try {
-    window.dispatchEvent(new CustomEvent(`prometheus:${name}`, { detail }));
-  } catch {}
-}
-
-
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
 }
@@ -6680,85 +6675,25 @@ function _settlePendingChatSteerPresentation(sessionId, streamState) {
   const changed = groupIds.reduce((changed, groupId) => (
     _collapseChatSteerWorkflowPresentation(sessionId, groupId) || changed
   ), false);
-  // Final-answer rendering owns the timer again after the temporary split is
-  // gone, so it appears above the final response rather than below a steer.
   streamState.steerTimerAnchored = false;
   return changed;
 }
 
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
-  const sid = String(sessionId || '').trim();
-  const sess = getChatSessionById(sid);
-  if (!sess) return false;
-  if (!Array.isArray(sess.history)) sess.history = [];
-  if (!Array.isArray(sess.processLog)) sess.processLog = [];
-  const st = getSessionStreamState(sid);
-  const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
-  const entries = sess.processLog.slice(startIndex);
-  const liveTraceEntries = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
-  const groupId = String(data?.workflowGroupId || '').trim() || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const text = String(steerText || '').trim();
-  const workStartedAt = Number(st?.turnStartedAt || Date.now()) || Date.now();
-  const timerAnchor = st?.steerTimerAnchored !== true;
-
-  // Record the steer outside either trace segment, then use the new process
-  // boundary for the continuation. This prevents old tool events from being
-  // replayed below the steered user message.
-  addSessionProcessEntry(sid, 'warn', `Chat steer queued: ${text.slice(0, 180)}`, {
-    actor: 'Chat Steer',
-    eventId: data?.eventId,
-    runtimeId: data?.runtimeId,
+  return appendChatSteerWorkflowSplitRuntime({
+    sessionId, steerText, data,
+    getSession: getChatSessionById,
+    getStreamState: getSessionStreamState,
+    addProcessEntry: addSessionProcessEntry,
+    workflowGroupIds: _chatSteerWorkflowGroupIds,
+    persistSession,
+    syncHistory: (sid, history) => syncSessionHistoryToServerById(sid, history).catch(() => {}),
+    activateSession: (sid, history) => {
+      if (window.activeChatSessionId !== sid) return;
+      window.chatHistory = history;
+      renderChatMessages();
+    },
   });
-  const continuationStartIndex = sess.processLog.length;
-
-  if (st || entries.length || liveTraceEntries.length) {
-    sess.history.push({
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      workStartedAt,
-      liveTraceEntries,
-      processEntries: entries,
-      _steerTimerAnchor: timerAnchor,
-      suppressWorkTimer: !timerAnchor,
-      workflowGroupId: groupId,
-      workflowPart: 'before_interruption',
-      workflowLabel: 'Tool stream before steer',
-      ...(data?.beforeMessageId ? { messageId: data.beforeMessageId } : {}),
-    });
-  }
-  sess.history.push({
-    role: 'user',
-    ...(data?.messageId ? { messageId: data.messageId } : {}),
-    content: text,
-    attachmentPreviews: Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length ? data.attachmentPreviews : undefined,
-    timestamp: Date.now(),
-    channel: 'web',
-    channelLabel: 'steer',
-    workflowGroupId: groupId,
-    workflowPart: 'interruption',
-    workflowLabel: 'Message sent as steer',
-  });
-  if (st) {
-    st.forceAppendAssistantAfterInterruption = true;
-    st.pendingInterruptionWorkflowGroupId = groupId;
-    st.pendingInterruptionWorkflowLabel = 'Response after steer';
-    st.pendingInterruptionWorkflowPresentationCleared = false;
-    st.steerWorkflowGroupIds = _chatSteerWorkflowGroupIds(st).concat(groupId).filter((id, index, all) => all.indexOf(id) === index);
-    st.steerTimerAnchored = true;
-    st.currentTurnStartIndex = continuationStartIndex;
-    st.liveTraceEntries = [];
-    st.currentPreflightStatus = '';
-    st.currentProgressLines = [];
-    st.currentProgressThinkingText = '';
-  }
-  persistSession(sid);
-  syncSessionHistoryToServerById(sid, sess.history).catch(() => {});
-  if (window.activeChatSessionId === sid) {
-    window.chatHistory = sess.history;
-    renderChatMessages();
-  }
-  return true;
 }
 
 async function steerQueuedPrompt(index) {
@@ -8960,6 +8895,7 @@ async function deleteChatSession(id, ev) {
   saveChatSessions();
   syncActiveChat();
   saveComposerDraft(composerDraftKey('desktop', id), '');
+  dispatchDesktopChatLifecycle('chat-session-deleted', { sessionId: id });
   if (typeof window.loadProjects === 'function') window.loadProjects();
   if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
@@ -12880,7 +12816,9 @@ async function openInFileLocation(targetPath) {
 
 function renderUserMessageContent(msg) {
   let text = msg.content || '';
-  const attachments = Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : [];
+  const attachments = Array.isArray(msg.attachmentPreviews) && msg.attachmentPreviews.length
+    ? msg.attachmentPreviews
+    : steerAttachmentsToPreviews(msg.attachments);
   const designSelections = attachments.filter((attachment) => attachment && attachment.kind === 'design-selection');
   if (attachments.length) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
@@ -18588,40 +18526,6 @@ function backgroundSpawnPreview(value, max = 180) {
   return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
 }
 
-function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
-  const next = String(text || '').trim();
-  if (!next) return;
-  const latest = trace.at(-1);
-  const previous = latest
-    && String(latest?.extra?.source || '').toLowerCase() === 'agent_progress'
-    ? latest
-    : null;
-  const visibleExtra = {
-    ...extra,
-    source: 'agent_progress',
-    visibility: 'summary',
-    reasoningKind: 'summary',
-  };
-  if (!previous) {
-    trace.push({
-      id: `background_trace_${index}`,
-      type: 'think',
-      text: next,
-      ts: String(extra?.ts || ''),
-      extra: visibleExtra,
-    });
-    return;
-  }
-  const current = String(previous.text || '').trim();
-  const isSnapshot = next.length > current.length && next.startsWith(current);
-  const canAppend = delta
-    && current
-    && !isSnapshot
-    && !/[.!?:]\s*$/.test(current)
-    && (/^\s/.test(text) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  previous.text = canAppend ? `${current}${next}`.replace(/\s+/g, ' ').trim() : next;
-  previous.extra = { ...(previous.extra || {}), ...visibleExtra };
-}
 
 function backgroundAgentEventsToLiveTraceEntries(events = []) {
   const trace = [];
@@ -18673,7 +18577,12 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
     }
     if (eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta') {
       const text = String(extra.thinking || extra.text || extra.message || entry.content || '').trim();
-      mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType.endsWith('_delta') });
+      mergeBackgroundReasoningSummary(trace, text, {
+        ...extra,
+        source: 'agent_progress',
+        visibility: 'summary',
+        reasoningKind: 'summary',
+      }, index, { delta: eventType.endsWith('_delta') });
       return;
     }
     if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
@@ -18799,7 +18708,13 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
           type: 'think',
           actor: 'Background Agent',
           content: text,
-          extra: { ...extra, source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' },
+          extra: {
+            ...extra,
+            eventType,
+            source: 'agent_progress',
+            visibility: 'summary',
+            reasoningKind: 'summary',
+          },
         }
         : null;
     }
@@ -19119,8 +19034,7 @@ function renderBackgroundSpawnDock() {
   dock.innerHTML = `${lanes.length > 2 ? '<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents">×</button>' : ''}${lanes.map((lane) => {
     const status = String(lane.status || 'running').toLowerCase();
     const statusLabel = status === 'in_progress' ? 'running' : status;
-    const latest = lane.events[lane.events.length - 1];
-    const detail = latest?.content || (lane.result ? backgroundAgentPreview(lane.result, 120) : 'Working in parallel...');
+    const detail = backgroundSpawnCollapsedDetail(lane, backgroundAgentPreview);
     const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
@@ -47138,6 +47052,9 @@ wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
 });
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+wsEventBus.on('chat_steer', (event = {}) => {
+  appendRemoteChatSteer(event, appendChatSteerWorkflowSplit);
+});
 
 wsEventBus.on('restart_continuity', (msg = {}) => {
   const sid = String(msg.sessionId || '').trim();

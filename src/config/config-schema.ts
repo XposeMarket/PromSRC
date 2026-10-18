@@ -471,7 +471,15 @@ export const PrometheusConfigSchema = z.object({
     google_cx:          z.string().optional(),
     brave_api_key:      z.string().optional(),
     search_rigor:       z.string().optional(),
-  }).optional(),
+    exa_api_key:        z.string().optional(),
+    serper_api_key:     z.string().optional(),
+    firecrawl_api_key:  z.string().optional(),
+    jina_api_key:       z.string().optional(),
+    linkup_api_key:     z.string().optional(),
+    serpapi_api_key:    z.string().optional(),
+    perplexity_api_key: z.string().optional(),
+    searxng_url:        z.string().optional(),
+  }).passthrough().optional(),
 
   llm: LLMConfigSchema.optional(),
   brain: z.object({

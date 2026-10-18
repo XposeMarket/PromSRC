@@ -21,7 +21,7 @@ for (const css of styles) {
   assert.match(css, /#pm-attach-sheet\.open \.pm-attach-sheet-panel > \.pm-attach-sheet-action--files[\s\S]{0,120}translate3d\(-38px, -58px/);
   assert.match(css, /#pm-attach-sheet\.open \.pm-attach-sheet-panel > \.pm-attach-sheet-action--camera[\s\S]{0,120}translate3d\(38px, -58px/);
   // removed: .pm-attach-goo-blob no longer exists in web-ui/src or src (no git history); reduced-motion now guards the .pm-attach-goo layer.
-  assert.match(css, /prefers-reduced-motion: reduce[\s\S]*#pm-composer #pm-attach-sheet > \.pm-attach-sheet-panel > \.pm-attach-goo/);
+  assert.match(css, /prefers-reduced-motion: reduce[\s\S]*#pm-attach-sheet > \.pm-attach-sheet-panel > \.pm-attach-goo/);
 }
 
 console.log('mobile gooey two-action attachment menu regression passed');

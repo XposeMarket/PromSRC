@@ -1741,7 +1741,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'complete_plan_step',
         description:
-          'Mark the current declare_plan phase finished and move to the next plan line. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. Include concrete evidence in note when available: native file-tool results, terminal/workspace_run workspaceChanges, browser/desktop results, or verification output are all valid. Do not wait for a native file tool when the active workspace mode exposes only terminal/workspace_run; plan bookkeeping is non-blocking and should still advance when the phase is complete.',
+          'Mark the current declare_plan phase finished and move to the next plan line. Emit it in the SAME parallel tool batch as the next phase\'s first tool call (or alongside the final verification call), so it never costs its own round trip. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. Include concrete evidence in note when available: native file-tool results, terminal/workspace_run workspaceChanges, browser/desktop results, or verification output are all valid. Do not wait for a native file tool when the active workspace mode exposes only terminal/workspace_run; plan bookkeeping is non-blocking and should still advance when the phase is complete.',
         parameters: {
           type: 'object',
           properties: {

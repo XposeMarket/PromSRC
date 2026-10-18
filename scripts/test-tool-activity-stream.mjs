@@ -59,6 +59,19 @@ const {
 
 {
   const entries = [];
+  const restored = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'run_restored_1',
+    action: 'workspace_run',
+    args: { command: 'npm test' },
+    terminal: { runId: 'run_restored_1', state: 'exited', exitCode: 0 },
+  });
+  assert.equal(restored.activity.terminal.completed, true, 'recovered process snapshots preserve their completed state');
+  assert.doesNotMatch(renderToolActivityEntry(restored), /<em>streaming<\/em>/, 'rehydrated exited terminals render as completed');
+}
+
+
+{
+  const entries = [];
   applyToolActivityEvent(entries, 'call', {
     toolCallId: 'skill_read_1',
     action: 'skill_read',
@@ -220,6 +233,14 @@ const {
   const rerendered = renderToolActivityEntry(staleRender, (value) => String(value));
   assert.match(rerendered, /third line/, 'a timeline rerender keeps the latest streamed output');
   assert.doesNotMatch(rerendered, /duplicate third/, 'repeated transport events do not append twice');
+  const operation = entries.find((entry) => entry?.activity?.terminal?.runId === 'run_live_1' && entry.activity.kind === 'operation');
+  const ended = applyCommandProcessEvent([operation], 'process_run_update', {
+    run: { runId: 'run_live_1', toolCallId: 'command_live_1', state: 'exited', exitCode: 0, outputSeq: 2 },
+  });
+  assert.equal(ended.completed, true, 'a terminal process snapshot ends the inline terminal even when its event name is update');
+  html = renderToolActivityEntry(operation, (value) => String(value));
+  assert.match(html, /tool-command-terminal is-complete/);
+  assert.doesNotMatch(html, /<em>streaming<\/em>/);
 
   applyCommandProcessEvent(entries, 'process_run_exited', {
     run: { runId: 'run_live_1', toolCallId: 'command_live_1', state: 'exited', exitCode: 0, durationMs: 850, outputSeq: 2 },
@@ -389,3 +410,20 @@ const {
 }
 
 console.log('[tool-activity-stream] two-row lifecycle, compact tool/result rows, and terminal output passed');
+
+// A returned tool observation is not evidence that its supervised process exited.
+for (const [name, observation, state] of [
+  ['still-running', { runId: 'active-run', result: '[still running]' }, 'running'],
+  ['running-status', { runId: 'active-run', status: 'running', result: 'Process started' }, 'running'],
+  ['explicit-running', { terminal: { runId: 'active-run', state: 'running' }, result: 'Process started' }, 'running'],
+  ['exited', { runId: 'active-run', result: 'done [exit 0]' }, 'exited'],
+  ['exit-code', { runId: 'active-run', exitCode: 0, result: 'done' }, 'exited'],
+  ['killed', { runId: 'active-run', status: 'killed', result: 'Stopped' }, 'exited'],
+]) {
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', { toolCallId: name, action: 'workspace_run', args: { action: 'run', command: 'node worker.js' } });
+  const entry = applyToolActivityEvent(entries, 'result', { toolCallId: name, action: 'workspace_run', args: { action: 'run' }, ...observation });
+  assert.equal(entry.activity.terminal.state, state, name);
+  assert.equal(entry.activity.terminal.completed === true, state === 'exited', name);
+  assert.match(renderToolActivityEntry(entry), state === 'exited' ? /completed/i : /running/i, name);
+}

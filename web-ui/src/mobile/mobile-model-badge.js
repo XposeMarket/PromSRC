@@ -814,9 +814,13 @@ function _openSheet(titleHtml, bodyHtml) {
         visualViewport: window.visualViewport,
         layoutHeight: Math.max(Number(window.innerHeight) || 0, Number(document.documentElement?.clientHeight) || 0),
         triggerRect: trigger?.getBoundingClientRect?.(),
+        preferredHeight: 176,
       });
-      const sheetHeight = Math.min(280, Math.max(0, Math.floor(placement.maxHeight)));
-      sheet.style.setProperty('bottom', `${Math.round(placement.bottom)}px`, 'important');
+      const sheetHeight = Math.floor(placement.height);
+      // Pin top in layout coordinates; Safari's fixed bottom reference can
+      // differ from innerHeight while its visual viewport is keyboard-panned.
+      sheet.style.setProperty('top', `${Math.round(placement.top)}px`, 'important');
+      sheet.style.setProperty('bottom', 'auto', 'important');
       sheet.style.setProperty('height', `${sheetHeight}px`, 'important');
       sheet.style.setProperty('max-height', `${Math.max(0, Math.floor(placement.maxHeight))}px`, 'important');
       sheet.classList.toggle('pm-msheet-short-viewport', placement.isShortViewport);
@@ -852,12 +856,18 @@ function _openSheet(titleHtml, bodyHtml) {
     _closeSheet();
   };
   document.addEventListener('keydown', onKeyDown, true);
+  const composerObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(reposition) : null;
+  const composer = document.getElementById('pm-composer');
+  if (composer) composerObserver?.observe(composer);
+  document.addEventListener('scroll', reposition, { capture: true, passive: true });
   window.addEventListener('resize', reposition, { passive: true });
   window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
   window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true });
   sheet.__pmModelSheetCleanup = () => {
     if (positionRaf) cancelAnimationFrame(positionRaf);
     sheet.__pmReasoningGestureDispose?.();
+    composerObserver?.disconnect();
+    document.removeEventListener('scroll', reposition, true);
     window.removeEventListener('resize', reposition);
     window.visualViewport?.removeEventListener?.('resize', reposition);
     window.visualViewport?.removeEventListener?.('scroll', reposition);

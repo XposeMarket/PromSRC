@@ -382,9 +382,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     }
   }
 
-  if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
-    globalThis.addEventListener('pagehide', _flushMobileBackgroundWorkPersistence);
-  }
+  if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') globalThis.addEventListener('pagehide', _flushMobileBackgroundWorkPersistence);
 
   function _mobileWorkflowTransitionLabel(message) {
     const groupId = String(message?.workflowGroupId || '');
@@ -445,7 +443,11 @@ export function createMobileChatRendererRuntime(context = {}) {
     const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
     // An explicit full thought is durable even when a provider echoes summary
     // metadata on the same packet.
+    if (visibility === 'private' || visibility === 'internal') return true;
     if (reasoningKind === 'full_thought') return false;
+    if (source === 'agent_progress' || source === 'reasoning_summary'
+      || type === 'reasoning_summary' || event === 'reasoning_summary'
+      || (reasoningKind === 'summary' && ['user', 'summary'].includes(visibility))) return false;
     return source === 'agent_progress'
       || source === 'reasoning_summary'
       || type === 'reasoning_summary'
@@ -483,10 +485,9 @@ export function createMobileChatRendererRuntime(context = {}) {
           },
         };
       }
-      // Reasoning summaries are transient. The one mutable agent_progress row
-      // is retained only long enough to render the current collapsed summary;
-      // old summary packets must never become standalone thought cards.
-      if (_isMobileTransientReasoningTraceEntry(entry) && !_isMobileMutableProgressTraceEntry(entry)) return null;
+      // Retain explicit public summary prose; private provider thinking deltas
+      // are still excluded by the shared visibility classification.
+      if (_isMobileTransientReasoningTraceEntry(entry)) return null;
       return entry;
     }).filter(Boolean);
   }
@@ -596,8 +597,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
       if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
-        .replace(/\s+/g, ' ')
-        .trim();
+        .split(/\r?\n/).find((line) => line.trim())?.replace(/^[#*\s]+|[*\s]+$/g, '').trim() || '';
       if (text) return text.slice(0, 220);
     }
     return '';
@@ -685,15 +685,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         return;
       }
       if (_isMobileTraceThoughtEntry(entry)) {
-        // Mutable model summaries continue the current tool phase. They
-        // update the existing expandable header until a durable/full thought,
-        // compaction, or vision event explicitly starts a new segment.
-        const isMutableProgress = _isMobileMutableProgressTraceEntry(entry)
-          && _mobileTraceThoughtKind(entry) === 'summary';
-        if (isMutableProgress && activeToolGroup) {
-          activeToolGroup.entries.push(entry);
-          return;
-        }
+        // Every public narration boundary closes the preceding tool phase.
         activeToolGroup = null;
         const thoughtKind = _mobileTraceThoughtKind(entry);
         const groupKind = thoughtKind === 'summary' ? 'thought-summary' : 'thought';
@@ -705,19 +697,9 @@ export function createMobileChatRendererRuntime(context = {}) {
         return;
       }
       if (!activeToolGroup) {
-        // A model summary can arrive one event before the tool call it
-        // narrates. Carry that mutable-only group into the tool disclosure so
-        // the real summary owns its header instead of leaving an empty thought
-        // block above a synthetic action label.
-        const previous = groups[groups.length - 1];
-        const pendingSummary = previous?.kind === 'thought-summary'
-          && previous.entries.length > 0
-          && previous.entries.every((candidate) => _isMobileMutableProgressTraceEntry(candidate));
-        if (pendingSummary) {
-          activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
-          groups[groups.length - 1] = activeToolGroup;
-          return;
-        }
+        // Narration is a first-class timeline block, never hidden inside the
+        // following tool disclosure. Both main chat and agent sheets use this
+        // boundary, including when reconstructing persisted events.
         activeToolGroup = { kind: 'tools', entries: [] };
         groups.push(activeToolGroup);
       }
@@ -1047,10 +1029,11 @@ export function createMobileChatRendererRuntime(context = {}) {
         const isLiveThought = streaming && index === groups.length - 1;
         const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
         const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
-        const summaryMarkup = progressSummary
+        const summaryMarkup = progressSummary && !group.entries.some((entry) => String(entry?.text || entry?.content || '').trim())
           ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong class="t-think" data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
           : '';
-        const bodyEntries = group.entries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
+        // Safe summaries retain their paragraph text, not only the header.
+        const bodyEntries = group.entries;
         const bodyHtml = bodyEntries.length
           ? `<div class="pm-trace-thought-body"><div class="pm-live-trace">${bodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`
           : '';
@@ -1077,10 +1060,8 @@ export function createMobileChatRendererRuntime(context = {}) {
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
       const visibleEntries = _mobileVisibleTraceEntries(group.entries);
-      // The mutable summary is rendered once in the expandable header. It
-      // must not also remain in the body, where the next tool event can make
-      // the summary look overwritten or duplicated.
-      const toolBodyEntries = visibleEntries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
+      // Preserve the safe summary body in the same segment as its tools.
+      const toolBodyEntries = visibleEntries;
       const callCount = toolBodyEntries.filter((entry) => /^(operation|result)$/.test(entry?.activity?.kind)).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -2397,7 +2378,11 @@ export function createMobileChatRendererRuntime(context = {}) {
     Array.from(threadEl.children).forEach((node) => {
       if (!ordered.includes(node)) node.remove();
     });
-    ordered.forEach((node) => threadEl.appendChild(node));
+    // Leave already ordered rows mounted: appendChild on every token moves
+    // focused cards and can disturb the user's scroll anchor.
+    ordered.forEach((node, index) => {
+      if (threadEl.children[index] !== node) threadEl.insertBefore(node, threadEl.children[index] || null);
+    });
   }
   
   function _patchMobileThreadMessage(threadEl, message, index) {

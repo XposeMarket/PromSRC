@@ -7,6 +7,8 @@ import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../featu
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
+import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
+import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 
 export { mobileReplayFrameAfterSteer };
 
@@ -1958,24 +1960,27 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       ? (chatVoiceCamera || attachBtn)
       : attachBtn;
     const anchorHitTarget = anchorElement?.closest?.('.pm-haptic-host') || anchorElement;
+    attachSheetPositionCleanup?.();
+    // Escape the composer's Liquid Glass stacking/containing contexts. Only
+    // the actions live above this body-level scrim; the whole composer blurs.
+    document.body.append(attachSheet);
+    const scrim = document.createElement('div');
+    scrim.className = 'pm-composer-popover-scrim';
+    document.body.append(scrim);
     const position = () => {
       const anchor = anchorElement?.getBoundingClientRect?.();
       const owner = form?.getBoundingClientRect?.();
       if (!anchor || !owner) return;
       const anchorPageX = anchor.left + anchor.width / 2;
       const anchorPageY = anchor.top + anchor.height / 2;
-      // The sheet lives inside the composer, so use composer-local coordinates.
-      // This keeps the fan attached even while the keyboard translates the
-      // composer or the page is scrolled.
-      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX - owner.left)}px`);
-      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY - owner.top)}px`);
+      // Body-level fixed layer uses the same layout coordinates as the trigger.
+      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX)}px`);
+      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY)}px`);
 
       const viewportWidth = Math.max(160, Math.round(window.visualViewport?.width || window.innerWidth || 390));
-      // Keep the settled buttons entirely above the composer's top edge. The
-      // keyboard changes the composer position, so derive the vertical orbit
-      // from the measured owner instead of using a fixed screen coordinate.
-      const aboveComposer = Math.max(0, Math.round(anchorPageY - owner.top));
-      const lowerOrbitY = -Math.max(52, aboveComposer + 18);
+      // Keep the fan directly above the trigger, not above the composer card.
+      // Chips and multiline input must not increase the trigger-to-action gap.
+      const lowerOrbitY = -64;
       const upperOrbitY = lowerOrbitY - 22;
       // The main composer trigger is close to the left edge. A symmetric fan
       // would put the left item outside the phone, so open into the available
@@ -2000,7 +2005,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       setOrbit('camera', orbit.camera);
     };
 
-    attachSheetPositionCleanup?.();
     const reanchor = () => {
       if (!attachSheet.hidden) position();
     };
@@ -2029,6 +2033,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       visualViewport?.removeEventListener('scroll', reanchor);
       anchorResizeObserver?.disconnect?.();
       document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+      scrim.remove();
       attachSheetPositionCleanup = null;
     };
     requestAnimationFrame(() => {
@@ -2058,6 +2063,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     setTimeout(() => {
       if (!attachSheet.classList.contains('open')) {
         attachSheet.hidden = true;
+        form?.append(attachSheet);
         contextDock?.classList.remove('pm-attach-popover-open');
       }
     }, 360);
@@ -2702,6 +2708,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         } else {
           _clearMobileActiveRun(requestedSession);
           _markMobileSessionRunning(requestedSession, false);
+          _finalizeMobileMainPlanForTurn(requestedSession);
           setBusy(false);
         }
         _flushThreadRender(threadEl, body, requestedSession);
@@ -2737,6 +2744,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         hideReconnectingStatus();
         _clearMobileActiveRun(requestedSession);
         _markMobileSessionRunning(requestedSession, false);
+        _finalizeMobileMainPlanForTurn(requestedSession);
         delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
         setBusy(false);
         _saveMobileThreadCache(requestedSession, _activeMobileThread());
@@ -2755,6 +2763,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         hideReconnectingStatus();
         _clearMobileActiveRun(requestedSession);
         _markMobileSessionRunning(requestedSession, false);
+        _finalizeMobileMainPlanForTurn(requestedSession);
         setBusy(false);
         return;
       }
@@ -3934,15 +3943,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const processExtra = isReasoningSummary
         ? { ...(extra && typeof extra === 'object' ? extra : {}), source: 'reasoning_summary', visibility: 'user' }
         : extra;
-      if (isReasoningSummary) {
-        const beforeTrace = String(lane.message.liveTraceEntries?.find((item) => (
-          String(item?.extra?.source || '').toLowerCase() === 'agent_progress'
-        ))?.text || '');
-        const traceChanged = _setMobileLiveProgressNarration(lane.message, text);
-        changed = changed || traceChanged || beforeTrace !== text;
-      } else {
-        _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, true);
-      }
+      // Route recovered public summaries through the same durable journal as
+      // tools; the shared recovery renderer restores chronological boundaries.
+      _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, true);
       changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
     }
     const snapshotTraceEntries = [
@@ -6054,7 +6057,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
 
   function applyMobileChatStreamEvent(aiTurn, evt) {
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     aiTurn = _mobileStreamTargetTurn(aiTurn);
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     if (!aiTurn || !evt?.type) return '';
     const eventRequestId = String(evt.clientRequestId || '').trim();
     const turnRequestId = String(aiTurn._clientRequestId || '').trim();
@@ -6399,6 +6404,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
   }
 
+  // The gateway always finalizes a declared plan at turn end (in_progress ->
+  // done, pending -> skipped) and emits one last progress_state. If the phone
+  // was backgrounded/reconnecting it can miss those frames, and recovery paths
+  // that find an already-finished turn return before replaying the plan, so
+  // the pill stayed stuck (e.g. "1 of 4"). Mirror the server finalization
+  // locally, then reconcile with the server's latest plan snapshot.
+  function _finalizeMobileMainPlanForTurn(sid) {
+    return finalizeMobileMainPlan(__pmChat, sid, loadMobileChatStreamReplay, _applyMobileMainPlanProgress, _renderMobileMainPlanDock);
+  }
+
   function finalizeMobileLiveAiTurn(aiTurn) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || (aiTurn._pmFinalized === true && aiTurn.streaming !== true)) return;
@@ -6421,6 +6436,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
     _markMobileSessionRunning(requestedSession, false);
+    _finalizeMobileMainPlanForTurn(requestedSession);
     if (_isMobileChatSessionVisibleToUser(requestedSession)) {
       markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
     }
@@ -7126,6 +7142,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _pmAdmissionClientRequestId: clientRequestId,
       _clientRequestId: clientRequestId,
     };
+    rememberMobileStreamOwner(aiTurn, actualSessionId);
     activeThread.push(aiTurn);
     _appendMobileUserProcess(aiTurn, msg || 'Attached file(s)', {
       stage: 'mobile_chat_user_message',
@@ -7368,9 +7385,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           targetAiTurn.streaming = true;
           const plannedRestart = isRestartSuspended(_readMobileActiveRun(actualSessionId));
           if (!plannedRestart) {
-            _recordMobileChatError(targetAiTurn, err);
             setChatConnectionStatus(true, 'Reconnecting to Prometheus');
-            pmToast(targetAiTurn.errorPresentation);
           }
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
           scheduleMobileRunRecovery(plannedRestart ? 250 : 2500, { force: true });

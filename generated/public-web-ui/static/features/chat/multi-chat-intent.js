@@ -1,6 +1,9 @@
 const SESSION_ROW_SELECTOR = '.chat-session-item, #sessions-list .job-item, #channels-list .chat-session-item';
 const STORAGE_KEY = 'prometheus_multi_chat_tabs_v3';
 let workspacePromise = null;
+let pendingDrag = null;
+document.addEventListener('dragend', () => { pendingDrag = null; }, true);
+document.addEventListener('drop', () => { pendingDrag = null; }, true);
 
 function hasPersistedWorkspace() {
   try {
@@ -32,8 +35,20 @@ export function loadMultiChatWorkspace() {
 }
 
 function sessionIntent(event) {
-  if (!event.target?.closest?.(SESSION_ROW_SELECTOR)) return;
-  requestMultiChatWorkspace();
+  const row = event.target?.closest?.(SESSION_ROW_SELECTOR);
+  if (!row) return;
+  const sessionId = String(row.dataset?.sessionId || row.dataset?.chatSessionId || row.dataset?.session || row.dataset?.id || '').trim();
+  if (!sessionId) return;
+  const payload = { sessionId, title: row.querySelector?.('.job-item-title, .chat-session-title, [data-session-title]')?.textContent || '' };
+  pendingDrag = payload;
+  // DataTransfer is writable only during dragstart, before the lazy import resolves.
+  try {
+    event.dataTransfer?.setData('application/x-prometheus-chat', JSON.stringify(payload));
+    event.dataTransfer?.setData('text/plain', sessionId);
+  } catch {}
+  void loadMultiChatWorkspace().then((workspace) => {
+    if (pendingDrag === payload) workspace.beginSessionDrag?.(payload);
+  }).catch((error) => console.warn('[multi-chat] workspace failed to load:', error));
 }
 
 function requestMultiChatWorkspace() {

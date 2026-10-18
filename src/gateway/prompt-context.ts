@@ -45,6 +45,7 @@ import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
 import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
 import { planMessageExtensionActivation } from '../extensions/activation-planner.js';
+import { EXTRA_SEARCH_PROVIDERS, EXTRA_SEARCH_ALL_FIELDS } from '../tools/search-provider-registry.js';
 
 function buildPromptRuntimeHostContext(workspacePath: string): string {
   const gpu = readCachedGpuInfo();
@@ -1171,7 +1172,7 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?,include_images?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search(query,max_results?,multi_engine?,provider?,fetch_top_k?,fetch_max_chars?)→one unified search tool: provider="multi" or multi_engine=true queries every configured provider, provider=tinyfish|tavily|google|brave|ddg|xai targets one provider. web_fetch(url|urls,max_chars?,concurrency?,include_media?,include_thread?)→fetch one page or a small batch of URLs; exact X statuses use official oEmbed, while media and thread browser work are opt-in. Search first, then fetch.
+  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?,include_images?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search(query,max_results?,multi_engine?,provider?,fetch_top_k?,fetch_max_chars?)→one unified search tool: provider="multi" or multi_engine=true queries every configured provider, provider=tinyfish|tavily|google|brave|ddg|xai|exa|serper|firecrawl|jina|linkup|serpapi|perplexity|searxng targets one provider (only configured ones work). web_fetch(url|urls,max_chars?,concurrency?,include_media?,include_thread?)→fetch one page or a small batch of URLs; exact X statuses use official oEmbed, while media and thread browser work are opt-in. Search first, then fetch.
 Product/shopping rule: for product carousels, shopping comparisons, prices, ratings, or store-specific product lists, call shopping_search_products first. Use browser/page extraction only when this result is incomplete or needs visual/login verification.
 Citation rule: when a reply uses facts from web_search/web_fetch, cite inline right after the supported sentence with a markdown link whose text is the site name, e.g. "rates rose to 4% ([Reuters](https://reuters.com/...))". Those links render as favicon citation pills. Cite the fetched page, not a search snippet; one or two per claim; never invent URLs. Every page fetched this turn is listed automatically as source pills under the reply, so do not add a trailing link list. Call show_sources only for a curated image-card roundup; it fills missing page metadata and preview images.
 Strategy: for complex topics make ONE web_search call with 2–4 angles in queries[] (they run in parallel); scan snippets; then ONE web_fetch with urls[] for the 1–3 most relevant pages.
@@ -1444,6 +1445,9 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
     if (tavilyKey) ps.push(preferred === 'tavily' ? 'Tavily (primary)' : 'Tavily');
     if (googleKey && googleCx) ps.push(preferred === 'google' ? 'Google (primary)' : 'Google');
     if (braveKey)  ps.push(preferred === 'brave'  ? 'Brave (primary)'  : 'Brave');
+    for (const p of EXTRA_SEARCH_PROVIDERS) {
+      if (s[p.field] && cfg.resolveSecret(s[p.field])) ps.push(preferred === p.id ? `${p.label} (primary)` : p.label);
+    }
     ps.push(preferred === 'ddg' ? 'DuckDuckGo (primary)' : 'DuckDuckGo (fallback)');
     searchProviders = ps.join(', ');
   } catch { /* use default */ }
@@ -1489,7 +1493,7 @@ CITATIONS: after web research, cite inline next to each supported claim as a mar
 HOW: complex topics → ONE web_search call with 2–4 angles in queries[] (searched in parallel; never several separate web_search calls). Scan snippets → ONE web_fetch with urls[] for the 1–3 most relevant pages. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
-For broad coverage use web_search(..., provider:"multi") or web_search(..., multi_engine:true). For provider checks use web_search(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
+For broad coverage use web_search(..., provider:"multi") or web_search(..., multi_engine:true). For provider checks use web_search(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai"|"exa"|"serper"|"firecrawl"|"jina"|"linkup"|"serpapi"|"perplexity"|"searxng") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
 
 [WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
 WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
@@ -1623,6 +1627,7 @@ export function buildToolsContext(activatedCategories: Set<string>, options?: { 
       google_api_key: search.google_api_key,
       google_cx: search.google_cx,
       brave_api_key: search.brave_api_key,
+      ...Object.fromEntries(EXTRA_SEARCH_ALL_FIELDS.map((f) => [f, search[f]])),
     };
   } catch {}
   const fingerprint = JSON.stringify({

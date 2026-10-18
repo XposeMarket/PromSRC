@@ -639,6 +639,14 @@ export interface PrometheusConfig {
     google_cx?: string;
     brave_api_key?: string;
     search_rigor?: string;
+    exa_api_key?: string;
+    serper_api_key?: string;
+    firecrawl_api_key?: string;
+    jina_api_key?: string;
+    linkup_api_key?: string;
+    serpapi_api_key?: string;
+    perplexity_api_key?: string;
+    searxng_url?: string;
   };
   llm?: LLMConfig;
   orchestration?: {
