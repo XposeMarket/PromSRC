@@ -5169,6 +5169,9 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   const existing = new Set(message.liveTraceEntries.map((entry) =>
     traceDedupeKey(entry)
   ));
+  const structuredCallIds = new Set(message.liveTraceEntries
+    .map((entry) => String(entry?.activity?.callId || '').trim())
+    .filter(Boolean));
   const existingThoughts = message.liveTraceEntries
     .filter(isThoughtTraceEntry)
     .map((entry) => ({
@@ -5179,6 +5182,13 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
+    // Recovery process rows are a fallback for calls the live stream never
+    // delivered. When a structured live row already owns this tool call, the
+    // reduced checkpoint copy (no duration/summary) must not join the trace.
+    const derivedType = String(entry?.type || '').toLowerCase();
+    const derivedCallId = String(entry?.extra?.toolCallId || entry?.extra?.tool_call_id || entry?.extra?.callId || entry?.toolCallId || '').trim();
+    if (derivedCallId && structuredCallIds.has(derivedCallId)
+      && ['tool', 'skill', 'result', 'error', 'progress'].includes(derivedType)) continue;
     const key = traceDedupeKey(entry);
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
@@ -7503,8 +7513,10 @@ function _normalizeMobileFileChanges(fileChanges) {
   const normalizedFiles = files.map((file) => {
     const path = String(file?.path || file?.displayPath || '').trim();
     const displayPath = String(file?.displayPath || path || '').trim();
-    const displayIsAbsolute = /^(?:[a-zA-Z]:[\\/]|\/)/.test(displayPath);
-    const openPath = displayPath && !displayIsAbsolute ? displayPath : path;
+    // displayPath can be relative to the repo the tracker watched (e.g. a PR
+    // worktree), not the workspace root, so prefer the absolute path to open.
+    const pathIsAbsolute = /^(?:[a-zA-Z]:[\\/]|\/)/.test(path);
+    const openPath = pathIsAbsolute ? path : (displayPath || path);
     const statusRaw = String(file?.status || 'modified').toLowerCase();
     const status = ['added', 'modified', 'deleted', 'renamed'].includes(statusRaw) ? statusRaw : 'modified';
     return {
@@ -7589,7 +7601,7 @@ function _renderMobileFileChangeRow(file) {
     <div class="pm-file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}"
       ${canOpen ? `data-pm-file-change-path="${escapeHtml(openPath)}" data-pm-file-change-name="${escapeHtml(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file')}" data-pm-file-change-kind="${escapeHtml(kind)}"` : 'aria-disabled="true"'}>
       <div class="pm-file-change-main">
-        <span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>
+        ${file.binary || file.status !== 'modified' ? `<span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>` : ''}
         <span class="pm-file-change-path">${escapeHtml(file.displayPath)}</span>
       </div>
       <div class="pm-file-change-counts">

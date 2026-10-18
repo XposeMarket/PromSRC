@@ -1081,7 +1081,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       // must not also remain in the body, where the next tool event can make
       // the summary look overwritten or duplicated.
       const toolBodyEntries = visibleEntries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
-      const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+      const callCount = toolBodyEntries.filter((entry) => /^(operation|result)$/.test(entry?.activity?.kind)).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
       const itemLabel = callCount ? 'call' : 'item';

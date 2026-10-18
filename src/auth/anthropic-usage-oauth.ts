@@ -175,6 +175,7 @@ async function refreshUsageToken(configDir: string, tokens: UsageOAuthTokens): P
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -214,6 +215,15 @@ export async function getValidUsageToken(configDir: string): Promise<string | nu
           return await refreshUsageToken(configDir, current);
         } catch (e: any) {
           const message = String(e?.message || e);
+          // Rotating refresh tokens: another gateway process sharing this vault
+          // (worktree/dev gateways) may have redeemed ours first and stored a
+          // newer pair. Adopt it instead of declaring the connection dead.
+          const latest = loadUsageTokens(configDir);
+          if (latest && !latest.reauth_required_at && latest.refresh_token
+            && latest.refresh_token !== current.refresh_token) {
+            if (Date.now() < latest.expires_at - 60_000) return latest;
+            try { return await refreshUsageToken(configDir, latest); } catch { /* fall through */ }
+          }
           if (/invalid_grant|refresh token expired|No refresh token/i.test(message)) {
             saveUsageTokens(configDir, { ...current, reauth_required_at: Date.now() });
             log.security('[anthropic-usage] Refresh credential expired; reconnect usage tracking.');
