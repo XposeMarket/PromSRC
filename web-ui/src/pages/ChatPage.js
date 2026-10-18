@@ -12965,7 +12965,11 @@ function isDesktopTransientReasoningTraceEntry(entry) {
   // A provider may carry summary visibility/source fields onto a following
   // curated thought packet. An explicit full_thought marker is authoritative;
   // never let the summary cleanup path delete that durable thought.
+  if (visibility === 'private' || visibility === 'internal') return true;
   if (reasoningKind === 'full_thought') return false;
+  if (source === 'agent_progress' || source === 'reasoning_summary'
+    || type === 'reasoning_summary' || event === 'reasoning_summary'
+    || (reasoningKind === 'summary' && ['user', 'summary'].includes(visibility))) return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -13298,10 +13302,8 @@ function liveTraceGroups(entries) {
       // becoming a second thought group that displaces the tool stream.
       const isMutableProgress = isDesktopMutableProgressTraceEntry(entry)
         && desktopTraceThoughtKind(entry) === 'summary';
-      if (isMutableProgress && activeToolGroup) {
-        activeToolGroup.entries.push(entry);
-        return;
-      }
+      // Public reasoning is a chronological block, not a tool header update.
+      // Runtime progress is filtered before it reaches this journal.
       activeToolGroup = null;
       const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
       const previous = groups[groups.length - 1];
@@ -18612,17 +18614,9 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       }
       return;
     }
-    if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') {
-      const text = String(extra.message || extra.current_step || extra.state || entry.content || '').trim();
-      if (!text || /^processing$/i.test(text)) return;
-      trace.push({
-        id: `background_trace_${index}`,
-        type: 'think',
-        text,
-        ts: String(entry.ts || ''),
-        extra: { ...extra, source: 'agent_progress', visibility: 'user' },
-      });
-    }
+    // Runtime lifecycle packets belong to the working status, not the
+    // chronological assistant/reasoning journal (same contract as mobile).
+    if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') return;
   });
   return trace;
 }
