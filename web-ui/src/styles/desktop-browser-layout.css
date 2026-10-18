@@ -1,0 +1,92 @@
+/* Desktop-only split layout. Never imported by the /mobile entrypoint. */
+body:not(.pm-mobile-active) .workspace {
+  position: relative;
+  container: desktop-workspace / inline-size;
+}
+body:not(.pm-mobile-active) .workspace > .center-col {
+  flex: 1 1 420px;
+  min-width: min(420px, 100%);
+  container: desktop-chat / inline-size;
+}
+body:not(.pm-mobile-active) .right-panel.open.canvas-open {
+  flex: 0 1 var(--right-w);
+  width: var(--right-w);
+  min-width: 360px;
+  max-width: calc(100% - 420px);
+}
+body:not(.pm-mobile-active) .main-shell-wrap,
+body:not(.pm-mobile-active) #chat-view,
+body:not(.pm-mobile-active) .chat-input-area {
+  min-width: 0;
+}
+body:not(.pm-mobile-active) .msg-body {
+  min-width: min(12ch, 100%);
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+@container desktop-workspace (max-width: 780px) {
+  body:not(.pm-mobile-active) .right-panel.open.canvas-open {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 110;
+    width: min(var(--right-w), 100%);
+    min-width: min(360px, 100%);
+    max-width: 100%;
+    box-shadow: -12px 0 36px rgb(0 0 0 / 25%);
+  }
+}
+
+/* Preserve the user's collapsed preference; automatic rail mode is CSS-only
+   and disappears immediately when the canvas closes or the window grows. */
+@media (max-width: 1400px) {
+  body:not(.pm-mobile-active):has(.right-panel.open.canvas-open) .sidebar:not(.collapsed) {
+    width: 64px !important;
+    min-width: 64px !important;
+    flex: 0 0 64px;
+    transition: none;
+  }
+  body:not(.pm-mobile-active):has(.right-panel.open.canvas-open) .sidebar:not(.collapsed) :is(.sidebar-scroll, .sidebar-search, .sidebar-section, .sidebar-footer, .sidebar-resize-handle, .sidebar-pages-toggle, #sidebar-sessions-section, #sidebar-pinned-section, #sidebar-projects-section) {
+    display: none !important;
+  }
+  body:not(.pm-mobile-active):has(.right-panel.open.canvas-open) .sidebar:not(.collapsed) :is(.nav-item, .sidebar-top) {
+    justify-content: center !important;
+    padding-inline: 0 !important;
+    min-width: 0;
+    font-size: 0 !important;
+    gap: 0 !important;
+  }
+  body:not(.pm-mobile-active):has(.right-panel.open.canvas-open) .sidebar:not(.collapsed) :is(.nav-item > span, .nav-label, .sidebar-brand, .sidebar-title) {
+    display: none !important;
+  }
+}
+body:not(.pm-mobile-active) #chat-view > .chat-input-area :is(.chat-model-switcher-wrap, #model-switcher-btn, #chat-model-name) {
+  min-width: 0;
+  max-width: 100%;
+}
+body:not(.pm-mobile-active) #chat-model-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@container desktop-chat (max-width: 620px) {
+  body:not(.pm-mobile-active) #chat-view > .chat-input-area {
+    grid-template-columns: 32px minmax(0, 1fr) 32px 32px !important;
+    grid-template-areas:
+      "staging staging staging staging"
+      "input input input input"
+      "attach model voice send" !important;
+    column-gap: 6px !important;
+    padding-inline: 10px !important;
+  }
+  body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-hint {
+    display: none !important;
+  }
+  body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-model-switcher-wrap {
+    width: 100%;
+    justify-content: flex-end;
+    overflow: visible;
+  }
+  body:not(.pm-mobile-active) #chat-view > .chat-input-area #model-switcher-btn {
+    overflow: hidden;
+  }
+}
