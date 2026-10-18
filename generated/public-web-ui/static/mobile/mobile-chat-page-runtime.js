@@ -7,6 +7,7 @@ import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../featu
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
+import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 
 export { mobileReplayFrameAfterSteer };
 
@@ -6409,25 +6410,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   // the pill stayed stuck (e.g. "1 of 4"). Mirror the server finalization
   // locally, then reconcile with the server's latest plan snapshot.
   function _finalizeMobileMainPlanForTurn(sid) {
-    const key = String(sid || '');
-    const state = __pmChat.mainPlanProgress?.[key];
-    const items = Array.isArray(state?.items) ? state.items : [];
-    if (items.length) {
-      const finalized = items.map((item) => {
-        const status = String(item?.status || '').trim().toLowerCase();
-        if (/^(done|complete|completed|skipped|failed)$/.test(status)) return item;
-        return { ...item, status: /^(in_progress|active|running)$/.test(status) ? 'done' : 'skipped' };
-      });
-      _applyMobileMainPlanProgress({ source: 'declared', reason: 'finalized_local', activeIndex: -1, total: finalized.length, items: finalized }, key);
-      _renderMobileMainPlanDock(null, key);
-    }
-    loadMobileChatStreamReplay(key, Number.MAX_SAFE_INTEGER).then((replay) => {
-      const progress = replay?.stream?.progressState;
-      if (progress && progress.source === 'declared' && Array.isArray(progress.items) && progress.items.length) {
-        _applyMobileMainPlanProgress(progress, key);
-        _renderMobileMainPlanDock(null, key);
-      }
-    }).catch(() => {});
+    return finalizeMobileMainPlan(__pmChat, sid, loadMobileChatStreamReplay, _applyMobileMainPlanProgress, _renderMobileMainPlanDock);
   }
 
   function finalizeMobileLiveAiTurn(aiTurn) {
