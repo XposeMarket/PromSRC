@@ -31,7 +31,10 @@ export function reasoningSheetViewportPlacement({
     : Math.max(viewportTop + safeMargin, hasTrigger ? triggerTop - safeGap : viewportBottom - safeMargin);
   const maxHeight = Math.max(0, sheetBottom - sheetTop);
 
+  const height = Math.min(Math.max(0, Number(preferredHeight) || 280), maxHeight);
   return {
+    top: anchor === 'below' ? sheetTop : sheetBottom - height,
+    height,
     bottom: Math.max(0, safeLayoutHeight - sheetBottom),
     maxHeight,
     viewportTop,

@@ -1958,24 +1958,27 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       ? (chatVoiceCamera || attachBtn)
       : attachBtn;
     const anchorHitTarget = anchorElement?.closest?.('.pm-haptic-host') || anchorElement;
+    attachSheetPositionCleanup?.();
+    // Escape the composer's Liquid Glass stacking/containing contexts. Only
+    // the actions live above this body-level scrim; the whole composer blurs.
+    document.body.append(attachSheet);
+    const scrim = document.createElement('div');
+    scrim.className = 'pm-composer-popover-scrim';
+    document.body.append(scrim);
     const position = () => {
       const anchor = anchorElement?.getBoundingClientRect?.();
       const owner = form?.getBoundingClientRect?.();
       if (!anchor || !owner) return;
       const anchorPageX = anchor.left + anchor.width / 2;
       const anchorPageY = anchor.top + anchor.height / 2;
-      // The sheet lives inside the composer, so use composer-local coordinates.
-      // This keeps the fan attached even while the keyboard translates the
-      // composer or the page is scrolled.
-      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX - owner.left)}px`);
-      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY - owner.top)}px`);
+      // Body-level fixed layer uses the same layout coordinates as the trigger.
+      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX)}px`);
+      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY)}px`);
 
       const viewportWidth = Math.max(160, Math.round(window.visualViewport?.width || window.innerWidth || 390));
-      // Keep the settled buttons entirely above the composer's top edge. The
-      // keyboard changes the composer position, so derive the vertical orbit
-      // from the measured owner instead of using a fixed screen coordinate.
-      const aboveComposer = Math.max(0, Math.round(anchorPageY - owner.top));
-      const lowerOrbitY = -Math.max(52, aboveComposer + 18);
+      // Keep the fan directly above the trigger, not above the composer card.
+      // Chips and multiline input must not increase the trigger-to-action gap.
+      const lowerOrbitY = -64;
       const upperOrbitY = lowerOrbitY - 22;
       // The main composer trigger is close to the left edge. A symmetric fan
       // would put the left item outside the phone, so open into the available
@@ -2000,7 +2003,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       setOrbit('camera', orbit.camera);
     };
 
-    attachSheetPositionCleanup?.();
     const reanchor = () => {
       if (!attachSheet.hidden) position();
     };
@@ -2029,6 +2031,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       visualViewport?.removeEventListener('scroll', reanchor);
       anchorResizeObserver?.disconnect?.();
       document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+      scrim.remove();
       attachSheetPositionCleanup = null;
     };
     requestAnimationFrame(() => {
@@ -2058,6 +2061,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     setTimeout(() => {
       if (!attachSheet.classList.contains('open')) {
         attachSheet.hidden = true;
+        form?.append(attachSheet);
         contextDock?.classList.remove('pm-attach-popover-open');
       }
     }, 360);
