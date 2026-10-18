@@ -6686,6 +6686,20 @@ function _settlePendingChatSteerPresentation(sessionId, streamState) {
   return changed;
 }
 
+function steerAttachmentsToPreviews(attachments) {
+  return (Array.isArray(attachments) ? attachments : []).map((attachment) => {
+    const base64 = String(attachment?.base64 || '').trim();
+    const mimeType = String(attachment?.mimeType || 'image/png').trim() || 'image/png';
+    const name = String(attachment?.name || 'attachment').trim() || 'attachment';
+    return {
+      kind: mimeType.startsWith('image/') ? 'image' : 'file',
+      name,
+      mimeType,
+      dataUrl: base64 ? `data:${mimeType};base64,${base64.replace(/^data:[^;]+;base64,/, '')}` : '',
+    };
+  }).filter((attachment) => attachment.dataUrl);
+}
+
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const sid = String(sessionId || '').trim();
   const sess = getChatSessionById(sid);
@@ -6698,6 +6712,16 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const liveTraceEntries = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
   const groupId = String(data?.workflowGroupId || '').trim() || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const text = String(steerText || '').trim();
+  const attachmentPreviews = Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length
+    ? data.attachmentPreviews
+    : steerAttachmentsToPreviews(data?.attachments);
+  const existingSteer = sess.history.find((row) => row?.role === 'user'
+    && ((data.messageId && row.messageId === data.messageId)
+      || (data.workflowGroupId && row.workflowGroupId === data.workflowGroupId && row.workflowPart === 'interruption')));
+  if (existingSteer) {
+    if (attachmentPreviews.length) existingSteer.attachmentPreviews = attachmentPreviews;
+    return true;
+  }
   const workStartedAt = Number(st?.turnStartedAt || Date.now()) || Date.now();
   const timerAnchor = st?.steerTimerAnchored !== true;
 
@@ -6731,7 +6755,7 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     role: 'user',
     ...(data?.messageId ? { messageId: data.messageId } : {}),
     content: text,
-    attachmentPreviews: Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length ? data.attachmentPreviews : undefined,
+    attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
     timestamp: Date.now(),
     channel: 'web',
     channelLabel: 'steer',
@@ -12880,7 +12904,9 @@ async function openInFileLocation(targetPath) {
 
 function renderUserMessageContent(msg) {
   let text = msg.content || '';
-  const attachments = Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : [];
+  const attachments = Array.isArray(msg.attachmentPreviews) && msg.attachmentPreviews.length
+    ? msg.attachmentPreviews
+    : steerAttachmentsToPreviews(msg.attachments);
   const designSelections = attachments.filter((attachment) => attachment && attachment.kind === 'design-selection');
   if (attachments.length) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
@@ -47138,6 +47164,11 @@ wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
 });
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+wsEventBus.on('chat_steer', (event = {}) => {
+  const sessionId = String(event.sessionId || '').trim();
+  if (!sessionId || sessionId === String(window.activeChatSessionId || '').trim()) return;
+  appendChatSteerWorkflowSplit(sessionId, event.displayMessage || event.message || '', event);
+});
 
 wsEventBus.on('restart_continuity', (msg = {}) => {
   const sid = String(msg.sessionId || '').trim();

@@ -61,3 +61,36 @@ assert.equal(JSON.parse(JSON.stringify(thread2[0])).steerContinuationMessageId, 
 assert.equal(sandbox._appendMobileQueuedSteerTurn('s2', 'Go left', { workflowGroupId: 'chat_steer_9', messageId: 'chat-steer:9' }), true);
 assert.equal(thread2.length, 3, 'duplicate steer (WS + POST) is idempotent');
 console.log('[mobile steer boundary] durable split, frozen prefix and replay filtering passed');
+
+// Restart recovery can be waiting on an agent: neither WS acknowledgement nor
+// POST reconciliation may depend on a subsequent stream/tool frame.
+const restartThread = [{ role: 'ai', streaming: true, body: { text: '' }, liveTraceEntries: [] }];
+sandbox.__pmChat.threads.restart = restartThread;
+sandbox.__pmChat.activeSessionId = 'restart';
+let paints = 0;
+sandbox.document.getElementById = (id) => id === 'pm-chat-thread' ? {} : null;
+sandbox._commitMobileTranscriptCache = () => {};
+sandbox._renderThread = () => { paints += 1; };
+sandbox._scrollChat = () => {};
+const preview = { kind: 'image', name: 'phone.png', workspacePath: 'uploads/phone.png', mimeType: 'image/png' };
+sandbox._appendMobileQueuedSteerTurn('restart', 'Look at this', {
+  clientSteerId: 'queue-image', messageId: 'pending-steer:queue-image',
+  workflowGroupId: 'chat_steer_pending_queue-image', attachmentPreviews: [preview],
+});
+assert.equal(paints, 1, 'optimistic steer paints without a tool event');
+sandbox._appendMobileQueuedSteerTurn('restart', 'Look at this', {
+  clientSteerId: 'queue-image', messageId: 'durable-image', workflowGroupId: 'chat_steer_image',
+  beforeMessageId: 'chat_steer_image:before', workflowBoundarySeq: 9, attachmentPreviews: [preview],
+});
+assert.equal(restartThread.length, 3, 'WS-before-POST acknowledgement adopts optimistic split');
+assert.equal(restartThread[1].messageId, 'durable-image');
+assert.equal(restartThread[1].body.attachments[0].workspacePath, preview.workspacePath);
+assert.equal(restartThread[2].messageId, 'chat_steer_image:continuation');
+assert.equal(restartThread[0].steerContinuationMessageId, 'chat_steer_image:continuation');
+assert.equal(paints, 2, 'acknowledgement immediately repaints');
+const mobileSource = fs.readFileSync(file, 'utf8');
+const listener = mobileSource.slice(mobileSource.indexOf("wsEventBus.on('chat_steer'"), mobileSource.indexOf("wsEventBus.on('main_chat_stream_event'"));
+assert.doesNotMatch(listener, /activeRuns|_readMobileActiveRun/, 'accepted steer must survive a cleared restart busy marker');
+assert.match(mobileSource, /attachments: uploadResults\.filter/, 'mobile steers transmit image payloads as well as previews');
+assert.match(fs.readFileSync('src/gateway/routes/chat/steer.ts', 'utf8'), /clientSteerId: clientSteerId \|\| undefined,[\s\S]*displayMessage:/, 'broadcast correlates the optimistic steer');
+console.log('[mobile steer boundary] immediate restart paint, image preview and acknowledgement race passed');

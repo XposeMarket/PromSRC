@@ -154,6 +154,7 @@ router.post('/api/chat/steer', (req, res) => {
         workflowPart: 'interruption', workflowLabel: 'Message sent as steer',
         workflowBoundarySeq: boundarySeq,
         workflowStreamId: boundaryStreamId,
+        ...(steerAttachments.length ? { attachments: steerAttachments } : {}),
         ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
       };
       addMessage(sessionId, durableSteer, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
@@ -200,10 +201,11 @@ router.post('/api/chat/steer', (req, res) => {
       workflowBoundarySeq: durableSteer?.workflowBoundarySeq,
       workflowStreamId: durableSteer?.workflowStreamId,
       timestamp: durableSteer?.timestamp,
+      clientSteerId: clientSteerId || undefined,
       displayMessage: String(durableSteer?.content || '').slice(0, 500),
       message: message.slice(0, 500),
-      attachments: steerAttachments.map((attachment) => ({ name: attachment.name, mimeType: attachment.mimeType })),
-      attachmentPreviews: steerAttachmentPreviews.map((preview: any) => ({ name: preview?.name, mimeType: preview?.mimeType, workspacePath: preview?.workspacePath || preview?.path || preview?.filePath })),
+      attachments: steerAttachments,
+      attachmentPreviews: steerAttachmentPreviews,
     });
     res.json({
       ok: true,
