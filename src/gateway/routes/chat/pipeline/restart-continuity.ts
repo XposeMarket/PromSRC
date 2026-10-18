@@ -1,4 +1,4 @@
-import { claimRuntimeRecovery } from '../../../runtime/recovery-claims';
+import { claimRuntimeRecovery, releaseRuntimeRecoveryClaim } from '../../../runtime/recovery-claims';
 import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
 import { addMessage, getHistory } from '../../../session';
 import { evaluateRestartReplay } from '../../../chat/restart-replay-guard';
@@ -166,6 +166,11 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
 
   const admissionLease = mainChatTurnCoordinator.tryAcquire(sessionId);
   if (!admissionLease) {
+    // Give the claim back: keeping it would suppress every later recovery
+    // pass for this runtime (the claim is otherwise permanent for 24h), so the
+    // interrupted turn could never be re-evaluated or retired once the
+    // session frees up.
+    releaseRuntimeRecoveryClaim(String(runtime?.id || ''), 'main_chat_retrigger');
     console.warn(`[RuntimeRecovery] Could not retrigger ${sessionId}: a replacement turn already owns the session.`);
     return false;
   }
