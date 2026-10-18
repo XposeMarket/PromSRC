@@ -196,6 +196,90 @@ export async function findPrometheusDebugProcesses(debugPort: number, profileDir
   }
 }
 
+/**
+ * Find top-level Chrome browser processes whose --user-data-dir basename starts
+ * with `profilePrefix` under `profileRoot`. Child processes (--type=...) are
+ * excluded because killing the browser process with /T reaps them.
+ */
+export async function findChromeProcessesByProfilePrefix(profileRoot: string, profilePrefix: string): Promise<Array<{ pid: number; commandLine: string; profileDir: string; debugPort: number }>> {
+  const root = path.resolve(profileRoot);
+  const match = (commandLine: string) => {
+    if (!commandLine || /--type=/.test(commandLine)) return null;
+    const profile = readCommandLineOption(commandLine, '--user-data-dir');
+    if (!profile) return null;
+    const resolved = path.resolve(profile);
+    if (path.dirname(resolved).toLowerCase() !== root.toLowerCase()) return null;
+    if (!path.basename(resolved).startsWith(profilePrefix)) return null;
+    const debugPort = Number(readCommandLineOption(commandLine, '--remote-debugging-port') || 0);
+    return { profileDir: resolved, debugPort };
+  };
+  try {
+    if (process.platform === 'win32') {
+      const token = `${path.sep}${profilePrefix}`;
+      const script = `$token='${escapePowerShellSingleQuoted(token)}'; ` +
+        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + $token + '*') -and $_.CommandLine -notlike '*--type=*' } | ` +
+        `Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress`;
+      const result = await execFileCapture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 });
+      if (!result.stdout.trim()) return [];
+      const parsed = JSON.parse(result.stdout.replace(/^\uFEFF/, ''));
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows.flatMap((row: any) => {
+        const pid = Number(row?.ProcessId || 0);
+        const commandLine = String(row?.CommandLine || '');
+        const info = match(commandLine);
+        return info && pid > 0 && pid !== process.pid ? [{ pid, commandLine, ...info }] : [];
+      });
+    }
+    const result = await execFileCapture('ps', ['-eo', 'pid=,args='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    return result.stdout.split(/\r?\n/).flatMap((line) => {
+      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!m) return [];
+      const info = match(m[2]);
+      const pid = Number(m[1]);
+      return info && pid > 0 && pid !== process.pid ? [{ pid, commandLine: m[2], ...info }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function killProcessTree(pid: number): Promise<boolean> {
+  try {
+    if (process.platform === 'win32') {
+      await execFileCapture('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 8000 });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Actually shut down a Chrome process that this gateway launched.
+ *
+ * Playwright's browser.close() on a connectOverCDP() browser only DISCONNECTS;
+ * the detached Chrome keeps running. That leaked one visible Chrome window per
+ * isolated browser session (notably every X thread scrape). Ask Chrome to quit
+ * over CDP first, then fall back to killing the exact port+profile process.
+ */
+export async function terminateLaunchedChrome(browser: any, debugPort?: number, profileDir?: string): Promise<boolean> {
+  try {
+    const cdp = await browser?.newBrowserCDPSession?.();
+    if (cdp) await Promise.race([cdp.send('Browser.close'), new Promise((resolve) => setTimeout(resolve, 3000))]);
+  } catch {
+    // Disconnect during Browser.close is expected.
+  }
+  if (!debugPort) return true;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (!(await isPortOpen(debugPort, 400))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!profileDir) return false;
+  return recoverStuckPrometheusChrome(debugPort, profileDir);
+}
+
 export function isPrometheusManagedChromeProfile(profileDir: string): boolean {
   const resolved = path.resolve(profileDir);
   const root = path.resolve(os.homedir(), '.prometheus');
