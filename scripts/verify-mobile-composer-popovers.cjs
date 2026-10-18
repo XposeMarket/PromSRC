@@ -4,7 +4,11 @@ const path = require('path');
 const cp = require('child_process');
 const { chromium } = require('playwright');
 const root = process.cwd();
-const out = 'C:/Users/rafel/PromSRC/research/chat-render-lanes';
+const outArg = process.argv.indexOf('--out');
+if (outArg !== -1 && (!process.argv[outArg + 1] || process.argv[outArg + 1].startsWith('--'))) {
+  throw new Error('--out requires a directory');
+}
+const out = path.resolve(outArg !== -1 ? process.argv[outArg + 1] : process.env.PROM_VERIFY_OUT || path.join(root, 'research', 'chat-render-lanes'));
 const read = (p, before) => before ? cp.execFileSync('git', ['show', 'HEAD:' + p], {encoding:'utf8', maxBuffer:8e6}) : fs.readFileSync(p,'utf8');
 const extract = (s, from, to) => s.slice(s.indexOf(from), s.indexOf(to, s.indexOf(from)));
 (async () => {
