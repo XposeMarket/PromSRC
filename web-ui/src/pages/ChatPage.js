@@ -13161,7 +13161,7 @@ function visibleLiveTraceEntries(entries) {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
       || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return false;
+    if (isDesktopTransientReasoningTraceEntry(entry)) return false;
     const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
     if (!hasContent) return false;
     if (isDesktopTraceThoughtType(type)) {
