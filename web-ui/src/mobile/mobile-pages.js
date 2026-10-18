@@ -3963,7 +3963,13 @@ function _isMobileTransientReasoningTraceEntry(entry) {
   const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
   // Full thoughts are durable journal entries even if a provider echoes a
   // summary field alongside them. Summary cleanup must never remove one.
+  if (visibility === 'private' || visibility === 'internal') return true;
   if (reasoningKind === 'full_thought') return false;
+  // Explicit public summaries are timeline content, not private thinking.
+  // Keep them through cache/recovery so reasoning boundaries survive reload.
+  if (source === 'agent_progress' || source === 'reasoning_summary'
+    || type === 'reasoning_summary' || event === 'reasoning_summary'
+    || (reasoningKind === 'summary' && ['user', 'summary'].includes(visibility))) return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -4012,9 +4018,7 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   const merged = canAppend
     ? _dedupeMobileTraceProseText(_appendMobileStreamingText(previous, incoming))
     : next;
-  const latest = canAppend
-    ? (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged)
-    : merged;
+  const latest = merged;
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
@@ -4050,9 +4054,9 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
   const chunk = String(evt?.text || evt?.summary || '');
   if (!chunk) return false;
   // This event type is the authoritative, user-visible reasoning summary.
-  // It must update the collapsible tool-stream label rather than becoming a
-  // second standalone thought card.
-  _setMobileLiveProgressNarration(message, chunk);
+  // Complete summary packets replace the active label; delta packets append.
+  // The shared renderer also retains their safe prose in each tool phase.
+  _setMobileLiveProgressNarration(message, chunk, { replace: String(evt?.type || '') === 'reasoning_summary' });
   return true;
 }
 
