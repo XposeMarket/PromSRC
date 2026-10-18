@@ -21,7 +21,7 @@ for (const name of ['_normalizeMobileRecoveredTraceEntry', '_normalizeMobileProc
 }
 const payload = {
   action: 'workspace_run', args: { action: 'run', command: 'rg -n example web-ui' },
-  tool_call_id: 'call_1', runId: 'run_1', result: 'found example\n', durationMs: 9300,
+  tool_call_id: 'call_1', runId: 'run_1', result: 'found example\n', exitCode: 0, durationMs: 9300,
 };
 const live = [];
 applyToolActivityEvent(live, 'call', payload);
@@ -67,8 +67,8 @@ assert.equal(noRun[0].activity.terminal.completed, true);
 assert.match(renderToolActivityEntry(noRun[0], esc), /Terminal output/);
 // A start acknowledgement is not process completion.
 const started = [];
-applyToolActivityEvent(started, 'call', { ...payload, args: { ...payload.args, action: 'start' } });
-applyToolActivityEvent(started, 'result', { ...payload, args: { ...payload.args, action: 'start' } });
+applyToolActivityEvent(started, 'call', { ...payload, exitCode: undefined, args: { ...payload.args, action: 'start' } });
+applyToolActivityEvent(started, 'result', { ...payload, exitCode: undefined, args: { ...payload.args, action: 'start' } });
 assert.notEqual(started.find((entry) => entry.activity.kind === 'result').activity.terminal.completed, true);
 
 // Exercise the actual mobile timeline merge, not just the tool classifier.

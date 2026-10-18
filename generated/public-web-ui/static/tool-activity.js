@@ -674,18 +674,23 @@ function makeActivity(payload, phase, previous = null) {
   const extra = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
   const incomingTerminal = payload.terminal && typeof payload.terminal === 'object' ? payload.terminal : null;
   const runId = compact(payload.runId || payload.run_id || extra.runId || extra.run_id || incomingTerminal?.runId || previous?.terminal?.runId, 180);
-  const synchronousCommandResult = phase === 'result' && description.family === 'command'
-    && ['', 'run'].includes(normalizeAction(args.action || previous?.args?.action));
-  const terminal = previous?.terminal || incomingTerminal || (runId || synchronousCommandResult ? {
-    runId,
-    state: phase === 'result' && normalizeAction(args.action) !== 'start' ? 'exited' : 'running',
-    output: '',
-    sequence: 0,
+  const commandResult = phase === 'result' && description.family === 'command';
+  const resultData = result && typeof result === 'object' ? result : {};
+  const explicitState = String(incomingTerminal?.state || payload.status || resultData.status || resultData.state || previous?.terminal?.state || '').toLowerCase();
+  const exitCode = incomingTerminal?.exitCode ?? payload.exitCode ?? extra.exitCode ?? resultData.exitCode;
+  const terminated = incomingTerminal?.completed === true || exitCode != null
+    || ['exited', 'completed', 'failed', 'cancelled', 'terminated', 'killed'].includes(explicitState)
+    || /\[exit\s+-?\d+\]/i.test(String(result));
+  const active = ['running', 'starting', 'started', 'active'].includes(explicitState)
+    || /\[still running\]/i.test(String(result));
+  const terminal = previous?.terminal || incomingTerminal || (runId || commandResult ? {
+    runId, state: 'running', completed: false, output: '', sequence: 0,
   } : undefined);
-  if (terminal && synchronousCommandResult) {
-    terminal.state = 'exited';
-    terminal.completed = true;
-    if (!terminal.output && result) terminal.output = boundTerminalText(String(result));
+  if (terminal) {
+    Object.assign(terminal, incomingTerminal || {});
+    if (terminated) Object.assign(terminal, { state: 'exited', completed: true });
+    else if (active) Object.assign(terminal, { state: 'running', completed: false });
+    if (commandResult && !terminal.output && result) terminal.output = boundTerminalText(String(result));
   }
   return {
     ...(previous || {}),
