@@ -41,5 +41,27 @@ assert.match(mobilePages, /function _isMobileInternalToolProtocolText\(/, 'mobil
 assert.match(desktopPage, /function isDesktopInternalToolProtocolTraceEntry\(/, 'desktop trace must recognize provider protocol diagnostics');
 assert.match(desktopPage, /function mergeBackgroundReasoningSummary\(/, 'desktop background streams must own one mutable reasoning summary');
 assert.match(desktopPage, /liveTraceEntries: Array\.isArray\(record\.liveTraceEntries\)/, 'desktop side panes must prefer persisted structured traces');
+assert.match(
+  desktopPage,
+  /function renderBackgroundAgentSidePaneHtml[\s\S]{0,2400}renderUnifiedDesktopLiveMessageHtml\(message, \{ sessionId: `background:\$\{record\.id\}` \}\)/,
+  'the background detail renderer must delegate to the unified desktop message renderer',
+);
+assert.match(
+  desktopPage,
+  /function backgroundAgentEventsToLiveTraceEntries\(events = \[\]\) \{[\s\S]*?if \(eventType === 'reasoning_summary' \|\| eventType === 'reasoning_summary_delta' \|\| eventType === 'reasoning_delta'\) \{\s*const text = String\(extra\.thinking \|\| extra\.text \|\| extra\.message \|\| entry\.content \|\| ''\)\.trim\(\);\s*mergeBackgroundReasoningSummary\(trace, text, \{\s*\.\.\.extra,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
+  'summary deltas must be tagged mutable so they cannot become a second stream row',
+);
+assert.match(desktopPage, /function backgroundSpawnCollapsedDetail\(/, 'background summaries need a stable dock detail selector');
+assert.match(desktopPage, /const detail = backgroundSpawnCollapsedDetail\(lane\)/, 'reasoning summary updates must not replace the collapsed background-agent header preview');
+assert.match(
+  desktopPage,
+  /case 'reasoning_summary_delta':[\s\S]{0,450}eventType,\s*source: 'agent_progress',\s*visibility: 'summary',\s*reasoningKind: 'summary'/,
+  'summary event metadata must survive websocket ingestion and reopen replay normalization',
+);
+
+
+
+
+
 
 console.log('[background-agent-stream-ui] grouped trace, reasoning summary, protocol filtering, and identity recovery passed');

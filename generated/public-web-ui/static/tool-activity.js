@@ -674,12 +674,18 @@ function makeActivity(payload, phase, previous = null) {
   const extra = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
   const incomingTerminal = payload.terminal && typeof payload.terminal === 'object' ? payload.terminal : null;
   const runId = compact(payload.runId || payload.run_id || extra.runId || extra.run_id || incomingTerminal?.runId || previous?.terminal?.runId, 180);
-  const terminal = previous?.terminal || incomingTerminal || (runId ? {
+  const terminalState = String(incomingTerminal?.state || previous?.terminal?.state || (runId ? 'running' : '')).toLowerCase();
+  const terminalCompleted = incomingTerminal?.completed === true || previous?.terminal?.completed === true
+    || ['exited', 'completed', 'failed', 'cancelled', 'terminated'].includes(terminalState);
+  const terminal = previous?.terminal || (incomingTerminal || (runId ? {
     runId,
     state: phase === 'result' && normalizeAction(args.action) !== 'start' ? 'exited' : 'running',
     output: '',
     sequence: 0,
-  } : undefined);
+  } : undefined));
+  const normalizedTerminal = terminal
+    ? { ...terminal, ...(terminalCompleted ? { completed: true } : {}) }
+    : undefined;
   return {
     ...(previous || {}),
     kind: phase === 'result' ? 'result' : 'operation',
@@ -704,7 +710,7 @@ function makeActivity(payload, phase, previous = null) {
     ...(streamId ? { streamId } : {}),
     ...(seq != null ? { seq } : {}),
     ...(stepNum != null ? { stepNum } : {}),
-    ...(terminal ? { terminal } : {}),
+    ...(normalizedTerminal ? { terminal: normalizedTerminal } : {}),
   };
 }
 
@@ -852,6 +858,7 @@ export function applyCommandProcessEvent(entriesInput, eventTypeRaw, payload = {
   terminal.command = command || terminal.command || firstValue(operationEntry.activity.args, ['command', 'cmd', 'script'], 500);
   terminal.cwd = compact(run.cwd || terminal.cwd, 300);
   terminal.state = String(run.state || terminal.state || (eventType === 'process_run_exited' ? 'exited' : 'running'));
+  if (['exited', 'completed', 'failed', 'cancelled', 'terminated'].includes(terminal.state.toLowerCase())) terminal.completed = true;
   terminal.exitCode = run.exitCode ?? terminal.exitCode;
   terminal.durationMs = run.durationMs ?? terminal.durationMs;
 
