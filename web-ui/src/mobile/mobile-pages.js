@@ -7513,8 +7513,10 @@ function _normalizeMobileFileChanges(fileChanges) {
   const normalizedFiles = files.map((file) => {
     const path = String(file?.path || file?.displayPath || '').trim();
     const displayPath = String(file?.displayPath || path || '').trim();
-    const displayIsAbsolute = /^(?:[a-zA-Z]:[\\/]|\/)/.test(displayPath);
-    const openPath = displayPath && !displayIsAbsolute ? displayPath : path;
+    // displayPath can be relative to the repo the tracker watched (e.g. a PR
+    // worktree), not the workspace root, so prefer the absolute path to open.
+    const pathIsAbsolute = /^(?:[a-zA-Z]:[\\/]|\/)/.test(path);
+    const openPath = pathIsAbsolute ? path : (displayPath || path);
     const statusRaw = String(file?.status || 'modified').toLowerCase();
     const status = ['added', 'modified', 'deleted', 'renamed'].includes(statusRaw) ? statusRaw : 'modified';
     return {
@@ -7599,7 +7601,7 @@ function _renderMobileFileChangeRow(file) {
     <div class="pm-file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}"
       ${canOpen ? `data-pm-file-change-path="${escapeHtml(openPath)}" data-pm-file-change-name="${escapeHtml(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file')}" data-pm-file-change-kind="${escapeHtml(kind)}"` : 'aria-disabled="true"'}>
       <div class="pm-file-change-main">
-        <span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>
+        ${file.binary || file.status !== 'modified' ? `<span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>` : ''}
         <span class="pm-file-change-path">${escapeHtml(file.displayPath)}</span>
       </div>
       <div class="pm-file-change-counts">

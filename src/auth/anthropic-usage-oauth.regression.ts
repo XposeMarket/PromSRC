@@ -37,6 +37,22 @@ async function main(): Promise<void> {
     assert.deepEqual(await Promise.all([getValidUsageToken(dir), getValidUsageToken(dir)]), ['new-access', 'new-access']);
     assert.equal(calls, 1);
     assert.deepEqual(usageTrackingState(dir), { configured: true, reauthRequired: false });
+
+    // Another gateway sharing the vault redeemed our rotating refresh token first
+    // and stored a fresh pair. Our invalid_grant must adopt it, not flag reauth.
+    saveExpired('stale-refresh');
+    calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      vault.set('anthropic.usage_oauth_tokens', JSON.stringify({
+        access_token: 'peer-access', refresh_token: 'peer-refresh',
+        expires_at: Date.now() + 3600000, stored_at: Date.now(),
+      }), 'regression-peer');
+      return Response.json({ error: 'invalid_grant', error_description: 'Refresh token expired' }, { status: 400 });
+    };
+    assert.equal(await getValidUsageToken(dir), 'peer-access');
+    assert.equal(calls, 1);
+    assert.deepEqual(usageTrackingState(dir), { configured: true, reauthRequired: false });
   } finally {
     globalThis.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });
