@@ -86,6 +86,7 @@ import {
 } from './mobile-gateway-catalog.js';
 import { getAccount } from '../auth/account.js';
 import { renderMd, setInnerHTMLPreservingVisuals, withoutInlineCards } from '../utils.js';
+import { renderSourcePills } from '../cards/index.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import './mobile-login-handoff.js';
@@ -8021,6 +8022,7 @@ function _renderMobileMap(a) {
 function _renderMobileSources(a) {
   const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
   if (!items.length) return '';
+  if (a?.layout === 'pills') return renderSourcePills(a, escapeHtml);
   const title = String(a?.title || '').trim();
   const cards = items.map((it) => {
     const url = String(it.url || '').trim();

@@ -37,6 +37,7 @@ import { estimateContextCostMicros, resolveModelPricing } from '../../../../prov
 import { getHistory, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled } from '../../../session';
 import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { collectRichArtifacts, extractVisualArtifactsFromMarkdown, productCarouselToArtifact } from '../../../rich-artifacts';
+import { buildTurnSourcesArtifact } from '../../../turn-sources';
 import { buildContextBudget, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
 import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
 import { captureChatTurnRouteSnapshot } from '../../../chat/chat-model-route';
@@ -4912,6 +4913,11 @@ Do not produce prose. Use the canonical thread tool now.` });
       if (finalProductCarousel && !finalRichArtifacts.some((a) => a.type === 'products')) {
         const productsArtifact = productCarouselToArtifact(finalProductCarousel);
         if (productsArtifact) finalRichArtifacts.unshift(productsArtifact);
+      }
+      // Every page fetched this turn shows as compact source pills under the reply.
+      if (!explicitVisualOutput) {
+        const turnSources = buildTurnSourcesArtifact(allToolResults, finalRichArtifacts);
+        if (turnSources) finalRichArtifacts.push(turnSources);
       }
       const priorVisualArtifacts = getHistory(sessionId)
         .slice()

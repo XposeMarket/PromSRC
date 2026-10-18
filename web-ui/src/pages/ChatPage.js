@@ -1,5 +1,6 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
@@ -12245,6 +12246,7 @@ function renderChartArtifact(a) {
 function renderSourcesArtifact(artifact) {
   const items = Array.isArray(artifact?.items) ? artifact.items.filter(Boolean) : [];
   if (!items.length) return '';
+  if (artifact?.layout === 'pills') return renderSourcePills(artifact, escHtml);
   const title = String(artifact?.title || '').trim();
   const layout = artifact?.layout === 'list' ? 'list' : 'cards';
   const cards = items.map((it) => {
@@ -12257,22 +12259,16 @@ function renderSourcesArtifact(artifact) {
     const snippet = String(it.snippet || '').trim();
     const date = String(it.publishedAt || '').trim();
     const badge = String(it.badge || '').trim();
-    const inner = `
-      <div class="src-img-wrap${img ? '' : ' src-img-missing'}">${img ? `<img class="src-img" src="${escHtml(img)}" alt="" loading="lazy" onerror="this.closest('.src-img-wrap')?.classList.add('src-img-missing');this.remove()">` : ''}<div class="src-img-placeholder"><span>${escHtml(publisher || headline)}</span></div></div>
-      <div class="src-body">
-        ${publisher ? `<div class="src-publisher">${escHtml(publisher)}${badge ? ` <span class="src-badge">${escHtml(badge)}</span>` : ''}</div>` : (badge ? `<div class="src-publisher"><span class="src-badge">${escHtml(badge)}</span></div>` : '')}
-        <strong class="src-title">${escHtml(headline)}</strong>
-        ${snippet ? `<div class="src-snippet">${escHtml(snippet)}</div>` : ''}
-        ${date ? `<div class="src-date">${escHtml(date)}</div>` : ''}
-      </div>`;
+    const inner = `<div class="src-img-wrap${img ? '' : ' src-img-missing'}">${img ? `<img class="src-img" src="${escHtml(img)}" alt="" loading="lazy" onerror="this.closest('.src-img-wrap')?.classList.add('src-img-missing');this.remove()">` : ''}<div class="src-img-placeholder"><span>${escHtml(publisher || headline)}</span></div></div>
+<div class="src-body">${publisher ? `<div class="src-publisher">${escHtml(publisher)}${badge ? ` <span class="src-badge">${escHtml(badge)}</span>` : ''}</div>` : (badge ? `<div class="src-publisher"><span class="src-badge">${escHtml(badge)}</span></div>` : '')}
+<strong class="src-title">${escHtml(headline)}</strong>
+${snippet ? `<div class="src-snippet">${escHtml(snippet)}</div>` : ''}
+${date ? `<div class="src-date">${escHtml(date)}</div>` : ''}</div>`;
     return url
       ? `<a class="src-card" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
       : `<div class="src-card">${inner}</div>`;
   }).join('');
-  return `<div class="sources-artifact sources-${layout}">
-    ${title ? `<div class="src-heading">${escHtml(title)}</div>` : ''}
-    <div class="src-track">${cards}</div>
-  </div>`;
+  return `<div class="sources-artifact sources-${layout}">${title ? `<div class="src-heading">${escHtml(title)}</div>` : ''}<div class="src-track">${cards}</div></div>`;
 }
 
 function awSparklineSvg(points, up) {
