@@ -12,6 +12,20 @@ import { getOllamaClient } from '../../agents/ollama-client';
 import { getCredentialHandler } from '../../security/credential-handler';
 import { hasReasoningCapabilityPolicy, normalizeReasoningEffort, normalizeSpeed } from '../../providers/reasoning-capabilities';
 import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { EXTRA_SEARCH_PROVIDERS, searchProviderCatalog } from '../../tools/search-provider-registry.js';
+
+/** Copy new extra-provider credential fields from a request body. Masked/blank keys keep the stored value; url fields accept '' to clear. */
+function pickExtraSearchFields(body: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!body || typeof body !== 'object') return out;
+  for (const p of EXTRA_SEARCH_PROVIDERS) {
+    const v = body[p.field];
+    if (typeof v !== 'string') continue;
+    if (p.kind === 'url') out[p.field] = v.trim();
+    else if (v !== '' && v !== '••••••••') out[p.field] = v.trim();
+  }
+  return out;
+}
 import * as fs from 'fs';
 import * as path from 'path';
 import crypto from 'crypto';
@@ -194,6 +208,11 @@ router.get('/api/settings/search', (_req, res) => {
     // keep showing the saved CSE ID without making users re-enter it.
     google_cx: cm.resolveSecret(cfg.google_cx) || '',
     brave_api_key: maskIfSet(cfg.brave_api_key),
+    ...Object.fromEntries(EXTRA_SEARCH_PROVIDERS.map((p) => [
+      p.field,
+      p.kind === 'url' ? String(cfg[p.field] || '') : maskIfSet(cfg[p.field]),
+    ])),
+    providers: searchProviderCatalog((field) => !!(cfg[field] && cm.resolveSecret(cfg[field]))),
   });
 });
 
@@ -213,6 +232,7 @@ router.post('/api/settings/search', (req, res) => {
     ...(isNew(google_api_key) && { google_api_key }),
     ...(google_cx !== undefined && { google_cx }),
     ...(isNew(brave_api_key) && { brave_api_key }),
+    ...pickExtraSearchFields(req.body),
   };
   cm.updateConfig({ search: newSearch } as any);
   // migrateSecretsToVault() runs inside updateConfig → saveConfig, so any
@@ -2372,6 +2392,7 @@ router.post('/api/settings/bulk', async (req, res) => {
         ...(isNew(google_api_key) && { google_api_key }),
         ...(google_cx !== undefined && { google_cx }),
         ...(isNew(brave_api_key) && { brave_api_key }),
+        ...pickExtraSearchFields(body.search),
       };
     }
 

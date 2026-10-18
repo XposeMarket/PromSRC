@@ -1537,7 +1537,7 @@ export function getFileWebMemoryTools(): any[] {
             queries: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'Optional extra query angles searched in parallel in this same call (max 6 total with query). Use instead of several web_search calls.' },
             max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
             multi_engine: { type: 'boolean', description: 'Default false. When true, queries every configured provider (slower). Default uses only the preferred provider from Settings.' },
-            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
+            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'exa', 'serper', 'firecrawl', 'jina', 'linkup', 'serpapi', 'perplexity', 'searxng'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
             fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
             fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
             provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds. Default 6000, max 15000.' },
@@ -1558,7 +1558,7 @@ export function getFileWebMemoryTools(): any[] {
           properties: {
             query: { type: 'string', description: 'Search query' },
             max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
-            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
+            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'exa', 'serper', 'firecrawl', 'jina', 'linkup', 'serpapi', 'perplexity', 'searxng'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
             fetch_top_k: { type: 'number', description: 'Optional. Fetch this many top result URLs after search. Default 0, max 10.' },
             fetch_max_chars: { type: 'number', description: 'Optional. Max characters per fetched result when fetch_top_k is set. Default 4000.' },
             provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds. Default 6000, max 15000.' },

@@ -11,6 +11,14 @@ import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline
 import { getActiveWorkspace } from './workspace-context.js';
 import { getConfig } from '../config/config.js';
 import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
+import {
+  ALL_SEARCH_PROVIDER_IDS,
+  EXTRA_SEARCH_ALL_FIELDS,
+  EXTRA_SEARCH_PROVIDERS,
+  getExtraSearchProvider,
+  type ExtraSearchProvider,
+  type ExtraSearchProviderId,
+} from './search-provider-registry.js';
 
 type SearchResultItem = {
   title: string;
@@ -23,7 +31,7 @@ type SearchResultItem = {
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
 type StructuredEvidence = { id: number; source_id: number; excerpt: string; score: number };
 type StructuredFact = { id: number; claim: string; evidence_ids: number[]; source_ids: number[]; confidence: number };
-type SearchProvider = 'multi' | 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html' | 'xai';
+type SearchProvider = 'multi' | 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html' | 'xai' | ExtraSearchProviderId;
 type SearchProviderAttempt = {
   provider: SearchProvider;
   status: 'success' | 'failed' | 'skipped';
@@ -33,12 +41,37 @@ type SearchProviderAttempt = {
 };
 type SearchDiagnostics = {
   query: string;
-  preferred_provider: 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
-  provider_order: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai'>;
+  preferred_provider: string;
+  provider_order: string[];
   attempted: SearchProviderAttempt[];
   selected_provider?: SearchProvider;
 };
-type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' | 'multi';
+type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' | 'multi' | ExtraSearchProviderId;
+const PREFERRABLE_SEARCH_PROVIDERS = ALL_SEARCH_PROVIDER_IDS.filter((p) => p !== 'xai');
+
+function resolveExtraSearchCredentials(cfg: { resolveSecret: (v: any) => any }, searchCfg: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const field of EXTRA_SEARCH_ALL_FIELDS) {
+    const raw = searchCfg?.[field];
+    if (!raw) continue;
+    const v = String(cfg.resolveSecret(raw) || '').trim();
+    if (v) out[field] = v;
+  }
+  return out;
+}
+
+async function searchExtraProvider(p: ExtraSearchProvider, query: string, limit: number, credential: string, timeoutMs: number): Promise<ToolResult> {
+  const ranked = rankResults(query, await p.search(query, limit, credential, timeoutMs));
+  if (!ranked.length) return { success: false, error: `${p.label}: no_results`, data: { query, results: [] } };
+  const answer = buildDirectPriceAnswer(query, ranked);
+  return {
+    success: true,
+    data: { query, results: ranked, answer: answer || undefined },
+    stdout: (answer ? `${answer}\n\n` : '') + ranked.map((r: any, i: number) =>
+      `[${i + 1}] ${r.title}\n    ${r.url}\n    ${String(r.snippet || '').slice(0, 400)}`
+    ).join('\n\n'),
+  };
+}
 export type ShoppingProductResult = {
   id: string;
   title: string;
@@ -647,6 +680,7 @@ export function getSearchProvidersSummary(): string {
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
     const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
+    const extra = resolveExtraSearchCredentials(cfg, searchCfg);
     const xaiAvailable = xaiHasCredentials();
     const providers: { key: string; label: string; available: boolean }[] = [
       { key: 'tinyfish', label: 'TinyFish', available: !!tinyfishKey },
@@ -654,6 +688,7 @@ export function getSearchProvidersSummary(): string {
       { key: 'google', label: 'Google', available: !!(googleKey && googleCx) },
       { key: 'brave',  label: 'Brave',  available: !!braveKey },
       { key: 'xai',    label: 'xAI X Search', available: xaiAvailable },
+      ...EXTRA_SEARCH_PROVIDERS.map((p) => ({ key: p.id as string, label: p.label, available: !!extra[p.field] })),
       { key: 'ddg',    label: 'DuckDuckGo', available: true },
     ];
     return providers
@@ -667,7 +702,8 @@ export function getSearchProvidersSummary(): string {
 
 // ── Load search config via the app's config system (same source as Settings UI) ──
 function getSearchConfig(): {
-  preferred: 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
+  preferred: string;
+  extra?: Record<string, string>;
   tinyfishKey?: string;
   tavilyKey?: string;
   googleKey?: string;
@@ -682,14 +718,15 @@ function getSearchConfig(): {
     const data = cfg.getConfig() as any;
     const searchCfg = data.search || {};
     const preferredRaw = String(searchCfg.preferred_provider || 'ddg').toLowerCase();
-    const preferred = (['tinyfish', 'tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
+    const preferred = PREFERRABLE_SEARCH_PROVIDERS.includes(preferredRaw) ? preferredRaw : 'ddg';
     // Resolve vault-backed search credentials so saves in Settings are used immediately.
     const tinyfishKey = cfg.resolveSecret(searchCfg.tinyfish_api_key);
     const tavilyKey = cfg.resolveSecret(searchCfg.tavily_api_key);
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
     const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
-    return { preferred, tinyfishKey, tavilyKey, googleKey, googleCx, braveKey };
+    const extra = resolveExtraSearchCredentials(cfg, searchCfg);
+    return { preferred, tinyfishKey, tavilyKey, googleKey, googleCx, braveKey, extra };
   } catch {
     // Final fallback: try reading config.json directly from known paths
     try {
@@ -702,7 +739,7 @@ function getSearchConfig(): {
         if (fs.existsSync(cfgPath)) {
           const data = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
           const preferredRaw = String(data.search?.preferred_provider || 'ddg').toLowerCase();
-          const preferred = (['tinyfish', 'tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
+          const preferred = PREFERRABLE_SEARCH_PROVIDERS.includes(preferredRaw) ? preferredRaw : 'ddg';
           return {
             preferred,
             tinyfishKey: data.search?.tinyfish_api_key,
@@ -710,6 +747,9 @@ function getSearchConfig(): {
             googleKey: data.search?.google_api_key,
             googleCx: data.search?.google_cx,
             braveKey: data.search?.brave_api_key,
+            extra: Object.fromEntries(EXTRA_SEARCH_ALL_FIELDS
+              .filter((f) => typeof data.search?.[f] === 'string' && !String(data.search[f]).startsWith('vault:'))
+              .map((f) => [f, String(data.search[f])])),
           };
         }
       }
@@ -1084,16 +1124,17 @@ export async function executeWebSearch(args: {
 
   const cfg = getSearchConfig();
   const providerRaw = String(args.provider || '').trim().toLowerCase();
-  const providerOverride = (['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
+  const providerOverride = ([...ALL_SEARCH_PROVIDER_IDS, 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
+  const configuredExtras = EXTRA_SEARCH_PROVIDERS.filter((p) => !!cfg.extra?.[p.field]).map((p) => p.id as string);
   const candidates: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'> = ['tinyfish', 'tavily', 'google', 'brave', 'ddg'];
   const useMultiEngine = providerOverride === 'multi' || (providerOverride === '' && args.multi_engine === true);
-  const providerOrder = providerOverride && providerOverride !== 'multi'
-    ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai']
+  const providerOrder: string[] = providerOverride && providerOverride !== 'multi'
+    ? [providerOverride]
     : !useMultiEngine
       // Preferred first; other keyed engines only run if it fails (the loop
       // returns on first success), so one slow/dead provider never fails the call.
-      ? [cfg.preferred, ...(['brave', 'tinyfish', 'tavily', 'google'] as const).filter(p => p !== cfg.preferred)]
-      : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
+      ? [cfg.preferred, ...(['brave', 'tinyfish', 'tavily', 'google', ...configuredExtras]).filter(p => p !== cfg.preferred)]
+      : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred), ...configuredExtras.filter(p => p !== cfg.preferred)];
 
   // ── Multi-engine mode: query all configured providers in parallel, merge results ──
   // Default OFF for low latency: use the Settings preferred provider only. Pass multi_engine:true or provider:"multi" for wide research.
@@ -1104,11 +1145,15 @@ export async function executeWebSearch(args: {
     if (cfg.googleKey && cfg.googleCx) tasks.push({ provider: 'google', promise: withSearchProviderTimeout('google', searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string, providerTimeoutMs), providerTimeoutMs) });
     if (cfg.braveKey)  tasks.push({ provider: 'brave',  promise: withSearchProviderTimeout('brave', searchBrave(args.query, limit, cfg.braveKey as string, providerTimeoutMs), providerTimeoutMs) });
     if (xaiHasCredentials()) tasks.push({ provider: 'xai', promise: withSearchProviderTimeout('xai', searchXAI(args.query, limit), providerTimeoutMs) });
+    for (const p of EXTRA_SEARCH_PROVIDERS) {
+      const cred = cfg.extra?.[p.field];
+      if (cred) tasks.push({ provider: p.id, promise: withSearchProviderTimeout(p.id, searchExtraProvider(p, args.query, limit, cred, providerTimeoutMs), providerTimeoutMs) });
+    }
     if (tasks.length >= 1) {
       const diagnostics: SearchDiagnostics = {
         query: args.query,
         preferred_provider: cfg.preferred,
-        provider_order: tasks.map(t => t.provider).filter((p): p is 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' => p !== 'ddg_html' && p !== 'multi'),
+        provider_order: tasks.map(t => t.provider as string).filter((p) => p !== 'ddg_html' && p !== 'multi'),
         attempted: [],
         selected_provider: 'multi' as SearchProvider,
       };
@@ -1193,6 +1238,35 @@ export async function executeWebSearch(args: {
 
   let lastErr = null;
   for (const provider of providerOrder) {
+    const extraProvider = getExtraSearchProvider(provider);
+    if (extraProvider) {
+      const cred = cfg.extra?.[extraProvider.field];
+      if (!cred) {
+        diagnostics.attempted.push({ provider: extraProvider.id, status: 'skipped', reason: `missing_${extraProvider.field}` });
+        continue;
+      }
+      const started = Date.now();
+      try {
+        const res = await withSearchProviderTimeout(extraProvider.id, searchExtraProvider(extraProvider, args.query, limit, cred, providerTimeoutMs), providerTimeoutMs);
+        if (!res.success) throw new Error(res.error || 'no_results');
+        await augmentEventContract(args.query, res);
+        diagnostics.attempted.push({
+          provider: extraProvider.id,
+          status: 'success',
+          duration_ms: Date.now() - started,
+          result_count: Array.isArray(res.data?.results) ? res.data.results.length : 0,
+        });
+        diagnostics.selected_provider = extraProvider.id;
+        res.data = { ...(res.data || {}), provider: extraProvider.id, search_diagnostics: diagnostics };
+        return maybeAttachFetchedSearchResults(res, args);
+      } catch (err) {
+        lastErr = err;
+        const reason = (err as any)?.message || String(err);
+        console.error(`[web_search] Provider ${provider} failed:`, reason);
+        diagnostics.attempted.push({ provider: extraProvider.id, status: 'failed', reason, duration_ms: Date.now() - started });
+      }
+      continue;
+    }
     if (provider === 'tinyfish' && !cfg.tinyfishKey) {
       diagnostics.attempted.push({ provider, status: 'skipped', reason: 'missing_tinyfish_api_key' });
       continue;
@@ -1317,7 +1391,7 @@ export async function executeWebSearch(args: {
       const fullReason = cause ? `${reason} [cause: ${cause.code || cause.message || String(cause)}]` : reason;
       console.error(`[web_search] Provider ${provider} failed:`, fullReason);
       diagnostics.attempted.push({
-        provider,
+        provider: provider as SearchProvider,
         status: 'failed',
         reason: fullReason,
         duration_ms: Date.now() - started,

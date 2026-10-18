@@ -518,14 +518,24 @@ async function renderCredentials(content, page) {
     mobileGatewayFetch('/api/credentials/status').catch(() => ({ keys: [] })),
     mobileGatewayFetch('/api/credentials/audit').catch(() => ({ lines: [] })),
   ]);
+  const extras = (Array.isArray(search.providers) ? search.providers : []).filter((p) => !p.builtin && p.field);
   content.innerHTML = `
     ${card('Search Provider Keys', `
       <div class="pm-card-body" style="margin-bottom:10px;">Stored encrypted in the vault. Masked values keep the existing key.</div>
+      ${input('pm-cred-filter', '', 'type="search" placeholder="Search providers (e.g. Exa, Google, free)" autocomplete="off" aria-label="Search providers"')}
       ${field('TinyFish API Key', input('pm-cred-tinyfish', search.tinyfish_api_key || '', 'type="password" placeholder="tf-..." autocomplete="new-password"'))}
       ${field('Tavily API Key', input('pm-cred-tavily', search.tavily_api_key || '', 'type="password" placeholder="tvly-..." autocomplete="new-password"'))}
       ${field('Google API Key', input('pm-cred-google', search.google_api_key || '', 'type="password" placeholder="AIza..." autocomplete="new-password"'))}
       ${field('Google CSE ID', input('pm-cred-google-cx', search.google_cx || '', 'placeholder="Custom search engine ID"'), 'Stored for persistence; leave as-is to keep current value.')}
       ${field('Brave API Key', input('pm-cred-brave', search.brave_api_key || '', 'type="password" placeholder="BSA..." autocomplete="new-password"'))}
+      ${extras.map((p) => `<div data-provider-search="${escapeHtml(`${p.label} ${p.id} ${p.freeTier || ''} ${p.description || ''}`.toLowerCase())}">${field(
+        `${p.label} ${p.kind === 'url' ? 'URL' : 'API Key'}${p.configured ? ' ✓' : ''}`,
+        input(`pm-cred-extra-${p.id}`, search[p.field] || '', p.kind === 'url'
+          ? `placeholder="${escapeHtml(p.placeholder || '')}" autocomplete="off"`
+          : `type="password" placeholder="${escapeHtml(p.placeholder || '')}" autocomplete="new-password"`),
+        p.freeTier || '',
+      )}${p.signupUrl ? `<a class="pm-settings-link" href="${escapeHtml(p.signupUrl)}" target="_blank" rel="noopener" style="display:inline-block;margin:-4px 0 10px;font-size:12px;">${p.kind === 'url' ? 'Setup guide' : 'Get key'} ↗</a>` : ''}</div>`).join('')}
+      <div class="pm-settings-callout" id="pm-cred-filter-empty" hidden>No providers match.</div>
       <button class="pm-btn primary" id="pm-save-creds">${ICONS.check} Save credentials</button>
       <div id="pm-settings-live-status"></div>
     `, 'gear', 'pm-card-strong')}
@@ -536,6 +546,22 @@ async function renderCredentials(content, page) {
     ${card('Recent Vault Access', `<div class="pm-settings-log">${(audit.lines || []).slice(-18).reverse().map(line => `<div>${escapeHtml(line)}</div>`).join('') || '<div>No audit entries yet.</div>'}</div>
       <button class="pm-btn" id="pm-refresh-creds">${ICONS.refresh} Refresh</button>`, 'clipboard')}
   `;
+  // Tag the built-in rows so the filter can search them too.
+  for (const [id, text] of [['pm-cred-tinyfish', 'tinyfish'], ['pm-cred-tavily', 'tavily free'], ['pm-cred-google', 'google cse free'], ['pm-cred-google-cx', 'google cse id'], ['pm-cred-brave', 'brave']]) {
+    const row = page.querySelector(`#${id}`)?.closest('.pm-field, label, div');
+    if (row && !row.hasAttribute('data-provider-search')) row.setAttribute('data-provider-search', text);
+  }
+  page.querySelector('#pm-cred-filter')?.addEventListener('input', (e) => {
+    const q = String(e.target.value || '').trim().toLowerCase();
+    let shown = 0;
+    page.querySelectorAll('[data-provider-search]').forEach((row) => {
+      const ok = !q || q.split(/\s+/).every((t) => row.getAttribute('data-provider-search').includes(t));
+      row.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    const empty = page.querySelector('#pm-cred-filter-empty');
+    if (empty) empty.hidden = shown > 0;
+  });
   page.querySelector('#pm-refresh-creds')?.addEventListener('click', () => renderCredentials(content, page));
   page.querySelector('#pm-save-creds')?.addEventListener('click', async () => {
     try {
@@ -547,6 +573,7 @@ async function renderCredentials(content, page) {
         google_api_key: val(page, 'pm-cred-google'),
         google_cx: val(page, 'pm-cred-google-cx'),
         brave_api_key: val(page, 'pm-cred-brave'),
+        ...Object.fromEntries(extras.map((p) => [p.field, val(page, `pm-cred-extra-${p.id}`)])),
       }) });
       setSectionStatus(page, 'Credentials saved.', 'ok');
       await renderCredentials(content, page);
@@ -572,7 +599,9 @@ async function renderSearch(content, page) {
   const s = await mobileGatewayFetch('/api/settings/search');
   content.innerHTML = `
     ${card('Web Search', `
-      ${field('Preferred provider', select('pm-search-provider', ['tavily', 'tinyfish', 'google', 'brave', 'none'], s.preferred_provider || 'tavily'))}
+      ${field('Preferred provider', select('pm-search-provider', Array.isArray(s.providers) && s.providers.length
+        ? s.providers.map((p) => ({ value: p.id, label: `${p.label}${p.configured ? '' : ' (no key)'}` }))
+        : ['tavily', 'tinyfish', 'google', 'brave', 'ddg'], s.preferred_provider || 'tavily'))}
       <div class="pm-settings-callout">API keys are managed in the Credentials tab and stored encrypted.</div>
       <button class="pm-btn primary" id="pm-save-search">${ICONS.check} Save search provider</button>
       <div id="pm-settings-live-status"></div>
