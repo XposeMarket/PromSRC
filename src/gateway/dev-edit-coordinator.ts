@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { quarantineCorruptStateFile } from './state-file-quarantine';
 import fs from 'fs';
 import path from 'path';
 
@@ -50,6 +51,8 @@ export interface CoordinatedDevApplyBatch {
   leaderId: string;
   approvalId?: string;
   approvalExpiresAt?: number;
+  /** Set when the batch enters 'applying'; used to detect an apply killed by a crash. */
+  applyStartedAt?: number;
   failure?: string;
 }
 
@@ -84,6 +87,8 @@ export interface DevEditVerificationResult {
 const TERMINAL_PHASES = new Set<CoordinatedDevEditPhase>(['complete', 'failed', 'orphaned', 'abandoned']);
 const READY_PHASES = new Set<CoordinatedDevEditPhase>(['verified_handoff', 'apply_pending', 'applying', 'applied', 'complete', 'verified_not_live']);
 const DEFAULT_LEASE_MS = 2 * 60 * 60 * 1000;
+/** Sync + build + restart takes minutes; an apply older than this is dead. */
+export const STALE_APPLY_MS = 45 * 60 * 1000;
 
 function stateRoot(): string {
   if (process.env.PROMETHEUS_DATA_DIR) return process.env.PROMETHEUS_DATA_DIR;
@@ -125,7 +130,9 @@ function readStore(): CoordinatorStore {
       edits: Array.isArray(parsed?.edits) ? parsed.edits : [],
       batches: Array.isArray(parsed?.batches) ? parsed.batches : [],
     };
-  } catch {
+  } catch (err) {
+    // Resetting to empty releases every file lease; at least keep the evidence.
+    quarantineCorruptStateFile(p, 'DevEditCoordinator', err);
     return emptyStore();
   }
 }
@@ -216,8 +223,24 @@ function reconcileStore(store: CoordinatorStore, now = Date.now()): boolean {
 
   for (const batch of store.batches) {
     if (!['awaiting_members', 'awaiting_approval', 'applying'].includes(batch.status)) continue;
-    // Do not mutate a cohort that has already started its single live apply.
-    if (batch.status === 'applying') continue;
+    // Do not mutate a cohort that has already started its single live apply,
+    // unless that apply is clearly dead. An apply legitimately spans one
+    // gateway restart (boot marks it applied), but a crash mid-build left the
+    // batch 'applying' forever and openBatch() then blocked every future apply.
+    if (batch.status === 'applying') {
+      const startedAt = Number(batch.applyStartedAt || 0);
+      if (startedAt > 0 && now - startedAt > STALE_APPLY_MS) {
+        batch.status = 'failed';
+        batch.failure = `Apply did not finish within ${Math.round(STALE_APPLY_MS / 60_000)} minutes (gateway likely crashed mid-apply). Re-verify and request apply again.`;
+        for (const edit of store.edits.filter((item) => item.batchId === batch.id)) {
+          if (edit.phase === 'applying') edit.phase = 'verified_handoff';
+          edit.batchId = undefined;
+          edit.updatedAt = now;
+        }
+        changed = true;
+      }
+      continue;
+    }
     const memberIds = batch.memberIds.filter((id) => {
       const edit = store.edits.find((item) => item.id === id);
       return !!edit && editParticipates(edit, now);
@@ -577,6 +600,7 @@ export function beginCoordinatedDevApplyBatch(batchId: string): CoordinatedDevAp
   const batch = store.batches.find((item) => item.id === batchId);
   if (!batch || batch.status !== 'awaiting_approval') return null;
   batch.status = 'applying';
+  batch.applyStartedAt = Date.now();
   for (const edit of store.edits.filter((item) => item.batchId === batchId)) {
     edit.phase = 'applying';
     edit.updatedAt = Date.now();

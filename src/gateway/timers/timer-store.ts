@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { quarantineCorruptStateFile, writeFileAtomicSync } from '../state-file-quarantine';
 import { getMainChatGoal } from '../session';
 
 export type MainChatTimerStatus = 'pending' | 'due_waiting' | 'running' | 'completed' | 'cancelled' | 'failed';
@@ -101,7 +102,9 @@ function loadStore(): TimerStoreData {
     };
     if (recoverStrandedMainChatTimers(store.timers)) saveStore(store);
     return store;
-  } catch {
+  } catch (err) {
+    // Preserve the damaged file before the next save replaces it with defaults.
+    quarantineCorruptStateFile(p, 'MainChatTimers', err);
     return defaultStore();
   }
 }
@@ -110,10 +113,8 @@ function saveStore(store: TimerStoreData): void {
   const dir = getTimerDir();
   fs.mkdirSync(dir, { recursive: true });
   store.updatedAt = new Date().toISOString();
-  const p = getTimerStorePath();
-  const tmp = `${p}.tmp-${Date.now()}`;
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
-  fs.renameSync(tmp, p);
+  // pid+random temp name: overlapping gateways (warm handoff) must not share a temp file.
+  writeFileAtomicSync(getTimerStorePath(), JSON.stringify(store, null, 2));
 }
 
 export function createMainChatTimer(input: {

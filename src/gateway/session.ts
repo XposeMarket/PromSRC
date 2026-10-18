@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import { cancelMainChatGoalTimers } from './timers/timer-store';
+import { quarantineCorruptStateFile, writeFileAtomicSync } from './state-file-quarantine';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
@@ -1246,7 +1247,10 @@ function loadSessionIndex(): SessionIndex {
       updatedAt: Number.isFinite(Number(parsed?.updatedAt)) ? Number(parsed.updatedAt) : Date.now(),
     };
     return sessionIndexCache;
-  } catch {
+  } catch (err) {
+    // A torn index used to be replaced in memory and then overwritten on the
+    // next save, silently dropping every session summary. Keep a copy.
+    quarantineCorruptStateFile(p, 'session-index', err);
     sessionIndexCache = defaultSessionIndex();
     return sessionIndexCache;
   }
@@ -1257,7 +1261,8 @@ function saveSessionIndex(index: SessionIndex): void {
   index.updatedAt = Date.now();
   sessionIndexCache = index;
   sessionIndexRevision += 1;
-  fs.writeFileSync(sessionIndexPath(), JSON.stringify(index, null, 2), 'utf-8');
+  // Atomic: a crash mid-write must not truncate the index.
+  writeFileAtomicSync(sessionIndexPath(), JSON.stringify(index, null, 2));
 }
 
 function normalizeChatModelRoute(input: any): ChatModelRoute | undefined {
