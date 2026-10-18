@@ -2702,6 +2702,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         } else {
           _clearMobileActiveRun(requestedSession);
           _markMobileSessionRunning(requestedSession, false);
+          _finalizeMobileMainPlanForTurn(requestedSession);
           setBusy(false);
         }
         _flushThreadRender(threadEl, body, requestedSession);
@@ -2737,6 +2738,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         hideReconnectingStatus();
         _clearMobileActiveRun(requestedSession);
         _markMobileSessionRunning(requestedSession, false);
+        _finalizeMobileMainPlanForTurn(requestedSession);
         delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
         setBusy(false);
         _saveMobileThreadCache(requestedSession, _activeMobileThread());
@@ -2755,6 +2757,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         hideReconnectingStatus();
         _clearMobileActiveRun(requestedSession);
         _markMobileSessionRunning(requestedSession, false);
+        _finalizeMobileMainPlanForTurn(requestedSession);
         setBusy(false);
         return;
       }
@@ -6399,6 +6402,34 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
   }
 
+  // The gateway always finalizes a declared plan at turn end (in_progress ->
+  // done, pending -> skipped) and emits one last progress_state. If the phone
+  // was backgrounded/reconnecting it can miss those frames, and recovery paths
+  // that find an already-finished turn return before replaying the plan, so
+  // the pill stayed stuck (e.g. "1 of 4"). Mirror the server finalization
+  // locally, then reconcile with the server's latest plan snapshot.
+  function _finalizeMobileMainPlanForTurn(sid) {
+    const key = String(sid || '');
+    const state = __pmChat.mainPlanProgress?.[key];
+    const items = Array.isArray(state?.items) ? state.items : [];
+    if (items.length) {
+      const finalized = items.map((item) => {
+        const status = String(item?.status || '').trim().toLowerCase();
+        if (/^(done|complete|completed|skipped|failed)$/.test(status)) return item;
+        return { ...item, status: /^(in_progress|active|running)$/.test(status) ? 'done' : 'skipped' };
+      });
+      _applyMobileMainPlanProgress({ source: 'declared', reason: 'finalized_local', activeIndex: -1, total: finalized.length, items: finalized }, key);
+      _renderMobileMainPlanDock(null, key);
+    }
+    loadMobileChatStreamReplay(key, Number.MAX_SAFE_INTEGER).then((replay) => {
+      const progress = replay?.stream?.progressState;
+      if (progress && progress.source === 'declared' && Array.isArray(progress.items) && progress.items.length) {
+        _applyMobileMainPlanProgress(progress, key);
+        _renderMobileMainPlanDock(null, key);
+      }
+    }).catch(() => {});
+  }
+
   function finalizeMobileLiveAiTurn(aiTurn) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || (aiTurn._pmFinalized === true && aiTurn.streaming !== true)) return;
@@ -6421,6 +6452,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
     _markMobileSessionRunning(requestedSession, false);
+    _finalizeMobileMainPlanForTurn(requestedSession);
     if (_isMobileChatSessionVisibleToUser(requestedSession)) {
       markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
     }
