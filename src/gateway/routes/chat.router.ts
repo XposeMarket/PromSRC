@@ -1221,8 +1221,8 @@ export function describeTurnAbortCause(abortSignal: { aborted?: boolean; reason?
 
 
 /** Recovery checkpoints must keep the same tool detail the live stream showed. */
-export function runtimeToolDetailMetadata(data: any): Record<string, any> {
-  const out: Record<string, any> = {};
+export function runtimeToolDetailMetadata(data: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   const duration = Number(data?.durationMs ?? data?.elapsedMs ?? data?.elapsed_ms);
   if (Number.isFinite(duration) && duration >= 0) out.durationMs = duration;
   if (typeof data?.ok === 'boolean') out.ok = data.ok;
