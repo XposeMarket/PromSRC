@@ -33,6 +33,7 @@ import {
 import { createQuestionController } from '../features/chat/questions/question-controller.js';
 import { createDesktopQuestionTransport } from '../features/chat/questions/desktop-question-transport.js';
 import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '../features/chat/runtime/recovered-trace.js';
+import { appendChatSteerWorkflowSplit as appendChatSteerWorkflowSplitRuntime, appendRemoteChatSteer, steerAttachmentsToPreviews } from '../features/chat/runtime/chat-steer-events.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
@@ -6674,85 +6675,25 @@ function _settlePendingChatSteerPresentation(sessionId, streamState) {
   const changed = groupIds.reduce((changed, groupId) => (
     _collapseChatSteerWorkflowPresentation(sessionId, groupId) || changed
   ), false);
-  // Final-answer rendering owns the timer again after the temporary split is
-  // gone, so it appears above the final response rather than below a steer.
   streamState.steerTimerAnchored = false;
   return changed;
 }
 
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
-  const sid = String(sessionId || '').trim();
-  const sess = getChatSessionById(sid);
-  if (!sess) return false;
-  if (!Array.isArray(sess.history)) sess.history = [];
-  if (!Array.isArray(sess.processLog)) sess.processLog = [];
-  const st = getSessionStreamState(sid);
-  const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
-  const entries = sess.processLog.slice(startIndex);
-  const liveTraceEntries = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
-  const groupId = String(data?.workflowGroupId || '').trim() || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const text = String(steerText || '').trim();
-  const workStartedAt = Number(st?.turnStartedAt || Date.now()) || Date.now();
-  const timerAnchor = st?.steerTimerAnchored !== true;
-
-  // Record the steer outside either trace segment, then use the new process
-  // boundary for the continuation. This prevents old tool events from being
-  // replayed below the steered user message.
-  addSessionProcessEntry(sid, 'warn', `Chat steer queued: ${text.slice(0, 180)}`, {
-    actor: 'Chat Steer',
-    eventId: data?.eventId,
-    runtimeId: data?.runtimeId,
+  return appendChatSteerWorkflowSplitRuntime({
+    sessionId, steerText, data,
+    getSession: getChatSessionById,
+    getStreamState: getSessionStreamState,
+    addProcessEntry: addSessionProcessEntry,
+    workflowGroupIds: _chatSteerWorkflowGroupIds,
+    persistSession,
+    syncHistory: (sid, history) => syncSessionHistoryToServerById(sid, history).catch(() => {}),
+    activateSession: (sid, history) => {
+      if (window.activeChatSessionId !== sid) return;
+      window.chatHistory = history;
+      renderChatMessages();
+    },
   });
-  const continuationStartIndex = sess.processLog.length;
-
-  if (st || entries.length || liveTraceEntries.length) {
-    sess.history.push({
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      workStartedAt,
-      liveTraceEntries,
-      processEntries: entries,
-      _steerTimerAnchor: timerAnchor,
-      suppressWorkTimer: !timerAnchor,
-      workflowGroupId: groupId,
-      workflowPart: 'before_interruption',
-      workflowLabel: 'Tool stream before steer',
-      ...(data?.beforeMessageId ? { messageId: data.beforeMessageId } : {}),
-    });
-  }
-  sess.history.push({
-    role: 'user',
-    ...(data?.messageId ? { messageId: data.messageId } : {}),
-    content: text,
-    attachmentPreviews: Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length ? data.attachmentPreviews : undefined,
-    timestamp: Date.now(),
-    channel: 'web',
-    channelLabel: 'steer',
-    workflowGroupId: groupId,
-    workflowPart: 'interruption',
-    workflowLabel: 'Message sent as steer',
-  });
-  if (st) {
-    st.forceAppendAssistantAfterInterruption = true;
-    st.pendingInterruptionWorkflowGroupId = groupId;
-    st.pendingInterruptionWorkflowLabel = 'Response after steer';
-    st.pendingInterruptionWorkflowPresentationCleared = false;
-    st.steerWorkflowGroupIds = _chatSteerWorkflowGroupIds(st).concat(groupId).filter((id, index, all) => all.indexOf(id) === index);
-    st.steerTimerAnchored = true;
-    st.currentTurnStartIndex = continuationStartIndex;
-    st.liveTraceEntries = [];
-    st.currentPreflightStatus = '';
-    st.currentProgressLines = [];
-    st.currentProgressThinkingText = '';
-  }
-  persistSession(sid);
-  syncSessionHistoryToServerById(sid, sess.history).catch(() => {});
-  if (window.activeChatSessionId === sid) {
-    window.chatHistory = sess.history;
-    renderChatMessages();
-  }
-  return true;
 }
 
 async function steerQueuedPrompt(index) {
@@ -12875,7 +12816,9 @@ async function openInFileLocation(targetPath) {
 
 function renderUserMessageContent(msg) {
   let text = msg.content || '';
-  const attachments = Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : [];
+  const attachments = Array.isArray(msg.attachmentPreviews) && msg.attachmentPreviews.length
+    ? msg.attachmentPreviews
+    : steerAttachmentsToPreviews(msg.attachments);
   const designSelections = attachments.filter((attachment) => attachment && attachment.kind === 'design-selection');
   if (attachments.length) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
@@ -47109,6 +47052,9 @@ wsEventBus.on('session_activity', ({ sessionId, state } = {}) => {
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
 });
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+wsEventBus.on('chat_steer', (event = {}) => {
+  appendRemoteChatSteer(event, appendChatSteerWorkflowSplit);
+});
 
 wsEventBus.on('restart_continuity', (msg = {}) => {
   const sid = String(msg.sessionId || '').trim();

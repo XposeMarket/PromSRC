@@ -382,9 +382,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     }
   }
 
-  if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
-    globalThis.addEventListener('pagehide', _flushMobileBackgroundWorkPersistence);
-  }
+  if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') globalThis.addEventListener('pagehide', _flushMobileBackgroundWorkPersistence);
 
   function _mobileWorkflowTransitionLabel(message) {
     const groupId = String(message?.workflowGroupId || '');

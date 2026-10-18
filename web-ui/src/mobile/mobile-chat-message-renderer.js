@@ -72,6 +72,13 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     }
     const b = m.body || {};
     if (m._pmCoalescedError) return '';
+    // Recovery may only know the steer boundary, not the pre-steer activity.
+    // Do not turn that empty placeholder into a misleading Worked for 0s row.
+    if (m.workflowPart === 'before_interruption'
+      && !String(b.text || m.content || '').trim()
+      && !(m.processEntries?.length || m.liveTraceEntries?.length || m.toolCalls?.length
+        || m.steps?.length || m.commandRuns?.length || attachments.length
+        || m.approvalRequest || m.questionRequest)) return '';
     const answerStarted = !!(m.finalResponseStarted || String(b.text || m.content || '').trim());
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(m);
     const statusDividerHtml = '<div class="pm-msg-status-divider" aria-hidden="true"></div>';
