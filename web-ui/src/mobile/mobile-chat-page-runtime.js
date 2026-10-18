@@ -3934,15 +3934,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const processExtra = isReasoningSummary
         ? { ...(extra && typeof extra === 'object' ? extra : {}), source: 'reasoning_summary', visibility: 'user' }
         : extra;
-      if (isReasoningSummary) {
-        const beforeTrace = String(lane.message.liveTraceEntries?.find((item) => (
-          String(item?.extra?.source || '').toLowerCase() === 'agent_progress'
-        ))?.text || '');
-        const traceChanged = _setMobileLiveProgressNarration(lane.message, text);
-        changed = changed || traceChanged || beforeTrace !== text;
-      } else {
-        _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, true);
-      }
+      // Route recovered public summaries through the same durable journal as
+      // tools; the shared recovery renderer restores chronological boundaries.
+      _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, true);
       changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
     }
     const snapshotTraceEntries = [
