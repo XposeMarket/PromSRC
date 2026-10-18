@@ -205,7 +205,7 @@ export function buildVoiceToolDefinitions(): any[] {
             query: { type: 'string' },
             mode: { type: 'string', enum: ['auto', 'single', 'multi'], description: 'auto/single use the configured preferred provider; use multi only when wide multi-provider search is explicitly wanted.' },
             max_results: { type: 'number', description: 'Small number, usually 3-5.' },
-            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'multi'], description: 'Optional canonical web_search provider override.' },
+            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'exa', 'serper', 'firecrawl', 'jina', 'linkup', 'serpapi', 'perplexity', 'searxng', 'multi'], description: 'Optional canonical web_search provider override.' },
             multi_engine: { type: 'boolean', description: 'Optional canonical web_search multi_engine flag.' },
             fetch_top_k: { type: 'number', description: 'Optional canonical web_search preview-fetch count.' },
             fetch_max_chars: { type: 'number', description: 'Optional canonical web_search preview-fetch character limit.' },

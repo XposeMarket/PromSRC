@@ -982,7 +982,67 @@ async function tickAgentHeartbeat() {
 
 // --- Credentials Tab ---------------------------------------------------------
 
+// Extra search providers come from GET /api/settings/search `providers` (server registry),
+// so new engines show up here without touching this file.
+let extraSearchProviders = [];
+
+function renderExtraSearchRows(s = {}) {
+  const host = document.getElementById('cred-extra-search-rows');
+  const catalog = Array.isArray(s.providers) ? s.providers : [];
+  extraSearchProviders = catalog.filter((p) => !p.builtin && p.field);
+  if (host) {
+    host.innerHTML = extraSearchProviders.map((p) => {
+      const id = `cred-extra-${p.id}`;
+      const isUrl = p.kind === 'url';
+      const status = p.configured ? '<span class="settings-provider-badge ok">set</span>' : '';
+      const link = p.signupUrl ? ` <a href="${escHtml(p.signupUrl)}" target="_blank" rel="noopener" class="settings-provider-link">${isUrl ? 'Setup guide' : 'Get key'}</a>` : '';
+      return `<div class="settings-credential-row" data-provider-search="${escHtml(`${p.label} ${p.id} ${p.freeTier || ''} ${p.description || ''}`.toLowerCase())}">
+        <label for="${id}" class="settings-credential-label"><span>${escHtml(p.label)} ${isUrl ? 'URL' : 'API key'}</span>${status}<span class="settings-help" tabindex="0" aria-label="${escHtml(p.label)} details" data-settings-help="${escHtml(`${p.description || ''} Free tier: ${p.freeTier || 'n/a'}.`)}">?</span></label>
+        <div class="settings-provider-meta">${escHtml(p.freeTier || '')}${link}</div>
+        <div class="settings-credential-control">
+          <input id="${id}" type="${isUrl ? 'text' : 'password'}" placeholder="${escHtml(p.placeholder || '')}" data-placeholder="${escHtml(p.placeholder || '')}" autocomplete="${isUrl ? 'off' : 'new-password'}" />
+          ${isUrl ? '' : `<button id="${id}-visibility-toggle" onclick="toggleCredVis('${id}',this)" title="Show value" aria-label="Show value"></button>`}
+        </div>
+      </div>`;
+    }).join('');
+    for (const p of extraSearchProviders) {
+      const el = document.getElementById(`cred-extra-${p.id}`);
+      if (!el) continue;
+      const v = s[p.field] || '';
+      el.value = v;
+      if (p.kind !== 'url') {
+        el.placeholder = v ? '••••••••  (key stored — enter new value to replace)' : (p.placeholder || '');
+        setCredentialToggleIcon(document.getElementById(`cred-extra-${p.id}-visibility-toggle`), false);
+      }
+    }
+  }
+  // Keep the preferred-provider dropdown in sync with the registry.
+  const select = document.getElementById('settings-provider');
+  if (select && catalog.length) {
+    const current = s.preferred_provider || select.value || 'tavily';
+    select.innerHTML = catalog.map((p) => `<option value="${escHtml(p.id)}">${escHtml(p.label)}${p.configured ? '' : ' (no key)'}</option>`).join('');
+    select.value = current;
+  }
+  const filter = document.getElementById('cred-search-filter');
+  if (filter?.value) filterSearchProviderRows(filter.value);
+}
+
+function filterSearchProviderRows(query = '') {
+  const q = String(query || '').trim().toLowerCase();
+  const rows = document.querySelectorAll('#settings-panel-search .settings-credentials-panel .settings-credential-row');
+  let shown = 0;
+  rows.forEach((row) => {
+    const hay = row.getAttribute('data-provider-search') || row.textContent.toLowerCase();
+    const match = !q || q.split(/\s+/).every((t) => hay.includes(t));
+    row.hidden = !match;
+    if (match) shown += 1;
+  });
+  const empty = document.getElementById('cred-search-filter-empty');
+  if (empty) empty.hidden = shown > 0;
+}
+
 function applyCredentialFields(s = {}) {
+  renderExtraSearchRows(s);
   // Server returns '••••••••' if key is set, '' if not
   const setField = (id, val) => {
     const el = document.getElementById(id);
@@ -1020,6 +1080,7 @@ function applyCredentialVaultStatus(data = {}) {
       'search.google_api_key':  'Google API Key',
       'search.google_cx':       'Google CSE ID',
       'search.brave_api_key':   'Brave API Key',
+      ...Object.fromEntries(extraSearchProviders.map((p) => [`search.${p.field}`, `${p.label} API Key`])),
       'llm.openai.api_key':     'OpenAI API Key',
       'hooks.token':            'Webhook Token',
       'channels.telegram.botToken': 'Telegram Token',
@@ -5463,6 +5524,7 @@ function buildCredentialTabPayload() {
     google_api_key: getSettingsValue('cred-google-key').trim(),
     google_cx: getSettingsValue('cred-google-cx').trim(),
     brave_api_key: getSettingsValue('cred-brave-key').trim(),
+    ...Object.fromEntries(extraSearchProviders.map((p) => [p.field, getSettingsValue(`cred-extra-${p.id}`).trim()])),
   };
 }
 
@@ -7850,6 +7912,7 @@ window.disconnectXaiOAuth = disconnectXaiOAuth;
 window.tickAgentHeartbeat = tickAgentHeartbeat;
 window.tickSubagentHb = tickSubagentHb;
 window.toggleCredVis = toggleCredVis;
+window.filterSearchProviderRows = filterSearchProviderRows;
 window.toggleQuickModePopover = toggleQuickModePopover;
 window.updateBgtHeartbeatLabel = updateBgtHeartbeatLabel;
 window.updateOpenAIModelDropdown = updateOpenAIModelDropdown;

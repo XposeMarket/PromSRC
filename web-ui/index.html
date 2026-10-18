@@ -4155,6 +4155,10 @@
           <h2>Search provider keys</h2>
           <span class="settings-help" tabindex="0" aria-label="Search provider keys technical details" data-settings-help="Values are loaded from the existing search settings endpoint. Stored key values remain masked; enter a new value only when replacing one.">?</span>
         </div>
+        <div class="settings-search-filter">
+          <input id="cred-search-filter" type="search" placeholder="Search providers (e.g. Exa, Google, free)" aria-label="Search providers" oninput="filterSearchProviderRows(this.value)" autocomplete="off" />
+          <span id="cred-search-filter-empty" class="settings-search-filter-empty" hidden>No providers match.</span>
+        </div>
         <div class="settings-section-panel settings-credentials-panel">
           <div class="settings-credential-row">
             <label for="cred-tinyfish-key" class="settings-credential-label"><span>TinyFish API key</span><span class="settings-help" tabindex="0" aria-label="TinyFish API key technical details" data-settings-help="Encrypted TinyFish credential used by the TinyFish search provider.">?</span></label>
@@ -4190,6 +4194,7 @@
               <button id="cred-brave-visibility-toggle" onclick="toggleCredVis('cred-brave-key',this)" title="Show value" aria-label="Show value"></button>
             </div>
           </div>
+          <div id="cred-extra-search-rows" style="display:contents"></div>
         </div>
       </section>
     </div>
