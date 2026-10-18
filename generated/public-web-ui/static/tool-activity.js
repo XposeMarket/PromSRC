@@ -674,12 +674,19 @@ function makeActivity(payload, phase, previous = null) {
   const extra = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
   const incomingTerminal = payload.terminal && typeof payload.terminal === 'object' ? payload.terminal : null;
   const runId = compact(payload.runId || payload.run_id || extra.runId || extra.run_id || incomingTerminal?.runId || previous?.terminal?.runId, 180);
-  const terminal = previous?.terminal || incomingTerminal || (runId ? {
+  const synchronousCommandResult = phase === 'result' && description.family === 'command'
+    && ['', 'run'].includes(normalizeAction(args.action || previous?.args?.action));
+  const terminal = previous?.terminal || incomingTerminal || (runId || synchronousCommandResult ? {
     runId,
     state: phase === 'result' && normalizeAction(args.action) !== 'start' ? 'exited' : 'running',
     output: '',
     sequence: 0,
   } : undefined);
+  if (terminal && synchronousCommandResult) {
+    terminal.state = 'exited';
+    terminal.completed = true;
+    if (!terminal.output && result) terminal.output = boundTerminalText(String(result));
+  }
   return {
     ...(previous || {}),
     kind: phase === 'result' ? 'result' : 'operation',
@@ -892,7 +899,10 @@ function legacyPayload(entry = {}) {
     ...extra,
     action: extra.action || extra.toolName || entry.action || entry.toolName || '',
     args: extra.args || entry.args || {},
-    result: entry.type === 'result' || entry.type === 'error' ? text : extra.result,
+    result: extra.result ?? extra.output ?? (entry.type === 'result' || entry.type === 'error' ? text : undefined),
+    terminal: entry.terminal || extra.terminal || nested.terminal,
+    runId: entry.runId || extra.runId || nested.runId,
+    callId: entry.callId || extra.callId || nested.callId,
     error: entry.type === 'error' || extra.error === true,
     tool_call_id: extra.tool_call_id || extra.toolCallId || entry.tool_call_id || '',
     durationMs: extra.durationMs ?? extra.elapsedMs ?? entry.durationMs,
