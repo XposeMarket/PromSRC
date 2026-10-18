@@ -5168,6 +5168,9 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   const existing = new Set(message.liveTraceEntries.map((entry) =>
     traceDedupeKey(entry)
   ));
+  const structuredCallIds = new Set(message.liveTraceEntries
+    .map((entry) => String(entry?.activity?.callId || '').trim())
+    .filter(Boolean));
   const existingThoughts = message.liveTraceEntries
     .filter(isThoughtTraceEntry)
     .map((entry) => ({
@@ -5178,6 +5181,13 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
+    // Recovery process rows are a fallback for calls the live stream never
+    // delivered. When a structured live row already owns this tool call, the
+    // reduced checkpoint copy (no duration/summary) must not join the trace.
+    const derivedType = String(entry?.type || '').toLowerCase();
+    const derivedCallId = String(entry?.extra?.toolCallId || entry?.extra?.tool_call_id || entry?.extra?.callId || entry?.toolCallId || '').trim();
+    if (derivedCallId && structuredCallIds.has(derivedCallId)
+      && ['tool', 'skill', 'result', 'error', 'progress'].includes(derivedType)) continue;
     const key = traceDedupeKey(entry);
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
