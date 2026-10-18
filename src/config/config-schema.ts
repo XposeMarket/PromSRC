@@ -481,10 +481,28 @@ export const PrometheusConfigSchema = z.object({
     }).optional(),
   }).passthrough().optional(),
   voice: z.object({
+    // Legacy agent settings remain readable while voice.defaults is rolled out.
     agent: z.object({
       provider: z.enum(['openai_codex', 'openai_realtime', 'xai']).optional(),
       voice: z.string().max(80).optional(),
     }).optional(),
+    defaults: z.object({
+      provider: z.string().max(80).optional(),
+      // Transitional alias accepted for configurations written by prerelease clients.
+      providerId: z.string().max(80).optional(),
+      model: z.string().max(160).optional(),
+      voice: z.string().max(80).optional(),
+      listenMode: z.enum(['push_to_talk', 'always_listening']).optional(),
+    }).optional(),
+    providers: z.record(z.object({
+      kind: z.literal('openai_realtime_compatible').optional(),
+      label: z.string().max(120).optional(),
+      baseUrl: z.string().max(2048),
+      model: z.string().max(160).optional(),
+      voices: z.array(z.string().max(80)).max(40).optional(),
+      apiKeyRef: z.string().max(160).optional(),
+      enabled: z.boolean().optional(),
+    })).optional(),
   }).optional(),
   image_generation: ImageGenerationConfigSchema.optional(),
   video_generation: VideoGenerationConfigSchema.optional(),

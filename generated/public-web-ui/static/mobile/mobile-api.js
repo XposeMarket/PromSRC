@@ -1682,41 +1682,32 @@ export async function runBgTaskAction(taskId, action) {
 }
 
 export async function loadVoiceStatus() {
-  const [realtime, xaiRealtime, creds, audioStatus] = await Promise.all([
-    mfetch('/api/realtime/status').catch(() => null),
-    mfetch('/api/realtime/xai/status').catch(() => null),
-    mfetch('/api/settings/credentialed-model-providers').catch(() => null),
-    mfetch('/api/voice/status').catch(() => null),
-  ]);
-  const configuredProviders = Array.isArray(creds?.providers)
-    ? creds.providers
-    : Array.isArray(creds?.ids)
-      ? creds.ids
-      : [];
-  const xaiConfigured = !!(
-    xaiRealtime?.configured
-    || configuredProviders.some((provider) => {
-      const id = typeof provider === 'string' ? provider : provider?.id || provider?.provider;
-      return String(id || '').trim().toLowerCase() === 'xai' && provider?.configured !== false;
-    })
-  );
-  const openAiConfigured = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
-  const xaiVoices = Array.isArray(xaiRealtime?.voices) ? xaiRealtime.voices : [];
+  const registry = await mfetch('/api/voice/providers').catch(() => null);
+  const providers = Array.isArray(registry?.providers) ? registry.providers : [];
+  const defaults = registry?.defaults && typeof registry.defaults === 'object' ? registry.defaults : {};
+  const selectedId = String(defaults.provider || '').trim();
+  const selected = providers.find((provider) => String(provider?.id || '') === selectedId) || providers[0] || null;
+  const selectedProtocol = String(selected?.protocol || '').trim();
+  const selectedConnected = selected?.connected === true;
   return {
-    realtime: realtime || { configured: false },
-    voice: audioStatus || {
-      sttProviders: [
-        { id: 'auto', label: 'Transcription', configured: true },
-        { id: 'xai', label: 'xAI / Grok', configured: xaiConfigured },
-      ],
-      ttsProviders: [
-        { id: 'openai_realtime', label: 'OpenAI Realtime', configured: openAiConfigured },
-        { id: 'xai', label: 'xAI / Grok', configured: xaiConfigured },
-      ],
-      voiceCatalogs: { xai: xaiVoices },
-      xaiModel: xaiRealtime?.model || 'grok-voice-latest',
+    registry: { providers, defaults },
+    // Keep the established mobile status shape while making connected state
+    // authoritative from the realtime provider registry.
+    realtime: {
+      configured: selectedConnected,
+      provider: selected?.id || '',
+      protocol: selectedProtocol,
+      model: defaults.model || selected?.defaultModel || '',
+      voice: defaults.voice || selected?.defaultVoice || '',
     },
-    providers: configuredProviders,
+    voice: {
+      providers,
+      defaults,
+      sttProviders: providers.map((provider) => ({ id: provider.id, label: provider.label || provider.id, configured: provider.connected === true })),
+      ttsProviders: providers.map((provider) => ({ id: provider.id, label: provider.label || provider.id, configured: provider.connected === true })),
+      voiceCatalogs: Object.fromEntries(providers.map((provider) => [provider.id, Array.isArray(provider.voices) ? provider.voices : []])),
+    },
+    providers,
   };
 }
 

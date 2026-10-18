@@ -28,7 +28,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
     context.bindMobileSessionTarget(voiceGatewaySessionId, routedVoiceTarget.gatewayId, { started: true });
   }
   if (initialVoiceGateway) context.setMobileActiveGatewayTarget(initialVoiceGateway);
-  if (!inlineMode && context.__pmVoice.settings.voiceMode !== 'canonical') {
+  if (!inlineMode) {
     if (voiceGatewaySessionId.startsWith('voice_room_')) {
       await context._loadDurableMobileVoiceRoom(voiceGatewaySessionId).catch((error) => {
         console.warn('[mobile voice] could not load Voice Room session:', error);
@@ -180,6 +180,9 @@ export async function renderVoicePage(baseContext, page, ctx) {
             <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;grid-column:1 / -1;">Voice Mode
               <select id="pm-voice-mode-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;"></select>
             </label>
+            <label id="pm-voice-realtime-model-label" style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;grid-column:1 / -1;">Model
+              <select id="pm-voice-realtime-model" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;"></select>
+            </label>
             <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;grid-column:1 / -1;">Listen Mode
               <select id="pm-voice-listen-mode" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
                 <option value="push_to_speak">Push to Speak</option>
@@ -304,6 +307,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
     _closeVoiceSettingsPanel();
   };
   const voiceModeSelect = page.querySelector('#pm-voice-mode-provider');
+  const realtimeModelSelect = page.querySelector('#pm-voice-realtime-model');
   const listenModeSelect = page.querySelector('#pm-voice-listen-mode');
   const serverVoiceLabel = page.querySelector('#pm-voice-server-voice-label');
   const serverVoiceSelect = page.querySelector('#pm-voice-server-voice');
@@ -2749,76 +2753,52 @@ void main() {
   }
 
   function _syncVoicePresetFromRouting() {
-    const sttProvider = String(context.__pmVoice.settings?.sttProvider || 'browser');
-    const ttsProvider = String(context.__pmVoice.settings?.ttsProvider || 'browser');
-    const preset = context.__pmVoice.settings.voiceMode === 'canonical' ? 'canonical' : context._voicePresetForProviders(sttProvider, ttsProvider);
-    context._saveVoiceSettings({ voiceMode: preset });
-    return preset;
+    const provider = String(context.__pmVoice.settings?.provider || context.__pmVoice.settings?.voiceMode || '').trim();
+    context._saveVoiceSettings({ voiceMode: provider, sttProvider: provider, ttsProvider: provider });
+    return provider;
   }
 
   function _paintVoiceSettings() {
     const settings = context.__pmVoice.settings || {};
-    const sttProviders = Array.isArray(context.__pmVoice.voiceStatus?.sttProviders) ? context.__pmVoice.voiceStatus.sttProviders : [];
-    const ttsProviders = Array.isArray(context.__pmVoice.voiceStatus?.ttsProviders) ? context.__pmVoice.voiceStatus.ttsProviders : [];
-    const realtimeReady = context._isRealtimeConnected(context.__pmVoice.lastVoiceStatus);
-    const xaiReady = sttProviders.some(p => p?.configured && p?.id === 'xai') && ttsProviders.some(p => p?.configured && p?.id === 'xai');
-    const selectedMode = settings.voiceMode || 'canonical';
-    const outputProvider = selectedMode === 'canonical' ? (settings.ttsProvider === 'realtime' ? 'browser' : settings.ttsProvider || 'browser') : selectedMode === 'xai' ? 'xai' : 'openai_realtime';
-    if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
-    settings.voiceAgentRealtimeAgent = selectedMode === 'openai_realtime';
-    if (selectedMode === 'canonical') settings.ttsProvider = outputProvider;
-    settings.voiceAgentXaiRealtime = selectedMode === 'xai';
-    voiceModeSelect.innerHTML = [
-      _providerOptionHtml('canonical', 'Voice — normal Prometheus chat', selectedMode),
-      _providerOptionHtml('openai_realtime', `Legacy ${context._mobileRealtimeProviderLabel()}${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
-      _providerOptionHtml('xai', `Legacy xAI / Grok realtime${xaiReady ? '' : ' (not connected)'}`, selectedMode),
-    ].join('');
-    if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || context._inputProviderForMode(selectedMode));
-    if (outputProviderSelect) outputProviderSelect.value = outputProvider;
-    if (advancedToggle) advancedToggle.style.display = selectedMode === 'canonical' ? '' : 'none';
+    const registry = context.__pmVoice.lastVoiceStatus?.registry || {};
+    const providers = Array.isArray(registry.providers) ? registry.providers : [];
+    const selectedId = String(registry.defaults?.provider || settings.provider || settings.voiceMode || '').trim();
+    const selected = providers.find((provider) => String(provider?.id || '') === selectedId) || providers[0] || null;
+    const providerId = String(selected?.id || selectedId).trim();
+    const connected = selected?.connected === true;
+    voiceModeSelect.innerHTML = providers.map((provider) => {
+      const suffix = provider.connected === true ? '' : ` (${provider.connectionLabel || 'not connected'})`;
+      return _providerOptionHtml(provider.id, `${provider.label || provider.id}${suffix}`, provider.id === providerId);
+    }).join('') || _providerOptionHtml('', 'No realtime provider available', true);
+    voiceModeSelect.value = providerId;
+    const models = Array.isArray(selected?.models) ? selected.models : [];
+    const model = String(settings.realtimeModel || selected?.defaultModel || models[0]?.id || '').trim();
+    if (realtimeModelSelect) {
+      realtimeModelSelect.innerHTML = models.map((item) => _providerOptionHtml(item.id, item.label || item.id, item.id === model)).join('');
+      realtimeModelSelect.value = model;
+      realtimeModelSelect.disabled = !models.length;
+    }
+    const voices = Array.isArray(selected?.voices) ? selected.voices : context._mobileRealtimeVoiceOptions(context.__pmVoice.lastVoiceStatus);
+    const normalizedVoices = voices.map((voice) => typeof voice === 'string' ? { id: voice, label: voice } : voice).filter((voice) => voice?.id);
+    const voice = String(settings.realtimeVoice || selected?.defaultVoice || normalizedVoices[0]?.id || 'marin').trim();
+    realtimeVoiceSelect.innerHTML = normalizedVoices.map((item) => _providerOptionHtml(item.id, item.label || item.id, item.id === voice)).join('');
+    realtimeVoiceSelect.value = voice;
+    if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = '';
+    if (serverVoiceLabel) serverVoiceLabel.style.display = 'none';
+    if (serverVoiceSelect) serverVoiceSelect.innerHTML = '';
+    if (inputProviderSelect) inputProviderSelect.closest('label').style.display = 'none';
+    if (outputProviderSelect) outputProviderSelect.closest('label').style.display = 'none';
+    if (advancedToggle) advancedToggle.style.display = 'none';
     if (advancedPanel) advancedPanel.style.display = 'none';
-    const selectedServerTts = ['xai', 'openai'].includes(outputProvider) && _routingProviderReady(outputProvider, 'output') ? outputProvider : '';
-    const realtimeVoiceOptions = context._mobileRealtimeVoiceOptions(context.__pmVoice.lastVoiceStatus);
-    const selectedRealtimeVoice = context._mobileRealtimeVoice(settings.realtimeVoice, context.__pmVoice.lastVoiceStatus);
-    realtimeVoiceSelect.innerHTML = realtimeVoiceOptions
-      .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), selectedRealtimeVoice))
-      .join('');
-    realtimeVoiceSelect.value = selectedRealtimeVoice;
-    if (selectedRealtimeVoice !== settings.realtimeVoice) {
-      context._saveVoiceSettings({ realtimeVoice: selectedRealtimeVoice });
-    }
-    if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = outputProvider === 'openai_realtime' ? '' : 'none';
-    if (selectedServerTts && serverVoiceLabel && serverVoiceSelect) {
-      serverVoiceLabel.style.display = '';
-      serverVoiceSelect.innerHTML = `<option value="">Loading voices...</option>`;
-      context._loadServerVoiceCatalog(selectedServerTts).then((voices) => {
-        const fallback = selectedServerTts === 'xai' ? 'eve' : (selectedServerTts === 'openai' ? 'alloy' : '');
-        const stored = settings.serverVoice || fallback;
-        const selected = voices.some((voice) => voice.id === stored) ? stored : (voices[0]?.id || '');
-        serverVoiceSelect.innerHTML = voices
-          .map((voice) => _providerOptionHtml(voice.id, voice.label || voice.name || voice.id, selected))
-          .join('');
-        serverVoiceSelect.value = selected;
-        if (selected && selected !== settings.serverVoice) context._saveVoiceSettings({ serverVoice: selected });
-        if (context.__pmVoice.provider) context.__pmVoice.provider.ttsVoice = selected;
-        _paintProviderBanner();
-      }).catch(() => {
-        const voices = context._serverVoiceFallback(selectedServerTts);
-        serverVoiceSelect.innerHTML = voices
-          .map((voice) => _providerOptionHtml(voice.id, voice.label || voice.id, settings.serverVoice || voice.id))
-          .join('');
-      });
-    } else if (serverVoiceLabel && serverVoiceSelect) {
-      serverVoiceLabel.style.display = 'none';
-      serverVoiceSelect.innerHTML = '';
-    }
-    const speedValue = outputProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05);
-    if (speedControl) speedControl.style.display = ['openai_realtime', 'xai'].includes(outputProvider) ? '' : 'none';
-    speedInput.min = outputProvider === 'xai' ? '0.7' : '0.75';
-    speedInput.max = outputProvider === 'xai' ? '1.5' : '1.3';
+    if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
+    if (speedControl) speedControl.style.display = '';
+    speedInput.min = '0.75';
+    speedInput.max = '1.3';
     speedInput.step = '0.05';
-    speedInput.value = String(speedValue);
+    speedInput.value = String(Number(settings.realtimeSpeed || 1.05));
     speedLabel.textContent = `${Number(speedInput.value).toFixed(2)}x`;
+    voiceModeSelect.disabled = !providers.length;
+    if (!connected && providerId) voiceModeSelect.title = selected?.connectionLabel || 'This provider is not connected.';
   }
 
   function _recomputeVoiceProvider() {
@@ -2828,17 +2808,11 @@ void main() {
 
   function _paintProviderBanner() {
     const p = context.__pmVoice.provider || context._detectProvider(context.__pmVoice.lastVoiceStatus || {});
-    const stt = String(p.sttProvider || context.__pmVoice.settings?.sttProvider || 'browser');
-    const tts = String(p.ttsProvider || context.__pmVoice.settings?.ttsProvider || 'browser');
-    const providerLabel = (id, kind) => {
-      if (id === 'openai_realtime') return context._mobileRealtimeProviderLabel();
-      if (id === 'xai') return 'xAI / Grok';
-      if (kind === 'input') return 'Browser';
-      return 'Device voice';
-    };
-    let detail = `Input: <strong>${context.escapeHtml(providerLabel(stt, 'input'))}</strong> - Output: <strong>${context.escapeHtml(providerLabel(tts, 'output'))}</strong>`;
-    if (tts === 'openai_realtime') detail += ` - ${context.escapeHtml(p.voice || context.__pmVoice.settings?.realtimeVoice || 'marin')}`;
-    if (tts === 'xai') detail += ` - ${context.escapeHtml(p.ttsVoice || context.__pmVoice.settings?.serverVoice || 'eve')}`;
+    const model = String(p.model || context.__pmVoice.settings?.realtimeModel || '').trim();
+    const voice = String(p.voice || context.__pmVoice.settings?.realtimeVoice || '').trim();
+    let detail = `<strong>${context.escapeHtml(p.label || p.id || 'Realtime voice')}</strong> - ${context.escapeHtml(p.connectionLabel || (p.canRealtime ? 'Connected' : 'Not connected'))}`;
+    if (model) detail += ` - ${context.escapeHtml(model)}`;
+    if (voice) detail += ` - ${context.escapeHtml(voice)}`;
     detail += ` - ${_isAlwaysListeningMode() ? 'Always listening' : 'Push to Speak'}`;
     banner.innerHTML = detail;
   }
@@ -2893,24 +2867,27 @@ void main() {
     if (willOpen) setTimeout(() => document.addEventListener('pointerdown', _voiceSettingsOutsideHandler, true), 0);
   });
   voiceModeSelect.addEventListener('change', () => {
-    const mode = voiceModeSelect.value || 'canonical';
-    const wasListening = context.__pmVoice.listening;
+    const providers = Array.isArray(context.__pmVoice.lastVoiceStatus?.registry?.providers) ? context.__pmVoice.lastVoiceStatus.registry.providers : [];
+    const selected = providers.find((provider) => String(provider?.id || '') === voiceModeSelect.value) || null;
+    if (!selected) return;
     context._saveVoiceSettings({
-      voiceMode: mode,
-      legacyRealtime: mode !== 'canonical',
-      sttProvider: 'auto',
-      ttsProvider: mode === 'canonical' ? 'browser' : 'realtime',
-      serverVoice: mode === 'xai' ? (context.__pmVoice.settings?.serverVoice || 'eve') : '',
-      sttProviderLocked: true,
-      autoProviderDefault: '',
+      voiceMode: selected.id,
+      provider: selected.id,
+      protocol: selected.protocol || '',
+      realtimeModel: selected.defaultModel || selected.models?.[0]?.id || '',
+      realtimeVoice: selected.defaultVoice || selected.voices?.[0]?.id || selected.voices?.[0] || 'marin',
+      sttProvider: selected.id,
+      ttsProvider: selected.id,
+      voiceAgentRealtimeAgent: true,
+      voiceAgentXaiRealtime: selected.protocol === 'xai_realtime',
     });
-    if (mode !== 'openai_realtime') context._closeRealtimeSpeechConnection();
+    context._stopMobileRealtimeAgentSession();
     _recomputeVoiceProvider();
     _paintProviderBanner();
-    if (wasListening && !context.__pmRealtimeAgent.conn) {
-      _stopListening(true);
-      if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
-    }
+  });
+  realtimeModelSelect?.addEventListener('change', () => {
+    context._saveVoiceSettings({ realtimeModel: realtimeModelSelect.value || '' });
+    context._stopMobileRealtimeAgentSession();
   });
   listenModeSelect?.addEventListener('change', () => {
     const listenMode = listenModeSelect.value === 'always_listening' ? 'always_listening' : 'push_to_speak';
@@ -5138,18 +5115,6 @@ void main() {
     // Full Realtime voice agent path — OpenAI Realtime handles STT + reasoning
     // + TTS in a single session. No transcript posting, no gateway voice agent
     // decision call. Bypasses the entire split flow when active.
-    if (context.__pmVoice.settings.voiceMode === 'canonical') {
-      // Audio transport only; submitSpeech below owns normal /api/chat SSE.
-      const active = context.__pmVoice.activeVoiceRuntime;
-      if (active?.isStreamActive) {
-        active.abort?.();
-        await context.stopMobileMainChat(active.sessionId, { source: 'canonical_voice_barge_in' });
-      }
-      const input = context.__pmVoice.settings.sttProvider || 'auto';
-      if (['browser', 'auto'].includes(input) && (window.SpeechRecognition || window.webkitSpeechRecognition)) _startBrowserListening();
-      else await _startBackendListening(input === 'browser' ? 'auto' : input);
-      return;
-    }
     if (context._isMobileRealtimeAgentMode()) {
       _setVoiceConnectionPill?.('starting');
       let sid = String(context.__pmVoice.targetSessionId || context.__pmChat.activeSessionId || context.MOBILE_CHAT_SESSION_ID).trim() || context.MOBILE_CHAT_SESSION_ID;

@@ -119,7 +119,12 @@ async function tts(text: string, voice: { provider: 'openai' | 'xai'; voice: str
     const r = await gp.fetchBinaryOrThrow(`${gp.xaiVoiceBaseUrl()}/tts`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0' },
-      body: JSON.stringify({ text, voice_id: resolved.voice, language: 'en', ...(voice.speed ? { speed: voice.speed } : {}) }),
+      body: JSON.stringify({
+          text,
+          voice_id: resolved.voice,
+          language: 'en',
+          output_format: { codec: 'mp3', sample_rate: 24000, bit_rate: 128000 },
+        }),
     });
     return { buffer: r.buffer, ext: r.mimeType.includes('wav') ? '.wav' : '.mp3', provider: 'xai', voice: resolved.voice };
   };

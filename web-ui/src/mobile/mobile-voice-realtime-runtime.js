@@ -141,10 +141,10 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       threshold: 0.5,
       prefix_padding_ms: 300,
       silence_duration_ms: listenMode === 'always_listening' ? 500 : 800,
-      // Keep VAD/transcription active while the camera is open, but make the
-      // client explicitly own response creation for the gated camera turn.
+      // Always-listening waits for the final transcript plus skill/memory
+      // context before this client manually creates the response.
       interrupt_response: !!enabled,
-      create_response: !!enabled,
+      create_response: false,
     };
     try {
       if (__pmRealtimeAgent.conn?.provider === 'xai') {
@@ -466,7 +466,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       if (__pmRealtimeAgent.pendingCreateResponse !== pending) return;
       __pmRealtimeAgent.pendingCreateResponse = null;
       _sendMobileRealtimeAgentResponseCreate(`${reason}_skill_context_timeout`);
-    }, 500);
+    }, 5000);
     __pmRealtimeAgent.pendingCreateResponse = pending;
   }
 
@@ -563,8 +563,10 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           maxChars: options.maxChars || 4200,
         }),
       });
-      const context = _sanitizeMobileRealtimeAgentSkillContext(data?.context);
-      if (!data?.success || !data?.matched || !context) return false;
+      const skillContext = _sanitizeMobileRealtimeAgentSkillContext(data?.context);
+      const memoryContext = _sanitizeMobileRealtimeAgentSkillContext(data?.memoryContext);
+      const context = [skillContext, memoryContext].filter(Boolean).join('\n\n');
+      if (!data?.success || !context) return false;
       dc.send(JSON.stringify({
         type: 'conversation.item.create',
         item: {
@@ -954,15 +956,11 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
   }
 
   function _isMobileRealtimeAgentMode() {
-    const mode = String(__pmVoice?.settings?.voiceMode || '').trim();
-    if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent === true;
-    if (mode === 'xai') return __pmVoice?.settings?.voiceAgentXaiRealtime === true;
-    return false;
+    return __pmVoice?.settings?.voiceAgentRealtimeAgent === true;
   }
 
   function _wantsMobileXaiRealtime() {
-    return String(__pmVoice?.settings?.voiceMode || '').trim() === 'xai'
-      && __pmVoice?.settings?.voiceAgentXaiRealtime === true;
+    return String(__pmVoice?.settings?.protocol || '').trim() === 'xai_realtime';
   }
 
   function _mobileVoiceDeviceTimeContext() {
@@ -1396,6 +1394,9 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           sessionId: sid,
           voiceTarget: _mobileVoiceTargetPayload(),
           voice: selectedRealtimeVoice,
+          provider: _mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings),
+          protocol: String(__pmVoice?.settings?.protocol || '').trim() || undefined,
+          model: String(__pmVoice?.settings?.realtimeModel || '').trim() || undefined,
           speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
           voiceRuntime: wakePhrase
             ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
@@ -1579,6 +1580,8 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
               body: JSON.stringify({
                 callToken: bootstrap.callToken,
                 sdp: offerSdp,
+                provider: bootstrap.provider || _mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings),
+                protocol: bootstrap.protocol || String(__pmVoice?.settings?.protocol || '').trim() || undefined,
               }),
             });
           } catch (err) {
@@ -4145,11 +4148,17 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         const shouldGateResponse = !!(
           pendingResponse
           && Date.now() - Number(pendingResponse.createdAt || 0) >= 0
-          && Date.now() - Number(pendingResponse.createdAt || 0) < 2500
+          && Date.now() - Number(pendingResponse.createdAt || 0) < 5500
         );
         if (shouldGateResponse) {
-          await _injectMobileRealtimeAgentSkillContext(sessionId, transcript, { reason: 'ptt_transcript' });
-          _finishMobileRealtimeAgentPendingResponse('ptt_transcript_ready');
+          // Both PTT and always-listening VAD hold response creation until the
+          // final transcript has been enriched with skill and memory context.
+          await _injectMobileRealtimeAgentSkillContext(sessionId, transcript, {
+            reason: (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
+              ? 'always_listening_transcript'
+              : 'ptt_transcript',
+          });
+          _finishMobileRealtimeAgentPendingResponse('final_transcript_context_ready');
         } else {
           _injectMobileRealtimeAgentSkillContext(sessionId, transcript, { reason: 'transcript_observed' }).catch(() => {});
         }
@@ -4478,6 +4487,12 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         } else {
           _stopMobileRealtimeLiveCameraVision(type);
         }
+        // No camera gate: always-listening VAD still needs the final transcript
+        // context before it can create the response.
+        if ((__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening') {
+          _scheduleMobileRealtimeAgentResponseAfterSkillContext('always_listening_vad');
+        }
+
       } else if (type === 'input_audio_buffer.committed') {
         __pmRealtimeAgent.turn.currentUserSpeechStoppedAt = Number(__pmRealtimeAgent.turn.currentUserSpeechStoppedAt || Date.now()) || Date.now();
         const cameraState = _mobileRealtimeLiveVisionState();
@@ -6769,11 +6784,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         try {
           dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
           _mobileRealtimeLiveVisionState().audioCommitted = true;
-          if (conn?.provider === 'xai') {
-            _sendMobileRealtimeAgentResponseCreate('xai_ptt_release');
-          } else {
-            _scheduleMobileRealtimeAgentResponseAfterSkillContext('ptt_release');
-          }
+          _scheduleMobileRealtimeAgentResponseAfterSkillContext(conn?.provider === 'xai' ? 'xai_ptt_release' : 'ptt_release');
         } catch {}
       }
     };

@@ -3,6 +3,7 @@ import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile
 import { prettifyModelName } from './mobile-model-badge.js';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
+import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
@@ -68,6 +69,7 @@ const SECTIONS = [
   { id: 'credentials', title: 'Credentials', icon: 'gear', desc: 'Search keys, vault status, and audit log.' },
   { id: 'security', title: 'Security', icon: 'check', desc: 'Workspace and file access allow/block lists.' },
   { id: 'models', title: 'Models', icon: 'brain', desc: 'LLM providers, defaults, brain, and compaction.' },
+  { id: 'voice', title: 'Voice', icon: 'mic', desc: 'Voice providers, defaults, and listening mode.' },
   { id: 'agents', title: 'Agents', icon: 'robot', desc: 'Agent list and model defaults.' },
   { id: 'channels', title: 'Channels', icon: 'send', desc: 'Telegram, Discord, and WhatsApp connections.' },
   { id: 'integrations', title: 'Integrations', icon: 'paperclip', desc: 'Webhooks and MCP servers.' },
@@ -223,6 +225,7 @@ async function loadSection(page, section, navigate) {
   if (!content) return;
   if (section === 'system') return renderSystem(content, page);
   if (section === 'models') return renderModels(content, page);
+  if (section === 'voice') return renderRealtimeVoiceSettings(content, page, navigate);
   if (section === 'credentials') return renderCredentials(content, page);
   if (section === 'search') return renderSearch(content, page);
   if (section === 'heartbeat') return renderHeartbeat(content, page);
@@ -230,6 +233,15 @@ async function loadSection(page, section, navigate) {
   if (section === 'agents') return renderAgents(content, page);
   if (section === 'channels') return renderChannels(content, page);
   if (section === 'integrations') return renderIntegrations(content, page);
+}
+
+async function renderRealtimeVoiceSettings(content, page, navigate) {
+  content.innerHTML = card('Voice settings', '<div id="pm-voice-provider-settings">Loading voice settings…</div>', 'mic', 'pm-card-strong');
+  await mountVoiceProviderSettings(content.querySelector('#pm-voice-provider-settings'), {
+    request: mobileGatewayFetch,
+    mode: 'mobile',
+    onChatConnections: () => navigate?.('#mobile/settings/models'),
+  });
 }
 
 function mobileDateMax() {
@@ -592,29 +604,6 @@ async function renderSearch(content, page) {
       setSectionStatus(page, 'Search settings saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }
   });
-}
-
-async function renderVoice(content, navigate) {
-  const voice = await loadVoiceStatus();
-  const stt = voice.voice?.sttProviders || [];
-  const tts = voice.voice?.ttsProviders || [];
-  content.innerHTML = `
-    ${card('Realtime Voice', `<div class="pm-settings-kv">
-      <span>Status</span><strong>${voice.realtime?.configured ? 'Configured' : 'Not configured'}</strong>
-      <span>Preferred</span><strong>${voice.providers?.includes('openai_codex') || voice.providers?.includes('openai') ? 'OpenAI Realtime' : 'Best connected provider'}</strong>
-    </div>`, 'mic', 'pm-card-strong')}
-    ${card('Realtime Voice', `<div class="pm-settings-chip-row">
-      <span class="pm-pill ${voice.realtime?.configured ? 'active' : 'gray'}">OpenAI Realtime</span>
-      <span class="pm-pill active">xAI Realtime</span>
-    </div>`, 'send')}
-    ${card('Configure Voice', `<div class="pm-card-body">The chat mic only transcribes into the composer. Spoken conversations use OpenAI or xAI Realtime.</div>
-      <div class="pm-row-buttons" style="margin-top:10px;">
-        <button class="pm-btn primary" data-go-models>${ICONS.brain} Models</button>
-        <button class="pm-btn" data-go-creds>${ICONS.gear} Credentials</button>
-      </div>`, 'gear')}
-  `;
-  content.querySelector('[data-go-models]')?.addEventListener('click', () => navigate?.('#mobile/settings/models'));
-  content.querySelector('[data-go-creds]')?.addEventListener('click', () => navigate?.('#mobile/settings/credentials'));
 }
 
 async function renderHeartbeat(content, page) {

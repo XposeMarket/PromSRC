@@ -8,6 +8,7 @@ const tests = [
   'src/gateway/memory-index/recall-index.regression.ts',
   'src/runtime/prompt-manifest.regression.ts',
   'src/gateway/voice/context-cache-key.regression.ts',
+  'src/gateway/routes/chat/voice/realtime-instructions.regression.ts',
   'src/gateway/learning/learning-loop.regression.ts',
   'src/gateway/learning/skill-routing-observability.regression.ts',
   'src/gateway/learning/skill-review-dispatch.regression.ts',

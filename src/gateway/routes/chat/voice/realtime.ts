@@ -19,6 +19,7 @@ import { buildVoiceTimeContext, buildRealtimeSkillContextForTranscript, voiceRun
 import { assertSafeStorageId, isStorageBoundaryError } from '../../../storage/storage-paths.js';
 import { parseVoiceToolResult, voiceRuntimeContextText } from './fallback';
 import crypto from 'crypto';
+import { getCustomVoiceProvider } from '../../../voice/voice-provider-registry';
 import { router, storageAwareStatus } from './dependencies';
 
 
@@ -38,10 +39,12 @@ export const DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper'
 export const PUBLIC_REALTIME_AGENT_VOICE_IDS = new Set([
   'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar',
 ]);
-export const REALTIME_AGENT_INSTRUCTIONS_MAX = 18000;
+export const REALTIME_AGENT_INSTRUCTIONS_MAX = Math.max(4000, Number(process.env.OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS) || 36000);
 export const realtimeAgentCallTokens = new Map<string, {
   clientSecret: string;
   sourceToken: string;
+  provider?: string;
+  baseUrl?: string;
   auth: RealtimeAgentAuthCandidate['auth'];
   model: string;
   createdAt: number;
@@ -154,6 +157,29 @@ export function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_IN
   const text = String(value || '').trim();
   if (!text || text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 18)).trimEnd()}\n...[truncated]`;
+}
+
+
+/** Budget disposable sections before touching personal context or continuity. */
+export function budgetRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTIONS_MAX): string {
+  let text = String(value || '').trim();
+  const trimSection = (start: string, end: string) => {
+    if (text.length <= max) return;
+    const from = text.indexOf(start);
+    if (from < 0) return;
+    const next = end ? text.indexOf(end, from + start.length) : -1;
+    const to = next < 0 ? text.length : next;
+    const remove = Math.min(to - from, text.length - max);
+    text = text.slice(0, to - remove) + text.slice(to);
+  };
+  trimSection('## Worker context packet', '## Current time');
+  trimSection('## When to call which tool', '## End tool-routing guidance');
+  trimSection('### Recent messages', '### End recent messages');
+  trimSection('## Shared Voice Room transcript', '## End shared voice room transcript');
+  if (text.length <= max) return text;
+  // Fail explicitly rather than silently losing identity, personal memory, skills,
+  // or continuity when the caller supplies more protected text than the cap.
+  throw new Error(`Realtime personal context and continuity exceed the ${max}-character instruction budget. Increase OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS.`);
 }
 
 // Convert the chat-completions style Voice definitions to Realtime format. The
@@ -274,10 +300,8 @@ export function buildRealtimeVoiceAgentInstructions(args: {
 }): string {
   const currentTime = args.currentTime || buildVoiceTimeContext();
   const identity = voiceAgentTargetIdentity(args.voiceTarget);
-  // Continuity block lives HIGH (right after identity) and is built first so the
-  // 18k clamp truncates the tool-routing preamble before it touches the thread
-  // context. This is what makes voice pick up mid-conversation instead of acting
-  // like a fresh chat.
+  // Personal context comes first; continuity stays above optional tool guidance.
+  // Explicit section boundaries let budgeting discard only lower-priority text.
   const continuityLines: string[] = [];
   if (args.cameraRuntime) {
     continuityLines.push(
@@ -292,6 +316,7 @@ export function buildRealtimeVoiceAgentInstructions(args: {
       '## Shared Voice Room transcript',
       'These are recent turns from the current multi-agent Voice Room, including turns spoken to other participants. Treat them as discussion you witnessed. Use them to resolve references such as "that", "what they said", and "what do you think about that"; do not claim every line was addressed to you.',
       voiceRoomTranscript,
+      '## End shared voice room transcript',
       '',
     );
   }
@@ -313,6 +338,7 @@ export function buildRealtimeVoiceAgentInstructions(args: {
         '',
         '### Recent messages',
         args.conversationTranscript,
+        '### End recent messages',
       );
     }
     if (args.recentToolLog) {
@@ -339,6 +365,8 @@ export function buildRealtimeVoiceAgentInstructions(args: {
       : '',
     'Your audio voice label or provider voice name, such as Eve, Marin, Alloy, or any similar setting, is only the sound used for speech output. It is never your name, persona, identity, role, or agent name. If asked who you are, answer from the identity above.',
     '',
+    '## Prometheus personal context',
+    args.contextBlock || '(no extended context available)',
     ...continuityLines,
     'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with the user. Use the user name only when it is known and natural. Avoid generic acknowledgements like "I am here" or "How can I help" â€” answer what they actually said.',
     '',
@@ -413,9 +441,9 @@ export function buildRealtimeVoiceAgentInstructions(args: {
     '- Never narrate that you are calling a tool ("let me search for that" means just call voice_ops action web_search and report the result).',
     '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through voice_browser and voice_desktop, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to a first-class Prometheus thread.',
     '',
-    '## Worker context (current state â€” read-only orientation)',
-    args.contextBlock || '(no extended context available)',
+
   ];
+  lines.push('## End tool-routing guidance');
   if (args.voiceRuntime) {
     lines.push('', '## Voice runtime state', args.voiceRuntime);
   }
@@ -424,7 +452,7 @@ export function buildRealtimeVoiceAgentInstructions(args: {
   }
   lines.push('', '## Worker context packet', JSON.stringify(args.contextPacket, null, 2));
   lines.push('', '## Current time', JSON.stringify(currentTime, null, 2));
-  return clampRealtimeInstructions(lines.filter(Boolean).join('\n'));
+  return budgetRealtimeInstructions(lines.filter(Boolean).join('\n'));
 }
 
 export function mobileCameraRuntimeContextText(value: unknown): string {
@@ -493,11 +521,23 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     });
     const tools = buildRealtimeVoiceAgentTools(voiceTarget, contextPacket.voiceRoom || null, sessionId);
 
-    const model = sanitizeRealtimeAgentModel(body.model);
+    const provider = String(body.provider || 'openai');
+    if (provider !== 'openai' && !provider.startsWith('custom:')) {
+      res.status(400).json({ ok: false, success: false, error: 'Unsupported realtime provider. Use the xAI bootstrap for xai.' });
+      return;
+    }
+    const customProvider = provider.startsWith('custom:') ? await getCustomVoiceProvider(getConfig().getConfig(), provider) : null;
+    if (provider.startsWith('custom:') && !customProvider) {
+      res.status(400).json({ ok: false, success: false, error: 'Custom realtime provider is not configured or enabled.' });
+      return;
+    }
+    const protocol = customProvider ? 'openai_realtime_compatible' : 'openai_realtime';
+    const baseUrl = customProvider ? customProvider.baseUrl.replace(/\/$/, '') : 'https://api.openai.com/v1';
+    const model = customProvider ? String(body.model || customProvider.model) : sanitizeRealtimeAgentModel(body.model);
     // AVAS voices (for example `juniper`) are valid only when this route is
     // context-only for the Codex app-server bridge. A public V2 session must
     // use a voice accepted by the public Realtime endpoint.
-    const voice = body.contextOnly === true
+    const voice = customProvider ? String(body.voice || customProvider.voices?.[0] || '') : body.contextOnly === true
       ? sanitizeRealtimeAgentVoice(body.voice)
       : sanitizePublicRealtimeAgentVoice(body.voice);
     const speed = sanitizeRealtimeAgentSpeed(body.speed);
@@ -507,6 +547,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
         ok: true,
         success: true,
         contextOnly: true,
+        provider,
+        protocol,
         model,
         voice,
         speed,
@@ -517,7 +559,9 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       return;
     }
 
-    const authCandidates = await getRealtimeAgentAuthCandidates();
+    const authCandidates: RealtimeAgentAuthCandidate[] = customProvider
+      ? [{ token: customProvider.apiKey || '', auth: 'api_key' }]
+      : await getRealtimeAgentAuthCandidates();
     if (!authCandidates.length) {
       res.status(400).json({ ok: false, success: false, error: 'OpenAI Realtime requires OPENAI_API_KEY, OPENAI_REALTIME_API_KEY, or a connected OpenAI Codex OAuth account.' });
       return;
@@ -569,7 +613,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
           },
           output: { voice },
         },
-        instructions: clampRealtimeInstructions(instructions, 9000),
+        instructions: budgetRealtimeInstructions(instructions, REALTIME_AGENT_INSTRUCTIONS_MAX),
       },
     };
     const sessionConfigVariants = [
@@ -587,8 +631,9 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     let lastFailure: { status: number; data: any; variant: string; auth: RealtimeAgentAuthCandidate['auth'] } | null = null;
     for (const candidate of authCandidates) {
       for (const variant of sessionConfigVariants) {
-        const upstream = await fetch(REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT, {
+        const upstream = await fetch(`${baseUrl}/realtime/client_secrets`, {
           method: 'POST',
+          redirect: 'error',
           headers: {
             Authorization: `Bearer ${candidate.token}`,
             'Content-Type': 'application/json',
@@ -625,8 +670,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       res.status(lastFailure?.status || 502).json({
         ok: false,
         success: false,
-        error: lastFailure?.data?.error?.message || lastFailure?.data?.error || `OpenAI Realtime returned ${lastFailure?.status || 502}`,
-        details: lastFailure?.data,
+        error: customProvider ? `Custom Realtime returned ${lastFailure?.status || 502}` : lastFailure?.data?.error?.message || lastFailure?.data?.error || `OpenAI Realtime returned ${lastFailure?.status || 502}`,
+        ...(customProvider ? {} : { details: lastFailure?.data }),
         variant: lastFailure?.variant || null,
         auth: lastFailure?.auth || null,
       });
@@ -634,7 +679,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     }
     const clientSecret = String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
     if (!clientSecret) {
-      res.status(502).json({ ok: false, success: false, error: 'Realtime client_secret was not returned.', details: data });
+      res.status(502).json({ ok: false, success: false, error: 'Realtime client_secret was not returned.', ...(customProvider ? {} : { details: data }) });
       return;
     }
     const callToken = crypto.randomUUID();
@@ -645,6 +690,8 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     realtimeAgentCallTokens.set(callToken, {
       clientSecret,
       sourceToken: usedSourceToken,
+      provider,
+      baseUrl,
       auth: usedAuth || 'openai_codex_oauth',
       model,
       createdAt: Date.now(),
@@ -661,8 +708,10 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     res.json({
       ok: true,
       success: true,
-      clientSecret,
+      ...(customProvider ? {} : { clientSecret }),
       callToken,
+      provider,
+      protocol,
       auth: usedAuth,
       variant: usedVariant,
       model,
@@ -708,8 +757,12 @@ router.post('/api/voice-agent/realtime-call', async (req, res) => {
       return;
     }
 
-    const callUrlNoModel = 'https://api.openai.com/v1/realtime/calls';
-    const callUrlWithModel = `https://api.openai.com/v1/realtime/calls?model=${encodeURIComponent(entry.model)}`;
+    if (body.provider && String(body.provider) !== (entry.provider || 'openai')) {
+      res.status(400).json({ ok: false, success: false, error: 'Realtime call provider does not match its bootstrap token.' });
+      return;
+    }
+    const callUrlNoModel = `${entry.baseUrl || 'https://api.openai.com/v1'}/realtime/calls`;
+    const callUrlWithModel = `${callUrlNoModel}?model=${encodeURIComponent(entry.model)}`;
     const attempts = [
       { label: 'ephemeral', token: entry.clientSecret, url: callUrlNoModel, auth: 'ephemeral' },
       { label: 'ephemeral_model', token: entry.clientSecret, url: callUrlWithModel, auth: 'ephemeral' },
@@ -720,6 +773,7 @@ router.post('/api/voice-agent/realtime-call', async (req, res) => {
     for (const attempt of attempts) {
       const upstream = await fetch(attempt.url, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           Authorization: `Bearer ${attempt.token}`,
           'Content-Type': 'application/sdp',
@@ -735,6 +789,7 @@ router.post('/api/voice-agent/realtime-call', async (req, res) => {
           model: entry.model,
           ...diagnostics,
         });
+        realtimeAgentCallTokens.delete(callToken);
         res.type('application/sdp').send(answer);
         return;
       }
@@ -752,7 +807,7 @@ router.post('/api/voice-agent/realtime-call', async (req, res) => {
     res.status(lastFailure?.status || 502).json({
       ok: false,
       success: false,
-      error: lastFailure?.error || `Realtime call exchange failed (${lastFailure?.status || 502})`,
+      error: entry.provider?.startsWith('custom:') ? `Custom Realtime call exchange failed (${lastFailure?.status || 502})` : lastFailure?.error || `Realtime call exchange failed (${lastFailure?.status || 502})`,
       attempt: lastFailure?.label || null,
       ...diagnostics,
     });
