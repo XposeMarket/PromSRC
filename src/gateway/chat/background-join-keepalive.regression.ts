@@ -22,7 +22,7 @@ import { isMainChatSemanticProgressEvent } from './main-chat-execution-owner';
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(sent.length, after, 'keepalive stops once the join settles');
 
-  assert.ok(isMainChatSemanticProgressEvent('background_wait'), 'background_wait resets the watchdog');
+  assert.equal(isMainChatSemanticProgressEvent('background_wait'), false, 'join ticks must not renew the fixed watchdog deadline');
   const delivery = classifyMainChatStreamEvent('background_wait', {});
   assert.equal(delivery.retain, false, 'not retained in the replay buffer');
   assert.equal(delivery.live, true, 'still delivered live');

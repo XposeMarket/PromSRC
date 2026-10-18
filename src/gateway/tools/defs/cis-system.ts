@@ -1057,6 +1057,7 @@ export function getCisSystemTools(): any[] {
           type: 'object', required: ['reason'],
           properties: {
             reason: { type: 'string', description: 'Why the restart is needed (e.g. "Applied proposal #abc123")' },
+            force: { type: 'boolean', description: 'Override the busy-chat guard; only when the user explicitly asks.' },
             proposal_id: { type: 'string', description: 'Proposal ID if this is a proposal execution' },
             repair_id: { type: 'string', description: 'Repair ID if this is a self-repair' },
             title: { type: 'string', description: 'Human-readable title of the change' },

@@ -200,6 +200,7 @@ import {
   MAIN_CHAT_SEMANTIC_STALL_MS,
   isMainChatExecutionAgeExceeded,
   isLiveBackgroundJoin,
+  isBlockingWaitInFlight,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1035,7 +1036,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (!waitingOnBackground && isMainChatSemanticProgressStalled({
+    if (!isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,
@@ -2371,13 +2372,8 @@ router.post('/api/chat', async (req, res) => {
     const now = Date.now();
     const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
     const activity = foregroundActivity.current();
-    // An open tool call is execution activity even when a long build has not
-    // produced a new output chunk. The turn-age limit still bounds a tool
-    // unless an active background join is independently reporting liveness.
-    if (activity) {
-      chatStream.lastSemanticProgressAt = now;
-      chatStream.lastSemanticEvent = 'active_tool_wait';
-    }
+    // Open calls are not proof of progress. Declared blocking waits have a
+    // fixed timeout + grace in the owner watchdog; heartbeats cannot renew it.
     const payload: Record<string, any> = { state: 'processing', idleMs, activeTool: activity };
     if (idleMs >= 45_000 && now - lastVisibleHeartbeatAt >= 45_000) {
       lastVisibleHeartbeatAt = now;

@@ -684,6 +684,7 @@ export class BackgroundTaskRunner {
       kind: task.scheduleId || task.taskKind === 'scheduled' ? 'scheduled_task' : task.parentTaskId || task.subagentProfile || task.teamSubagent ? 'subagent' : 'background_task',
       label: task.title || 'Background task',
       sessionId: task.sessionId,
+      recoveryData: { ownerSessionId: task.originatingSessionId || task.sessionId },
       taskId,
       teamId: task.teamSubagent?.teamId,
       agentId: task.teamSubagent?.agentId,
