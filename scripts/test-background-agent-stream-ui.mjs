@@ -117,3 +117,8 @@ assert.deepEqual(recovered.map((entry) => entry.type), ['think', 'tool', 'preamb
 assert.ok(!JSON.stringify(recovered).includes('Loading tool schemas'));
 assert.match(desktopPage, /<details class="live-turn-thought-group"/, 'reasoning must use the shared collapsible desktop thinking component');
 console.log('[background-agent-stream-ui] desktop runtime filtering and narration/tool/reasoning boundaries passed');
+
+const isTransientReasoning = new Function(`${functionSource('isDesktopTransientReasoningTraceEntry')}; return isDesktopTransientReasoningTraceEntry;`)();
+assert.equal(isTransientReasoning({ type: 'think', extra: { source: 'agent_progress', visibility: 'private' } }), true);
+assert.equal(isTransientReasoning({ type: 'think', extra: { source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' } }), false);
+assert.doesNotMatch(desktopPage, /isDesktopTransientReasoningTraceEntry\(entry\) && !isDesktopMutableProgressTraceEntry/, 'private reasoning must not bypass filtering through mutable progress');

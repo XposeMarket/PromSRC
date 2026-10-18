@@ -13003,10 +13003,9 @@ function desktopTracePresentationEntries(entries) {
         },
       };
     }
-    // Summary packets are transient transport updates. Keep one mutable
-    // agent_progress entry as the live summary owner and discard stale copies
-    // before grouping, so recovery cannot place them back in the timeline.
-    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return null;
+    // Preserve explicit public reasoning prose, but never allow a mutable
+    // progress marker to override private/internal visibility.
+    if (isDesktopTransientReasoningTraceEntry(entry)) return null;
     return entry;
   }).filter(Boolean);
 }
