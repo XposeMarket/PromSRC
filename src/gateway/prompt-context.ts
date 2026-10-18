@@ -1712,7 +1712,7 @@ export async function capturePersonalityContextSnapshot(
   const allowAtomicMemory = shouldInjectMemoryAtoms(sessionId, executionMode, profile, runtimeActor || null);
   const allowLongTermSearch = profile !== 'local_llm'
     && profile !== 'teach_mode'
-    && profile !== 'voice_agent'
+    && (profile !== 'voice_agent' || Boolean(String(messageText || '').trim()))
     && executionMode === 'interactive'
     && !isDirectSubagentProfile
     && runtimeActor?.kind !== 'agent'

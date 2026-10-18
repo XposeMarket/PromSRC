@@ -1338,8 +1338,8 @@ export async function creativeGenerateVoiceover(
       body: JSON.stringify({
         text,
         voice_id: resolvedVoice.voice,
-        language: input.language || process.env.XAI_TTS_LANGUAGE || 'en',
-        ...(Number.isFinite(Number(input.speed)) ? { speed: Math.max(0.5, Math.min(2, Number(input.speed))) } : {}),
+        language: 'en',
+        output_format: { codec: 'mp3', sample_rate: 24000, bit_rate: 128000 },
       }),
     });
     buffer = result.buffer;

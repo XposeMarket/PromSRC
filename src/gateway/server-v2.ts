@@ -180,6 +180,7 @@ import { router as processHygieneRouter } from './routes/process-hygiene.router'
 import { router as codingRouter } from './routes/coding.router';
 import { router as realtimeRouter } from './routes/realtime.router';
 import { router as voiceRouter } from './routes/voice.router';
+import { router as voiceProvidersRouter } from './routes/voice-providers.router';
 import { getCodexRealtimeBridge, shutdownCodexRealtimeBridge } from './realtime/codex-app-server-bridge';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
@@ -1028,6 +1029,7 @@ setChatGPTBridgeFallbackCatalog(() => buildTools()
 app.use('/', requireGatewayAuth, accountRouter);
 app.use('/', requireGatewayAuth, realtimeRouter);
 app.use('/', requireGatewayAuth, voiceRouter);
+app.use('/', requireGatewayAuth, voiceProvidersRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, skillsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, tasksRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, channelsRouter);

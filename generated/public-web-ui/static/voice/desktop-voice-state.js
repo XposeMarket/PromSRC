@@ -1,21 +1,23 @@
 export const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
-const DESKTOP_VOICE_MODES = new Set(['canonical', 'openai_realtime', 'xai']);
+const DESKTOP_VOICE_MODES = new Set(['openai_realtime', 'xai']);
 
 export function normalizeDesktopVoiceMode(value) {
   const mode = String(value || '').trim();
-  return DESKTOP_VOICE_MODES.has(mode) ? mode : 'canonical';
+  return mode.startsWith('custom:') || DESKTOP_VOICE_MODES.has(mode) ? mode : 'openai_realtime';
 }
 
 export function loadDesktopVoiceSettings(getStoredVoiceSetting) {
   try {
     const saved = JSON.parse(localStorage.getItem(DESKTOP_VOICE_SETTINGS_KEY) || '{}');
     // Old saved defaults were realtime reasoning sessions, not opt-ins.
-    const legacyMode = saved.legacyRealtime === true ? saved.voiceMode : 'canonical';
+    const legacyMode = normalizeDesktopVoiceMode(saved.voiceMode);
     return {
       voiceMode: normalizeDesktopVoiceMode(legacyMode),
-      legacyRealtime: saved.legacyRealtime === true,
+      legacyRealtime: true,
+      provider: saved.provider || (legacyMode === 'xai' ? 'xai' : legacyMode.startsWith('custom:') ? legacyMode : 'openai'),
+      model: saved.model || '',
       sttProvider: ['browser', 'openai', 'xai'].includes(saved.sttProvider) ? saved.sttProvider : 'browser',
-      ttsProvider: legacyMode === 'canonical' ? (saved.ttsProvider === 'realtime' ? 'browser' : saved.ttsProvider || 'browser') : 'realtime',
+      ttsProvider: 'realtime',
       realtimeVoice: saved.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin'),
       realtimeSpeed: Number(saved.realtimeSpeed || getStoredVoiceSetting('realtime_voice_speed', '1.1') || 1.1),
       serverVoice: saved.serverVoice || getStoredVoiceSetting('voice_xai_voice', 'eve'),
@@ -27,9 +29,11 @@ export function loadDesktopVoiceSettings(getStoredVoiceSetting) {
     };
   } catch {
     return {
-      voiceMode: 'canonical',
+      voiceMode: 'openai_realtime',
+      provider: 'openai',
+      model: '',
       sttProvider: 'browser',
-      ttsProvider: 'browser',
+      ttsProvider: 'realtime',
       realtimeVoice: 'marin',
       realtimeSpeed: 1.1,
       serverVoice: 'eve',

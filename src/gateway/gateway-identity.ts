@@ -96,7 +96,7 @@ export function getGatewayDescriptor(origin = ''): Record<string, unknown> {
       'status.read',
       'pairing',
       'target-selection',
-      ...(MOBILE_GATEWAY_EXECUTION_ENABLED ? ['chat.read', 'chat.write', 'chat.stream', 'voice'] : []),
+      ...(MOBILE_GATEWAY_EXECUTION_ENABLED ? ['chat.read', 'chat.write', 'chat.stream', 'voice', 'voice.providers'] : []),
     ],
     // Execution remains target-scoped: the phone must present the paired
     // device grant issued by this gateway. No account cookie or credential is
@@ -105,7 +105,7 @@ export function getGatewayDescriptor(origin = ''): Record<string, unknown> {
       enabled: MOBILE_GATEWAY_EXECUTION_ENABLED,
       mode: MOBILE_GATEWAY_EXECUTION_ENABLED ? 'paired-device-direct' : 'read-only',
       scopes: MOBILE_GATEWAY_EXECUTION_ENABLED
-        ? ['chat.read', 'chat.write', 'chat.stream', 'voice']
+        ? ['chat.read', 'chat.write', 'chat.stream', 'voice', 'voice.providers']
         : ['catalog.read', 'status.read'],
       reason: MOBILE_GATEWAY_EXECUTION_ENABLED ? 'paired_device_scope' : 'execution_disabled_by_configuration',
     },

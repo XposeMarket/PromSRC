@@ -8971,7 +8971,7 @@ async function _openSession(id, generation) {
   }
   resetDesktopNewChatContext();
   if (window.activeChatSessionId !== id) {
-    canonicalVoiceEpoch += 1;
+    dictationEpoch += 1;
     if (backendVoiceRecorder) stopBackendDictation();
   }
   window.activeChatSessionId = id;
@@ -22405,6 +22405,7 @@ async function restoreDesktopVoiceRoomSession(sessionId = window.activeChatSessi
   realtimeVoiceStarting = true;
   setRealtimeVoiceButtonState();
   try {
+    await loadDesktopVoiceRegistry(true);
     const listenMode = realtimeUsesHoldSpace() ? 'push_to_talk' : 'always_listening';
     await startVoiceAgentRealtimeSession(sid, {
       listenMode,
@@ -22427,39 +22428,33 @@ async function restoreDesktopVoiceRoomSession(sessionId = window.activeChatSessi
   }
 }
 
-function getDesktopVoiceDefaultProvider() {
-  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') return 'canonical';
-  if (realtimeVoiceConfigured) return 'openai_realtime';
-  const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
-  return xaiReady ? 'xai' : 'openai_realtime';
+let desktopVoiceRegistry = { providers: [], defaults: {} };
+
+async function loadDesktopVoiceRegistry(applyDefaults = false) {
+  const registry = await api('/api/voice/providers');
+  desktopVoiceRegistry = registry;
+  if (applyDefaults) {
+    const defaults = registry.defaults || {};
+    const provider = registry.providers.find((entry) => entry.id === defaults.provider);
+    if (!provider) throw new Error('Select a realtime voice provider in Settings → Voice.');
+    const mode = provider.id === 'openai' ? 'openai_realtime' : provider.id;
+    saveDesktopVoiceSettings({
+      provider: provider.id, voiceMode: mode, model: defaults.model || provider.defaultModel,
+      realtimeVoice: defaults.voice || provider.defaultVoice, serverVoice: defaults.voice || provider.defaultVoice,
+      sttProvider: 'auto', ttsProvider: 'realtime', voiceAgentXaiRealtime: provider.protocol === 'xai_realtime',
+    });
+    realtimeVoiceSelection = defaults.voice || provider.defaultVoice;
+    storeRealtimeListenMode(defaults.listenMode === 'always_listening' ? 'auto_send' : 'hold_space');
+    realtimeVoiceConfigured = provider.connected === true;
+  }
+  renderVoiceModeSelect();
+  return registry;
 }
 
-function applyDesktopVoiceProviderDefaults() {
-  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') return false;
-  const provider = getDesktopVoiceDefaultProvider();
-  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  const autoProviderDefault = String(desktopVoiceSettings.autoProviderDefault || '');
-  const isDefaultRoute =
-    !desktopVoiceSettings.sttProviderLocked ||
-    autoProviderDefault ||
-    mode === 'openai_realtime' ||
-    (
-      String(desktopVoiceSettings.sttProvider || 'browser') === 'browser' &&
-      String(desktopVoiceSettings.ttsProvider || 'browser') === 'browser'
-    );
-  if (!isDefaultRoute) return false;
-  if (mode === provider && autoProviderDefault === provider) return false;
-  const next =
-    provider === 'openai_realtime'
-      ? { voiceMode: 'openai_realtime', sttProvider: 'auto', ttsProvider: 'realtime' }
-      : { voiceMode: 'xai', sttProvider: 'auto', ttsProvider: 'realtime', serverVoice: desktopVoiceSettings.serverVoice || 'eve' };
-  saveDesktopVoiceSettings({
-    ...next,
-    sttProviderLocked: true,
-    autoProviderDefault: provider,
-  });
-  return true;
+function getDesktopVoiceDefaultProvider() {
+  return desktopVoiceSettings.voiceMode;
 }
+function applyDesktopVoiceProviderDefaults() { return false; }
 
 function normalizeRealtimeVoiceSpeed(value) {
   const speed = Number(value);
@@ -22569,9 +22564,7 @@ function realtimeAllowsContinuousCapture() {
 
 function wantsVoiceAgentRealtimeMode() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  if (mode === 'openai_realtime') return true;
-  if (mode === 'xai') return desktopVoiceSettings.voiceAgentXaiRealtime === true;
-  return false;
+  return mode === 'openai_realtime' || mode === 'xai' || mode.startsWith('custom:');
 }
 
 // True when the active voice mode is the xAI/Grok speech-to-speech realtime agent
@@ -22579,7 +22572,7 @@ function wantsVoiceAgentRealtimeMode() {
 // the default; this only flips on when the user opts in.
 function wantsXaiRealtimeMode() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  return mode === 'xai' && desktopVoiceSettings.voiceAgentXaiRealtime === true;
+  return mode === 'xai';
 }
 
 function setRegularVoiceControlsVisible(visible) {
@@ -22867,7 +22860,7 @@ function toggleBrowserDictation() {
   }
 
   if (voiceRecognition) { try { voiceRecognition.stop(); } catch {} return; }
-  const epoch = canonicalVoiceEpoch;
+  const epoch = dictationEpoch;
   const sessionId = window.activeChatSessionId;
   let submitted = false;
   const input = document.getElementById('chat-input');
@@ -22896,7 +22889,7 @@ function toggleBrowserDictation() {
     if (voiceDictationEnabled) writeDictationTranscript('');
   };
   voiceRecognition.onresult = (event) => {
-    if (!voiceDictationEnabled || submitted || epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId) return;
+    if (!voiceDictationEnabled || submitted || epoch !== dictationEpoch || sessionId !== window.activeChatSessionId) return;
     let interim = '';
     let sawFinal = false;
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -22914,12 +22907,7 @@ function toggleBrowserDictation() {
       }
     }
     writeDictationTranscript(interim);
-    if (sawFinal && normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
-      submitted = true;
-      try { voiceRecognition?.stop?.(); } catch {}
-      sendChat().catch((err) => showDesktopVoiceStatus('Voice failed', String(err?.message || err), 'error'));
-    }
-    else if (sawFinal) submitVoiceCommandIfPresent();
+    // Composer dictation only writes text; it never starts a spoken chat turn.
   };
   try {
     voiceRecognition.start();
@@ -23118,14 +23106,14 @@ async function toggleBackendDictationFallback() {
   return toggleBackendDictation({ forceBatch: true });
 }
 
-let canonicalVoiceEpoch = 0;
+let dictationEpoch = 0;
 async function transcribeBackendRecording(blob, recordingContext) {
   if (!recordingContext || !voiceDictationEnabled) return;
   const { epoch, sessionId } = recordingContext;
-  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId) return;
-  const provider = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical' ? (desktopVoiceSettings.sttProvider === 'browser' ? 'auto' : desktopVoiceSettings.sttProvider || 'auto') : 'auto';
+  if (epoch !== dictationEpoch || sessionId !== window.activeChatSessionId) return;
+  const provider = 'auto';
   const audioBase64 = await blobToBase64(blob);
-  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
+  if (epoch !== dictationEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
   const response = await fetch('/api/voice/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -23139,13 +23127,8 @@ async function transcribeBackendRecording(blob, recordingContext) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `Transcription failed (${response.status})`);
-  if (epoch !== canonicalVoiceEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
+  if (epoch !== dictationEpoch || sessionId !== window.activeChatSessionId || !voiceDictationEnabled) return;
   appendDictationText(data.text || '');
-  if (data.text && normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
-    // Exactly the normal composer path, including attachments, request IDs,
-    // canonical SSE and approval rendering. STT supplies text only.
-    await sendChat();
-  }
   if (data.text) showDesktopVoiceStatus('Transcribed', `${provider.toUpperCase()} wrote into the chat box.`, 'success', 1800);
   else showDesktopVoiceStatus('No speech detected', '', 'info', 1800);
 }
@@ -23169,13 +23152,13 @@ async function toggleBackendDictation(options = {}) {
     return;
   }
   const selected = getProviderInfo('stt', voiceSttProvider);
-  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && !selected?.configured) {
+  if (voiceSttProvider !== 'auto' && voiceSttProvider !== 'browser' && !selected?.configured) {
     showDesktopVoiceStatus('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
     return;
   }
-  const recordingContext = Object.freeze({ sessionId: window.activeChatSessionId, epoch: canonicalVoiceEpoch });
+  const recordingContext = Object.freeze({ sessionId: window.activeChatSessionId, epoch: dictationEpoch });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) {
+  if (!voiceDictationEnabled || recordingContext.epoch !== dictationEpoch || recordingContext.sessionId !== window.activeChatSessionId) {
     try { stream.getTracks().forEach((track) => track.stop()); } catch {}
     return;
   }
@@ -23199,7 +23182,7 @@ async function toggleBackendDictation(options = {}) {
       setVoiceDictationState(false);
     }
     try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
-    if (!voiceDictationEnabled || recordingContext.epoch !== canonicalVoiceEpoch || recordingContext.sessionId !== window.activeChatSessionId) return;
+    if (!voiceDictationEnabled || recordingContext.epoch !== dictationEpoch || recordingContext.sessionId !== window.activeChatSessionId) return;
     if (!chunks.length) return;
     const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
     try {
@@ -23215,104 +23198,10 @@ async function toggleBackendDictation(options = {}) {
 }
 
 function toggleVoiceDictation() {
-  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
-    toggleRealtimeVoiceReplies().catch((err) => showDesktopVoiceStatus('Voice failed', String(err?.message || err), 'error'));
-    return;
-  }
-  if (realtimeVoiceStarting) {
-    disableRealtimeVoiceMode();
-    showToast('Realtime voice cancelled', '', 'info', 1400);
-    return;
-  }
-  if (realtimeVoiceRepliesEnabled) {
-    toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not stop', String(err?.message || err), 'error'));
-    return;
-  }
-  if (voiceDictationEnabled || voiceDictationActive || voiceRecognition || backendVoiceRecorder || xaiStreamingDictationConnection) {
-    voiceDictationEnabled = false;
-    voiceRepliesEnabled = false;
-    resetRealtimeSessionWakePhrase({ clearInput: true });
-    setRegularVoiceControlsVisible(false);
-    setVoiceDictationState(false);
-    if (voiceRecognition) {
-      const recognition = voiceRecognition;
-      voiceRecognition = null;
-      try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch {}
-      try { recognition.abort?.(); } catch {}
-    }
-    if (backendVoiceRecorder) {
-      const recorder = backendVoiceRecorder;
-      backendVoiceRecorder = null;
-      backendVoiceChunks = [];
-      try { recorder.ondataavailable = null; recorder.onerror = null; recorder.onstop = null; recorder.stop(); } catch {}
-      try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
-    }
-    if (xaiStreamingDictationConnection) {
-      stopXaiStreamingDictation(true);
-    }
-    showDesktopVoiceStatus('Dictation off', '', 'info', 1400);
-    return;
-  }
-  disableRealtimeVoiceMode();
-  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  if (mode === 'openai_realtime') {
-    toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not start', String(err?.message || err), 'error'));
-    return;
-  }
-  // xAI realtime opt-in: speech-to-speech over WebSocket, same agent machinery
-  // as OpenAI Realtime. If realtime can't start, fall back to the standard xAI
-  // STT/TTS route rather than leaving the user with no working voice.
-  if (mode === 'xai' && wantsXaiRealtimeMode()) {
-    toggleRealtimeVoiceReplies().catch((err) => {
-      const reason = String(err?.message || err || 'Unknown error').slice(0, 300);
-      showDesktopVoiceStatus('xAI realtime unavailable', 'Using standard xAI dictation instead. Check your xAI account or API access to restore realtime voice.', 'warning', 8000);
-      try { addSessionProcessEntry(window.activeChatSessionId || 'default', 'warn', `xAI realtime failed: ${reason} (fell back to standard xAI voice)`, { actor: 'Voice Agent (xAI Realtime)' }); } catch {}
-      console.warn('[xai-realtime] start failed, falling back to standard xAI route', err);
-      startStandardDesktopDictation('xai');
-    });
-    return;
-  }
-  startStandardDesktopDictation(mode);
+  // Voice mode is always the live realtime agent. Composer dictation has its own control.
+  toggleRealtimeVoiceReplies().catch((error) => showDesktopVoiceStatus('Voice unavailable', String(error?.message || error), 'error'));
 }
 
-// Standard (non-realtime) desktop dictation: xAI or browser STT/TTS split flow.
-// Extracted so the xAI realtime path can fall back to it on failure.
-function startStandardDesktopDictation(mode) {
-  if (mode === 'xai') {
-    const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
-    const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
-    if (!xaiTtsReady) {
-      showDesktopVoiceStatus('xAI/Grok voice unavailable', 'Connect xAI/Grok voice credentials, then try again. Using Default dictation for now.', 'error', 3200);
-      voiceSttProvider = 'browser';
-      voiceTtsProvider = 'browser';
-    } else {
-      voiceTtsProvider = 'xai';
-      voiceSttProvider = xaiSttReady ? 'xai' : 'browser';
-      if (!xaiSttReady) showDesktopVoiceStatus('xAI/Grok transcription unavailable', 'Using browser dictation with xAI/Grok response voice.', 'info', 2600);
-    }
-    storeVoiceProvider('stt', voiceSttProvider);
-    storeVoiceProvider('tts', voiceTtsProvider);
-    saveDesktopVoiceSettings({ voiceMode: 'xai', sttProvider: voiceSttProvider, ttsProvider: voiceTtsProvider });
-  } else {
-    voiceSttProvider = 'browser';
-    voiceTtsProvider = 'browser';
-    storeVoiceProvider('stt', voiceSttProvider);
-    storeVoiceProvider('tts', voiceTtsProvider);
-    saveDesktopVoiceSettings({ voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser' });
-  }
-  voiceDictationEnabled = true;
-  voiceRepliesEnabled = true;
-  setRegularVoiceControlsVisible(true);
-  renderVoiceProviderControls();
-  if (voiceSttProvider === 'browser') {
-    toggleBrowserDictation();
-    return;
-  }
-  toggleBackendDictation().catch((err) => {
-    setVoiceDictationState(false);
-    showDesktopVoiceStatus('Dictation could not start', String(err?.message || err), 'error');
-  });
-}
 
 function extractRealtimeClientSecret(data) {
   return String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
@@ -24941,6 +24830,8 @@ function selectedRegularVoiceProvider() {
 
 function normalizeRealtimeVoice(value) {
   const voice = String(value || '').trim();
+  const provider = desktopVoiceRegistry.providers.find((entry) => entry.id === desktopVoiceSettings.provider);
+  if (provider?.voices?.length) return provider.voices.includes(voice) ? voice : (provider.defaultVoice || provider.voices[0]);
   const supported = currentRealtimeVoiceIds();
   return supported.includes(voice) ? voice : currentRealtimeDefaultVoice();
 }
@@ -24952,6 +24843,8 @@ function isCodexAvasRealtimeTransport(status = realtimeVoiceStatus) {
 }
 
 function currentRealtimeVoiceIds(status = realtimeVoiceStatus) {
+  const provider = desktopVoiceRegistry.providers.find((entry) => entry.id === desktopVoiceSettings.provider);
+  if (provider?.voices?.length) return provider.voices;
   if (isCodexAvasRealtimeTransport(status)) {
     const live = Array.isArray(status?.codexBridgeActiveVoices)
       ? status.codexBridgeActiveVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
@@ -24985,14 +24878,10 @@ function renderVoiceModeSelect() {
   const select = document.getElementById('voice-mode-provider');
   if (!select) return;
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  const realtimeLabel = realtimeVoiceConfigured ? 'OpenAI Realtime' : 'OpenAI Realtime (not connected)';
-  const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
-  const xaiLabel = xaiReady ? 'xAI / Grok' : 'xAI / Grok (not connected)';
-  select.innerHTML = [
-    { value: 'canonical', label: 'Voice — normal Prometheus chat' },
-    { value: 'openai_realtime', label: `Legacy ${realtimeLabel}` },
-    { value: 'xai', label: `Legacy ${xaiLabel} realtime` },
-  ].map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('');
+  select.innerHTML = (desktopVoiceRegistry?.providers || []).map((provider) => {
+    const value = provider.id === 'openai' ? 'openai_realtime' : provider.id;
+    return `<option value="${escHtml(value)}">${escHtml(provider.label + (provider.connected ? '' : ' (not connected)'))}</option>`;
+  }).join('');
   select.value = mode;
 }
 
@@ -25035,7 +24924,7 @@ async function renderRealtimeVoiceSelect() {
   const ids = currentRealtimeVoiceIds();
   const list = ids.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) }));
   const defaultVoice = currentRealtimeDefaultVoice();
-  const stored = normalizeRealtimeVoice(getStoredVoiceSetting('realtime_voice', defaultVoice));
+  const stored = normalizeRealtimeVoice(desktopVoiceSettings.realtimeVoice || realtimeVoiceSelection || defaultVoice);
   realtimeVoiceSelection = list.some((voice) => voice.id === stored) ? stored : defaultVoice;
   if (realtimeVoiceSelection !== stored) storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
   if (desktopVoiceSettings.realtimeVoice !== realtimeVoiceSelection) {
@@ -25100,25 +24989,18 @@ function renderVoiceProviderControls() {
   const speedLabel = document.getElementById('voice-speed-label');
   const narrationLabel = document.getElementById('voice-narration-label');
   const listenLabel = document.getElementById('realtime-listen-label');
-  if (micLabel) micLabel.hidden = mode !== 'canonical';
-  if (speakLabel) speakLabel.hidden = mode !== 'canonical';
-  if (mode === 'canonical') {
-    for (const [id, selected] of [['voice-stt-provider', desktopVoiceSettings.sttProvider || 'browser'], ['voice-tts-provider', desktopVoiceSettings.ttsProvider || 'browser']]) {
-      const el = document.getElementById(id);
-      if (el) { el.innerHTML = ['browser', 'openai', 'xai'].map(p => `<option value="${p}">${p === 'browser' ? 'Browser / device' : p === 'openai' ? 'OpenAI audio' : 'xAI audio'}</option>`).join(''); el.value = selected; el.disabled = false; }
-    }
-  }
-  if (realtimeVoiceLabel) realtimeVoiceLabel.hidden = mode !== 'openai_realtime';
+  if (micLabel) micLabel.hidden = true;
+  if (speakLabel) speakLabel.hidden = true;
+  if (realtimeVoiceLabel) realtimeVoiceLabel.hidden = false;
   if (speedLabel) speedLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (narrationLabel) narrationLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
-  if (listenLabel) listenLabel.hidden = mode !== 'openai_realtime';
+  if (listenLabel) listenLabel.hidden = false;
   const xaiRealtimeLabel = document.getElementById('xai-realtime-toggle-label');
   const xaiRealtimeToggle = document.getElementById('xai-realtime-toggle');
-  if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = mode !== 'xai';
+  if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = true;
   if (xaiRealtimeToggle) xaiRealtimeToggle.checked = desktopVoiceSettings.voiceAgentXaiRealtime === true;
   const voiceLabel = document.getElementById('voice-output-voice-label');
-  if (voiceLabel) voiceLabel.hidden = mode !== 'canonical';
-  if (mode === 'canonical') renderOutputVoiceSelect().catch(() => {});
+  if (voiceLabel) voiceLabel.hidden = true;
   renderRealtimeVoiceSelect().catch(() => {});
   renderRealtimeVoiceSpeedSelect();
   renderRealtimeNarrationModeSelect();
@@ -25135,9 +25017,9 @@ async function refreshVoiceProviderStatus() {
     const voiceAgent = defaults?.voiceAgent || {};
     const provider = String(voiceAgent.provider || '').trim();
     const voice = String(voiceAgent.voice || '').trim();
-    if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && (provider === 'openai_codex' || provider === 'openai_realtime')) {
+    if ((provider === 'openai_codex' || provider === 'openai_realtime')) {
       saveDesktopVoiceSettings({ voiceMode: 'openai_realtime', realtimeVoice: voice || desktopVoiceSettings.realtimeVoice || 'marin' });
-    } else if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) !== 'canonical' && provider === 'xai') {
+    } else if (provider === 'xai') {
       saveDesktopVoiceSettings({ voiceMode: 'xai', serverVoice: voice || desktopVoiceSettings.serverVoice || 'eve' });
     }
   } catch {}
@@ -25154,7 +25036,8 @@ async function refreshVoiceProviderStatus() {
     const data = await response.json().catch(() => ({}));
     if (data) {
       realtimeVoiceStatus = data;
-      voiceProvidersStatus = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical' ? await api('/api/voice/status') : {
+      await loadDesktopVoiceRegistry();
+      voiceProvidersStatus = {
         sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
         ttsProviders: [
           { id: 'openai_realtime', label: 'OpenAI Realtime', configured: !!data?.configured },
@@ -25228,7 +25111,9 @@ function onVoiceModeChanged() {
   storeVoiceProvider('tts', voiceTtsProvider);
   saveDesktopVoiceSettings({
     voiceMode: mode,
-    legacyRealtime: mode !== 'canonical',
+    provider: mode === 'openai_realtime' ? 'openai' : mode,
+    voiceAgentXaiRealtime: mode === 'xai',
+    legacyRealtime: true,
     sttProvider: voiceSttProvider,
     ttsProvider: voiceTtsProvider,
     realtimeVoice: realtimeVoiceSelection || desktopVoiceSettings.realtimeVoice || 'marin',
@@ -25818,7 +25703,7 @@ function scheduleVoiceAgentRealtimeResponseAfterSkillContext(reason = 'ptt_relea
     if (voiceAgentRealtimePendingCreateResponse !== pending) return;
     voiceAgentRealtimePendingCreateResponse = null;
     sendVoiceAgentRealtimeResponseCreate(`${reason}_skill_context_timeout`);
-  }, 500);
+  }, 5000);
   voiceAgentRealtimePendingCreateResponse = pending;
 }
 
@@ -25893,8 +25778,8 @@ async function injectVoiceAgentRealtimeSkillContext(sessionId, transcript, optio
       }),
     });
     const data = await response.json().catch(() => ({}));
-    const context = sanitizeVoiceAgentRealtimeSkillContext(data?.context);
-    if (!response.ok || !data?.success || !data?.matched || !context) return false;
+    const context = [data?.memoryContext, data?.context].map((value) => sanitizeVoiceAgentRealtimeSkillContext(value)).filter(Boolean).join('\n\n');
+    if (!response.ok || data?.success === false || !context) return false;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -26205,7 +26090,7 @@ function sendRealtimeAgentCreateResponseFlag(enabled) {
     threshold: 0.5,
     prefix_padding_ms: 300,
     silence_duration_ms: 500,
-    create_response: !!enabled,
+    create_response: false,
   };
   try {
     if (voiceAgentRealtimeConnection?.provider === 'xai') {
@@ -26340,11 +26225,11 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     // bridge is available this is context-only and never mints or reads an API key.
     const realtimeStatusResp = await fetch('/api/realtime/status', { cache: 'no-store' });
     const realtimeStatus = await realtimeStatusResp.json().catch(() => ({}));
-    const useCodexOauthBridge = realtimeStatusResp.ok
+    const useCodexOauthBridge = !String(desktopVoiceSettings.provider || '').startsWith('custom:') && realtimeStatusResp.ok
       && realtimeStatus?.codexBridgeAvailable === true
       && realtimeStatus?.transport === 'codex_app_server'
       && realtimeStatus?.auth === 'chatgpt_oauth_app_server';
-    if (realtimeStatus?.authMode === 'codex_oauth' && !useCodexOauthBridge) {
+    if (!String(desktopVoiceSettings.provider || '').startsWith('custom:') && realtimeStatus?.authMode === 'codex_oauth' && !useCodexOauthBridge) {
       throw new Error(realtimeStatus?.codexBridgeError || 'Codex is not signed in with ChatGPT OAuth for Realtime voice.');
     }
     const wakeGate = getRealtimeWakeGate?.();
@@ -26356,7 +26241,9 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: sid,
-        voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+        provider: desktopVoiceSettings.provider || 'openai',
+        model: desktopVoiceSettings.model || undefined,
+        voice: realtimeVoiceSelection || 'marin',
         speed: getCurrentRealtimeVoiceSpeed(),
         voiceRuntime: wakeGate?.phrase
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
@@ -26440,13 +26327,10 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       answerSdp = String(bridgeResult.sdp || '');
       codexBridgeSessionId = String(bridgeResult.sessionId || '');
     } else {
-      const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+      const sdpResp = await fetch('/api/voice-agent/realtime-call', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${bootstrap.clientSecret}`,
-          'Content-Type': 'application/sdp',
-        },
-        body: offer.sdp,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sdp: offer.sdp, callToken: bootstrap.callToken, provider: desktopVoiceSettings.provider || 'openai', model: desktopVoiceSettings.model || bootstrap.model }),
       });
       answerSdp = await sdpResp.text();
       if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
@@ -26488,7 +26372,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
                     threshold: 0.5,
                     prefix_padding_ms: 300,
                     silence_duration_ms: 500,
-                    create_response: !voiceAgentRealtimeQuiet.active,
+                    create_response: false,
                   }
                 : null,
               transcription: { model: 'gpt-realtime-whisper' },
@@ -27143,13 +27027,16 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
       const shouldGateResponse = !!(
         pendingResponse
         && Date.now() - Number(pendingResponse.createdAt || 0) >= 0
-        && Date.now() - Number(pendingResponse.createdAt || 0) < 2500
+        && Date.now() - Number(pendingResponse.createdAt || 0) < 5000
       );
       if (shouldGateResponse) {
         await injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'ptt_transcript' });
         finishVoiceAgentRealtimePendingResponse('ptt_transcript_ready');
       } else {
-        injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'transcript_observed' }).catch(() => {});
+        await injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'transcript_observed' });
+        if (voiceAgentRealtimeListenMode === 'always_listening' && !voiceAgentRealtimeQuiet.active) {
+          try { voiceAgentRealtimeConnection?.dc?.send(JSON.stringify({ type: 'response.create' })); } catch {}
+        }
       }
     }
     return;
@@ -27165,6 +27052,14 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
         voiceAgentRealtimeTurn.liveUserTranscript || '',
       );
       updateRealtimeAgentChatTurn(sessionId, 'user', voiceAgentRealtimeTurn.liveUserTranscript);
+      if (type !== 'conversation.item.created') {
+        voiceAgentRealtimeTurn.lastUserTranscript = transcript;
+        await injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'user_item_done' });
+        if (voiceAgentRealtimePendingCreateResponse) finishVoiceAgentRealtimePendingResponse('user_item_context_ready');
+        else if (voiceAgentRealtimeListenMode === 'always_listening' && !voiceAgentRealtimeQuiet.active) {
+          try { voiceAgentRealtimeConnection?.dc?.send(JSON.stringify({ type: 'response.create' })); } catch {}
+        }
+      }
     }
     return;
   }
@@ -27899,6 +27794,8 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: sid,
+        provider: 'xai',
+        model: desktopVoiceSettings.model || undefined,
         voice: normalizeXaiRealtimeVoice(desktopVoiceSettings.serverVoice || realtimeVoiceSelection),
         speed: getCurrentRealtimeVoiceSpeed(),
         voiceRuntime: wakeGate?.phrase
@@ -28009,7 +27906,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
 
     // 4. Configure the session over the socket.
     const turnDetection = listenMode === 'always_listening'
-      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: !voiceAgentRealtimeQuiet.active }
+      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: false }
       : null;
     // xAI's realtime API is OpenAI-Realtime-compatible, so use the OpenAI
     // Realtime WebSocket session format: flat input_audio_format/output_audio_format
@@ -28329,287 +28226,58 @@ async function streamVoiceAgentInput(body, onChunk) {
   return finalResult || {}; */
 }
 
-// Per-call streaming TTS dispatcher. Each chunk fetched and played sequentially,
-// pre-fetching the next chunk while the current one plays for seamless audio.
-function createStreamingTtsDispatcher(provider) {
+// Spoken conversation belongs exclusively to the live realtime agent.
+function createStreamingTtsDispatcher() {
   return { enqueue() {}, wait() { return Promise.resolve(); } };
-  /*
-  const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
-  const selectedVoice = provider === 'xai'
-    ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
-    : (voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'alloy') : '');
-  const fetchChunk = async (chunk) => {
-    const body = { provider, text: chunk };
-    if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
-    if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
-    if (provider === 'xai') body.speed = Number(desktopVoiceSettings.xaiSpeed || 1.0);
-    const response = await fetch('/api/voice/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data?.success === false) throw new Error(data?.error || `TTS failed (${response.status})`);
-    return data;
-  };
-  // Sequential playback chain — each enqueue chains the next fetch + play.
-  // The TTS fetch begins immediately when a chunk arrives from the server.
-  let chain = Promise.resolve();
-  let pendingFetch = null;
-  return {
-    enqueue(text) {
-      const t = String(text || '').trim();
-      if (!t) return;
-      // Kick off the fetch right away (don't wait for the previous chunk to finish).
-      const fetched = fetchChunk(t).catch((err) => {
-        console.warn('[voice-agent] streaming TTS fetch failed:', err);
-        return null;
-      });
-      chain = chain
-        .catch(() => {})
-        .then(async () => {
-          const data = await fetched;
-          if (!data) return;
-          try { await playAudioBase64(data.audioBase64, data.mimeType); } catch {}
-        });
-    },
-    wait() { return chain.catch(() => {}); },
-  }; */
 }
+async function speakAssistantReply() {}
 
-async function speakWithServerTts(text, provider) {
-  const chunkMax = provider === 'groq' ? 180 : 400;
-  const chunks = splitVoiceText(text, chunkMax).filter(Boolean);
-  if (!chunks.length) return;
-  const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
-  const selectedVoice = provider === 'xai'
-    ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
-    : (voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'alloy') : '');
-  const fetchChunk = async (chunk) => {
-    const body = { provider, text: chunk };
-    if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
-    if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
-    if (provider === 'xai') body.speed = Number(desktopVoiceSettings.xaiSpeed || 1.0);
-    const response = await fetch('/api/voice/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data?.success === false) throw new Error(data?.error || `TTS failed (${response.status})`);
-    return data;
-  };
-  // Pipeline: pre-fetch the next chunk while the current one plays so audio is
-  // ready immediately after each segment ends — first audio byte arrives faster
-  // on multi-sentence replies.
-  let nextFetch = fetchChunk(chunks[0]);
-  for (let i = 0; i < chunks.length; i++) {
-    const data = await nextFetch;
-    if (i + 1 < chunks.length) nextFetch = fetchChunk(chunks[i + 1]);
-    await playAudioBase64(data.audioBase64, data.mimeType);
-  }
-}
-
-async function speakAssistantReply(text) {
-  text = cleanVoiceSpeechText(text);
-  if (!text) return;
-  if (getRealtimeWakeGate()?.suppressVoice) return;
-  if (realtimeVoiceRepliesEnabled) {
-    await speakWithRealtimeVoice(text);
-    return;
-  }
-
-  if (!voiceRepliesEnabled) return;
-  const provider = voiceTtsProvider || 'browser';
-  if (provider === 'browser') {
-    speakWithBrowserVoice(text);
-    return;
-  }
-  if (provider === 'openai_realtime') {
-    await speakWithRealtimeVoice(text);
-    return;
-  }
-  const selected = getProviderInfo('tts', provider);
-  if (selected && !selected.configured) throw new Error(`${selected.label} needs its API key on the gateway.`);
-  await speakWithServerTts(text, provider);
-}
 
 async function toggleRealtimeVoiceReplies() {
-  if (normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode) === 'canonical') {
-    try { window.speechSynthesis?.cancel?.(); } catch {}
-    try { if (window.voiceReplyAudio) { window.voiceReplyAudio.pause(); window.voiceReplyAudio = null; } } catch {}
-    stopRealtimeVoicePlayback({ recordInterrupt: false });
-    if (voiceRecognition) {
-      voiceRecognition.stop();
-      return;
-    }
-    if (!backendVoiceRecorder) {
-      canonicalVoiceEpoch += 1;
-      try { window.stopGeneration?.(); } catch {}
-    }
-    voiceRepliesEnabled = true;
-    voiceTtsProvider = desktopVoiceSettings.ttsProvider === 'realtime' ? 'browser' : (desktopVoiceSettings.ttsProvider || 'browser');
-    voiceDictationEnabled = true;
-    setRegularVoiceControlsVisible(true);
-    if (desktopVoiceSettings.sttProvider === 'browser' && (window.SpeechRecognition || window.webkitSpeechRecognition)) toggleBrowserDictation();
-    else await toggleBackendDictation({ forceBatch: true });
-    return;
-  }
-  const xaiRealtime = wantsXaiRealtimeMode();
-  if (xaiRealtime) {
-    if (!(await isXaiRealtimeConfigured())) {
-      // Not configured for realtime — let the caller fall back to standard xAI.
-      throw new Error('xAI realtime not configured');
-    }
-  } else {
-    await refreshRealtimeVoiceStatus();
-    if (!realtimeVoiceConfigured) {
-      setRegularVoiceControlsVisible(true);
-      renderVoiceProviderControls();
-      showToast('Realtime voice not configured', 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key on the gateway.', 'error');
-      return;
-    }
-  }
-  if (realtimeVoiceStarting) {
+  if (realtimeVoiceStarting || realtimeVoiceRepliesEnabled) {
     disableRealtimeVoiceMode();
-    showToast('Realtime voice cancelled', '', 'info', 1400);
+    showToast('Realtime voice off', '', 'info', 1600);
     return;
   }
-  realtimeVoiceModeEpoch += 1;
-  const epoch = realtimeVoiceModeEpoch;
-  const nextEnabled = !realtimeVoiceRepliesEnabled;
-  if (nextEnabled) {
+  const epoch = ++realtimeVoiceModeEpoch;
+  realtimeVoiceStarting = true;
+  setRealtimeVoiceButtonState();
+  try {
+    await loadDesktopVoiceRegistry(true);
+    if (realtimeVoiceModeEpoch !== epoch) return;
+    const provider = desktopVoiceRegistry.providers.find((entry) => entry.id === desktopVoiceSettings.provider);
+    if (!provider?.connected) throw new Error('Connect your voice provider in Settings → Voice.');
+    realtimeVoiceStarting = true;
     voiceRepliesEnabled = false;
-    realtimeVoicePlaybackWarningShown = false;
-    saveDesktopVoiceSettings(xaiRealtime
-      ? {
-          voiceMode: 'xai',
-          voiceAgentXaiRealtime: true,
-          realtimeVoice: normalizeXaiRealtimeVoice(realtimeVoiceSelection),
-          xaiSpeed: Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1.0),
-        }
-      : {
-          voiceMode: 'openai_realtime',
-          sttProvider: 'browser',
-          ttsProvider: 'browser',
-          realtimeVoice: realtimeVoiceSelection || 'marin',
-          realtimeSpeed: realtimeVoiceSpeed,
-        });
-    if (voiceDictationActive && voiceRecognition) {
-      try { voiceRecognition.stop(); } catch {}
-    }
-    if (backendVoiceRecorder) {
-      try { backendVoiceRecorder.stop(); } catch {}
-    }
-
-    // Full Realtime end-to-end agent path — single OpenAI session does STT,
-    // reasoning, TTS, and tool calls. Replaces the legacy transcription +
-    // gateway voice agent + TTS split flow.
-    if (wantsVoiceAgentRealtimeMode()) {
-      const listenMode = !realtimeUsesHoldSpace() ? 'always_listening' : 'push_to_talk';
-      const listenMessage = listenMode === 'always_listening'
-        ? 'Realtime voice is listening. Speak naturally — Prometheus hears, thinks, and replies in one OpenAI session.'
-        : 'Realtime voice is ready. Hold Space to talk.';
-      realtimeVoiceStarting = true;
-      setRealtimeVoiceButtonState();
-      // xAI may fall through to another transport. Keep that route change out
-      // of the toast stack; its final state is reported by the keyed status.
-      if (!xaiRealtime) {
-        showToast('Starting realtime agent', listenMode === 'always_listening' ? 'Opening your microphone and realtime session...' : 'Opening realtime session...', 'info', 2200);
-      }
-      const sid = window.activeChatSessionId || 'default';
-      try {
-        await startVoiceAgentRealtimeSession(sid, {
-          listenMode,
-          voiceTarget: desktopVoiceTargetForBootstrap(),
-          voiceRoom: desktopVoiceRoomContextForSession(sid),
-        });
-        if (realtimeVoiceModeEpoch !== epoch) return;
-        realtimeVoiceStarting = false;
-        realtimeVoiceRepliesEnabled = true;
-        setRegularVoiceControlsVisible(false);
-        setRealtimeVoiceControlsVisible(true);
-        renderVoiceProviderControls();
-        renderRealtimeVoiceSelect().catch(() => {});
-        if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
-        addSessionProcessEntry(sid, 'info', `Realtime agent connected (${listenMode}).`, { actor: 'Voice Agent (Realtime)' });
-        setRealtimeVoiceButtonState();
-        if (xaiRealtime) showDesktopVoiceStatus('xAI realtime voice on', listenMessage, 'success', 3200);
-        else showToast('Realtime agent on', listenMessage, 'success', 3200);
-      } catch (err) {
-        if (realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
-        realtimeVoiceStarting = false;
-        realtimeVoiceRepliesEnabled = false;
-        realtimeVoiceModeEpoch += 1;
-        stopVoiceAgentRealtimeSession();
-        setRegularVoiceControlsVisible(true);
-        renderVoiceProviderControls();
-        setRealtimeVoiceButtonState();
-        // For xAI, let the caller fall back to the standard STT/TTS route.
-        if (xaiRealtime) throw err;
-        const presentation = presentRealtimeVoiceError(err);
-        showToast(presentation.title, presentation.message, 'error');
-      }
-      return;
-    }
-
+    setRealtimeVoiceButtonState();
+    if (voiceDictationActive && voiceRecognition) { try { voiceRecognition.stop(); } catch {} }
+    if (backendVoiceRecorder) { try { backendVoiceRecorder.stop(); } catch {} }
+    const sid = window.activeChatSessionId || 'default';
+    const listenMode = desktopVoiceRegistry.defaults.listenMode === 'always_listening' ? 'always_listening' : 'push_to_talk';
+    await startVoiceAgentRealtimeSession(sid, {
+      listenMode,
+      voiceTarget: desktopVoiceTargetForBootstrap(),
+      voiceRoom: desktopVoiceRoomContextForSession(sid),
+    });
+    if (realtimeVoiceModeEpoch !== epoch) return;
+    realtimeVoiceStarting = false;
     realtimeVoiceRepliesEnabled = true;
     setRegularVoiceControlsVisible(false);
     setRealtimeVoiceControlsVisible(true);
+    if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
     renderVoiceProviderControls();
-    renderRealtimeVoiceSelect().catch(() => {});
     setRealtimeVoiceButtonState();
-    const listenMessage = realtimeUsesHoldSpace()
-      ? 'Hold Space to talk. Release to send.'
-      : realtimeListenMode === 'confirm_send'
-        ? 'Speak naturally. Say "send message" when you want Prometheus to receive it.'
-        : 'Speak naturally. Prometheus will receive the transcript and answer aloud.';
-    showToast('Realtime voice on', listenMessage, 'success', 2600);
-    renderRealtimeWakeGateState();
-    if (realtimeAllowsContinuousCapture()) {
-      startRealtimeInputCapture().catch((err) => {
-        if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped|inactive/i.test(String(err?.message || err))) return;
-        realtimeVoiceRepliesEnabled = false;
-        realtimeVoiceModeEpoch += 1;
-        resetRealtimeSessionWakePhrase({ clearInput: true });
-        closeRealtimeDictationConnection();
-        closeRealtimeVoiceConnection();
-        stopRealtimeDraftRecognition();
-        setRegularVoiceControlsVisible(true);
-        renderVoiceProviderControls();
-        setRealtimeVoiceButtonState();
-        showToast('Realtime microphone failed', String(err?.message || err), 'error');
-      });
-    }
-    ensureRealtimeVoiceConnection().catch((err) => {
-      if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
-      realtimeVoiceRepliesEnabled = false;
-      realtimeVoiceModeEpoch += 1;
-      resetRealtimeSessionWakePhrase({ clearInput: true });
-      closeRealtimeDictationConnection();
-      closeRealtimeVoiceConnection();
-      stopRealtimeDraftRecognition();
-      setRegularVoiceControlsVisible(true);
-      renderVoiceProviderControls();
-      setRealtimeVoiceButtonState();
-      showToast('Realtime voice failed', String(err?.message || err), 'error');
-    });
-  } else {
+    showToast('Realtime voice on', listenMode === 'always_listening' ? 'Listening. Speak naturally.' : 'Hold Space to talk.', 'success', 2200);
+  } catch (error) {
+    if (realtimeVoiceModeEpoch !== epoch) return;
+    realtimeVoiceStarting = false;
     realtimeVoiceRepliesEnabled = false;
-    setRealtimeVoiceButtonState();
-    realtimeHoldSpaceActive = false;
-    clearRealtimeAssistantSpeakingState();
-    resetRealtimeSessionWakePhrase({ clearInput: true });
     stopVoiceAgentRealtimeSession();
-    closeRealtimeDictationConnection();
-    closeRealtimeVoiceConnection();
-    stopRealtimeDraftRecognition();
-    resetRealtimeDictationTranscript();
-    renderVoiceProviderControls();
-    try { window.speechSynthesis?.cancel?.(); } catch {}
-    showToast('Realtime voice off', '', 'info', 1600);
+    setRealtimeVoiceButtonState();
+    showToast('Realtime voice unavailable', String(error?.message || error), 'error');
   }
 }
+
 
 function initializeCreativeFeatureClients(runtime) {
   if (creativeRenderJobClient && creativeMotionTemplateClient && creativeExportEngine && creativeRenderWorkerController) return;

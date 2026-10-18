@@ -5,7 +5,9 @@ import { VoiceAgentTargetContext, normalizeVoiceAgentTarget, voiceAgentTargetIde
 import { parseVoiceToolResult, voiceRuntimeContextText } from './fallback';
 import { buildVoiceTimeContext, buildRealtimeSkillContextForTranscript, voiceRuntimeDirectiveFromToolResult, parseVoiceToolArgs, cleanVoiceWakePhrase } from './tool-helpers';
 import { mobileCameraRuntimeContextText, buildRealtimeVoiceAgentInstructions, buildRealtimeVoiceAgentTools } from './realtime';
-import { router, storageAwareStatus } from './dependencies';
+import { router, storageAwareStatus, _skillsManager } from './dependencies';
+import { capturePersonalityContextSnapshot } from '../../../prompt-context.js';
+import { getConfig } from '../../../../config/config.js';
 
 
 // ============================================================================
@@ -206,6 +208,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       ok: true,
       success: true,
       provider: 'xai',
+      protocol: 'xai_realtime',
       clientSecret,
       auth: usedAuth,
       wsUrl: `${XAI_REALTIME_WS_BASE}?model=${encodeURIComponent(model)}`,
@@ -229,14 +232,34 @@ router.post('/api/voice-agent/realtime-skill-context', async (req, res) => {
   try {
     const body = req.body || {};
     const transcript = String(body.transcript || body.text || body.message || '').trim();
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const maxChars = Math.min(8000, Math.max(1000, Number(body.maxChars || body.max_chars || 4200) || 4200));
     const result = buildRealtimeSkillContextForTranscript(transcript, maxChars);
+    let memoryContext = '';
+    if (transcript && _skillsManager) {
+      const snapshot = await capturePersonalityContextSnapshot(
+        sessionId,
+        getConfig().getWorkspacePath(),
+        transcript,
+        'interactive',
+        0,
+        _skillsManager,
+        () => {},
+        undefined,
+        { profile: 'voice_agent' },
+      );
+      memoryContext = [snapshot.memoryAtomContext, snapshot.retrievedMemoryContext]
+        .filter(Boolean)
+        .join('\n\n')
+        .slice(0, 4000);
+    }
     res.json({
       ok: true,
       success: true,
       matched: result.skills.length > 0,
       context: result.context,
       skills: result.skills,
+      memoryContext,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });

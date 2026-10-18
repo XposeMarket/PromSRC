@@ -179,6 +179,11 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _mobileRealtimeVoiceOptions(status = __pmVoice?.lastVoiceStatus) {
+    const providerId = String(__pmVoice?.settings?.provider || __pmVoice?.settings?.voiceMode || '').trim();
+    const registryProvider = (status?.registry?.providers || []).find((provider) => String(provider?.id || '') === providerId);
+    if (Array.isArray(registryProvider?.voices) && registryProvider.voices.length) {
+      return registryProvider.voices.map((voice) => String(typeof voice === 'string' ? voice : voice?.id || '').trim()).filter(Boolean);
+    }
     const realtime = status?.realtime || {};
     if (_isMobileCodexAvasRealtime(status)) {
       const live = Array.isArray(realtime?.codexBridgeActiveVoices)
@@ -228,13 +233,15 @@ export function createMobileVoiceRuntime(context = {}) {
   function _loadVoiceSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(PM_VOICE_SETTINGS_KEY) || '{}');
-      const voiceMode = saved.legacyRealtime === true ? (saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime') : 'canonical';
+      const voiceMode = String(saved.voiceMode || saved.provider || 'openai').trim() || 'openai';
       const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
       return {
         voiceMode,
-        legacyRealtime: saved.legacyRealtime === true,
-        sttProvider: ['browser', 'openai', 'xai'].includes(saved.sttProvider) ? saved.sttProvider : 'auto',
-        ttsProvider: voiceMode === 'canonical' ? (saved.ttsProvider === 'realtime' ? 'browser' : saved.ttsProvider || 'browser') : 'realtime',
+        provider: String(saved.provider || voiceMode).trim() || 'openai',
+        protocol: String(saved.protocol || '').trim(),
+        realtimeModel: String(saved.realtimeModel || saved.model || '').trim(),
+        sttProvider: voiceMode,
+        ttsProvider: voiceMode,
         realtimeVoice: saved.realtimeVoice || 'marin',
         realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
         serverVoice: saved.serverVoice || '',
@@ -245,11 +252,11 @@ export function createMobileVoiceRuntime(context = {}) {
         wakeGateActive: listenMode === 'always_listening' && saved.wakeGateActive === true,
         sttProviderLocked: saved.sttProviderLocked === true,
         autoProviderDefault: saved.autoProviderDefault || '',
-        voiceAgentRealtimeAgent: voiceMode === 'openai_realtime',
+        voiceAgentRealtimeAgent: true,
         voiceAgentXaiRealtime: voiceMode === 'xai',
       };
     } catch {
-      return { voiceMode: 'canonical', sttProvider: 'auto', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: true, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
+      return { voiceMode: 'openai', provider: 'openai', protocol: '', realtimeModel: '', sttProvider: 'openai', ttsProvider: 'openai', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: true, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
     }
   }
 
@@ -266,8 +273,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _mobileRealtimeProviderKeyFromSettings(settings = __pmVoice?.settings || {}) {
-    const mode = String(settings?.voiceMode || '').trim();
-    return mode === 'xai' ? 'xai_realtime' : 'openai_realtime';
+    return String(settings?.provider || settings?.voiceMode || 'openai').trim() || 'openai';
   }
 
   function _mobileRealtimeTurnDetectionForListenMode(listenMode, settings = __pmVoice?.settings || {}) {
@@ -279,7 +285,9 @@ export function createMobileVoiceRuntime(context = {}) {
       threshold: 0.5,
       prefix_padding_ms: 300,
       silence_duration_ms: 500,
-      create_response: !quietActive && !__pmRealtimeAgent?.quiet?.active,
+      // The final transcript handler always creates the response after skill and
+      // memory context injection; automatic VAD responses would race it.
+      create_response: false,
     };
   }
 
@@ -474,47 +482,35 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _mobileVoiceDefaultProviderFromStatus(status) {
-    const realtime = status?.realtime || {};
-    const sttProviders = Array.isArray(status?.voice?.sttProviders) ? status.voice.sttProviders : [];
-    const ttsProviders = Array.isArray(status?.voice?.ttsProviders) ? status.voice.ttsProviders : [];
-    const openAiReady = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
-    if (openAiReady) return 'openai_realtime';
-    const xaiReady =
-      sttProviders.some(p => p?.configured && p?.id === 'xai') &&
-      ttsProviders.some(p => p?.configured && p?.id === 'xai');
-    return xaiReady ? 'xai' : 'default';
+    return String(status?.registry?.defaults?.provider || status?.voice?.defaults?.provider || '').trim();
   }
 
+  // Voice pages deliberately refresh this registry on each open: server defaults
+  // are the source of truth for provider/model/voice/listen mode.
   function _applyMobileVoiceProviderDefaults(status) {
-    if (__pmVoice.settings?.voiceMode === 'canonical') return false;
+    const registry = status?.registry || {};
+    const defaults = registry?.defaults || status?.voice?.defaults || {};
+    const providers = Array.isArray(registry?.providers) ? registry.providers : [];
     const provider = _mobileVoiceDefaultProviderFromStatus(status);
-    if (provider === 'default') return false;
+    const selected = providers.find((item) => String(item?.id || '') === provider);
+    if (!provider || !selected) return false;
     const settings = __pmVoice.settings || {};
-    const currentMode = String(settings.voiceMode || 'default');
-    const autoProviderDefault = String(settings.autoProviderDefault || '');
-    const isDefaultRoute =
-      !settings.sttProviderLocked ||
-      autoProviderDefault ||
-      currentMode === 'default' ||
-      (
-        String(settings.sttProvider || 'browser') === 'browser' &&
-        String(settings.ttsProvider || 'browser') === 'browser'
-      );
-    if (!isDefaultRoute) return false;
-    if (
-      currentMode === provider &&
-      settings.listenMode === 'always_listening' &&
-      autoProviderDefault === provider
-    ) return false;
-    _saveVoiceSettings({
+    const next = {
       voiceMode: provider,
-      sttProvider: _inputProviderForMode(provider),
-      ttsProvider: _outputProviderForMode(provider),
-      listenMode: 'always_listening',
-      wakeGateActive: false,
-      sttProviderLocked: true,
-      autoProviderDefault: provider,
-      serverVoice: provider === 'xai' ? (settings.serverVoice || 'eve') : '',
+      provider,
+      protocol: String(selected.protocol || '').trim(),
+      realtimeModel: String(defaults.model || selected.defaultModel || '').trim(),
+      realtimeVoice: String(defaults.voice || selected.defaultVoice || settings.realtimeVoice || 'marin').trim(),
+      sttProvider: provider,
+      ttsProvider: provider,
+      listenMode: defaults.listenMode === 'always_listening' ? 'always_listening' : 'push_to_speak',
+      voiceAgentRealtimeAgent: true,
+      voiceAgentXaiRealtime: selected.protocol === 'xai_realtime',
+    };
+    if (Object.entries(next).every(([key, value]) => settings[key] === value)) return false;
+    _saveVoiceSettings({
+      ...next,
+      wakeGateActive: next.listenMode === 'always_listening' && settings.wakeGateActive === true,
     });
     return true;
   }
@@ -2809,37 +2805,23 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _detectProvider(status) {
-    const realtime = status?.realtime || {};
-    const configuredTts = (status?.voice?.ttsProviders || []).filter(p => p?.configured);
-    const configuredStt = (status?.voice?.sttProviders || []).filter(p => p?.configured && p?.id !== 'browser');
     const settings = __pmVoice.settings || {};
-    const inputProvider = String(settings.sttProvider || _inputProviderForMode(settings.voiceMode || 'default'));
-    const outputProvider = String(settings.ttsProvider || _outputProviderForMode(settings.voiceMode || 'default'));
-    const realtimeReady = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
-    const xaiTtsReady = configuredTts.some(p => p?.id === 'xai');
-    const xaiSttReady = configuredStt.some(p => p?.id === 'xai');
-    const sttReady = inputProvider === 'openai_realtime' ? realtimeReady : inputProvider === 'xai' ? xaiSttReady : true;
-    const ttsReady = outputProvider === 'openai_realtime' ? realtimeReady : outputProvider === 'xai' ? xaiTtsReady : true;
-    const sttProvider = sttReady ? inputProvider : 'browser';
-    const ttsProvider = ttsReady ? outputProvider : 'browser';
-    if (sttProvider !== 'browser' || ttsProvider !== 'browser') return {
-      id: _voicePresetForProviders(sttProvider, ttsProvider),
-      label: [sttProvider, ttsProvider].filter(Boolean).join(' input / ') || 'Voice',
-      model: realtime.model || 'gpt-realtime',
-      voice: settings.realtimeVoice || realtime.voice || 'marin',
-      speed: ttsProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05),
-      canRealtime: sttProvider === 'openai_realtime' || ttsProvider === 'openai_realtime',
-      sttProvider,
-      ttsProvider,
-      ttsVoice: ttsProvider === 'xai' ? (settings.serverVoice || 'eve') : (settings.realtimeVoice || realtime.voice || 'marin'),
-    };
+    const providers = Array.isArray(status?.registry?.providers) ? status.registry.providers : [];
+    const id = String(settings.provider || settings.voiceMode || '').trim();
+    const provider = providers.find((item) => String(item?.id || '') === id) || null;
+    const connected = provider?.connected === true;
     return {
-      id: 'browser',
-      label: 'Default',
-      canRealtime: false,
-      sttProvider: 'browser',
-      ttsProvider: 'browser',
-      requestedMode: settings.voiceMode || 'default',
+      id: provider?.id || id || 'voice',
+      label: provider?.label || id || 'Realtime voice',
+      protocol: String(provider?.protocol || settings.protocol || '').trim(),
+      connectionLabel: String(provider?.connectionLabel || (connected ? 'Connected' : 'Not connected')),
+      model: String(settings.realtimeModel || provider?.defaultModel || '').trim(),
+      voice: String(settings.realtimeVoice || provider?.defaultVoice || 'marin').trim(),
+      speed: Number(settings.realtimeSpeed || 1.05),
+      canRealtime: connected,
+      sttProvider: provider?.id || id,
+      ttsProvider: provider?.id || id,
+      ttsVoice: String(settings.realtimeVoice || provider?.defaultVoice || 'marin').trim(),
     };
   }
 
@@ -2848,8 +2830,10 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _isRealtimeConnected(status = __pmVoice.lastVoiceStatus) {
-    const realtime = status?.realtime || {};
-    return !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
+    const id = String(__pmVoice?.settings?.provider || __pmVoice?.settings?.voiceMode || '').trim();
+    const providers = Array.isArray(status?.registry?.providers) ? status.registry.providers : [];
+    const selected = providers.find((provider) => String(provider?.id || '') === id) || null;
+    return selected?.connected === true || status?.realtime?.configured === true;
   }
 
   async function _loadServerVoiceCatalog(provider) {
@@ -3229,11 +3213,10 @@ export function createMobileVoiceRuntime(context = {}) {
     return headers;
   }
 
-  async function _synthesizeVoiceAudio(payload = {}) {
-    return mobileGatewayFetch('/api/voice/tts', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  // Realtime sessions own spoken replies. Keep this compatibility helper inert so
+  // old streaming callers never fall back to the removed server TTS endpoint.
+  async function _synthesizeVoiceAudio() {
+    return null;
   }
 
   function _voiceDebug(event, data = {}) {
@@ -4282,140 +4265,10 @@ export function createMobileVoiceRuntime(context = {}) {
     return null;
   }
 
-  async function _ttsSpeak(text) {
-    // Canonical voice speaks only text returned by normal chat.
-    if (__pmVoice.settings?.voiceMode !== 'canonical') return;
-    text = _cleanVoiceSpeechText(text);
-    if (!text) return;
-    __pmVoice.currentSpokenSegment = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
-    const mode = String(__pmVoice.settings?.voiceMode || 'default');
-    const outputProvider = String(__pmVoice.settings?.ttsProvider || __pmVoice.provider?.ttsProvider || _outputProviderForMode(mode));
-    _voiceDebug('tts-start', { textLen: String(text || '').length, mode, provider: outputProvider });
-    const wantsRealtime = outputProvider === 'openai_realtime';
-    const wantsXai = outputProvider === 'xai';
-    const wantsOpenaiTts = outputProvider === 'openai';
-    let realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected());
-    if (wantsRealtime && !realtimeReady) {
-      try {
-        const status = await loadVoiceStatus();
-        __pmVoice.lastVoiceStatus = status;
-        __pmVoice.voiceStatus = status?.voice || null;
-        const detected = _detectProvider(status);
-        __pmVoice.provider = { ...detected, sttProvider: __pmVoice.provider?.sttProvider || detected.sttProvider || 'browser' };
-        realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected(status));
-      } catch {}
-    }
-    if ((wantsXai || wantsOpenaiTts) && !Array.isArray(__pmVoice.voiceStatus?.ttsProviders)) {
-      try {
-        const status = await loadVoiceStatus();
-        __pmVoice.lastVoiceStatus = status;
-        __pmVoice.voiceStatus = status?.voice || null;
-        const detected = _detectProvider(status);
-        __pmVoice.provider = { ...__pmVoice.provider, ...detected };
-      } catch {}
-    }
-    if (wantsRealtime && realtimeReady) {
-      try {
-        _voiceSetStatus('Speaking with Realtime', 'OpenAI Realtime audio is generating the response');
-        await _speakWithRealtimeVoice(text);
-        return;
-      } catch (err) {
-        console.warn('[voice] realtime speech failed, falling back', err);
-        if (_isBenignRealtimeParseError(err)) return;
-        pmToast(err.message || 'OpenAI Realtime audio failed', 'error');
-        _voiceSetStatus('Audio failed', 'OpenAI Realtime could not play this response');
-      }
-    }
-    const xaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
-      && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'xai' && p?.configured);
-    const openaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
-      && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'openai' && p?.configured);
-    const xaiDisabled = !!(typeof window !== 'undefined' && window.__pmDisableXaiTts);
-    const providersToTry = wantsXai && xaiTtsConfigured && !xaiDisabled
-      ? ['xai']
-      : (wantsOpenaiTts && openaiTtsConfigured ? ['openai'] : []);
-    try { console.log('[voice] server TTS gate split-routing', { mode, outputProvider, xaiTtsConfigured, openaiTtsConfigured, willTry: providersToTry }); } catch {}
-    _voiceDebug('tts-gate', { mode, provider: outputProvider, xaiTtsConfigured, openaiTtsConfigured, wantsXai, wantsOpenaiTts, providersToTry });
-    for (const ttsProvider of providersToTry) {
-      try {
-        _voiceSetStatus(ttsProvider === 'xai' ? 'Speaking with xAI / Grok' : 'Speaking with OpenAI', `${ttsProvider === 'xai' ? 'Grok' : 'OpenAI'} voice audio is generating the response`);
-        _markVoiceSpeakingStart(text);
-        const xaiSpeed = Number(__pmVoice.settings?.xaiSpeed || __pmVoice.provider?.speed || 1.0);
-        const serverVoice = String(__pmVoice.settings?.serverVoice || __pmVoice.provider?.ttsVoice || '').trim();
-        const xaiVoice = String(serverVoice || 'eve').trim();
-        const useUrl = ttsProvider === 'xai' && !_isIosSafariBrowser();
-        const buildChunkBody = (chunk) => {
-          const b = { provider: ttsProvider, text: chunk };
-          if (ttsProvider === 'openai' && serverVoice) b.voice = serverVoice;
-          if (ttsProvider === 'xai' && xaiVoice) b.voiceId = xaiVoice;
-          if (ttsProvider === 'xai') b.speed = xaiSpeed;
-          if (useUrl) b.delivery = 'url';
-          return b;
-        };
-        // Split into sentence-sized chunks and pipeline fetch+play so the firs
-        // audio segment starts playing before the full reply is encoded.
-        const sentences = (() => {
-          const src = String(text || '').replace(/\s+/g, ' ').trim();
-          if (!src) return [];
-          const parts = src.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [src];
-          const out = []; let cur = '';
-          for (const p of parts) {
-            const next = p.trim();
-            if (!next) continue;
-            if ((cur + ' ' + next).trim().length <= 400) { cur = (cur + ' ' + next).trim(); continue; }
-            if (cur) out.push(cur);
-            cur = next.length <= 400 ? next : (out.push(...next.match(/.{1,400}/g) || [next]), '');
-          }
-          if (cur) out.push(cur);
-          return out.filter(Boolean);
-        })();
-        const chunks = sentences.length ? sentences : [String(text || '').trim().slice(0, 4000)];
-        const totalChunkChars = Math.max(1, chunks.reduce((sum, chunk) => sum + chunk.length, 0));
-        let completedChunkChars = 0;
-        _voiceDebug('tts-fetch-start', { provider: ttsProvider, voiceId: xaiVoice, delivery: useUrl ? 'url' : 'base64', chunks: chunks.length });
-        let nextFetch = _synthesizeVoiceAudio(buildChunkBody(chunks[0]));
-        for (let ci = 0; ci < chunks.length; ci++) {
-          const audio = await nextFetch;
-          if (ci + 1 < chunks.length) nextFetch = _synthesizeVoiceAudio(buildChunkBody(chunks[ci + 1]));
-          _voiceDebug('tts-fetch-ok', { provider: ttsProvider, chunk: ci, mimeType: audio?.mimeType || '', hasBase64: !!audio?.audioBase64, hasUrl: !!(audio?.audioUrl || audio?.url) });
-          __pmVoice.lyricPlayback = {
-            text,
-            start: completedChunkChars / totalChunkChars,
-            end: (completedChunkChars + chunks[ci].length) / totalChunkChars,
-          };
-          __pmVoice.currentSpokenSegment = chunks[ci];
-          await _playAudioBase64({ ...audio, playbackRate: ttsProvider === 'xai' ? xaiSpeed : 1 });
-          completedChunkChars += chunks[ci].length;
-        }
-        __pmVoice.lyricPlayback = null;
-        _voiceDebug('tts-play-ok', { provider: ttsProvider });
-        return;
-      } catch (err) {
-        console.warn(`[voice] server TTS failed for ${ttsProvider}, falling back`, err);
-        _voiceDebug('tts-error', { provider: ttsProvider, message: err?.message || String(err) });
-        pmToast(err.message || `${ttsProvider} voice failed`, 'error');
-        _voiceSetStatus('Audio failed', `${ttsProvider === 'xai' ? 'xAI / Grok' : ttsProvider} could not play this response`);
-        _markVoiceSpeakingEnd();
-      }
-    }
-    _voiceDebug('tts-browser-fallback', { mode, provider: outputProvider });
-    try {
-      const synth = window.speechSynthesis;
-      if (!synth) return;
-      synth.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = 1.02;
-      utter.pitch = 1.0;
-      utter.volume = 1.0;
-      utter.onstart = () => { _markVoiceSpeakingStart(text); };
-      utter.onboundary = (event) => {
-        const charIndex = Math.max(0, Number(event.charIndex || 0) || 0);
-        _setMobileVoiceLyricProgress(text, charIndex / Math.max(1, text.length));
-      };
-      utter.onend   = () => { _setMobileVoiceLyricProgress(text, 1); _markVoiceSpeakingEnd(); };
-      utter.onerror = () => { _markVoiceSpeakingEnd(); };
-      synth.speak(utter);
-    } catch (err) { console.warn('[voice] TTS failed', err); }
+  async function _ttsSpeak(_text) {
+    // Realtime sessions own assistant audio; never route a chat reply through
+    // browser/server TTS after the realtime-only migration.
+    return;
   }
 
   function _ttsStop() {

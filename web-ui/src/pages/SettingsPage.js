@@ -21,6 +21,7 @@ import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
 import { effortOptions, validEffort, supportsFastSpeed, reasoningCapability } from '../reasoning-capabilities.js';
+import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
@@ -547,7 +548,8 @@ function setSettingsTab(tab) {
     tab = 'system';
   }
   window.settingsTab = tab;
-  const tabs = ['system', 'appearance', 'heartbeat', 'search', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+  ensureVoiceSettingsTab();
+  const tabs = ['system', 'appearance', 'heartbeat', 'search', 'security', 'migration', 'models', 'voice', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
   const titles = {
     system: 'General',
     appearance: 'Appearance',
@@ -556,6 +558,7 @@ function setSettingsTab(tab) {
     security: 'Security',
     migration: 'Migration',
     models: 'Models',
+    voice: 'Voice',
     agents: 'Agents',
     channels: 'Channels',
     integrations: 'Integrations',
@@ -590,6 +593,7 @@ function setSettingsTab(tab) {
         }
         if (t === 'channels') pendingLoads.push(loadChannelsStatus());
         if (t === 'models') pendingLoads.push(loadModelSettings());
+        if (t === 'voice') pendingLoads.push(loadVoiceSettings());
         if (t === 'agents') pendingLoads.push(loadAgentsTab());
         if (t === 'integrations') pendingLoads.push(loadIntegrationsTab());
         if (t === 'search') {
@@ -620,6 +624,35 @@ function setSettingsTab(tab) {
       externalImportStatus('conversation', 'info', 'Migration now lives here. The older migration entry point remains compatible.');
     }, 0);
   }
+}
+
+function ensureVoiceSettingsTab() {
+  const modal = document.getElementById('settings-modal');
+  const modelTab = document.getElementById('settings-tab-models');
+  const modelPanel = document.getElementById('settings-panel-models');
+  if (!modal || document.getElementById('settings-panel-voice')) return;
+  const tab = document.createElement('button');
+  tab.id = 'settings-tab-voice';
+  tab.className = modelTab?.className || 'settings-tab';
+  tab.type = 'button';
+  tab.textContent = 'Voice';
+  tab.addEventListener('click', () => setSettingsTab('voice'));
+  if (modelTab?.parentElement) modelTab.parentElement.insertBefore(tab, modelTab.nextSibling);
+  const panel = document.createElement('div');
+  panel.id = 'settings-panel-voice';
+  panel.style.display = 'none';
+  panel.innerHTML = '<div id="settings-voice-provider-settings"></div>';
+  if (modelPanel?.parentElement) modelPanel.parentElement.insertBefore(panel, modelPanel.nextSibling);
+  else modal.appendChild(panel);
+}
+
+async function loadVoiceSettings() {
+  ensureVoiceSettingsTab();
+  const container = document.getElementById('settings-voice-provider-settings');
+  await mountVoiceProviderSettings(container, {
+    request: api,
+    onChatConnections: () => setSettingsTab('models'),
+  });
 }
 
 async function replayOnboardingTutorial() {
