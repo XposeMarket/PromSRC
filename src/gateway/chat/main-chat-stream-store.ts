@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { classifyMainChatStreamEvent } from './main-chat-stream';
-import { isMainChatSemanticProgressEvent } from './main-chat-execution-owner';
+import { isMainChatSemanticProgressEvent, updateBlockingWaits, type BlockingWait } from './main-chat-execution-owner';
 import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
 
 export type MainChatStreamFrame = {
@@ -17,6 +17,7 @@ export type MainChatStreamState = {
   updatedAt: number;
   lastSemanticProgressAt: number;
   lastSemanticEvent?: string;
+  blockingWaits?: BlockingWait[];
   runtimeId?: string;
   admissionLeaseId?: string;
   active: boolean;
@@ -174,6 +175,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
       stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
     }
   }
+  stream.blockingWaits = updateBlockingWaits(stream.blockingWaits || [], frame.type, frame.data, frame.at);
   stream.updatedAt = frame.at;
   if (isMainChatSemanticProgressEvent(frame.type)) {
     stream.lastSemanticProgressAt = frame.at;

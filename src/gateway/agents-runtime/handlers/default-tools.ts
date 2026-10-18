@@ -1737,6 +1737,12 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
         }
 
         if (name === 'gateway_restart') {
+          const { listLiveRuntimes } = require('../../live-runtime-registry') as typeof import('../../live-runtime-registry');
+          const { otherActiveRestartRuntimes, restartDeferredMessage } = require('../../runtime/gateway-restart-guard') as typeof import('../../runtime/gateway-restart-guard');
+          const otherTurns = otherActiveRestartRuntimes(listLiveRuntimes(), sessionId);
+          if (args.force !== true && otherTurns.length) {
+            return { name, args, result: restartDeferredMessage(otherTurns), error: false };
+          }
           const reason = String(args.reason || 'manual restart').trim();
           try {
             const { gracefulRestart } = require('../../lifecycle');

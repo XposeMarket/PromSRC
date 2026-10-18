@@ -109,3 +109,27 @@ assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'background_wait', l
 assert.equal(isLiveBackgroundJoin({ now, lastSemanticEvent: 'heartbeat', lastSemanticProgressAt: now, activeBackgroundCount: 2 }), false, 'transport heartbeats are not join liveness');
 
 console.log('main chat execution owner regression passed');
+
+// Intentional waits have fixed deadlines; transport frames cannot extend them.
+import { effectiveBlockingWaitDeadline, isBlockingWaitInFlight, updateBlockingWaits } from './main-chat-execution-owner';
+const waitStart = 1_000_000;
+for (const [name, args] of [
+  ['background_ops', { action: 'wait', timeout_ms: 900_000 }],
+  ['background_ops', { action: 'join', wait_ms: 900_000 }],
+  ['workspace_run', { action: 'wait', timeoutMs: 900_000 }],
+  ['video_project', { action: 'wait' }], ['process_wait', {}],
+  ['ask_prometheus_questions', {}], ['await_prometheus_question_response', {}],
+  ['request_browser_login', {}], ['request_final_action_approval', {}],
+] as Array<[string, Record<string, any>]>) {
+  const waits = updateBlockingWaits([], 'tool_call', { action: name, args, toolCallId: name }, waitStart);
+  assert.equal(isBlockingWaitInFlight(waits, waitStart + 900_000), true, name);
+  assert.equal(isBlockingWaitInFlight(waits, waitStart + 1_020_001), false, `${name} expires`);
+  assert.equal(updateBlockingWaits(waits, 'tool_result', { action: name, toolCallId: name }, waitStart + 1).length, 0);
+}
+assert.equal(effectiveBlockingWaitDeadline({ name: 'process_wait', startedAt: waitStart, args: { timeout_ms: 9e9 } }), waitStart + 1_920_000);
+assert.equal(effectiveBlockingWaitDeadline({ name: 'workspace_run', startedAt: waitStart, args: { action: 'run' } }), 0);
+let joined = updateBlockingWaits([], 'background_wait', { pending: 2, waitedMs: 0 }, waitStart);
+joined = updateBlockingWaits(joined, 'background_wait', { pending: 2, waitedMs: 900_000 }, waitStart + 900_000);
+assert.equal(isBlockingWaitInFlight(joined, waitStart + 1_020_001), false, 'join keepalives cannot renew the deadline');
+assert.equal(updateBlockingWaits(joined, 'background_wait', { pending: 0, finished: true }, waitStart + 1).length, 0);
+console.log('blocking-wait watchdog regressions passed');

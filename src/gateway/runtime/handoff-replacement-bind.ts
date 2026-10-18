@@ -1,6 +1,8 @@
 import type { Server as HttpServer } from 'node:http';
 
-export const HANDOFF_BIND_RETRY_WINDOW_MS = 20_000;
+// A supervisor replacement can overlap the predecessor's shutdown while it drains
+// streaming connections. Keep this bounded, but cover the observed handoff tail.
+export const HANDOFF_BIND_RETRY_WINDOW_MS = 40_000;
 export const HANDOFF_BIND_RETRY_INITIAL_DELAY_MS = 200;
 export const HANDOFF_LISTENER_CLOSE_TIMEOUT_MS = 5_000;
 

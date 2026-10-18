@@ -574,6 +574,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       kind: 'background_agent',
       label: 'Background agent',
       sessionId: runtimeSessionId,
+      recoveryData: { ownerSessionId: record.spawnerSessionId },
       taskId: record.id,
       source: 'background_spawn',
       detail: String(prompt || '').slice(0, 160),

@@ -4730,6 +4730,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           Promise.all(
             pendingSpawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
           ),
+          30_000,
+          Math.max(...pendingSpawnedBgRuns.map((run) => run.timeoutMs || 15 * 60_000)),
         );
         const resultBlocks = joinedResults
           .map((r, i) => {
@@ -4832,6 +4834,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           Promise.all(
             spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
           ),
+          30_000,
+          Math.max(...spawnedBgRuns.map((run) => run.timeoutMs || 15 * 60_000)),
         );
         const resultBlocks = joinedResults
           .map((r, i) => {

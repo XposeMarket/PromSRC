@@ -197,6 +197,7 @@ export async function withBackgroundJoinKeepalive<T>(
   backgroundIds: string[],
   join: Promise<T>,
   intervalMs = 30_000,
+  timeoutMs?: number,
 ): Promise<T> {
   const startedAt = Date.now();
   const tick = () => {
@@ -204,7 +205,7 @@ export async function withBackgroundJoinKeepalive<T>(
       const state = backgroundStatus(id)?.state;
       return state === 'queued' || state === 'in_progress';
     }).length;
-    try { send('background_wait', { backgroundIds, pending, waitedMs: Date.now() - startedAt }); } catch { /* keepalive is best effort */ }
+    try { send('background_wait', { backgroundIds, pending, timeoutMs, waitedMs: Date.now() - startedAt }); } catch { /* keepalive is best effort */ }
   };
   tick();
   const timer = setInterval(tick, intervalMs);
@@ -212,6 +213,7 @@ export async function withBackgroundJoinKeepalive<T>(
     return await join;
   } finally {
     clearInterval(timer);
+    try { send('background_wait', { backgroundIds, pending: 0, finished: true, waitedMs: Date.now() - startedAt }); } catch {}
   }
 }
 

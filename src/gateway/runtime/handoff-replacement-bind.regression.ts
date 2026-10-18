@@ -4,6 +4,7 @@ import {
   closeListeningHandle,
   listenWithHandoffRetry,
   runtimeBelongsToLiveHandoffHost,
+  HANDOFF_BIND_RETRY_WINDOW_MS,
 } from './handoff-replacement-bind';
 
 async function main(): Promise<void> {
@@ -27,6 +28,25 @@ async function main(): Promise<void> {
     throw Object.assign(new Error('occupied'), { code: 'EADDRINUSE' });
   }, { enabled: false }));
   assert.equal(ordinaryAttempts, 1, 'non-handoff binds must remain fail-fast');
+  assert.ok(
+    HANDOFF_BIND_RETRY_WINDOW_MS >= 30_000 && HANDOFF_BIND_RETRY_WINDOW_MS <= 45_000,
+    'handoff retry window must cover a slow replacement handoff without becoming unbounded',
+  );
+
+  let elapsedMs = 0;
+  let deadlineAttempts = 0;
+  await assert.rejects(listenWithHandoffRetry(async () => {
+    deadlineAttempts += 1;
+    throw Object.assign(new Error('still occupied'), { code: 'EADDRINUSE' });
+  }, {
+    enabled: true,
+    maxWaitMs: 250,
+    initialDelayMs: 200,
+    now: () => elapsedMs,
+    sleep: async (ms) => { elapsedMs += ms; },
+  }));
+  assert.equal(deadlineAttempts, 3, 'handoff retry must stop at its bounded deadline');
+  assert.equal(elapsedMs, 250, 'last handoff retry sleep must be capped by the remaining deadline');
 
   class FakeListener extends EventEmitter {
     listening = true;
