@@ -4573,13 +4573,23 @@ function buildSnapshotDelta(prevSnapshot: string, newSnapshot: string, pass: num
 }
 
 const X_SCRAPE_PROFILE_PREFIX = 'detached-x_scrape_';
-let xScrapeOrphanSweepDone = false;
+let xScrapeOrphanSweep: Promise<{ killed: number; removedProfiles: number }> | undefined;
+
+function isLiveXScrapeProfile(profileDir: string, debugPort?: number, pid?: number): boolean {
+  const resolved = path.resolve(profileDir).toLowerCase();
+  return Array.from(sessions.values()).some((session) =>
+    (session.profileDir && path.resolve(session.profileDir).toLowerCase() === resolved)
+    || (debugPort && session.debugPort === debugPort)
+    || (pid && session.browser?.process?.()?.pid === pid),
+  );
+}
 
 function removeXScrapeProfileDir(profileDir: string): void {
   const root = path.resolve(getPersistentBrowserProfileRoot());
   const resolved = path.resolve(profileDir);
   if (path.dirname(resolved).toLowerCase() !== root.toLowerCase()) return;
   if (!path.basename(resolved).startsWith(X_SCRAPE_PROFILE_PREFIX)) return;
+  if (isLiveXScrapeProfile(resolved)) return;
   try { fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }); } catch {}
 }
 
@@ -4589,15 +4599,17 @@ function removeXScrapeProfileDir(profileDir: string): void {
  * touches `detached-x_scrape_*` profiles under the Prometheus profile root that
  * no live session in this gateway owns.
  */
-export async function sweepOrphanedXScrapeChromes(): Promise<{ killed: number; removedProfiles: number }> {
+export function sweepOrphanedXScrapeChromes(): Promise<{ killed: number; removedProfiles: number }> {
+  // Publish the shared promise before enumeration starts; every scraper waits.
+  return xScrapeOrphanSweep ??= Promise.resolve().then(runXScrapeOrphanSweep);
+}
+
+async function runXScrapeOrphanSweep(): Promise<{ killed: number; removedProfiles: number }> {
   const root = getPersistentBrowserProfileRoot();
-  const liveProfiles = new Set(
-    Array.from(sessions.values()).map((s) => String(s.profileDir || '').toLowerCase()).filter(Boolean),
-  );
   let killed = 0;
   const procs = await findChromeProcessesByProfilePrefix(root, X_SCRAPE_PROFILE_PREFIX);
   for (const proc of procs) {
-    if (liveProfiles.has(proc.profileDir.toLowerCase())) continue;
+    if (isLiveXScrapeProfile(proc.profileDir, proc.debugPort, proc.pid)) continue;
     if (await killProcessTree(proc.pid)) killed += 1;
   }
   let removedProfiles = 0;
@@ -4606,7 +4618,7 @@ export async function sweepOrphanedXScrapeChromes(): Promise<{ killed: number; r
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || !entry.name.startsWith(X_SCRAPE_PROFILE_PREFIX)) continue;
       const dir = path.join(root, entry.name);
-      if (liveProfiles.has(path.resolve(dir).toLowerCase())) continue;
+      if (isLiveXScrapeProfile(dir)) continue;
       removeXScrapeProfileDir(dir);
       if (!fs.existsSync(dir)) removedProfiles += 1;
     }
@@ -4620,10 +4632,7 @@ export async function sweepOrphanedXScrapeChromes(): Promise<{ killed: number; r
 export async function fetchXThread(sessionId: string, url: string): Promise<string> {
   // Normalize /video/N direct links to base tweet URL for proper extraction
   const normalizedUrl = url.replace(/\/video\/\d+(\?|$)/, '$1');
-  if (!xScrapeOrphanSweepDone) {
-    xScrapeOrphanSweepDone = true;
-    await sweepOrphanedXScrapeChromes().catch(() => null);
-  }
+  await sweepOrphanedXScrapeChromes().catch(() => null);
   // Use unique session ID for X scraping, isolated from main session
   const xSessionId = `x_scrape_${Date.now()}`;
   let xProfileDir = '';
