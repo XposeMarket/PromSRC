@@ -230,15 +230,25 @@ export function createMobileVoiceRuntime(context = {}) {
     return 'browser';
   }
 
+  // Realtime provider ids are 'openai' (Codex bridge / OpenAI realtime), 'xai',
+  // or 'custom:<id>'. Settings saved before #704 used 'openai_realtime',
+  // 'canonical' or 'xai' in voiceMode; map them so the bootstrap never 400s.
+  function _normalizeMobileVoiceProviderId(value) {
+    const id = String(value || '').trim();
+    if (id === 'xai' || id === 'xai_realtime') return 'xai';
+    if (id.startsWith('custom:')) return id;
+    return 'openai';
+  }
+
   function _loadVoiceSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(PM_VOICE_SETTINGS_KEY) || '{}');
-      const voiceMode = String(saved.voiceMode || saved.provider || 'openai').trim() || 'openai';
+      const voiceMode = _normalizeMobileVoiceProviderId(saved.provider || saved.voiceMode);
       const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
       return {
         voiceMode,
-        provider: String(saved.provider || voiceMode).trim() || 'openai',
-        protocol: String(saved.protocol || '').trim(),
+        provider: voiceMode,
+        protocol: voiceMode === 'xai' ? 'xai_realtime' : voiceMode.startsWith('custom:') ? (String(saved.protocol || '').trim() || 'openai_realtime_compatible') : 'openai_realtime',
         realtimeModel: String(saved.realtimeModel || saved.model || '').trim(),
         sttProvider: voiceMode,
         ttsProvider: voiceMode,
@@ -273,7 +283,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _mobileRealtimeProviderKeyFromSettings(settings = __pmVoice?.settings || {}) {
-    return String(settings?.provider || settings?.voiceMode || 'openai').trim() || 'openai';
+    return _normalizeMobileVoiceProviderId(settings?.provider || settings?.voiceMode);
   }
 
   function _mobileRealtimeTurnDetectionForListenMode(listenMode, settings = __pmVoice?.settings || {}) {
@@ -442,11 +452,11 @@ export function createMobileVoiceRuntime(context = {}) {
     const newKey = _mobileRealtimeProviderKeyFromSettings(next);
     const activeConn = __pmRealtimeAgent?.conn;
     const activeProviderKey = activeConn
-      ? (activeConn.provider === 'xai' ? 'xai_realtime' : 'openai_realtime')
+      ? String(activeConn.providerKey || (activeConn.provider === 'xai' ? 'xai' : 'openai'))
       : '';
-    const realtimeKeys = ['voiceMode', 'sttProvider', 'ttsProvider', 'listenMode', 'wakePhrase', 'wakeGateActive', 'realtimeVoice', 'realtimeSpeed', 'serverVoice', 'xaiSpeed', 'voiceAgentRealtimeAgent', 'voiceAgentXaiRealtime'];
+    const realtimeKeys = ['provider', 'protocol', 'realtimeModel', 'voiceMode', 'sttProvider', 'ttsProvider', 'listenMode', 'wakePhrase', 'wakeGateActive', 'realtimeVoice', 'realtimeSpeed', 'serverVoice', 'xaiSpeed', 'voiceAgentRealtimeAgent', 'voiceAgentXaiRealtime'];
     const touchedRealtime = keys.some((key) => realtimeKeys.includes(key));
-    const openAiAgentVoiceChanged = activeProviderKey === 'openai_realtime'
+    const openAiAgentVoiceChanged = !!activeProviderKey && activeProviderKey !== 'xai'
       && keys.includes('realtimeVoice')
       && String(previous.realtimeVoice || '') !== String(next.realtimeVoice || '');
     // Do this before updating any other realtime connection: OpenAI rejects a
@@ -461,7 +471,8 @@ export function createMobileVoiceRuntime(context = {}) {
       if (String(previous.ttsProvider || '') === 'openai_realtime' && String(next.ttsProvider || '') !== 'openai_realtime') _closeRealtimeSpeechConnection?.();
     }
     if (!touchedRealtime && !activeConn) return;
-    if (activeConn && (newKey === 'split' || (activeProviderKey && newKey !== activeProviderKey))) {
+    // Only a provider switch restarts a live session; unrelated settings must not.
+    if (activeConn && newKey !== oldKey && newKey !== activeProviderKey) {
       _restartMobileRealtimeAgentForSettings('provider_changed');
       return;
     }
@@ -720,7 +731,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _prewarmMobileCodexRealtimeBridge() {
-    if (_mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) !== 'openai_realtime') return null;
+    if (_mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) !== 'openai') return null;
     if (__pmVoice?.codexRealtimeBridgeWarmPromise) return __pmVoice.codexRealtimeBridgeWarmPromise;
     const promise = mobileGatewayFetch('/api/realtime/status', { method: 'GET' })
       .then((status) => {

@@ -86,8 +86,10 @@ export function getVoiceProviderRegistry(config: any = getConfig().getConfig()):
   const custom = record(voice.providers);
   const providers = [
     {
-      id: 'openai', label: 'OpenAI Realtime', protocol: 'openai_realtime', builtIn: true, connected: openai.configured,
-      models: [{ id: 'gpt-realtime-2', label: 'GPT Realtime 2' }], voices: OPENAI_VOICES, defaultModel: 'gpt-realtime-2', defaultVoice: 'marin',
+      // With ChatGPT OAuth (no API key) this provider runs through the Codex
+      // app-server bridge (gpt-live-1-codex); label it so users see Codex voice.
+      id: 'openai', label: openai.authSource === 'oauth' ? 'Codex Voice (ChatGPT)' : 'OpenAI Realtime', protocol: 'openai_realtime', builtIn: true, connected: openai.configured,
+      models: [{ id: 'gpt-realtime-2', label: openai.authSource === 'oauth' ? 'Codex Live (ChatGPT bridge)' : 'GPT Realtime 2' }], voices: OPENAI_VOICES, defaultModel: 'gpt-realtime-2', defaultVoice: 'marin',
       authSource: 'chat:openai', connectionLabel: openai.configured ? `OpenAI (${openai.authSource})` : 'OpenAI not connected',
     },
     {
