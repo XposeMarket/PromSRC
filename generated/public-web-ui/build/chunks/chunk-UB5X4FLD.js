@@ -1,4 +1,5 @@
 <<<<<<<< HEAD:generated/public-web-ui/build/chunks/chunk-UB5X4FLD.js
+<<<<<<<< HEAD:generated/public-web-ui/build/chunks/chunk-UB5X4FLD.js
 <<<<<<<< HEAD:generated/public-web-ui/build/chunks/chunk-KCI4XCLW.js
 import{A as kt,C as Q,H as Lt,I as Mt,J as At,M as Tt,O as _t,c as mt,f as ut,g as vt,h as Ee,i as ht,j as gt,l as fe,m as ft,o as bt,p as yt,q as Pe,r as wt,s as $t,t as xt,u as Ce,v as St}from"./chunk-RVCPB2AF.js";import{b as ue}from"./chunk-J5HXEABW.js";import{a as ee}from"./chunk-35CAQ6TV.js";import{H as b,I as m,O as Te,P as _e}from"./chunk-RV4P4Q6H.js";import{e as oe}from"./chunk-DMDHDKAQ.js";import{a as ct,b as dt,c as pt}from"./chunk-M3PLONZS.js";import{La as lt,Q as Re,R as Ye,S as Le,T as Je,U as Ze,V as Xe,X as et,Y as Me,Z as tt,_ as Ae,aa as at,ba as nt,c as Ge,ca as rt,da as st,ea as ot,ga as it,s as Qe}from"./chunk-LWMMI44A.js";import{a as C}from"./chunk-N4XQFN62.js";function zt(e){let i=e.house==="blue"?"#4a82d1":"#a4682b";return`
 ========
@@ -7,6 +8,9 @@ import{A as kt,C as Q,H as Lt,I as Mt,J as At,M as Tt,O as _t,c as mt,f as ut,g 
 ========
 import{A as kt,C as Q,H as Lt,I as Mt,J as At,M as Tt,O as _t,c as mt,f as ut,g as vt,h as Ee,i as ht,j as gt,l as fe,m as ft,o as bt,p as yt,q as Pe,r as wt,s as $t,t as xt,u as Ce,v as St}from"./chunk-JJHGFL3T.js";import{b as ue}from"./chunk-J5HXEABW.js";import{a as ee}from"./chunk-35CAQ6TV.js";import{H as b,I as m,O as Te,P as _e}from"./chunk-PSSVEZ7B.js";import{e as oe}from"./chunk-MZA47U74.js";import{a as ct,b as dt,c as pt}from"./chunk-M3PLONZS.js";import{La as lt,Q as Re,R as Ye,S as Le,T as Je,U as Ze,V as Xe,X as et,Y as Me,Z as tt,_ as Ae,aa as at,ba as nt,c as Ge,ca as rt,da as st,ea as ot,ga as it,s as Qe}from"./chunk-5EXWSNTM.js";import{a as C}from"./chunk-N4XQFN62.js";function zt(e){let i=e.house==="blue"?"#4a82d1":"#a4682b";return`
 >>>>>>>> origin/fix/plan-pill-finalize:generated/public-web-ui/build/chunks/chunk-E6CSUPRO.js
+========
+import{A as kt,C as Q,H as Lt,I as Mt,J as At,M as Tt,O as _t,c as mt,f as ut,g as vt,h as Ee,i as ht,j as gt,l as fe,m as ft,o as bt,p as yt,q as Pe,r as wt,s as $t,t as xt,u as Ce,v as St}from"./chunk-KXJGKL4L.js";import{b as ue}from"./chunk-J5HXEABW.js";import{a as ee}from"./chunk-35CAQ6TV.js";import{H as b,I as m,O as Te,P as _e}from"./chunk-PSSVEZ7B.js";import{e as oe}from"./chunk-MZA47U74.js";import{a as ct,b as dt,c as pt}from"./chunk-M3PLONZS.js";import{La as lt,Q as Re,R as Ye,S as Le,T as Je,U as Ze,V as Xe,X as et,Y as Me,Z as tt,_ as Ae,aa as at,ba as nt,c as Ge,ca as rt,da as st,ea as ot,ga as it,s as Qe}from"./chunk-5EXWSNTM.js";import{a as C}from"./chunk-N4XQFN62.js";function zt(e){let i=e.house==="blue"?"#4a82d1":"#a4682b";return`
+>>>>>>>> origin/fix/mobile-recovery-stream:generated/public-web-ui/build/chunks/chunk-AU5YRNJQ.js
     <button class="pm-team-tile ${e.featured?"featured":""}" data-team="${e.id}">
       ${e.featured?'<span class="pm-star">\u2605</span>':""}
       <span class="pm-house" style="color:${i}">\u{1F3E0}</span>

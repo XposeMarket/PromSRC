@@ -3841,6 +3841,8 @@ function _appendMobileProcess(message, type, text, extra = null) {
 function _recordMobileChatError(message, error) {
   if (!message) return null;
   const presentation = error?.chatPresentation || presentChatError(error);
+  // Transport recovery belongs to the connection pill, not the tool journal.
+  if (error?.mobileStreamDisconnected || presentation.key === 'chat-connection-dropped') return presentation;
   const prior = message.errorPresentation;
   if (prior?.key === presentation.key) {
     prior.count = Math.max(1, Number(prior.count || 1)) + 1;
@@ -3889,6 +3891,15 @@ function _clearRecoveredMobileChatError(message) {
   if (message.errorPresentation?.key === 'chat-connection-dropped') {
     delete message.errorPresentation;
     changed = true;
+  }
+  for (const key of ['processEntries', 'liveTraceEntries']) {
+    if (!Array.isArray(message[key])) continue;
+    const entries = message[key].filter((entry) => !(
+      String(entry?.type || '').toLowerCase() === 'error'
+      && (entry?.extra?.code === 'chat-connection-dropped'
+        || /^Connection dropped: Recovery is checking whether Prometheus is still working\.?$/.test(String(entry?.text || '')))
+    ));
+    if (entries.length !== message[key].length) { message[key] = entries; changed = true; }
   }
   if (clearMobileRecoveryPlaceholder(message)) changed = true;
   return changed;
@@ -4180,6 +4191,7 @@ function _normalizeMobileProcessEntry(entry) {
     status: String(recovered.status || recovered.extra?.status || '').trim() || undefined,
     summary: String(recovered.summary || recovered.extra?.summary || '').trim() || undefined,
     extra: recovered.extra || null,
+    ...(recovered.activity ? { activity: recovered.activity } : {}),
     time: recovered.time || (recovered.ts ? _formatChatTime(recovered.ts) : ''),
     // Vision rows (analyze_image/analyze_video, screenshots) render from
     // preview; dropping it here left reloaded turns with an empty card.
@@ -4241,8 +4253,16 @@ function _isMobileReasoningSummaryTraceEntry(entry) {
 
 function _normalizeMobileRecoveredTraceEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
-  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const nestedExtra = extra.extra && typeof extra.extra === 'object' ? extra.extra : {};
+  // Checkpoints wrap the SSE payload in extra (sometimes extra.extra).
+  // Flatten once before inference so live and recovered rows keep identical
+  // args, result, call identity and terminal metadata.
+  const outerExtra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const nestedExtra = outerExtra.extra && typeof outerExtra.extra === 'object' ? outerExtra.extra : {};
+  const extra = { ...nestedExtra, ...outerExtra };
+  for (const key of ['action', 'toolName', 'args', 'result', 'output', 'callId', 'tool_call_id', 'toolCallId', 'runId', 'terminal', 'durationMs']) {
+    if (extra[key] == null && entry[key] != null) extra[key] = entry[key];
+  }
+  entry = { ...entry, extra };
   const rawType = String(entry.type || entry.kind || '').toLowerCase();
   const event = String(extra.event || entry.event || rawType || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
@@ -5047,16 +5067,9 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   // The durable process log is a recovery fallback, not a second narration
   // channel. When the stream already supplied thought text, replaying the
   // same planning updates from processEntries produces duplicate prose rows.
-  const structuredActions = new Set(liveSources.map((entry) => String(
-    entry?.activity?.action
-      || entry?.extra?.action
-      || entry?.extra?.toolName
-      || entry?.action
-      || entry?.toolName
-      || '',
-  ).trim()).filter(Boolean));
   const structuredCallIds = new Set(liveSources.map((entry) => String(
     entry?.activity?.callId
+      || entry?.extra?.callId
       || entry?.extra?.toolCallId
       || entry?.extra?.tool_call_id
       || entry?.toolCallId
@@ -5072,9 +5085,9 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     let text = String(entry.text || entry.content || entry.message || '').trim();
     const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
     const action = String(extra?.action || extra?.toolName || entry.action || entry.toolName || '').trim();
-    const callId = String(extra?.toolCallId || extra?.tool_call_id || entry.toolCallId || '').trim();
-    if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
-      && (['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)
+    const callId = String(extra?.callId || extra?.toolCallId || extra?.tool_call_id || entry.callId || entry.toolCallId || '').trim();
+    if (fromProcess && action && callId && structuredCallIds.has(callId)
+      && (['tool', 'skill', 'info', 'progress'].includes(type)
         || (type === 'compaction' && out.some((candidate) => (
           String(candidate?.type || '').toLowerCase() === 'compaction'
           && String(candidate?.status || candidate?.extra?.status || '').toLowerCase() !== 'compacting'
@@ -5116,7 +5129,7 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
       if (!previewData) return;
     }
     const thoughtKind = _mobileTraceThoughtKind({ ...entry, type, extra });
-    const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
+    const key = `${type}|${callId}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     if (type === 'compaction') {
@@ -5161,7 +5174,8 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const preview = _mobileVisionPreviewKey(entry?.preview?.dataUrl || entry?.dataUrl || '', entry?.preview || {});
     const thoughtType = type === 'preamble' || type === 'think' || type === 'assistant';
     const thoughtKind = thoughtType ? _mobileTraceThoughtKind(entry) : '';
-    return `${thoughtType ? 'thought' : type}|${thoughtKind}|${text}|${preview}`;
+    const callId = String(entry?.activity?.callId || entry?.extra?.callId || entry?.extra?.toolCallId || entry?.extra?.tool_call_id || '').trim();
+    return `${thoughtType ? 'thought' : type}|${callId}|${thoughtKind}|${text}|${preview}`;
   };
   const isThoughtTraceEntry = (entry) => {
     const type = String(entry?.type || '').toLowerCase();
@@ -5187,13 +5201,12 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
-    // Recovery process rows are a fallback for calls the live stream never
-    // delivered. When a structured live row already owns this tool call, the
-    // reduced checkpoint copy (no duration/summary) must not join the trace.
+    // Calls already owned by a live row need no duplicate operation. Results
+    // must still reach the shared coalescer to complete an interrupted call.
     const derivedType = String(entry?.type || '').toLowerCase();
     const derivedCallId = String(entry?.extra?.toolCallId || entry?.extra?.tool_call_id || entry?.extra?.callId || entry?.toolCallId || '').trim();
     if (derivedCallId && structuredCallIds.has(derivedCallId)
-      && ['tool', 'skill', 'result', 'error', 'progress'].includes(derivedType)) continue;
+      && ['tool', 'skill', 'progress'].includes(derivedType)) continue;
     const key = traceDedupeKey(entry);
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {

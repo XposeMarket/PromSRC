@@ -7385,9 +7385,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           targetAiTurn.streaming = true;
           const plannedRestart = isRestartSuspended(_readMobileActiveRun(actualSessionId));
           if (!plannedRestart) {
-            _recordMobileChatError(targetAiTurn, err);
             setChatConnectionStatus(true, 'Reconnecting to Prometheus');
-            pmToast(targetAiTurn.errorPresentation);
           }
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
           scheduleMobileRunRecovery(plannedRestart ? 250 : 2500, { force: true });
