@@ -2254,6 +2254,15 @@ function isMobileVisionPreviewPath(pathname, searchParams) {
 // a paired remote gateway, so a raw relative route would incorrectly resolve
 // against the page origin and silently leave the live image blank. Rebuild
 // supported routes against the active gateway and attach the media token.
+// Sent attachments keep only their workspace path once uploaded (the inline
+// data URL is dropped to keep session JSON small). A bare relative route has
+// no gateway origin or pairing token, so it 401s over a paired/Funnel gateway
+// and renders as a broken image. Route it like every other mobile media URL.
+export function buildMobileAttachmentInlineUrl(workspacePath) {
+  const route = `/api/canvas/inline?path=${encodeURIComponent(String(workspacePath || ''))}`;
+  return buildMobileVisionPreviewUrl(route) || route;
+}
+
 export function buildMobileVisionPreviewUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';

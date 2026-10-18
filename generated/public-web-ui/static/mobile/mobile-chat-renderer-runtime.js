@@ -13,6 +13,7 @@ import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-mer
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
+import { buildMobileAttachmentInlineUrl as _aSrc } from './mobile-api.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -1314,7 +1315,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       const meta = escapeHtml(stateLabel || f.sizeLabel || f.mimeType || 'file');
       const remove = removable ? `<button type="button" class="pm-attach-remove" data-remove-attachment="${i}" aria-label="Remove attachment">×</button>` : '';
       if (f.kind === 'image' && (f.dataUrl || f.workspacePath)) {
-        const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
+        const src = f.dataUrl || _aSrc(f.workspacePath);
         const mediaAttrs = !removable
           ? ` data-pm-media data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(f.workspacePath ? `/api/canvas/download?path=${encodeURIComponent(String(f.workspacePath || ''))}` : src)}" data-name="${name}" data-path="${escapeHtml(String(f.workspacePath || ''))}"`
           : '';
@@ -1325,7 +1326,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         return `<${tag} class="pm-attach-chip image${removable ? '' : ' openable'}"${mediaAttrs}>${remove}<img src="${escapeHtml(src)}" alt=""><span><strong>${name}</strong><em>${meta}</em></span></${removable ? 'div' : 'button'}>`;
       }
       if (f.kind === 'video' && (f.dataUrl || f.workspacePath)) {
-        const src = f.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(f.workspacePath || ''))}`;
+        const src = f.dataUrl || _aSrc(f.workspacePath);
         const mediaAttrs = !removable
           ? ` data-pm-media data-kind="video" data-src="${escapeHtml(src)}" data-download="${escapeHtml(f.workspacePath ? `/api/canvas/download?path=${encodeURIComponent(String(f.workspacePath || ''))}` : src)}" data-name="${name}" data-path="${escapeHtml(String(f.workspacePath || ''))}"`
           : '';

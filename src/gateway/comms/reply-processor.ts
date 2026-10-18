@@ -2,6 +2,7 @@
 // Reply sanitization and thinking-tag stripping — extracted from server-v2.ts (Step 17.1).
 // Exports: separateThinkingFromContent, sanitizeFinalReply, stripExplicitThinkTags,
 //          normalizeForDedup, isGreetingLikeMessage
+import { stripChatUiMarkup } from './chat-ui-markup.js';
 
 export function separateThinkingFromContent(text: string): { reply: string; thinking: string } {
   if (!text) return { reply: '', thinking: '' };
@@ -100,7 +101,7 @@ export function sanitizeFinalReply(
   text: string,
   opts: { preflightReason?: string } = {},
 ): string {
-  const raw = stripInternalToolNotes(text).trim();
+  const raw = stripChatUiMarkup(stripInternalToolNotes(text)).trim();
   if (!raw) return '';
 
   const metaPatterns: RegExp[] = [
