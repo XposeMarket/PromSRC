@@ -9,6 +9,8 @@ import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
+import { attachNativePicker } from './mobile-native-picker.js';
+
 
 export { mobileReplayFrameAfterSteer };
 
@@ -498,6 +500,14 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let targetProjectId = String(rememberedChatContext.projectId || '').trim();
   let targetProjectLabel = String(rememberedChatContext.projectName || '').trim();
   let targetWorkspaceLabel = gatewayTarget?.workspaceName || '';
+  let nativeTargetPicker = null;
+  let nativeProjectPicker = null;
+  let nativeProjectPickerOptions = [
+    { value: '', label: 'Chat', selected: !targetProjectId },
+    { value: '__pm_new_project__', label: 'New project…' },
+    ...(targetProjectId ? [{ value: targetProjectId, label: targetProjectLabel || 'Current project', selected: true }] : []),
+  ];
+
   let targetPopover = null;
   let closeTargetPopover = () => {};
 
@@ -1334,11 +1344,90 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     button.addEventListener('click', run);
     try { attachMobileButtonHaptic(button, run); } catch {}
   };
-  bindContextTrigger(targetChip, openChatTargetPopover);
-  bindContextTrigger(projectChip, openChatProjectPopover);
+  // The direction choices use directly tapped native selects on mobile. Keep
+  // the legacy popover functions above as a fallback implementation, but do
+  // not bind them while the native overlays own the trusted user gesture.
+  nativeTargetPicker = attachNativePicker(targetChip, {
+    label: 'Connected computer',
+    options: () => {
+      const target = currentChatGateway();
+      return loadGatewayCatalog().map((entry) => ({
+        value: entry.gatewayId,
+        label: entry.name,
+        selected: entry.gatewayId === target?.gatewayId,
+        disabled: requestedSession !== MOBILE_CHAT_SESSION_ID,
+      }));
+    },
+    onChange: (value) => {
+      const gatewayId = String(value || '').trim();
+      if (requestedSession !== MOBILE_CHAT_SESSION_ID || !gatewayId || gatewayId === currentChatGateway()?.gatewayId) {
+        nativeTargetPicker?.refresh();
+        return;
+      }
+      pendingGatewayId = gatewayId;
+      setActiveGatewayId(gatewayId);
+      setMobileActiveGatewayTarget(gatewayId);
+      rememberChatContext();
+      renderChatTargetChip();
+      renderChatProjectChip();
+      nativeTargetPicker?.refresh();
+      nativeProjectPicker?.refresh();
+    },
+  });
+  nativeProjectPicker = attachNativePicker(projectChip, {
+    label: 'Directed chat',
+    options: () => nativeProjectPickerOptions.map((option) => ({
+      ...option,
+      selected: option.value === targetProjectId,
+    })),
+    onChange: (value) => {
+      const selected = String(value || '');
+      if (selected === '__pm_new_project__') {
+        nativeProjectPicker?.refresh();
+        openNewProjectPopover();
+        return;
+      }
+      if (selected === targetProjectId) {
+        nativeProjectPicker?.refresh();
+        return;
+      }
+      const option = nativeProjectPickerOptions.find((entry) => entry.value === selected);
+      targetProjectId = selected;
+      targetProjectLabel = selected ? String(option?.label || '').trim() : '';
+      rememberChatContext();
+      renderChatProjectChip();
+      nativeProjectPicker?.refresh();
+    },
+  });
   renderChatTargetChip();
   renderChatProjectChip();
-  const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => renderChatTargetChip());
+  const loadNativeProjectPickerOptions = async () => {
+    try {
+      const data = await mobileGatewayFetch('/api/projects');
+      if (mobilePageDisposed) return;
+      const projects = (Array.isArray(data) ? data : data?.projects || []).filter((project) => project?.id);
+      nativeProjectPickerOptions = [
+        { value: '', label: 'Chat', selected: !targetProjectId },
+        { value: '__pm_new_project__', label: 'New project…' },
+        ...projects.map((project) => ({
+          value: String(project.id),
+          label: String(project.name || 'Untitled project'),
+          selected: String(project.id) === targetProjectId,
+        })),
+      ];
+    } catch {
+      // Keep the remembered selection and project creation available offline.
+    }
+    if (targetProjectId && !nativeProjectPickerOptions.some(option => option.value === targetProjectId)) {
+      nativeProjectPickerOptions.push({ value: targetProjectId, label: targetProjectLabel || 'Current project', selected: true });
+    }
+    nativeProjectPicker?.refresh();
+  };
+  void loadNativeProjectPickerOptions();
+  const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => {
+    renderChatTargetChip();
+    nativeTargetPicker?.refresh();
+  });
 
   function syncNewProjectPopoverToKeyboard(keyboardOpen = false, visualBottom = 0, layoutHeight = 0) {
     const popover = targetPopover?.dataset?.popoverType === 'new-project' ? targetPopover : null;
@@ -1459,6 +1548,12 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         renderChatProjectChip();
         invalidateMobileDrawerSessions();
         try { window.__pmMobileProjectsChanged?.(project); } catch {}
+        nativeProjectPickerOptions = [
+          { value: '', label: 'Chat', selected: !targetProjectId },
+          { value: projectId, label: targetProjectLabel, selected: true },
+          ...nativeProjectPickerOptions.filter((option) => option.value && option.value !== projectId),
+        ];
+        nativeProjectPicker?.refresh();
         close();
       } catch (error) {
         submitting = false;
@@ -7967,6 +8062,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         __pmChat.recoverTimer = null;
       }
     }
+    nativeTargetPicker?.destroy();
+    nativeTargetPicker = null;
+    nativeProjectPicker?.destroy();
+    nativeProjectPicker = null;
+
     stopMobileBackgroundAgentDetailRefresh();
     _mobileChatRendererInvoke('_flushMobileBackgroundWorkPersistence');
     backgroundAgentRenderScheduler.destroy();
