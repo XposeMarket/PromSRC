@@ -59,6 +59,19 @@ const {
 
 {
   const entries = [];
+  const restored = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'run_restored_1',
+    action: 'workspace_run',
+    args: { command: 'npm test' },
+    terminal: { runId: 'run_restored_1', state: 'exited', exitCode: 0 },
+  });
+  assert.equal(restored.activity.terminal.completed, true, 'recovered process snapshots preserve their completed state');
+  assert.doesNotMatch(renderToolActivityEntry(restored), /<em>streaming<\/em>/, 'rehydrated exited terminals render as completed');
+}
+
+
+{
+  const entries = [];
   applyToolActivityEvent(entries, 'call', {
     toolCallId: 'skill_read_1',
     action: 'skill_read',
@@ -220,6 +233,14 @@ const {
   const rerendered = renderToolActivityEntry(staleRender, (value) => String(value));
   assert.match(rerendered, /third line/, 'a timeline rerender keeps the latest streamed output');
   assert.doesNotMatch(rerendered, /duplicate third/, 'repeated transport events do not append twice');
+  const operation = entries.find((entry) => entry?.activity?.terminal?.runId === 'run_live_1' && entry.activity.kind === 'operation');
+  const ended = applyCommandProcessEvent([operation], 'process_run_update', {
+    run: { runId: 'run_live_1', toolCallId: 'command_live_1', state: 'exited', exitCode: 0, outputSeq: 2 },
+  });
+  assert.equal(ended.completed, true, 'a terminal process snapshot ends the inline terminal even when its event name is update');
+  html = renderToolActivityEntry(operation, (value) => String(value));
+  assert.match(html, /tool-command-terminal is-complete/);
+  assert.doesNotMatch(html, /<em>streaming<\/em>/);
 
   applyCommandProcessEvent(entries, 'process_run_exited', {
     run: { runId: 'run_live_1', toolCallId: 'command_live_1', state: 'exited', exitCode: 0, durationMs: 850, outputSeq: 2 },

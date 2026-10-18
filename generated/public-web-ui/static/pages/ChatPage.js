@@ -1,5 +1,6 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
 import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
@@ -18588,40 +18589,6 @@ function backgroundSpawnPreview(value, max = 180) {
   return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
 }
 
-function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
-  const next = String(text || '').trim();
-  if (!next) return;
-  const latest = trace.at(-1);
-  const previous = latest
-    && String(latest?.extra?.source || '').toLowerCase() === 'agent_progress'
-    ? latest
-    : null;
-  const visibleExtra = {
-    ...extra,
-    source: 'agent_progress',
-    visibility: 'summary',
-    reasoningKind: 'summary',
-  };
-  if (!previous) {
-    trace.push({
-      id: `background_trace_${index}`,
-      type: 'think',
-      text: next,
-      ts: String(extra?.ts || ''),
-      extra: visibleExtra,
-    });
-    return;
-  }
-  const current = String(previous.text || '').trim();
-  const isSnapshot = next.length > current.length && next.startsWith(current);
-  const canAppend = delta
-    && current
-    && !isSnapshot
-    && !/[.!?:]\s*$/.test(current)
-    && (/^\s/.test(text) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  previous.text = canAppend ? `${current}${next}`.replace(/\s+/g, ' ').trim() : next;
-  previous.extra = { ...(previous.extra || {}), ...visibleExtra };
-}
 
 function backgroundAgentEventsToLiveTraceEntries(events = []) {
   const trace = [];
@@ -18673,7 +18640,12 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
     }
     if (eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta') {
       const text = String(extra.thinking || extra.text || extra.message || entry.content || '').trim();
-      mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType.endsWith('_delta') });
+      mergeBackgroundReasoningSummary(trace, text, {
+        ...extra,
+        source: 'agent_progress',
+        visibility: 'summary',
+        reasoningKind: 'summary',
+      }, index, { delta: eventType.endsWith('_delta') });
       return;
     }
     if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
@@ -18799,7 +18771,13 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
           type: 'think',
           actor: 'Background Agent',
           content: text,
-          extra: { ...extra, source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' },
+          extra: {
+            ...extra,
+            eventType,
+            source: 'agent_progress',
+            visibility: 'summary',
+            reasoningKind: 'summary',
+          },
         }
         : null;
     }
@@ -19119,8 +19097,7 @@ function renderBackgroundSpawnDock() {
   dock.innerHTML = `${lanes.length > 2 ? '<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents">×</button>' : ''}${lanes.map((lane) => {
     const status = String(lane.status || 'running').toLowerCase();
     const statusLabel = status === 'in_progress' ? 'running' : status;
-    const latest = lane.events[lane.events.length - 1];
-    const detail = latest?.content || (lane.result ? backgroundAgentPreview(lane.result, 120) : 'Working in parallel...');
+    const detail = backgroundSpawnCollapsedDetail(lane, backgroundAgentPreview);
     const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
     return `
       <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">

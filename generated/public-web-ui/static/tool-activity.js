@@ -864,6 +864,7 @@ export function applyCommandProcessEvent(entriesInput, eventTypeRaw, payload = {
   terminal.command = command || terminal.command || firstValue(operationEntry.activity.args, ['command', 'cmd', 'script'], 500);
   terminal.cwd = compact(run.cwd || terminal.cwd, 300);
   terminal.state = String(run.state || terminal.state || (eventType === 'process_run_exited' ? 'exited' : 'running'));
+  if (['exited', 'completed', 'failed', 'cancelled', 'terminated'].includes(terminal.state.toLowerCase())) terminal.completed = true;
   terminal.exitCode = run.exitCode ?? terminal.exitCode;
   terminal.durationMs = run.durationMs ?? terminal.durationMs;
 
