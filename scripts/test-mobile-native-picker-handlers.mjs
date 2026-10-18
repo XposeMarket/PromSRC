@@ -42,9 +42,12 @@ try {
   assert.deepEqual(calls[2], ['save', 'p1', { reasoning_effort: 'high' }, true]);
   assert.deepEqual(calls[3], ['save', 'p1', { speed: 'fast' }, true]);
   assert.deepEqual(calls[4], ['fast', true]);
-  await page.evaluate(() => renderers._renderReasoningBody('p1', { model: 'm1', reasoning_effort: 'low' }, { onAdvanced: null, onSave: (...args) => calls.push(['subagent', ...args]) }));
-  await select('Intelligence').selectOption('high');
-  assert.deepEqual(await page.evaluate(() => calls.at(-1)), ['subagent', 'high', { immediate: true }]);
+  // The quick reasoning sheet (composer badge tap, subagent reasoning) is the
+  // custom swipe slider, NOT a native picker. Only the Advanced rows use native
+  // iOS pickers. PR #710 replaced the slider by mistake; keep it guarded.
+  assert.match(reasoning, /renderReasoningSelector\(/, 'quick reasoning sheet must render the reasoning slider');
+  assert.match(reasoning, /attachMobileHapticGestureSurface\(control/, 'reasoning slider must keep its native haptic gesture surface');
+  assert.doesNotMatch(reasoning, /attachNativePicker|data-pm-reasoning-picker/, 'quick reasoning sheet must not be a native picker drill-down');
   const chatSource = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-chat-page-runtime.js', import.meta.url), 'utf8');
   const chatBindings = chatSource.slice(chatSource.indexOf('  nativeTargetPicker = attachNativePicker('), chatSource.indexOf('\n  renderChatTargetChip();\n  renderChatProjectChip();\n  const loadNativeProjectPickerOptions'));
   await page.evaluate(async ({ helper, chatBindings }) => {

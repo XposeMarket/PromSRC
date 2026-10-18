@@ -26,6 +26,7 @@ import {
   validEffort,
 } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, formatModelWithReasoning, formatReasoningDisplayName } from '../model-display.js';
+import { renderReasoningSelector, reasoningSliderFillWidth, reasoningProgressFromPointer } from '../components/reasoning-selector.js';
 import { reasoningSheetViewportPlacement } from './mobile-reasoning-sheet-geometry.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 
@@ -960,27 +961,29 @@ async function _openReasoningSheet() {
   await _refreshPickerData();
   if (!sheet?.isConnected || !sheet.classList.contains('is-reasoning')) return;
   const body = document.getElementById('pm-msheet-body');
-  const stillOnSelector = !!body?.querySelector('[data-pm-reasoning-picker], .pm-msheet-loading');
+  const stillOnSelector = !!body?.querySelector('#pm-reasoning-selector, .pm-msheet-loading');
   if (stillOnSelector && (!warm || _pickerStateKey() !== shownKey)) render();
 }
 
 function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
   const options = _effortOptions(provider, cfg);
   const current = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
+  const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
+  const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
   _setSheetTitle('');
   const sheet = document.getElementById('pm-msheet');
   sheet?.__pmReasoningGestureDispose?.();
   if (sheet) sheet.__pmReasoningGestureDispose = null;
-  const label = options ? _effortLabel(current, provider, cfg.model) : 'Default';
-  const body = _setSheetBody(`
-    <div class="pm-msheet-rows pm-native-picker-rows">
-      <button type="button" class="pm-msheet-row pm-native-picker-trigger" data-pm-reasoning-picker ${options ? '' : 'disabled'}>
-        <span class="pm-msheet-row-label">Intelligence</span>
-        <span class="pm-msheet-row-value">${_esc(label)}</span>
-        <span class="pm-msheet-chev" aria-hidden="true">&#8250;</span>
-      </button>
-      ${typeof onAdvanced === 'function' ? '<button type="button" class="pm-msheet-row" id="pm-reasoning-advanced"><span class="pm-msheet-row-label">Model and speed</span><span class="pm-msheet-chev" aria-hidden="true">&#8250;</span></button>' : ''}
-    </div>`);
+  const body = _setSheetBody(renderReasoningSelector({
+    provider,
+    model: cfg.model,
+    effort: current,
+    selectorId: 'pm-reasoning-selector',
+    controlId: 'pm-reasoning-control',
+    liveLabelId: 'pm-reasoning-live-label',
+    advancedId: 'pm-reasoning-advanced',
+    includeAdvanced: typeof onAdvanced === 'function',
+  }));
   if (!body) return;
 
   document.getElementById('pm-reasoning-advanced')?.addEventListener('click', () => {
@@ -988,34 +991,148 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     onAdvanced?.();
   });
 
-  const trigger = body.querySelector('[data-pm-reasoning-picker]');
-  if (!trigger || !options) return;
-  const picker = attachNativePicker(trigger, {
-    label: 'Intelligence',
-    options: () => {
-      const liveOptions = _effortOptions(provider, cfg) || [];
-      const liveCurrent = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
-      return liveOptions.map(value => ({
-        value,
-        label: _effortLabel(value, provider, cfg.model),
-        selected: value === liveCurrent,
-      }));
-    },
-    onChange: (value) => {
-      const effort = String(value || '');
-      const nextCfg = { ...cfg, reasoning_effort: effort };
-      if (!effort) delete nextCfg.reasoning_effort;
-      const saveResult = onSave
-        ? onSave(effort, { immediate: true })
-        : _queueReasoningSave(provider, { reasoning_effort: effort }, true);
-      if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
-      _renderReasoningBody(provider, nextCfg, { onAdvanced, onSave });
-    },
-  });
-  picker.select?.addEventListener('change', () => pmHaptic(8));
-  picker.select?.parentElement?.style.setProperty('width', '100%');
+  const control = document.getElementById('pm-reasoning-control');
+  if (control && options) {
+    if (document.getElementById('pm-msheet')?.__pmModelSheetRestoreFocus?.id === 'pm-composer-input') {
+      // Slider gestures must not move focus off the textarea on iOS.
+      control.addEventListener('pointerdown', (event) => event.preventDefault(), true);
+    }
+    control.setAttribute('aria-label', 'Reasoning level. Swipe left or right to adjust.');
+    control.setAttribute('aria-orientation', 'horizontal');
+    let lastIndex = selectedIndex;
+    let requestGestureNativeHaptic = null;
+    const indexMax = Math.max(1, options.length - 1);
+    const setProgress = (progress) => {
+      const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+      control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
+      control.style.setProperty('--pm-reasoning-fill-width', reasoningSliderFillWidth(safeProgress, options.length));
+    };
+    const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
+      const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
+      const value = options[safeIndex] || '';
+      const label = _effortLabel(value, provider, cfg.model);
+      control.style.setProperty('--pm-reasoning-index', String(safeIndex));
+      if (snap) setProgress(safeIndex / indexMax);
+      control.setAttribute('aria-valuenow', String(safeIndex));
+      control.setAttribute('aria-valuetext', label);
+      document.getElementById('pm-reasoning-live-label').textContent = label;
+      control.querySelectorAll('.pm-reasoning-segment').forEach((segment, segmentIndex) => {
+        segment.classList.toggle('is-active', segmentIndex === safeIndex);
+        segment.classList.toggle('is-filled', segmentIndex <= safeIndex);
+      });
+      if (safeIndex !== lastIndex) {
+        // The gesture surface moves one real native switch under the finger.
+        // Request it once per crossed step; unchanged pointer moves request
+        // no tick. pmHaptic remains the non-gesture fallback.
+        const stepsCrossed = Math.abs(safeIndex - lastIndex);
+        for (let tick = 0; tick < stepsCrossed; tick += 1) {
+          // Only a gesture-surface callback puts the switch under the active
+          // finger. pmHaptic is the fallback for taps/keyboard and platforms
+          // without that native path.
+          if (requestGestureNativeHaptic) requestGestureNativeHaptic();
+          else pmHaptic(8);
+        }
+        lastIndex = safeIndex;
+      }
+      if (save) {
+        const saveResult = onSave
+          ? onSave(value, { immediate })
+          : _queueReasoningSave(provider, { reasoning_effort: value }, immediate);
+        if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+      }
+    };
+    // Thumb centers sit on segment centers; map the finger onto them.
+    const progressFromEvent = (event) => reasoningProgressFromPointer(event, control, options.length);
+    const indexFromProgress = (progress) => {
+      return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
+    };
+    const updateFromPointer = (event, immediate = false) => {
+      const progress = progressFromEvent(event);
+      setProgress(progress);
+      commitIndex(indexFromProgress(progress), immediate, { snap: immediate, save: immediate });
+    };
+    control.querySelectorAll('.pm-reasoning-segment').forEach((segment) => {
+      segment.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        commitIndex(segment.getAttribute('data-index'), true);
+      });
+    });
+    // Both the visible control and the short-lived native switch sensor use
+    // these handlers. The sensor produces real iOS ticks at level boundaries;
+    // disposing it with the sheet prevents an old invisible hit target from
+    // blocking the next opening.
+    let activePointerId = null;
+    const onPointerDown = (event, gesture) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
+      if (!gesture) event.preventDefault();
+      activePointerId = event.pointerId;
+      if (!gesture) { try { control.setPointerCapture?.(event.pointerId); } catch {} }
+      control.classList.add('is-dragging');
+      updateFromPointer(event);
+      const restoreFocus = sheet?.__pmModelSheetRestoreFocus;
+      if (restoreFocus?.id === 'pm-composer-input') {
+        queueMicrotask(() => {
+          if (restoreFocus.isConnected && document.activeElement !== restoreFocus) {
+            try { restoreFocus.focus({ preventScroll: true }); } catch {}
+          }
+        });
+      }
+    };
+    const onPointerMove = (event, gesture) => {
+      if (event.pointerId !== activePointerId) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+      updateFromPointer(event);
+    };
+    const finishPointer = (event) => {
+      if (event.pointerId !== activePointerId) return;
+      activePointerId = null;
+      control.classList.remove('is-dragging');
+      if (Number.isFinite(event.clientX)) updateFromPointer(event, true);
+      else commitIndex(lastIndex, true);
+      requestGestureNativeHaptic = null;
+    };
+    control.addEventListener('pointerdown', onPointerDown);
+    control.addEventListener('pointermove', onPointerMove);
+    control.addEventListener('pointerup', finishPointer);
+    control.addEventListener('pointercancel', finishPointer);
+    if (sheet) {
+      sheet.__pmReasoningGestureDispose = attachMobileHapticGestureSurface(control, {
+        onPointerDown,
+        onPointerMove,
+        onPointerUp: finishPointer,
+        onPointerCancel: finishPointer,
+        onClick: () => {
+          const restoreFocus = sheet.__pmModelSheetRestoreFocus;
+          if (restoreFocus?.id === 'pm-composer-input' && restoreFocus.isConnected && document.activeElement !== restoreFocus) {
+            try { restoreFocus.focus({ preventScroll: true }); } catch {}
+          }
+        },
+        nativeHapticsOnMove: false,
+      });
+      // The sensor is positioned from the control's rect when it is attached,
+      // but the sheet is still translated off-screen then (slide-up entrance)
+      // and the control is scaled. Re-measure once the sheet has settled, or
+      // the invisible switch sits below the viewport and iOS never ticks.
+      const refreshSensor = () => sheet.__pmReasoningGestureDispose?.refresh?.();
+      requestAnimationFrame(() => requestAnimationFrame(refreshSensor));
+      setTimeout(refreshSensor, 180);
+      setTimeout(refreshSensor, 420);
+      sheet.addEventListener('transitionend', (event) => {
+        if (event.target === sheet) refreshSensor();
+      });
+    }
+    control.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const currentIndex = Number(control.getAttribute('aria-valuenow') || selectedIndex);
+      if (event.key === 'Home') commitIndex(0, true);
+      else if (event.key === 'End') commitIndex(options.length - 1, true);
+      else commitIndex(currentIndex + (event.key === 'ArrowRight' ? 1 : -1), true);
+    });
+  }
 }
-
 
 async function _openSubagentReasoningSheet() {
   const context = _subagentReasoningContext;
