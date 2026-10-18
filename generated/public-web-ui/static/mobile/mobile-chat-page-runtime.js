@@ -7,6 +7,7 @@ import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../featu
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
+import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 
 export { mobileReplayFrameAfterSteer };
 
@@ -6054,7 +6055,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
 
   function applyMobileChatStreamEvent(aiTurn, evt) {
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     aiTurn = _mobileStreamTargetTurn(aiTurn);
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     if (!aiTurn || !evt?.type) return '';
     const eventRequestId = String(evt.clientRequestId || '').trim();
     const turnRequestId = String(aiTurn._clientRequestId || '').trim();
@@ -7126,6 +7129,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _pmAdmissionClientRequestId: clientRequestId,
       _clientRequestId: clientRequestId,
     };
+    rememberMobileStreamOwner(aiTurn, actualSessionId);
     activeThread.push(aiTurn);
     _appendMobileUserProcess(aiTurn, msg || 'Attached file(s)', {
       stage: 'mobile_chat_user_message',

@@ -1,0 +1,1 @@
+var o=new WeakMap;function t(e,r){if(!e||typeof e!="object")return"";let i=String(r||"").trim();return i&&!o.has(e)&&o.set(e,i),o.get(e)||""}function n(e,r){return o.get(e)||t(e,Object.keys(r).find(i=>Array.isArray(r[i])&&r[i].includes(e)))}export{t as a,n as b};

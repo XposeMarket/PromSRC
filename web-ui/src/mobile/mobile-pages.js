@@ -1,4 +1,5 @@
 // Chat and inline Voice route owner.
+import { mobileStreamOwner } from './mobile-stream-owner.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
@@ -11057,7 +11058,7 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       // a plain new turn to another chat's stale "Response after steer" row, so
       // the real turn showed no tool stream and inherited that row's label and
       // 30+ minute timer. Anonymous matches are only allowed in the owner chat.
-      const ownerSid = Object.keys(threads).find((sid) => Array.isArray(threads[sid]) && threads[sid].includes(turn)) || preferred;
+      const ownerSid = mobileStreamOwner(turn, threads);
       // Each steer links a new continuation onto the row that was live at that
       // moment, so a second steer hangs off the FIRST continuation, not off the
       // row the SSE closure holds. Follow the whole chain to the newest one;
@@ -11105,7 +11106,7 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
           const sameRequest = cid && rowCid === cid;
           // Snapshot copies can lose every identifier; the newest live
           // continuation inside the current request is then the target.
-          const liveAnonymous = sid === ownerSid
+          const liveAnonymous = !!ownerSid && sid === ownerSid
             && row.streaming === true && row._pmFinalReceived !== true
             && !(rowCid && cid && rowCid !== cid);
           if (!sameRow && !sameGroup && !sameRequest && !liveAnonymous) {
