@@ -54,7 +54,7 @@ async function main() {
     const appended = await readIndexedSessionUsage(copy, session);
     const appendMs = performance.now() - started;
     clearInterval(heartbeat);
-    if (before.length !== after.length || appended.length !== after.length + 1) throw new Error('benchmark result mismatch');
+    if (JSON.stringify(before) !== JSON.stringify(after) || appended.length !== after.length + 1) throw new Error('benchmark result mismatch');
     console.log(JSON.stringify({ bytes: size, sessionRows: after.length, baselineMs, coldMs, warmMs, appendMs, worstAsyncTimerDriftMs: worstDrift }, null, 2));
   } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
 }
