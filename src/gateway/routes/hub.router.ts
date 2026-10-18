@@ -15,6 +15,8 @@ import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
 import { readModelUsageEvents } from '../../providers/model-usage.js';
+import { aggregateHubUsageAnalytics } from '../hub-usage-analytics.js';
+import { listBackgroundStatuses } from '../tasks/task-runner.js';
 import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
 import { readAllToolObservations } from '../tool-observations';
 import { getAllMainChatGoalRecords } from '../main-chat-goals';
@@ -1002,7 +1004,28 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
+
 });
+
+router.get('/api/hub/usage-analytics', (req: Request, res: Response) => {
+  try {
+    const analytics = aggregateHubUsageAnalytics(readModelUsageEvents(), {
+      range: req.query.range,
+      provider: req.query.provider,
+    });
+    // Runtime state is separate from historical token telemetry. Expose no prompts,
+    // session IDs, results, or filesystem paths in the activity strip.
+    const activity = listBackgroundStatuses()
+      .filter(run => !['completed', 'failed', 'cancelled'].includes(run.state))
+      .filter(run => !req.query.provider || run.providerId === String(req.query.provider))
+      .slice(0, 32)
+      .map(run => ({ id: run.id, name: run.model || run.id, provider: run.providerId || 'unknown', state: run.state === 'in_progress' ? 'running' : run.state }));
+    res.json({ success: true, ...analytics, activity });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 
 router.get('/api/hub/tools/heatmap', (req: Request, res: Response) => {
   try {
@@ -1015,6 +1038,8 @@ router.get('/api/hub/tools/heatmap', (req: Request, res: Response) => {
 
     const buckets: Record<string, number> = {};
     for (const line of readAuditLinesCached()) {
+
+
       let e: any;
       try { e = JSON.parse(line); } catch { continue; }
       if (e.actionType !== 'tool_call') continue;
