@@ -1,5 +1,7 @@
 import fs from 'fs';
+import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes } from './model-usage-index';
 import path from 'path';
+import { listModelUsageHistoryFiles, readModelUsageHistory, rotateModelUsageLog, tryQueueModelUsageAppend, flushModelUsageAppends, withModelUsageReadLock } from './model-usage-history';
 import { getConfig } from '../config/config';
 import type { ChatMessage, ContentPart, ModelUsage } from './LLMProvider';
 import { estimateModelUsageCost } from './model-pricing';
@@ -61,6 +63,8 @@ export interface ModelUsageEvent {
 export interface ModelUsageLogCursor {
   filePath: string;
   byteOffset: number;
+  /** Detect replacement even when a rotated file has grown past the old offset. */
+  identity?: string;
 }
 
 function usageLogPath(): string {
@@ -337,8 +341,9 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
     const priorSize = (() => {
       try { return fs.statSync(filePath).size; } catch { return 0; }
     })();
+    if (tryQueueModelUsageAppend(filePath, line)) return;
     fs.appendFileSync(filePath, line, 'utf-8');
-    clearHistoricalUsageCache();
+    scheduleUsageRotation(filePath, priorSize + Buffer.byteLength(line));
     if (
       filePath === _usageReadCachePath
       && _usageReadCacheInitialized
@@ -356,30 +361,17 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
 }
 
 let _usageReadCachePath = '';
+let _usageReadCacheIdentity = '';
 let _usageReadCacheMtimeMs = 0;
 let _usageReadCacheSize = 0;
 let _usageReadCacheEventCount = 0;
 let _usageReadCacheRemainder = '';
 let _usageReadCacheInitialized = false;
-const HISTORICAL_USAGE_CACHE_TTL_MS = 15_000;
-let _historicalUsageCache: {
-  filePath: string;
-  size: number;
-  mtimeMs: number;
-  loadedAt: number;
-  events: ModelUsageEvent[];
-} | null = null;
-let _historicalUsageCacheTimer: NodeJS.Timeout | null = null;
 // The resident index exists only for bounded calibration state. Historical
 // usage remains authoritative in model-usage.jsonl and is materialized only
 // for explicit history queries instead of being mirrored in gateway heap.
 const _usageCalibrationEvents = new Map<string, ModelUsageEvent[]>();
 
-function clearHistoricalUsageCache(): void {
-  if (_historicalUsageCacheTimer) clearTimeout(_historicalUsageCacheTimer);
-  _historicalUsageCacheTimer = null;
-  _historicalUsageCache = null;
-}
 
 function usageCalibrationKey(provider: string, model: string): string {
   return `${String(provider || '').trim()}\u0000${String(model || '').trim()}`;
@@ -401,8 +393,8 @@ function indexUsageEvent(event: ModelUsageEvent): void {
 }
 
 function resetUsageReadCache(filePath = ''): void {
-  clearHistoricalUsageCache();
   _usageReadCachePath = filePath;
+  _usageReadCacheIdentity = '';
   _usageReadCacheMtimeMs = 0;
   _usageReadCacheSize = 0;
   _usageReadCacheEventCount = 0;
@@ -460,18 +452,29 @@ function ensureUsageReadCache(): void {
     return;
   }
 
-  if (!_usageReadCacheInitialized || filePath !== _usageReadCachePath || st.size < _usageReadCacheSize) {
+  const identity = `${st.dev}:${st.ino}:${st.birthtimeMs}`;
+  if (!_usageReadCacheInitialized || filePath !== _usageReadCachePath || st.size < _usageReadCacheSize
+    || _usageReadCacheIdentity !== identity || (st.size === _usageReadCacheSize && st.mtimeMs !== _usageReadCacheMtimeMs)) {
     resetUsageReadCache(filePath);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    parseUsageChunk(content, true);
+    // Calibration only needs its last twelve samples, never the entire ledger.
+    const start = Math.max(0, st.size - 256 * 1024);
+    let content = readUsageTail(filePath, start, st.size);
+    if (start) content = content.slice(content.indexOf('\n') + 1);
+    parseUsageChunk(content, false);
     _usageReadCacheSize = st.size;
     _usageReadCacheMtimeMs = st.mtimeMs;
     _usageReadCacheInitialized = true;
+    _usageReadCacheIdentity = identity;
     return;
   }
 
   if (st.size > _usageReadCacheSize) {
-    const tail = readUsageTail(filePath, _usageReadCacheSize, st.size);
+    const start = Math.max(_usageReadCacheSize, st.size - 256 * 1024);
+    let tail = readUsageTail(filePath, start, st.size);
+    if (start !== _usageReadCacheSize) {
+      _usageReadCacheRemainder = '';
+      tail = tail.slice(tail.indexOf('\n') + 1);
+    }
     parseUsageChunk(tail, false);
     _usageReadCacheSize = st.size;
     _usageReadCacheMtimeMs = st.mtimeMs;
@@ -481,51 +484,6 @@ function ensureUsageReadCache(): void {
   _usageReadCacheMtimeMs = st.mtimeMs;
 }
 
-function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
-  const wantedSessionId = String(sessionId || '').trim();
-  const filePath = usageLogPath();
-  let stat: fs.Stats;
-  try { stat = fs.statSync(filePath); } catch { return []; }
-  const now = Date.now();
-  const cache = _historicalUsageCache;
-  if (
-    cache
-    && cache.filePath === filePath
-    && cache.size === stat.size
-    && cache.mtimeMs === stat.mtimeMs
-    && now - cache.loadedAt < HISTORICAL_USAGE_CACHE_TTL_MS
-  ) {
-    return wantedSessionId
-      ? cache.events.filter((event) => String(event.sessionId || '').trim() === wantedSessionId)
-      : cache.events.slice();
-  }
-  let raw = '';
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
-  const events = parseUsageEvents(raw, wantedSessionId);
-  if (!wantedSessionId) {
-    _historicalUsageCache = { filePath, size: stat.size, mtimeMs: stat.mtimeMs, loadedAt: now, events };
-    _historicalUsageCacheTimer = setTimeout(clearHistoricalUsageCache, HISTORICAL_USAGE_CACHE_TTL_MS);
-    _historicalUsageCacheTimer.unref?.();
-  }
-  return events;
-}
-
-function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
-  const wantedSessionId = String(sessionId || '').trim();
-  const out: ModelUsageEvent[] = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const event = JSON.parse(line) as ModelUsageEvent;
-      if (wantedSessionId && String(event.sessionId || '').trim() !== wantedSessionId) continue;
-      out.push(event);
-    } catch {
-      // Historical usage queries remain best-effort if telemetry contains a
-      // malformed row; the resident calibration index follows the same rule.
-    }
-  }
-  return out;
-}
 
 /**
  * Capture the current end of the append-only usage log without parsing its
@@ -535,7 +493,8 @@ function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
 export function captureModelUsageLogCursor(): ModelUsageLogCursor {
   const filePath = usageLogPath();
   try {
-    return { filePath, byteOffset: fs.statSync(filePath).size };
+    const stat = fs.statSync(filePath);
+    return { filePath, byteOffset: stat.size, identity: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` };
   } catch {
     return { filePath, byteOffset: 0 };
   }
@@ -547,105 +506,87 @@ export function captureModelUsageLogCursor(): ModelUsageLogCursor {
  * was running, fall back to a trace-scoped historical read so accounting does
  * not silently include unrelated old turns.
  */
-export function readModelUsageEventsSince(
+export async function readModelUsageEventsSince(
   cursor: ModelUsageLogCursor,
   sessionId?: string,
   traceId?: string,
-): ModelUsageEvent[] {
+): Promise<ModelUsageEvent[]> {
   const filePath = usageLogPath();
-  let currentSize = 0;
-  try {
-    currentSize = fs.statSync(filePath).size;
-  } catch {
-    return [];
-  }
-
-  const fallback = (): ModelUsageEvent[] => {
-    const historical = readHistoricalUsageEvents(sessionId);
+  const fallback = async (): Promise<ModelUsageEvent[]> => {
+    const historical = sessionId
+      ? await readModelUsageEventsForSession(sessionId)
+      : await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
     const wantedTraceId = String(traceId || '').trim();
     return wantedTraceId
       ? historical.filter((event) => String(event.traceId || '').trim() === wantedTraceId)
       : historical;
   };
-
-  if (cursor.filePath !== filePath || currentSize < cursor.byteOffset) return fallback();
-  if (currentSize === cursor.byteOffset) return [];
-
   try {
-    return parseUsageEvents(readUsageTail(filePath, cursor.byteOffset, currentSize), sessionId);
-  } catch {
-    return fallback();
-  }
+    const result = await withModelUsageReadLock(filePath, async (): Promise<ModelUsageEvent[] | null> => {
+      let stat: fs.Stats;
+      try { stat = await fs.promises.stat(filePath); } catch { return []; }
+      const replaced = !!cursor.identity && cursor.identity !== `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+      if (replaced || cursor.filePath !== filePath || stat.size < cursor.byteOffset) return null;
+      if (stat.size === cursor.byteOffset) return [];
+      return readUsageRange(filePath, cursor.byteOffset, stat.size, sessionId);
+    });
+    // Release the lock before invoking readers that acquire it themselves.
+    return result === null ? fallback() : result;
+  } catch { return fallback(); }
 }
 
-export function readModelUsageEvents(): ModelUsageEvent[] {
-  try {
-    ensureUsageReadCache();
-    return readHistoricalUsageEvents();
-  } catch {
-    return [];
-  }
+export async function readModelUsageEvents(): Promise<ModelUsageEvent[]> {
+  try { return await readModelUsageHistory(usageLogPath()); } catch { return []; }
 }
 
-// Per-session incremental cache. The context-window endpoint asks for one
-// session's usage on every poll; re-reading and JSON-parsing the whole
-// append-only log (tens of MB) each time blocked the gateway main thread for
-// >1.5s right as a turn was being prepared. The first read per session is a
-// full scan; later reads only parse bytes appended since the last read.
-const SESSION_USAGE_CACHE_MAX = 8;
-const _sessionUsageCache = new Map<string, { filePath: string; size: number; events: ModelUsageEvent[] }>();
-
-function readSessionUsageEventsIncremental(sessionId: string): ModelUsageEvent[] {
-  const filePath = usageLogPath();
-  let size = 0;
-  try { size = fs.statSync(filePath).size; } catch { return []; }
-  const cached = _sessionUsageCache.get(sessionId);
-  if (cached && cached.filePath === filePath && size >= cached.size) {
-    if (size > cached.size) {
-      // Only consume complete lines; a partial trailing row is re-read next time.
-      const tail = readUsageTail(filePath, cached.size, size);
-      const lastNewline = tail.lastIndexOf('\n');
-      if (lastNewline >= 0) {
-        const complete = tail.slice(0, lastNewline + 1);
-        cached.events.push(...parseUsageEvents(complete, sessionId));
-        cached.size += Buffer.byteLength(complete, 'utf-8');
+export async function readModelUsageEventsForSession(sessionId: string): Promise<ModelUsageEvent[]> {
+  const wanted = String(sessionId || '').trim();
+  if (!wanted) return [];
+  const file = usageLogPath();
+  try {
+    return await withModelUsageReadLock(file, async () => {
+      const events: ModelUsageEvent[] = [];
+      for (const candidate of await listModelUsageHistoryFiles(file)) {
+        try { for (const event of await readIndexedSessionUsage(candidate, wanted)) events.push(event); }
+        catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
       }
-    }
-    _sessionUsageCache.delete(sessionId);
-    _sessionUsageCache.set(sessionId, cached);
-    return cached.events.slice();
-  }
-  let raw = '';
-  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
-  const lastNewline = raw.lastIndexOf('\n');
-  const complete = lastNewline >= 0 ? raw.slice(0, lastNewline + 1) : '';
-  const events = parseUsageEvents(complete, sessionId);
-  _sessionUsageCache.set(sessionId, { filePath, size: Buffer.byteLength(complete, 'utf-8'), events });
-  while (_sessionUsageCache.size > SESSION_USAGE_CACHE_MAX) {
-    const oldest = _sessionUsageCache.keys().next().value;
-    if (oldest === undefined) break;
-    _sessionUsageCache.delete(oldest);
-  }
-  return events.slice();
+      return events;
+    });
+  } catch { return []; }
 }
 
-export function readModelUsageEventsForSession(sessionId: string): ModelUsageEvent[] {
+export async function readRecentModelUsageEvents(cutoff: number): Promise<ModelUsageEvent[]> {
   try {
-    ensureUsageReadCache();
-    const wanted = String(sessionId || '').trim();
-    if (!wanted) return readHistoricalUsageEvents();
-    return readSessionUsageEventsIncremental(wanted);
-  } catch {
-    return [];
-  }
+    const file = usageLogPath();
+    return await withModelUsageReadLock(file, () => readRecentUsage(file, cutoff));
+  } catch { return []; }
 }
 
-export function warmModelUsageIndex(): { events: number; durationMs: number } {
+export async function warmModelUsageIndex(): Promise<{ events: number; durationMs: number }> {
   const startedAt = Date.now();
+  await flushModelUsageAppends(usageLogPath());
   ensureUsageReadCache();
-  return { events: _usageReadCacheEventCount, durationMs: Date.now() - startedAt };
+  scheduleUsageRotation(usageLogPath(), 0, true);
+  try {
+    const index = await ensureSessionUsageIndex(usageLogPath());
+    return { events: index.count, durationMs: Date.now() - startedAt };
+  } catch { return { events: 0, durationMs: Date.now() - startedAt }; }
 }
 
 export function resetModelUsageIndexForTests(): void {
   resetUsageReadCache();
+  resetSessionUsageIndexes();
+}
+
+let rotationScheduled = false;
+let lastRotationCheck = 0;
+function scheduleUsageRotation(file: string, size: number, startup = false): void {
+  if (rotationScheduled || (!startup && (size < 32 * 1024 * 1024 || Date.now() - lastRotationCheck < 3600000))) return;
+  rotationScheduled = true;
+  lastRotationCheck = Date.now();
+  const timer = setTimeout(() => {
+    void rotateModelUsageLog(file).catch(error => console.warn('[usage] Log rotation deferred:', error?.message || error))
+      .finally(() => { rotationScheduled = false; });
+  }, 0);
+  timer.unref();
 }

@@ -42,8 +42,8 @@ async function main(): Promise<void> {
       estimatedProviderInputTokens: 50,
     });
 
-    assert.equal(usage.readModelUsageEvents().length, 2);
-    assert.equal(usage.readModelUsageEventsForSession('session-a').length, 1);
+    assert.equal((await usage.readModelUsageEvents()).length, 2);
+    assert.equal((await usage.readModelUsageEventsForSession('session-a')).length, 1);
     assert.deepEqual(usage.getUsageCalibration('test-provider', 'test-model'), {
       factor: 1,
       samples: 2,
@@ -69,8 +69,8 @@ async function main(): Promise<void> {
     };
     fs.appendFileSync(logPath, `${JSON.stringify(externalEvent)}\n`, 'utf-8');
 
-    assert.equal(usage.readModelUsageEvents().length, 3, 'external appends must be consumed from the new byte range');
-    assert.equal(usage.readModelUsageEventsForSession('session-a').length, 2);
+    assert.equal((await usage.readModelUsageEvents()).length, 3, 'external appends must be consumed from the new byte range');
+    assert.equal((await usage.readModelUsageEventsForSession('session-a')).length, 2);
     assert.deepEqual(usage.getUsageCalibration('test-provider', 'test-model'), {
       factor: 1,
       samples: 3,
@@ -87,24 +87,24 @@ async function main(): Promise<void> {
     };
     fs.appendFileSync(logPath, `${JSON.stringify(appendedTurnEvent)}\n`, 'utf-8');
     assert.deepEqual(
-      usage.readModelUsageEventsSince(cursor, 'session-a').map((event) => event.traceId),
+      (await usage.readModelUsageEventsSince(cursor, 'session-a')).map((event) => event.traceId),
       ['turn-cursor-test'],
       'cursor reads must return only rows appended after the turn started',
     );
-    assert.equal(usage.readModelUsageEventsSince(cursor, 'session-b').length, 0);
+    assert.equal((await usage.readModelUsageEventsSince(cursor, 'session-b')).length, 0);
 
     const rotatedCursor = usage.captureModelUsageLogCursor();
     fs.writeFileSync(logPath, `${JSON.stringify({ ...appendedTurnEvent, traceId: 'turn-rotated-test' })}\n`, 'utf-8');
     assert.deepEqual(
-      usage.readModelUsageEventsSince(rotatedCursor, 'session-a', 'turn-rotated-test').map((event) => event.traceId),
+      (await usage.readModelUsageEventsSince(rotatedCursor, 'session-a', 'turn-rotated-test')).map((event) => event.traceId),
       ['turn-rotated-test'],
       'rotation fallback must remain scoped to the current turn',
     );
 
     const firstLine = fs.readFileSync(logPath, 'utf-8').split('\n').find(Boolean) || '';
     fs.writeFileSync(logPath, `${firstLine}\n`, 'utf-8');
-    assert.equal(usage.readModelUsageEvents().length, 1, 'truncation/rotation must rebuild the in-memory index');
-    assert.equal(usage.readModelUsageEventsForSession('session-b').length, 0);
+    assert.equal((await usage.readModelUsageEvents()).length, 1, 'truncation/rotation must rebuild the in-memory index');
+    assert.equal((await usage.readModelUsageEventsForSession('session-b')).length, 0);
 
     console.log('model-usage incremental index regression passed');
   } finally {

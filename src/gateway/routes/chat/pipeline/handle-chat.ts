@@ -4322,7 +4322,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     // Provider usage is reconciled after every admitted request. The current
     // response completes normally; an actual overage blocks every next round.
     if (brainRunBudget) {
-      const actualEvent = brainProviderUsageCursor ? readModelUsageEventsSince(brainProviderUsageCursor, sessionId, turnTiming.turnId).at(-1) : undefined;
+      const actualEvent = brainProviderUsageCursor ? (await readModelUsageEventsSince(brainProviderUsageCursor, sessionId, turnTiming.turnId)).at(-1) : undefined;
       const actualInput = actualEvent ? resolveProviderPromptTokens(actualEvent) : Number(response?.usage?.inputTokens || 0);
       const actualBudget = brainRunBudget.reconcileActualInput(actualInput);
       if (actualBudget.hit) brainRunBudgetHit = actualBudget.hit;

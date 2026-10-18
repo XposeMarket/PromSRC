@@ -1536,9 +1536,9 @@ async function startGatewayListeners(): Promise<void> {
     const usageWarmupDelayMs = isHotRestartBoot
       ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_USAGE_WARMUP_DELAY_MS || 60_000))
       : Math.max(15_000, Number(process.env.PROMETHEUS_USAGE_WARMUP_DELAY_MS || 30_000));
-    const deferredUsageTimer = setTimeout(() => {
+    const deferredUsageTimer = setTimeout(async () => {
       try {
-        const usageWarmup = warmModelUsageIndex();
+        const usageWarmup = await warmModelUsageIndex();
         console.log(`[model-usage] Indexed ${usageWarmup.events} events after stable readiness in ${usageWarmup.durationMs}ms.`);
       } catch (e: any) {
         console.warn('[model-usage] Deferred startup index warmup failed:', e?.message || e);

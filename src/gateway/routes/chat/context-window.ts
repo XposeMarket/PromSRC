@@ -266,8 +266,8 @@ export function aggregateModelUsageEvents(events: ModelUsageEvent[]) {
   return totals;
 }
 
-export function aggregateSessionModelUsage(sessionId: string) {
-  return aggregateModelUsageEvents(readModelUsageEventsForSession(sessionId));
+export async function aggregateSessionModelUsage(sessionId: string) {
+  return aggregateModelUsageEvents(await readModelUsageEventsForSession(sessionId));
 }
 
 export function summarizeTurnToolResultBudget(observations: ToolObservation[]) {

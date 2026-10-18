@@ -4584,13 +4584,18 @@ function isLiveXScrapeProfile(profileDir: string, debugPort?: number, pid?: numb
   );
 }
 
-function removeXScrapeProfileDir(profileDir: string): void {
+async function removeXScrapeProfileDir(profileDir: string): Promise<boolean> {
   const root = path.resolve(getPersistentBrowserProfileRoot());
   const resolved = path.resolve(profileDir);
-  if (path.dirname(resolved).toLowerCase() !== root.toLowerCase()) return;
-  if (!path.basename(resolved).startsWith(X_SCRAPE_PROFILE_PREFIX)) return;
-  if (isLiveXScrapeProfile(resolved)) return;
-  try { fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 }); } catch {}
+  if (path.dirname(resolved).toLowerCase() !== root.toLowerCase()) return false;
+  if (!path.basename(resolved).startsWith(X_SCRAPE_PROFILE_PREFIX)) return false;
+  if (isLiveXScrapeProfile(resolved)) return false;
+  try {
+    await fs.promises.rm(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -4619,8 +4624,7 @@ async function runXScrapeOrphanSweep(): Promise<{ killed: number; removedProfile
       if (!entry.isDirectory() || !entry.name.startsWith(X_SCRAPE_PROFILE_PREFIX)) continue;
       const dir = path.join(root, entry.name);
       if (isLiveXScrapeProfile(dir)) continue;
-      removeXScrapeProfileDir(dir);
-      if (!fs.existsSync(dir)) removedProfiles += 1;
+      if (await removeXScrapeProfileDir(dir)) removedProfiles += 1;
     }
   } catch {}
   if (killed || removedProfiles) {

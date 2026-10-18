@@ -840,7 +840,9 @@ export class BrainRunner {
     if (!active.usageFinished) {
       active.usageFinished = true;
       try {
-        finishBrainJobUsage(active.usageHandle, { outcome: 'aborted', error });
+        void finishBrainJobUsage(active.usageHandle, { outcome: 'aborted', error }).catch((usageError: any) => {
+          console.warn('[BrainRunner] Could not persist shutdown interruption usage:', usageError?.message || usageError);
+        });
       } catch (usageError: any) {
         console.warn('[BrainRunner] Could not persist shutdown interruption usage:', usageError?.message || usageError);
       }
@@ -1230,7 +1232,7 @@ export class BrainRunner {
       prompt: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`,
       broadcast: this.deps.broadcast,
     });
-    const usageHandle = beginBrainJobUsage({
+    const usageHandle = await beginBrainJobUsage({
       job: 'thought',
       runId,
       date: dateStr,
@@ -1535,7 +1537,7 @@ export class BrainRunner {
       saveDailyStatus(daily);
     }
 
-    const usage = finishBrainJobUsage(usageHandle, {
+    const usage = await finishBrainJobUsage(usageHandle, {
       outcome,
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
     });
@@ -1632,7 +1634,7 @@ export class BrainRunner {
       prompt: `[Brain Dream] Nightly synthesis for ${dateStr} — ${thoughtCount} thought(s)`,
       broadcast: this.deps.broadcast,
     });
-    const usageHandle = beginBrainJobUsage({
+    const usageHandle = await beginBrainJobUsage({
       job: 'dream',
       runId,
       date: dateStr,
@@ -1981,7 +1983,7 @@ export class BrainRunner {
       saveLatestState(state);
     }
 
-    const usage = finishBrainJobUsage(usageHandle, {
+    const usage = await finishBrainJobUsage(usageHandle, {
       outcome,
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
     });
@@ -2063,7 +2065,7 @@ export class BrainRunner {
       prompt: `[Brain Dream Cleanup] Memory solidifier for ${dateStr}`,
       broadcast: this.deps.broadcast,
     });
-    const usageHandle = beginBrainJobUsage({
+    const usageHandle = await beginBrainJobUsage({
       job: 'dream_cleanup',
       runId,
       date: dateStr,
@@ -2284,7 +2286,7 @@ export class BrainRunner {
       saveLatestState(latestAfter);
     }
 
-    const usage = finishBrainJobUsage(usageHandle, {
+    const usage = await finishBrainJobUsage(usageHandle, {
       outcome,
       error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
     });

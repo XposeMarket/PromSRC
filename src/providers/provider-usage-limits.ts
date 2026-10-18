@@ -19,7 +19,7 @@
  */
 
 import { getConfig } from '../config/config';
-import { readModelUsageEvents } from './model-usage';
+import { readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
 
 export interface UsageWindow {
   /** Human label e.g. "5-hour", "Weekly", "Monthly credits". */
@@ -798,7 +798,7 @@ async function getLive(providerId: string, configDir: string, accountId?: string
 
 // ─── Internal token accounting ───────────────────────────────────────────────
 
-function internalTokens(providerId: string, events: ReturnType<typeof readModelUsageEvents>, accountId?: string): ProviderTokenTotals {
+function internalTokens(providerId: string, events: ModelUsageEvent[], accountId?: string): ProviderTokenTotals {
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
@@ -941,7 +941,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
 
   const budgets = getBudgets();
   const activeMain = getActiveMainModel();
-  const events = readModelUsageEvents();
+  const events = await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');

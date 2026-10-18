@@ -302,13 +302,13 @@ function aggregateEvents(events: ModelUsageEvent[]): {
   };
 }
 
-export function beginBrainJobUsage(input: {
+export async function beginBrainJobUsage(input: {
   job: BrainJobKind;
   runId: string;
   date: string;
   sessionId: string;
   startedAt?: string | number | Date;
-}): BrainJobUsageHandle {
+}): Promise<BrainJobUsageHandle> {
   const startedAtMs = input.startedAt instanceof Date
     ? input.startedAt.getTime()
     : typeof input.startedAt === 'number'
@@ -321,21 +321,21 @@ export function beginBrainJobUsage(input: {
     sessionId: String(input.sessionId || '').trim(),
     startedAt: isoOrNow(input.startedAt || startedAtMs),
     startedAtMs,
-    eventCountAtStart: readModelUsageEventsForSession(input.sessionId).length,
+    eventCountAtStart: (await readModelUsageEventsForSession(input.sessionId)).length,
   };
 }
 
-export function finishBrainJobUsage(
+export async function finishBrainJobUsage(
   handle: BrainJobUsageHandle,
   input: {
     outcome: BrainJobOutcome;
     completedAt?: string | number | Date;
     error?: string | null;
   },
-): BrainJobUsageRecord {
+): Promise<BrainJobUsageRecord> {
   const completedAt = isoOrNow(input.completedAt);
   const completedAtMs = timestampMs(completedAt) || Date.now();
-  const sessionEvents = readModelUsageEventsForSession(handle.sessionId);
+  const sessionEvents = await readModelUsageEventsForSession(handle.sessionId);
   const events = sessionEvents.slice(Math.max(0, handle.eventCountAtStart));
   const aggregate = aggregateEvents(events);
   const durationMs = Math.max(0, completedAtMs - handle.startedAtMs);

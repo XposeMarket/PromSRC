@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
-import { readModelUsageEvents } from '../../providers/model-usage.js';
+import { readModelUsageHistory } from '../../providers/model-usage-history.js';
 import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
 import { readAllToolObservations } from '../tool-observations';
 import { getAllMainChatGoalRecords } from '../main-chat-goals';
@@ -398,6 +398,14 @@ function sessionSummaryTimestamp(summary: any): string {
   return '';
 }
 
+function modelUsageLogPath(): string {
+  try { return path.join(getConfig().getConfigDir(), 'model-usage.jsonl'); } catch { return path.join(process.cwd(), '.prometheus', 'model-usage.jsonl'); }
+}
+
+async function readHubModelUsageEvents() {
+  return readModelUsageHistory(modelUsageLogPath());
+}
+
 function addTokenBucket(buckets: Record<string, number>, timestamp: string, tokens: number): void {
   const key = localDateKey(timestamp);
   const n = Math.max(0, Number(tokens || 0));
@@ -405,9 +413,9 @@ function addTokenBucket(buckets: Record<string, number>, timestamp: string, toke
   buckets[key] = (buckets[key] || 0) + n;
 }
 
-router.get('/api/hub/tokens/activity', (req: Request, res: Response) => {
+router.get('/api/hub/tokens/activity', async (req: Request, res: Response) => {
   try {
-    const modelEvents = readModelUsageEvents();
+    const modelEvents = await readHubModelUsageEvents();
     const observations = readAllToolObservations(100_000);
     const auditEarliestTimestamp = readAuditEarliestTimestampCached();
     const sessionTimestamps = listSessionSummaries()
@@ -654,7 +662,7 @@ router.post('/api/hub/skills/review/:id/reject', (req: Request, res: Response) =
   }
 });
 
-router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
+router.get('/api/hub/tools/overview', async (req: Request, res: Response) => {
   try {
     const chatStats = getChatSessionStats();
     const rawEvents: any[] = [];
@@ -679,7 +687,7 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
       const t = Number(obs.createdAt || 0);
       return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
     });
-    const modelEventsInRange = readModelUsageEvents().filter((e) => {
+    const modelEventsInRange = (await readHubModelUsageEvents()).filter((e) => {
       const t = Date.parse(e.timestamp || '');
       return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
     });
@@ -868,10 +876,10 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
   }
 });
 
-router.get('/api/hub/models/overview', (req: Request, res: Response) => {
+router.get('/api/hub/models/overview', async (req: Request, res: Response) => {
   try {
     const chatStats = getChatSessionStats();
-    const rawEvents = readModelUsageEvents();
+    const rawEvents = await readHubModelUsageEvents();
     const window = rangeWindow(String(req.query.range || 'all'), rawEvents.map((e) => e.timestamp));
     const inRange = rawEvents.filter((e) => {
       const t = Date.parse(e.timestamp || '');

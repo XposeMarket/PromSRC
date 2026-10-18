@@ -755,7 +755,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   }
 });
 
-router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, res) => {
+router.get('/api/sessions/:id/context-window', requireSafeSessionParam, async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) {
@@ -779,7 +779,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const session = getSession(id);
     const observationSnapshot = readToolObservationSnapshot(id, 512, profile.tokenizer);
     const storedThread = estimateStoredThreadFootprint(id, session, profile, observationSnapshot);
-    const modelUsage = aggregateSessionModelUsage(id);
+    const modelUsage = await aggregateSessionModelUsage(id);
     const toolUsage = observationSnapshot.usage;
     const currentState = buildContextWindowCurrentState({
       sessionId: id,

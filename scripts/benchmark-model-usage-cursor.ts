@@ -2,6 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+async function measureAsync<T>(fn: () => Promise<T>): Promise<{ values: number[]; result: T }> {
+  const values: number[] = [];
+  let result!: T;
+  for (let index = 0; index < 5; index += 1) {
+    const startedAt = performance.now();
+    result = await fn();
+    values.push(Number((performance.now() - startedAt).toFixed(2)));
+  }
+  return { values, result };
+}
+
 function measure<T>(fn: () => T): { values: number[]; result: T } {
   const values: number[] = [];
   let result!: T;
@@ -46,9 +57,9 @@ async function main(): Promise<void> {
   const sessionId = String(lastEvent.sessionId || '').trim();
   const lastLineOffset = stats.size - sampleBytes + lineStartInTail;
 
-  const historical = measure(() => usage.readModelUsageEventsForSession(sessionId));
+  const historical = await measureAsync(() => usage.readModelUsageEventsForSession(sessionId));
   const cursorCapture = measure(() => usage.captureModelUsageLogCursor());
-  const incremental = measure(() => usage.readModelUsageEventsSince(
+  const incremental = await measureAsync(() => usage.readModelUsageEventsSince(
     { filePath: logPath, byteOffset: lastLineOffset },
     sessionId,
   ));
