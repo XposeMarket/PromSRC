@@ -723,9 +723,13 @@ async function drainQueue(): Promise<void> {
         task.timeoutHandle = undefined;
       }
       let cancelled = false;
+      // Only kill the child once the query is actually executing in it. A task
+      // aborted while still waiting on the memory gate (e.g. queued behind
+      // index maintenance) must not cold-restart a healthy warm worker.
+      let brokerRunStarted = false;
       const onActiveAbort = () => {
         cancelled = true;
-        broker.forceKill();
+        if (brokerRunStarted) broker.forceKill();
       };
       if (task.signal) {
         if (task.abortListener) task.signal.removeEventListener('abort', task.abortListener);
@@ -739,7 +743,9 @@ async function drainQueue(): Promise<void> {
           signal: task.signal,
           timeoutMs: remainingMs,
         });
-        const result = await broker.run<MemorySearchWorkerResult>(task.kind, task.payload, remainingMs);
+        if (cancelled || task.signal?.aborted) throw abortError();
+        brokerRunStarted = true;
+        const result = await broker.run<MemorySearchWorkerResult>(task.kind, task.payload, Math.max(1, task.deadlineAt - Date.now()));
         if (cancelled || task.signal?.aborted) {
           settle(task, { error: abortError() });
           await recycleWorker(task.payload.workspacePath);
@@ -758,8 +764,9 @@ async function drainQueue(): Promise<void> {
             : error instanceof Error ? error : new Error(String(error));
         settle(task, { error: normalized });
         // Wait for the killed/failed child to exit and clear broker state before
-        // allowing another queued job to spawn a replacement.
-        await recycleWorker(task.payload.workspacePath);
+        // allowing another queued job to spawn a replacement. Gate-wait
+        // failures (abort/timeout before the child ran) leave the worker warm.
+        if (brokerRunStarted) await recycleWorker(task.payload.workspacePath);
       } finally {
         releaseMemoryAccess?.();
         active = null;

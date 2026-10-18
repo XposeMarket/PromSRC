@@ -12,6 +12,7 @@ import {
 import {
   searchMemoryInWorker,
 } from '../../memory-index/search-worker-client';
+import { getMemoryAccessGateState } from '../../memory-index/memory-access-gate';
 import { invalidateMemoryAtomSnapshot } from '../../memory-index/memory-atoms.js';
 import { deleteMemoryFact, isPoisonMemoryFact, writeMemoryFact } from '../../memory-index/memory-recall.js';
 import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
@@ -137,12 +138,98 @@ function resolveMemoryPath(workspacePath: string, filename: string, sessionId?: 
  * it, the answer still returns with a note instead of a 30s failure.
  * The current chat is excluded so the question can't match itself.
  */
+// Structured-index budget for memory(action:"search"). The keyword + semantic
+// recall index is the primary answer; the structured worker index is a bonus
+// section. It used to run AFTER recall with a 4-8s race, and because every
+// explicit search schedules an index refresh + embedding backfill (exclusive
+// SQLite gate), the next search routinely sat ~8s queued behind maintenance
+// before being skipped (observed: "Memory completed · 8.7 s").
+export const STRUCTURED_SEARCH_BUDGET_MS = 3000;
+export const STRUCTURED_SEARCH_MAINTENANCE_BUDGET_MS = 750;
+
+function maintenanceHoldsMemoryGate(): boolean {
+  const gate = getMemoryAccessGateState();
+  return gate.activeKind === 'maintenance' || gate.pending.includes('maintenance');
+}
+
+/**
+ * Run a structured search with a hard wall-clock budget, started in parallel
+ * with recall. Budget shrinks when maintenance holds/awaits the gate. On
+ * expiry while still queued behind maintenance, the underlying task is
+ * aborted so it does not linger in the worker queue (aborting a query that is
+ * actively executing would force-kill and cold-restart the worker, so that
+ * case is left to finish in the background and its result is discarded).
+ */
+export function runStructuredSearchWithBudget(
+  search: (signal: AbortSignal) => Promise<string>,
+  options: { parentSignal?: AbortSignal; budgetMs?: number; maintenanceBudgetMs?: number; maintenanceBusy?: () => boolean } = {},
+): Promise<{ ok: true; value: string } | { ok: false; error: string; elapsedMs: number }> {
+  const busy = options.maintenanceBusy || maintenanceHoldsMemoryGate;
+  const budgetMs = busy()
+    ? (options.maintenanceBudgetMs ?? STRUCTURED_SEARCH_MAINTENANCE_BUDGET_MS)
+    : (options.budgetMs ?? STRUCTURED_SEARCH_BUDGET_MS);
+  const controller = new AbortController();
+  const parent = options.parentSignal;
+  const onParentAbort = () => controller.abort();
+  if (parent) {
+    if (parent.aborted) controller.abort();
+    else parent.addEventListener('abort', onParentAbort, { once: true });
+  }
+  const startedAt = Date.now();
+  let timer: NodeJS.Timeout | undefined;
+  const work = search(controller.signal);
+  work.catch(() => undefined);
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const queuedBehindMaintenance = busy();
+      if (queuedBehindMaintenance) controller.abort();
+      reject(new Error(queuedBehindMaintenance
+        ? `structured memory index busy with maintenance (>${budgetMs}ms); skipped`
+        : `structured memory index slow (>${budgetMs}ms); skipped`));
+    }, budgetMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, budget])
+    .then(
+      (value) => ({ ok: true as const, value }),
+      (err: any) => ({ ok: false as const, error: String(err?.message || err), elapsedMs: Date.now() - startedAt }),
+    )
+    .finally(() => {
+      if (timer) clearTimeout(timer);
+      parent?.removeEventListener('abort', onParentAbort);
+    });
+}
+
 async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boolean): Promise<ToolResult> {
   const { name, args, workspacePath, sessionId } = ctx;
   const query = String(args?.query || '').trim();
   if (!query) return { name, args, result: `memory(action="${recallOnly ? 'recall' : 'search'}"): query is required`, error: true };
   const sections: string[] = [];
   let recallBest = 'none';
+  // Kick off the structured worker query first so it runs in its child
+  // process while keyword + semantic recall run here.
+  const structuredPending = recallOnly ? null : (() => {
+    const modeRaw = String(args?.mode || 'quick').trim().toLowerCase();
+    const mode = (modeRaw === 'deep' || modeRaw === 'project' || modeRaw === 'timeline') ? modeRaw : 'quick';
+    const sourceTypes = Array.isArray(args?.source_types) ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined;
+    return runStructuredSearchWithBudget((signal) => searchMemoryInWorker('memory_search', {
+      workspacePath,
+      params: {
+        query, mode: mode as any, limit: Math.min(8, Number(args?.limit || 6)),
+        projectId: args?.project_id ? String(args.project_id) : undefined,
+        dateFrom: args?.date_from ? String(args.date_from) : undefined,
+        dateTo: args?.date_to ? String(args.date_to) : undefined,
+        sourceTypes: sourceTypes as any,
+        minDurability: args?.min_durability !== undefined ? Number(args.min_durability) : undefined,
+        rerank: true,
+        queryRoute: 'tool_manual',
+      },
+    }, { signal }), {
+      parentSignal: ctx.deps?.abortSignal?.signal,
+      // Deep mode explicitly asks for more work; give it a longer budget.
+      budgetMs: mode === 'deep' ? 8000 : undefined,
+    });
+  })();
   try {
     const { searchRecall, formatRecallResult, searchRecallSemantic, formatSemanticRecallSection } = require('../../memory-index/recall-index');
     const sources = Array.isArray(args?.sources) ? args.sources.map((s: any) => String(s || '').trim()).filter(Boolean) : undefined;
@@ -174,34 +261,19 @@ async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boo
   } catch (err: any) {
     sections.push(`recall index unavailable: ${String(err?.message || err)}`);
   }
-  if (!recallOnly) {
-    try {
-      const modeRaw = String(args?.mode || 'quick').trim().toLowerCase();
-      const mode = (modeRaw === 'deep' || modeRaw === 'project' || modeRaw === 'timeline') ? modeRaw : 'quick';
-      const sourceTypes = Array.isArray(args?.source_types) ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined;
-      const timeoutMs = recallBest === 'strong' ? 4000 : 8000;
-      const structured = await Promise.race([
-        searchMemoryInWorker('memory_search', {
-          workspacePath,
-          params: {
-            query, mode: mode as any, limit: Math.min(8, Number(args?.limit || 6)),
-            projectId: args?.project_id ? String(args.project_id) : undefined,
-            dateFrom: args?.date_from ? String(args.date_from) : undefined,
-            dateTo: args?.date_to ? String(args.date_to) : undefined,
-            sourceTypes: sourceTypes as any,
-            minDurability: args?.min_durability !== undefined ? Number(args.min_durability) : undefined,
-            rerank: true,
-            queryRoute: 'tool_manual',
-          },
-        }, { signal: ctx.deps?.abortSignal?.signal }),
-        new Promise<string>((_, reject) => setTimeout(() => reject(new Error(`structured memory index busy (>${timeoutMs}ms, likely maintenance); skipped`)), timeoutMs)),
-      ]);
-      const { formatStructuredMemoryHits } = require('../../tools/core-tool-normalizers');
-      sections.push(args?.debug === true
-        ? `STRUCTURED MEMORY INDEX (raw):\n${compactMemorySearchResult(structured)}`
-        : `STRUCTURED MEMORY INDEX (decisions/tasks/proposals; use memory_read_record with id for detail):\n${formatStructuredMemoryHits(structured)}`);
-    } catch (err: any) {
-      sections.push(`STRUCTURED MEMORY INDEX: ${String(err?.message || err)}`);
+  if (structuredPending) {
+    const outcome = await structuredPending;
+    if (outcome.ok) {
+      try {
+        const { formatStructuredMemoryHits } = require('../../tools/core-tool-normalizers');
+        sections.push(args?.debug === true
+          ? `STRUCTURED MEMORY INDEX (raw):\n${compactMemorySearchResult(outcome.value)}`
+          : `STRUCTURED MEMORY INDEX (decisions/tasks/proposals; use memory_read_record with id for detail):\n${formatStructuredMemoryHits(outcome.value)}`);
+      } catch (err: any) {
+        sections.push(`STRUCTURED MEMORY INDEX: ${String(err?.message || err)}`);
+      }
+    } else {
+      sections.push(`STRUCTURED MEMORY INDEX: ${outcome.error}`);
     }
   }
   return { name, args, result: sections.join('\n\n'), error: false };
