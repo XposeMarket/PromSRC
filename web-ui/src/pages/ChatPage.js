@@ -18427,9 +18427,7 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
-    liveTraceEntries: Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length
-      ? lane.liveTraceEntries
-      : backgroundAgentEventsToLiveTraceEntries(lane.events),
+    liveTraceEntries: backgroundSpawnLaneLiveTrace(lane),
     streamId: lane.streamId,
     lastSeq: lane.lastSeq,
     steerMessages: lane.steerMessages,
@@ -18809,6 +18807,46 @@ function scheduleBackgroundAgentUiUpdate(options = {}) {
   chatPerformanceRuntime.scheduleBackgroundAgentUiUpdate(renderBackgroundAgentUi, options);
 }
 
+// Live trace is derived from lane.events. Rebuilding it on every streamed
+// frame was O(events) per token; derive lazily and cache by events identity
+// (appendBackgroundAgentEvent always returns a new array).
+function backgroundSpawnLaneLiveTrace(lane) {
+  if (!lane) return [];
+  const events = Array.isArray(lane.events) ? lane.events : [];
+  if (lane.__liveTraceEventsRef === events && Array.isArray(lane.liveTraceEntries)) return lane.liveTraceEntries;
+  if (!events.length && Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length) return lane.liveTraceEntries;
+  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(events);
+  lane.__liveTraceEventsRef = events;
+  return lane.liveTraceEntries;
+}
+
+// Durable persistence normalizes and merges the full event buffer. Doing that
+// per streamed frame pinned the main thread while agents ran; coalesce dirty
+// lanes and persist each once per window instead.
+const BACKGROUND_SPAWN_PERSIST_MS = 750;
+const backgroundSpawnDirtyLaneIds = new Set();
+let backgroundSpawnPersistTimer = null;
+function flushBackgroundSpawnLanePersistence() {
+  if (backgroundSpawnPersistTimer) { clearTimeout(backgroundSpawnPersistTimer); backgroundSpawnPersistTimer = null; }
+  if (!backgroundSpawnDirtyLaneIds.size) return;
+  const ids = [...backgroundSpawnDirtyLaneIds];
+  backgroundSpawnDirtyLaneIds.clear();
+  const lanes = ensureBackgroundSpawnDockMap();
+  ids.forEach((id) => {
+    const lane = lanes.get(id);
+    if (lane) persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+  });
+}
+function scheduleBackgroundSpawnLanePersistence(laneId) {
+  backgroundSpawnDirtyLaneIds.add(String(laneId || ''));
+  if (backgroundSpawnPersistTimer) return;
+  backgroundSpawnPersistTimer = setTimeout(() => {
+    backgroundSpawnPersistTimer = null;
+    flushBackgroundSpawnLanePersistence();
+  }, BACKGROUND_SPAWN_PERSIST_MS);
+}
+window.addEventListener('pagehide', flushBackgroundSpawnLanePersistence);
+
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
@@ -18830,10 +18868,9 @@ function pushBackgroundSpawnEvent(msg = {}) {
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
     lane.events = appendBackgroundAgentEvent(lane.events, entry);
-    lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   }
   if (streamId && seq) lane.lastSeq = seq;
-  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+  scheduleBackgroundSpawnLanePersistence(lane.id);
   if (!document.hidden && String(window.currentMode || 'chat') === 'chat'
     && (lane.sessionId === String(window.activeChatSessionId || '').trim()
       || lane.id === String(window.backgroundAgentDetailId || '').trim())) {
@@ -18896,8 +18933,8 @@ function completeBackgroundSpawnLane(msg = {}) {
     content,
     extra: msg,
   });
-  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   lane.updatedAt = Date.now();
+  backgroundSpawnDirtyLaneIds.delete(lane.id);
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), { immediate: true });
   scheduleBackgroundAgentUiUpdate({ immediate: true });
 }
