@@ -10871,14 +10871,18 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
 function _mobileVoiceBootstrapSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem('pm_voice_settings_v1') || '{}');
-    const voiceMode = saved.legacyRealtime === true ? (saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime') : 'canonical';
+    // Realtime-only (#704): 'openai' (Codex bridge / OpenAI), 'xai', or 'custom:<id>'.
+    const rawProvider = String(saved.provider || saved.voiceMode || '').trim();
+    const voiceMode = rawProvider === 'xai' || rawProvider === 'xai_realtime' ? 'xai' : rawProvider.startsWith('custom:') ? rawProvider : 'openai';
     const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
     const wakePhrase = String(saved.wakePhrase || '').replace(/\s+/g, ' ').trim();
     return {
       voiceMode,
-      legacyRealtime: saved.legacyRealtime === true,
+      provider: voiceMode,
+      protocol: voiceMode === 'xai' ? 'xai_realtime' : voiceMode.startsWith('custom:') ? (String(saved.protocol || '').trim() || 'openai_realtime_compatible') : 'openai_realtime',
+      realtimeModel: String(saved.realtimeModel || '').trim(),
       sttProvider: ['browser', 'openai', 'xai'].includes(saved.sttProvider) ? saved.sttProvider : 'auto',
-      ttsProvider: voiceMode === 'canonical' ? (saved.ttsProvider === 'realtime' ? 'browser' : saved.ttsProvider || 'browser') : 'realtime',
+      ttsProvider: voiceMode,
       realtimeVoice: saved.realtimeVoice || 'marin',
       realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
       serverVoice: saved.serverVoice || '',
@@ -10889,14 +10893,16 @@ function _mobileVoiceBootstrapSettings() {
       wakeGateActive: listenMode === 'always_listening' && saved.wakeGateActive === true,
       sttProviderLocked: saved.sttProviderLocked === true,
       autoProviderDefault: saved.autoProviderDefault || '',
-      voiceAgentRealtimeAgent: voiceMode === 'openai_realtime',
+      voiceAgentRealtimeAgent: true,
       voiceAgentXaiRealtime: voiceMode === 'xai',
     };
   } catch {
     return {
-      voiceMode: 'canonical',
+      voiceMode: 'openai',
+      provider: 'openai',
+      protocol: 'openai_realtime',
       sttProvider: 'auto',
-      ttsProvider: 'browser',
+      ttsProvider: 'openai',
       realtimeVoice: 'marin',
       realtimeSpeed: 1.05,
       serverVoice: '',
@@ -10959,10 +10965,17 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
 __pmVoice.settings = { ..._mobileVoiceBootstrapSettings(), ...(__pmVoice.settings || {}) };
 if (!(__pmVoice.activeVoiceToolCalls instanceof Set)) __pmVoice.activeVoiceToolCalls = new Set();
 if (!Number.isFinite(Number(__pmVoice.thinkingOrbAudioPulse))) __pmVoice.thinkingOrbAudioPulse = 0;
-if (!['canonical', 'openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'canonical';
+{
+  const rawVoiceProvider = String(__pmVoice.settings.provider || __pmVoice.settings.voiceMode || '').trim();
+  const voiceProvider = rawVoiceProvider === 'xai' || rawVoiceProvider === 'xai_realtime' ? 'xai' : rawVoiceProvider.startsWith('custom:') ? rawVoiceProvider : 'openai';
+  __pmVoice.settings.voiceMode = voiceProvider;
+  __pmVoice.settings.provider = voiceProvider;
+  if (voiceProvider === 'xai') __pmVoice.settings.protocol = 'xai_realtime';
+  else if (voiceProvider === 'openai') __pmVoice.settings.protocol = 'openai_realtime';
+}
 if (!['auto', 'browser', 'openai', 'xai'].includes(__pmVoice.settings.sttProvider)) __pmVoice.settings.sttProvider = 'auto';
-__pmVoice.settings.ttsProvider = __pmVoice.settings.voiceMode === 'canonical' ? (['browser', 'openai', 'xai'].includes(__pmVoice.settings.ttsProvider) ? __pmVoice.settings.ttsProvider : 'browser') : 'realtime';
-__pmVoice.settings.voiceAgentRealtimeAgent = __pmVoice.settings.voiceMode === 'openai_realtime';
+__pmVoice.settings.ttsProvider = __pmVoice.settings.voiceMode;
+__pmVoice.settings.voiceAgentRealtimeAgent = true;
 __pmVoice.settings.voiceAgentXaiRealtime = __pmVoice.settings.voiceMode === 'xai';
 __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
 
