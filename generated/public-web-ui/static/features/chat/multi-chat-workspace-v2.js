@@ -45,6 +45,7 @@ function readStoredState() {
       .filter((tab) => tab.sessionId)
       .filter((tab, index, all) => all.findIndex((candidate) => candidate.sessionId === tab.sessionId) === index)
       .slice(-MAX_TABS);
+    state.mainSessionId = clean(parsed?.mainSessionId);
     state.sideSessionId = clean(parsed?.sideSessionId);
     state.sourceSessionId = clean(parsed?.sourceSessionId);
   } catch {}
@@ -54,6 +55,7 @@ function persistState() {
   try {
     localStorage.setItem(MULTI_CHAT_STORAGE_KEY, JSON.stringify({
       tabs: state.tabs.slice(-MAX_TABS),
+      mainSessionId: state.mainSessionId,
       sideSessionId: state.sideSessionId,
       sourceSessionId: state.sourceSessionId,
     }));
@@ -186,10 +188,17 @@ function closeNativeSideIfOwned(sessionId = state.sideSessionId) {
   try { window.closeSideChatSplit?.(); } catch {}
 }
 
+function tabNeighborAfterClose(tabs, sessionId) {
+  const index = tabs.findIndex((tab) => tab.sessionId === sessionId);
+  return index < 0 ? null : (tabs[index + 1] || tabs[index - 1] || null);
+}
+
 function removeTab(sessionId) {
   const sid = clean(sessionId);
   if (!sid) return;
   const wasSide = state.sideSessionId === sid;
+  const wasMain = currentMainSessionId() === sid;
+  const neighbor = tabNeighborAfterClose(state.tabs, sid);
   state.tabs = state.tabs.filter((tab) => tab.sessionId !== sid);
   if (wasSide) {
     state.sideSessionId = '';
@@ -197,6 +206,7 @@ function removeTab(sessionId) {
     closeNativeSideIfOwned(sid);
   }
   if (state.sourceSessionId === sid) state.sourceSessionId = '';
+  if (wasMain && neighbor) activateMain(neighbor.sessionId, neighbor.title);
   persistState();
   render();
 }
@@ -343,7 +353,12 @@ function activateMain(sessionId, title = '') {
 function openSide(sessionId, title = '') {
   const sid = clean(sessionId);
   const mainId = currentMainSessionId();
-  if (!sid || !mainId || sid === mainId) return;
+  if (!sid || !mainId) return;
+  if (sid === mainId || sid === state.sideSessionId) {
+    const composer = sid === mainId ? document.getElementById('chat-input') : document.getElementById('side-chat-input');
+    composer?.focus();
+    return;
+  }
   ensureMainTab(mainId, titleForSession(mainId));
   addExplicitTab(sid, title);
   state.sideSessionId = sid;
@@ -514,7 +529,7 @@ function handleClick(event) {
 
 function handleDragStart(event) {
   const tab = event.target.closest?.('.prom-multi-chat-tab');
-  const row = event.target.closest?.('.chat-session-item, #sessions-list .job-item');
+  const row = event.target.closest?.('.chat-session-item, #sessions-list .job-item, #channels-list .chat-session-item');
   const sessionId = tab?.dataset?.sessionId || extractSessionFromRow(row);
   if (!sessionId) return;
   const title = tab?.querySelector?.('.prom-multi-chat-tab-title')?.textContent || titleForSession(sessionId, row?.textContent);
@@ -525,6 +540,12 @@ function handleDragStart(event) {
     event.dataTransfer.setData(DRAG_MIME, JSON.stringify(dragPayload));
     event.dataTransfer.setData('text/plain', dragPayload.sessionId);
   } catch {}
+  beginSessionDrag(dragPayload);
+}
+
+export function beginSessionDrag(payload) {
+  dragPayload = normalizePayload(payload);
+  if (!dragPayload) return;
   document.body.classList.add('prom-multi-chat-dragging');
   ensureDropZones();
 }
@@ -572,7 +593,8 @@ function handleDrop(event) {
   if (!zone && !tab) return;
   event.preventDefault();
   event.stopPropagation();
-  if (zone?.dataset.chatDrop === 'main') activateMain(payload.sessionId, payload.title);
+  if (zone?.dataset.chatDrop === 'main' && payload.sessionId === state.sideSessionId) document.getElementById('side-chat-input')?.focus();
+  else if (zone?.dataset.chatDrop === 'main') activateMain(payload.sessionId, payload.title);
   else if (zone?.dataset.chatDrop === 'side') openSide(payload.sessionId, payload.title);
   else if (tab) reorderTabs(payload.sessionId, tab.dataset.sessionId);
   handleDragEnd();
@@ -624,6 +646,13 @@ function installWorkspace() {
   installed = true;
   ensureStylesheet();
   readStoredState();
+  const restoredMain = state.mainSessionId;
+  if (restoredMain && state.tabs.some((tab) => tab.sessionId === restoredMain)) {
+    callNativeSessionSwitcher(restoredMain);
+  }
+  window.addEventListener('prometheus:chat-session-deleted', (event) => {
+    removeTab(event.detail?.sessionId);
+  });
   document.addEventListener('click', handleSourceTriggerCapture, true);
   document.addEventListener('click', handleClick);
   document.addEventListener('dragstart', handleDragStart, true);
@@ -640,7 +669,7 @@ function installWorkspace() {
   window.addEventListener('prometheus:chat-rendered', () => {
     syncMainSession();
     patchNativeSplitHeaders();
-    if (!document.getElementById('prom-multi-chat-tabs')) renderTabStrip();
+    renderTabStrip();
   });
   window.addEventListener('prometheus:chat-title-override-changed', renderTabStrip);
   render();
