@@ -8960,6 +8960,7 @@ async function deleteChatSession(id, ev) {
   saveChatSessions();
   syncActiveChat();
   saveComposerDraft(composerDraftKey('desktop', id), '');
+  dispatchDesktopChatLifecycle('chat-session-deleted', { sessionId: id });
   if (typeof window.loadProjects === 'function') window.loadProjects();
   if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
