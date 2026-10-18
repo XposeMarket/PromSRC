@@ -1081,7 +1081,10 @@ export function createMobileChatRendererRuntime(context = {}) {
       // must not also remain in the body, where the next tool event can make
       // the summary look overwritten or duplicated.
       const toolBodyEntries = visibleEntries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
-      const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+      // Coalescing folds a finished call into its result row, so count both
+      // kinds. Counting only operations flipped "1 call" to "2 items" as soon
+      // as calls completed or a reconnect restored them as results.
+      const callCount = toolBodyEntries.filter((entry) => ['operation', 'result'].includes(String(entry?.activity?.kind || ''))).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
       const itemLabel = callCount ? 'call' : 'item';
