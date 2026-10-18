@@ -8,6 +8,7 @@ import { createReconnectStatusController as mkReconnect, createRestartContinuity
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
+import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 
 export { mobileReplayFrameAfterSteer };
 
@@ -6056,7 +6057,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
 
   function applyMobileChatStreamEvent(aiTurn, evt) {
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     aiTurn = _mobileStreamTargetTurn(aiTurn);
+    rememberMobileStreamOwner(aiTurn, requestedSession);
     if (!aiTurn || !evt?.type) return '';
     const eventRequestId = String(evt.clientRequestId || '').trim();
     const turnRequestId = String(aiTurn._clientRequestId || '').trim();
@@ -7139,6 +7142,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _pmAdmissionClientRequestId: clientRequestId,
       _clientRequestId: clientRequestId,
     };
+    rememberMobileStreamOwner(aiTurn, actualSessionId);
     activeThread.push(aiTurn);
     _appendMobileUserProcess(aiTurn, msg || 'Attached file(s)', {
       stage: 'mobile_chat_user_message',
