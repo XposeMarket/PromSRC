@@ -19,7 +19,8 @@
  */
 
 import { getConfig } from '../config/config';
-import { readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
+import { readModelUsageLifetimeTotals, readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
+import type { LifetimeSummaryTotal } from './model-usage-history';
 
 export interface UsageWindow {
   /** Human label e.g. "5-hour", "Weekly", "Monthly credits". */
@@ -798,7 +799,7 @@ async function getLive(providerId: string, configDir: string, accountId?: string
 
 // ─── Internal token accounting ───────────────────────────────────────────────
 
-function internalTokens(providerId: string, events: ModelUsageEvent[], accountId?: string): ProviderTokenTotals {
+function internalTokens(providerId: string, events: ModelUsageEvent[], accountId?: string, archived: LifetimeSummaryTotal[] = []): ProviderTokenTotals {
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
@@ -815,6 +816,15 @@ function internalTokens(providerId: string, events: ModelUsageEvent[], accountId
     calls += 1;
     const t = Date.parse(e.timestamp || '');
     if (Number.isFinite(t) && t >= monthMs) monthTotal += tt;
+  }
+  // Rotated-out rows are older than the 35-day window, so they never fall in the current month.
+  for (const a of archived) {
+    if (String(a.provider) !== providerId) continue;
+    if (accountId && String(a.accountId || '') !== accountId) continue;
+    total += Number(a.totalTokens || 0);
+    input += Number(a.inputTokens || 0);
+    output += Number(a.outputTokens || 0);
+    calls += Number(a.calls || 0);
   }
   return { total, input, output, calls, monthTotal };
 }
@@ -942,6 +952,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const budgets = getBudgets();
   const activeMain = getActiveMainModel();
   const events = await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
+  const archivedTotals = await readModelUsageLifetimeTotals();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
@@ -949,7 +960,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const providerEntries = ids.flatMap((id) => configuredUsageAccounts(id).map(account => ({ id, account })));
   const providers = (await Promise.all(providerEntries.map(async ({ id, account }): Promise<ProviderUsage | null> => {
     const live = await getLive(id, configDir, account.id);
-    const tokens = internalTokens(id, events, account.id);
+    const tokens = internalTokens(id, events, account.id, archivedTotals);
     const activeCodexModel = activeMain.provider === id && activeMain.accountId === account.id ? activeMain.model : '';
     const codexSelection = id === 'openai_codex' && (live || isCodexSparkModel(activeCodexModel))
       ? selectCodexUsageForModel(live || {

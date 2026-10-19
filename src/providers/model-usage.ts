@@ -1,7 +1,8 @@
 import fs from 'fs';
+import { createHash } from 'crypto';
 import { ensureSessionUsageIndex, readIndexedSessionUsage, readRecentUsage, readUsageRange, resetSessionUsageIndexes } from './model-usage-index';
 import path from 'path';
-import { listModelUsageHistoryFiles, readModelUsageHistory, rotateModelUsageLog, tryQueueModelUsageAppend, flushModelUsageAppends, withModelUsageReadLock } from './model-usage-history';
+import { listModelUsageHistoryFiles, readLifetimeSummary, readModelUsageHistory, rotateModelUsageLog, tryQueueModelUsageAppend, flushModelUsageAppends, withModelUsageReadLock, type LifetimeSummaryTotal } from './model-usage-history';
 import { getConfig } from '../config/config';
 import type { ChatMessage, ContentPart, ModelUsage } from './LLMProvider';
 import { estimateModelUsageCost } from './model-pricing';
@@ -441,6 +442,15 @@ function readUsageTail(filePath: string, start: number, end: number): string {
   }
 }
 
+let _usageReadCacheHead = '';
+
+/** Prefix fingerprint: catches a rewrite that regrows past the cached offset with the same inode. */
+function headFingerprint(filePath: string, size: number): string {
+  const length = Math.min(4096, size);
+  if (!length) return '';
+  return createHash('sha256').update(readUsageTail(filePath, 0, length)).digest('hex');
+}
+
 function ensureUsageReadCache(): void {
   const filePath = usageLogPath();
   let st: fs.Stats;
@@ -454,7 +464,8 @@ function ensureUsageReadCache(): void {
 
   const identity = `${st.dev}:${st.ino}:${st.birthtimeMs}`;
   if (!_usageReadCacheInitialized || filePath !== _usageReadCachePath || st.size < _usageReadCacheSize
-    || _usageReadCacheIdentity !== identity || (st.size === _usageReadCacheSize && st.mtimeMs !== _usageReadCacheMtimeMs)) {
+    || _usageReadCacheIdentity !== identity || _usageReadCacheHead !== headFingerprint(filePath, st.size)
+    || (st.size === _usageReadCacheSize && st.mtimeMs !== _usageReadCacheMtimeMs)) {
     resetUsageReadCache(filePath);
     // Calibration only needs its last twelve samples, never the entire ledger.
     const start = Math.max(0, st.size - 256 * 1024);
@@ -465,6 +476,7 @@ function ensureUsageReadCache(): void {
     _usageReadCacheMtimeMs = st.mtimeMs;
     _usageReadCacheInitialized = true;
     _usageReadCacheIdentity = identity;
+    _usageReadCacheHead = headFingerprint(filePath, st.size);
     return;
   }
 
@@ -560,6 +572,11 @@ export async function readRecentModelUsageEvents(cutoff: number): Promise<ModelU
     const file = usageLogPath();
     return await withModelUsageReadLock(file, () => readRecentUsage(file, cutoff));
   } catch { return []; }
+}
+
+/** Lifetime totals of rows rotated out of the active log (older than the 35-day window). */
+export async function readModelUsageLifetimeTotals(): Promise<LifetimeSummaryTotal[]> {
+  try { return (await readLifetimeSummary(usageLogPath())).totals; } catch { return []; }
 }
 
 export async function warmModelUsageIndex(): Promise<{ events: number; durationMs: number }> {

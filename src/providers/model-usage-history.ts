@@ -8,6 +8,61 @@ const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 35;
 const CHUNK_BYTES = 256 * 1024;
 
+export interface LifetimeSummaryTotal {
+  provider: string;
+  model: string;
+  accountId: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface LifetimeSummary { version: 1; totals: LifetimeSummaryTotal[]; }
+
+function summaryFile(filePath: string): string { return `${filePath}.lifetime-summary.json`; }
+
+/** Totals of rows rotated out of the active log, so lifetime readers keep history past the retention window. */
+export async function readLifetimeSummary(filePath: string): Promise<LifetimeSummary> {
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(summaryFile(filePath), 'utf8')) as LifetimeSummary;
+    if (parsed?.version === 1 && Array.isArray(parsed.totals)) return parsed;
+  } catch {}
+  return { version: 1, totals: [] };
+}
+
+function addEventTotal(summary: LifetimeSummary, event: ModelUsageEvent): void {
+  const provider = String(event.provider || '');
+  const model = String(event.model || '');
+  const accountId = String(event.accountId || '');
+  let entry = summary.totals.find((t) => t.provider === provider && t.model === model && t.accountId === accountId);
+  if (!entry) {
+    entry = { provider, model, accountId, calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    summary.totals.push(entry);
+  }
+  entry.calls += 1;
+  entry.inputTokens += Number(event.inputTokens || 0);
+  entry.outputTokens += Number(event.outputTokens || 0);
+  entry.totalTokens += Number(event.totalTokens || 0);
+}
+
+export function mergeLifetimeSummary(base: LifetimeSummary, delta: LifetimeSummary): LifetimeSummary {
+  const merged: LifetimeSummary = { version: 1, totals: base.totals.map((t) => ({ ...t })) };
+  for (const add of delta.totals) {
+    const entry = merged.totals.find((t) => t.provider === add.provider && t.model === add.model && t.accountId === add.accountId);
+    if (!entry) { merged.totals.push({ ...add }); continue; }
+    entry.calls += add.calls;
+    entry.inputTokens += add.inputTokens;
+    entry.outputTokens += add.outputTokens;
+    entry.totalTokens += add.totalTokens;
+  }
+  return merged;
+}
+
+async function optionalSha256(filePath: string): Promise<string> {
+  try { return await sha256(filePath); } catch { return ''; }
+}
+
 type LogLock = { tail: Promise<void>; busy: boolean };
 const logLocks = new Map<string, LogLock>();
 
@@ -35,6 +90,8 @@ interface RotationJournal {
   activeStagePath: string;
   activeSha256: string;
   archives: Array<{ targetPath: string; stagePath: string; sha256: string }>;
+  /** beforeSha256 makes the summary write idempotent: it applies only if the summary is still the pre-rotation version. */
+  summary?: { beforeSha256: string; after: LifetimeSummary };
 }
 
 function lockFor(filePath: string): LogLock {
@@ -171,6 +228,9 @@ async function recoverPendingRotation(filePath: string): Promise<void> {
     try { await fs.promises.rename(journal.activeStagePath, filePath); }
     catch (error: any) { if (error?.code === 'ENOENT') throw new Error(`rotation recovery missing staged active log: ${journal.activeStagePath}`); throw error; }
   }
+  if (journal.summary && await optionalSha256(summaryFile(filePath)) === journal.summary.beforeSha256) {
+    await atomicWriteJson(summaryFile(filePath), journal.summary.after);
+  }
   await fs.promises.rm(journalFile, { force: true });
 }
 
@@ -285,6 +345,7 @@ export async function rotateModelUsageLog(filePath: string, options: RotateModel
     const archiveHandles = new Map<string, fs.promises.FileHandle>();
     const archiveStages = new Map<string, string>();
     let archivedRows = 0;
+    const delta: LifetimeSummary = { version: 1, totals: [] };
     let activeRows = 0;
     try {
       for await (const { line, terminated } of readLines(filePath)) {
@@ -294,6 +355,7 @@ export async function rotateModelUsageLog(filePath: string, options: RotateModel
           const event = JSON.parse(line) as ModelUsageEvent;
           const timestamp = Date.parse(String(event.timestamp || ''));
           if (terminated && Number.isFinite(timestamp) && timestamp < cutoff) destination = archivePath(filePath, String(event.timestamp));
+          if (destination) addEventTotal(delta, event);
         } catch {}
         if (!destination) {
           await writeTo(activeHandle, rawRow);
@@ -326,6 +388,7 @@ export async function rotateModelUsageLog(filePath: string, options: RotateModel
       activeStagePath,
       activeSha256: await sha256(activeStagePath),
       archives,
+      summary: { beforeSha256: await optionalSha256(summaryFile(filePath)), after: mergeLifetimeSummary(await readLifetimeSummary(filePath), delta) },
     } satisfies RotationJournal);
     await recoverPendingRotation(filePath);
     return { rotated: true, archivedRows, activeRows, archivePaths: archives.map((archive) => archive.targetPath) };

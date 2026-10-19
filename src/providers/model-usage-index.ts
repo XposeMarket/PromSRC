@@ -1,9 +1,14 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import type { ModelUsageEvent } from './model-usage';
 
 const CHUNK = 64 * 1024;
+/** Prefix hash detects truncate-then-regrow replacement even when ino/birthtime are reused. */
+const HEAD_BYTES = 4096;
 interface Index {
   identity: string;
+  head: string;
+  headLength: number;
   offset: number;
   size: number;
   mtime: number;
@@ -15,15 +20,24 @@ const pending = new Map<string, Promise<Index>>();
 function identity(st: fs.Stats): string { return `${st.dev}:${st.ino}:${st.birthtimeMs}`; }
 const yieldLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+/** Hash of the first `length` bytes; a mismatch means the indexed prefix was rewritten. */
+async function headHash(handle: fs.promises.FileHandle, length: number): Promise<string> {
+  if (!length) return '';
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, 0);
+  return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex');
+}
+
 /** Compact byte ranges only: never retain historical event payloads in the gateway heap. */
 async function updateIndex(file: string): Promise<Index> {
   const handle = await fs.promises.open(file, 'r');
   try {
     const st = await handle.stat();
     let index = indexes.get(file);
-    if (!index || index.identity !== identity(st) || st.size < index.size
-      || (st.size === index.size && st.mtimeMs !== index.mtime)) {
-      index = { identity: identity(st), offset: 0, size: 0, mtime: 0, sessions: new Map(), count: 0 };
+    const headNow = index ? await headHash(handle, index.headLength) : '';
+    if (!index || index.identity !== identity(st) || st.size < index.offset || st.size < index.size
+      || headNow !== index.head || (st.size === index.size && st.mtimeMs !== index.mtime)) {
+      index = { identity: identity(st), head: '', headLength: 0, offset: 0, size: 0, mtime: 0, sessions: new Map(), count: 0 };
       indexes.set(file, index);
     }
     let position = index.offset;
@@ -56,6 +70,8 @@ async function updateIndex(file: string): Promise<Index> {
     }
     index.size = st.size;
     index.mtime = st.mtimeMs;
+    index.headLength = Math.min(HEAD_BYTES, st.size);
+    index.head = await headHash(handle, index.headLength);
     return index;
   } finally { await handle.close(); }
 }
@@ -73,9 +89,10 @@ export async function readIndexedSessionUsage(file: string, session: string): Pr
   const ranges = (index.sessions.get(session) || []).slice();
   const handle = await fs.promises.open(file, 'r');
   try {
-    // A rename between indexing and opening must never apply old offsets to a new file.
+    // A rename or in-place rewrite between indexing and opening must never apply old offsets to new bytes.
     const current = await handle.stat();
-    if (identity(current) !== index.identity || current.size < index.size) return readIndexedSessionUsage(file, session);
+    if (identity(current) !== index.identity || current.size < index.size
+      || await headHash(handle, index.headLength) !== index.head) return readIndexedSessionUsage(file, session);
     const result: ModelUsageEvent[] = [];
     for (let i = 0; i < ranges.length; i += 2) {
       let position = ranges[i];

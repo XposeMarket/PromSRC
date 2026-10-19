@@ -48,6 +48,11 @@ async function main() {
   for (const c of candidates) fs.writeFileSync(c, row('a', 9));
   assert.deepEqual((await readModelUsageEventsForSession('a')).map((e: any) => e.inputTokens), [9], 'truncated log is re-read');
 
+  // Truncate-then-grow past the indexed size between reads, with different content: stale offsets must not be reused.
+  const regrown = row('c', 30) + row('a', 21) + row('b', 22) + row('a', 23) + row('a', 24) + row('c', 31);
+  for (const c of candidates) fs.writeFileSync(c, regrown);
+  assert.deepEqual((await readModelUsageEventsForSession('a')).map((e: any) => e.inputTokens), [21, 23, 24], 'regrown log past old size returns only its own rows');
+
   console.log('model-usage-session-cache regression: ok');
 }
 
