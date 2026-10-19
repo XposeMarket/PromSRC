@@ -9,6 +9,7 @@
  * Returns { server, wss } — the same objects used everywhere else.
  */
 
+import { getProcessTelemetrySnapshot } from '../runtime/process-telemetry.js';
 import http from 'http';
 import https from 'https';
 import os from 'os';
@@ -451,6 +452,7 @@ function tryRawGatewayFastPath(
       processStartedAt: Number(process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT || 0),
       timestamp: Date.now(),
       fastPath: true,
+      processTelemetry: getProcessTelemetrySnapshot(),
       memory: {
         rssBytes: memory.rss,
         heapUsedBytes: memory.heapUsed,

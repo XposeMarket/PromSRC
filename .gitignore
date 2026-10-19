@@ -278,3 +278,7 @@ workspace/skills/.cache/
 
 # local eval output (published results live in evals/RESULTS.md)
 evals/results/
+
+# Root runtime recall index and intraday notes (not source).
+/audit/
+/memory/

@@ -215,6 +215,7 @@
     "test:activity-package": "tsx src/gateway/brain/activity-package.regression.ts",
     "test:brain-phase0": "tsx src/gateway/brain/brain-phase0.regression.ts",
     "test:brain-proposal-policy": "tsx src/gateway/brain/brain-proposal-policy.regression.ts",
+    "test:process-telemetry": "tsx src/gateway/runtime/process-telemetry.regression.ts",
     "test:usage-eventloop": "tsx src/providers/model-usage.regression.ts && tsx src/providers/model-usage-session-cache.regression.ts && tsx src/providers/model-usage-index.regression.ts && tsx src/providers/model-usage-history.regression.ts && tsx src/providers/model-usage-rotation-session.regression.ts && tsx src/gateway/browser-tools.x-scrape-sweep.regression.ts",
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",

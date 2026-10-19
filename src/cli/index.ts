@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { telemetryLogDirectory } from '../gateway/runtime/process-telemetry.js';
+
 import { Command } from 'commander';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -658,6 +660,19 @@ const GATEWAY_CRASH_LOOP_THRESHOLD = 8;
 const GATEWAY_CRASH_LOOP_BACKOFF_MS = 60_000;
 
 async function runSupervisedGateway(): Promise<void> {
+  const killReasons = new WeakMap<ChildProcess, string>();
+  const logChildTelemetry = async (pid: number | undefined, reason: string, code: number | null = null, signal: string | null = null) => {
+    const records = await Promise.all(['gateway-process-telemetry-latest.json', 'gateway-process-telemetry-last.json'].map(async name => {
+      try {
+        const filename = path.join(telemetryLogDirectory(), name);
+        if ((await fs.promises.stat(filename)).size > 16384) return null;
+        const record = JSON.parse(await fs.promises.readFile(filename, 'utf8'));
+        return record.pid === pid ? record : null;
+      } catch { return null; }
+    }));
+    const latest = records.filter(Boolean).sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))[0] || null;
+    console.error(`[GatewaySupervisor] child pid=${pid} reason=${reason} code=${code} signal=${signal} lastTelemetry=${JSON.stringify(latest)}`);
+  };
   let stopping = false;
   let restartCount = 0;
   let child: ChildProcess | null = null;
@@ -828,6 +843,7 @@ async function runSupervisedGateway(): Promise<void> {
     });
     launched.once('exit', (code, signal) => {
       void (async () => {
+      await logChildTelemetry(launched.pid, killReasons.get(launched) || (stopping || code === 0 || code === 42 || code === 43 ? 'requested' : 'crash'), code, signal);
       if (stopping) return;
       if (launched.pid && drainingChildren.delete(launched.pid)) {
         console.error(`[GatewaySupervisor] Drained gateway ${launched.pid} exited (${signal || (code ?? 'unknown')}).`);
@@ -1033,8 +1049,12 @@ async function runSupervisedGateway(): Promise<void> {
       continue;
     }
     console.error(`[GatewaySupervisor] Confirmed gateway stall (${decision.reasonCode}). Restarting gateway process...`);
-    if (child) killGatewayChild(child);
-    else scheduleLaunch();
+    const target = child as ChildProcess | null;
+    if (target) {
+      killReasons.set(target, `health-timeout:${decision.reasonCode}`);
+      await logChildTelemetry(target.pid, `health-timeout:${decision.reasonCode}`);
+      if (target.exitCode === null && target.signalCode === null && (child as ChildProcess | null) === target) killGatewayChild(target);
+    } else scheduleLaunch();
   }
 }
 

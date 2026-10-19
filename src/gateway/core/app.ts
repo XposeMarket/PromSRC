@@ -8,6 +8,7 @@
  * used everywhere else — nothing changes at runtime.
  */
 
+import { getProcessTelemetrySnapshot } from '../runtime/process-telemetry.js';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -209,6 +210,7 @@ export function createApp(): express.Application {
     res.json({
       ok: true,
       uptimeMs: Date.now() - startedAt,
+      processTelemetry: getProcessTelemetrySnapshot(),
       pid: process.pid,
       timestamp: Date.now(),
       modelBusy: isModelBusy(),

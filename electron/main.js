@@ -1296,6 +1296,24 @@ function getLastGatewayOutput(maxLines = 30) {
   return gatewayLogLines.slice(-maxLines).join('\n');
 }
 
+function readLastGatewayTelemetry() {
+  const directory = path.join(RUNTIME_STATE_DIR, 'logs');
+  const records = [];
+  for (const name of ['gateway-process-telemetry-latest.json', 'gateway-process-telemetry-last.json']) {
+    try {
+      const filename = path.join(directory, name);
+      if (fs.statSync(filename).size > 16384) continue;
+      records.push(JSON.parse(fs.readFileSync(filename, 'utf8')));
+    } catch {}
+  }
+  return records.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))[0] || null;
+}
+
+function logGatewaySupervisorKillReason(child, reason) {
+  if (child) child.prometheusKillReason = reason;
+  writeGatewayLog(`[main] Gateway supervisor force kill: reason=${reason} pid=${child?.pid || 'unknown'} lastTelemetry=${JSON.stringify(readLastGatewayTelemetry())}\n`);
+}
+
 async function openExternalSafely(rawUrl) {
   const externalUrl = normalizeExternalUrl(rawUrl);
   if (!externalUrl) {
@@ -1401,6 +1419,7 @@ function readGatewayRuntimeStatus() {
 process.on('exit', () => {
   if (!gatewayProcess || !gatewayProcess.pid) return;
   if (gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
+  logGatewaySupervisorKillReason(gatewayProcess, 'electron_process_exit');
   killManagedGatewayProcessTree(gatewayProcess);
 });
 
@@ -1816,7 +1835,12 @@ async function startGateway() {
   const launcher = resolveGatewayLauncherCommand();
   writeGatewayLog(`[main] Launcher: ${launcher.command} ${launcher.cliEntry}${launcher.electronRunAsNode ? ' (ELECTRON_RUN_AS_NODE fallback: bundled Node runtime missing)' : ''}\n`);
 
-  const supervisor = spawn(launcher.command, launcher.args, {
+  // Pass the explicit heap budget through execArgv to the gateway child.
+  // Preserve both spellings and any user-supplied NODE_OPTIONS override.
+  const hasHeapLimit = /--max[-_]old[-_]space[-_]size(?:[=\s]|$)/.test(
+    `${process.env.NODE_OPTIONS || ''} ${launcher.args.join(' ')}`);
+  const supervisorArgs = hasHeapLimit ? launcher.args : ['--max-old-space-size=4096', ...launcher.args];
+  const supervisor = spawn(launcher.command, supervisorArgs, {
     cwd: getGatewayWorkingDirectory(),
     env: {
       ...buildGatewayEnvironment(),
@@ -1850,7 +1874,8 @@ async function startGateway() {
   });
 
   supervisor.on('exit', (code, signal) => {
-    writeGatewayLog(`[main] Gateway supervisor exited (code=${code}, signal=${signal})\n`);
+    const reason = supervisor.prometheusKillReason || ((isQuitting || gatewayShuttingDown || code === 0 || code === GATEWAY_APP_RELAUNCH_EXIT_CODE) ? 'requested' : 'crash');
+    writeGatewayLog(`[main] Gateway supervisor exited (code=${code}, signal=${signal}, reason=${reason}) lastTelemetry=${JSON.stringify(readLastGatewayTelemetry())}\n`);
     if (gatewayProcess === supervisor) gatewayProcess = null;
     if (isQuitting || gatewayShuttingDown || isGatewayRestarting) return;
     if (code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
@@ -1912,6 +1937,7 @@ async function restartGatewayFromElectron(options = {}) {
         return true;
       }
       writeGatewayLog(`[main] Terminating gateway supervisor tree (pid=${stale.pid || 'unknown'})\n`);
+      logGatewaySupervisorKillReason(stale, `restart:${reason}`);
       killManagedGatewayProcessTree(stale);
       await waitForGatewayProcessExit(stale);
       forceCleanupOwnedGatewayPort(stale.pid || 0, Number(readGatewayRuntimeStatus()?.pid || 0));
@@ -4566,6 +4592,7 @@ app.on('before-quit', (event) => {
     try { shutdownRequest?.destroy(); } catch {}
     target.removeListener('exit', onExit);
     if (forceKill) {
+      logGatewaySupervisorKillReason(target, 'graceful_quit_timeout');
       killManagedGatewayProcessTree(target);
       forceCleanupOwnedGatewayPort(target.pid || 0, targetRuntimePid);
     }

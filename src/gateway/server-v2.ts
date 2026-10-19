@@ -14,6 +14,9 @@
 import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
 import './startup-async-diagnostics.js';
+import { installProcessTelemetry } from './runtime/process-telemetry.js';
+
+installProcessTelemetry();
 
 // Background git reads (build-status, workspace session, coding context) run
 // `git status` with short timeouts. Without this, status takes .git/index.lock
