@@ -4127,15 +4127,15 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
     message.liveTraceEntries.push({
       id: `mtrace_progress_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: 'think',
-      text: incoming.trim(),
+      text: incoming,
       ts: Date.now(),
       time: _nowTime(),
       extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' },
     });
     return true;
   }
-  const previous = String(existing.text || '').trim();
-  const next = incoming.trim();
+  const previous = String(existing.text || '');
+  const next = incoming;
   if (!next) return false;
   const isSnapshot = next.length > previous.length && next.startsWith(previous);
   const canAppend = !replace
@@ -4144,7 +4144,7 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
     && !/[.!?:]\s*$/.test(previous)
     && (/^\s/.test(incoming) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
   const merged = canAppend
-    ? _dedupeMobileTraceProseText(_appendMobileStreamingText(previous, incoming))
+    ? _appendMobileStreamingText(previous, incoming)
     : next;
   const latest = merged;
   if (!latest) return false;
@@ -4383,7 +4383,8 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
   const event = String(extra.event || entry.event || rawType || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
   const action = String(extra.action || extra.toolName || entry.action || entry.toolName || nestedExtra.action || nestedExtra.toolName || '').trim().toLowerCase();
-  if (rawType === 'compaction' || action === 'context_compaction') {
+  if (rawType === 'compaction' || action === 'context_compaction'
+    || (rawType === 'info' && _mobileCompactionStatusFromText(text))) {
     const explicitStatus = String(entry.status || extra.status || nestedExtra.status || '').trim().toLowerCase();
     const status = explicitStatus === 'skipped'
       ? 'skipped'
@@ -4932,14 +4933,19 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
         ? 'Context compaction skipped'
         : 'Context compacted';
   const cleanSummary = String(summary || extra?.summary || '').trim();
-  const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
+  let index = message.liveTraceEntries.length - 1;
+  while (index >= 0 && message.liveTraceEntries[index]?.type === 'info'
+    && /^Processing(?:\.{3}|…)?$/i.test(String(message.liveTraceEntries[index].text || '').trim())) index--;
+  const last = message.liveTraceEntries[index];
   const payload = {
     ...(extra && typeof extra === 'object' ? extra : {}),
     action: 'context_compaction',
   };
   if (last && String(last.type || '').toLowerCase() === 'compaction') {
-    last.text = label;
-    last.status = normalizedStatus;
+    if (normalizedStatus !== 'compacting' || last.status === 'compacting') {
+      last.text = label;
+      last.status = normalizedStatus;
+    }
     if (cleanSummary) last.summary = cleanSummary;
     last.extra = { ...(last.extra || {}), ...payload };
     return;
@@ -5317,6 +5323,10 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
+    // Persisted/live compaction already owns this event; process recovery
+    // otherwise appends the call/result/status triple again at the tail.
+    if (_normalizeMobileRecoveredTraceEntry(entry)?.type === 'compaction'
+      && message.liveTraceEntries.some((item) => item.type === 'compaction')) continue;
     // Calls already owned by a live row need no duplicate operation. Results
     // must still reach the shared coalescer to complete an interrupted call.
     const derivedType = String(entry?.type || '').toLowerCase();

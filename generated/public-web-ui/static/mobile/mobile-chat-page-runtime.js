@@ -3840,10 +3840,15 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const liveTraceEntries = [];
     const traceKeys = new Set();
     const visionKeys = new Set();
-    [
-      ...(Array.isArray(source.liveTraceEntries) ? source.liveTraceEntries : []),
-      ...(Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : []),
-    ].forEach((entry) => {
+    // Server history owns chronology; lane compaction IDs are synthetic and
+    // cannot be compared to persisted stream/sequence IDs.
+    const persisted = Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : [];
+    const hasPersistedCompaction = persisted.some((entry) =>
+      _normalizeMobileRecoveredTraceEntry(entry)?.type === 'compaction');
+    const lane = (Array.isArray(source.liveTraceEntries) ? source.liveTraceEntries : [])
+      .filter((entry) => !hasPersistedCompaction
+        || _normalizeMobileRecoveredTraceEntry(entry)?.type !== 'compaction');
+    [...persisted, ...lane].forEach((entry) => {
       const normalized = _normalizeMobileRecoveredTraceEntry(entry);
       if (!normalized) return;
       const key = String(normalized.id || normalized.eventKey || normalized.extra?.eventKey || `${normalized.type || ''}|${normalized.text || normalized.content || ''}`);
@@ -3855,6 +3860,22 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       if (traceKeys.has(key) || (visionKey && visionKeys.has(visionKey))) return;
       traceKeys.add(key);
       if (visionKey) visionKeys.add(visionKey);
+      if (normalized.type === 'compaction') {
+        // Processing heartbeats do not start a new compaction event.
+        let index = liveTraceEntries.length - 1;
+        while (index >= 0 && liveTraceEntries[index].type === 'info'
+          && /^Processing(?:\.{3}|…)?$/i.test(String(liveTraceEntries[index].text || '').trim())) index--;
+        const previous = liveTraceEntries[index];
+        if (previous?.type === 'compaction') {
+          const final = normalized.status !== 'compacting' || previous.status === 'compacting'
+            ? normalized : previous;
+          liveTraceEntries[index] = { ...previous, ...final,
+            summary: normalized.summary || previous.summary || '',
+            extra: { ...previous.extra, ...final.extra,
+              summary: normalized.summary || previous.summary || '' } };
+          return;
+        }
+      }
       liveTraceEntries.push(normalized);
     });
     if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
