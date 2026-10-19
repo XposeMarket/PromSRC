@@ -49,8 +49,15 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   if (explicitlyPrivateReasoning) return null;
   // Keep the public summary channel distinct from commentary during recovery.
   if (isReasoningSummary) {
-    const text = backgroundTraceText(data?.text || data?.summary || data?.thinking);
-    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } } : null;
+    // Summary deltas are streamed fragments ("There's", " a lot", " to think").
+    // Trimming each fragment deletes the word boundaries, and the live trace
+    // concatenates consecutive fragments, producing "There'salottothink".
+    // Keep the raw fragment; only use trim() to decide whether it is empty.
+    const rawValue = data?.text ?? data?.summary ?? data?.thinking;
+    const raw = typeof rawValue === 'string' ? rawValue : backgroundTraceText(rawValue);
+    if (!raw.trim()) return null;
+    const text = raw.length > 4_000 ? `${raw.slice(0, 4_000)}...` : raw;
+    return { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } };
   }
   if (eventType === 'token_narration_boundary') {
     const text = backgroundTraceText(data?.text || data?.message || data?.narration);
