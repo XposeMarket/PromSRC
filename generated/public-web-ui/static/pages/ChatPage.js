@@ -15240,6 +15240,10 @@ function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
+  if (container) {
+    container.dataset.streamSession = String(window.activeChatSessionId || '');
+    container.dataset.streamHistoryCount = String((window.chatHistory || []).length);
+  }
   // All desktop threads share #chat-messages, and no row key survives a thread
   // switch, so reconcile deleted every row (live tool stream included) and
   // rebuilt the incoming thread from HTML. Park the outgoing thread's row nodes
@@ -15352,6 +15356,11 @@ function renderChatMessages() {
     if (!panesReconciled) setInnerHTMLPreservingVisuals(container, splitHtml);
     const mainPane = container.querySelector('.side-chat-main-messages');
     const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
+    if (sideActive && sidePane?.id === 'side-chat-messages') {
+      sidePane.dataset.streamSession = String(getSideChatSession()?.id || '');
+      sidePane.dataset.streamHistoryCount = String((getSideChatSession()?.history || []).length);
+    }
+
     if (!panesReconciled && !window.chatMessagesUserScrolledUp) {
       if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
@@ -15689,38 +15698,110 @@ function patchStreamingAnswerText(content, nextContent) {
 // body render remains the safe fallback for first paint and structural changes.
 function patchStreamingChatBubble(sessionId) {
   const sid = String(sessionId || '').trim();
-  if (!sid || sid !== String(window.activeChatSessionId || '') || !isSessionThinking(sid)) return false;
-  const bubble = document.getElementById('thinking-msg');
-  const content = bubble?.querySelector?.('[data-live-stream-content]');
-  if (!bubble || !content) return false;
-  if (content.querySelector('.chat-question-card, .chat-approval-card')) return false;
-
-  const container = document.getElementById('chat-messages');
-  const shouldFollow = !!container && (container.scrollHeight - (container.scrollTop + container.clientHeight)) <= 60;
+  if (!sid || !isSessionThinking(sid)) return false;
+  // Active chat patches #chat-messages; an open side/split pane patches its own
+  // #side-chat-messages container. Any other session keeps the full fallback.
+  const isActive = sid === String(window.activeChatSessionId || '');
+  const side = isActive ? null : getSideChatSession();
+  if (!isActive && (!side || String(side.id) !== sid)) return false;
+  const chatRoot = document.getElementById('chat-messages');
+  const container = isActive ? chatRoot : chatRoot?.querySelector('#side-chat-messages');
+  if (!container) return false;
+  const historyCount = String(((isActive ? window.chatHistory : side.history) || []).length);
+  if (container.dataset.streamSession !== sid
+    || container.dataset.streamHistoryCount !== historyCount) {
+    return false; // The frame scheduler owns the coalesced structural fallback.
+  }
+  const list = container.querySelector('.side-chat-main-messages') || container;
+  let bubble = Array.from(list.querySelectorAll('[data-live-stream-body]'))
+    .find((node) => node.dataset.liveStreamBody === sid)?.closest('.msg');
+  if (!bubble) {
+    // A pending question may deliberately suppress the placeholder. Insert only
+    // the live row when text/tools subsequently arrive, never rebuild history.
+    const html = renderSessionThinkingHtml(sid);
+    if (!html) return true;
+    list.querySelector('#chat-welcome')?.remove();
+    if (isActive) document.getElementById('chat-view')?.classList.remove('chat-empty');
+    list.insertAdjacentHTML('beforeend', html);
+    bubble = Array.from(list.querySelectorAll('[data-live-stream-body]'))
+      .find((node) => node.dataset.liveStreamBody === sid)?.closest('.msg');
+  }
+  const content = bubble?.querySelector('[data-live-stream-content]');
+  if (!content) return false;
+  const shouldFollow = (list.scrollHeight - (list.scrollTop + list.clientHeight)) <= 60;
   const nextContent = document.createElement('div');
   nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
+  // Keep placeholder styling in sync when the first answer/tool arrives.
+  const st = getSessionStreamState(sid) || {};
+  bubble.classList.toggle('thinking-only', !String(st.streamingAIText || '').trim()
+    && !(st.liveTraceEntries || []).length && !(st.currentProgressLines || []).length
+    && !(st.pendingApprovals || []).length && !getRuntimePlanItems(st.runtimeProgressState).length);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
   const hasTimeline = !!directLiveTraceChild(content, (node) => node.classList.contains('live-turn-timeline'))
     || !!directLiveTraceChild(nextContent, (node) => node.classList.contains('live-turn-timeline'));
   const patchedTimeline = !hasTimeline || patchLiveTurnTimeline(content, nextContent);
-  if (!patchedAnswer || !patchedTimeline) {
+  if ((!patchedAnswer || !patchedTimeline
+    || content.querySelector('.chat-question-card, .chat-approval-card')
+    || nextContent.querySelector('.chat-question-card, .chat-approval-card')
+    || !hasTimeline) && content.innerHTML !== nextContent.innerHTML) {
+    // Structural transitions affect the live body only, never historical rows.
+    // Reuse unchanged interactive cards so token paints do not reset their UI.
+    const cards = Array.from(content.querySelectorAll('.chat-question-card, .chat-approval-card'));
+    Array.from(nextContent.querySelectorAll('.chat-question-card, .chat-approval-card')).forEach((card) => {
+      const previous = cards.find((node) => node.outerHTML === card.outerHTML);
+      if (previous) card.replaceWith(previous);
+    });
     const disclosures = captureLiveTraceDisclosureState(content);
-    content.innerHTML = nextContent.innerHTML;
+    content.replaceChildren(...Array.from(nextContent.childNodes));
     restoreLiveTraceDisclosureState(content, disclosures);
   }
 
   // Only follow the stream when the reader was already at the bottom. Opening
   // a tool summary or reading its metadata must never pull the chat away.
-  if (container && shouldFollow) container.scrollTop = container.scrollHeight;
+  if (shouldFollow) list.scrollTop = list.scrollHeight;
   // Scrolled-up readers retain their scrollTop without another layout write.
   return true;
 }
 
-function renderStreamingChatUpdate(sessionId) {
-  if (document.hidden) return; // Latest stream state is painted when the tab becomes visible.
-  if (!patchStreamingChatBubble(sessionId)) renderChatMessages();
+const streamingChatFrames = new Map();
+const streamingChatFlushHooks = new Map();
+// Visible = the active chat plus an open side/split pane. A failed patch redraws
+// only that pane (coalesced in the same frame); the active chat keeps its full fallback.
+function redrawSideChatStreamPane(sid) {
+  const list = document.getElementById('chat-messages')?.querySelector('#side-chat-messages');
+  const side = getSideChatSession();
+  if (!list || !side || String(side.id) !== sid) return false;
+  const template = document.createElement('div');
+  template.innerHTML = renderSideChatPaneHtml();
+  const next = template.querySelector('#side-chat-messages');
+  if (!next) return false;
+  setInnerHTMLPreservingVisuals(list, next.innerHTML);
+  list.dataset.streamSession = sid;
+  list.dataset.streamHistoryCount = String((side.history || []).length);
+  return true;
 }
+function renderStreamingChatUpdate(sessionId, onFlushed = null) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || document.hidden || !isSessionVisibleInChatSurface(sid)) return;
+  // onFlushed runs after the DOM write in the rAF flush (first-visible metric, motion hook).
+  if (typeof onFlushed === 'function') {
+    streamingChatFlushHooks.set(sid, [...(streamingChatFlushHooks.get(sid) || []), onFlushed]);
+  }
+  if (streamingChatFrames.has(sid)) return;
+  streamingChatFrames.set(sid, requestAnimationFrame(() => {
+    streamingChatFrames.delete(sid);
+    const hooks = streamingChatFlushHooks.get(sid) || [];
+    streamingChatFlushHooks.delete(sid);
+    if (document.hidden || !isSessionVisibleInChatSurface(sid)) return;
+    if (!patchStreamingChatBubble(sid)) {
+      const paneOnly = sid !== String(window.activeChatSessionId || '') && redrawSideChatStreamPane(sid);
+      if (!paneOnly) renderChatMessages();
+    }
+    for (const hook of hooks) { try { hook(); } catch {} }
+  }));
+}
+
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && window.activeChatSessionId && isSessionThinking(window.activeChatSessionId)) {
     renderStreamingChatUpdate(window.activeChatSessionId);
@@ -15728,11 +15809,21 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function syncAssistantWorkTimer() {
-  const active = !document.hidden && !window.__promSidePaneSuspended && isSessionThinking(window.activeChatSessionId);
+  const thinking = isSessionThinking(window.activeChatSessionId);
+  document.getElementById('chat-messages')?.classList.toggle('is-streaming', thinking);
+  const active = !document.hidden && !window.__promSidePaneSuspended && thinking;
   if (active) {
     if (!window._assistantWorkTimer) {
       window._assistantWorkTimer = setInterval(() => {
-        renderStreamingChatUpdate(window.activeChatSessionId);
+        // Stream events own body updates. Keep only the elapsed label alive;
+        // never reparse markdown or reconcile history on this idle timer.
+        if (document.hidden) return;
+        const sid = window.activeChatSessionId;
+        const startedAt = Number(getSessionStreamState(sid)?.turnStartedAt || 0);
+        if (!startedAt) return;
+        const timer = document.querySelector('[data-live-stream-content] .assistant-work-timer');
+        const label = `Working for ${formatAssistantWorkDuration(Date.now() - startedAt)}`;
+        if (timer && timer.textContent !== label) timer.textContent = label;
       }, 2500);
     }
   } else if (window._assistantWorkTimer) {
@@ -18433,9 +18524,7 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
-    liveTraceEntries: Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length
-      ? lane.liveTraceEntries
-      : backgroundAgentEventsToLiveTraceEntries(lane.events),
+    liveTraceEntries: backgroundSpawnLaneLiveTrace(lane),
     streamId: lane.streamId,
     lastSeq: lane.lastSeq,
     steerMessages: lane.steerMessages,
@@ -18815,6 +18904,50 @@ function scheduleBackgroundAgentUiUpdate(options = {}) {
   chatPerformanceRuntime.scheduleBackgroundAgentUiUpdate(renderBackgroundAgentUi, options);
 }
 
+// Live trace is derived from lane.events. Rebuilding it on every streamed
+// frame was O(events) per token; derive lazily and cache by events identity
+// (appendBackgroundAgentEvent always returns a new array).
+function backgroundSpawnLaneLiveTrace(lane) {
+  if (!lane) return [];
+  const events = Array.isArray(lane.events) ? lane.events : [];
+  if (lane.__liveTraceEventsRef === events && Array.isArray(lane.liveTraceEntries)) return lane.liveTraceEntries;
+  if (!events.length && Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length) return lane.liveTraceEntries;
+  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(events);
+  lane.__liveTraceEventsRef = events;
+  return lane.liveTraceEntries;
+}
+
+// Durable persistence normalizes and merges the full event buffer. Doing that
+// per streamed frame pinned the main thread while agents ran; coalesce dirty
+// lanes and persist each once per window instead.
+const BACKGROUND_SPAWN_PERSIST_MS = 750;
+const backgroundSpawnDirtyLaneIds = new Set();
+let backgroundSpawnPersistTimer = null;
+function flushBackgroundSpawnLanePersistence({ immediate = true } = {}) {
+  if (backgroundSpawnPersistTimer) { clearTimeout(backgroundSpawnPersistTimer); backgroundSpawnPersistTimer = null; }
+  if (!backgroundSpawnDirtyLaneIds.size) return;
+  const ids = [...backgroundSpawnDirtyLaneIds];
+  backgroundSpawnDirtyLaneIds.clear();
+  const lanes = ensureBackgroundSpawnDockMap();
+  ids.forEach((id) => {
+    const lane = lanes.get(id);
+    if (lane) persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), immediate ? { immediate: true } : undefined);
+  });
+}
+function scheduleBackgroundSpawnLanePersistence(laneId) {
+  backgroundSpawnDirtyLaneIds.add(String(laneId || ''));
+  if (backgroundSpawnPersistTimer) return;
+  backgroundSpawnPersistTimer = setTimeout(() => {
+    backgroundSpawnPersistTimer = null;
+    flushBackgroundSpawnLanePersistence({ immediate: false });
+  }, BACKGROUND_SPAWN_PERSIST_MS);
+}
+// Close/hide must not leave dirty lanes waiting on the 750ms timer: flush now.
+window.addEventListener('pagehide', flushBackgroundSpawnLanePersistence);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushBackgroundSpawnLanePersistence();
+});
+
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
@@ -18836,10 +18969,9 @@ function pushBackgroundSpawnEvent(msg = {}) {
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
     lane.events = appendBackgroundAgentEvent(lane.events, entry);
-    lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   }
   if (streamId && seq) lane.lastSeq = seq;
-  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+  scheduleBackgroundSpawnLanePersistence(lane.id);
   if (!document.hidden && String(window.currentMode || 'chat') === 'chat'
     && (lane.sessionId === String(window.activeChatSessionId || '').trim()
       || lane.id === String(window.backgroundAgentDetailId || '').trim())) {
@@ -18902,8 +19034,8 @@ function completeBackgroundSpawnLane(msg = {}) {
     content,
     extra: msg,
   });
-  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   lane.updatedAt = Date.now();
+  backgroundSpawnDirtyLaneIds.delete(lane.id);
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), { immediate: true });
   scheduleBackgroundAgentUiUpdate({ immediate: true });
 }
@@ -18922,13 +19054,41 @@ function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId)
   return source;
 }
 
+let backgroundDetailFrame = null;
 function renderBackgroundAgentDetail() {
-  const id = String(window.backgroundAgentDetailId || '').trim();
-  const record = id ? backgroundSpawnDetailRecord(id) : null;
-  if (!id) return;
-  if (!record) window.backgroundAgentDetailId = '';
-  updateSideChatChrome();
-  renderChatMessages();
+  if (document.hidden || backgroundDetailFrame !== null) return;
+  backgroundDetailFrame = requestAnimationFrame(() => {
+    backgroundDetailFrame = null;
+    if (document.hidden) return;
+    const id = String(window.backgroundAgentDetailId || '').trim();
+    if (!id) return;
+    const record = backgroundSpawnDetailRecord(id);
+    const pane = document.querySelector('.background-agent-side-pane');
+    if (!record || !pane || pane.dataset.chatPaneKey !== `side:background:${id}`) {
+      if (!record) window.backgroundAgentDetailId = '';
+      updateSideChatChrome();
+      renderChatMessages(); // Opening/closing a split pane is structural.
+      return;
+    }
+    const list = pane.querySelector('#background-agent-side-messages');
+    if (!list) return;
+    const signature = `${record.status}:${record.updatedAt}:${record.lastSeq}:${record.events?.length}:${record.result}:${record.steerMessages?.length}`;
+    if (list.dataset.streamVersion === signature) return;
+    const template = document.createElement('div');
+    template.innerHTML = renderBackgroundAgentSidePaneHtml(record);
+    const nextList = template.querySelector('#background-agent-side-messages');
+    if (!nextList) return;
+    reconcileKeyedTimelineRows(list, nextList.innerHTML, {
+      scroller: list,
+      scrollState: captureKeyedScrollState(list, list),
+      followBottom: list.scrollHeight - list.scrollTop - list.clientHeight <= 60,
+      setContents: setInnerHTMLPreservingVisuals,
+    });
+    const header = pane.querySelector('.side-chat-kicker');
+    const nextHeader = template.querySelector('.side-chat-kicker');
+    if (header && nextHeader && header.innerHTML !== nextHeader.innerHTML) header.innerHTML = nextHeader.innerHTML;
+    list.dataset.streamVersion = signature;
+  });
 }
 
 function openBackgroundAgentDetail(id) {
@@ -19093,6 +19253,9 @@ function updateBackgroundSpawnDockOffset() {
 }
 
 function clearBackgroundSpawnDockForSession(sessionId = window.activeChatSessionId) {
+  // Persist pending coalesced writes before any lane is removed, so events
+  // buffered in the 750ms window are not lost when the main turn ends.
+  flushBackgroundSpawnLanePersistence();
   const sid = String(sessionId || '').trim();
   const lanes = ensureBackgroundSpawnDockMap();
   const cleared = ensureBackgroundSpawnClearedIds();
