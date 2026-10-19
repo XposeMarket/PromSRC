@@ -6405,7 +6405,7 @@ function applyCreativeModeUI(options = {}) {
   } else if (rightPanel) {
     if (creativeModeSavedPanelWidth && !/^0px$/i.test(creativeModeSavedPanelWidth)) {
       rightPanel.style.width = creativeModeSavedPanelWidth;
-      rightPanel.style.minWidth = creativeModeSavedPanelWidth;
+      rightPanel.style.removeProperty('min-width');
     } else {
       rightPanel.style.removeProperty('width');
       rightPanel.style.removeProperty('min-width');
