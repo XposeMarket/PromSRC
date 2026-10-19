@@ -285,6 +285,11 @@ body.pm-mobile-active .pm-background-spawn-dock.is-open.has-many {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
+  /* The base dock is pointer-events:none so it never blocks the chat; an
+     open multi-agent list must own touches or iOS can't scroll it. */
+  pointer-events: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 body.pm-mobile-active .pm-background-spawn-dock.is-open .pm-background-spawn-lane {
