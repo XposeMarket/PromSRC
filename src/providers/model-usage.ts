@@ -1,4 +1,5 @@
 import fs from 'fs';
+import readline from 'readline';
 import path from 'path';
 import { getConfig } from '../config/config';
 import type { ChatMessage, ContentPart, ModelUsage } from './LLMProvider';
@@ -648,4 +649,77 @@ export function warmModelUsageIndex(): { events: number; durationMs: number } {
 
 export function resetModelUsageIndexForTests(): void {
   resetUsageReadCache();
+}
+
+// Non-blocking analytics read. The file is streamed line-by-line (readline over
+// fs.createReadStream) so the gateway event loop is never stalled by a sync full read.
+// One in-flight promise is shared by concurrent callers, and a snapshot keyed on
+// size/mtime is served within TTL, then stale-while-refresh until a hard max age.
+const ASYNC_USAGE_CACHE_TTL_MS = 15_000;
+const ASYNC_USAGE_STALE_MAX_MS = 120_000;
+let _asyncUsageCache: {
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  loadedAt: number;
+  events: ModelUsageEvent[];
+} | null = null;
+let _asyncUsageInflight: Promise<ModelUsageEvent[]> | null = null;
+
+async function streamUsageEventsFromDisk(filePath: string): Promise<ModelUsageEvent[]> {
+  const events: ModelUsageEvent[] = [];
+  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        // Best-effort: malformed telemetry rows are skipped, never fatal.
+        for (const event of parseUsageEvents(line)) events.push(event);
+      } catch {}
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+  return events;
+}
+
+async function refreshAsyncUsageCache(filePath: string): Promise<ModelUsageEvent[]> {
+  let st: fs.Stats;
+  try {
+    st = await fs.promises.stat(filePath);
+  } catch {
+    _asyncUsageCache = null;
+    return [];
+  }
+  const cached = _asyncUsageCache;
+  if (cached && cached.filePath === filePath && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+    cached.loadedAt = Date.now();
+    return cached.events;
+  }
+  const events = await streamUsageEventsFromDisk(filePath);
+  _asyncUsageCache = { filePath, size: st.size, mtimeMs: st.mtimeMs, loadedAt: Date.now(), events };
+  return events;
+}
+
+export function readModelUsageEventsAsync(): Promise<ModelUsageEvent[]> {
+  const filePath = usageLogPath();
+  const cached = _asyncUsageCache && _asyncUsageCache.filePath === filePath ? _asyncUsageCache : null;
+  const age = cached ? Date.now() - cached.loadedAt : Infinity;
+  if (cached && age < ASYNC_USAGE_CACHE_TTL_MS) return Promise.resolve(cached.events);
+  if (cached && age < ASYNC_USAGE_STALE_MAX_MS) {
+    // Stale-while-refresh: answer from the last snapshot and refresh in the background.
+    if (!_asyncUsageInflight) {
+      _asyncUsageInflight = refreshAsyncUsageCache(filePath)
+        .catch(() => cached.events)
+        .finally(() => { _asyncUsageInflight = null; });
+    }
+    return Promise.resolve(cached.events);
+  }
+  if (!_asyncUsageInflight) {
+    _asyncUsageInflight = refreshAsyncUsageCache(filePath)
+      .finally(() => { _asyncUsageInflight = null; });
+  }
+  return _asyncUsageInflight;
 }

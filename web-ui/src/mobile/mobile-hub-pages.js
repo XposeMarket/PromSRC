@@ -687,14 +687,29 @@ function _pmTokenActivityGrid(activity = {}) {
   `;
 }
 
+// Read-only Goals list (finding: existing goals were unreachable after the goals UI was removed).
+function _pmHubGoalsMarkup(goals, { loading = false, error = '' } = {}) {
+  if (loading) return `<div class="hub-goals-state" role="status">Loading goals…</div>`;
+  if (error) return `<div class="hub-goals-state error" role="alert">Unable to load goals. ${escapeHtml(error)}</div>`;
+  if (!goals.length) return `<div class="hub-goals-state" role="status">No main-chat goals yet.</div>`;
+  return `<div class="hub-achievements-grid" aria-label="Goals, ${goals.length} total">${goals.slice(0, 20).map((goal) => {
+    const body = _pmGoalBody(goal);
+    return `<article class="hub-goal-card"><div class="hub-goal-title">${escapeHtml(_pmGoalTitle(goal))}</div>${body ? `<div class="hub-goal-body">${escapeHtml(body.slice(0, 240))}</div>` : ''}<div class="hub-goal-meta">${_pmStatusPill(goal?.status)} ${escapeHtml(_pmDateTime(goal?.updatedAt || goal?.createdAt))}</div></article>`;
+  }).join('')}</div>`;
+}
+
 export async function renderHubPage(page, { navigate } = {}) {
-  page.innerHTML = `${renderMobileHeader({ title: 'Hub', online: true })}<div class="pm-body pm-hub-analytics"><section id="hub-usage" class="hub-usage" aria-label="Usage analytics"></section></div>`;
+  page.innerHTML = `${renderMobileHeader({ title: 'Hub', online: true })}<div class="pm-body pm-hub-analytics"><section id="hub-goals" class="hub-section" aria-label="Goals"><div class="hub-goals-header"><div class="hub-section-title">Goals</div></div><div id="hub-goals-body">${_pmHubGoalsMarkup([], { loading: true })}</div></section><section id="hub-usage" class="hub-usage" aria-label="Usage analytics"></section></div>`;
   wireHeaderActions(page, {});
   if (!document.querySelector('link[data-hub-analytics]')) {
     const link = document.createElement('link');
     link.rel = 'stylesheet'; link.href = '/src/styles/hub.css'; link.dataset.hubAnalytics = 'true';
     document.head.appendChild(link);
   }
+  const goalsBody = page.querySelector('#hub-goals-body');
+  loadMobileHubGoals()
+    .then((goals) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup(goals); })
+    .catch((err) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup([], { error: err?.message || String(err) }); });
   const { activateHubUsage } = await import('../pages/HubUsage.js');
   if (page.isConnected) activateHubUsage();
 }

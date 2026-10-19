@@ -1725,6 +1725,7 @@ export function hubPageActivate() {
     _heatmap.month = now.getMonth() + 1;
   }
   loadProviders();
+  loadGoals();
   activateHubUsage();
 }
 

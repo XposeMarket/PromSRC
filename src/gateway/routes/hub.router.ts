@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
-import { readModelUsageEvents } from '../../providers/model-usage.js';
+import { readModelUsageEvents, readModelUsageEventsAsync } from '../../providers/model-usage.js';
 import { aggregateHubUsageAnalytics } from '../hub-usage-analytics.js';
 import { listBackgroundStatuses } from '../tasks/task-runner.js';
 import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
@@ -1007,9 +1007,10 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
 
 });
 
-router.get('/api/hub/usage-analytics', (req: Request, res: Response) => {
+router.get('/api/hub/usage-analytics', async (req: Request, res: Response) => {
   try {
-    const analytics = aggregateHubUsageAnalytics(readModelUsageEvents(), {
+    // Async, shared, cached read: never blocks the gateway event loop on model-usage.jsonl.
+    const analytics = aggregateHubUsageAnalytics(await readModelUsageEventsAsync(), {
       range: req.query.range,
       provider: req.query.provider,
     });
