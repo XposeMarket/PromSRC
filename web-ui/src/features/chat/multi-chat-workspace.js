@@ -261,7 +261,7 @@ function renderTabStrip() {
 function syncSidePaneActivity() {
   const frame = document.getElementById('prom-multi-chat-side-frame');
   if (!frame?.contentWindow) return;
-  const active = !!state.sideSessionId && paneVisible && !document.hidden && document.activeElement === frame;
+  const active = !!state.sideSessionId && paneVisible && !document.hidden && document.hasFocus() && document.activeElement === frame;
   frame.contentWindow.postMessage({ type: 'prom-side-pane-activity', active }, location.origin);
 }
 
@@ -521,9 +521,9 @@ function installParentWorkspace() {
   window.addEventListener('popstate', sync);
   window.addEventListener('hashchange', sync);
   window.addEventListener('focus', syncSidePaneActivity);
-  window.addEventListener('blur', syncSidePaneActivity);
+  window.addEventListener('blur', () => setTimeout(syncSidePaneActivity, 0));
   document.addEventListener('focusin', syncSidePaneActivity);
-  document.addEventListener('visibilitychange', sync);
+  document.addEventListener('visibilitychange', () => { syncSidePaneActivity(); sync(); });
   window.addEventListener('message', (event) => {
     const frame = document.getElementById('prom-multi-chat-side-frame');
     if (event.origin === location.origin && event.source === frame?.contentWindow && event.data?.type === 'prom-side-pane-ready') syncSidePaneActivity();
@@ -548,7 +548,9 @@ function installEmbeddedSidePane() {
   });
   document.addEventListener('visibilitychange', syncActivity);
   syncActivity();
-  window.parent.postMessage({ type: 'prom-side-pane-ready' }, location.origin);
+  const notifyParent = () => window.parent.postMessage({ type: 'prom-side-pane-ready' }, location.origin);
+  window.addEventListener('focus', notifyParent);
+  notifyParent();
   const params = new URLSearchParams(location.search);
   const sid = clean(params.get(SESSION_PARAM));
   if (!sid) return;
