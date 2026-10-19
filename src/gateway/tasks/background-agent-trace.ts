@@ -17,6 +17,19 @@ function backgroundTraceText(value: unknown, max = 4_000): string {
   }
 }
 
+// Summary deltas are streamed fragments ("There's", " a lot", " to think").
+// Trimming each fragment deletes the word boundaries and the live trace then
+// concatenates them into "There'salottothink". Deltas keep whitespace-only
+// fragments (" ", "\n") as word boundaries; only "" is skipped. Final
+// (non-delta) summaries are still trimmed and skipped when empty.
+function backgroundSummaryEntryText(eventType: string, data: any): string {
+  const rawValue = data?.text ?? data?.summary ?? data?.thinking;
+  const raw = typeof rawValue === 'string' ? rawValue : backgroundTraceText(rawValue);
+  if (eventType !== 'reasoning_summary_delta' && eventType !== 'reasoning_delta') return backgroundTraceText(raw);
+  return raw.length > 4_000 ? `${raw.slice(0, 4_000)}...` : raw;
+}
+
+
 export function backgroundProcessEntryFromSseEvent(event: string, data: any): Record<string, any> | null {
   const eventType = String(event || '').trim();
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
@@ -49,20 +62,8 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   if (explicitlyPrivateReasoning) return null;
   // Keep the public summary channel distinct from commentary during recovery.
   if (isReasoningSummary) {
-    // Summary deltas are streamed fragments ("There's", " a lot", " to think").
-    // Trimming each fragment deletes the word boundaries, and the live trace
-    // concatenates consecutive fragments, producing "There'salottothink".
-    // Deltas keep whitespace-only fragments (" ", "\n"): they are word boundaries
-    // and dropping them splits the summary into extra rows. Only "" is skipped.
-    // Final (non-delta) summaries are still trimmed and skipped when empty.
-    const isDeltaFragment = eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta';
-    const rawValue = data?.text ?? data?.summary ?? data?.thinking;
-    const raw = typeof rawValue === 'string' ? rawValue : backgroundTraceText(rawValue);
-    const text = isDeltaFragment
-      ? (raw.length > 4_000 ? `${raw.slice(0, 4_000)}...` : raw)
-      : backgroundTraceText(raw);
-    if (!text) return null;
-    return { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } };
+    const text = backgroundSummaryEntryText(eventType, data);
+    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } } : null;
   }
   if (eventType === 'token_narration_boundary') {
     const text = backgroundTraceText(data?.text || data?.message || data?.narration);
