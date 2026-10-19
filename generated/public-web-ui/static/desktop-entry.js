@@ -277,7 +277,7 @@ window.refreshAccountDisplay = function refreshAccountDisplay() {
     const maximumWidth = Math.max(minimumWidth, Math.min(ratioMaximumWidth, canvasMaximumWidth));
     const nextWidth = Math.max(minimumWidth, Math.min(maximumWidth, startWidth + delta));
     rightPanel.style.width = `${nextWidth}px`;
-    rightPanel.style.removeProperty('min-width');
+    rightPanel.style.minWidth = `${nextWidth}px`;
     rightPanel.style.removeProperty('max-width');
     window._syncPageViewPositions?.();
     window.queueNativeBrowserSurfaceSync?.({ force: true });

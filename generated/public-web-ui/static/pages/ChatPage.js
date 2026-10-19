@@ -2291,8 +2291,7 @@ function setRightPanelWidth(width, options = {}) {
     boundedWidth = Math.min(boundedWidth, getCanvasPanelMaximumWidth());
   }
   rightPanel.style.width = `${boundedWidth}px`;
-  // Do not pin an inline min-width: it overrides the CSS min that keeps the chat column usable.
-  rightPanel.style.removeProperty('min-width');
+  rightPanel.style.minWidth = `${boundedWidth}px`;
   if (options.lockMax) rightPanel.style.maxWidth = `${boundedWidth}px`;
   else rightPanel.style.removeProperty('max-width');
 }
@@ -2335,6 +2334,7 @@ function restoreCanvasPreviewSavedPanelWidth(rightPanel = document.getElementByI
   if (!rightPanel || canvasPreviewSavedPanelWidth === null) return false;
   if (canvasPreviewSavedPanelWidth && !/^0px$/i.test(canvasPreviewSavedPanelWidth)) {
     rightPanel.style.width = canvasPreviewSavedPanelWidth;
+    rightPanel.style.minWidth = canvasPreviewSavedPanelWidth;
   } else {
     rightPanel.style.removeProperty('width');
     rightPanel.style.removeProperty('min-width');
@@ -6405,7 +6405,7 @@ function applyCreativeModeUI(options = {}) {
   } else if (rightPanel) {
     if (creativeModeSavedPanelWidth && !/^0px$/i.test(creativeModeSavedPanelWidth)) {
       rightPanel.style.width = creativeModeSavedPanelWidth;
-      rightPanel.style.removeProperty('min-width');
+      rightPanel.style.minWidth = creativeModeSavedPanelWidth;
     } else {
       rightPanel.style.removeProperty('width');
       rightPanel.style.removeProperty('min-width');
@@ -19177,6 +19177,22 @@ function renderBackgroundSpawnDock() {
   updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
   dock.classList.toggle('has-many', lanes.length > 2);
+  if (!dock.dataset.wheelScrollBound) {
+    dock.dataset.wheelScrollBound = '1';
+    // Mouse wheels only emit deltaY; map it to the horizontal agent strip.
+    dock.addEventListener('wheel', (event) => {
+      if (!dock.classList.contains('has-many') || event.ctrlKey) return;
+      if (dock.scrollWidth <= dock.clientWidth + 1) return;
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      const inner = event.target?.closest?.('.background-spawn-panel, .pm-process-full, pre');
+      if (inner && inner !== dock && inner.scrollHeight > inner.clientHeight + 1) return;
+      const max = dock.scrollWidth - dock.clientWidth;
+      const next = Math.max(0, Math.min(max, dock.scrollLeft + event.deltaY));
+      if (next === dock.scrollLeft) return;
+      event.preventDefault();
+      dock.scrollLeft = next;
+    }, { passive: false });
+  }
   if (!lanes.length) {
     dock.innerHTML = '';
     updateBackgroundSpawnDockOffset();
