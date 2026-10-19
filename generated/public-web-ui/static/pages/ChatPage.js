@@ -13813,9 +13813,17 @@ function traceDrawerIdForMessage(msg) {
   return `trace_${processPanelIdForMessage(msg)}`;
 }
 
+function liveTraceHasReasoning(entries) {
+  return (Array.isArray(entries) ? entries : []).some((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    return isDesktopTraceThoughtType(type) && isDesktopUserVisibleReasoningTraceEntry(entry);
+  });
+}
+
 function renderCompletedAssistantTraceDrawer(msg) {
   const entries = desktopWorkflowTraceEntriesForMessage(msg);
-  if (!liveTraceHasToolGroup(entries)) return '';
+  // Reasoning-only traces (no tool calls) must survive, matching main chat.
+  if (!liveTraceHasToolGroup(entries) && !liveTraceHasReasoning(entries)) return '';
   const id = traceDrawerIdForMessage(msg);
   const open = ensureOpenProcessPanelSet().has(id);
   return `<div id="${escHtml(id)}" class="assistant-trace-drawer${open ? ' open' : ''}">
@@ -14955,7 +14963,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       entries: sideTimeline.paintEntries,
     });
   return `
-    <section class="side-chat-pane background-agent-side-pane" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
+    <section class="side-chat-pane background-agent-side-pane" data-background-agent-id="${escHtml(record.id)}" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
           <div class="side-chat-kicker">${escHtml(record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel)}</div>
@@ -18910,13 +18918,38 @@ function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId)
   return source;
 }
 
+let backgroundAgentDetailPaneFrame = 0;
+function patchBackgroundAgentDetailPane(record) {
+  const pane = document.querySelector('#chat-messages .background-agent-side-pane');
+  if (!pane || pane.getAttribute('data-background-agent-id') !== String(record.id || '')) return false;
+  const template = document.createElement('template');
+  template.innerHTML = renderBackgroundAgentSidePaneHtml(record, null).trim();
+  const next = template.content.firstElementChild;
+  if (!next || !next.classList.contains('background-agent-side-pane')) return false;
+  pane.replaceWith(next);
+  return true;
+}
 function renderBackgroundAgentDetail() {
   const id = String(window.backgroundAgentDetailId || '').trim();
   const record = id ? backgroundSpawnDetailRecord(id) : null;
   if (!id) return;
-  if (!record) window.backgroundAgentDetailId = '';
+  if (!record) {
+    window.backgroundAgentDetailId = '';
+    updateSideChatChrome();
+    renderChatMessages();
+    return;
+  }
   updateSideChatChrome();
-  renderChatMessages();
+  // Detail-only updates patch just the open pane, coalesced to one frame. Structural changes (first open, pane missing) still take the full render.
+  if (backgroundAgentDetailPaneFrame) return;
+  if (!document.querySelector('#chat-messages .background-agent-side-pane')) { renderChatMessages(); return; }
+  backgroundAgentDetailPaneFrame = requestAnimationFrame(() => {
+    backgroundAgentDetailPaneFrame = 0;
+    const openId = String(window.backgroundAgentDetailId || '').trim();
+    const openRecord = openId ? backgroundSpawnDetailRecord(openId) : null;
+    if (!openRecord) return;
+    if (!patchBackgroundAgentDetailPane(openRecord)) renderChatMessages();
+  });
 }
 
 function openBackgroundAgentDetail(id) {

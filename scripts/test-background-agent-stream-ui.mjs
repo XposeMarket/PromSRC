@@ -122,3 +122,7 @@ const isTransientReasoning = new Function(`${functionSource('isDesktopTransientR
 assert.equal(isTransientReasoning({ type: 'think', extra: { source: 'agent_progress', visibility: 'private' } }), true);
 assert.equal(isTransientReasoning({ type: 'think', extra: { source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' } }), false);
 assert.doesNotMatch(desktopPage, /isDesktopTransientReasoningTraceEntry\(entry\) && !isDesktopMutableProgressTraceEntry/, 'private reasoning must not bypass filtering through mutable progress');
+
+assert.match(desktopPage, /liveTraceHasReasoning\(entries\)/, 'completed trace drawer must keep reasoning-only traces');
+assert.match(desktopPage, /patchBackgroundAgentDetailPane\(openRecord\)/, 'detail updates must patch only the open pane');
+assert.match(desktopPage, /data-background-agent-id=/, 'detail pane must expose its agent id for the pane-only patch');
