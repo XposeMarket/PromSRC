@@ -15353,6 +15353,11 @@ function renderChatMessages() {
     if (!panesReconciled) setInnerHTMLPreservingVisuals(container, splitHtml);
     const mainPane = container.querySelector('.side-chat-main-messages');
     const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
+    if (sideActive && sidePane?.id === 'side-chat-messages') {
+      sidePane.dataset.streamSession = String(getSideChatSession()?.id || '');
+      sidePane.dataset.streamHistoryCount = String((getSideChatSession()?.history || []).length);
+    }
+
     if (!panesReconciled && !window.chatMessagesUserScrolledUp) {
       if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
@@ -15750,16 +15755,43 @@ function patchStreamingChatBubble(sessionId) {
 }
 
 const streamingChatFrames = new Map();
-function renderStreamingChatUpdate(sessionId) {
+const streamingChatFlushHooks = new Map();
+// Visible = the active chat plus an open side/split pane. A failed patch redraws
+// only that pane (coalesced in the same frame); the active chat keeps its full fallback.
+function redrawSideChatStreamPane(sid) {
+  const list = document.getElementById('chat-messages')?.querySelector('#side-chat-messages');
+  const side = getSideChatSession();
+  if (!list || !side || String(side.id) !== sid) return false;
+  const template = document.createElement('div');
+  template.innerHTML = renderSideChatPaneHtml();
+  const next = template.querySelector('#side-chat-messages');
+  if (!next) return false;
+  setInnerHTMLPreservingVisuals(list, next.innerHTML);
+  list.dataset.streamSession = sid;
+  list.dataset.streamHistoryCount = String((side.history || []).length);
+  return true;
+}
+function renderStreamingChatUpdate(sessionId, onFlushed = null) {
   const sid = String(sessionId || '').trim();
-  if (!sid || document.hidden || sid !== String(window.activeChatSessionId || '')) return;
+  if (!sid || document.hidden || !isSessionVisibleInChatSurface(sid)) return;
+  // onFlushed runs after the DOM write in the rAF flush (first-visible metric, motion hook).
+  if (typeof onFlushed === 'function') {
+    streamingChatFlushHooks.set(sid, [...(streamingChatFlushHooks.get(sid) || []), onFlushed]);
+  }
   if (streamingChatFrames.has(sid)) return;
   streamingChatFrames.set(sid, requestAnimationFrame(() => {
     streamingChatFrames.delete(sid);
-    if (document.hidden || sid !== String(window.activeChatSessionId || '')) return;
-    if (!patchStreamingChatBubble(sid)) renderChatMessages();
+    const hooks = streamingChatFlushHooks.get(sid) || [];
+    streamingChatFlushHooks.delete(sid);
+    if (document.hidden || !isSessionVisibleInChatSurface(sid)) return;
+    if (!patchStreamingChatBubble(sid)) {
+      const paneOnly = sid !== String(window.activeChatSessionId || '') && redrawSideChatStreamPane(sid);
+      if (!paneOnly) renderChatMessages();
+    }
+    for (const hook of hooks) { try { hook(); } catch {} }
   }));
 }
+
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && window.activeChatSessionId && isSessionThinking(window.activeChatSessionId)) {
     renderStreamingChatUpdate(window.activeChatSessionId);
