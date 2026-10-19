@@ -14,8 +14,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
-import { readModelUsageEvents, readModelUsageEventsAsync } from '../../providers/model-usage.js';
-import { aggregateHubUsageAnalytics } from '../hub-usage-analytics.js';
+import { readModelUsageEvents } from '../../providers/model-usage.js';
+import { readHubUsageAnalytics } from '../hub-usage-analytics.js';
 import { listBackgroundStatuses } from '../tasks/task-runner.js';
 import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
 import { readAllToolObservations } from '../tool-observations';
@@ -1009,8 +1009,8 @@ router.get('/api/hub/models/overview', async (req: Request, res: Response) => {
 
 router.get('/api/hub/usage-analytics', async (req: Request, res: Response) => {
   try {
-    // Async, shared, cached read: never blocks the gateway event loop on model-usage.jsonl.
-    const analytics = aggregateHubUsageAnalytics(await readModelUsageEventsAsync(), {
+    // Windowed reads use the shared async usage index, not a second ledger cache.
+    const analytics = await readHubUsageAnalytics({
       range: req.query.range,
       provider: req.query.provider,
     });

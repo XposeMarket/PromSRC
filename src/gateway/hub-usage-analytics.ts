@@ -1,4 +1,4 @@
-import type { ModelUsageEvent } from '../providers/model-usage.js';
+import { readRecentModelUsageEvents, type ModelUsageEvent } from '../providers/model-usage.js';
 
 export type HubUsageAnalyticsRange = '24h' | '7d' | '30d';
 
@@ -62,6 +62,17 @@ function finalize<T extends HubUsageTotals>(row: T): T {
     ? Math.round((row.cacheReadTokens / (row.inputTokens + row.cacheReadTokens)) * 10_000) / 100
     : 0;
   return row;
+}
+
+/** Read only the requested window through the shared async usage index. */
+export async function readHubUsageAnalytics(
+  input: { range?: unknown; provider?: unknown; now?: number } = {},
+  readRecent: typeof readRecentModelUsageEvents = readRecentModelUsageEvents,
+) {
+  const range = normalizeHubUsageAnalyticsRange(input.range);
+  const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+  const events = await readRecent(now - rangeMs(range));
+  return aggregateHubUsageAnalytics(events, { ...input, range, now });
 }
 
 /** Pure deterministic aggregation for the Hub analytics endpoint. */

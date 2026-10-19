@@ -4,7 +4,7 @@ The desktop Hub keeps its Connected Providers quota/limit trackers unchanged. Ev
 
 ## Data and scope
 
-`GET /api/hub/usage-analytics?range=24h|7d|30d&provider=<exact-id>` is served under the existing Hub/gateway access controls. It reads the current installation's `model-usage.jsonl` through the existing cached `readModelUsageEvents()` function. The request never accepts a filesystem path or account identifier. This is local installation telemetry, not a new cross-user telemetry service.
+`GET /api/hub/usage-analytics?range=24h|7d|30d&provider=<exact-id>` is served under the existing Hub/gateway access controls. It reads the current installation's usage through the public async, index-backed `readRecentModelUsageEvents(cutoff)` API. `readHubUsageAnalytics()` normalizes the range and uses the same request timestamp for the index cutoff and aggregation; there is no separate ledger reader/cache or synchronous ledger read. Only 24h, 7d and 30d windows are supported (invalid ranges default to 7d); no all-time or lifetime total is displayed. Future explicit all-time event queries must use `readModelUsageEvents()`, and lifetime totals must use `readModelUsageLifetimeTotals()`. The request never accepts a filesystem path or account identifier. This is local installation telemetry, not a new cross-user telemetry service.
 
 - Tokens, input/output/cache-read/cache-write: recorded `ModelUsageEvent` fields. `totalTokens` retains provider semantics; only absent/zero totals fall back to component sums including reasoning.
 - API-equivalent estimate: sum of recorded `totalCostMicros`, not a subscription bill. Coverage counts explicitly priced requests including zero-cost calls; unpriced events are excluded from cost, not from usage.
@@ -29,11 +29,4 @@ npm run build:web
 
 `sync:web-ui` produces the production web build as well as running sync/module/theme checks. Avoid rebuilding the production directory alone afterward: its static mirrors can temporarily diverge from the synchronization manifest.
 
-Optional read-only visual harness (local development only, explicit user-supplied log):
-
-```
-npx tsx scripts/preview-hub-usage.ts <absolute-model-usage.jsonl> 4317
-node scripts/capture-hub-usage.mjs 4317 <screenshot-directory>
-```
-
-The harness serves the new analytics component with actual telemetry, not fabricated fixtures, at 1440px desktop and 390x844 mobile viewport sizes. Screenshots are component-level, not proof of the full installed app or a physical phone. It also captures light theme variants and checks ranges, filtering, sorting, focus tooltips and viewport overflow.
+The dev-only preview/capture harness has been removed; analytics are exercised through the production Hub route and shared desktop/mobile renderer.

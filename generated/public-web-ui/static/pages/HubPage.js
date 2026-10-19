@@ -8,6 +8,7 @@
  */
 
 import { api } from '../api.js';
+import { activateHubUsage } from './HubUsage.js';
 import { escHtml, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 
@@ -1723,13 +1724,9 @@ export function hubPageActivate() {
     _heatmap.year = now.getFullYear();
     _heatmap.month = now.getMonth() + 1;
   }
-  loadGoals();
-  loadSkills();
-  loadStats();
   loadProviders();
-  loadHeatmap();
-  loadWeek();
-  loadCuratorSuggestions();
+  loadGoals();
+  activateHubUsage();
 }
 
 window.hubPageActivate = hubPageActivate;
@@ -1739,10 +1736,7 @@ window.toggleHubSkillChangeCard = toggleHubSkillChangeCard;
 window.openHubSkillResource = openHubSkillResource;
 window.loadCuratorSuggestions = loadCuratorSuggestions;
 
-wsEventBus.on('main_chat_goal_updated', () => {
-  const hub = document.getElementById('hub-view');
-  if (hub && hub.style.display !== 'none') loadGoals();
-});
+
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { aggregateHubUsageAnalytics } from './hub-usage-analytics';
+import { aggregateHubUsageAnalytics, readHubUsageAnalytics } from './hub-usage-analytics';
 
 const now = Date.parse('2026-10-18T12:00:00.000Z');
 const result = aggregateHubUsageAnalytics([
@@ -23,4 +23,23 @@ const filtered = aggregateHubUsageAnalytics([{ timestamp: '2026-10-18T11:00:00.0
 assert.equal(filtered.totals.requests, 0);
 assert.deepEqual(filtered.providers, ['openai'], 'provider selector options remain available when filtered');
 
-console.log('hub usage analytics regression passed');
+async function testAsyncWindowReads() {
+  for (const [range, days] of [['24h', 1], ['7d', 7], ['30d', 30], ['invalid', 7]] as const) {
+    let calls = 0;
+    const analytics = await readHubUsageAnalytics({ range, provider: 'openai', now }, async cutoff => {
+      calls += 1;
+      assert.equal(cutoff, now - days * 24 * 60 * 60_000, 'reader must receive the normalized window cutoff');
+      await Promise.resolve();
+      return [{ timestamp: new Date(now).toISOString(), provider: 'openai', model: 'async-test', callType: 'chat', inputTokens: 10, outputTokens: 2, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 12, source: 'provider', totalCostMicros: 42 }];
+    });
+    assert.equal(calls, 1, 'one indexed read per request');
+    assert.equal(analytics.totals.totalTokens, 12, 'aggregate awaited reader results');
+    assert.equal(analytics.totals.costMicros, 42);
+    assert.equal(analytics.coverage.providerFilter, 'openai');
+    assert.equal(analytics.coverage.until, new Date(now).toISOString());
+    assert.equal(analytics.range, range === 'invalid' ? '7d' : range);
+  }
+  await assert.rejects(readHubUsageAnalytics({ now }, async () => { throw new Error('ledger read failed'); }), /ledger read failed/);
+  console.log('hub usage analytics regression passed');
+}
+void testAsyncWindowReads().catch(error => { console.error(error); process.exitCode = 1; });
