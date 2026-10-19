@@ -18845,7 +18845,11 @@ function scheduleBackgroundSpawnLanePersistence(laneId) {
     flushBackgroundSpawnLanePersistence();
   }, BACKGROUND_SPAWN_PERSIST_MS);
 }
+// Close/hide must not leave dirty lanes waiting on the 750ms timer: flush now.
 window.addEventListener('pagehide', flushBackgroundSpawnLanePersistence);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushBackgroundSpawnLanePersistence();
+});
 
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
@@ -19124,6 +19128,9 @@ function updateBackgroundSpawnDockOffset() {
 }
 
 function clearBackgroundSpawnDockForSession(sessionId = window.activeChatSessionId) {
+  // Persist pending coalesced writes before any lane is removed, so events
+  // buffered in the 750ms window are not lost when the main turn ends.
+  flushBackgroundSpawnLanePersistence();
   const sid = String(sessionId || '').trim();
   const lanes = ensureBackgroundSpawnDockMap();
   const cleared = ensureBackgroundSpawnClearedIds();
