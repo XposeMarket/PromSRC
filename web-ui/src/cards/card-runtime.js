@@ -174,10 +174,26 @@ function onInput(event) {
   if (event.target.closest?.('[data-pc-calc]')) updateCalculator(event.target.closest('.pc-calc'));
 }
 
+function syncClockTimer() {
+  const needed = !document.hidden && !window.__promSidePaneSuspended && !!document.querySelector('.pc-clock-cell[data-tz]');
+  if (!needed) {
+    if (clockTimer) clearInterval(clockTimer);
+    clockTimer = null;
+    return;
+  }
+  if (!clockTimer) {
+    tickClocks();
+    clockTimer = setInterval(() => {
+      if (!document.querySelector('.pc-clock-cell[data-tz]') || document.hidden || window.__promSidePaneSuspended) syncClockTimer();
+      else tickClocks();
+    }, 1000);
+  }
+}
+
 /** Hydrate anything that needs a first paint (currency results, clocks). */
 export function hydrateCards(root = document) {
   root.querySelectorAll?.('.pc-currency:not([data-pc-ready])').forEach((card) => { card.setAttribute('data-pc-ready', '1'); updateCurrency(card); });
-  if (root.querySelector?.('.pc-clock-cell[data-tz]')) { tickClocks(); if (!clockTimer) clockTimer = setInterval(tickClocks, 1000); }
+  syncClockTimer();
 }
 
 export function installPromCards() {
@@ -204,10 +220,14 @@ export function installPromCards() {
   });
   document.addEventListener('input', onInput);
   document.addEventListener('change', onInput);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) hydrateCards(); else syncClockTimer(); });
+  window.addEventListener('prometheus:pane-activity', () => { if (!window.__promSidePaneSuspended) hydrateCards(); else syncClockTimer(); });
   hydrateCards();
   if (typeof MutationObserver === 'undefined') return;
   let scheduled = false;
-  new MutationObserver(() => {
+  new MutationObserver((records) => {
+    // Ignore token/text churn; only card insertion/removal requires hydration.
+    if (document.hidden || window.__promSidePaneSuspended || !records.some((record) => [...record.addedNodes, ...record.removedNodes].some((node) => node.nodeType === 1 && (node.matches?.('.pc-card, .pc-clock-cell') || node.querySelector?.('.pc-card, .pc-clock-cell'))))) return;
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => { scheduled = false; hydrateCards(); });

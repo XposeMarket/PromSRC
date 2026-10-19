@@ -744,11 +744,7 @@ function _syncPageViewPositions() {
     : sidebar
       ? Math.round(_sidebarDragW || sidebar.getBoundingClientRect().width || SIDEBAR_DEFAULT_W)
       : SIDEBAR_DEFAULT_W;
-  // Single source of truth: the rendered sidebar width. This follows the 64px rail
-  // (automatic browser rail or collapsed state) and the dragged width, so pages never
-  // keep a stale full-width offset after the rail appears or disappears.
-  const renderedSidebarW = Math.round(sidebar?.getBoundingClientRect().width || 0);
-  const left = `${renderedSidebarW > 0 ? renderedSidebarW : sidebarRight}px`;
+  const left = `${sidebarRight}px`;
   const rightW = _getRightPanelWidth() + _getSourcesMinimizedLayoutWidth();
   const right = rightW > 0 ? `${rightW}px` : '0';
   document.querySelectorAll('.page-view').forEach(el => {
