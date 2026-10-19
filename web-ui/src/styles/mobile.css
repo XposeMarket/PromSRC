@@ -6611,6 +6611,11 @@ html.pm-session-context-open * {
   overflow-y: auto;
   overscroll-behavior-y: contain;
 }
+.pm-background-spawn-dock.is-open.has-many {
+  pointer-events: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
 .pm-background-spawn-dock.has-many .pm-background-spawn-lane {
   flex: 0 0 auto;
   width: 100%;

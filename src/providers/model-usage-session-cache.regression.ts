@@ -25,28 +25,33 @@ async function main() {
     fs.writeFileSync(c, row('a', 1) + row('b', 2) + row('a', 3));
   }
 
-  const first = readModelUsageEventsForSession('a');
+  const first = (await readModelUsageEventsForSession('a'));
   assert.equal(first.length, 2, 'first read returns the session\'s events');
 
   // Append: new events for 'a' must be visible, and 'b' must not leak in.
   for (const c of candidates) fs.appendFileSync(c, row('a', 4) + row('b', 5));
-  const second = readModelUsageEventsForSession('a');
+  const second = (await readModelUsageEventsForSession('a'));
   assert.deepEqual(second.map((e: any) => e.inputTokens), [1, 3, 4], 'appended rows are picked up incrementally');
 
   // A partial trailing row is not consumed until it is complete.
   for (const c of candidates) fs.appendFileSync(c, row('a', 6).slice(0, 20));
-  assert.equal(readModelUsageEventsForSession('a').length, 3, 'partial trailing row is deferred');
+  assert.equal((await readModelUsageEventsForSession('a')).length, 3, 'partial trailing row is deferred');
   for (const c of candidates) fs.appendFileSync(c, row('a', 6).slice(20));
-  assert.deepEqual(readModelUsageEventsForSession('a').map((e: any) => e.inputTokens), [1, 3, 4, 6], 'completed row is read exactly once');
+  assert.deepEqual((await readModelUsageEventsForSession('a')).map((e: any) => e.inputTokens), [1, 3, 4, 6], 'completed row is read exactly once');
 
   // Returned arrays are copies: mutating one must not corrupt the cache.
-  const copy = readModelUsageEventsForSession('a');
+  const copy = (await readModelUsageEventsForSession('a'));
   copy.length = 0;
-  assert.equal(readModelUsageEventsForSession('a').length, 4, 'cache is not exposed to callers');
+  assert.equal((await readModelUsageEventsForSession('a')).length, 4, 'cache is not exposed to callers');
 
   // Log rotation/truncation falls back to a full re-read.
   for (const c of candidates) fs.writeFileSync(c, row('a', 9));
-  assert.deepEqual(readModelUsageEventsForSession('a').map((e: any) => e.inputTokens), [9], 'truncated log is re-read');
+  assert.deepEqual((await readModelUsageEventsForSession('a')).map((e: any) => e.inputTokens), [9], 'truncated log is re-read');
+
+  // Truncate-then-grow past the indexed size between reads, with different content: stale offsets must not be reused.
+  const regrown = row('c', 30) + row('a', 21) + row('b', 22) + row('a', 23) + row('a', 24) + row('c', 31);
+  for (const c of candidates) fs.writeFileSync(c, regrown);
+  assert.deepEqual((await readModelUsageEventsForSession('a')).map((e: any) => e.inputTokens), [21, 23, 24], 'regrown log past old size returns only its own rows');
 
   console.log('model-usage-session-cache regression: ok');
 }
