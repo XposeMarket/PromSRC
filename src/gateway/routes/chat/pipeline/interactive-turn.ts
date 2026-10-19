@@ -363,7 +363,7 @@ export async function runInteractiveTurn(
     const command = handleMainChatGoalCommand(sessionId, message);
     const reply = command.message || 'Goal command handled.';
     const goalCompletionReport = command.goal?.status === 'done'
-      ? (buildMainChatGoalCompletionReport(command.goal, readModelUsageEventsForSession(sessionId), Date.now()) || undefined)
+      ? (buildMainChatGoalCompletionReport(command.goal, await readModelUsageEventsForSession(sessionId), Date.now()) || undefined)
       : undefined;
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     addMessage(sessionId, { role: 'assistant', ...assistantRequestIdentity, content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack', goalCompletionReport }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
@@ -665,7 +665,7 @@ export async function runInteractiveTurn(
     : [];
   turnTiming.mark('tool_observations_persisted', { durationMs: Date.now() - observationPersistStartedAt, count: toolObservations.length });
   const providerUsageAfterStartedAt = Date.now();
-  const turnUsageEvents = readModelUsageEventsSince(providerUsageCursor, sessionId, turnTiming.turnId);
+  const turnUsageEvents = await readModelUsageEventsSince(providerUsageCursor, sessionId, turnTiming.turnId);
   const turnProviderUsage = aggregateModelUsageEvents(turnUsageEvents);
   turnTiming.mark('model_usage_after_loaded', {
     durationMs: Date.now() - providerUsageAfterStartedAt,
@@ -682,7 +682,7 @@ export async function runInteractiveTurn(
     if (completedGoal?.status === 'done') {
       result.goalCompletionReport = buildMainChatGoalCompletionReport(
         completedGoal,
-        readModelUsageEventsForSession(sessionId),
+        await readModelUsageEventsForSession(sessionId),
         Date.now(),
       ) || undefined;
     }

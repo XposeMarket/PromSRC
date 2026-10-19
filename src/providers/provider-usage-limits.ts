@@ -19,7 +19,8 @@
  */
 
 import { getConfig } from '../config/config';
-import { readModelUsageEvents } from './model-usage';
+import { readModelUsageLifetimeTotals, readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
+import type { UsageLifetimeTotal } from './model-usage-index';
 
 export interface UsageWindow {
   /** Human label e.g. "5-hour", "Weekly", "Monthly credits". */
@@ -798,7 +799,7 @@ async function getLive(providerId: string, configDir: string, accountId?: string
 
 // ─── Internal token accounting ───────────────────────────────────────────────
 
-function internalTokens(providerId: string, events: ReturnType<typeof readModelUsageEvents>, accountId?: string): ProviderTokenTotals {
+export function internalTokens(providerId: string, events: ModelUsageEvent[], accountId?: string, lifetime: UsageLifetimeTotal[] = []): ProviderTokenTotals {
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
@@ -809,12 +810,17 @@ function internalTokens(providerId: string, events: ReturnType<typeof readModelU
     if (String(e.provider) !== providerId) continue;
     if (accountId && String(e.accountId || '') !== accountId) continue;
     const tt = Number(e.totalTokens || 0);
-    total += tt;
-    input += Number(e.inputTokens || 0);
-    output += Number(e.outputTokens || 0);
-    calls += 1;
     const t = Date.parse(e.timestamp || '');
     if (Number.isFinite(t) && t >= monthMs) monthTotal += tt;
+  }
+  // The index covers all rows; recent events contribute only to the month window.
+  for (const a of lifetime) {
+    if (String(a.provider) !== providerId) continue;
+    if (accountId && String(a.accountId || '') !== accountId) continue;
+    total += Number(a.totalTokens || 0);
+    input += Number(a.inputTokens || 0);
+    output += Number(a.outputTokens || 0);
+    calls += Number(a.calls || 0);
   }
   return { total, input, output, calls, monthTotal };
 }
@@ -941,7 +947,8 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
 
   const budgets = getBudgets();
   const activeMain = getActiveMainModel();
-  const events = readModelUsageEvents();
+  const events = await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
+  const lifetimeTotals = await readModelUsageLifetimeTotals();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
@@ -949,7 +956,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const providerEntries = ids.flatMap((id) => configuredUsageAccounts(id).map(account => ({ id, account })));
   const providers = (await Promise.all(providerEntries.map(async ({ id, account }): Promise<ProviderUsage | null> => {
     const live = await getLive(id, configDir, account.id);
-    const tokens = internalTokens(id, events, account.id);
+    const tokens = internalTokens(id, events, account.id, lifetimeTotals);
     const activeCodexModel = activeMain.provider === id && activeMain.accountId === account.id ? activeMain.model : '';
     const codexSelection = id === 'openai_codex' && (live || isCodexSparkModel(activeCodexModel))
       ? selectCodexUsageForModel(live || {

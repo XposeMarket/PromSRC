@@ -18,7 +18,7 @@ async function main(): Promise<void> {
     brainUsage.resetBrainUsageLedgerForTests();
 
     const sessionId = 'brain_thought_2099-12-31_23-30';
-    const first = brainUsage.beginBrainJobUsage({
+    const first = await brainUsage.beginBrainJobUsage({
       job: 'thought',
       runId: 'thought-run-1',
       date: '2099-12-31',
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
       totalTokens: 50,
       source: 'estimated',
     });
-    const firstRecord = brainUsage.finishBrainJobUsage(first, {
+    const firstRecord = await brainUsage.finishBrainJobUsage(first, {
       outcome: 'success',
       completedAt: '2099-12-31T23:31:00.000Z',
     });
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
     // A rerun uses the same stable session ID, so the second snapshot must only
     // include the new provider event rather than charging the first run again.
-    const second = brainUsage.beginBrainJobUsage({
+    const second = await brainUsage.beginBrainJobUsage({
       job: 'thought',
       runId: 'thought-run-2',
       date: '2099-12-31',
@@ -90,7 +90,7 @@ async function main(): Promise<void> {
       totalTokens: 10,
       source: 'provider',
     });
-    const secondRecord = brainUsage.finishBrainJobUsage(second, {
+    const secondRecord = await brainUsage.finishBrainJobUsage(second, {
       outcome: 'failed',
       completedAt: '2099-12-31T23:36:00.000Z',
       error: 'artifact check failed',

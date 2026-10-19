@@ -405,9 +405,9 @@ function addTokenBucket(buckets: Record<string, number>, timestamp: string, toke
   buckets[key] = (buckets[key] || 0) + n;
 }
 
-router.get('/api/hub/tokens/activity', (req: Request, res: Response) => {
+router.get('/api/hub/tokens/activity', async (req: Request, res: Response) => {
   try {
-    const modelEvents = readModelUsageEvents();
+    const modelEvents = await readModelUsageEvents();
     const observations = readAllToolObservations(100_000);
     const auditEarliestTimestamp = readAuditEarliestTimestampCached();
     const sessionTimestamps = listSessionSummaries()
@@ -654,7 +654,7 @@ router.post('/api/hub/skills/review/:id/reject', (req: Request, res: Response) =
   }
 });
 
-router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
+router.get('/api/hub/tools/overview', async (req: Request, res: Response) => {
   try {
     const chatStats = getChatSessionStats();
     const rawEvents: any[] = [];
@@ -679,7 +679,7 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
       const t = Number(obs.createdAt || 0);
       return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
     });
-    const modelEventsInRange = readModelUsageEvents().filter((e) => {
+    const modelEventsInRange = (await readModelUsageEvents()).filter((e) => {
       const t = Date.parse(e.timestamp || '');
       return Number.isFinite(t) && t >= window.sinceMs && t < window.untilMs;
     });
@@ -868,10 +868,10 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
   }
 });
 
-router.get('/api/hub/models/overview', (req: Request, res: Response) => {
+router.get('/api/hub/models/overview', async (req: Request, res: Response) => {
   try {
     const chatStats = getChatSessionStats();
-    const rawEvents = readModelUsageEvents();
+    const rawEvents = await readModelUsageEvents();
     const window = rangeWindow(String(req.query.range || 'all'), rawEvents.map((e) => e.timestamp));
     const inRange = rawEvents.filter((e) => {
       const t = Date.parse(e.timestamp || '');
