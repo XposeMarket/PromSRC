@@ -18826,7 +18826,7 @@ function backgroundSpawnLaneLiveTrace(lane) {
 const BACKGROUND_SPAWN_PERSIST_MS = 750;
 const backgroundSpawnDirtyLaneIds = new Set();
 let backgroundSpawnPersistTimer = null;
-function flushBackgroundSpawnLanePersistence() {
+function flushBackgroundSpawnLanePersistence({ immediate = true } = {}) {
   if (backgroundSpawnPersistTimer) { clearTimeout(backgroundSpawnPersistTimer); backgroundSpawnPersistTimer = null; }
   if (!backgroundSpawnDirtyLaneIds.size) return;
   const ids = [...backgroundSpawnDirtyLaneIds];
@@ -18834,7 +18834,7 @@ function flushBackgroundSpawnLanePersistence() {
   const lanes = ensureBackgroundSpawnDockMap();
   ids.forEach((id) => {
     const lane = lanes.get(id);
-    if (lane) persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+    if (lane) persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), immediate ? { immediate: true } : undefined);
   });
 }
 function scheduleBackgroundSpawnLanePersistence(laneId) {
@@ -18842,7 +18842,7 @@ function scheduleBackgroundSpawnLanePersistence(laneId) {
   if (backgroundSpawnPersistTimer) return;
   backgroundSpawnPersistTimer = setTimeout(() => {
     backgroundSpawnPersistTimer = null;
-    flushBackgroundSpawnLanePersistence();
+    flushBackgroundSpawnLanePersistence({ immediate: false });
   }, BACKGROUND_SPAWN_PERSIST_MS);
 }
 // Close/hide must not leave dirty lanes waiting on the 750ms timer: flush now.
