@@ -299,15 +299,17 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
     const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
     const renderIfViewingThisSession = () => {
       if (!isSessionVisibleInChatSurface(thisSessionId)) return;
-      const beforeTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
       if (window.activeChatSessionId === thisSessionId) applyStreamStateToWindow(thisSessionId);
-      renderStreamingChatUpdate(thisSessionId);
-      const afterTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
-      if (!firstVisibleTokenMarked && afterTextLen > beforeTextLen && afterTextLen > 0) {
-        firstVisibleTokenMarked = true;
-        markChatPerformance('chat_first_visible_token', { traceId: streamTraceId, size: afterTextLen });
-      }
-      markLiveStreamMotionAfterRender(thisSessionId, beforeTextLen);
+      // DOM writes happen in the next rAF; measure and run the motion hook in onFlushed.
+      renderStreamingChatUpdate(thisSessionId, () => {
+        const afterTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
+        if (!firstVisibleTokenMarked && afterTextLen > lastVisibleTextLen && afterTextLen > 0) {
+          firstVisibleTokenMarked = true;
+          markChatPerformance('chat_first_visible_token', { traceId: streamTraceId, size: afterTextLen });
+        }
+        lastVisibleTextLen = Math.max(lastVisibleTextLen, afterTextLen);
+        markLiveStreamMotionAfterRender(thisSessionId);
+      });
     };
     const pushProgressLine = (line) => {
       const txt = String(line || '').trim();
