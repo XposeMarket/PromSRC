@@ -1411,7 +1411,8 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   pointer-events: none;
 }
 .background-spawn-dock[hidden] { display: none; }
-.background-spawn-dock.has-many { width: min(860px, calc(100% - 40px)); flex-direction: row; flex-wrap: nowrap; align-items: stretch; overflow-x: auto; overflow-y: hidden; }
+.background-spawn-dock.has-many { width: min(860px, calc(100% - 40px)); flex-direction: row; flex-wrap: nowrap; align-items: stretch; overflow-x: auto; overflow-y: hidden; pointer-events: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; padding-bottom: 4px; }
+.background-spawn-dock.has-many > * { scroll-snap-align: start; }
 .background-spawn-dock.is-collapsed { width: max-content; max-width: calc(100% - 40px); }
 .background-spawn-pill {
   min-height: 34px;
