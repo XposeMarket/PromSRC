@@ -8399,7 +8399,7 @@ function updateMainGoalElapsedLabel() {
 
 function syncMainGoalElapsedTimer() {
   const goal = getActiveMainChatGoal();
-  const shouldTick = !document.hidden && !window.__promSidePaneSuspended && !!goal && String(goal.status || '') === 'active' && mainGoalStartedAtMs(goal) > 0;
+  const shouldTick = !document.hidden && !window.__promSidePaneSuspended && !!document.querySelector('[data-main-goal-elapsed]') && !!goal && String(goal.status || '') === 'active' && mainGoalStartedAtMs(goal) > 0;
   if (!shouldTick) {
     if (mainGoalElapsedTimer) clearInterval(mainGoalElapsedTimer);
     mainGoalElapsedTimer = null;

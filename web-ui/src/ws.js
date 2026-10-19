@@ -383,12 +383,24 @@ export function syncWsStreamFocus(force = false) {
   try { window.ws.send(JSON.stringify({ type: 'focus_sessions', sessionIds: ids })); } catch {}
 }
 wsEventBus.on('ws:open', () => { _wsStreamFocusSent = ''; syncWsStreamFocus(true); });
-// Chat routes signal focus immediately. Keep a slower fallback for voice and
-// legacy callers, but never wake a hidden phone just to compare static ids.
-setInterval(() => { if (!document.hidden && !window.__promSidePaneSuspended) syncWsStreamFocus(false); }, 15000);
-window.addEventListener('focus', () => syncWsStreamFocus(false));
-window.addEventListener('prometheus:chat-session-activated', () => syncWsStreamFocus(false));
-document.addEventListener('visibilitychange', () => { if (!document.hidden) syncWsStreamFocus(false); });
+// Session changes are event-driven. Voice/legacy callers retain a slow fallback
+// only while this document is active. Keep existing subscriptions while suspended:
+// dropping them would lose token deltas before a pane resumes.
+let _wsStreamFocusTimer = null;
+function syncWsStreamFocusActivity() {
+  if (document.hidden || window.__promSidePaneSuspended) {
+    if (_wsStreamFocusTimer != null) clearInterval(_wsStreamFocusTimer);
+    _wsStreamFocusTimer = null;
+    return;
+  }
+  syncWsStreamFocus(false);
+  if (_wsStreamFocusTimer == null) _wsStreamFocusTimer = setInterval(() => syncWsStreamFocus(false), 15000);
+}
+window.addEventListener('focus', syncWsStreamFocusActivity);
+window.addEventListener('prometheus:chat-session-activated', syncWsStreamFocusActivity);
+window.addEventListener('prometheus:pane-activity', syncWsStreamFocusActivity);
+document.addEventListener('visibilitychange', syncWsStreamFocusActivity);
+syncWsStreamFocusActivity();
 window.syncWsStreamFocus = syncWsStreamFocus;
 
 // Expose on window
