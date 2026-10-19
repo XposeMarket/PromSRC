@@ -212,6 +212,8 @@ jobs:
           node scripts/test-mobile-realtime-transient-disconnect.mjs
       - name: Verify Electron security boundary
         run: node scripts/test-electron-security-boundary.mjs
+      - name: Verify Electron main window recovery
+        run: npm run test:electron-window-lifecycle
       - name: Verify Electron native browser resource policy
         run: npm run test:electron-browser-resource-policy
       - name: Verify browser dispatch continuity and failure evidence
