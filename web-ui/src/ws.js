@@ -387,15 +387,31 @@ wsEventBus.on('ws:open', () => { _wsStreamFocusSent = ''; syncWsStreamFocus(true
 // only while this document is active. Keep existing subscriptions while suspended:
 // dropping them would lose token deltas before a pane resumes.
 let _wsStreamFocusTimer = null;
+let _wsStreamFocusTimerMs = 0;
+// Voice page (body.pm-mobile-voice-snap) gets a 2s fallback so streamed text and
+// target switches land quickly; other visible views keep the 15s fallback.
+function _wsStreamFocusIntervalMs() {
+  return document.body?.classList?.contains('pm-mobile-voice-snap') ? 2000 : 15000;
+}
 function syncWsStreamFocusActivity() {
   if (document.hidden || window.__promSidePaneSuspended) {
     if (_wsStreamFocusTimer != null) clearInterval(_wsStreamFocusTimer);
     _wsStreamFocusTimer = null;
+    _wsStreamFocusTimerMs = 0;
     return;
   }
   syncWsStreamFocus(false);
-  if (_wsStreamFocusTimer == null) _wsStreamFocusTimer = setInterval(() => syncWsStreamFocus(false), 15000);
+  const ms = _wsStreamFocusIntervalMs();
+  if (_wsStreamFocusTimer != null && _wsStreamFocusTimerMs !== ms) {
+    clearInterval(_wsStreamFocusTimer);
+    _wsStreamFocusTimer = null;
+  }
+  if (_wsStreamFocusTimer == null) {
+    _wsStreamFocusTimer = setInterval(() => syncWsStreamFocus(false), ms);
+    _wsStreamFocusTimerMs = ms;
+  }
 }
+window.syncWsStreamFocusActivity = syncWsStreamFocusActivity;
 window.addEventListener('focus', syncWsStreamFocusActivity);
 window.addEventListener('prometheus:chat-session-activated', syncWsStreamFocusActivity);
 window.addEventListener('prometheus:pane-activity', syncWsStreamFocusActivity);

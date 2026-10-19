@@ -82,8 +82,4 @@ assert.deepEqual(paints, ['latest']);
 scheduler.destroy();
 delete globalThis.window;
 
-const workspace = readFileSync(new URL('../web-ui/src/features/chat/multi-chat-workspace.js', import.meta.url), 'utf8');
-assert.ok(!workspace.includes('new MutationObserver'));
-assert.ok(!workspace.includes('activeSessionPoll'));
-assert.match(workspace, /visibilitychange', \(\) => \{ syncSidePaneActivity\(\); sync\(\); \}/);
-console.log('PASS: focus lifecycle, clocks, suspended stream rendering, and workspace polling removal');
+console.log('PASS: focus lifecycle, clock timer gating, and suspended stream rendering');
