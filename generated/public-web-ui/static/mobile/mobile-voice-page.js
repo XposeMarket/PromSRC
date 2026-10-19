@@ -58,6 +58,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
     rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New voice chat">${context.ICONS.compose}</button>`,
   });
   if (!inlineMode) document.body?.classList.add('pm-mobile-voice-snap');
+  window.syncWsStreamFocusActivity?.();
   if (inlineMode) {
     // Begin with the orb centered and the transcript hidden. Dragging the orb
     // down restores the live transcript and docks Voice above mobile chrome.
@@ -2149,6 +2150,7 @@ void main() {
         inlineOrbLastHapticTick = 0;
       } else {
         document.body?.classList.remove('pm-mobile-voice-snap');
+        window.syncWsStreamFocusActivity?.();
       }
     });
     safe('inline_haptics', () => {
