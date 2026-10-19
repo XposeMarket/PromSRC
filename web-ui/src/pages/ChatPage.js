@@ -15695,11 +15695,18 @@ function patchStreamingAnswerText(content, nextContent) {
 // body render remains the safe fallback for first paint and structural changes.
 function patchStreamingChatBubble(sessionId) {
   const sid = String(sessionId || '').trim();
-  if (!sid || sid !== String(window.activeChatSessionId || '') || !isSessionThinking(sid)) return false;
-  const container = document.getElementById('chat-messages');
+  if (!sid || !isSessionThinking(sid)) return false;
+  // Active chat patches #chat-messages; an open side/split pane patches its own
+  // #side-chat-messages container. Any other session keeps the full fallback.
+  const isActive = sid === String(window.activeChatSessionId || '');
+  const side = isActive ? null : getSideChatSession();
+  if (!isActive && (!side || String(side.id) !== sid)) return false;
+  const chatRoot = document.getElementById('chat-messages');
+  const container = isActive ? chatRoot : chatRoot?.querySelector('#side-chat-messages');
   if (!container) return false;
+  const historyCount = String(((isActive ? window.chatHistory : side.history) || []).length);
   if (container.dataset.streamSession !== sid
-    || container.dataset.streamHistoryCount !== String((window.chatHistory || []).length)) {
+    || container.dataset.streamHistoryCount !== historyCount) {
     return false; // The frame scheduler owns the coalesced structural fallback.
   }
   const list = container.querySelector('.side-chat-main-messages') || container;
@@ -15711,7 +15718,7 @@ function patchStreamingChatBubble(sessionId) {
     const html = renderSessionThinkingHtml(sid);
     if (!html) return true;
     list.querySelector('#chat-welcome')?.remove();
-    document.getElementById('chat-view')?.classList.remove('chat-empty');
+    if (isActive) document.getElementById('chat-view')?.classList.remove('chat-empty');
     list.insertAdjacentHTML('beforeend', html);
     bubble = Array.from(list.querySelectorAll('[data-live-stream-body]'))
       .find((node) => node.dataset.liveStreamBody === sid)?.closest('.msg');

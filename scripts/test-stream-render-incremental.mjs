@@ -106,3 +106,81 @@ tick();
 assert.equal(writes, 1);
 console.log('PASS: token batching, visible side-pane patch + pane-only fallback, structural coalescing, visibility, session switch, flush-hook order, idle no-op');
 console.log('Scope: production functions in a VM with DOM stubs; not a browser/layout benchmark.');
+
+// --- Real patch path, both panes (no patchStreamingChatBubble stub) ---
+// Extracts the production patch + scheduler and runs them against a fake DOM, so a
+// side-chat regression cannot hide behind a stubbed patch result.
+{
+  const patchSource = source.slice(source.indexOf('function patchStreamingAnswerText('), source.indexOf('function syncAssistantWorkTimer()'));
+  assert.ok(patchSource.includes('function patchStreamingChatBubble('), 'extract the production patch path');
+  const fakeEl = (over = {}) => Object.assign({
+    dataset: {}, innerHTML: '', childNodes: [], replaceCount: 0, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+    classList: { toggle() {}, remove() {} },
+    replaceChildren() { this.replaceCount++; },
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+  }, over);
+  const frames = [];
+  const counts = { paneRedraw: 0, fullRender: 0, paneHtml: 0 };
+  const sideList = fakeEl({ dataset: { streamSession: 'side1', streamHistoryCount: '2' } });
+  const sideContent = fakeEl();
+  const sideBubble = fakeEl({ querySelector: sel => (sel === '[data-live-stream-content]' ? sideContent : null) });
+  sideList.querySelectorAll = () => [fakeEl({ dataset: { liveStreamBody: 'side1' }, closest: () => sideBubble })];
+  const mainContent = fakeEl();
+  const mainBubble = fakeEl({ querySelector: sel => (sel === '[data-live-stream-content]' ? mainContent : null) });
+  const chatRoot = fakeEl({ dataset: { streamSession: 'a', streamHistoryCount: '1' }, querySelector: sel => (sel === '#side-chat-messages' ? sideList : null) });
+  chatRoot.querySelectorAll = () => [fakeEl({ dataset: { liveStreamBody: 'a' }, closest: () => mainBubble })];
+  const ctx = {
+    Map, String, Number, Array,
+    document: {
+      hidden: false,
+      addEventListener() {},
+      createElement: () => {
+        const t = fakeEl();
+        t.querySelector = () => ({ innerHTML: '<i>pane</i>' });
+        return t;
+      },
+      getElementById: id => (id === 'chat-messages' ? chatRoot : null),
+    },
+    window: { activeChatSessionId: 'a', chatHistory: [1], sideChatSplitOpen: true, activeSideChatId: 'side1' },
+    requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
+    isSessionThinking: () => true,
+    getSideChatSession: () => ({ id: 'side1', history: [1, 2] }),
+    renderSideChatPaneHtml: () => { counts.paneHtml++; return '<div id="side-chat-messages"></div>'; },
+    setInnerHTMLPreservingVisuals: el => { if (el === sideList) counts.paneRedraw++; },
+    renderChatMessages: () => counts.fullRender++,
+    isSessionVisibleInChatSurface: sid => sid === 'a' || sid === 'side1',
+    getSessionStreamState: () => ({ streamingAIText: 'x' }),
+    getRuntimePlanItems: () => [],
+    renderSessionThinkingHtml: () => '',
+    renderSessionThinkingBodyHtml: () => '<div>body</div>',
+    directLiveTraceChild: () => null,
+    patchLiveTurnTimeline: () => true,
+    captureLiveTraceDisclosureState: () => [],
+    restoreLiveTraceDisclosureState: () => {},
+  };
+  vm.runInNewContext(patchSource, ctx);
+  const flush = () => { while (frames.length) frames.shift()(); };
+
+  // Side-chat stream: every token patches the live row in place, no pane redraw.
+  for (let i = 0; i < 50; i++) ctx.renderStreamingChatUpdate('side1');
+  flush();
+  assert.equal(sideContent.replaceCount, 1, 'side pane live row is patched in place');
+  assert.equal(counts.paneRedraw, 0, 'side-chat token must not redraw the pane');
+  assert.equal(counts.paneHtml, 0);
+  assert.equal(counts.fullRender, 0);
+
+  // Active chat: unchanged incremental behavior.
+  ctx.renderStreamingChatUpdate('a');
+  flush();
+  assert.equal(mainContent.replaceCount, 1, 'active live row is patched in place');
+  assert.equal(counts.paneRedraw, 0);
+  assert.equal(counts.fullRender, 0);
+
+  // Negative polarity: a stale side pane marker cannot be patched, so the pane
+  // redraw fallback is allowed (once, coalesced) and no full chat render happens.
+  sideList.dataset.streamSession = 'stale';
+  ctx.renderStreamingChatUpdate('side1');
+  flush();
+  assert.equal(counts.paneRedraw, 1, 'unpatchable side pane falls back to pane redraw');
+  assert.equal(counts.fullRender, 0, 'side fallback never rebuilds the main chat');
+}
