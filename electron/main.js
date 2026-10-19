@@ -421,6 +421,7 @@ let gatewayProcess      = null;
 let nativeBrowserRpcServer = null;
 let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
+let desktopStartupComplete = false;
 let gatewayShuttingDown = false;
 let availableUpdate     = null;  // holds UpdateInfo before a download begins
 let pendingUpdate       = null;  // holds UpdateInfo once a release is downloaded
@@ -446,6 +447,20 @@ const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 
+function restoreMainWindow() {
+  // Native browser automation can keep hidden host windows (and the gateway)
+  // alive after the main window closes, so window-all-closed never fires.
+  // Reopen only after startup has selected and readied this instance's gateway.
+  if (!desktopStartupComplete || isQuitting) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 // A desktop gateway owns the user-data directory, connector sessions, and
 // runtime status snapshots. Starting a second Electron process against that
 // same directory creates two gateways that overwrite each other's heartbeat
@@ -457,12 +472,8 @@ const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-  });
+  app.on('second-instance', restoreMainWindow);
+  app.on('activate', restoreMainWindow);
 }
 
 function normalizeTitlebarColor(value, fallback) {
@@ -4519,6 +4530,7 @@ app.whenReady().then(async () => {
     await waitForGateway();
     await prepareSourceElectronRenderer();
     createWindow();
+    desktopStartupComplete = true;
     loader.close();
     setupAutoUpdater();
     startCanonicalUpdateWatcher();
