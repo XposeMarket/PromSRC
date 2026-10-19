@@ -232,3 +232,23 @@ console.log('background-agent-stream regression: ok');
   assert.doesNotMatch(JSON.stringify(trace), /Old stream tail/);
   console.log('team transient process-array commentary recovery: ok');
 }
+
+// Streamed reasoning-summary deltas must keep their word boundaries when the
+// live trace coalesces consecutive fragments (regression: "There'salottothink").
+{
+  const stream = createBackgroundAgentStream(3000);
+  const processEntries: Record<string, any>[] = [];
+  const trace: Record<string, any>[] = [];
+  for (const chunk of ["There's", ' ', 'a lot', ' ', 'to think', '\n', 'about here!']) {
+    const data = { text: chunk, source: 'reasoning_summary', visibility: 'user' };
+    appendBackgroundSseTrace(processEntries, trace, 'reasoning_summary_delta', data,
+      appendBackgroundAgentStreamEvent(stream, 'reasoning_summary_delta', data));
+  }
+  assert.equal(trace.length, 1, 'consecutive summary deltas coalesce into one row');
+  assert.equal(trace[0].text, "There's a lot to think\nabout here!");
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary_delta', { text: ' ' })?.text, ' ', 'whitespace-only delta is kept');
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary_delta', { text: '\n' })?.text, '\n', 'newline-only delta is kept');
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary_delta', { text: '' }), null, 'empty delta is dropped');
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary', { text: '   ' }), null, 'whitespace-only final summary is still skipped');
+  console.log('background reasoning summary delta spacing: ok');
+}
