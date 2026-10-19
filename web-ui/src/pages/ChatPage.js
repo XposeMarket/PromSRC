@@ -19179,6 +19179,22 @@ function renderBackgroundSpawnDock() {
   updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
   dock.classList.toggle('has-many', lanes.length > 2);
+  if (!dock.dataset.wheelScrollBound) {
+    dock.dataset.wheelScrollBound = '1';
+    // Mouse wheels only emit deltaY; map it to the horizontal agent strip.
+    dock.addEventListener('wheel', (event) => {
+      if (!dock.classList.contains('has-many') || event.ctrlKey) return;
+      if (dock.scrollWidth <= dock.clientWidth + 1) return;
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      const inner = event.target?.closest?.('.background-spawn-panel, .pm-process-full, pre');
+      if (inner && inner !== dock && inner.scrollHeight > inner.clientHeight + 1) return;
+      const max = dock.scrollWidth - dock.clientWidth;
+      const next = Math.max(0, Math.min(max, dock.scrollLeft + event.deltaY));
+      if (next === dock.scrollLeft) return;
+      event.preventDefault();
+      dock.scrollLeft = next;
+    }, { passive: false });
+  }
   if (!lanes.length) {
     dock.innerHTML = '';
     updateBackgroundSpawnDockOffset();
