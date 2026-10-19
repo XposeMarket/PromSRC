@@ -52,11 +52,16 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     // Summary deltas are streamed fragments ("There's", " a lot", " to think").
     // Trimming each fragment deletes the word boundaries, and the live trace
     // concatenates consecutive fragments, producing "There'salottothink".
-    // Keep the raw fragment; only use trim() to decide whether it is empty.
+    // Deltas keep whitespace-only fragments (" ", "\n"): they are word boundaries
+    // and dropping them splits the summary into extra rows. Only "" is skipped.
+    // Final (non-delta) summaries are still trimmed and skipped when empty.
+    const isDeltaFragment = eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta';
     const rawValue = data?.text ?? data?.summary ?? data?.thinking;
     const raw = typeof rawValue === 'string' ? rawValue : backgroundTraceText(rawValue);
-    if (!raw.trim()) return null;
-    const text = raw.length > 4_000 ? `${raw.slice(0, 4_000)}...` : raw;
+    const text = isDeltaFragment
+      ? (raw.length > 4_000 ? `${raw.slice(0, 4_000)}...` : raw)
+      : backgroundTraceText(raw);
+    if (!text) return null;
     return { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } };
   }
   if (eventType === 'token_narration_boundary') {
