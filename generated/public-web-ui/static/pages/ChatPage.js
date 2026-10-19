@@ -2291,7 +2291,8 @@ function setRightPanelWidth(width, options = {}) {
     boundedWidth = Math.min(boundedWidth, getCanvasPanelMaximumWidth());
   }
   rightPanel.style.width = `${boundedWidth}px`;
-  rightPanel.style.minWidth = `${boundedWidth}px`;
+  // Do not pin an inline min-width: it overrides the CSS min that keeps the chat column usable.
+  rightPanel.style.removeProperty('min-width');
   if (options.lockMax) rightPanel.style.maxWidth = `${boundedWidth}px`;
   else rightPanel.style.removeProperty('max-width');
 }
@@ -2334,7 +2335,6 @@ function restoreCanvasPreviewSavedPanelWidth(rightPanel = document.getElementByI
   if (!rightPanel || canvasPreviewSavedPanelWidth === null) return false;
   if (canvasPreviewSavedPanelWidth && !/^0px$/i.test(canvasPreviewSavedPanelWidth)) {
     rightPanel.style.width = canvasPreviewSavedPanelWidth;
-    rightPanel.style.minWidth = canvasPreviewSavedPanelWidth;
   } else {
     rightPanel.style.removeProperty('width');
     rightPanel.style.removeProperty('min-width');
