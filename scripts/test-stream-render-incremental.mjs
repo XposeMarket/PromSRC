@@ -18,7 +18,7 @@ const context = {
     getElementById: id => (id === 'chat-messages' ? sideContainer : null),
     createElement: () => ({ innerHTML: '', querySelector: () => ({ innerHTML: '<i>pane</i>' }) }),
   },
-  window: { activeChatSessionId: 'a', sideChatSplitOpen: false, activeSideChatId: '' },
+  window: { activeChatSessionId: 'a', sideChatSplitOpen: false, activeSideChatId: '', addEventListener: () => {} },
   requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
   patchStreamingChatBubble: () => { patches++; order.push('patch'); return patchResult; },
   renderChatMessages: () => fullRenders++,
