@@ -687,31 +687,96 @@ function _pmTokenActivityGrid(activity = {}) {
   `;
 }
 
-// Read-only Goals list (finding: existing goals were unreachable after the goals UI was removed).
-function _pmHubGoalsMarkup(goals, { loading = false, error = '' } = {}) {
-  if (loading) return `<div class="hub-goals-state" role="status">Loading goals…</div>`;
-  if (error) return `<div class="hub-goals-state error" role="alert">Unable to load goals. ${escapeHtml(error)}</div>`;
-  if (!goals.length) return `<div class="hub-goals-state" role="status">No main-chat goals yet.</div>`;
-  return `<div class="hub-achievements-grid" aria-label="Goals, ${goals.length} total">${goals.slice(0, 20).map((goal) => {
-    const body = _pmGoalBody(goal);
-    return `<article class="hub-goal-card"><div class="hub-goal-title">${escapeHtml(_pmGoalTitle(goal))}</div>${body ? `<div class="hub-goal-body">${escapeHtml(body.slice(0, 240))}</div>` : ''}<div class="hub-goal-meta">${_pmStatusPill(goal?.status)} ${escapeHtml(_pmDateTime(goal?.updatedAt || goal?.createdAt))}</div></article>`;
-  }).join('')}</div>`;
-}
-
 export async function renderHubPage(page, { navigate } = {}) {
-  page.innerHTML = `${renderMobileHeader({ title: 'Hub', online: true })}<div class="pm-body pm-hub-analytics"><section id="hub-goals" class="hub-section" aria-label="Goals"><div class="hub-goals-header"><div class="hub-section-title">Goals</div></div><div id="hub-goals-body">${_pmHubGoalsMarkup([], { loading: true })}</div></section><section id="hub-usage" class="hub-usage" aria-label="Usage analytics"></section></div>`;
+  const extras = `<span class="pm-spacer"></span><button class="pm-icon-btn" id="pm-hub-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
+  page.innerHTML = `
+    ${renderMobileHeader({ title: 'Hub', online: true, extras, hideTitle: true, hideBrand: true })}
+    <div class="pm-body pm-hub-profile-page" id="pm-hub-body">${_pmMoreSkeleton()}</div>
+  `;
   wireHeaderActions(page, {});
-  if (!document.querySelector('link[data-hub-analytics]')) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet'; link.href = '/src/styles/hub.css'; link.dataset.hubAnalytics = 'true';
-    document.head.appendChild(link);
-  }
-  const goalsBody = page.querySelector('#hub-goals-body');
-  loadMobileHubGoals()
-    .then((goals) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup(goals); })
-    .catch((err) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup([], { error: err?.message || String(err) }); });
-  const { activateHubUsage } = await import('../pages/HubUsage.js');
-  if (page.isConnected) activateHubUsage();
+  await _mountEvidenceReview(page, navigate, 'skills');
+  const body = page.querySelector('#pm-hub-body');
+  let loadGeneration = 0;
+  const load = async () => {
+    try {
+      const generation = ++loadGeneration;
+      body.innerHTML = _pmMoreSkeleton();
+      const data = await loadMobileHubOverview();
+      const account = _pmHubAccount();
+      const latestGoal = data.goals[0];
+      const modelStats = data.models || {};
+      const toolStats = data.tools || {};
+      const tokenActivity = data.tokenActivity || { daily: [], stats: {} };
+      const tokenStats = tokenActivity.stats || {};
+      const totalTokens = Number(tokenStats.totalTokens || _pmModelTotal(modelStats)) || 0;
+      const peakTokens = Number(tokenStats.peakTokens || 0) || 0;
+      const activeDays = Number(tokenStats.activeDays || toolStats.activeDays || modelStats.activeDays || 0) || 0;
+      const currentStreak = Number(tokenStats.current ?? tokenStats.currentStreak ?? toolStats.currentStreak ?? modelStats.currentStreak ?? 0) || 0;
+      const longestStreak = Number(tokenStats.longest ?? tokenStats.longestStreak ?? toolStats.longestStreak ?? modelStats.longestStreak ?? 0) || 0;
+      const toolCalls = Number(toolStats.toolCalls || toolStats.total || 0) || 0;
+      const topModels = Array.isArray(data.topModels) ? data.topModels : [];
+      const topTools = Array.isArray(data.topTools) ? data.topTools : [];
+      body.innerHTML = `
+        <section class="pm-hub-profile-hero">
+          <div class="pm-hub-avatar">${escapeHtml(_pmHubInitials(account.name))}</div>
+          <h1>${escapeHtml(account.name)}</h1>
+          <p><span>${escapeHtml(account.handle)}</span><span>Prometheus</span></p>
+        </section>
+        <section class="pm-hub-profile-stats">
+          ${_pmHubStat('Lifetime tokens', _pmCompactNumber(totalTokens))}
+          ${_pmHubStat('Peak tokens', _pmCompactNumber(peakTokens))}
+          ${_pmHubStat('Model calls', _pmCompactNumber(_pmModelCalls(modelStats)))}
+          ${_pmHubStat('Current streak', `${currentStreak}d`)}
+          ${_pmHubStat('Longest streak', `${longestStreak}d`)}
+        </section>
+        <section class="pm-hub-profile-section">
+          <div class="pm-hub-section-head">
+            <strong>Token activity</strong>
+            <span>${escapeHtml(_pmCompactNumber(totalTokens))} total</span>
+          </div>
+          ${_pmTokenActivityGrid(tokenActivity)}
+        </section>
+        <section class="pm-hub-profile-columns">
+          <div class="pm-hub-profile-section">
+            <div class="pm-hub-section-head"><strong>Activity insights</strong></div>
+            <div class="pm-hub-insight-list">
+              <span><em>Active days</em><b>${escapeHtml(_pmCompactNumber(activeDays))}</b></span>
+              <span><em>Tool calls</em><b>${escapeHtml(_pmCompactNumber(toolCalls))}</b></span>
+              <span><em>Sessions</em><b>${escapeHtml(_pmCompactNumber(toolStats.chatSessions || modelStats.chatSessions || 0))}</b></span>
+              <span><em>Peak hour</em><b>${escapeHtml(String(toolStats.peakHour || modelStats.peakHour || '-'))}</b></span>
+            </div>
+          </div>
+          <div class="pm-hub-profile-section">
+            <div class="pm-hub-section-head"><strong>Most used models</strong></div>
+            <div class="pm-hub-usage-list">
+              ${topModels.slice(0, 4).map((m) => `<span><b>${escapeHtml(m.name || 'Model')}</b><em>${escapeHtml(_pmCompactNumber(m.tokens || 0))} tokens</em></span>`).join('') || '<p>No model usage yet.</p>'}
+            </div>
+          </div>
+        </section>
+        ${_pmHubLatestGoalSection(latestGoal, data.goalsLoaded === false)}
+        <section class="pm-hub-profile-section">
+          <div class="pm-hub-section-head"><strong>Most used tools</strong></div>
+          <div class="pm-hub-usage-list">
+            ${topTools.slice(0, 6).map((t) => `<span><b>${escapeHtml(t.name || 'Tool')}</b><em>${escapeHtml(_pmCompactNumber(t.count || 0))} calls</em></span>`).join('') || '<p>No tool usage yet.</p>'}
+          </div>
+        </section>
+      `;
+      _wirePmTokenActivityPopover(body);
+      if (data.goalsLoaded === false) {
+        loadMobileHubGoals().then((goals) => {
+          if (generation !== loadGeneration || !body.isConnected) return;
+          const goalSlot = body.querySelector('#pm-hub-latest-goal');
+          if (goalSlot) goalSlot.outerHTML = _pmHubLatestGoalSection(goals[0] || null);
+        }).catch(() => {});
+      }
+      return true;
+    } catch (err) {
+      body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.target}</div><h2>Could not load Hub</h2><p>${escapeHtml(err.message || '')}</p></div>`;
+      return false;
+    }
+  };
+  page.querySelector('#pm-hub-refresh')?.addEventListener('click', load);
+  _pmScheduleInitialLoad(page, load);
 }
 
 async function _renderMoreAudit(page, { navigate }) {
