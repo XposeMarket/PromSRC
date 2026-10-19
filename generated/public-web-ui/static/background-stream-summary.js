@@ -12,7 +12,8 @@ export function backgroundSpawnCollapsedDetail(lane = {}, preview = String) {
 }
 
 export function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
-  const next = String(text || '').trim();
+  const raw = String(text || '');
+  const next = raw.trim();
   if (!next) return;
   const latest = trace.at(-1);
   const previous = latest
@@ -24,6 +25,7 @@ export function mergeBackgroundReasoningSummary(trace, text, extra, index, { del
     source: 'agent_progress',
     visibility: 'summary',
     reasoningKind: 'summary',
+    _trailingSpace: /\s$/.test(raw),
   };
   if (!previous) {
     trace.push({
@@ -42,6 +44,7 @@ export function mergeBackgroundReasoningSummary(trace, text, extra, index, { del
     && !isSnapshot
     && !/[.!?:]\s*$/.test(current)
     && (/^\s/.test(text) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
-  previous.text = canAppend ? `${current}${next}`.replace(/\s+/g, ' ').trim() : next;
+  const needsSpace = /^\s/.test(raw) || Boolean(previous.extra?._trailingSpace);
+  previous.text = canAppend ? `${current}${needsSpace ? ' ' : ''}${next}`.replace(/\s+/g, ' ').trim() : next;
   previous.extra = { ...(previous.extra || {}), ...visibleExtra };
 }
