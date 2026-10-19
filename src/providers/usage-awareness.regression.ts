@@ -1,57 +1,57 @@
-// Usage awareness must be per provider and silent above 30% left.
-// A model on Anthropic must never be shown OpenAI's usage (or vice versa),
-// and nothing should be injected in the normal case (keeps the prompt cache stable).
 import assert from 'node:assert/strict';
-// Must be set before import: the module must never touch live credentials here.
-process.env.PROMETHEUS_DISABLE_USAGE_AWARENESS_REFRESH = '1';
-import {
-  recordAnthropicRateLimitHeaders,
-  recordUsageApiSnapshot,
-  formatUsageAwarenessForPrompt,
-  resetUsageAwarenessForTests,
-} from './usage-awareness';
+import { formatUsageAwarenessForPrompt as format, recordUsageApiSnapshot as record, resetUsageAwarenessForTests as reset } from './usage-awareness';
+import type { UsageLimitsResult } from './provider-usage-limits';
 
-resetUsageAwarenessForTests();
-const now = Date.now();
-const in2h = String(Math.floor((now + 2 * 3600_000) / 1000));
-const in3d = String(Math.floor((now + 3 * 86400_000) / 1000));
-
-// Healthy Anthropic plan: silent.
-recordAnthropicRateLimitHeaders({
-  'anthropic-ratelimit-unified-5h-utilization': '0.40',
-  'anthropic-ratelimit-unified-5h-reset': in2h,
-  'anthropic-ratelimit-unified-7d-utilization': '0.50',
-  'anthropic-ratelimit-unified-7d-reset': in3d,
-});
-assert.equal(formatUsageAwarenessForPrompt('anthropic', now), '', 'above 30% left must inject nothing');
-
-// Weekly at 78% used -> 22% left: notice tier, tightest window drives it.
-recordAnthropicRateLimitHeaders({
-  'anthropic-ratelimit-unified-5h-utilization': '0.40',
-  'anthropic-ratelimit-unified-5h-reset': in2h,
-  'anthropic-ratelimit-unified-7d-utilization': '0.78',
-  'anthropic-ratelimit-unified-7d-reset': in3d,
-});
-const notice = formatUsageAwarenessForPrompt('anthropic', now);
-assert.match(notice, /provider=anthropic/);
-assert.match(notice, /Weekly 22% left/);
-assert.match(notice, /Be economical/);
-
-// OpenAI is low, but a model on Anthropic must never see it.
-recordUsageApiSnapshot('openai_codex', [{ label: '5-hour', used_percent: 97, reset_at: null }]);
-assert.doesNotMatch(formatUsageAwarenessForPrompt('anthropic', now), /openai/i, 'Anthropic turn must not show OpenAI usage');
-const openai = formatUsageAwarenessForPrompt('openai_codex', now);
-assert.match(openai, /provider=openai_codex/);
-assert.match(openai, /3% left/);
-assert.match(openai, /CRITICAL/);
-assert.doesNotMatch(openai, /anthropic/i, 'OpenAI turn must not show Anthropic usage');
-
-// Caution tier.
-recordAnthropicRateLimitHeaders({ 'anthropic-ratelimit-unified-5h-utilization': '0.88' });
-assert.match(formatUsageAwarenessForPrompt('anthropic', now), /Low: keep turns tight/);
-
-// Unknown provider: nothing.
-assert.equal(formatUsageAwarenessForPrompt('xai', now), '');
-
-// Guard: the regression itself must not have started any live refresh.
-console.log('usage-awareness regression: ok');
+async function main() {
+  reset();
+  const now = Date.now();
+  const window = (used_percent: number, reset_at = new Date(now + 3600000).toISOString()) => ({ label: '5-hour', used_percent, reset_at });
+  record('anthropic', [window(90)]);
+  record('openai_codex', [window(10)]);
+  const block = format(['anthropic', 'openai_codex', 'anthropic'], now, 'anthropic');
+  assert.equal(block.split('\n').filter(line => line.startsWith('anthropic:')).length, 1);
+  assert.match(block, /openai_codex: 5-hour 90% left \(resets in 1h 0m\)/);
+  assert.match(block, /Low:/);
+  assert.match(block, /more headroom/);
+  record('anthropic', [window(99)]);
+  assert.match(format('anthropic'), /CRITICAL:/);
+  assert.match(format(['openai_codex'], now + 6 * 60000), /openai_codex: unknown/);
+  record('expired', [window(1, new Date(now - 1000).toISOString())]);
+  assert.match(format('expired'), /expired: unknown/);
+  let calls = 0;
+  let resolve!: (value: UsageLimitsResult) => void;
+  let batch: string[] = [];
+  reset(ids => { calls++; batch = ids; return new Promise(done => { resolve = done; }); });
+  const ids = ['stale', 'missing', 'ollama', 'failed'];
+  record('stale', [window(1, new Date(now - 1000).toISOString())]);
+  const immediate = format(ids);
+  assert.equal(typeof immediate, 'string');
+  assert.equal(calls, 0, 'refresh must not execute during synchronous formatting');
+  ids.forEach(id => assert.match(immediate, new RegExp(`${id}: unknown`)));
+  format(ids);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  assert.deepEqual(batch, ids);
+  format(ids);
+  await Promise.resolve();
+  assert.equal(calls, 1, 'in-flight batch deduplicates repeated turns');
+  resolve({ fetched_at: new Date().toISOString(), providers: [
+    { provider: 'missing', windows: [window(20)], budget: null, error: null },
+    { provider: 'ollama', windows: [], budget: { used_percent: 25 }, error: null },
+    { provider: 'failed', windows: [window(1)], budget: null, error: 'secret/path must not appear' },
+  ] as any });
+  await new Promise(done => setImmediate(done));
+  const refreshed = format(ids);
+  assert.match(refreshed, /missing: 5-hour 80% left/);
+  assert.match(refreshed, /ollama: internal budget 75% left/);
+  assert.match(refreshed, /failed: unknown/);
+  assert.doesNotMatch(refreshed, /secret|path/);
+  reset(async () => { throw new Error('sensitive'); });
+  format(['xai']);
+  await new Promise(done => setImmediate(done));
+  assert.match(format(['xai']), /xai: unknown/);
+  reset();
+  console.log('PASS usage-awareness: multiple/healthy/stale/expired/missing/local/failed, deduped nonblocking refresh, budget, caution');
+  console.log(block);
+}
+void main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -950,7 +950,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const events = await readRecentModelUsageEvents(Date.now() - 35 * 86400000);
   const lifetimeTotals = await readModelUsageLifetimeTotals();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
-    .filter((id) => id && !LOCAL_PROVIDERS.has(id));
+    .filter((id) => id && (!LOCAL_PROVIDERS.has(id) || Number(budgets[id]?.monthly_token_limit) > 0));
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
 
   const providerEntries = ids.flatMap((id) => configuredUsageAccounts(id).map(account => ({ id, account })));
