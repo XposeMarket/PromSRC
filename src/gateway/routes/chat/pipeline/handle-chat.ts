@@ -97,7 +97,7 @@ import { raceWithWatchdog, PreemptState } from '../../../scheduling/preempt-watc
 import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from '../.././tool-result-elision';
 import { normalizeReasoningSummary } from '../../../context/turn-context-packet';
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../../../context/edit-log';
-import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../../../providers/usage-awareness';
+import { formatUsageAwarenessForPrompt, listCredentialedModelProviderIds, isUsageLimitError, recordProviderUsageExhausted } from '../../../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../../../providers/chatgpt-web/chatgpt-web-models';
 import { getRuntimeToolCategoryIds } from '../../../../runtime/tool-category-manifest';
 import { PROM_VIZ_REFERENCE } from '../../../prom-viz-reference';
@@ -528,12 +528,11 @@ export async function handleChatUntraced(
     : [
         getWorkingContextForContext(sessionId, 9_000),
         formatEditLogForPrompt(sessionId, { excludeTurnId: editLogTurnId, excludeSince: latencyStartAt }),
-        // Plan usage for THIS turn's provider only; empty above 30% left, so it
-        // adds nothing to the prompt (or the cache) in the normal case.
+        // All connected providers, cache-only; stays in the volatile tail.
         (() => {
           try {
             const usageProvider = String(admittedRouteSnapshot?.providerId || (getConfig().getConfig() as any)?.llm?.provider || '').trim();
-            return usageProvider ? formatUsageAwarenessForPrompt(usageProvider) : '';
+            return formatUsageAwarenessForPrompt(listCredentialedModelProviderIds(), Date.now(), usageProvider);
           } catch { return ''; }
         })(),
       ].filter(Boolean).join('\n\n');

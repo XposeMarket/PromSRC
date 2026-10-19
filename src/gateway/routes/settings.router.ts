@@ -78,6 +78,7 @@ import { addSessionAllowedPath, addPersistentAllowedPath } from '../path-permiss
 import { appendAuditEntry } from '../audit-log';
 import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
+import { listCredentialedModelProviderIds, PROVIDER_OAUTH_VAULT_KEYS, providerAccountVaultKey, providerOAuthVaultKey } from '../../providers/usage-awareness';
 import { broadcastWS, getLastMainSessionId } from '../comms/broadcaster';
 import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
 import { buildContextBudget, resolveCompactionThreshold, resolveActiveModelContextProfile, selectModelInfoForContextProfile, resolveModelContextProfile, rememberProviderContextMetadata } from '../context/model-context';
@@ -251,24 +252,7 @@ router.get('/api/credentials/status', (_req, res) => {
   }
 });
 
-const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
-  openai_codex: ['openai.oauth_tokens'],
-  anthropic: ['anthropic.oauth_tokens'],
-  xai: ['xai.oauth_tokens'],
-};
 const ACCOUNT_AWARE_PROVIDERS = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
-
-function providerAccountVaultKey(providerId: string, accountId: string, field = 'api_key'): string {
-  return `llm.${providerId}.accounts.${accountId}.${field}`;
-}
-
-function providerOAuthVaultKey(providerId: string, accountId?: string): string {
-  const id = String(accountId || '').trim();
-  if (providerId === 'openai_codex') return id ? `openai.oauth_tokens.${id}` : 'openai.oauth_tokens';
-  if (providerId === 'anthropic') return id ? `anthropic.oauth_tokens.${id}` : 'anthropic.oauth_tokens';
-  if (providerId === 'xai') return id ? `xai.oauth_tokens.${id}` : 'xai.oauth_tokens';
-  return '';
-}
 
 function slugAccountId(providerId: string, label = ''): string {
   const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
@@ -367,57 +351,6 @@ function migrateAccountSecretsToVault(llm: any): any {
   return out;
 }
 
-function hasSavedProviderSecretConfig(providerConfig: any, field: string): boolean {
-  const value = providerConfig?.[field];
-  if (typeof value !== 'string') return false;
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  return trimmed.startsWith('vault:') || trimmed.startsWith('env:') || trimmed.length > 0;
-}
-
-function listCredentialedModelProviderIds(): string[] {
-  const cfg = getConfig().getConfig() as any;
-  const configuredProviders = cfg?.llm?.providers && typeof cfg.llm.providers === 'object'
-    ? cfg.llm.providers
-    : {};
-  const keys = new Set(getVault().keys());
-  const ids = new Set<string>();
-
-  for (const [providerId, field] of listProviderSecretFieldPaths()) {
-    if (keys.has(`llm.${providerId}.${field}`)) ids.add(providerId);
-    if (hasSavedProviderSecretConfig(configuredProviders?.[providerId], field)) ids.add(providerId);
-  }
-
-  for (const [providerId, providerCfg] of Object.entries(configuredProviders)) {
-    const accounts = (providerCfg as any)?.accounts;
-    if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
-    for (const [accountId, account] of Object.entries(accounts)) {
-      if (hasSavedProviderSecretConfig(account, 'api_key')) ids.add(providerId);
-      if (keys.has(providerAccountVaultKey(providerId, accountId))) ids.add(providerId);
-      const oauthKey = providerOAuthVaultKey(providerId, accountId);
-      if (oauthKey && keys.has(oauthKey)) ids.add(providerId);
-    }
-  }
-
-  for (const [providerId, vaultKeys] of Object.entries(PROVIDER_OAUTH_VAULT_KEYS)) {
-    if (vaultKeys.some(key => keys.has(key))) ids.add(providerId);
-  }
-
-  const catalogOrder = new Map<string, number>();
-  listProviderDescriptors().forEach((descriptor, index) => {
-    catalogOrder.set(descriptor.id, index);
-    for (const ownedId of descriptor.ownership?.providerIds || []) {
-      if (!catalogOrder.has(ownedId)) catalogOrder.set(ownedId, index);
-    }
-  });
-
-  return [...ids].sort((a, b) => {
-    const rankA = catalogOrder.has(a) ? catalogOrder.get(a)! : Number.MAX_SAFE_INTEGER;
-    const rankB = catalogOrder.has(b) ? catalogOrder.get(b)! : Number.MAX_SAFE_INTEGER;
-    if (rankA !== rankB) return rankA - rankB;
-    return a.localeCompare(b);
-  });
-}
 
 router.get('/api/settings/credentialed-model-providers', (_req, res) => {
   try {

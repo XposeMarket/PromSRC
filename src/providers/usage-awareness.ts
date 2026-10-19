@@ -1,17 +1,46 @@
-// Per-provider usage awareness for the model itself.
-//
-// The model is told its remaining plan allowance ONLY for the provider it is
-// running on right now, and only when it matters (<= 30% left). Above that the
-// block is empty, so nothing volatile enters the prompt and the prompt cache is
-// untouched. The line is appended to the volatile tail of the system prompt,
-// never the stable prefix.
-//
-// Sources, cheapest first:
-//   - Anthropic: `anthropic-ratelimit-unified-*` headers on every response
-//     (recordAnthropicRateLimitHeaders), so there is no extra request.
-//   - Everyone else: the same live windows Settings shows
-//     (getProviderUsageLimits), cached for a few minutes and refreshed in the
-//     background so turn prep never waits on it.
+// Multi-provider usage belongs only in the volatile per-turn prompt tail.
+import { getConfig } from '../config/config';
+import { getVault } from '../security/vault';
+import { listProviderDescriptors, listProviderSecretFieldPaths } from './provider-registry.js';
+import type { UsageLimitsResult } from './provider-usage-limits';
+
+export const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
+  openai_codex: ['openai.oauth_tokens'], anthropic: ['anthropic.oauth_tokens'], xai: ['xai.oauth_tokens'],
+};
+export function providerAccountVaultKey(providerId: string, accountId: string, field = 'api_key'): string {
+  return `llm.${providerId}.accounts.${accountId}.${field}`;
+}
+export function providerOAuthVaultKey(providerId: string, accountId?: string): string {
+  const key = PROVIDER_OAUTH_VAULT_KEYS[providerId]?.[0];
+  return key ? `${key}${accountId?.trim() ? `.${accountId.trim()}` : ''}` : '';
+}
+/** Same current-user config/vault discovery used by Settings and chat. */
+export function listCredentialedModelProviderIds(): string[] {
+  const providers = (getConfig().getConfig() as any)?.llm?.providers || {};
+  const keys = new Set(getVault().keys());
+  const ids = new Set<string>();
+  const saved = (cfg: any, field: string) => typeof cfg?.[field] === 'string' && !!cfg[field].trim();
+  for (const [id, field] of listProviderSecretFieldPaths()) {
+    if (keys.has(`llm.${id}.${field}`) || saved(providers[id], field)) ids.add(id);
+  }
+  for (const [id, cfg] of Object.entries(providers)) {
+    const accounts = (cfg as any)?.accounts;
+    if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) continue;
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (saved(account, 'api_key') || keys.has(providerAccountVaultKey(id, accountId))
+        || keys.has(providerOAuthVaultKey(id, accountId))) ids.add(id);
+    }
+  }
+  for (const [id, names] of Object.entries(PROVIDER_OAUTH_VAULT_KEYS)) {
+    if (names.some(key => keys.has(key))) ids.add(id);
+  }
+  const order = new Map<string, number>();
+  listProviderDescriptors().forEach((descriptor, index) => {
+    order.set(descriptor.id, index);
+    for (const id of descriptor.ownership?.providerIds || []) if (!order.has(id)) order.set(id, index);
+  });
+  return [...ids].sort((a, b) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) || a.localeCompare(b));
+}
 
 export interface UsageAwarenessWindow {
   label: string;
@@ -24,6 +53,7 @@ export interface UsageAwarenessSnapshot {
   windows: UsageAwarenessWindow[];
   source: 'response_headers' | 'usage_api';
   at: number;
+  budget?: { usedPercent: number; resetAt: string };
 }
 
 const snapshots = new Map<string, UsageAwarenessSnapshot>();
@@ -83,72 +113,87 @@ export function recordUsageApiSnapshot(provider: string, windows: Array<{ label:
   snapshots.set(id, { provider: id, windows: mapped, source: 'usage_api', at: Date.now() });
 }
 
-function refreshFromUsageApi(provider: string): void {
-  if (!refreshEnabled || refreshInFlight.has(provider)) return;
-  refreshInFlight.add(provider);
-  void (async () => {
+type UsageReader = (ids: string[]) => Promise<UsageLimitsResult>;
+const defaultReader: UsageReader = async ids => (await import('./provider-usage-limits')).getProviderUsageLimits(ids);
+let usageReader = defaultReader;
+const pendingRefresh = new Set<string>();
+let refreshScheduled = false;
+
+function fresh(snap: UsageAwarenessSnapshot | undefined, now: number): boolean {
+  return !!snap && now - snap.at < (snap.source === 'response_headers' ? HEADER_SNAPSHOT_TTL_MS : API_SNAPSHOT_TTL_MS)
+    && snap.windows.every(w => !w.resetAt || Date.parse(w.resetAt) > now)
+    && (!snap.budget || Date.parse(snap.budget.resetAt) > now);
+}
+function refreshFromUsageApi(ids: string[]): void {
+  if (!refreshEnabled) return;
+  for (const id of ids) if (!refreshInFlight.has(id)) pendingRefresh.add(id);
+  if (refreshScheduled || !pendingRefresh.size) return;
+  refreshScheduled = true;
+  // Queue the entire batch after synchronous prompt preparation, never await it.
+  void Promise.resolve().then(async () => {
+    refreshScheduled = false;
+    const batch = [...pendingRefresh];
+    pendingRefresh.clear();
+    batch.forEach(id => refreshInFlight.add(id));
     try {
-      const mod = await import('./provider-usage-limits');
-      const result = await mod.getProviderUsageLimits([provider]);
-      const entry = (result?.providers || []).find((p: any) => p?.provider === provider && Array.isArray(p.windows) && p.windows.length);
-      if (entry) recordUsageApiSnapshot(provider, entry.windows);
-    } catch { /* awareness is best-effort */ } finally {
-      refreshInFlight.delete(provider);
-    }
-  })();
+      const result = await usageReader(batch);
+      for (const id of batch) {
+        const entries = result.providers.filter(p => p.provider === id);
+        // Collapse accounts conservatively; do not leak account names or errors.
+        const windows = entries.some(p => p.error) ? [] : entries.flatMap(p => p.windows);
+        const existing = snapshots.get(id);
+        if (windows.length && existing?.source === 'response_headers' && fresh(existing, Date.now())) continue;
+        const budgets = entries.flatMap(p => p.budget ? [p.budget.used_percent] : []);
+        const now = new Date();
+        snapshots.set(id, { provider: id, source: 'usage_api', at: now.getTime(),
+          windows: windows.filter(w => Number.isFinite(w.used_percent)).map(w => ({ label: w.label, usedPercent: clampPct(w.used_percent), resetAt: w.reset_at })),
+          ...(budgets.length ? { budget: { usedPercent: Math.max(...budgets), resetAt: new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString() } } : {}),
+        });
+      }
+    } catch {
+      for (const id of batch) snapshots.set(id, { provider: id, source: 'usage_api', at: Date.now(), windows: [] });
+    } finally { batch.forEach(id => refreshInFlight.delete(id)); }
+  });
 }
-
 export function getUsageAwarenessSnapshot(provider: string): UsageAwarenessSnapshot | null {
-  const id = String(provider || '').trim();
-  if (!id) return null;
-  const snap = snapshots.get(id) || null;
-  const ttl = snap?.source === 'response_headers' ? HEADER_SNAPSHOT_TTL_MS : API_SNAPSHOT_TTL_MS;
-  if (!snap || Date.now() - snap.at > ttl) {
-    // Never block turn prep: kick a background refresh and use what we have.
-    if (id !== 'anthropic' || !snap) refreshFromUsageApi(id);
-  }
-  return snap;
+  const snap = snapshots.get(provider);
+  if (!fresh(snap, Date.now())) { refreshFromUsageApi([provider]); return null; }
+  return snap || null;
 }
-
 function formatReset(resetAt: string | null, now: number): string {
-  if (!resetAt) return '';
-  const t = Date.parse(resetAt);
-  if (!Number.isFinite(t)) return '';
-  const mins = Math.max(0, Math.round((t - now) / 60_000));
-  if (mins < 60) return `resets in ${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 48) return `resets in ${hours}h${mins % 60 ? ` ${mins % 60}m` : ''}`;
-  return `resets in ${Math.round(hours / 24)}d`;
+  if (!resetAt || !Number.isFinite(Date.parse(resetAt))) return 'reset unknown';
+  const mins = Math.max(0, Math.round((Date.parse(resetAt) - now) / 60_000));
+  return `resets in ${mins < 60 ? `${mins}m` : mins < 2880 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${Math.round(mins / 1440)}d`}`;
 }
-
-/**
- * The block the model sees. Empty unless the tightest window for the CURRENT
- * provider is at or below 30% left. Only the current provider is ever named.
- */
-export function formatUsageAwarenessForPrompt(provider: string, now = Date.now()): string {
-  const snap = getUsageAwarenessSnapshot(provider);
-  if (!snap || !snap.windows.length) return '';
-  const withLeft = snap.windows.map((w) => ({ ...w, left: Math.round(100 - w.usedPercent) }));
-  const tightest = withLeft.reduce((a, b) => (b.left < a.left ? b : a));
-  if (tightest.left > USAGE_AWARENESS_NOTICE_PERCENT_LEFT) return '';
-  const windowsText = withLeft
-    .map((w) => `${w.label} ${w.left}% left${formatReset(w.resetAt, now) ? ` (${formatReset(w.resetAt, now)})` : ''}`)
-    .join('; ');
-  let guidance: string;
-  if (tightest.left <= USAGE_AWARENESS_CRITICAL_PERCENT_LEFT) {
-    guidance = 'CRITICAL: save state now (commit/push or write a note) and tell the user before starting anything long. Keep this turn minimal.';
-  } else if (tightest.left <= USAGE_AWARENESS_CAUTION_PERCENT_LEFT) {
-    guidance = 'Low: keep turns tight, batch tool calls, save work before long jobs, and do not spawn background agents on this same provider.';
-  } else {
-    guidance = 'Be economical: prefer fewer, batched tool calls and avoid unnecessary re-reads.';
-  }
-  return `[USAGE_AWARENESS provider=${snap.provider}] ${windowsText}. ${guidance} [/USAGE_AWARENESS]`;
+const safeLabel = (text: string) => /^[a-zA-Z0-9 _().-]{1,32}$/.test(text) ? text : 'window';
+/** Synchronous cache-only formatter. Old string caller shape remains supported. */
+export function formatUsageAwarenessForPrompt(providers: string | string[], now = Date.now(), currentProvider = typeof providers === 'string' ? providers : ''): string {
+  const ids = [...new Set((Array.isArray(providers) ? providers : [providers]).filter(id => /^[a-z0-9_-]{1,64}$/.test(id)))];
+  const stale: string[] = [];
+  const lines = ids.map(id => {
+    const snap = snapshots.get(id);
+    if (!fresh(snap, now)) { stale.push(id); return `${id}: unknown`; }
+    const windows = (snap!.windows).filter(w => Number.isFinite(w.usedPercent));
+    const parts = windows.slice(0, 3).map(w => `${safeLabel(w.label)} ${Math.round(100 - w.usedPercent)}% left (${formatReset(w.resetAt, now)})`);
+    if (snap!.budget) parts.push(`internal budget ${Math.round(100 - snap!.budget.usedPercent)}% left (${formatReset(snap!.budget.resetAt, now)})`);
+    const left = Math.min(...windows.map(w => 100 - w.usedPercent), ...(snap!.budget ? [100 - snap!.budget.usedPercent] : []));
+    let guidance = '';
+    if (id === currentProvider && left <= USAGE_AWARENESS_NOTICE_PERCENT_LEFT) {
+      guidance = left <= USAGE_AWARENESS_CRITICAL_PERCENT_LEFT
+        ? ' CRITICAL: save state now (commit/push or write a note) and tell the user before starting anything long. Keep this turn minimal.'
+        : left <= USAGE_AWARENESS_CAUTION_PERCENT_LEFT
+          ? ' Low: keep turns tight, batch tool calls, save work before long jobs, and do not spawn background agents on this same provider.'
+          : ' Be economical: prefer fewer, batched tool calls and avoid unnecessary re-reads.';
+    }
+    return `${id}: ${parts.join('; ') || 'unknown'}${guidance}`;
+  });
+  refreshFromUsageApi(stale);
+  return lines.length ? `[USAGE_AWARENESS]\n${lines.join('\n')}\nPrefer a provider with more headroom for spawned workers.\n[/USAGE_AWARENESS]` : '';
 }
-
-export function resetUsageAwarenessForTests(): void {
-  snapshots.clear();
-  refreshInFlight.clear();
-  refreshEnabled = false;
+export function resetUsageAwarenessForTests(reader?: UsageReader): void {
+  snapshots.clear(); refreshInFlight.clear(); pendingRefresh.clear(); refreshScheduled = false;
+  usageReader = reader || defaultReader;
+  refreshEnabled = !!reader;
 }
 
 // ── Exhaustion tracking (for routing, e.g. switch_model) ────────────────────
