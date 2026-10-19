@@ -153,6 +153,7 @@ export function openThemeWheel(trigger, { themes, current, apply }) {
     track.append(card); return card;
   });
   function select(index, tick = true, nativeTick = null) {
+    if (closed) return;
     const crossed = Math.abs(index - selected);
     const different = index !== selected; selected = index;
     cards.forEach((card, i) => { card.setAttribute('aria-selected', String(i === index)); card.tabIndex = i === index ? 0 : -1; card.classList.toggle('is-centered', i === index); });
@@ -176,6 +177,7 @@ export function openThemeWheel(trigger, { themes, current, apply }) {
   // Per-frame cover-flow: transform/opacity only, driven by distance from the
   // rail midpoint. Also finds the nearest card for selection and haptics.
   function layout() {
+    if (closed) return;
     rafScroll = 0;
     const mid = track.getBoundingClientRect().left + track.clientWidth / 2;
     let closest = 0, distance = Infinity;
@@ -192,12 +194,13 @@ export function openThemeWheel(trigger, { themes, current, apply }) {
     });
     if (closest !== selected) select(closest);
   }
-  function requestLayout() { if (!rafScroll) rafScroll = requestAnimationFrame(layout); }
+  function requestLayout() { if (closed || rafScroll) return; rafScroll = requestAnimationFrame(layout); }
   function finish(commit) {
     if (closed) return; closed = true;
     cancelAnimationFrame(frame); cancelAnimationFrame(rafScroll);
     try { scrubHaptics?.(); } catch {}
     document.removeEventListener('keydown', keys);
+    track.removeEventListener('scroll', requestLayout);
     closeActive = null;
     sheet.classList.add('is-closing');
     overlay.style.pointerEvents = 'none';
