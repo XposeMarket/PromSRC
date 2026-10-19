@@ -9,6 +9,7 @@
 @import './themes.css';
 @import './settings.css';
 @import './surfaces-polish.css';
+@import './desktop-browser-layout.css';
 
 /* Desktop chat paint isolation. Do not apply to mobile liquid glass. Layout
    containment (not paint clipping) keeps menus/glows outside rows intact. */
