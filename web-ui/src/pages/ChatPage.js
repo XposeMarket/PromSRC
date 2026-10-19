@@ -8399,7 +8399,7 @@ function updateMainGoalElapsedLabel() {
 
 function syncMainGoalElapsedTimer() {
   const goal = getActiveMainChatGoal();
-  const shouldTick = !!goal && String(goal.status || '') === 'active' && mainGoalStartedAtMs(goal) > 0;
+  const shouldTick = !document.hidden && !window.__promSidePaneSuspended && !!document.querySelector('[data-main-goal-elapsed]') && !!goal && String(goal.status || '') === 'active' && mainGoalStartedAtMs(goal) > 0;
   if (!shouldTick) {
     if (mainGoalElapsedTimer) clearInterval(mainGoalElapsedTimer);
     mainGoalElapsedTimer = null;
@@ -8408,6 +8408,9 @@ function syncMainGoalElapsedTimer() {
   updateMainGoalElapsedLabel();
   if (!mainGoalElapsedTimer) mainGoalElapsedTimer = setInterval(updateMainGoalElapsedLabel, 1000);
 }
+
+document.addEventListener('visibilitychange', syncMainGoalElapsedTimer);
+window.addEventListener('prometheus:pane-activity', syncMainGoalElapsedTimer);
 
 function toggleMainGoalDetails() {
   mainGoalDetailsOpen = !mainGoalDetailsOpen;
@@ -15806,8 +15809,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function syncAssistantWorkTimer() {
-  const active = isSessionThinking(window.activeChatSessionId);
-  document.getElementById('chat-messages')?.classList.toggle('is-streaming', active);
+  const thinking = isSessionThinking(window.activeChatSessionId);
+  document.getElementById('chat-messages')?.classList.toggle('is-streaming', thinking);
+  const active = !document.hidden && !window.__promSidePaneSuspended && thinking;
   if (active) {
     if (!window._assistantWorkTimer) {
       window._assistantWorkTimer = setInterval(() => {
@@ -15827,6 +15831,9 @@ function syncAssistantWorkTimer() {
     window._assistantWorkTimer = null;
   }
 }
+
+document.addEventListener('visibilitychange', syncAssistantWorkTimer);
+window.addEventListener('prometheus:pane-activity', syncAssistantWorkTimer);
 
 async function copyChatMessage(originalIndex, ev) {
   if (ev) ev.stopPropagation();

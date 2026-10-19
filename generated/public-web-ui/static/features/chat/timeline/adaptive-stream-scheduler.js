@@ -40,6 +40,8 @@ export function createAdaptiveStreamScheduler(options = {}) {
     return states.get(id);
   }
 
+  // Only embedded side panes opt in; normal hidden-tab scheduling is unchanged.
+  function isSuspended() { return globalThis.window?.__promSidePaneSuspended === true; }
   function isHidden() { return documentRef?.visibilityState === 'hidden' || documentRef?.hidden === true; }
   function inputPressure() {
     let pending = false;
@@ -67,7 +69,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
   }
 
   function run(state) {
-    if (destroyed || state.running || typeof state.pending !== 'function') return;
+    if (destroyed || isSuspended() || state.running || typeof state.pending !== 'function') return;
     if (state.timer != null) { clearTimer(state.timer); state.timer = null; }
     const task = state.pending;
     const queuedAt = state.queuedAt || now();
@@ -97,7 +99,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
   }
 
   function arm(state, minimumDelay = 0) {
-    if (destroyed || state.timer != null || state.running || typeof state.pending !== 'function') return;
+    if (destroyed || isSuspended() || state.timer != null || state.running || typeof state.pending !== 'function') return;
     const interval = isHidden() ? hiddenMs : state.intervalMs;
     const dueAt = Math.max(state.lastRunAt + interval, now() + Math.max(0, Number(minimumDelay) || 0));
     state.timer = setTimer(() => {
@@ -129,6 +131,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
       state.pending = task;
       state.queuedAt ||= now();
     }
+    if (isSuspended()) return true; // Keep the latest paint callback; WS state still updates.
     if (state.running && state.pending) {
       const pending = state.pending;
       state.pending = null;
@@ -171,6 +174,13 @@ export function createAdaptiveStreamScheduler(options = {}) {
 
   const onInput = () => noteInput();
   const onVisibility = () => {
+    if (isSuspended()) {
+      for (const state of states.values()) {
+        if (state.timer != null) clearTimer(state.timer);
+        state.timer = null;
+      }
+      return;
+    }
     if (isHidden()) return;
     for (const state of states.values()) {
       if (!state.pending) continue;
@@ -181,6 +191,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
   documentRef?.addEventListener?.('input', onInput, true);
   documentRef?.addEventListener?.('keydown', onInput, true);
   documentRef?.addEventListener?.('visibilitychange', onVisibility);
+  globalThis.window?.addEventListener?.('prometheus:pane-activity', onVisibility);
 
   function destroy() {
     destroyed = true;
@@ -189,6 +200,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
     documentRef?.removeEventListener?.('input', onInput, true);
     documentRef?.removeEventListener?.('keydown', onInput, true);
     documentRef?.removeEventListener?.('visibilitychange', onVisibility);
+    globalThis.window?.removeEventListener?.('prometheus:pane-activity', onVisibility);
   }
 
   return Object.freeze({ schedule, flush, cancel, noteInput, snapshot, destroy });
