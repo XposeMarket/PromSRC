@@ -291,6 +291,7 @@ async function useMyChrome(state) {
       msg = `Chrome has no sign-in for ${(res?.domains || []).slice(0, 2).join(' / ') || 'this site'}. Log in once in Chrome, then try again.`;
     }
     toast(state, msg, 6500);
+    if (res?.imported) offerAlwaysChromeSignins(state);
     state.lastInputAt = Date.now();
     scheduleFrame(state, 600);
   } catch (err) {
@@ -298,6 +299,29 @@ async function useMyChrome(state) {
   } finally {
     state.chrome.disabled = false;
   }
+}
+
+// After a manual import, offer the standing grant when it is still off.
+// The toggle itself lives in desktop Settings; this only turns it on.
+async function offerAlwaysChromeSignins(state) {
+  let grant;
+  try { grant = await mobileGatewayFetch('/api/browser/chrome-signin-sync', { timeoutMs: 6000 }); } catch { return; }
+  if (!grant || grant.enabled) return;
+  const toolbar = state.root.querySelector('.pm-lh-toolbar');
+  if (!toolbar || state.root.querySelector('.pm-lh-always')) return;
+  const always = el('button', { class: 'pm-lh-always', type: 'button', text: 'Always do this' });
+  always.addEventListener('click', async () => {
+    always.disabled = true;
+    try {
+      await post('/api/browser/chrome-signin-sync', { enabled: true }, 8000);
+      always.remove();
+      toast(state, 'Chrome sign-ins will sync automatically. Turn off in Settings on desktop.', 6500);
+    } catch (err) {
+      always.disabled = false;
+      toast(state, String(err?.message || 'Could not turn on Chrome sign-in sync'), 5200);
+    }
+  });
+  toolbar.before(always);
 }
 
 // iOS can keep the shrunken keyboard viewport after an input disappears.

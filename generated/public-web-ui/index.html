@@ -14,12 +14,12 @@
   html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
   html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
 </style>
-<script src="/build/inline/index-inline-02-df22236f2daf.js"></script>
+<script src="/build/inline/index-inline-02-eb4f3719c6f8.js"></script>
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-03-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-04-ff0bf274d644.js"></script>
+<script src="/build/inline/index-inline-04-8ddcef7c8e38.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script src="/build/inline/index-inline-05-606d0eb0eaa3.js"></script>
 <script src="/build/inline/index-inline-06-d0bf4f36f509.js"></script>
@@ -3756,6 +3756,18 @@
               <span class="settings-profile-toggle-track" aria-hidden="true"><span class="settings-profile-toggle-thumb"></span></span>
             </label>
           </div>
+          <div class="settings-search-row settings-chrome-signin-sync-row">
+            <label for="settings-chrome-signin-sync-toggle" class="settings-search-row-label">
+              <span>Always use my Chrome sign-ins</span>
+              <span class="settings-help" tabindex="0" aria-label="Always use my Chrome sign-ins details" data-settings-help="When on, opening a site copies that site's sign-in from your paired Personal Chrome, plus its sibling sites and login providers. Cookie values stay on this computer and are never written to logs. Agents can list which Google accounts and sites have Chrome sign-ins, but cannot change this setting.">?</span>
+            </label>
+            <label class="settings-profile-toggle" title="Copy Chrome sign-ins when opening sites">
+              <input id="settings-chrome-signin-sync-toggle" type="checkbox" onchange="setChromeSigninSync(this.checked)">
+              <span class="settings-profile-toggle-track" aria-hidden="true"><span class="settings-profile-toggle-thumb"></span></span>
+            </label>
+          </div>
+          <div id="settings-chrome-signin-sync-status" class="settings-help-text muted" aria-live="polite"></div>
+
           <div id="settings-chrome-profile-import-panel" class="settings-chrome-profile-import-panel" hidden>
             <div class="settings-chrome-profile-import-controls">
               <select id="settings-chrome-profile-select" class="settings-row-select" aria-label="Detected Chrome profile">
@@ -5312,7 +5324,7 @@
 <link rel="modulepreload" href="/build/chunks/chunk-EPSJJCWL.js">
 <link rel="modulepreload" href="/build/chunks/chunk-JF4LWGNM.js">
 <link rel="modulepreload" href="/build/chunks/chunk-VIPO6N7H.js">
-<script type="module" src="/build/entries/desktop-CWFVCHYN.js"></script>
+<script type="module" src="/build/entries/desktop-BZRC6IEQ.js"></script>
 <script src="/build/inline/index-inline-11-4550e6a395a8.js"></script>
 
 <script src="/build/inline/index-inline-12-047d20aba693.js"></script>

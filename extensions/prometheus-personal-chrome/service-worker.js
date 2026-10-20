@@ -46,6 +46,21 @@ async function handle(method, params) {
       }
       return { cookies: out, domains };
     }
+    // Read-only inventory for agents: Google account emails and cookie domain
+    // counts. Never returns cookie names or values.
+    case 'google.accounts': {
+      const res = await fetch('https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&laf=b', { credentials: 'include' });
+      const text = await res.text();
+      return { raw: text.slice(0, 20000) };
+    }
+    case 'cookies.sites': {
+      const counts = new Map();
+      for (const c of await chrome.cookies.getAll({})) {
+        const domain = String(c.domain || '').replace(/^\./, '').toLowerCase();
+        if (domain) counts.set(domain, (counts.get(domain) || 0) + 1);
+      }
+      return [...counts.entries()].map(([domain, count]) => ({ domain, count })).sort((a, b) => b.count - a.count).slice(0, 400);
+    }
     case 'downloads.search': return chrome.downloads.search(params.query || {});
     // Unpacked extensions keep running old code until reloaded; let the gateway
     // ask for a reload after it ships a newer extension build.

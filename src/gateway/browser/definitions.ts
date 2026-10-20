@@ -27,7 +27,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['doctor', 'set_profile_target', 'open', 'list_tabs', 'select_tab', 'new_tab', 'close_tab', 'close'] },
+            action: { type: 'string', enum: ['doctor', 'set_profile_target', 'open', 'list_tabs', 'select_tab', 'new_tab', 'close_tab', 'close', 'chrome_accounts'] },
             url: { type: 'string', description: 'URL for open/new_tab.' },
             target: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], default: 'inhouse', description: 'Browser target for open/set_profile_target. On Electron desktop, omit this to use the embedded in-house browser. prometheus is the secondary Prometheus-owned Chrome/CDP lane; user_chrome is the paired real Chrome extension lane.' },
             profile: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], description: 'Alias for target. Defaults to inhouse on Electron desktop.' },
