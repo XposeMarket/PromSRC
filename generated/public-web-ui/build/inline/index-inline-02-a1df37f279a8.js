@@ -1,0 +1,1 @@
+if(document.documentElement.classList.contains("mobile-settings-handoff")){const preload=document.createElement("link");preload.rel="modulepreload",preload.href="/build/entries/settings-24ZK3RI7.js",document.head.appendChild(preload)}

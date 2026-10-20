@@ -67,7 +67,7 @@ const SECTIONS = [
   { id: 'heartbeat', title: 'Heartbeat', icon: 'clock', desc: 'Background heartbeat cadence and instructions.' },
   { id: 'search', title: 'Search', icon: 'target', desc: 'Preferred web search provider.' },
   { id: 'credentials', title: 'Credentials', icon: 'gear', desc: 'Search keys, vault status, and audit log.' },
-  { id: 'security', title: 'Security', icon: 'check', desc: 'Workspace and file access allow/block lists.' },
+  { id: 'security', title: 'Security', icon: 'check', desc: 'Workspace, file access lists, and Chrome sign-ins.' },
   { id: 'models', title: 'Models', icon: 'brain', desc: 'LLM providers, defaults, brain, and compaction.' },
   { id: 'voice', title: 'Voice', icon: 'mic', desc: 'Voice providers, defaults, and listening mode.' },
   { id: 'agents', title: 'Agents', icon: 'robot', desc: 'Agent list and model defaults.' },
@@ -664,7 +664,14 @@ async function renderHeartbeat(content, page) {
 
 async function renderSecurity(content, page) {
   const paths = await mobileGatewayFetch('/api/settings/paths').catch(() => ({}));
+  const chromeGrant = await mobileGatewayFetch('/api/browser/chrome-signin-sync').catch(() => null);
+  const chromeOn = chromeGrant?.enabled === true;
   content.innerHTML = `
+    ${card('Chrome sign-ins', `
+      <div class="pm-card-body">When on, opening a site copies that site's sign-in from your paired Personal Chrome. Cookie values stay on your computer.</div>
+      ${toggleRow('pm-chrome-signin-sync', 'Always use my Chrome sign-ins', chromeOn)}
+      <div id="pm-chrome-signin-status" class="pm-settings-status muted">${chromeOn ? 'On: opening a site copies its Chrome sign-in.' : 'Off.'}</div>
+    `, 'check')}
     ${card('File Access', `
       ${field('Workspace Path', input('pm-sec-workspace', paths.workspace_path || '', 'placeholder="%APPDATA%\\\\Prometheus\\\\workspace"'))}
       ${field('Allowed Paths (one per line)', textarea('pm-sec-allowed', (paths.allowed_paths || []).join('\n'), 'rows="6"'))}
@@ -673,6 +680,23 @@ async function renderSecurity(content, page) {
       <div id="pm-settings-live-status"></div>
     `, 'check', 'pm-card-strong')}
   `;
+  const chromeToggle = page.querySelector('#pm-chrome-signin-sync');
+  chromeToggle?.addEventListener('click', async () => {
+    const next = !chromeToggle.classList.contains('on');
+    const statusEl = page.querySelector('#pm-chrome-signin-status');
+    chromeToggle.disabled = true;
+    try {
+      const res = await mobileGatewayFetch('/api/browser/chrome-signin-sync', { method: 'POST', body: JSON.stringify({ enabled: next }) });
+      const on = res?.enabled === true;
+      chromeToggle.classList.toggle('on', on);
+      chromeToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (statusEl) statusEl.textContent = on ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Could not save: ${err.message}`;
+    } finally {
+      chromeToggle.disabled = false;
+    }
+  });
   page.querySelector('#pm-save-security')?.addEventListener('click', async () => {
     try {
       await mobileGatewayFetch('/api/settings/paths', { method: 'POST', body: JSON.stringify({

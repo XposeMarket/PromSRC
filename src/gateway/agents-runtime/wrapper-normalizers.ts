@@ -599,6 +599,7 @@ export function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name:
     if (action === 'new_tab') return { name: 'browser_new_tab', args };
     if (action === 'close_tab') return { name: 'browser_close_tab', args };
     if (action === 'close') return { name: 'browser_close', args };
+    if (action === 'chrome_accounts') return { name: 'browser_chrome_accounts', args };
     return { name, args: rawArgs, error: `Unsupported browser_session action "${action}".` };
   }
 

@@ -11,14 +11,34 @@ import { buildUiActionIntent, enforceFinalActionGate, somLabelFromSourceNote } f
 import { getBrowserRefLabel } from '../../browser-tools';
 import { desktopAccessibilityAction, desktopAccessibilityFindAndAct, desktopBackgroundCommand, desktopBackgroundPrepareSandbox, desktopBackgroundStatus, desktopClick, desktopClickText, desktopCloseApp, desktopDiffScreenshot, desktopDoctor, desktopDrag, desktopFindInstalledApp, desktopFindWindow, desktopFocusWindowCanonical, desktopFocusWindowVerified, desktopGetAccessibilityState, desktopGetAccessibilityTree, desktopGetClipboard, desktopGetMonitorsSummary, desktopGetProcessList, desktopGetWindowState, desktopGetWindowText, desktopLaunchApp, desktopListApps, desktopListInstalledApps, desktopListMacros, desktopListWindowsCanonical, desktopLocateText, desktopPixelWatch, desktopPressKey, desktopRecordMacro, desktopReplayMacro, desktopScreenshotWithHistory, desktopScroll, desktopSetClipboard, desktopStopMacro, desktopType, desktopTypeRaw, desktopWait, desktopWaitForChange, desktopWindowClick, desktopWindowControl, desktopWindowDrag, desktopWindowPressKey, desktopWindowScreenshot, desktopWindowScroll, desktopWindowType, getDesktopAdvisorPacketById, parseDesktopPointerMonitorArgs, parseDesktopScreenshotToolArgs, resolveCanonicalWindow, resolveDesktopActionPoint } from '../../desktop-tools';
 import { executeDeliverySendScreenshot } from '../../delivery-screenshot.js';
+import { defaultChromeSigninDeps, listChromeAccounts } from '../../browser/chrome-signin-sync';
+
 import { executeTool, resolveBoundedToolTimeoutMs, withBoundedToolTimeout } from '../subagent-executor';
 
-export const HANDLEBROWSERDESKTOPTOOL_TOOL_NAMES: ReadonlySet<string> = new Set(["browser_doctor","browser_set_profile_target","browser_open","browser_snapshot","browser_list_tabs","browser_select_tab","browser_new_tab","browser_close_tab","browser_click","browser_fill","browser_upload_file","browser_press_key","browser_key","browser_type","browser_wait","browser_scroll","browser_drag","browser_click_and_download","browser_close","browser_get_focused_item","browser_get_page_text","browser_send_to_telegram","browser_vision_screenshot","browser_vision_click","browser_vision_type","browser_scroll_collect","browser_scroll_collect_v2","browser_run_js","browser_intercept_network","tool_benchmark_summary","inspect_console","run_accessibility_check","browser_smoke_test","browser_element_watch","browser_snapshot_delta","browser_extract_structured","browser_teach_verify","desktop_doctor","desktop_screenshot","desktop_get_monitors","desktop_window_screenshot","desktop_find_window","desktop_focus_window","desktop_window_control","desktop_click","desktop_drag","desktop_wait","desktop_type","desktop_press_key","desktop_get_clipboard","desktop_set_clipboard","desktop_list_installed_apps","desktop_find_installed_app","desktop_launch_app","desktop_close_app","desktop_get_process_list","desktop_wait_for_change","desktop_diff_screenshot","desktop_list_apps","desktop_list_windows","desktop_get_window_state","desktop_locate_text","desktop_click_text","desktop_get_accessibility_state","desktop_accessibility_action","desktop_window_click","desktop_window_type","desktop_window_press_key","desktop_window_scroll","desktop_window_drag","desktop_get_window_text","desktop_get_accessibility_tree","desktop_pixel_watch","desktop_record_macro","desktop_stop_macro","desktop_replay_macro","desktop_list_macros","desktop_background_status","desktop_background_prepare_sandbox","desktop_background_command","desktop_scroll","desktop_type_raw","desktop_send_to_telegram","desktop_task"]);
+export const HANDLEBROWSERDESKTOPTOOL_TOOL_NAMES: ReadonlySet<string> = new Set(["browser_chrome_accounts","browser_doctor","browser_set_profile_target","browser_open","browser_snapshot","browser_list_tabs","browser_select_tab","browser_new_tab","browser_close_tab","browser_click","browser_fill","browser_upload_file","browser_press_key","browser_key","browser_type","browser_wait","browser_scroll","browser_drag","browser_click_and_download","browser_close","browser_get_focused_item","browser_get_page_text","browser_send_to_telegram","browser_vision_screenshot","browser_vision_click","browser_vision_type","browser_scroll_collect","browser_scroll_collect_v2","browser_run_js","browser_intercept_network","tool_benchmark_summary","inspect_console","run_accessibility_check","browser_smoke_test","browser_element_watch","browser_snapshot_delta","browser_extract_structured","browser_teach_verify","desktop_doctor","desktop_screenshot","desktop_get_monitors","desktop_window_screenshot","desktop_find_window","desktop_focus_window","desktop_window_control","desktop_click","desktop_drag","desktop_wait","desktop_type","desktop_press_key","desktop_get_clipboard","desktop_set_clipboard","desktop_list_installed_apps","desktop_find_installed_app","desktop_launch_app","desktop_close_app","desktop_get_process_list","desktop_wait_for_change","desktop_diff_screenshot","desktop_list_apps","desktop_list_windows","desktop_get_window_state","desktop_locate_text","desktop_click_text","desktop_get_accessibility_state","desktop_accessibility_action","desktop_window_click","desktop_window_type","desktop_window_press_key","desktop_window_scroll","desktop_window_drag","desktop_get_window_text","desktop_get_accessibility_tree","desktop_pixel_watch","desktop_record_macro","desktop_stop_macro","desktop_replay_macro","desktop_list_macros","desktop_background_status","desktop_background_prepare_sandbox","desktop_background_command","desktop_scroll","desktop_type_raw","desktop_send_to_telegram","desktop_task"]);
 
 export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext): Promise<any> {
   const { name, args, workspacePath, deps, sessionId, broadcastBrowserStatus, maybeBroadcastBrowserStatus } = ctx;
   void workspacePath; void deps;
   switch (name) {
+      // Read-only Chrome inventory (Google account names + site cookie counts; no values)
+      case 'browser_chrome_accounts': {
+        const inv = await listChromeAccounts(defaultChromeSigninDeps());
+        const lines: string[] = [];
+        if (!inv.paired) {
+          lines.push(`Chrome is not paired${inv.reason ? ` (${inv.reason})` : ''}. Open the Personal Chrome extension and pair it, then try again.`);
+        } else if (inv.reason) {
+          lines.push(inv.reason);
+        } else {
+          lines.push(inv.accounts.length
+            ? `Google accounts in Chrome: ${inv.accounts.map(a => (a.name ? `${a.name} <${a.email}>` : a.email) + (a.signedIn ? '' : ' (signed out)')).join('; ')}`
+            : 'Google accounts in Chrome: none detected.');
+          lines.push(inv.sites.length
+            ? `Sites with Chrome sign-ins (cookie counts): ${inv.sites.slice(0, 60).map(s => `${s.site} (${s.cookies})`).join(', ')}`
+            : 'Sites with Chrome sign-ins: none detected.');
+        }
+        return { name, args, result: lines.join('\n'), error: false };
+      }
       // Browser automation tools
       case 'browser_doctor': {
         const result = await browserDoctor(sessionId);

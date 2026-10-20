@@ -3170,6 +3170,36 @@ async function loadChromeProfileSettings() {
   }
 }
 
+async function loadChromeSigninSync() {
+  const toggle = document.getElementById('settings-chrome-signin-sync-toggle');
+  const status = document.getElementById('settings-chrome-signin-sync-status');
+  try {
+    const res = await fetch('/api/browser/chrome-signin-sync');
+    const data = await res.json();
+    if (toggle) toggle.checked = data?.enabled === true;
+    if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+  } catch (error) {
+    if (status) status.textContent = `Could not read this setting: ${error?.message || error}`;
+  }
+}
+
+async function setChromeSigninSync(enabled) {
+  const status = document.getElementById('settings-chrome-signin-sync-status');
+  try {
+    const res = await fetch('/api/browser/chrome-signin-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled === true }),
+    });
+    const data = await res.json();
+    if (!res.ok || data?.success === false) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
+  } catch (error) {
+    if (status) status.textContent = `Could not save: ${error?.message || error}`;
+    await loadChromeSigninSync();
+  }
+}
+
 function toggleChromeProfileImportPanel(enabled) {
   const panel = document.getElementById('settings-chrome-profile-import-panel');
   const next = enabled === true;
@@ -3290,6 +3320,7 @@ async function openSettings(tab) {
       window._settingsSearchLoadedToUI = false;
     }),
     loadChromeProfileSettings().catch(() => {}),
+    loadChromeSigninSync().catch(() => {}),
     loadSessionCompactionSettings().catch(() => {}),
     loadAutoSettleSettings().catch(() => {}),
   ];
@@ -7270,6 +7301,8 @@ window.setButtonBusy = setButtonBusy;
 window.toggleDesktopAutoUpdate = toggleDesktopAutoUpdate;
 window.setDesktopUpdateChannel = setDesktopUpdateChannel;
 window.toggleChromeProfileImportPanel = toggleChromeProfileImportPanel;
+window.setChromeSigninSync = setChromeSigninSync;
+window.loadChromeSigninSync = loadChromeSigninSync;
 window.selectInHouseBrowserProfile = selectInHouseBrowserProfile;
 window.importSelectedChromeProfile = importSelectedChromeProfile;
 window.checkDesktopForUpdates = checkDesktopForUpdates;

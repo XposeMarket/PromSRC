@@ -4075,6 +4075,18 @@
               <span class="settings-profile-toggle-track" aria-hidden="true"><span class="settings-profile-toggle-thumb"></span></span>
             </label>
           </div>
+          <div class="settings-search-row settings-chrome-signin-sync-row">
+            <label for="settings-chrome-signin-sync-toggle" class="settings-search-row-label">
+              <span>Always use my Chrome sign-ins</span>
+              <span class="settings-help" tabindex="0" aria-label="Always use my Chrome sign-ins details" data-settings-help="When on, opening a site copies that site's sign-in from your paired Personal Chrome, plus its sibling sites and login providers. Cookie values stay on this computer and are never written to logs. Agents can list which Google accounts and sites have Chrome sign-ins, but cannot change this setting.">?</span>
+            </label>
+            <label class="settings-profile-toggle" title="Copy Chrome sign-ins when opening sites">
+              <input id="settings-chrome-signin-sync-toggle" type="checkbox" onchange="setChromeSigninSync(this.checked)">
+              <span class="settings-profile-toggle-track" aria-hidden="true"><span class="settings-profile-toggle-thumb"></span></span>
+            </label>
+          </div>
+          <div id="settings-chrome-signin-sync-status" class="settings-help-text muted" aria-live="polite"></div>
+
           <div id="settings-chrome-profile-import-panel" class="settings-chrome-profile-import-panel" hidden>
             <div class="settings-chrome-profile-import-controls">
               <select id="settings-chrome-profile-select" class="settings-row-select" aria-label="Detected Chrome profile">

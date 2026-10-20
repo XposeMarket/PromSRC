@@ -20,6 +20,7 @@ import {
   browserLoginImportFromChrome,
   browserLoginChromePaired,
 } from '../browser-tools';
+import { defaultChromeSigninDeps, listChromeAccounts, readChromeSigninGrant, setChromeSigninGrant } from '../browser/chrome-signin-sync';
 
 const sharp: any = (sharpModule as any)?.default || sharpModule;
 import {
@@ -349,6 +350,25 @@ router.post('/api/browser/login-import-chrome', async (req, res) => {
     if (isStorageBoundaryError(error)) { sendError(res, error); return; }
     res.status(409).json({ success: false, error: String(error?.message || error) });
   }
+});
+
+// "Always use my Chrome sign-ins" grant. Only the UI toggles it; agents may read status.
+router.get('/api/browser/chrome-signin-sync', (_req, res) => {
+  res.json({ success: true, ...readChromeSigninGrant() });
+});
+
+router.post('/api/browser/chrome-signin-sync', (req, res) => {
+  try {
+    const grant = setChromeSigninGrant(req.body?.enabled === true);
+    res.json({ success: true, ...grant });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+// Read-only Chrome inventory: Google account emails and site cookie counts. No values.
+router.get('/api/browser/chrome-accounts', async (_req, res) => {
+  res.json({ success: true, ...(await listChromeAccounts(defaultChromeSigninDeps())) });
 });
 
 router.post('/api/browser/login-input', async (req, res) => {
