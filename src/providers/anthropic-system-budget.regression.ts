@@ -3,6 +3,7 @@ import { AnthropicAdapter, anthropicContextWindowTokens } from './anthropic-adap
 
 assert.equal(anthropicContextWindowTokens('claude-opus-5-5'), 1_000_000);
 assert.equal(anthropicContextWindowTokens('claude-haiku-4-5-20251001'), 200_000);
+assert.equal(anthropicContextWindowTokens('claude-haiku-5-5'), 1_000_000, 'Haiku 5.5 system budget must use its 1M window');
 
 const proto: any = (AnthropicAdapter as any).prototype;
 const recovery = '[GATEWAY RESTART RECOVERY]\nYou are resuming YOUR OWN turn. PR #999 merged.\n[/GATEWAY RESTART RECOVERY]';
