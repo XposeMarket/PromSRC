@@ -45,6 +45,16 @@ export function isAnthropicOverloadStreamError(message: string): boolean {
   return /stream error: overloaded_error\b/i.test(String(message || ''));
 }
 
+/** Socket failures are incomplete streams, not provider/protocol errors. */
+export function isTransientStreamTransportError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const error = err as { name?: string; message?: unknown; cause?: { name?: string; code?: unknown; message?: unknown } };
+  if (error.name === 'AbortError' || error.cause?.name === 'AbortError') return false;
+  return [error.message, error.cause?.code, error.cause?.message].some(value =>
+    typeof value === 'string' && (/^terminated$/i.test(value)
+      || /other side closed|socket hang up|ECONNRESET|UND_ERR_SOCKET|fetch failed|network/i.test(value)));
+}
+
 /**
  * Tool names shaped like `mcp_<name>` (single underscore) make Anthropic bill a
  * setup-token request to extra usage, which is disabled, so the request fails
@@ -1317,7 +1327,16 @@ export class AnthropicAdapter implements LLMProvider {
       }, ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
       reader.read().then(
         (result) => { clearTimeout(timer); resolve(result); },
-        (err) => { clearTimeout(timer); reject(err); },
+        (err) => {
+          clearTimeout(timer);
+          if (!options.abortSignal?.aborted && isTransientStreamTransportError(err)) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[anthropic] ${model}: stream connection dropped (${msg}); ending stream as incomplete`);
+            resolve({ done: true, value: undefined });
+          } else {
+            reject(err);
+          }
+        },
       );
     });
 
