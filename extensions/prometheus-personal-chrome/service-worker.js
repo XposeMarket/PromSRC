@@ -49,9 +49,13 @@ async function handle(method, params) {
     // Read-only inventory for agents: Google account emails and cookie domain
     // counts. Never returns cookie names or values.
     case 'google.accounts': {
-      const res = await fetch('https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&laf=b', { credentials: 'include' });
+      // ListAccounts rejects extension-origin requests (400/403), so read the
+      // account switcher page Google's own avatar menu uses. Only email
+      // addresses leave the extension, never the page HTML.
+      const res = await fetch('https://accounts.google.com/SignOutOptions?hl=en', { credentials: 'include' });
       const text = await res.text();
-      return { raw: text.slice(0, 20000) };
+      const emails = [...new Set((text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map(e => e.toLowerCase()))].slice(0, 50);
+      return { emails, status: res.status, source: 'signoutoptions' };
     }
     case 'cookies.sites': {
       const counts = new Map();

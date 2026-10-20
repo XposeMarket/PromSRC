@@ -3174,8 +3174,8 @@ async function loadChromeSigninSync() {
   const toggle = document.getElementById('settings-chrome-signin-sync-toggle');
   const status = document.getElementById('settings-chrome-signin-sync-status');
   try {
-    const res = await fetch('/api/browser/chrome-signin-sync');
-    const data = await res.json();
+    // api() adds the paired-device token; raw fetch fails with 401 through the funnel/phone.
+    const data = await api('/api/browser/chrome-signin-sync', { dedupe: false });
     if (toggle) toggle.checked = data?.enabled === true;
     if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
   } catch (error) {
@@ -3186,13 +3186,11 @@ async function loadChromeSigninSync() {
 async function setChromeSigninSync(enabled) {
   const status = document.getElementById('settings-chrome-signin-sync-status');
   try {
-    const res = await fetch('/api/browser/chrome-signin-sync', {
+    const data = await api('/api/browser/chrome-signin-sync', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: enabled === true }),
     });
-    const data = await res.json();
-    if (!res.ok || data?.success === false) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (data?.success === false) throw new Error(data?.error || 'Save failed');
     if (status) status.textContent = data?.enabled ? 'On: opening a site copies its Chrome sign-in.' : 'Off.';
   } catch (error) {
     if (status) status.textContent = `Could not save: ${error?.message || error}`;
@@ -4257,7 +4255,7 @@ let _scData = {}; // cache: { hostname: { shortcuts: [...], notes, description }
 
 async function loadShortcutsPanel() {
   try {
-    const data = await fetch('/api/shortcuts').then(r => r.json());
+    const data = await api('/api/shortcuts', { dedupe: false });
     _scData = data.shortcuts || {};
     // Populate host filter dropdown
     const sel = document.getElementById('sc-filter-host');
@@ -4330,11 +4328,10 @@ async function addSiteShortcut() {
   }
 
   try {
-    const res = await fetch('/api/shortcuts', {
+    const res = await api('/api/shortcuts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hostname, key, action, context: context || undefined, preferred_for_compose: compose }),
-    }).then(r => r.json());
+    });
 
     if (res.success) {
       statusEl.style.color = 'var(--ok)';
@@ -4360,9 +4357,8 @@ async function addSiteShortcut() {
 async function deleteSiteShortcutUI(hostname, key) {
   if (!confirm(`Delete shortcut "${key}" from ${hostname}?`)) return;
   try {
-    await fetch('/api/shortcuts', {
+    await api('/api/shortcuts', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hostname, key }),
     });
     loadShortcutsPanel();

@@ -105,6 +105,19 @@ export function parseGoogleListAccounts(raw: string): GoogleAccount[] {
   }
 }
 
+/** Normalizes the email list from Google's account switcher page (deduped, lowercased). */
+export function googleAccountsFromEmails(emails: unknown): GoogleAccount[] {
+  const out: GoogleAccount[] = [];
+  const seen = new Set<string>();
+  for (const value of Array.isArray(emails) ? emails : []) {
+    const email = String(value || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || seen.has(email)) continue;
+    seen.add(email);
+    out.push({ email, signedIn: true });
+  }
+  return out;
+}
+
 /** Groups cookie counts by registrable domain. Names and values never appear. */
 export function summarizeChromeSites(sites: Array<{ domain?: unknown; count?: unknown }>): ChromeSiteSummary[] {
   const totals = new Map<string, number>();
@@ -232,9 +245,15 @@ export async function listChromeAccounts(deps: ChromeSigninSyncDeps): Promise<Ch
     if (errors.some(e => /Unsupported Personal Chrome relay method/i.test(e))) {
       return { paired: true, accounts: [], sites: [], reason: RELOAD_EXTENSION_MESSAGE };
     }
-    const accounts = parseGoogleListAccounts(String(google?.raw || ''));
     const siteRows = Array.isArray(sites) ? sites : [];
-    return { paired: true, accounts, sites: summarizeChromeSites(siteRows) };
+    // 1.4.1+ returns { emails } from Google's account switcher. 1.4.0 returned the
+    // ListAccounts body, which Google now rejects, so treat it as a stale extension.
+    if (google && !Array.isArray(google.emails)) {
+      const legacy = parseGoogleListAccounts(String(google.raw || ''));
+      if (!legacy.length) return { paired: true, accounts: [], sites: summarizeChromeSites(siteRows), reason: RELOAD_EXTENSION_MESSAGE };
+      return { paired: true, accounts: legacy, sites: summarizeChromeSites(siteRows) };
+    }
+    return { paired: true, accounts: googleAccountsFromEmails(google?.emails), sites: summarizeChromeSites(siteRows) };
   } catch (err: any) {
     return { paired: false, accounts: [], sites: [], reason: String(err?.message || err || 'inventory-failed').slice(0, 200) };
   }
