@@ -6,6 +6,14 @@ export const HANDOFF_BIND_RETRY_WINDOW_MS = 40_000;
 export const HANDOFF_BIND_RETRY_INITIAL_DELAY_MS = 200;
 export const HANDOFF_LISTENER_CLOSE_TIMEOUT_MS = 5_000;
 
+/** Leave pre-listen warm-handoff port conflicts to the bounded bind retry. */
+export function shouldExitOnGatewayListenerError(
+  err: NodeJS.ErrnoException | null | undefined,
+  opts: { hotRestart: boolean; listening: boolean },
+): boolean {
+  return !(err?.code === 'EADDRINUSE' && opts.hotRestart && !opts.listening);
+}
+
 type BindRetryOptions = {
   enabled: boolean;
   maxWaitMs?: number;

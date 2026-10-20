@@ -1,13 +1,65 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createServer, type Server } from 'node:http';
 import {
   closeListeningHandle,
   listenWithHandoffRetry,
   runtimeBelongsToLiveHandoffHost,
+  shouldExitOnGatewayListenerError,
   HANDOFF_BIND_RETRY_WINDOW_MS,
 } from './handoff-replacement-bind';
 
+async function testPersistentListener(hotRestart: boolean): Promise<void> {
+  const blocker = createServer();
+  const replacement = createServer();
+  let exitCalls = 0;
+  let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  replacement.on('error', (err: NodeJS.ErrnoException) => {
+    if (shouldExitOnGatewayListenerError(err, { hotRestart, listening: replacement.listening })) exitCalls += 1;
+  });
+  const close = (server: Server): Promise<void> => new Promise((resolve, reject) => {
+    if (!server.listening) return resolve();
+    server.close((error) => error ? reject(error) : resolve());
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      blocker.once('error', reject);
+      blocker.listen(0, '127.0.0.1', resolve);
+    });
+    const address = blocker.address();
+    assert.ok(address && typeof address !== 'string');
+    releaseTimer = setTimeout(() => { blocker.close(); }, 200);
+    await listenWithHandoffRetry(() => new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        replacement.off('listening', onListening);
+        replacement.off('error', onError);
+      };
+      const onListening = (): void => { cleanup(); resolve(); };
+      const onError = (error: NodeJS.ErrnoException): void => { cleanup(); reject(error); };
+      replacement.once('listening', onListening);
+      replacement.once('error', onError);
+      try { replacement.listen(address.port, '127.0.0.1'); } catch (error) { cleanup(); reject(error); }
+    }), { enabled: true, maxWaitMs: 5_000, initialDelayMs: 50 });
+    assert.equal(replacement.listening, true, 'replacement must bind after the blocker releases');
+    if (hotRestart) assert.equal(exitCalls, 0, 'persistent listener must not exit during warm-handoff retries');
+    else assert.ok(exitCalls > 0, 'ordinary-start persistent listener must retain its exit behavior');
+  } finally {
+    clearTimeout(releaseTimer);
+    await Promise.all([close(replacement), close(blocker)]);
+  }
+}
+
 async function main(): Promise<void> {
+  const occupied = Object.assign(new Error('occupied'), { code: 'EADDRINUSE' });
+  assert.equal(shouldExitOnGatewayListenerError(occupied, { hotRestart: true, listening: false }), false);
+  assert.equal(shouldExitOnGatewayListenerError(occupied, { hotRestart: false, listening: false }), true);
+  assert.equal(shouldExitOnGatewayListenerError(occupied, { hotRestart: true, listening: true }), true);
+  assert.equal(shouldExitOnGatewayListenerError(Object.assign(new Error('denied'), { code: 'EACCES' }), { hotRestart: true, listening: false }), true);
+  assert.equal(shouldExitOnGatewayListenerError(null, { hotRestart: true, listening: false }), true);
+  assert.equal(shouldExitOnGatewayListenerError(undefined, { hotRestart: true, listening: false }), true);
+  await testPersistentListener(true);
+  await testPersistentListener(false);
+
   let attempts = 0;
   const delays: number[] = [];
   await listenWithHandoffRetry(async () => {
