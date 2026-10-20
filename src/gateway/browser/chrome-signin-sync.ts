@@ -70,7 +70,7 @@ export function setChromeSigninGrant(enabled: boolean, file: string = chromeSign
     : { enabled: false };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(grant, null, 2), { encoding: 'utf8', mode: 0o600 });
-  if (!enabled) syncCache.clear();
+  if (!enabled) clearChromeSigninSyncCache();
   return grant;
 }
 
@@ -138,6 +138,8 @@ export function syncDomainsFor(url: string): string[] {
 }
 
 const syncCache = new Map<string, number>();
+const UNPAIRED_BACKOFF_MS = 2 * 60 * 1000;
+let unpairedRetryAt = 0;
 
 export function shouldSync(profileId: string, domain: string, now: number): boolean {
   const at = syncCache.get(`${profileId}|${domain}`);
@@ -150,6 +152,7 @@ export function markSynced(profileId: string, domain: string, now: number): void
 
 export function clearChromeSigninSyncCache(): void {
   syncCache.clear();
+  unpairedRetryAt = 0;
 }
 
 export async function maybeAutoSyncChromeSignins(
@@ -164,9 +167,15 @@ export async function maybeAutoSyncChromeSignins(
     domain = domains[0];
     if (!shouldSync(input.profileId, domain, deps.now())) return { synced: false, imported: 0, domain, reason: 'cached' };
     if (!deps.isPaired()) {
+      // Back off after a failed wait so an unpaired Chrome doesn't add 3s to every open.
+      if (deps.now() < unpairedRetryAt) return { synced: false, imported: 0, domain, reason: 'chrome-not-paired' };
       const paired = await deps.waitForPeer(3000);
-      if (!paired) return { synced: false, imported: 0, domain, reason: 'chrome-not-paired' };
+      if (!paired) {
+        unpairedRetryAt = deps.now() + UNPAIRED_BACKOFF_MS;
+        return { synced: false, imported: 0, domain, reason: 'chrome-not-paired' };
+      }
     }
+    unpairedRetryAt = 0;
     const cookies = await deps.requestCookies(domains);
     const imported = await deps.importCookies(input.sessionId, cookies);
     markSynced(input.profileId, domain, deps.now());
@@ -215,10 +224,14 @@ export async function listChromeAccounts(deps: ChromeSigninSyncDeps): Promise<Ch
       const paired = await deps.waitForPeer(3000);
       if (!paired) return { paired: false, accounts: [], sites: [], reason: 'chrome-not-paired' };
     }
-    const [google, sites] = await Promise.all([
-      deps.requestRelay('google.accounts', {}, 15_000).catch(() => null),
-      deps.requestRelay('cookies.sites', {}, 20_000).catch(() => null),
-    ]);
+    const errors: string[] = [];
+    const call = (method: string, timeoutMs: number) => deps.requestRelay(method, {}, timeoutMs)
+      .catch((err: any) => { errors.push(String(err?.message || err)); return null; });
+    const [google, sites] = await Promise.all([call('google.accounts', 15_000), call('cookies.sites', 20_000)]);
+    // An unpacked extension keeps running old code until reloaded; say so instead of "none detected".
+    if (errors.some(e => /Unsupported Personal Chrome relay method/i.test(e))) {
+      return { paired: true, accounts: [], sites: [], reason: RELOAD_EXTENSION_MESSAGE };
+    }
     const accounts = parseGoogleListAccounts(String(google?.raw || ''));
     const siteRows = Array.isArray(sites) ? sites : [];
     return { paired: true, accounts, sites: summarizeChromeSites(siteRows) };

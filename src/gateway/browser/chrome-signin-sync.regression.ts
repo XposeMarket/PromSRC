@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  clearChromeSigninSyncCache,
   listChromeAccounts,
   maybeAutoSyncChromeSignins,
   parseGoogleListAccounts,
@@ -117,6 +118,24 @@ try {
   assert.deepEqual(inventory.accounts.map(a => a.email), ['alice@example.com', 'bob@example.com']);
   assert.deepEqual(inventory.sites, [{ site: 'github.com', cookies: 7 }]);
   assert.equal(JSON.stringify(inventory).includes('sid'), false);
+
+  // Unpaired Chrome: the second open inside the backoff must not wait again.
+  let waits = 0;
+  const backoff = makeDeps({ isPaired: () => false, waitForPeer: async () => { waits++; return false; } });
+  await maybeAutoSyncChromeSignins(backoff.deps, { ...onInput, profileId: 'p-backoff-1' });
+  r = await maybeAutoSyncChromeSignins(backoff.deps, { ...onInput, profileId: 'p-backoff-2' });
+  assert.equal(r.reason, 'chrome-not-paired');
+  assert.equal(waits, 1, 'unpaired backoff must skip the 3s wait on the next open');
+  clearChromeSigninSyncCache();
+  const paired = makeDeps();
+  r = await maybeAutoSyncChromeSignins(paired.deps, { ...onInput, profileId: 'p-backoff-3' });
+  assert.equal(r.synced, true, 'clearing the cache resets the unpaired backoff');
+
+  // Old extension worker: the agent gets the reload instruction, not "none detected".
+  const stale = makeDeps({ requestRelay: async (method: string) => { throw new Error(`Unsupported Personal Chrome relay method: ${method}`); } });
+  const staleInv = await listChromeAccounts(stale.deps);
+  assert.equal(staleInv.paired, true);
+  assert.match(String(staleInv.reason), /chrome:\/\/extensions/);
 
   const notPaired = makeDeps({ isPaired: () => false, waitForPeer: async () => false });
   const missing = await listChromeAccounts(notPaired.deps);

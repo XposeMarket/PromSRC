@@ -27,6 +27,8 @@ export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext
         const lines: string[] = [];
         if (!inv.paired) {
           lines.push(`Chrome is not paired${inv.reason ? ` (${inv.reason})` : ''}. Open the Personal Chrome extension and pair it, then try again.`);
+        } else if (inv.reason) {
+          lines.push(inv.reason);
         } else {
           lines.push(inv.accounts.length
             ? `Google accounts in Chrome: ${inv.accounts.map(a => (a.name ? `${a.name} <${a.email}>` : a.email) + (a.signedIn ? '' : ' (signed out)')).join('; ')}`

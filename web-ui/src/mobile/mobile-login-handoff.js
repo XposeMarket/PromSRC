@@ -302,7 +302,7 @@ async function useMyChrome(state) {
 }
 
 // After a manual import, offer the standing grant when it is still off.
-// The toggle itself lives in desktop Settings; this only turns it on.
+// The on/off toggle lives in Settings (desktop browser settings, mobile Security).
 async function offerAlwaysChromeSignins(state) {
   let grant;
   try { grant = await mobileGatewayFetch('/api/browser/chrome-signin-sync', { timeoutMs: 6000 }); } catch { return; }
@@ -315,7 +315,7 @@ async function offerAlwaysChromeSignins(state) {
     try {
       await post('/api/browser/chrome-signin-sync', { enabled: true }, 8000);
       always.remove();
-      toast(state, 'Chrome sign-ins will sync automatically. Turn off in Settings on desktop.', 6500);
+      toast(state, 'Chrome sign-ins will sync automatically. Turn it off anytime in Settings > Security.', 6500);
     } catch (err) {
       always.disabled = false;
       toast(state, String(err?.message || 'Could not turn on Chrome sign-in sync'), 5200);

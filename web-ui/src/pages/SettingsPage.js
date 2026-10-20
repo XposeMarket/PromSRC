@@ -3320,6 +3320,7 @@ async function openSettings(tab) {
       window._settingsSearchLoadedToUI = false;
     }),
     loadChromeProfileSettings().catch(() => {}),
+    loadChromeSigninSync().catch(() => {}),
     loadSessionCompactionSettings().catch(() => {}),
     loadAutoSettleSettings().catch(() => {}),
   ];
