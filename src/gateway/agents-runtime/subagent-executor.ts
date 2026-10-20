@@ -3565,6 +3565,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         return await handleMiscTool({ ...workspaceHelpers, name, args, workspacePath, deps, sessionId, __dirname });
 
       // Browser + desktop automation handlers live in handlers/browser-desktop.ts.
+      case 'browser_chrome_accounts':
       case 'browser_doctor':
       case 'browser_set_profile_target':
       case 'browser_open':

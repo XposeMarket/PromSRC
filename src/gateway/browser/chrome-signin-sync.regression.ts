@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   clearChromeSigninSyncCache,
+  googleAccountsFromEmails,
   listChromeAccounts,
   maybeAutoSyncChromeSignins,
   parseGoogleListAccounts,
@@ -136,6 +137,25 @@ try {
   const staleInv = await listChromeAccounts(stale.deps);
   assert.equal(staleInv.paired, true);
   assert.match(String(staleInv.reason), /chrome:\/\/extensions/);
+
+  // 1.4.1+ extension returns { emails } from Google's account switcher (ListAccounts now 400/403s).
+  assert.deepEqual(googleAccountsFromEmails(['A@x.com', 'a@x.com', 'not-an-email', 'b@y.org']).map(a => a.email), ['a@x.com', 'b@y.org']);
+  assert.deepEqual(googleAccountsFromEmails(undefined), []);
+  const modern = makeDeps({});
+  modern.deps.requestRelay = async (method: string) => {
+    if (method === 'google.accounts') return { emails: ['one@gmail.com', 'two@gmail.com'], status: 200 };
+    if (method === 'cookies.sites') return [{ domain: 'stripe.com', count: 3 }];
+    return null;
+  };
+  const modernInv = await listChromeAccounts(modern.deps);
+  assert.deepEqual(modernInv.accounts.map(a => a.email), ['one@gmail.com', 'two@gmail.com']);
+  assert.equal(modernInv.reason, undefined);
+  // A 1.4.0 extension returns a rejected ListAccounts body: ask for a reload instead of "no accounts".
+  const oldBody = makeDeps({});
+  oldBody.deps.requestRelay = async (method: string) => method === 'google.accounts' ? { raw: '<html>Error 400</html>' } : [];
+  const oldInv = await listChromeAccounts(oldBody.deps);
+  assert.equal(oldInv.accounts.length, 0);
+  assert.match(String(oldInv.reason), /chrome:\/\/extensions/);
 
   const notPaired = makeDeps({ isPaired: () => false, waitForPeer: async () => false });
   const missing = await listChromeAccounts(notPaired.deps);
