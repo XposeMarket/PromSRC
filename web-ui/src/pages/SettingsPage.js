@@ -1,4 +1,5 @@
 import { returnFromMobileSettings } from '../settings-return.js';
+import { setCachedBusyComposerMode } from '../features/chat/runtime/busy-composer-mode.js';
 import { renderContextSelection, wireContextSelection } from '../context-selection.js';
 
 /**
@@ -2111,6 +2112,9 @@ async function loadSessionCompactionSettings() {
     if (toolsEl) toolsEl.value = String(Number(s.rollingCompactionToolTurns) || 5);
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
+    const busyModeEl = document.getElementById('settings-busy-composer-mode');
+    if (busyModeEl) busyModeEl.value = s.busyComposerMode === 'steer' ? 'steer' : 'queue';
+    setCachedBusyComposerMode(s.busyComposerMode);
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
     const contextWrap = document.getElementById('settings-context-budget-summary');
     if (contextWrap) {
@@ -5556,6 +5560,7 @@ function buildSessionSettingsPayload() {
     rollingCompactionToolTurns: Number(getSettingsValue('settings-rolling-compaction-tools', '5') || 5),
     rollingCompactionSummaryMaxWords: Number(getSettingsValue('settings-rolling-compaction-words', '900') || 900),
     rollingCompactionModel: getSettingsValue('settings-rolling-compaction-model').trim(),
+    busyComposerMode: getSettingsValue('settings-busy-composer-mode', 'queue') === 'steer' ? 'steer' : 'queue',
     mainChatGoals: {
       compactionModel: goalRoute('compactor'),
       compactionReasoning: getSettingsValue('goal-compactor-reasoning').trim(),

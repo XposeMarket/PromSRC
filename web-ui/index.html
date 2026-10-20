@@ -3865,6 +3865,17 @@
               </div>
               <div id="settings-auto-settle-status" class="settings-row-status"></div>
             </div>
+            <div class="settings-row settings-busy-composer-row">
+              <div class="settings-row-copy">
+                <div class="settings-row-label">Messages sent while Prometheus is busy</div>
+                <div class="settings-row-help">Queue waits and runs next. Steer sends it straight into the active run.</div>
+              </div>
+              <select id="settings-busy-composer-mode" class="settings-row-select" aria-label="Busy composer mode">
+                <option value="queue">Queue (default)</option>
+                <option value="steer">Steer into active run</option>
+              </select>
+            </div>
+
           </div>
         </section>
       </div>

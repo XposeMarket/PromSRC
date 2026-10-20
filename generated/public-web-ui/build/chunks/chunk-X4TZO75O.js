@@ -1,0 +1,1 @@
+var s="queue",r="steer";function n(e){return e===r?r:s}function a({mode:e,isQueuedReplay:t=!1,sessionBusy:u=!1}={}){return n(e)===r&&u===!0&&t!==!0}var o=s;function p(){return o}function c(e){return o=n(e),o}async function d(e){try{let t=await e("/api/settings/session");return c(t?.session?.busyComposerMode)}catch{return o}}export{a,p as b,c,d};
