@@ -92,6 +92,20 @@ export function buildNeedsYouItems(sources: {
       items.push({ id: `team:${team.id}:thread:${(thread as any).id}`, kind: 'team_escalation', source: text(team.name, 'Team'), sessionId: text((thread as any).sessionId || team.originatingSessionId), createdAt: iso(messages[messages.length - 1]?.createdAt || (thread as any).lastMessageAt), payload: { ...(thread as any), teamId: team.id, teamName: team.name, pendingUserMessages: messages } });
     }
   }
+  // Main-agent escalations the user must see: escalated_to_user (3 unanswered deliveries) or level user.
+  for (const team of sources.teams || []) {
+    for (const msg of (team?.mainAgentThread || []) as any[]) {
+      if (!msg || msg.from !== 'coordinator') continue;
+      const st = msg.status || (msg.read ? 'answered' : 'open');
+      const needsUser = st === 'escalated_to_user' || (st === 'open' && msg.level === 'user');
+      if (!needsUser) continue;
+      items.push({
+        id: `team:${team.id}:escalation:${msg.id}`, kind: 'team_escalation', source: text(team.name, 'Team'),
+        sessionId: text(msg.deliverySessionId || team.originatingSessionId), createdAt: iso(msg.timestamp),
+        payload: { id: msg.id, teamId: team.id, teamName: team.name, level: msg.level || 'main', type: msg.type, status: st, content: msg.content, deliveryCount: msg.deliveryCount || 0, createdAt: msg.timestamp },
+      });
+    }
+  }
   for (const task of sources.tasks || []) {
     if (!task || !['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(text(task.status).toLowerCase())) continue;
     if (!['awaiting_user_input', 'awaiting_approval', 'awaiting_command_approval', 'awaiting_final_action_approval', 'awaiting_prometheus_question_response'].includes(text(task.pauseReason).toLowerCase()) && !['needs_assistance', 'awaiting_user_input'].includes(text(task.status).toLowerCase())) continue;

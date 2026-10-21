@@ -5,6 +5,8 @@
  * board loads /chat, /runs and /room-state on its own. Strip them and keep
  * cheap counts + last activity. `?full=1` on the route returns raw records.
  */
+import { summarizeEscalations } from './managed-teams';
+
 export function summarizeTeamForList(team: any): any {
   if (!team || typeof team !== 'object') return team;
   const { teamChat, runHistory, roomState, ...rest } = team;
@@ -22,5 +24,6 @@ export function summarizeTeamForList(team: any): any {
     teamChatCount: chat.length,
     runHistoryCount: runs.length,
     lastActivityAt: Math.max(ts(rest.lastActivityAt), lastChat, lastRun) || undefined,
+    escalations: summarizeEscalations(team),
   };
 }

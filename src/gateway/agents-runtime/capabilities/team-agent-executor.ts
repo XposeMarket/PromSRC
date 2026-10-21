@@ -20,6 +20,9 @@ import {
 import {
   addTeamContextReference,
   appendMainAgentThread,
+  resolveEscalation,
+  escalationViewsFromTeam,
+  summarizeEscalations,
   appendTeamChat,
   appendTeamRoomMessage,
   createManagedTeam,
@@ -42,6 +45,7 @@ import {
   updateTeamMemberState,
   upsertTeamPlanItem,
 } from '../../teams/managed-teams';
+import { deliverTeamEscalation } from '../../teams/team-escalation-delivery';
 import {
   handleManagerConversation,
   triggerManagerReview,
@@ -112,6 +116,7 @@ const TEAM_AGENT_TOOL_NAMES = new Set([
   'update_team_goal',
   'post_to_team_chat',
   'message_main_agent',
+  'team_escalation',
   'reply_to_team',
   'manage_team_goal',
   'manage_team_context_ref',
@@ -1156,7 +1161,16 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
         const type = (['planning', 'error', 'status'].includes(messageType) ? messageType : 'planning') as 'planning' | 'error' | 'status';
-        const threadMsg = appendMainAgentThread(teamId, { from: 'coordinator', content: message, read: false, type });
+        // FYI status (no wait_for_reply) is stored answered and never delivered; everything else is an open escalation.
+        const isFyi = type === 'status' && !waitForReply;
+        const threadMsg = appendMainAgentThread(teamId, {
+          from: 'coordinator', content: message, read: isFyi, type,
+          waitForReply, level: 'main', status: isFyi ? 'answered' : 'open',
+        });
+        if (threadMsg && !isFyi) {
+          deliverTeamEscalation(teamId, threadMsg.id).catch((err: any) =>
+            console.warn(`[message_main_agent] escalation delivery failed for ${teamId}: ${err?.message || err}`));
+        }
         const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Message to main agent (${type}): ${message}` });
         try {
           const mainWorkspacePath = getConfig().getWorkspacePath() || workspacePath;
@@ -1170,6 +1184,28 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         } catch {}
         deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
         return { name, args, result: JSON.stringify({ success: true, team_id: teamId, waiting_for_reply: waitForReply, thread_message_id: threadMsg?.id || null }, null, 2), error: false };
+      }
+
+      case 'team_escalation': {
+        const sub = String(args?.escalation_action || 'list').trim().toLowerCase();
+        const teamId = String(args?.team_id || '').trim();
+        const messageId = String(args?.message_id || '').trim();
+        if (sub === 'list') {
+          const teams = teamId ? [getManagedTeam(teamId)].filter(Boolean) : listManagedTeams();
+          const escalations = (teams as any[]).flatMap((t: any) => escalationViewsFromTeam(t));
+          const summary = teamId ? summarizeEscalations(getManagedTeam(teamId)) : null;
+          return { name, args, result: JSON.stringify({ success: true, count: escalations.length, escalations, summary }, null, 2), error: false };
+        }
+        const outcome = sub === 'dismiss' ? 'dismissed' : sub === 'escalate_to_user' ? 'escalated_to_user' : sub === 'answered' ? 'answered' : '';
+        if (!outcome) return { name, args, result: `ERROR: unknown escalation_action "${sub}". Use list, dismiss, escalate_to_user, or answered.`, error: true };
+        if (!teamId || !messageId) return { name, args, result: 'ERROR: escalation_action requires team_id and message_id (from list).', error: true };
+        const changed = resolveEscalation(teamId, messageId, outcome as any, 'escalation_tool');
+        const escalationNote = String(args?.note || '').trim();
+        if (changed && escalationNote) {
+          appendTeamChat(teamId, { from: 'user', fromName: 'Main Agent', content: `Escalation ${outcome} (${messageId}): ${escalationNote}` });
+        }
+        if (!changed) return { name, args, result: `ERROR: no open escalation ${messageId} on team ${teamId}.`, error: true };
+        return { name, args, result: JSON.stringify({ success: true, team_id: teamId, message_id: messageId, status: outcome }, null, 2), error: false };
       }
 
       case 'reply_to_team': {
@@ -1193,12 +1229,14 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           route.targetAgentId = targetAgentId;
         }
 
-        appendMainAgentThread(teamId, {
+        const replyThreadMsg = appendMainAgentThread(teamId, {
           from: 'main_agent',
           content: visibleMessage,
           read: true,
           type: 'reply',
         });
+        // A main reply answers every open escalation for this team (escalated_to_user included).
+        resolveEscalation(teamId, 'all_open', 'answered', replyThreadMsg?.id || 'reply');
         const chatMsg = appendTeamChat(teamId, {
           from: 'user',
           fromName: 'Main Agent',

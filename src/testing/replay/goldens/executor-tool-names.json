@@ -456,6 +456,7 @@
   "talk_to_manager",
   "talk_to_subagent",
   "task_control",
+  "team_escalation",
   "team_manage",
   "test_workflow",
   "timer",
