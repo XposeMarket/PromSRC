@@ -28,7 +28,6 @@ import {
 import { formatModelDisplayName, formatModelWithReasoning, formatReasoningDisplayName } from '../model-display.js';
 import { renderReasoningSelector, reasoningSliderFillWidth, reasoningProgressFromPointer } from '../components/reasoning-selector.js';
 import { reasoningSheetViewportPlacement } from './mobile-reasoning-sheet-geometry.js';
-import { attachNativePicker } from './mobile-native-picker.js';
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const BUILTIN_LABELS = {
@@ -1214,6 +1213,7 @@ async function _openSwitchSheet() {
   await _refreshPickerData();
   if (!sheet?.isConnected) return;
   const body = document.getElementById('pm-msheet-body');
+  if (body?.querySelector('[data-pm-view="providers"]')) { _renderProviderList(); return; }
   const stillOnAdvanced = !!body?.querySelector('.pm-advanced-panel, .pm-msheet-loading');
   if (stillOnAdvanced && (!warm || _pickerStateKey() !== shownKey)) _renderAdvancedSheet();
 }
@@ -1239,88 +1239,140 @@ function _advancedRow(label, value, action, { disabled = false } = {}) {
 function _renderAdvancedSheet() {
   _setSheetTitle('Advanced <span class="pm-msheet-chev">&rsaquo;</span>');
   const { provider, model, cfg, options, effortValue } = _currentAdvancedState();
-  const models = _modelsForProvider(provider);
-  const speed = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
-  const body = _setSheetBody(`
-    <div class="pm-msheet-rows pm-native-picker-rows pm-advanced-panel">
-      <button type="button" class="pm-msheet-row pm-native-picker-trigger" data-pm-model-picker ${models.length ? '' : 'disabled'}>
-        <span class="pm-msheet-row-label">Model</span>
-        <span class="pm-msheet-row-value">${_esc(prettifyModelName(model, provider))}</span>
-        <span class="pm-msheet-chev" aria-hidden="true">&#8250;</span>
-      </button>
-      <button type="button" class="pm-msheet-row pm-native-picker-trigger" data-pm-effort-picker ${options ? '' : 'disabled'}>
-        <span class="pm-msheet-row-label">Intelligence</span>
-        <span class="pm-msheet-row-value">${_esc(options ? _effortLabel(effortValue, provider, model) : 'Default')}</span>
-        <span class="pm-msheet-chev" aria-hidden="true">&#8250;</span>
-      </button>
-      ${supportsFastSpeed(provider, model) ? `<button type="button" class="pm-msheet-row pm-native-picker-trigger" data-pm-speed-picker><span class="pm-msheet-row-label">Speed</span><span class="pm-msheet-row-value">${speed === 'fast' ? 'Fast' : 'Standard'}</span><span class="pm-msheet-chev" aria-hidden="true">&#8250;</span></button>` : ''}
-      <button type="button" class="pm-msheet-row pm-native-picker-trigger" data-pm-provider-picker><span class="pm-msheet-row-label">Provider</span><span class="pm-msheet-row-value">${_esc(_providerLabel(provider))}</span><span class="pm-msheet-chev" aria-hidden="true">&#8250;</span></button>
-    </div>`);
+  const rows = [
+    _advancedRow('Provider', _providerLabel(provider), 'provider'),
+    _advancedRow('Model', prettifyModelName(model, provider), 'model'),
+    _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider, model) : 'Default', 'intelligence', { disabled: !options }),
+  ];
+  if (supportsFastSpeed(provider, model)) rows.push(_advancedRow('Speed', cfg.speed === 'fast' || cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
+  const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
   if (!body) return;
-  const attach = (trigger, config) => {
-    if (!trigger) return null;
-    const picker = attachNativePicker(trigger, config);
-    picker.select?.parentElement?.style.setProperty('width', '100%');
-    picker.select?.addEventListener('change', () => pmHaptic(8));
-    return picker;
-  };
-  attach(body.querySelector('[data-pm-provider-picker]'), {
-    label: 'Provider',
-    options: () => {
-      const active = _activeModel(_llmCache).provider;
-      const ids = (_credentialedIds || []).slice();
-      if (active && !ids.includes(active)) ids.unshift(active);
-      return ids.map(value => ({ value, label: _providerLabel(value), selected: value === active }));
-    },
-    onChange: async value => {
-      const nextProvider = String(value || '');
+  body.querySelector('[data-action="provider"]')?.addEventListener('click', _renderProviderList);
+  body.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderModelList(provider));
+  body.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderEffortList(provider));
+  body.querySelector('[data-action="speed"]')?.addEventListener('click', () => _renderSpeedList(provider));
+}
+
+function _renderSpeedList(provider) {
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  if (!supportsFastSpeed(provider, cfg.model || '')) return _renderAdvancedSheet();
+  const current = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Speed`);
+  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  body?.querySelectorAll('[data-speed]').forEach(btn => btn.addEventListener('click', () => {
+    const speed = btn.getAttribute('data-speed') === 'fast' ? 'fast' : 'standard';
+    _queueReasoningSave(provider, { speed }, true);
+    const merged = { ...cfg, speed }; delete merged.fast_mode;
+    if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+    _setBadgeFast(speed === 'fast');
+    _renderAdvancedSheet();
+  }));
+}
+
+function _renderProviderList() {
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Provider`);
+  const { provider: activeProvider } = _activeModel(_llmCache);
+  const ids = (_credentialedIds || []).slice();
+  if (activeProvider && !ids.includes(activeProvider)) ids.unshift(activeProvider);
+  // Keep a stable, builtin-first ordering.
+  const order = Object.keys(BUILTIN_LABELS);
+  ids.sort((a, b) => {
+    const ia = order.indexOf(a); const ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+
+  if (!ids.length) {
+    _setSheetBody('<div class="pm-msheet-empty">No providers with saved credentials. Add an API key or connect a provider in Settings.</div>');
+    document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+    return;
+  }
+
+  const rows = ids.map((id) => {
+    const left = _primaryUsageLeft(id);
+    const usage = left == null
+      ? ''
+      : `<span class="pm-msheet-row-usage${left <= 15 ? ' is-low' : ''}">Primary Account: ${left}% Left</span>`;
+    return `
+    <button type="button" class="pm-msheet-row" data-provider="${_esc(id)}">
+      <span class="pm-msheet-row-label">${_esc(_providerLabel(id))}</span>
+      ${usage}
+      ${id === activeProvider ? '<span class="pm-msheet-dot" title="Current"></span>' : ''}
+      <span class="pm-msheet-chev">&rsaquo;</span>
+    </button>`;
+  }).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows" data-pm-view="providers">${rows}</div>`);
+  if (!_usageIsFresh()) {
+    // Usage arrives after first paint; re-render only if the list is still open.
+    _loadUsage(false).then(() => {
+      if (_usageIsFresh() && document.querySelector('#pm-msheet-body [data-pm-view="providers"]')) _renderProviderList();
+    }).catch(() => {});
+  }
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  if (!body) return;
+  body.querySelectorAll('[data-provider]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const nextProvider = btn.getAttribute('data-provider');
       const existing = (_llmCache?.providers || {})[nextProvider] || {};
       const nextModel = existing.model || _modelsForProvider(nextProvider)[0] || '';
       if (nextModel) await _switchModel(nextProvider, nextModel, { keepOpen: true, returnToAdvanced: true });
-    },
+      else _renderModelList(nextProvider);
+    });
   });
-  attach(body.querySelector('[data-pm-model-picker]'), {
-    label: 'Model',
-    options: () => {
-      const currentState = _currentAdvancedState();
-      return _modelsForProvider(currentState.provider).map(value => ({
-        value,
-        label: prettifyModelName(value, currentState.provider),
-        selected: value === currentState.model,
-      }));
-    },
-    onChange: value => _switchModel(provider, String(value || ''), { keepOpen: true, returnToAdvanced: true }),
+}
+
+function _renderModelList(provider) {
+  const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Model`);
+  const models = _modelsForProvider(provider);
+
+  let rows = models.map((m) => {
+    const isActive = provider === activeProvider && m === activeModel;
+    return `<button type="button" class="pm-msheet-row" data-model="${_esc(m)}">
+      <span class="pm-msheet-row-label">${_esc(prettifyModelName(m, provider))}</span>
+      ${isActive ? '<span class="pm-msheet-check">&#10003;</span>' : ''}
+    </button>`;
+  }).join('');
+  if (!models.length) {
+    rows = '<div class="pm-msheet-empty">No known models. Fetch them from Settings > Models.</div>';
+  }
+  const body = _setSheetBody(`<div class="pm-msheet-rows pm-msheet-model-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  if (!body) return;
+  body.querySelectorAll('[data-model]').forEach((btn) => {
+    btn.addEventListener('click', () => _switchModel(provider, btn.getAttribute('data-model'), { keepOpen: true, returnToAdvanced: true }));
   });
-  attach(body.querySelector('[data-pm-effort-picker]'), {
-    label: 'Intelligence',
-    options: () => {
-      const state = _currentAdvancedState();
-      return (state.options || []).map(value => ({
-        value,
-        label: _effortLabel(value, state.provider, state.model),
-        selected: value === state.effortValue,
-      }));
-    },
-    onChange: value => {
-      const effort = String(value || '');
-      _queueReasoningSave(provider, { reasoning_effort: effort }, true);
-      const merged = { ...cfg, reasoning_effort: effort };
-      if (!effort) delete merged.reasoning_effort;
+}
+
+function _renderEffortList(provider) {
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const options = _effortOptions(provider, cfg);
+  if (!options) {
+    _renderAdvancedSheet();
+    return;
+  }
+  const current = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Intelligence`);
+  const rows = options.map((value) => {
+    const isActive = value === current || (!value && !current);
+    return `<button type="button" class="pm-msheet-row" data-effort="${_esc(value)}">
+      <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider, cfg.model))}</span>
+      ${isActive ? '<span class="pm-msheet-check">&#10003;</span>' : ''}
+    </button>`;
+  }).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  if (!body) return;
+  body.querySelectorAll('[data-effort]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const value = btn.getAttribute('data-effort') || '';
+      _queueReasoningSave(provider, { reasoning_effort: value }, true);
+      const merged = { ...cfg, reasoning_effort: value };
+      if (!value) delete merged.reasoning_effort;
       if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
       _renderAdvancedSheet();
-    },
-  });
-  attach(body.querySelector('[data-pm-speed-picker]'), {
-    label: 'Speed',
-    options: () => ['standard', 'fast'].map(value => ({ value, label: value === 'fast' ? 'Fast' : 'Standard', selected: value === speed })),
-    onChange: value => {
-      const nextSpeed = value === 'fast' ? 'fast' : 'standard';
-      _queueReasoningSave(provider, { speed: nextSpeed }, true);
-      const merged = { ...cfg, speed: nextSpeed }; delete merged.fast_mode;
-      if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
-      _setBadgeFast(nextSpeed === 'fast');
-      _renderAdvancedSheet();
-    },
+    });
   });
 }
 
