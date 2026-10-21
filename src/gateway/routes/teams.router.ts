@@ -836,6 +836,15 @@ router.put('/api/teams/:id', (req, res) => {
 	    }
     if (req.body.manager) {
       team.manager = { ...team.manager, ...req.body.manager };
+      const m = req.body.manager;
+      if (m.model !== undefined || m.reasoningEffort !== undefined) {
+        // Keep the manager agent record (source of truth) in sync with the team-level edit.
+        const { setManagedTeamManagerRouting } = require('../teams/managed-teams');
+        setManagedTeamManagerRouting(team, {
+          ...(m.model !== undefined ? { model: String(m.model ?? '') } : {}),
+          ...(m.reasoningEffort !== undefined ? { reasoningEffort: String(m.reasoningEffort ?? '') } : {}),
+        });
+      }
     }
     saveManagedTeam(team);
     res.json({ success: true, team });

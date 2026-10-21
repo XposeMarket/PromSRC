@@ -353,6 +353,7 @@ export interface ManagedTeam {
   manager: {
     systemPrompt: string;     // What the manager is trying to achieve overall
     model?: string;           // e.g. "openai/gpt-4o" — uses global secondary if omitted
+    reasoningEffort?: string; // mirror of the manager agent's reasoning_effort ('' / undefined = provider default)
     reviewTrigger: 'after_each_run' | 'after_all_runs' | 'daily' | 'manual';
     autoApplyLowRisk: boolean; // auto-apply low-risk changes without user approval
     lastReviewAt?: number;
@@ -1808,14 +1809,48 @@ export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: str
     isTeamManager: true,
     workspace: identityPath,
     executionWorkspace: path.join(getConfig().getWorkspacePath(), 'teams', safeTeamPathId(team.id), 'workspace'),
-    model: team.manager?.model || (idx >= 0 ? agents[idx]?.model : undefined),
-  };
+    // Single source of truth: the manager agent record. team.manager.model/reasoningEffort only
+    // seed a brand-new agent and are mirrored back below. Explicit team-level changes go through
+    // setManagedTeamManagerRouting(), which writes both. (Previously team.manager.model won on
+    // every turn, silently reverting agent_ops model changes, and effort was never stored.)
+    model: (idx >= 0 ? agents[idx]?.model : undefined) || team.manager?.model,
+  } as any;
+  if (entry.reasoning_effort === undefined && team.manager?.reasoningEffort) entry.reasoning_effort = team.manager.reasoningEffort;
+  if (!entry.model) delete entry.model;
   const changed = idx < 0 || JSON.stringify(agents[idx]) !== JSON.stringify(entry);
   if (idx >= 0) agents[idx] = entry;
   else agents.push(entry);
   if (changed) cm.updateConfig({ agents } as any);
+  if (team.manager) {
+    team.manager.model = entry.model || undefined;
+    team.manager.reasoningEffort = entry.reasoning_effort || undefined;
+  }
   team.managerAgentId = agentId;
   return { agentId, identityPath };
+}
+
+/**
+ * Explicitly set the manager's model and/or reasoning effort from a team-level surface
+ * (team_manage update manager_model, PUT /api/teams/:id manager.model). Writes the manager
+ * agent record (source of truth) and the team.manager mirror together. Pass '' to clear.
+ */
+export function setManagedTeamManagerRouting(team: ManagedTeam, patch: { model?: string; reasoningEffort?: string }): void {
+  team.manager = team.manager || ({} as any);
+  if (patch.model !== undefined) team.manager.model = String(patch.model).trim() || undefined;
+  if (patch.reasoningEffort !== undefined) team.manager.reasoningEffort = String(patch.reasoningEffort).trim() || undefined;
+  const agentId = String(team.managerAgentId || `${team.id}_manager`).trim();
+  const cm = getConfig();
+  const cfg = cm.getConfig() as any;
+  const agents = Array.isArray(cfg.agents) ? [...cfg.agents] : [];
+  const idx = agents.findIndex((agent: any) => String(agent?.id || '') === agentId);
+  if (idx >= 0) {
+    const next = { ...agents[idx] };
+    if (patch.model !== undefined) { if (team.manager.model) next.model = team.manager.model; else delete next.model; }
+    if (patch.reasoningEffort !== undefined) { if (team.manager.reasoningEffort) next.reasoning_effort = team.manager.reasoningEffort; else delete next.reasoning_effort; }
+    agents[idx] = next;
+    cm.updateConfig({ agents } as any);
+  }
+  ensureManagedTeamManagerAgent(team);
 }
 
 /**
