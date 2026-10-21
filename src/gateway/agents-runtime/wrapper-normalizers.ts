@@ -875,6 +875,7 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
       reply: 'reply_to_team',
       post_chat: 'post_to_team_chat',
       message_main: 'message_main_agent',
+      escalation: 'team_escalation',
       // Generic team dispatch must stay on the team-aware execution path.
       // Routing this alias through dispatch_to_agent creates a standalone task
       // with no team/session binding, so talk_to_manager cannot identify the

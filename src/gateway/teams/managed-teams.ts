@@ -137,6 +137,15 @@ export interface MainAgentThreadMessage {
   timestamp: number;
   read: boolean;
   type: 'planning' | 'error' | 'status' | 'reply';
+  // Escalation fields (optional; legacy records omit them). See team-escalation-delivery.ts.
+  level?: EscalationLevel;
+  waitForReply?: boolean;
+  status?: EscalationStatus;
+  deliveredAt?: number;
+  deliveryCount?: number;
+  deliverySessionId?: string;
+  answeredAt?: number;
+  answeredBy?: string;
 }
 
 export type TeamRoomActorType = 'manager' | 'member' | 'user' | 'system' | 'main_agent';
@@ -3158,27 +3167,107 @@ export function getMainAgentThread(teamId: string, limit = 20): MainAgentThreadM
 /**
  * Check if there are any unread messages from the coordinator waiting for main agent.
  */
-export function hasUnreadCoordinatorMessages(teamId: string): boolean {
-  const team = getManagedTeam(teamId);
-  if (!team) return false;
-  return (team.mainAgentThread || []).some(m => m.from === 'coordinator' && !m.read);
+export function markCoordinatorMessagesRead(teamId: string): void {
+  resolveEscalation(teamId, 'all_open', 'answered', 'legacy');
+}
+
+// ─── Escalations (main-agent inbox over coordinator messages) ───────────────
+
+export type EscalationLevel = 'manager' | 'main' | 'user';
+export type EscalationStatus = 'open' | 'answered' | 'escalated_to_user' | 'dismissed';
+export type EscalationOutcome = 'answered' | 'escalated_to_user' | 'dismissed';
+
+export interface EscalationView {
+  id: string;
+  teamId: string;
+  teamName: string;
+  level: EscalationLevel;
+  type: MainAgentThreadMessage['type'];
+  status: EscalationStatus;
+  createdAt: number;
+  ageMs: number;
+  waitForReply: boolean;
+  deliveryCount: number;
+  preview: string;
+  content: string;
+}
+
+function escalationStatusOf(msg: MainAgentThreadMessage): EscalationStatus {
+  if (msg.status) return msg.status;
+  // Legacy records: unread coordinator message = open, read = answered.
+  return msg.read ? 'answered' : 'open';
+}
+
+function isOpenEscalationStatus(status: EscalationStatus): boolean {
+  return status === 'open' || status === 'escalated_to_user';
+}
+
+/** Pure: open escalations from a team object (no store read). */
+export function escalationViewsFromTeam(team: any, now: number = Date.now()): EscalationView[] {
+  if (!team || !Array.isArray(team.mainAgentThread)) return [];
+  const teamName = String(team.name || team.id || '');
+  return (team.mainAgentThread as MainAgentThreadMessage[])
+    .filter(m => m.from === 'coordinator' && isOpenEscalationStatus(escalationStatusOf(m)))
+    .map(m => {
+      const content = String(m.content || '');
+      return {
+        id: m.id,
+        teamId: String(team.id),
+        teamName,
+        level: m.level || 'main',
+        type: m.type,
+        status: escalationStatusOf(m),
+        createdAt: m.timestamp,
+        ageMs: Math.max(0, now - m.timestamp),
+        waitForReply: m.waitForReply !== false,
+        deliveryCount: m.deliveryCount || 0,
+        preview: content.replace(/\s+/g, ' ').slice(0, 160),
+        content,
+      };
+    });
+}
+
+export function listOpenEscalations(teamId: string): EscalationView[] {
+  return escalationViewsFromTeam(getManagedTeam(teamId));
+}
+
+export function summarizeEscalations(team: any, now: number = Date.now()): { open: number; escalatedToUser: number; oldestAgeMs: number | null } {
+  const open = escalationViewsFromTeam(team, now);
+  return {
+    open: open.length,
+    escalatedToUser: open.filter(v => v.status === 'escalated_to_user').length,
+    oldestAgeMs: open.reduce<number | null>((max, v) => (max === null ? v.ageMs : Math.max(max, v.ageMs)), null),
+  };
 }
 
 /**
- * Mark all coordinator messages as read (called when main agent processes them).
+ * Resolve open escalations (one id, or 'all_open'). 'escalated_to_user' stays unread so it
+ * keeps showing in the inbox; answered/dismissed mark read. Returns the number changed.
  */
-export function markCoordinatorMessagesRead(teamId: string): void {
+export function resolveEscalation(
+  teamId: string,
+  messageId: string | 'all_open',
+  outcome: EscalationOutcome,
+  by: string,
+): number {
   invalidateCache();
   const team = getManagedTeam(teamId);
-  if (!team || !team.mainAgentThread?.length) return;
-  let changed = false;
+  if (!team?.mainAgentThread?.length) return 0;
+  const now = Date.now();
+  let changed = 0;
   for (const msg of team.mainAgentThread) {
-    if (msg.from === 'coordinator' && !msg.read) {
-      msg.read = true;
-      changed = true;
+    if (msg.from !== 'coordinator' || !isOpenEscalationStatus(escalationStatusOf(msg))) continue;
+    if (messageId !== 'all_open' && msg.id !== messageId) continue;
+    msg.status = outcome;
+    msg.read = outcome !== 'escalated_to_user';
+    if (outcome !== 'escalated_to_user') {
+      msg.answeredAt = now;
+      msg.answeredBy = by;
     }
+    changed++;
   }
   if (changed) saveManagedTeam(team);
+  return changed;
 }
 
 // ─── Per-Agent Pause Management ──────────────────────────────────────────────

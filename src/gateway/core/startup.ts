@@ -37,6 +37,8 @@ import {
   quarantineOrphanedTeamWorkspaces,
 } from '../teams/managed-teams';
 import { handleManagerConversation } from '../teams/team-manager-runner';
+import { buildOpenEscalationsSection } from '../teams/team-escalation-delivery';
+import { setEscalationReviewRunner } from '../teams/team-escalation-delivery';
 import { getTeamWorkspacePath, readTeamMemoryContext, initTeamWorkspaceArtifacts } from '../teams/team-workspace';
 import type { BrainRunner } from '../brain/brain-runner';
 import { setTeamRunAgentFn } from '../teams/team-manager-runner';
@@ -148,6 +150,8 @@ function buildOriginatingTranscript(workspacePath: string, sessionId?: string): 
 }
 
 function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns: number): string {
+  // Open escalations lead the packet (empty string when none, so the block is omitted).
+  const openEscalations = buildOpenEscalationsSection(getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId));
   const team = getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId);
   const teamName = team?.name || teamId;
   const workspacePath = getConfig().getWorkspacePath();
@@ -169,6 +173,7 @@ function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns
     .join('\n') || '(No run history.)';
 
   return [
+    ...(openEscalations ? [openEscalations] : []),
     `[TEAM COMPLETION PACKET]`,
     `teamId: ${teamId}`,
     `teamName: ${teamName}`,
@@ -637,6 +642,23 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   // Wire coordinator deps — main agent acts as team manager
   try {
     const { setCoordinatorDeps } = require('../teams/team-coordinator.js');
+    // Shared "create task + bg_task_created broadcast + run review" block. Used by the
+    // goal-complete review and by main-agent escalation review turns (team-escalation-delivery).
+    const queueTeamReviewTask = (job: { sessionId: string; teamId: string; teamName: string; title: string; prompt: string; source: string; plan: Array<{ index: number; description: string; status: 'pending' }> }): void => {
+      const task = createTask({ sessionId: job.sessionId, title: job.title, prompt: job.prompt, channel: 'web', plan: job.plan });
+      const makeTaskBroadcast = (data: any) => {
+        const payload = data && typeof data === 'object' ? { ...data } : { message: String(data ?? '') };
+        if (!payload.taskId) payload.taskId = task.id;
+        broadcastWS(payload);
+      };
+      makeTaskBroadcast({ type: 'bg_task_created', taskId: task.id, title: task.title, sessionId: job.sessionId, source: job.source, teamId: job.teamId, teamName: job.teamName });
+      const BackgroundTaskRunner = getBackgroundTaskRunner();
+      const runner = new BackgroundTaskRunner(task.id, handleChat, makeTaskBroadcast, telegramChannel);
+      runner.start().catch((err: any) => {
+        console.error(`[TeamReview] review task failed to start for ${job.teamId}:`, err?.message || err);
+      });
+    };
+    setEscalationReviewRunner((job) => queueTeamReviewTask(job));
     setCoordinatorDeps({
       handleChat,
       broadcastTeamEvent,
@@ -701,38 +723,18 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
           '- End with a short "Bottom line" paragraph.',
         ].join('\n');
 
-        const task = createTask({
+        queueTeamReviewTask({
           sessionId,
+          teamId,
+          teamName,
           title: `Team Goal Complete Analysis: ${teamName}`,
           prompt,
-          channel: 'web',
+          source: 'team_goal_complete',
           plan: [
             { index: 0, description: 'Load team state and completion context.', status: 'pending' },
             { index: 1, description: 'Summarize recent runs and tool usage patterns.', status: 'pending' },
             { index: 2, description: 'Write concise owner-facing recommendations.', status: 'pending' },
           ],
-        });
-
-        const makeTaskBroadcast = (data: any) => {
-          const payload = data && typeof data === 'object' ? { ...data } : { message: String(data ?? '') };
-          if (!payload.taskId) payload.taskId = task.id;
-          broadcastWS(payload);
-        };
-
-        makeTaskBroadcast({
-          type: 'bg_task_created',
-          taskId: task.id,
-          title: task.title,
-          sessionId,
-          source: 'team_goal_complete',
-          teamId,
-          teamName,
-        });
-
-        const BackgroundTaskRunner = getBackgroundTaskRunner();
-        const runner = new BackgroundTaskRunner(task.id, handleChat, makeTaskBroadcast, telegramChannel);
-        runner.start().catch((err: any) => {
-          console.error(`[TeamCoordinator] Goal-complete analysis task failed to start for ${teamId}:`, err?.message || err);
         });
       },
     });

@@ -24,6 +24,7 @@ import {
   isTeamGoalReadyToClose,
 } from './managed-teams';
 import { notifyMainAgent } from './notify-bridge';
+import { sweepTeamEscalations } from './team-escalation-delivery';
 import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
 import { getTeamWorkspacePath } from './team-workspace';
@@ -692,6 +693,8 @@ export async function runCoordinatorConversation(
   if (!team) return;
 
   const sessionId = getCoordSessionId(teamId);
+  // Lazy escalation redelivery: each coordinator turn start re-queues stale open escalations for this team.
+  sweepTeamEscalations(teamId).catch((err: any) => console.warn(`[TeamCoordinator] escalation sweep failed for ${teamId}: ${err?.message || err}`));
   const bfn = broadcastFn || _deps.broadcastTeamEvent;
   const workspacePath = getConfig().getWorkspacePath();
   let currentMessage = userMessage;

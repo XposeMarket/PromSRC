@@ -97,7 +97,7 @@ export function getAgentTeamScheduleTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['manage', 'delete', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result'] },
+            action: { type: 'string', enum: ['manage', 'delete', 'manage_goal', 'manage_context_ref', 'update_goal', 'reply', 'post_chat', 'message_main', 'dispatch', 'dispatch_team_agent', 'request_member_turn', 'get_agent_result', 'escalation'] },
             team_action: { type: 'string', description: 'Sub-action for action="manage", e.g. list/create/start/dispatch/pause/resume/delete.' },
             team_id: { type: 'string' },
             teamId: { type: 'string' },
@@ -132,6 +132,9 @@ export function getAgentTeamScheduleTools(): any[] {
             confirm: { type: 'boolean' },
             delete_agents: { type: 'boolean' },
             background: { type: 'boolean', description: 'dispatch_team_agent only. Default: true when called from main chat (returns task_id immediately; poll with get_agent_result), false inside the team manager. Pass false to block until the member finishes.' },
+            escalation_action: { type: 'string', enum: ['list', 'dismiss', 'escalate_to_user', 'answered'], description: 'For action="escalation". list (team_id optional: all teams when omitted), dismiss, escalate_to_user, or answered. Needs message_id for the last three.' },
+            message_id: { type: 'string', description: 'For action="escalation": the escalation id from list.' },
+            note: { type: 'string', description: 'For action="escalation": short reason, shown in the team chat.' },
             value: { type: 'string', description: 'manage_goal value, e.g. the new focus text for team_action="set_focus".' },
           },
         },

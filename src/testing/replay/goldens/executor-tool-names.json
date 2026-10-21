@@ -357,6 +357,7 @@
   "memory_update",
   "memory_write",
   "message_main_agent",
+  "team_escalation",
   "message_subagent",
   "mkdir",
   "move_directory",
