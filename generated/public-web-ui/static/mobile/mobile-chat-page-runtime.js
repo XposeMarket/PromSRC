@@ -516,7 +516,16 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
   function syncContextDockToComposer() {
     if (!contextDock || !form) return;
-    const rect = form.getBoundingClientRect?.();
+    // Lock the dock above whichever bottom control is actually showing: the
+    // voice/keyboard launcher while the composer is collapsed, the composer
+    // once it is open. The collapsed composer keeps a stale (often taller)
+    // rect, which pushed the dock away from the launcher buttons.
+    const launcher = page?.querySelector?.('#pm-chat-mode-launcher');
+    const launcherVisible = !!launcher
+      && launcher.getAttribute('aria-hidden') !== 'true'
+      && form.classList.contains('pm-composer-mode-hidden');
+    const anchorEl = launcherVisible ? launcher : form;
+    const rect = anchorEl.getBoundingClientRect?.();
     if (!rect || !rect.height) return;
     const keyboardOpen = _pmKbApp?.classList?.contains('pm-keyboard-open')
       || document.body?.classList?.contains('pm-keyboard-open');
@@ -1957,6 +1966,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       updateComposerExpandedState();
       updateChatComposerSpace();
     }
+    // The launcher/composer swap animates (scale + clip-path); re-measure
+    // the context dock after it settles so it stays locked above it.
+    reanchorContextDockAfterLayout();
   }
 
   if (modeLauncher) {
@@ -2232,8 +2244,38 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   });
   const { openCameraCapture, stopCameraCapture } = mobileCamera;
 
+  // Opening a chat must land on the latest message. One forced scroll is not
+  // enough: markdown, images, cards and the composer inset keep growing the
+  // transcript for a moment after the first paint, which left the view
+  // stranded mid-history. Keep re-pinning while the thread settles and stop
+  // as soon as the user touches/scrolls, or after a short window.
+  let initialBottomPinStop = null;
+  function pinChatToBottomWhileSettling(windowMs = 2500) {
+    initialBottomPinStop?.();
+    if (!body || !threadEl) return;
+    let done = false;
+    const userEvents = ['touchstart', 'wheel', 'pointerdown', 'keydown'];
+    const pin = () => { if (!done) _scrollChat(body); };
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(pin) : null;
+    let timer = 0;
+    const stop = () => {
+      if (done) return;
+      done = true;
+      observer?.disconnect();
+      window.clearTimeout(timer);
+      userEvents.forEach((type) => body.removeEventListener(type, stop, true));
+      if (initialBottomPinStop === stop) initialBottomPinStop = null;
+    };
+    observer?.observe(threadEl);
+    userEvents.forEach((type) => body.addEventListener(type, stop, { capture: true, passive: true }));
+    timer = window.setTimeout(stop, windowMs);
+    initialBottomPinStop = stop;
+    pin();
+    requestAnimationFrame(() => requestAnimationFrame(pin));
+  }
+
   _renderThread(threadEl);
-  _scrollChat(body);
+  pinChatToBottomWhileSettling();
   renderPendingAttachments();
 
   let questionRecoveryInFlight = null;
@@ -2415,7 +2457,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       _activeMobileThread();
       _commitMobileTranscriptCache(requestedSession, 'mobile-cache-hydration');
       _renderThread(threadEl);
-      _scrollChat(body);
+      pinChatToBottomWhileSettling();
     } else {
       threadEl.innerHTML = '<div class="pm-chat-loading">Loading chat...</div>';
       setChatConnectionStatus(true, 'Loading chat');
@@ -2467,7 +2509,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         mobileChatRuntimeAdapter.syncInitial(requestedSession, session, __pmChat.threads[requestedSession]);
         _activeMobileThread();
         _renderThread(threadEl);
-        _scrollChat(body);
+        pinChatToBottomWhileSettling();
         // Persist this fresh render to localStorage for the next cold open
         _saveMobileThreadCache(requestedSession, __pmChat.threads[requestedSession] || []);
         // Session was just freshly loaded — skip the redundant re-fetch in
@@ -8081,6 +8123,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (input) saveComposerDraft(draftKeyFor(), input.value);
     attachmentPickerCleanup?.();
     attachmentPickerCleanup = null;
+    initialBottomPinStop?.();
     previousCleanup?.();
     releaseActiveChatRuntime();
     mobilePageDisposed = true;

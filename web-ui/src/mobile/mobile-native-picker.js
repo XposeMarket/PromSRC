@@ -4,14 +4,17 @@ export function attachNativePicker(trigger, { label, options, onChange, multiple
   if (!trigger?.parentElement) return { refresh() {}, destroy() {} };
   const host = document.createElement('span');
   host.className = 'pm-native-picker-host';
-  host.style.cssText = 'position:relative;display:inline-flex;min-width:0;align-items:stretch';
+  // Hosts often live inside pointer-events:none docks (the new-chat context
+  // dock); pointer-events is inherited, so opt the host and select back in or
+  // the tap falls through to the visual button and nothing opens.
+  host.style.cssText = 'position:relative;display:inline-flex;min-width:0;align-items:stretch;pointer-events:auto';
   trigger.before(host);
   host.append(trigger);
   const select = document.createElement('select');
   select.className = 'pm-native-picker';
   select.setAttribute('aria-label', label || trigger.getAttribute('aria-label') || trigger.textContent.trim());
   select.multiple = multiple;
-  select.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;cursor:pointer;z-index:2';
+  select.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:16px;cursor:pointer;z-index:2;pointer-events:auto';
   const oldTabIndex = trigger.getAttribute('tabindex');
   const oldAriaHidden = trigger.getAttribute('aria-hidden');
   trigger.tabIndex = -1;

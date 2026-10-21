@@ -32,6 +32,22 @@ try {
     testPicker.controller.refresh();
   });
   assert.equal(await page.locator('select').first().inputValue(), 'b');
+  // Regression: inside a pointer-events:none dock (new-chat context dock) the
+  // select must still receive the tap instead of falling through.
+  await page.evaluate(async ({ helper }) => {
+    const { attachNativePicker } = await import(URL.createObjectURL(new Blob([helper], { type: 'text/javascript' })));
+    const dock = document.createElement('div');
+    dock.style.cssText = 'position:fixed;left:0;right:0;bottom:100px;pointer-events:none';
+    dock.innerHTML = '<button id="docked" style="pointer-events:auto;width:200px;height:44px">Docked</button>';
+    document.body.append(dock);
+    window.dockedPicker = attachNativePicker(dock.querySelector('#docked'), { label: 'Docked', options: () => [{ value: 'x', label: 'X' }], onChange() {} });
+  }, { helper });
+  assert.equal(await page.evaluate(() => {
+    const el = window.dockedPicker.select;
+    const rect = el.getBoundingClientRect();
+    return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === el;
+  }), true, 'select inside a pointer-events:none dock still receives the tap');
+  await page.evaluate(() => window.dockedPicker.destroy());
   await page.evaluate(() => testPicker.controller.destroy());
   assert.equal(await page.locator('#picker').getAttribute('tabindex'), null);
   assert.equal(await page.locator('#picker').getAttribute('aria-hidden'), null);
