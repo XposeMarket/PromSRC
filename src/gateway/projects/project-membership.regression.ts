@@ -114,9 +114,101 @@ async function main(): Promise<void> {
       'hidden supervisor cannot use project actions',
     );
 
+    // ── Index recovery after an outside JSON edit (warm cache, then edit disk directly) ──
+    const warm = storeApi.createProject('Warm A');
+    const cold = storeApi.createProject('Warm B');
+    seed('chat_ext');
+    storeApi.attachSessionToProject(warm.id, 'chat_ext');
+    assert.equal(storeApi.findProjectBySessionId('chat_ext')?.id, warm.id, 'warm cache sees the owner');
+    const projectFile = (id: string): string => {
+      const hit = (fs.readdirSync(root, { recursive: true }) as string[]).map(String).find((p) => p.endsWith(`${id}.json`));
+      assert.ok(hit, `project file exists for ${id}`);
+      return path.join(root, hit!);
+    };
+    const editOnDisk = (id: string, mutate: (sessions: any[]) => any[]): void => {
+      const file = projectFile(id);
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      parsed.sessions = mutate(parsed.sessions || []);
+      fs.writeFileSync(file, JSON.stringify(parsed, null, 2), 'utf-8');
+    };
+    editOnDisk(warm.id, (sessions) => sessions.filter((s) => s.id !== 'chat_ext'));
+    editOnDisk(cold.id, (sessions) => [...sessions, { id: 'chat_ext', title: 'External' }]);
+    assert.equal(storeApi.findProjectBySessionId('chat_ext')?.id, cold.id, 'outside edit: returns the true owner, not the stale one');
+    editOnDisk(cold.id, (sessions) => sessions.filter((s) => s.id !== 'chat_ext'));
+    assert.equal(storeApi.findProjectBySessionId('chat_ext'), null, 'outside removal: never returns the stale owner');
+
+    // ── Router: strict booleans, 400/404 paths, delete counts (real express app) ──
+    const express = (await import('express')).default;
+    const { router: projectsRouter } = await import('../routes/projects.router');
+    const app = express();
+    app.use(express.json());
+    app.use(projectsRouter);
+    const server = await new Promise<import('node:http').Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    try {
+      const base = `http://127.0.0.1:${(server.address() as any).port}`;
+      const call = async (method: string, url: string, body?: unknown): Promise<{ status: number; json: any }> => {
+        const res = await fetch(base + url, {
+          method,
+          headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        return { status: res.status, json: await res.json().catch(() => null) };
+      };
+
+      const routed = storeApi.createProject('Routed');
+      seed('chat_route');
+      storeApi.attachSessionToProject(routed.id, 'chat_route');
+
+      const badChat = await call('DELETE', `/api/projects/${routed.id}/sessions/chat_route?deleteChat=garbage`);
+      assert.equal(badChat.status, 400, 'deleteChat=garbage is 400');
+      assert.equal(storeApi.findProjectBySessionId('chat_route')?.id, routed.id, 'bad deleteChat changes nothing (still owned)');
+      assert.equal(sessionApi.sessionExists('chat_route'), true, 'bad deleteChat changes nothing (chat kept)');
+
+      const badProject = await call('DELETE', `/api/projects/${routed.id}?deleteSessions=garbage`);
+      assert.equal(badProject.status, 400, 'deleteSessions=garbage is 400');
+      assert.ok(storeApi.getProject(routed.id), 'bad deleteSessions changes nothing (project kept)');
+
+      const noSession = await call('POST', `/api/projects/${routed.id}/sessions/attach`, {});
+      assert.equal(noSession.status, 400, 'attach without sessionId is 400');
+      const noProject = await call('POST', '/api/projects/missing_project_id/sessions/attach', { sessionId: 'chat_route' });
+      assert.equal(noProject.status, 404, 'attach to unknown project is 404');
+      const noChat = await call('POST', `/api/projects/${routed.id}/sessions/attach`, { sessionId: 'no_such_chat' });
+      assert.equal(noChat.status, 404, 'attach unknown session is 404');
+      assert.equal(sessionApi.sessionExists('no_such_chat'), false, 'failed attach creates nothing');
+
+      seed('chat_count_a');
+      seed('chat_count_b');
+      const keepCounted = storeApi.createProject('Keep Counted');
+      storeApi.attachSessionToProject(keepCounted.id, 'chat_count_a');
+      storeApi.attachSessionToProject(keepCounted.id, 'chat_count_b');
+      const keepRes = await call('DELETE', `/api/projects/${keepCounted.id}?deleteSessions=false`);
+      assert.equal(keepRes.status, 200);
+      assert.deepEqual([keepRes.json.deletedSessions, keepRes.json.keptSessions], [0, 2], 'keep mode counts 0 deleted, 2 kept');
+      assert.equal(sessionApi.sessionExists('chat_count_a'), true, 'keep mode keeps chats');
+
+      const dropCounted = storeApi.createProject('Drop Counted');
+      seed('chat_drop_a');
+      seed('chat_drop_b');
+      storeApi.attachSessionToProject(dropCounted.id, 'chat_drop_a');
+      storeApi.attachSessionToProject(dropCounted.id, 'chat_drop_b');
+      const dropRes = await call('DELETE', `/api/projects/${dropCounted.id}?deleteSessions=true`);
+      assert.equal(dropRes.status, 200);
+      assert.deepEqual([dropRes.json.deletedSessions, dropRes.json.keptSessions], [2, 0], 'delete mode counts 2 deleted, 0 kept');
+      assert.equal(sessionApi.sessionExists('chat_drop_a'), false, 'deleteSessions=true deletes the chats');
+
+      const detachRes = await call('DELETE', `/api/projects/${routed.id}/sessions/chat_route?deleteChat=false`);
+      assert.equal(detachRes.status, 200, 'deleteChat=false detaches');
+      assert.equal(sessionApi.sessionExists('chat_route'), true, 'detach keeps the chat');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+
     console.log('project-membership regression passed');
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    // The audit logger may still be flushing into the temp dir; retry instead of failing on ENOTEMPTY.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 

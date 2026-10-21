@@ -79,7 +79,7 @@ function initialiseProjectSidebar() {
       else if (action === 'pin-project') void window.toggleProjectPin(projectId, event);
       else if (action === 'delete-project') void window.confirmDeleteProject(projectId, String(target.dataset.projectName || ''));
       else if (action === 'open-session' && sessionId) void window.openProjectSession(projectId, sessionId);
-      else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId, String(target.dataset.sessionTitle || ''));
+      else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId);
     });
   });
 }
@@ -859,7 +859,7 @@ window.confirmDeleteProject = async function(projectId, projectName) {
         `Also delete the ${chatCount} ${chatCount === 1 ? 'chat' : 'chats'} in this project? Their history will be permanently deleted and cannot be undone.`,
         () => removeProject(true),
         () => removeProject(false),
-        { title: 'Delete chats too?', confirmText: 'Delete chats', cancelText: 'Keep chats', danger: true }
+        { title: 'Delete chats too?', confirmText: 'Delete chats', cancelText: 'Keep chats', danger: true, onDismiss: () => {} }
       );
     },
     null,
@@ -867,7 +867,9 @@ window.confirmDeleteProject = async function(projectId, projectName) {
   );
 };
 
-window.confirmDeleteProjectSession = async function(projectId, sessionId, sessionTitle) {
+window.confirmDeleteProjectSession = async function(projectId, sessionId) {
+  // Title is looked up from project state, never passed through an inline handler string.
+  const sessionTitle = String(_projects.find(p => p.id === projectId)?.sessions?.find(s => s.id === sessionId)?.title || 'this chat');
   showConfirm(
     `Delete chat "${sessionTitle}"? Its history will be permanently deleted and cannot be undone.`,
     async () => {

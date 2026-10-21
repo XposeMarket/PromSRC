@@ -960,8 +960,14 @@ function _refreshAfterChatProjectChange() {
   if (typeof window.loadChatSessions === 'function') window.loadChatSessions();
 }
 
+// Chat titles are read from the rendered row by id, never interpolated into inline handler source.
+function _chatTitleFor(sessionId) {
+  const row = document.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+  return row?.dataset?.sessionTitle || '';
+}
+
 // Move an existing chat into a project. Membership only: history is kept and the chat leaves its old project.
-window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id, title) {
+window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id) {
   const sessionId = String(id || '').trim();
   if (!sessionId) return;
   hideSessionHoverPreview();
@@ -976,7 +982,7 @@ window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id, ti
     heading.textContent = 'Move to project…';
     const note = document.createElement('div');
     note.style.cssText = 'font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:14px';
-    note.textContent = `“${title || 'this chat'}” keeps its history and leaves its current project.`;
+    note.textContent = `“${_chatTitleFor(sessionId) || 'this chat'}” keeps its history and leaves its current project.`;
     box.append(heading, note);
     const close = () => overlay.remove();
     if (!list.length) {
@@ -1822,12 +1828,12 @@ function renderChatSessionCard(s, options = {}) {
   const chatProjectOwned = !!(projectId || s.projectName || searchResult?.projectName);
   const folderIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
   const detachIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
-  const moveProjectAction = `<button class="chat-session-action-btn chat-move-project-btn" onclick="event.preventDefault();event.stopPropagation();openChatMoveToProjectPicker('${s.id}','${escHtml(s.title || 'New chat')}')" title="Move to project…" aria-label="Move to project…">${folderIcon}</button>`;
+  const moveProjectAction = `<button class="chat-session-action-btn chat-move-project-btn" onclick="event.preventDefault();event.stopPropagation();openChatMoveToProjectPicker('${escHtml(s.id)}')" title="Move to project…" aria-label="Move to project…">${folderIcon}</button>`;
   const removeProjectAction = chatProjectOwned
-    ? `<button class="chat-session-action-btn chat-remove-project-btn" onclick="event.preventDefault();event.stopPropagation();removeChatFromProjectNow('${s.id}')" title="Remove from project" aria-label="Remove from project">${detachIcon}</button>`
+    ? `<button class="chat-session-action-btn chat-remove-project-btn" onclick="event.preventDefault();event.stopPropagation();removeChatFromProjectNow('${escHtml(s.id)}')" title="Remove from project" aria-label="Remove from project">${detachIcon}</button>`
     : '';
   const projectDeleteAction = projectId && options.projectDelete
-    ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtml(s.title || 'New chat')}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
+    ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${escHtml(projectId)}','${escHtml(s.id)}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
   const settleLabel = isSettled ? 'Reopen chat' : 'Settle chat';
   const settleAction = isSettled
