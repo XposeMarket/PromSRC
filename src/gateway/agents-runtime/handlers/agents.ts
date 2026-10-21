@@ -1610,7 +1610,12 @@ export async function handleAgentsTool(ctx: handleAgentsToolContext): Promise<Aw
             if (has(ctx)) { team.teamContext = str(ctx, 1000); changed.push('team_context'); }
             team.manager = team.manager || {};
             if (has(args.manager_system_prompt)) { team.manager.systemPrompt = str(args.manager_system_prompt, 2000); changed.push('manager_system_prompt'); }
-            if (has(args.manager_model)) { team.manager.model = String(args.manager_model).trim() || undefined; changed.push('manager_model'); }
+            if (has(args.manager_model)) {
+              // Write the manager agent record too, otherwise the next turn's sync reverts it.
+              const { setManagedTeamManagerRouting } = require('../../teams/managed-teams');
+              setManagedTeamManagerRouting(team, { model: String(args.manager_model) });
+              changed.push('manager_model');
+            }
             if (has(args.review_trigger)) {
               const rt = String(args.review_trigger).trim().toLowerCase();
               if (!['after_each_run', 'after_all_runs', 'daily', 'manual'].includes(rt)) {
