@@ -65,6 +65,8 @@
       "connector_github_close_pr",
       "connector_github_update_issue",
       "connector_github_comment",
+      "connector_github_create_review",
+      "connector_github_list_review_comments",
       "connector_github_api_request"
     ]
   },
@@ -149,6 +151,8 @@
             "connector_github_close_pr",
             "connector_github_update_issue",
             "connector_github_comment",
+            "connector_github_create_review",
+            "connector_github_list_review_comments",
             "connector_github_api_request"
           ],
           "rollback": "legacy-vault-session-remains-readable"

@@ -146,8 +146,9 @@
 /* ── Sources panel: floating card ───────────────────────────────
    The open drawer reads as the same floating surface as the minimized peek:
    inset from the window edge, rounded, shadowed, no hard dock line. It stays
-   in the flex flow so chat content is never hidden behind it. */
-body:not(.pm-mobile-active) .workspace > .right-panel.open {
+   in the flex flow so chat content is never hidden behind it. Only the Sources
+   panel floats; canvas/browser mode (.canvas-open) stays docked. */
+body:not(.pm-mobile-active) .workspace > .right-panel.open:not(.canvas-open) {
   --sp-gap: 12px;
   --sp-tint: color-mix(in srgb, var(--text) 4%, transparent);
   align-self: stretch;
@@ -199,6 +200,14 @@ body:not(.pm-mobile-active) .right-panel.open button.source-panel-row:hover {
   transform: none;
 }
 body:not(.pm-mobile-active) .right-panel.open .source-panel-section-title { color: var(--muted); }
+/* Full docked Sources panel: compact density (fix/sources-mini-compact). */
+body:not(.pm-mobile-active) .right-panel.open .source-panel-row{min-height:38px;padding:6px 10px;border-radius:9px;gap:9px}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-row .source-item-icon{width:22px;height:22px;flex-basis:22px;border-radius:6px;font-size:11px}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-row .source-item-title{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-row .source-item-meta{font-size:10.5px}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-list{gap:5px}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-section{margin-top:16px}
+body:not(.pm-mobile-active) .right-panel.open .source-panel-section-title{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
 body:not(.pm-mobile-active) .right-panel.open .source-panel-subtitle { margin-bottom: 12px; }
 /* Header icon buttons stay flat: no outlined accent box around refresh/close. */
 body:not(.pm-mobile-active) :is(.right-panel, .sources-minimized-panel) :is(.source-panel-icon-btn, .source-panel-close-btn) {
