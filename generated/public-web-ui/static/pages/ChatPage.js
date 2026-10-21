@@ -13622,7 +13622,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const bodyHtml = bodyEntries.length
         ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
         : '';
-      return `<details class="live-turn-thought-group"${openThoughts ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      return `<details class="live-turn-thought-group"${(openThoughts || streaming) ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
         <summary class="live-turn-tool-summary">Thinking</summary>
         ${summaryMarkup}
         ${bodyHtml}
@@ -19462,6 +19462,9 @@ const sourcePanelState = {
   processRequestToken: 0,
   processRefreshTimer: null,
   miniProcessExpanded: false,
+  miniEnvExpanded: false,
+  miniSourcesExpanded: false,
+  fullProcessExpanded: false,
   initialized: false,
   seenResourceKeys: new Set(),
   seenEditKeys: new Set(),
@@ -19549,7 +19552,7 @@ function resetSourcePanelContextState() {
   sourcePanelState.projectRequestToken += 1;
   sourcePanelState.gitRequestToken += 1;
   sourcePanelState.diffRequestToken += 1;
-  sourcePanelState.miniProcessExpanded = false;
+  sourcePanelState.miniProcessExpanded = false; sourcePanelState.miniEnvExpanded = false; sourcePanelState.miniSourcesExpanded = false; sourcePanelState.fullProcessExpanded = false;
 }
 
 function setSourcePanelChatContext(input = {}, options = {}) {
@@ -20112,12 +20115,32 @@ function sourcePanelEnvironmentRowMarkup(item, { mini = false } = {}) {
   </${tag}>`;
 }
 
+function sourcePanelMiniSlice(items, collapsedLimit, expandedLimit, expanded) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = expanded ? expandedLimit : collapsedLimit;
+  const visible = list.slice(0, limit);
+  return { visible, remaining: Math.max(0, list.length - visible.length), expandable: list.length > collapsedLimit };
+}
+
+function sourcePanelMiniToggleLabel(slice, expanded) {
+  if (!slice?.expandable) return '';
+  return expanded ? 'Show less' : `+${slice.remaining} more`;
+}
+
+function sourcePanelMiniDisplayTitle(title) {
+  const text = String(title || '');
+  return /^https?:\/\//i.test(text) ? text.replace(/^https?:\/\//i, '').replace(/\/$/, '') : text;
+}
+
 function renderSourcePanelEnvironment(data, { mini = false } = {}) {
-  const rows = sourcePanelEnvironmentItems(data).map((item) => sourcePanelEnvironmentRowMarkup(item, { mini })).join('');
+  const allItems = sourcePanelEnvironmentItems(data);
+  const envSlice = mini ? sourcePanelMiniSlice(allItems, 3, allItems.length, sourcePanelState.miniEnvExpanded) : { visible: allItems, expandable: false };
+  const rows = envSlice.visible.map((item) => sourcePanelEnvironmentRowMarkup(item, { mini })).join('');
+  const envToggle = mini && envSlice.expandable ? `<button class="source-panel-mini-more" type="button" onclick="toggleSourcePanelMiniEnv()">${sourcePanelState.miniEnvExpanded ? 'Less' : 'More'}</button>` : '';
   if (!rows) return '';
   return `<section class="source-panel-section source-panel-environment-section${mini ? ' source-panel-section--mini' : ''}">
     <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Environment</h3>${mini ? '<button class="source-panel-section-add" type="button" aria-label="Open environment" title="Open environment" onclick="openFullSourcePanel(); setSourcePanelTab(\'git\')">＋</button>' : ''}</div>
-    <div class="source-panel-environment-card">${rows}</div>
+    <div class="source-panel-environment-card">${rows}${envToggle}</div>
   </section>`;
 }
 
@@ -20151,19 +20174,23 @@ function sourcePanelProcessRowMarkup(item, { mini = false } = {}) {
   const meta = [status, cwd].filter(Boolean).join(' • ');
   return `<button type="button" class="source-panel-row source-panel-row--process${mini ? ' source-panel-row--mini' : ''}" onclick="openSourcePanelProcess(${encodeInlineJsString(run.runId || '')})" title="Open process details">
     ${sourcePanelIconMarkup('process', '›_')}
-    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || 'Background process')}</span></span></span>
+    ${mini
+      ? `<span class="source-item-copy source-item-copy--inline"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta">· ${escHtml(status)}</span></span>`
+      : `<span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || 'Background process')}</span></span></span>`}
   </button>`;
 }
 
 function renderSourcePanelProcesses(data, { mini = false } = {}) {
   const items = Array.isArray(data?.processes) ? data.processes : sourcePanelProcessItems();
   if (!items.length) return '';
-  const limit = mini && !sourcePanelState.miniProcessExpanded ? 4 : (mini ? 10 : items.length);
-  const visible = items.slice(0, limit);
-  const remaining = Math.max(0, items.length - visible.length);
+  const procSlice = mini
+    ? sourcePanelMiniSlice(items, 2, 8, sourcePanelState.miniProcessExpanded)
+    : sourcePanelMiniSlice(items, 4, items.length, sourcePanelState.fullProcessExpanded);
+  const toggleLabel = sourcePanelMiniToggleLabel(procSlice, mini ? sourcePanelState.miniProcessExpanded : sourcePanelState.fullProcessExpanded);
+  const visible = procSlice.visible;
   return `<section class="source-panel-section source-panel-process-section${mini ? ' source-panel-section--mini' : ''}">
     <h3 class="source-panel-section-title">Background processes</h3>
-    <div class="source-panel-list source-panel-process-list">${visible.map((item) => sourcePanelProcessRowMarkup(item, { mini })).join('')}</div>${remaining ? `<button class="source-panel-link-button source-panel-process-more" type="button" onclick="toggleSourcePanelMiniProcesses()">Show ${remaining} more</button>` : ''}
+    <div class="source-panel-list source-panel-process-list">${visible.map((item) => sourcePanelProcessRowMarkup(item, { mini })).join('')}</div>${toggleLabel ? `<button class="source-panel-link-button source-panel-process-more source-panel-mini-more" type="button" onclick="${mini ? 'toggleSourcePanelMiniProcesses()' : 'toggleSourcePanelFullProcesses()'}">${toggleLabel}</button>` : ''}
   </section>`;
 }
 
@@ -20269,7 +20296,7 @@ function sourcePanelResourceRowMarkup(item, { mini = false } = {}) {
   const unavailable = ['missing', 'unavailable', 'stale', 'deleted'].includes(String(resource?.status || '').toLowerCase());
   return `<button type="button" class="source-panel-row source-panel-row--resource${unavailable ? ' is-unavailable' : ''}" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="${escHtml(url ? 'Open source' : 'Open file')}" data-source-item="${escHtml(item.key)}">
     ${sourcePanelIconMarkup(iconKind, iconLabel)}
-    <span class="source-item-copy"><span class="source-item-title">${escHtml(chatResourceTitle(resource))}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || chatResourceLocatorLabel(resource) || 'Source')}</span></span></span>
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(mini ? sourcePanelMiniDisplayTitle(chatResourceTitle(resource)) : chatResourceTitle(resource))}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || chatResourceLocatorLabel(resource) || 'Source')}</span></span></span>
     <span class="source-item-chevron" aria-hidden="true">›</span>
   </button>`;
 }
@@ -20359,7 +20386,7 @@ function renderSourcePanelOverview(data) {
   ${renderSourcePanelEnvironment(data)}
   ${renderSourcePanelProcesses(data)}
   ${renderSourcePanelBrowser(data)}
-  <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">· View all project sources</button>' : ''}</section>`;
+  <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">View all project sources →</button>' : ''}</section>`;
 }
 
 function renderSourcePanelFiles(data) {
@@ -20845,7 +20872,7 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.processSessionId = '';
     sourcePanelState.processLoaded = false;
     sourcePanelState.processRequestToken += 1;
-    sourcePanelState.miniProcessExpanded = false;
+    sourcePanelState.miniProcessExpanded = false; sourcePanelState.miniEnvExpanded = false; sourcePanelState.miniSourcesExpanded = false; sourcePanelState.fullProcessExpanded = false;
   }
   if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
   scheduleSourcePanelSideLoads(sid);
@@ -21324,6 +21351,21 @@ function toggleSourcePanelMiniFilter() {
   renderSourcesMinimizedPanel();
 }
 
+function toggleSourcePanelMiniEnv() {
+  sourcePanelState.miniEnvExpanded = !sourcePanelState.miniEnvExpanded;
+  renderSourcesMinimizedPanel();
+}
+
+function toggleSourcePanelMiniSources() {
+  sourcePanelState.miniSourcesExpanded = !sourcePanelState.miniSourcesExpanded;
+  renderSourcesMinimizedPanel();
+}
+
+function toggleSourcePanelFullProcesses() {
+  sourcePanelState.fullProcessExpanded = !sourcePanelState.fullProcessExpanded;
+  renderSourcePanel();
+}
+
 function toggleSourcePanelMiniProcesses() {
   sourcePanelState.miniProcessExpanded = !sourcePanelState.miniProcessExpanded;
   renderSourcesMinimizedPanel();
@@ -21333,7 +21375,9 @@ function renderSourcesMinimizedPanel() {
   const panel = document.getElementById('sources-minimized-panel');
   if (!panel) return;
   const data = sourcePanelData();
-  const items = sourcePanelMiniItems('all').slice(0, 5);
+  const all = sourcePanelMiniItems('all');
+  const srcSlice = sourcePanelMiniSlice(all, 3, 8, sourcePanelState.miniSourcesExpanded);
+  const items = srcSlice.visible;
   panel.innerHTML = `<div class="sources-minimized-card">
     <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn source-panel-add-btn" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
     <div class="sources-minimized-body">
@@ -21344,7 +21388,8 @@ function renderSourcesMinimizedPanel() {
         <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Sources</h3><button class="source-panel-section-add" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button></div>
         <div class="source-mini-list">${items.length ? items.map((item) => sourcePanelItemMarkup(item, { mini: true })).join('') : '<div class="source-panel-empty">No sources yet.</div>'}</div>
       </section>
-      <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">· View all</button>
+      ${srcSlice.expandable ? `<button class="source-panel-link-button source-panel-mini-more" type="button" onclick="toggleSourcePanelMiniSources()">${sourcePanelMiniToggleLabel(srcSlice, sourcePanelState.miniSourcesExpanded)}</button>` : ''}
+      <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">View all sources →</button>
     </div>
   </div>`;
 }
