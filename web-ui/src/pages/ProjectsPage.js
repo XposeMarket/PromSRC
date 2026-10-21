@@ -858,8 +858,8 @@ window.confirmDeleteProject = async function(projectId, projectName) {
       showConfirm(
         `Also delete the ${chatCount} ${chatCount === 1 ? 'chat' : 'chats'} in this project? Their history will be permanently deleted and cannot be undone.`,
         () => removeProject(true),
-        () => {}, // Cancel aborts the whole delete: nothing is removed.
-        { title: 'Delete chats too?', confirmText: 'Delete chats', cancelText: 'Cancel', danger: true, onDismiss: () => {} }
+        () => removeProject(false), // "Keep chats": delete the project, keep its chats.
+        { title: 'Delete chats too?', confirmText: 'Delete chats', cancelText: 'Keep chats', danger: true, onDismiss: () => {} } // Dismiss aborts the whole delete.
       );
     },
     null,

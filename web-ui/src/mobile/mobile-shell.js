@@ -3110,11 +3110,11 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
       '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
     '</div>' +
     '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
-      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D ' + (isProjectDelete ? 'The project and its files (instructions, knowledge, and workspace folder) will be deleted. Its chats are kept and move back to Chats.' : 'will be permanently deleted and cannot be undone.') + '</p>' +
+      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D ' + (isProjectDelete ? 'will be deleted along with its files (instructions, knowledge, and workspace folder). Its chats are kept and move back to Chats.' : 'will be permanently deleted and cannot be undone.') + '</p>' +
       '<div class="pm-msheet-rows pm-sess-confirm-rows">' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-confirm-delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
-          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete permanently</span>' +
+          '<span class="pm-msheet-row-label pm-sess-delete-label">' + (isProjectDelete ? 'Delete project' : 'Delete permanently') + '</span>' +
         '</button>' +
         (isProjectDelete ? '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-delete-chats-too"><span class="pm-msheet-row-label pm-sess-delete-label">Delete project and its chats</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row" id="pm-sess-cancel-delete">' +
