@@ -46,6 +46,25 @@ async function handle(method, params) {
       }
       return { cookies: out, domains };
     }
+    // Read-only inventory for agents: Google account emails and cookie domain
+    // counts. Never returns cookie names or values.
+    case 'google.accounts': {
+      // ListAccounts rejects extension-origin requests (400/403), so read the
+      // account switcher page Google's own avatar menu uses. Only email
+      // addresses leave the extension, never the page HTML.
+      const res = await fetch('https://accounts.google.com/SignOutOptions?hl=en', { credentials: 'include' });
+      const text = await res.text();
+      const emails = [...new Set((text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map(e => e.toLowerCase()))].slice(0, 50);
+      return { emails, status: res.status, source: 'signoutoptions' };
+    }
+    case 'cookies.sites': {
+      const counts = new Map();
+      for (const c of await chrome.cookies.getAll({})) {
+        const domain = String(c.domain || '').replace(/^\./, '').toLowerCase();
+        if (domain) counts.set(domain, (counts.get(domain) || 0) + 1);
+      }
+      return [...counts.entries()].map(([domain, count]) => ({ domain, count })).sort((a, b) => b.count - a.count).slice(0, 400);
+    }
     case 'downloads.search': return chrome.downloads.search(params.query || {});
     // Unpacked extensions keep running old code until reloaded; let the gateway
     // ask for a reload after it ships a newer extension build.

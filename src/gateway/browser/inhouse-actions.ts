@@ -22,6 +22,7 @@ import { resolveBrowserObserveMode, shouldReturnSnapshot, attachShortcutsContext
 import { boundedBrowserSnapshot } from './snapshot-format.js';
 import { buildBrowserRunJsEnvelopeSource, formatBrowserRunJsEnvelope } from './diagnostics.js';
 import { setLastBrowserScreenshot } from './state.js';
+import { defaultChromeSigninDeps, maybeAutoSyncChromeSignins, markSynced } from './chrome-signin-sync.js';
 
 
 export async function browserOpenInHouse(
@@ -43,11 +44,20 @@ export async function browserOpenInHouse(
       url: inHouse.url,
       title: inHouse.title,
     });
+    // "Always use my Chrome sign-ins" grant: copy this site's Chrome cookies
+    // before the snapshot. Off by default; never throws into the open path.
+    const sync = await maybeAutoSyncChromeSignins(defaultChromeSigninDeps(), {
+      sessionId: resolved,
+      profileId: resolveInHouseProfileId(resolved),
+      url: String(inHouse.url || targetUrl),
+    }).catch(() => null);
+    const syncNote = sync?.synced && sync.imported > 0 ? `Chrome sign-ins synced for ${sync.domain} (${sync.imported} cookies).` : '';
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_open');
     if (shouldReturnSnapshot(observeMode)) {
-      return await browserSnapshotInHouse(resolved);
+      const snapshot = await browserSnapshotInHouse(resolved);
+      return syncNote ? `${syncNote}\n${snapshot}` : snapshot;
     }
-    return `Browser opened in Prometheus in-house browser.\nPage: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`;
+    return `Browser opened in Prometheus in-house browser.${syncNote ? `\n${syncNote}` : ''}\nPage: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`;
   } catch (err: any) {
     return `ERROR: In-house browser open failed: ${err.message}`;
   }
@@ -435,6 +445,8 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   const cookies = Array.isArray(got?.cookies) ? got.cookies : [];
   const res: any = await callInHouseBrowser('import-cookies', { sessionId: resolved, cookies });
   const imported = Number(res?.imported || 0);
+  // Stamp the sync cache so auto-sync does not re-import the same site right away.
+  if (imported > 0 && origin) markSynced(resolveInHouseProfileId(resolved), origin, Date.now());
   const failedCount = Number(res?.failedCount || 0);
   const byDomain: Record<string, number> = res?.byDomain && typeof res.byDomain === 'object' ? res.byDomain : {};
   const failed: string[] = Array.isArray(res?.failed) ? res.failed.map(String) : [];

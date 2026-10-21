@@ -28,7 +28,11 @@ const endpointB={...routed,llm:{...routed.llm,providers:{openai_codex:{...routed
 assert.equal(resolveModelContextProfile('openai_codex','gpt-6.1-sol',undefined,endpointB,'account-a').maxContextWindowTokens,872000,'metadata must not leak between endpoints');
 
 const haiku=resolveModelContextProfile('anthropic','claude-haiku-5-5',undefined,{llm:{providers:{}}});
-assert.equal(haiku.contextWindowTokens,100000); assert.equal(haiku.maxContextWindowTokens,1000000);
+assert.equal(haiku.contextWindowTokens,1000000,'Haiku 5.5 standard must be its full 1M window, not a 100k cap'); assert.equal(haiku.standardContextWindowTokens,1000000); assert.equal(haiku.maxContextWindowTokens,1000000);
+const haikuCustom=resolveModelContextProfile('anthropic','claude-haiku-5-5',undefined,{llm:{providers:{}},session:{contextSelections:{'anthropic/claude-haiku-5-5/default':{mode:'custom',tokens:100000}}}});
+assert.equal(haikuCustom.contextWindowTokens,100000,'custom 100k must still be selectable for API-tier users');
+const haiku45=resolveModelContextProfile('anthropic','claude-haiku-4-5-20251001',undefined,{llm:{providers:{}}});
+assert.equal(haiku45.contextWindowTokens,200000,'Haiku 4.5 keeps its 200k window');
 assert.match(haiku.contextUsageWarning!, /5x/);
 const opus=resolveModelContextProfile('anthropic','claude-opus-5-5',undefined,{llm:{providers:{}}});
 assert.equal(opus.contextWindowTokens,1000000); assert.match(opus.contextUsageWarning!, /standard API/);

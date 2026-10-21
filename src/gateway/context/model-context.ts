@@ -250,8 +250,10 @@ export function resolveModelContextProfile(
     Number.isFinite(standardMetadata) && standardMetadata > 512 ? Math.floor(standardMetadata)
       : providerId === 'openai_codex' && /^gpt-(?:6|5\.(?:4|5|6))/.test(model) ? Math.min(272000, maxContextWindowTokens)
       : maxContextWindowTokens);
-  const usageSafeStandard = providerId === 'anthropic' && /^claude-haiku-5-5(?:$|-)/.test(model) ? Math.min(100000, standardContextWindowTokens)
-    : providerId === 'openai' && /^gpt-(?:6|5\.(?:4|5|6))(?:[.-]|$)/.test(model) && maxContextWindowTokens > 400000 ? Math.min(272000, standardContextWindowTokens)
+  // Haiku 5.5 follows the other 1M Claude models (standard = full window). Its API
+  // long-prompt tier above 100k is surfaced in contextUsageWarning, and users who
+  // want to stay under it can pick a custom 100k budget.
+  const usageSafeStandard = providerId === 'openai' && /^gpt-(?:6|5\.(?:4|5|6))(?:[.-]|$)/.test(model) && maxContextWindowTokens > 400000 ? Math.min(272000, standardContextWindowTokens)
     : standardContextWindowTokens;
   const accountId = contextExecutionAccount(providerId, raw, executionAccountId);
   const selection = raw?.session?.contextSelections?.[`${providerId}/${model}/${accountId}`];
@@ -266,7 +268,7 @@ export function resolveModelContextProfile(
     ? 'Extended context can consume more subscription allowance. OpenAI documents 2x usage above the standard 272k window for GPT-5.4; the exact multiplier for other models is not verified. This is a local request budget, not a billing setting.'
     : providerId === 'anthropic'
       ? /^claude-haiku-5-5(?:$|-)/.test(model)
-        ? 'Haiku 5.5 API: prompts over 100,000 tokens use a 5x pricing tier (input, output and cache). Standard mode stays at 100k. Maximum is 1M. Claude subscription allowance is separate from API pricing.'
+        ? 'Haiku 5.5 has a 1M window. On API keys, prompts over 100,000 tokens use a 5x pricing tier (input, output and cache); pick Custom 100k to stay under it. Claude subscription allowance is separate from API pricing.'
         : 'Current Claude 1M models, including Opus 5.5, use standard API rates throughout the window (Haiku 5.5 is the exception). More tokens still use more allowance. Claude subscription limits are account-specific, not API prices.'
       : providerId === 'openai' && /^gpt-(?:6|5\.(?:4|5|6))/.test(model)
         ? 'OpenAI API long-context categories can cost 2x input/cache and 1.5x output. GPT-5.4 documents the boundary above 272k input; the exact GPT-6 boundary is not verified here. These API tariffs are not Codex subscription usage. Check current pricing before large requests.'

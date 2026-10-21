@@ -76,7 +76,7 @@ export function fromAnthropicWireToolName(name: string): string {
 
 /** Context window used for the system-prompt budget (mirrors model-context known table). */
 export function anthropicContextWindowTokens(model: string): number {
-  return /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6))(?:\b|[-_])/i.test(String(model || ''))
+  return /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i.test(String(model || ''))
     ? 1_000_000
     : 200_000;
 }

@@ -16,7 +16,8 @@ function desktopCompactionStatusFromText(value) {
 }
 
 export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
-  loadBusyComposerModeFromServer((url) => fetch(url).then((r) => r.json())).catch(() => {});
+  // Use the authed api() helper (paired/remote desktop needs its auth headers); raw fetch is a last resort.
+  loadBusyComposerModeFromServer((url) => (typeof window.api === 'function' ? window.api(url) : fetch(url).then((r) => r.json()))).catch(() => {});
   return async function sendChat(queuedMessage = null, options = {}) {
       let {
         MAX_QUEUED_PROMPTS,
@@ -1965,21 +1966,30 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       window._editRerunAbortResetSessions?.delete?.(thisSessionId);
     }
 
-    if (isViewingThisSession) {
+    // Drain this session's queue even when the user is viewing another chat.
+    // Previously the drain was gated on isViewingThisSession, so a prompt queued
+    // here and then left while switching chats never started.
+    {
       const shouldPauseQueue = isFailedTurnReply(finalReply || (sessionHistoryRef[sessionHistoryRef.length - 1]?.content || ''));
       const queue = getSessionQueuedPrompts(thisSessionId);
       let queuedPromptStarted = false;
       if (queue.length > 0 && shouldPauseQueue) {
-        addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
+        if (isViewingThisSession) addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
       } else if (queue.length > 0) {
         const next = queue.shift();
-        window.queuedPrompts = queue;
-        updateQueuedPromptUI();
-        addProcessEntry('info', `Auto-running queued prompt${queue.length ? ` (${queue.length} remaining)` : ''}.`);
+        if (window.activeChatSessionId === thisSessionId) {
+          window.queuedPrompts = queue;
+          updateQueuedPromptUI();
+          addProcessEntry('info', `Auto-running queued prompt${queue.length ? ` (${queue.length} remaining)` : ''}.`);
+        }
         queuedPromptStarted = true;
-        setTimeout(() => { sendChat(next); }, 0);
+        setTimeout(() => {
+          sendChat(next, isViewingThisSession && window.activeChatSessionId === thisSessionId
+            ? undefined
+            : { sessionIdOverride: thisSessionId });
+        }, 0);
       }
-      if (!queuedPromptStarted) setTimeout(processVoicePendingTurns, 0);
+      if (!queuedPromptStarted && isViewingThisSession) setTimeout(processVoicePendingTurns, 0);
     }
   }
 }

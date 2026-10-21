@@ -20,6 +20,7 @@ import { getConfig } from '../../config/config';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { setWss, setWsClientStreamFocus } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
+import { shouldExitOnGatewayListenerError } from '../runtime/handoff-replacement-bind';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import {
   browserHandleUserInput,
@@ -644,8 +645,11 @@ export function createServer(
   server.on('error', (err: any) => {
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
-      if (process.env.PROMETHEUS_HOT_RESTART === '1') {
-        console.warn('[Gateway] Handoff replacement will retry the listener bind while its predecessor releases the port.');
+      if (!shouldExitOnGatewayListenerError(err, {
+        hotRestart: process.env.PROMETHEUS_HOT_RESTART === '1',
+        listening: server.listening,
+      })) {
+        console.warn('[Gateway] Port busy during warm handoff; bind retry will try again.');
         return;
       }
       console.error('[Gateway] Another gateway instance is likely already running or the port is stuck.');
@@ -1231,6 +1235,13 @@ export function createServer(
 
   server.on('error', (err: any) => {
     if (err?.code === 'EADDRINUSE') {
+      if (!shouldExitOnGatewayListenerError(err, {
+        hotRestart: process.env.PROMETHEUS_HOT_RESTART === '1',
+        listening: server.listening,
+      })) {
+        console.warn('[Gateway] Port busy during warm handoff; bind retry will try again.');
+        return;
+      }
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
       console.error('[Gateway] Another gateway instance is likely already running.');
       console.error(`[Gateway] The configured gateway port is ${port}; use a different instance port if needed.`);
