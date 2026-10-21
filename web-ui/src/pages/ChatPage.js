@@ -9360,10 +9360,10 @@ function renderAssistantContent(content, message = null) {
     return `
       <div class="msg-staged">
         ${head ? `<div class="msg-content markdown-body">${renderMd(head, markdownOptions)}</div>` : ''}
-        <div class="msg-stage">
-          <div class="msg-stage-title">Background agent response</div>
+        <details class="msg-stage msg-stage--bg">
+          <summary class="msg-stage-title">Background agent response</summary>
           <div class="msg-content markdown-body">${renderMd(bgBody || 'No background details provided.', markdownOptions)}</div>
-        </div>
+        </details>
       </div>
     `;
   }
@@ -19178,7 +19178,7 @@ function renderBackgroundSpawnDock() {
   dock.dataset.backgroundRenderSignature = signature;
   updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
-  dock.classList.toggle('has-many', lanes.length > 2);
+  dock.classList.toggle('has-many', lanes.length > 1);
   if (!dock.dataset.wheelScrollBound) {
     dock.dataset.wheelScrollBound = '1';
     // Mouse wheels only emit deltaY; map it to the horizontal agent strip.
@@ -19215,7 +19215,8 @@ function renderBackgroundSpawnDock() {
     updateBackgroundSpawnDockOffset();
     return;
   }
-  dock.innerHTML = `${lanes.length > 2 ? '<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents">×</button>' : ''}${lanes.map((lane) => {
+  // Desktop matches mobile: the cards can always fold into the "N Agents" pill.
+  dock.innerHTML = `<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents" title="Collapse to pill">×</button>${lanes.map((lane) => {
     const status = String(lane.status || 'running').toLowerCase();
     const statusLabel = status === 'in_progress' ? 'running' : status;
     const detail = backgroundSpawnCollapsedDetail(lane, backgroundAgentPreview);
@@ -48477,15 +48478,34 @@ wsEventBus.on('bg_agent_done', (msg) => {
     );
   }
   if (msg.state !== 'completed' || !msg.result) return;
-  if (window.isThinking) {
+  // Route strictly by the spawner session. The result must never land in
+  // whichever chat happens to be open on this device.
+  if (!sessionId) return;
+  const isActiveTarget = sessionId === String(window.activeChatSessionId || '').trim();
+  if (isActiveTarget && window.isThinking) {
     addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });
     renderProcessLog();
     return;
   }
-  // Only inject into the currently active session's history
-  const activeSession = window.chatSessions?.find(s => s.id === window.activeChatSessionId);
-  if (!activeSession) return;
-  const history = activeSession.history || [];
+  const targetSession = window.chatSessions?.find(s => s.id === sessionId);
+  if (!targetSession) return;
+  if (!isActiveTarget) {
+    // Inactive chat: append to its stored history only; the server-side
+    // transcript stays authoritative when that chat is reopened.
+    const h = Array.isArray(targetSession.history) ? targetSession.history : [];
+    let idx = -1;
+    for (let i = h.length - 1; i >= 0; i--) {
+      if (h[i].role === 'ai' || h[i].role === 'assistant') { idx = i; break; }
+    }
+    if (idx === -1) return;
+    const prior = String(h[idx].content || '');
+    if (/background agent response:/i.test(prior)) return;
+    h[idx] = { ...h[idx], content: prior.trim() + '\n\nBackground agent response:\n' + String(msg.result || '') };
+    targetSession.history = h;
+    saveChatSessions();
+    return;
+  }
+  const history = targetSession.history || [];
   // Find the last AI message
   let lastAiIdx = -1;
   for (let i = history.length - 1; i >= 0; i--) {

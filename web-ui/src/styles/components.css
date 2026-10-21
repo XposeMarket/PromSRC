@@ -1138,6 +1138,28 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   font-weight: 800;
   margin-bottom: 6px;
 }
+details.msg-stage--bg > summary.msg-stage-title {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+details.msg-stage--bg > summary.msg-stage-title::-webkit-details-marker { display: none; }
+details.msg-stage--bg > summary.msg-stage-title::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+details.msg-stage--bg[open] > summary.msg-stage-title { margin-bottom: 6px; }
+details.msg-stage--bg[open] > summary.msg-stage-title::before { transform: rotate(45deg); }
+details.msg-stage--bg > summary.msg-stage-title:hover { color: var(--text); }
 .artifact-list {
   margin-top: 10px;
   display: flex;
@@ -1403,15 +1425,19 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   left: 50%;
   bottom: var(--background-spawn-dock-bottom, 128px);
   transform: translateX(-50%);
-  width: min(320px, calc(100% - 40px));
+  /* One horizontal row (side scroller) instead of a vertical stack. */
+  width: max-content;
+  max-width: min(860px, calc(100% - 40px));
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
   z-index: 11;
   pointer-events: none;
 }
 .background-spawn-dock[hidden] { display: none; }
-.background-spawn-dock.has-many { width: min(860px, calc(100% - 40px)); flex-direction: row; flex-wrap: nowrap; align-items: stretch; overflow-x: auto; overflow-y: hidden; pointer-events: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; padding-bottom: 4px; }
+.background-spawn-dock > .background-spawn-lane { flex: 0 0 min(260px, calc(100vw - 96px)); min-width: 0; }
+.background-spawn-dock.has-many { flex-direction: row; flex-wrap: nowrap; align-items: stretch; overflow-x: auto; overflow-y: hidden; pointer-events: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: thin; padding-bottom: 4px; }
 .background-spawn-dock.has-many > * { scroll-snap-align: start; }
 .background-spawn-dock.is-collapsed { width: max-content; max-width: calc(100% - 40px); }
 .background-spawn-pill {
@@ -1433,12 +1459,14 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 .background-spawn-pill strong { font-size: 11px; font-weight: 700; }
 .background-spawn-pill-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--pm-orange, var(--t-accent)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--pm-orange, var(--t-accent)) 14%, transparent); }
 .background-spawn-close {
-  position: absolute;
-  top: -9px;
-  right: -9px;
+  /* Inline first item of the row; sticky so it stays reachable while scrolling. */
+  position: sticky;
+  left: 0;
   z-index: 3;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 26px;
+  align-self: center;
+  width: 26px;
+  height: 26px;
   border: 1px solid var(--composer-border);
   border-radius: 999px;
   background: var(--composer-bg);
@@ -1463,7 +1491,7 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   backdrop-filter: blur(18px) saturate(1.18);
   -webkit-backdrop-filter: blur(18px) saturate(1.18);
 }
-.background-spawn-dock.has-many .background-spawn-lane { flex: 0 0 min(250px, calc(100% - 16px)); min-width: 0; }
+.background-spawn-close:hover, .background-spawn-close:focus-visible { color: var(--text); }
 .background-spawn-summary {
   width: 100%;
   min-height: 44px;
@@ -4652,7 +4680,9 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
 .streaming-question-dock .chat-approval-card { margin: 0; }
 
 .inline-runtime-plan {
-  width: min(620px, calc(100vw - 180px));
+  /* Size to the chat column, not the viewport, so it never overflows when the right panel is open. */
+  width: min(620px, 100%);
+  box-sizing: border-box;
   max-width: 100%;
   margin: 10px 0 2px;
   border: 1px solid var(--progress-border);
