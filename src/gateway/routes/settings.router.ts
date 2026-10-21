@@ -746,6 +746,7 @@ router.get('/api/settings/session', async (_req, res) => {
       rollingCompactionToolTurns: toBoundedInt(cfg.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
       rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
       rollingCompactionModel: String(cfg.rollingCompactionModel || '').trim(),
+      busyComposerMode: cfg.busyComposerMode === 'steer' ? 'steer' : 'queue',
       mainChatGoals: mergeMainChatGoalRouting(cfg.mainChatGoals, {}),
       autoSettle: autoSettleStatus.settings,
       contextProfile,
@@ -797,6 +798,9 @@ router.post('/api/settings/session', async (req, res) => {
         d.rollingCompactionSummaryMaxWords,
       ),
       rollingCompactionModel: String(body.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
+      busyComposerMode: body.busyComposerMode === undefined
+        ? (existing.busyComposerMode === 'steer' ? 'steer' : 'queue')
+        : (body.busyComposerMode === 'steer' ? 'steer' : 'queue'),
       mainChatGoals: mergeMainChatGoalRouting(body.mainChatGoals, existing.mainChatGoals),
     };
 

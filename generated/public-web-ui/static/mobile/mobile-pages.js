@@ -2960,6 +2960,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
   }
 }
 
+window.__pmSteerMobileQueuedPrompt = _steerMobileQueuedPrompt;
+
 function _renderMobileQueuedPromptsPanel(sessionId = '') {
   const panel = document.getElementById('pm-mobile-queued-prompts');
   if (!panel) return;
