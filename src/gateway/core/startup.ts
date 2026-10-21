@@ -37,8 +37,7 @@ import {
   quarantineOrphanedTeamWorkspaces,
 } from '../teams/managed-teams';
 import { handleManagerConversation } from '../teams/team-manager-runner';
-import { buildOpenEscalationsSection } from '../teams/team-escalation-delivery';
-import { setEscalationReviewRunner } from '../teams/team-escalation-delivery';
+import { buildOpenEscalationsSection, setEscalationReviewRunner } from '../teams/team-escalation-delivery';
 import { getTeamWorkspacePath, readTeamMemoryContext, initTeamWorkspaceArtifacts } from '../teams/team-workspace';
 import type { BrainRunner } from '../brain/brain-runner';
 import { setTeamRunAgentFn } from '../teams/team-manager-runner';
@@ -151,8 +150,8 @@ function buildOriginatingTranscript(workspacePath: string, sessionId?: string): 
 
 function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns: number): string {
   // Open escalations lead the packet (empty string when none, so the block is omitted).
-  const openEscalations = buildOpenEscalationsSection(getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId));
   const team = getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId);
+  const openEscalations = buildOpenEscalationsSection(team);
   const teamName = team?.name || teamId;
   const workspacePath = getConfig().getWorkspacePath();
   const teamWs = getTeamWorkspacePath(teamId);

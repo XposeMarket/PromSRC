@@ -9,7 +9,7 @@
  */
 import {
   getManagedTeam,
-  saveManagedTeam,
+  updateMainAgentThreadMessages,
   escalationViewsFromTeam,
   type EscalationView,
   type MainAgentThreadMessage,
@@ -67,14 +67,27 @@ export function buildOpenEscalationsSection(team: any, now: number = Date.now())
   ].join('\n');
 }
 
-function buildEscalationReviewPrompt(team: any, msg: MainAgentThreadMessage, view: EscalationView, attempt: number, now: number): string {
-  const others = escalationViewsFromTeam(team, now).filter(v => v.id !== msg.id);
+/** One review task per batch: every escalation in items gets its id, type, and exact tool calls. */
+function buildEscalationReviewPrompt(
+  team: any,
+  items: Array<{ msg: MainAgentThreadMessage; view: EscalationView }>,
+  now: number,
+): string {
+  const batchIds = new Set(items.map(i => i.msg.id));
+  const others = escalationViewsFromTeam(team, now).filter(v => !batchIds.has(v.id));
   const recentChat = (team.teamChat || []).slice(-10)
     .map((m: any) => `- [${m.fromName || m.from}] ${String(m.content || '').replace(/\s+/g, ' ').slice(0, 300)}`)
     .join('\n') || '(no recent team chat)';
   const otherLines = others.length
     ? others.map(v => `- [${v.id}] type=${v.type} age=${formatAge(v.ageMs)}: ${v.preview}`).join('\n')
     : '(none)';
+  const blocks = items.flatMap(({ msg, view }, i) => [
+    `Escalation ${i + 1} of ${items.length}: id ${msg.id} (type=${msg.type}, level=${view.level}, age=${formatAge(view.ageMs)}, attempt ${msg.deliveryCount || 1} of ${MAX_ESCALATION_DELIVERIES})`,
+    String(msg.content || ''),
+    `  Escalate to user: team_ops_wrapper(action="escalation", escalation_action="escalate_to_user", team_id="${team.id}", message_id="${msg.id}", note="...")`,
+    `  Dismiss (stale or duplicate): team_ops_wrapper(action="escalation", escalation_action="dismiss", team_id="${team.id}", message_id="${msg.id}", note="...")`,
+    '',
+  ]);
   return [
     'You are Prometheus main agent. A managed team manager escalated to you and needs a decision.',
     '',
@@ -82,27 +95,81 @@ function buildEscalationReviewPrompt(team: any, msg: MainAgentThreadMessage, vie
     `Purpose: ${team.purpose || team.mission || team.teamContext || ''}`,
     `Current focus: ${team.currentFocus || ''}`,
     '',
-    `Escalation ${msg.id} (type=${msg.type}, level=${view.level}, age=${formatAge(view.ageMs)}, attempt ${attempt} of ${MAX_ESCALATION_DELIVERIES}):`,
-    String(msg.content || ''),
+    `${items.length} escalation(s) need a decision in this review:`,
     '',
+    ...blocks,
     'Other open escalations for this team:',
     otherLines,
     '',
     'Recent team chat:',
     recentChat,
     '',
-    'Pick exactly one outcome:',
-    `1) Reply/decide: reply_to_team(team_id="${team.id}", message="...") with the decision or missing context. The manager resumes and this escalation is answered.`,
-    `2) Escalate to the user (credentials, payments, accounts, destructive or irreversible actions, or anything only the user can do): team_ops_wrapper(action="escalation", escalation_action="escalate_to_user", team_id="${team.id}", message_id="${msg.id}", note="...").`,
-    `3) Dismiss (stale or duplicate): team_ops_wrapper(action="escalation", escalation_action="dismiss", team_id="${team.id}", message_id="${msg.id}", note="...").`,
+    'Decide every escalation above. Pick one outcome for each:',
+    `1) Reply/decide for the team: reply_to_team(team_id="${team.id}", message="...") answers EVERY open escalation for this team, so one reply can cover the whole batch. The manager resumes.`,
+    '2) Or handle one message with the escalate or dismiss calls listed under it (escalate to user for credentials, payments, accounts, destructive or irreversible actions; dismiss for stale or duplicate items).',
     '',
-    'Do not reply with only "noted". Choose one outcome.',
+    'Do not reply with only "noted". Choose an outcome for every escalation.',
   ].join('\n');
 }
 
+
+/** True when a message has never been delivered, or its last delivery is at least ESCALATION_REDELIVER_MS old. */
+function isDueForDelivery(team: any, messageId: string, now: number): boolean {
+  const msg = (team.mainAgentThread || []).find((m: MainAgentThreadMessage) => m.id === messageId);
+  return !msg?.deliveredAt || now - msg.deliveredAt >= ESCALATION_REDELIVER_MS;
+}
+
 /**
- * Deliver one open escalation to main. Dedup: skipped if delivered within ESCALATION_REDELIVER_MS
- * (unless opts.force). On the MAX_ESCALATION_DELIVERIES-th delivery the message becomes escalated_to_user.
+ * Stamp every escalation in the batch (one shared session id, per-message 3-strike rule) on a
+ * freshly loaded team, then queue ONE review task that covers the whole batch.
+ * Returns the stamped messages (empty when there is no runner or nothing matched).
+ */
+async function queueEscalationBatch(teamId: string, batch: EscalationView[], now: number): Promise<MainAgentThreadMessage[]> {
+  const runner = reviewRunner;
+  if (!runner || !batch.length) return [];
+  const sessionId = `team_escalation_${teamId}_${now.toString(36)}`;
+  const ids = new Set(batch.map(v => v.id));
+  const stamped = updateMainAgentThreadMessages(
+    teamId,
+    m => ids.has(m.id),
+    m => {
+      const count = (m.deliveryCount || 0) + 1;
+      return count >= MAX_ESCALATION_DELIVERIES
+        ? { deliveredAt: now, deliveryCount: count, deliverySessionId: sessionId, status: 'escalated_to_user', read: false }
+        : { deliveredAt: now, deliveryCount: count, deliverySessionId: sessionId };
+    },
+  );
+  if (!stamped.length) return [];
+
+  const team: any = getManagedTeam(teamId);
+  const teamName = team?.name || teamId;
+  const items = stamped.map(msg => ({ msg, view: batch.find(v => v.id === msg.id)! }));
+  const job: EscalationReviewJob = {
+    teamId,
+    teamName,
+    sessionId,
+    title: stamped.length === 1
+      ? `Team Escalation: ${teamName} (${stamped[0].type})`
+      : `Team Escalation: ${teamName} (${stamped.length} messages)`,
+    prompt: buildEscalationReviewPrompt(team, items, now),
+    source: 'team_escalation',
+    plan: [
+      { index: 0, description: 'Read the escalations and team state.', status: 'pending' },
+      { index: 1, description: 'Decide each escalation: reply to the team, escalate to the user, or dismiss.', status: 'pending' },
+    ],
+  };
+  try {
+    await runner(job);
+  } catch (err: any) {
+    console.warn(`[TeamEscalation] review task failed to start for ${teamId}: ${err?.message || err}`);
+  }
+  return stamped;
+}
+
+/**
+ * Deliver one open escalation to main (a single message_main_agent call delivers just that message).
+ * Dedup: skipped if delivered within ESCALATION_REDELIVER_MS (unless opts.force).
+ * On the MAX_ESCALATION_DELIVERIES-th delivery the message becomes escalated_to_user.
  */
 export async function deliverTeamEscalation(
   teamId: string,
@@ -121,49 +188,24 @@ export async function deliverTeamEscalation(
   }
   if (!reviewRunner) return { delivered: false, reason: 'no_runner' };
 
-  const count = (msg.deliveryCount || 0) + 1;
-  msg.deliveredAt = now;
-  msg.deliveryCount = count;
-  msg.deliverySessionId = `team_escalation_${teamId}_${messageId}_${count}`;
-  if (count >= MAX_ESCALATION_DELIVERIES) {
-    msg.status = 'escalated_to_user';
-    msg.read = false;
-  }
-  saveManagedTeam(team);
-
-  const job: EscalationReviewJob = {
-    teamId,
-    teamName: team.name || teamId,
-    sessionId: msg.deliverySessionId,
-    title: `Team Escalation: ${team.name || teamId} (${msg.type})`,
-    prompt: buildEscalationReviewPrompt(team, msg, { ...view, deliveryCount: count }, count, now),
-    source: 'team_escalation',
-    plan: [
-      { index: 0, description: 'Read the escalation and team state.', status: 'pending' },
-      { index: 1, description: 'Decide: reply to the team, escalate to the user, or dismiss.', status: 'pending' },
-    ],
-  };
-  try {
-    await reviewRunner(job);
-  } catch (err: any) {
-    console.warn(`[TeamEscalation] review task failed to start for ${teamId}: ${err?.message || err}`);
-  }
-  return { delivered: true, reason: 'delivered', status: msg.status || 'open', deliveryCount: count };
+  const [stamped] = await queueEscalationBatch(teamId, [view], now);
+  if (!stamped) return { delivered: false, reason: 'message_not_found' };
+  return { delivered: true, reason: 'delivered', status: stamped.status || 'open', deliveryCount: stamped.deliveryCount };
 }
 
 /**
- * Lazy redelivery sweep for one team. Called at coordinator turn start.
- * Delivers every open escalation whose last delivery is older than ESCALATION_REDELIVER_MS
- * (or that was never delivered, which backfills legacy records). Paused teams are skipped.
+ * Lazy redelivery sweep for one team, called at coordinator turn start.
+ * Batches per team: every due open escalation goes into ONE review task. Due means never delivered
+ * or last delivered at least ESCALATION_REDELIVER_MS ago. Paused teams are skipped.
+ * Returns the number of escalations delivered in the batch (0 means no task was queued).
  */
 export async function sweepTeamEscalations(teamId: string, now: number = Date.now()): Promise<number> {
   const team: any = getManagedTeam(teamId);
   if (!team || team.manager?.paused === true) return 0;
-  let delivered = 0;
-  for (const v of escalationViewsFromTeam(team, now)) {
-    if (v.status !== 'open') continue;
-    const result = await deliverTeamEscalation(teamId, v.id, { now });
-    if (result.delivered) delivered++;
-  }
-  return delivered;
+  const due = escalationViewsFromTeam(team, now)
+    .filter(v => v.status === 'open' && isDueForDelivery(team, v.id, now));
+  if (!due.length) return 0;
+  const stamped = await queueEscalationBatch(teamId, due, now);
+  return stamped.length;
 }
+

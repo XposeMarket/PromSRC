@@ -1200,6 +1200,10 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         if (!outcome) return { name, args, result: `ERROR: unknown escalation_action "${sub}". Use list, dismiss, escalate_to_user, or answered.`, error: true };
         if (!teamId || !messageId) return { name, args, result: 'ERROR: escalation_action requires team_id and message_id (from list).', error: true };
         const changed = resolveEscalation(teamId, messageId, outcome as any, 'escalation_tool');
+        const escalationNote = String(args?.note || '').trim();
+        if (changed && escalationNote) {
+          appendTeamChat(teamId, { from: 'user', fromName: 'Main Agent', content: `Escalation ${outcome} (${messageId}): ${escalationNote}` });
+        }
         if (!changed) return { name, args, result: `ERROR: no open escalation ${messageId} on team ${teamId}.`, error: true };
         return { name, args, result: JSON.stringify({ success: true, team_id: teamId, message_id: messageId, status: outcome }, null, 2), error: false };
       }

@@ -96,6 +96,24 @@ async function main() {
   assert.equal(await delivery.sweepTeamEscalations(team.id, t0 + 100 * H + 7 * H), 1, 'sweep after 6h: redelivers');
   assert.equal(jobs.length, before + 2);
 
+  // 9b) Batch per team: 3 open escalations swept together queue exactly ONE task, all stamped with the same session.
+  const batchTeam = managed.createManagedTeam({
+    name: 'Batch', description: 'd', subagentIds: [], teamContext: 'ctx', managerSystemPrompt: 'p',
+  });
+  const batchIds = ['one', 'two', 'three'].map(label => managed.appendMainAgentThread(batchTeam.id, {
+    from: 'coordinator', content: `Blocked ${label}`, read: false, type: 'error', level: 'main', waitForReply: true, status: 'open',
+  })!.id);
+  const beforeBatch = jobs.length;
+  assert.equal(await delivery.sweepTeamEscalations(batchTeam.id, t0 + 200 * H), 3, 'batch sweep stamps all three');
+  assert.equal(jobs.length, beforeBatch + 1, 'batch sweep queues exactly one task');
+  const batchJob = jobs[jobs.length - 1];
+  for (const id of batchIds) assert.ok(batchJob.prompt.includes(id), 'batch prompt lists every escalation id');
+  const batchMsgs = managed.getManagedTeam(batchTeam.id)!.mainAgentThread!.filter(m => batchIds.includes(m.id));
+  assert.deepEqual(batchMsgs.map(m => m.deliverySessionId), [batchJob.sessionId, batchJob.sessionId, batchJob.sessionId], 'one session id for the batch');
+  assert.ok(batchMsgs.every(m => m.deliveryCount === 1 && m.deliveredAt === t0 + 200 * H), 'each message stamped');
+  assert.equal(await delivery.sweepTeamEscalations(batchTeam.id, t0 + 200 * H + 1 * H), 0, 'second batch sweep within 6h queues 0');
+  assert.equal(jobs.length, beforeBatch + 1, 'still one task after second sweep');
+
   // 10) Legacy records (no status fields) still count as open main escalations and markCoordinatorMessagesRead clears them.
   const legacyTeam = managed.createManagedTeam({
     name: 'Legacy', description: 'd', subagentIds: [], teamContext: 'ctx', managerSystemPrompt: 'p',
@@ -107,7 +125,24 @@ async function main() {
   managed.markCoordinatorMessagesRead(legacyTeam.id);
   assert.deepEqual(managed.listOpenEscalations(legacyTeam.id), [], 'legacy cleared by markCoordinatorMessagesRead');
 
-  console.log('team escalation routing regression: PASS (open/dedup/6h redelivery/3-strikes/answered/FYI/packet section/sweep/legacy)');
+  // 11) Legacy filter: an unread legacy 'status' message is NOT listed and is NOT delivered.
+  const legacyStatusTeam = managed.createManagedTeam({
+    name: 'LegacyStatus', description: 'd', subagentIds: [], teamContext: 'ctx', managerSystemPrompt: 'p',
+  });
+  const legacyStatus = managed.appendMainAgentThread(legacyStatusTeam.id, { from: 'coordinator', content: 'old status chatter', read: false, type: 'status' })!;
+  assert.deepEqual(managed.listOpenEscalations(legacyStatusTeam.id), [], 'legacy unread status is not listed');
+  const legacyStatusDelivery = await delivery.deliverTeamEscalation(legacyStatusTeam.id, legacyStatus.id, { now: t0 });
+  assert.equal(legacyStatusDelivery.reason, 'not_open', 'legacy unread status is not delivered');
+  assert.equal(await delivery.sweepTeamEscalations(legacyStatusTeam.id, t0), 0, 'legacy unread status is not swept');
+
+  // 12) Legacy filter: an unread legacy 'planning' message IS listed (open, level main).
+  const legacyPlanningTeam = managed.createManagedTeam({
+    name: 'LegacyPlanning', description: 'd', subagentIds: [], teamContext: 'ctx', managerSystemPrompt: 'p',
+  });
+  const legacyPlanning = managed.appendMainAgentThread(legacyPlanningTeam.id, { from: 'coordinator', content: 'old planning', read: false, type: 'planning' })!;
+  assert.deepEqual(managed.listOpenEscalations(legacyPlanningTeam.id).map(v => v.id), [legacyPlanning.id], 'legacy unread planning is listed');
+
+  console.log('team escalation routing regression: PASS (open/dedup/6h redelivery/3-strikes/answered/FYI/packet section/sweep/batch per team/legacy status excluded/legacy planning listed)');
 }
 
 main().catch((err) => {
