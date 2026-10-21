@@ -72,11 +72,18 @@ function hydrateProjectSessions(project: any): any {
         if (!sessionExists(sessionId)) return stored;
         const session = getSession(sessionId);
         const firstUserMsg = session.history?.find((m: any) => m.role === 'user');
-        const title = session.externalImport?.source
-          ? (session.title || firstUserMsg?.content || stored.title || 'New chat')
+        // Prefer the real chat title (auto-generated or user-renamed) so project lists match the
+        // main chat list. Fall back to the stored title, then the first user message.
+        const sessionTitle = String(session.title || '').trim();
+        const storedTitle = String(stored.title || '').trim();
+        const isPlaceholder = (t: string) => !t || /^new chat$/i.test(t);
+        const title = !isPlaceholder(sessionTitle)
+          ? sessionTitle
+          : !isPlaceholder(storedTitle)
+          ? storedTitle
           : firstUserMsg?.content
-          ? String(firstUserMsg.content).slice(0, 60)
-          : (stored.title || 'New chat');
+          ? String(firstUserMsg.content).replace(/\s+/g, ' ').trim().slice(0, 60)
+          : 'New chat';
         const lastHistoryMessage = session.history?.[session.history.length - 1];
         return {
           ...stored,
