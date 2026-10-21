@@ -36,6 +36,8 @@ const tools = [
   'connector_github_close_pr',
   'connector_github_update_issue',
   'connector_github_comment',
+  'connector_github_create_review',
+  'connector_github_list_review_comments',
   'connector_github_api_request',
 ];
 
@@ -64,6 +66,81 @@ function cleanPatch<T extends Record<string, any>>(patch: T): Partial<T> {
 
 function resolveIssueNumber(args: any): number | null {
   return resolvePullRequestNumber({ pr_number: args?.issue_number ?? args?.issueNumber ?? args?.pr_number ?? args?.pull_number ?? args?.number });
+}
+
+const REVIEW_EVENTS = ['COMMENT', 'REQUEST_CHANGES', 'APPROVE'];
+const REVIEW_SIDES = ['LEFT', 'RIGHT'];
+const MAX_REVIEW_COMMENTS = 50;
+const GITHUB_NAME_RE = /^[A-Za-z0-9_.-]+$/;
+
+function positiveInt(value: unknown): number | null {
+  const n = typeof value === 'string' && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+function reviewPrefix(args: any): { path: string } | { error: string } {
+  const owner = typeof args?.owner === 'string' ? args.owner.trim() : '';
+  const repo = typeof args?.repo === 'string' ? args.repo.trim() : '';
+  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) return { error: 'owner and repo are required.' };
+  const prNumber = resolvePullRequestNumber(args);
+  if (prNumber === null) return { error: 'pr_number is required and must be a positive integer (pull request number).' };
+  return { path: `/repos/${owner}/${repo}/pulls/${prNumber}` };
+}
+
+/** Pure request builder for create_review. Validates everything before any API call. */
+export function buildGitHubReviewCall(args: any): { method: 'POST'; path: string; body: Record<string, unknown>; commentCount: number } | { error: string } {
+  const prefix = reviewPrefix(args);
+  if ('error' in prefix) return prefix;
+  const summary = typeof args?.body === 'string' ? args.body.trim() : '';
+  if (!summary) return { error: 'body is required: the review summary cannot be empty.' };
+  const event = args?.event === undefined || args?.event === null || args?.event === '' ? 'COMMENT' : String(args.event).trim().toUpperCase();
+  if (!REVIEW_EVENTS.includes(event)) return { error: `event must be one of ${REVIEW_EVENTS.join(', ')}.` };
+  const rawComments = args?.comments ?? [];
+  if (!Array.isArray(rawComments)) return { error: 'comments must be an array.' };
+  if (rawComments.length > MAX_REVIEW_COMMENTS) return { error: `comments may contain at most ${MAX_REVIEW_COMMENTS} items.` };
+  const comments: Record<string, unknown>[] = [];
+  for (let i = 0; i < rawComments.length; i++) {
+    const c: any = rawComments[i];
+    const at = `comments[${i}]`;
+    if (!c || typeof c !== 'object') return { error: `${at} must be an object.` };
+    const path = typeof c.path === 'string' ? c.path.trim() : '';
+    if (!path) return { error: `${at}.path is required.` };
+    const line = positiveInt(c.line);
+    if (line === null) return { error: `${at}.line must be a positive integer.` };
+    const side = c.side === undefined || c.side === null || c.side === '' ? 'RIGHT' : String(c.side).trim().toUpperCase();
+    if (!REVIEW_SIDES.includes(side)) return { error: `${at}.side must be LEFT or RIGHT.` };
+    const text = typeof c.body === 'string' ? c.body.trim() : '';
+    if (!text) return { error: `${at}.body is required.` };
+    const out: Record<string, unknown> = { path, line, side, body: text };
+    if (c.start_line !== undefined && c.start_line !== null) {
+      const startLine = positiveInt(c.start_line);
+      if (startLine === null || startLine > line) return { error: `${at}.start_line must be a positive integer no greater than line.` };
+      out.start_line = startLine;
+      const startSide = c.start_side === undefined || c.start_side === null || c.start_side === '' ? side : String(c.start_side).trim().toUpperCase();
+      if (!REVIEW_SIDES.includes(startSide)) return { error: `${at}.start_side must be LEFT or RIGHT.` };
+      out.start_side = startSide;
+    }
+    comments.push(out);
+  }
+  const path = `${prefix.path}/reviews`;
+  const pathError = validateGitHubApiPath(path);
+  if (pathError) return { error: pathError };
+  const body: Record<string, unknown> = { event, body: summary, comments };
+  const commitId = typeof args?.commit_id === 'string' ? args.commit_id.trim() : '';
+  if (commitId) body.commit_id = commitId;
+  return { method: 'POST', path, body, commentCount: comments.length };
+}
+
+/** Pure request builder for list_review_comments (read-only GET). */
+export function buildGitHubReviewCommentsCall(args: any): { method: 'GET'; path: string } | { error: string } {
+  const prefix = reviewPrefix(args);
+  if ('error' in prefix) return prefix;
+  const perPage = args?.per_page === undefined || args?.per_page === null ? 30 : positiveInt(args.per_page);
+  if (perPage === null) return { error: 'per_page must be a positive integer.' };
+  const path = `${prefix.path}/comments?per_page=${Math.min(perPage, 100)}`;
+  const pathError = validateGitHubApiPath(path);
+  if (pathError) return { error: pathError };
+  return { method: 'GET', path };
 }
 
 function gh(): GitHubConnector | undefined {
@@ -317,6 +394,88 @@ const ext: PrometheusExtensionDefinition = {
         return toolOk(`Comment posted: ${comment.html_url}`);
       }),
     });
+
+    api.registerTool({
+      name: 'connector_github_create_review',
+      description: '[GitHub] Post a pull request review: a summary body, an event (COMMENT, REQUEST_CHANGES, or APPROVE), and optional inline comments pinned to path + line. Requires approval in Default permissions mode.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'pr_number', 'body'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          pr_number: { type: 'number', description: 'Pull request number' },
+          body: { type: 'string', description: 'Review summary (markdown)' },
+          event: { type: 'string', enum: REVIEW_EVENTS, description: 'COMMENT (default), REQUEST_CHANGES, or APPROVE' },
+          commit_id: { type: 'string', description: 'Optional commit SHA the review applies to (defaults to the PR head)' },
+          comments: {
+            type: 'array',
+            description: 'Inline comments, max 50. Each needs path, line, and body. side defaults to RIGHT. Use start_line (and start_side) for a multi-line range.',
+            items: {
+              type: 'object',
+              required: ['path', 'line', 'body'],
+              properties: {
+                path: { type: 'string', description: 'File path in the diff' },
+                line: { type: 'number', description: 'Line number in the file (positive integer)' },
+                side: { type: 'string', enum: REVIEW_SIDES, description: 'RIGHT (new code, default) or LEFT (deleted code)' },
+                start_line: { type: 'number', description: 'First line of a multi-line range (must be <= line)' },
+                start_side: { type: 'string', enum: REVIEW_SIDES, description: 'Side for start_line (defaults to side)' },
+                body: { type: 'string', description: 'Comment text (markdown)' },
+              },
+            },
+          },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: WRITE_EFFECTS,
+      execute: async (args: any) => {
+        const call = buildGitHubReviewCall(args);
+        if ('error' in call) return toolError(call.error);
+        return withConn(async (c) => {
+          const res = await c.apiRequest(call.method, call.path, call.body);
+          if (!res.ok) {
+            const detail = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+            return toolError(`GitHub rejected the review (${res.status}): ${String(detail).slice(0, 2000)}`);
+          }
+          const review = res.data ?? {};
+          return toolOk({ id: review.id, html_url: review.html_url, state: review.state, comments_posted: call.commentCount });
+        });
+      },
+    });
+
+    api.registerTool({
+      name: 'connector_github_list_review_comments',
+      description: '[GitHub] List inline review comments on a pull request (path, line, body, author). Read-only.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'pr_number'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          pr_number: { type: 'number', description: 'Pull request number' },
+          per_page: { type: 'number', description: 'Number of comments (default: 30, max 100)' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      execute: async (args: any) => {
+        const call = buildGitHubReviewCommentsCall(args);
+        if ('error' in call) return toolError(call.error);
+        return withConn(async (c) => {
+          const res = await c.apiRequest(call.method, call.path);
+          if (!res.ok) return toolError(`GitHub returned ${res.status} while listing review comments.`);
+          const items: any[] = Array.isArray(res.data) ? res.data : [];
+          return toolOk(items.map((x: any) => ({
+            id: x.id,
+            path: x.path,
+            line: x.line ?? x.original_line ?? null,
+            body: String(x.body ?? '').slice(0, 500),
+            user: x.user?.login ?? null,
+            html_url: x.html_url,
+          })));
+        });
+      },
+    });
+
 
     api.registerTool({
       name: 'connector_github_api_request',
