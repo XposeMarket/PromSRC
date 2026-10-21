@@ -208,7 +208,9 @@ async function main(): Promise<void> {
     console.log('project-membership regression passed');
   } finally {
     // The audit logger may still be flushing into the temp dir; retry instead of failing on ENOTEMPTY.
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    // Best-effort: a Windows temp dir left behind must not turn a passing test into a failure.
+    try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+    catch (error: any) { console.warn(`[project-membership] temp cleanup skipped: ${error?.code || error}`); }
   }
 }
 
