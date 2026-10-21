@@ -1802,6 +1802,29 @@ export async function createMobileProjectChatSession(projectId, { title = 'New C
   });
 }
 
+// Moves an EXISTING chat into a project (leaves any other project). Membership only.
+export async function attachMobileSessionToProject(projectId, sessionId) {
+  const pid = String(projectId || '').trim();
+  const sid = String(sessionId || '').trim();
+  if (!pid) throw new Error('Project id required');
+  if (!sid) throw new Error('Session id required');
+  return mfetch(`/api/projects/${encodeURIComponent(pid)}/sessions/attach`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: sid }),
+  });
+}
+
+// Removes project membership only. The chat is kept (deleteChat=false).
+export async function detachMobileSessionFromProject(projectId, sessionId) {
+  const pid = String(projectId || '').trim();
+  const sid = String(sessionId || '').trim();
+  if (!pid) throw new Error('Project id required');
+  if (!sid) throw new Error('Session id required');
+  return mfetch(`/api/projects/${encodeURIComponent(pid)}/sessions/${encodeURIComponent(sid)}?deleteChat=false`, {
+    method: 'DELETE',
+  });
+}
+
 export async function resolveMobileVoiceRoom(participants = []) {
   return mfetch('/api/voice-rooms/resolve', {
     method: 'POST',

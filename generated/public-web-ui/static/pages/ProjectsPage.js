@@ -259,12 +259,14 @@ async function createProjectApi(name, workspacePath = '') {
   });
 }
 
-async function deleteProjectApi(projectId) {
-  return await api(`/api/projects/${projectId}`, { method: 'DELETE' });
+// Chats are kept by default; deleteSessions=true also deletes every chat in the project.
+async function deleteProjectApi(projectId, deleteSessions = false) {
+  return await api(`/api/projects/${projectId}?deleteSessions=${deleteSessions ? 'true' : 'false'}`, { method: 'DELETE' });
 }
 
 async function deleteProjectSessionApi(projectId, sessionId) {
-  return await api(`/api/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' });
+  // This path is the explicit "Delete chat" action, so it also deletes the chat record.
+  return await api(`/api/projects/${projectId}/sessions/${sessionId}?deleteChat=true`, { method: 'DELETE' });
 }
 
 async function updateProjectInstructionsApi(projectId, instructions) {
@@ -824,37 +826,50 @@ window.openProjectSession = async function(projectId, sessionId) {
 // ─── Deletion ────────────────────────────────────────────────────────────────
 
 window.confirmDeleteProject = async function(projectId, projectName) {
-  showConfirm(
-    `Delete project "${projectName}"? This will permanently delete all sessions and knowledge files in the project workspace.`,
-    async () => {
-      try {
-        await deleteProjectApi(projectId);
-        showToast(`Project "${projectName}" deleted.`);
-        _expandedProjectIds.delete(projectId);
-        if (_currentProjectSessionId) {
-          const proj = _projects.find(p => p.id === projectId);
-          const owned = (proj?.sessions || []).find(s => s.id === _currentProjectSessionId);
-          if (owned) {
-            _currentProjectSessionId = null;
-            document.body.classList.remove('in-project-session');
-            delete document.body.dataset.projectId;
-            delete document.body.dataset.projectName;
-          }
+  const chatCount = (_projects.find(p => p.id === projectId)?.sessions || []).length;
+  const removeProject = async (deleteSessions) => {
+    try {
+      await deleteProjectApi(projectId, deleteSessions);
+      showToast(deleteSessions
+        ? `Project "${projectName}" and its chats deleted.`
+        : `Project "${projectName}" deleted. Its chats were kept.`);
+      _expandedProjectIds.delete(projectId);
+      if (_currentProjectSessionId) {
+        const proj = _projects.find(p => p.id === projectId);
+        const owned = (proj?.sessions || []).find(s => s.id === _currentProjectSessionId);
+        if (owned) {
+          _currentProjectSessionId = null;
+          document.body.classList.remove('in-project-session');
+          delete document.body.dataset.projectId;
+          delete document.body.dataset.projectName;
         }
-        await loadProjects();
-      } catch (e) {
-        showToast('Delete failed.', 'error');
-        console.error(e);
       }
+      await loadProjects();
+      if (typeof window.loadChatSessions === 'function') window.loadChatSessions();
+    } catch (e) {
+      showToast('Delete failed.', 'error');
+      console.error(e);
+    }
+  };
+  showConfirm(
+    `Delete project "${projectName}"? Its chats are kept and move back to Chats. Project files and knowledge in the workspace will be deleted.`,
+    () => {
+      if (chatCount === 0) return removeProject(false);
+      showConfirm(
+        `Also delete the ${chatCount} ${chatCount === 1 ? 'chat' : 'chats'} in this project? Their history will be permanently deleted and cannot be undone.`,
+        () => removeProject(true),
+        () => removeProject(false),
+        { title: 'Delete chats too?', confirmText: 'Delete chats', cancelText: 'Keep chats', danger: true }
+      );
     },
     null,
-    { title: 'Delete Project', confirmText: 'Delete', danger: true }
+    { title: 'Delete Project', confirmText: 'Delete project', danger: true }
   );
 };
 
 window.confirmDeleteProjectSession = async function(projectId, sessionId, sessionTitle) {
   showConfirm(
-    `Delete session "${sessionTitle}"?`,
+    `Delete chat "${sessionTitle}"? Its history will be permanently deleted and cannot be undone.`,
     async () => {
       try {
         await deleteProjectSessionApi(projectId, sessionId);
@@ -872,7 +887,7 @@ window.confirmDeleteProjectSession = async function(projectId, sessionId, sessio
       }
     },
     null,
-    { title: 'Delete Session', confirmText: 'Delete', danger: true }
+    { title: 'Delete Chat', confirmText: 'Delete chat', danger: true }
   );
 };
 
