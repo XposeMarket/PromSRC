@@ -10,6 +10,9 @@ import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
+import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
+
+let mobileBusyComposerModeLoaded = false;
 
 
 export { mobileReplayFrameAfterSteer };
@@ -7117,6 +7120,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _pmClearActiveSlashCommand(page, input, { focus: false });
       _renderMobileQueuedPromptsPanel(busySessionId);
       pmToast(`Queued prompt #${queue.length}. It will run automatically next.`, 'success');
+      // Busy composer mode 'steer': steer the item just queued. On failure it stays queued.
+      if (!mobileBusyComposerModeLoaded) {
+        mobileBusyComposerModeLoaded = true;
+        await loadBusyComposerModeFromServer((url) => mobileGatewayFetch(url)).catch(() => {});
+      }
+      if (shouldAutoSteerBusyTurn({ mode: getCachedBusyComposerMode(), isQueuedReplay: false, sessionBusy: true })
+        && typeof window.__pmSteerMobileQueuedPrompt === 'function') {
+        await window.__pmSteerMobileQueuedPrompt(busySessionId, queue.length - 1);
+      }
       return;
     }
 

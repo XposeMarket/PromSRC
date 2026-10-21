@@ -1,3 +1,5 @@
+import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from './busy-composer-mode.js';
+
 /**
  * Owns the desktop send orchestration boundary.
  *
@@ -14,6 +16,8 @@ function desktopCompactionStatusFromText(value) {
 }
 
 export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
+  // Use the authed api() helper (paired/remote desktop needs its auth headers); raw fetch is a last resort.
+  loadBusyComposerModeFromServer((url) => (typeof window.api === 'function' ? window.api(url) : fetch(url).then((r) => r.json()))).catch(() => {});
   return async function sendChat(queuedMessage = null, options = {}) {
       let {
         MAX_QUEUED_PROMPTS,
@@ -487,6 +491,12 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       updateQueuedPromptUI();
       releaseChatSendLock(sendLock);
       forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+      // Busy composer mode 'steer': the turn was just queued; steer that exact item now.
+      // On failure the item stays queued (steerQueuedPrompt only removes it on success).
+      if (shouldAutoSteerBusyTurn({ mode: getCachedBusyComposerMode(), isQueuedReplay: !!queuedTurn, sessionBusy: true })
+        && window.activeChatSessionId === thisSessionId && typeof window.steerQueuedPrompt === 'function') {
+        await window.steerQueuedPrompt(sessionQueue.length - 1);
+      }
       return;
     }
     streamState = resetSessionStreamState(thisSessionId);

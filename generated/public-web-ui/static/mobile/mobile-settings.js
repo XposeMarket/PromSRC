@@ -5,6 +5,8 @@ import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } fr
 import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
 import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { renderContextSelection, wireContextSelection } from '../context-selection.js';
+import { setCachedBusyComposerMode } from '../features/chat/runtime/busy-composer-mode.js';
+
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
@@ -365,6 +367,10 @@ async function renderModels(content, page) {
     ${card('Context Compaction', `
       <div class="pm-card-body">Prometheus uses the selected model's token window automatically. Context is compacted only when token pressure requires it; message count does not define model context.</div>
       ${toggleRow('pm-session-roll', 'Rolling compaction', session.rollingCompactionEnabled !== false, 'Automatically summarize older active context when token pressure requires it.')}
+      ${field('Busy composer', `<select id="pm-session-busy-mode">
+        <option value="queue"${(session.busyComposerMode === 'steer') ? '' : ' selected'}>Queue (run after current)</option>
+        <option value="steer"${(session.busyComposerMode === 'steer') ? ' selected' : ''}>Steer (send into current run)</option>
+      </select>`, 'When you send a message while Prometheus is busy: queue it for the next turn, or steer it into the active run.')}
       ${toggleRow('pm-session-compact-auto', 'Use selected context window', session.compactionThreshold === 'auto' || session.compactionThreshold == null, 'Automatic sizing reserves output, reasoning and one estimation margin. Turn off to use a manual earlier threshold.')}
       ${field('Manual compaction threshold', input('pm-session-compact', typeof session.compactionThreshold === 'number' ? session.compactionThreshold : 0.7, 'type="number" min="0.4" max="0.95" step="0.01"'))}
       ${field('Memory flush threshold', input('pm-session-memory', session.memoryFlushThreshold || 0.9, 'type="number" min="0.5" max="0.98" step="0.01"'))}
@@ -424,7 +430,9 @@ async function renderModels(content, page) {
         memoryFlushThreshold: Number(val(page, 'pm-session-memory')),
         rollingCompactionToolTurns: Number(val(page, 'pm-session-tool-turns')),
         rollingCompactionModel: val(page, 'pm-session-model'),
+        busyComposerMode: val(page, 'pm-session-busy-mode') === 'steer' ? 'steer' : 'queue',
       }) });
+      setCachedBusyComposerMode(val(page, 'pm-session-busy-mode') === 'steer' ? 'steer' : 'queue');
       setSectionStatus(page, 'Compaction settings saved.', 'ok');
     } catch (err) { setSectionStatus(page, err.message, 'error'); }
   });
