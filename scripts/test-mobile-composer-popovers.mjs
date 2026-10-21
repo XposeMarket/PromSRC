@@ -16,7 +16,23 @@ for (const width of [390, 430]) {
     }
   }
 }
+// The reasoning sheet must never jump to the top of the page. A trigger with no
+// room above it (header badge, stale rect) or one outside the visual viewport
+// must fall back to docking at the bottom of the visual viewport (just above
+// the iOS keyboard), never "below" the trigger near the top.
+for (const offsetTop of [0, 84]) {
+  const vv = { width: 390, height: 450, offsetTop };
+  const bottom = offsetTop + 450;
+  for (const trigger of [{ top: offsetTop + 20, bottom: offsetTop + 50 }, { top: bottom + 200, bottom: bottom + 230 }, null]) {
+    const placed = context.place({ visualViewport: vv, layoutHeight: 844, triggerRect: trigger, preferredHeight: 176 });
+    assert.equal(placed.anchor, 'above');
+    assert.equal(placed.top + placed.height, bottom - 10, 'fallback sheet docks 10px above the visual viewport bottom');
+    assert.ok(placed.top > offsetTop + 200, 'sheet must not render at the top of the page');
+  }
+}
 const runtime = fs.readFileSync('web-ui/src/mobile/mobile-chat-page-runtime.js', 'utf8');
+assert.match(runtime, /const anchorEl = launcherVisible \? launcher : form;/, 'context dock locks above the visible launcher or composer');
+assert.match(runtime, /pinChatToBottomWhileSettling\(\);/, 'opening a chat pins to the latest message while it settles');
 assert.match(runtime, /document\.body\.append\(attachSheet\)/);
 assert.match(runtime, /const lowerOrbitY = -64;/);
 assert.doesNotMatch(runtime, /aboveComposer \+ 18/);

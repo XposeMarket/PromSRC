@@ -17,12 +17,16 @@ export function reasoningSheetViewportPlacement({
   const safeLayoutHeight = Math.max(Number(layoutHeight) || 0, viewportBottom);
   const triggerTop = Number(triggerRect?.top);
   const triggerBottom = Number(triggerRect?.bottom);
-  const hasTrigger = Number.isFinite(triggerTop) && Number.isFinite(triggerBottom);
-  const aboveHeight = hasTrigger ? triggerTop - safeGap - viewportTop - safeMargin : viewportHeight - safeMargin * 2;
-  const belowHeight = hasTrigger ? viewportBottom - triggerBottom - safeGap - safeMargin : 0;
-  const anchor = hasTrigger && aboveHeight < Math.min(Number(preferredHeight) || 280, 120) && belowHeight > aboveHeight
-    ? 'below'
-    : 'above';
+  // Only trust a trigger that is inside the visible viewport with real room
+  // above it. A stale/off-screen/top-edge rect used to flip the sheet
+  // "below" its trigger, which rendered it at the top of the page. The sheet
+  // always sits above the composer/keyboard; without a usable trigger it
+  // docks to the bottom of the visual viewport (just above the keyboard).
+  const minRoom = Math.min(Number(preferredHeight) || 280, 120);
+  const hasTrigger = Number.isFinite(triggerTop) && Number.isFinite(triggerBottom)
+    && triggerTop <= viewportBottom
+    && triggerTop - safeGap - viewportTop - safeMargin >= minRoom;
+  const anchor = 'above';
   const sheetTop = anchor === 'below'
     ? Math.max(viewportTop + safeMargin, triggerBottom + safeGap)
     : viewportTop + safeMargin;
