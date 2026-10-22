@@ -258,7 +258,9 @@ function stageIsReadOnly(stage: string, first: boolean): boolean {
   const head = words[0].toLowerCase();
   // Follow/wait modes never exit (tail -f, Get-Content -Wait), so they are not probes.
   if (['tail', 'get-content', 'gc', 'cat', 'type'].includes(head)
-    && words.slice(1).some((word) => /^(-f|--follow.*|-wait)$/i.test(word))) return false;
+    && words.slice(1).some((word) => /^(-f|--follow.*|-wa(i(t)?)?(:.*)?)$/i.test(word)
+      // tail accepts combined short flags (-qf, -nf, -F).
+      || (head === 'tail' && /^-[a-z]*f/i.test(word)))) return false;
   if (!first) {
     if (!READ_ONLY_SHELL_FILTERS.has(head)) return false;
     // GNU sort can write a file (-o / --output); anything output-like is not read-only.

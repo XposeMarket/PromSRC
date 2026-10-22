@@ -200,6 +200,7 @@ async function main(): Promise<void> {
     'git log --outp=x', 'git diff --ou=x', 'git cat-file --batch',
     'rg --hostname-bin=calc foo', 'rg -z foo', 'rg --search-zip foo', 'rg -nz foo',
     'tail -f app.log', 'Get-Content app.log -Wait', 'cat a.txt | tail -f',
+    'tail -F app.log', 'tail -qf app.log', 'tail -nf app.log', 'Get-Content a -Wa', 'Get-Content a -Wai', 'Get-Content a -Wait:$true', 'gc a -wait',
   ]) {
     assert.equal(isReadOnlyShellCommand(command), false, `${command} must not be read-only`);
   }
