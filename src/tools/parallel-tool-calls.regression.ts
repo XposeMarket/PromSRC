@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_RUN_YIELD_MS,
+  type ParallelToolCall,
   canExecuteToolCallsInParallel,
   executeToolCallsInParallel,
   getParallelToolCallLimit,
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
     { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
   ]), false, 'mutating shell plus read stays serial');
 
-  const partitionInput = [
+  const partitionInput: ParallelToolCall[] = [
     runCall('rg -n foo src'),
     { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
     { name: 'workspace_edit', args: { action: 'find_replace', path: 'a.ts', find: 'a', replace: 'b' } },
