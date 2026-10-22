@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 
 import {
+  DEFAULT_RUN_YIELD_MS,
   canExecuteToolCallsInParallel,
   executeToolCallsInParallel,
   getParallelToolCallLimit,
+  isParallelSafeToolCall,
+  isReadOnlyShellCommand,
   partitionToolCallsForParallelExecution,
 } from './parallel-tool-calls.js';
+
+const runCall = (command: string, extra: Record<string, unknown> = {}) => ({
+  name: 'workspace_run',
+  args: { action: 'run', command, ...extra },
+});
 
 async function main(): Promise<void> {
   assert.equal(getParallelToolCallLimit(1), 2, 'the executor must keep a useful minimum width');
@@ -121,6 +129,98 @@ async function main(): Promise<void> {
     'result-2',
     'result-3',
     'result-4',
+  ]);
+
+  // Read-only shell classifier: every spec example, both polarities.
+  const readOnlyYes = [
+    'git status --short',
+    "rg -n foo src -g '*.ts' | Select -First 20",
+    'cd C:\\x; git log --oneline -3',
+    'git status 2>$null',
+    'git log --oneline -3 2>&1',
+    'rg -n foo src 2>/dev/null',
+    'Get-ChildItem src | Measure-Object',
+    'git -C C:\\repo status',
+    'node --version',
+    'git remote -v',
+    'git branch --show-current',
+  ];
+  const readOnlyNo = [
+    'npm run build',
+    'git commit -m x',
+    'git checkout main',
+    'git branch -D x',
+    'git fetch',
+    'rg foo --pre cat',
+    'rg foo --replace x',
+    'Get-Content a > b',
+    'Get-ChildItem | % { Remove-Item $_ }',
+    'Get-ChildItem | ForEach-Object { 1 }',
+    'Remove-Item x',
+    'node script.js',
+    '$f=Get-Content a; $f',
+    '$f = Get-Content a',
+    'echo hi > out.txt',
+    'rg foo 2>file',
+    'echo $(whoami)',
+    'echo `whoami`',
+    'iex "dir"',
+    'Start-Process calc',
+    'function x { 1 }',
+    'git status\ngit fetch',
+    'git status && git commit -m x',
+    'git remote add x y',
+    'rg -n "a|b" src',
+  ];
+  for (const command of readOnlyYes) {
+    assert.equal(isReadOnlyShellCommand(command), true, `expected read-only: ${command}`);
+    assert.equal(isParallelSafeToolCall(runCall(command)), true, `expected parallel-safe without flags: ${command}`);
+  }
+  for (const command of readOnlyNo) {
+    assert.equal(isReadOnlyShellCommand(command), false, `expected not read-only: ${command}`);
+    assert.equal(isParallelSafeToolCall(runCall(command)), false, `expected serial without flags: ${command}`);
+  }
+  for (const flag of [{ elevated: true }, { pty: true }, { stdin: true }, { visible: true }]) {
+    assert.equal(isParallelSafeToolCall(runCall('git status --short', flag)), false, `flag ${JSON.stringify(flag)} must stay serial`);
+  }
+  assert.equal(isParallelSafeToolCall({ name: 'workspace_run', args: { action: 'start', command: 'git status --short' } }), false, 'start without the flag stays serial');
+  assert.equal(isParallelSafeToolCall(runCall('npm test', { parallel_safe: true, parallel_key: 'repo-a' })), true, 'explicit keyed run keeps old behavior');
+  assert.equal(DEFAULT_RUN_YIELD_MS, 30_000, 'default run yield must be 30s');
+
+  // Mixed-batch rule: only non-read-only shell runs/starts are refused with waits or other tools.
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('git status --short'),
+    { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
+    { name: 'skill_read', args: { id: 'fast-coding-loop' } },
+  ]), true, 'read-only shell probes may mix with reads');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('git status --short', { cwd: 'repo-a' }),
+    runCall('git log --oneline -3', { cwd: 'repo-a' }),
+  ]), true, 'two read-only probes in the same cwd may overlap');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('git status --short', { cwd: 'repo-a' }),
+    runCall('git status --short', { cwd: 'repo-a' }),
+  ]), false, 'identical fingerprints stay rejected by the duplicate check');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('git status --short'),
+    { name: 'workspace_run', args: { action: 'wait', runId: 'run-a' } },
+  ]), true, 'read-only run plus wait may overlap');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('npm run build', { parallel_safe: true, parallel_key: 'repo-a' }),
+    { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
+  ]), false, 'mutating shell plus read stays serial');
+
+  const partitionInput = [
+    runCall('rg -n foo src'),
+    { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
+    { name: 'workspace_edit', args: { action: 'find_replace', path: 'a.ts', find: 'a', replace: 'b' } },
+    runCall('git status --short'),
+  ];
+  const partition = partitionToolCallsForParallelExecution(partitionInput);
+  assert.deepEqual(partition.map((group) => [group.parallel, group.calls.map((call) => partitionInput.indexOf(call) + 1)]), [
+    [true, [1, 2]],
+    [false, [3]],
+    [false, [4]],
   ]);
 
   console.log('parallel tool call regression checks passed');

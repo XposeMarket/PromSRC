@@ -120,7 +120,10 @@ function toolArgs(call: ParallelToolCall): Record<string, unknown> {
   return {};
 }
 
-function shellOperation(call: ParallelToolCall): { kind: 'run' | 'start' | 'wait' | 'other'; resource: string } | null {
+/** Default yield for a workspace_run run before it returns "[still running]". */
+export const DEFAULT_RUN_YIELD_MS = 30_000;
+
+function shellOperation(call: ParallelToolCall): { kind: 'run' | 'start' | 'wait' | 'other'; resource: string; readOnly?: boolean } | null {
   const name = String(call?.name || '').trim();
   if (name !== 'workspace_run' && name !== 'terminal') return null;
   const args = toolArgs(call);
@@ -130,6 +133,13 @@ function shellOperation(call: ParallelToolCall): { kind: 'run' | 'start' | 'wait
     return { kind: 'wait', resource: runId };
   }
   if (action !== 'run' && action !== 'start') return { kind: 'other', resource: '' };
+  const command = String(args.command || '').trim();
+  const flagged = args.elevated === true || args.pty === true || args.stdin === true || args.visible === true;
+  if (action === 'run' && !flagged && command && isReadOnlyShellCommand(command)) {
+    // Unique per call: identical read-only probes must not collide on resource.
+    readOnlyShellRunSequence += 1;
+    return { kind: 'run', resource: `readonly:${readOnlyShellRunSequence}`, readOnly: true };
+  }
   const resource = String(args.parallel_key || '').trim().toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
   if (args.parallel_safe !== true || !resource || !String(args.command || '').trim()
     || args.elevated === true || args.pty === true || args.stdin === true || args.visible === true) {
@@ -159,6 +169,117 @@ export function isParallelSafeToolCall(call: ParallelToolCall): boolean {
     return readOnlyActions.has(action);
   }
   return PARALLEL_SAFE_TOOL_NAMES.has(name);
+}
+
+// Read-only shell classifier. Allowlist only: any doubt means "not read-only".
+const READ_ONLY_SHELL_READERS: ReadonlySet<string> = new Set([
+  'cd', 'set-location', 'sl', 'pushd', 'pwd', 'get-location',
+  'rg', 'grep', 'findstr', 'select-string', 'sls',
+  'ls', 'dir', 'get-childitem', 'gci',
+  'cat', 'type', 'get-content', 'gc', 'head', 'tail', 'wc',
+  'get-item', 'gi', 'test-path', 'resolve-path', 'get-command', 'where', 'where.exe', 'which',
+  'echo', 'write-output',
+  'node', 'npm', 'git',
+]);
+
+const READ_ONLY_SHELL_FILTERS: ReadonlySet<string> = new Set([
+  'select-object', 'select', 'sort-object', 'sort', 'measure-object', 'measure',
+  'format-table', 'ft', 'format-list', 'fl', 'out-string', 'where-object', '?', 'where',
+  'select-string', 'sls', 'findstr', 'grep', 'head', 'tail', 'wc', 'uniq', 'convertto-json',
+]);
+
+const READ_ONLY_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'grep',
+  'describe', 'merge-base', 'cat-file',
+]);
+
+const READ_ONLY_GIT_BRANCH_FLAGS: ReadonlySet<string> = new Set([
+  '-a', '-r', '-v', '-vv', '--list', '--show-current', '--contains', '--merged',
+]);
+
+// Only these stderr-redirect tokens are allowed; every other '>' is rejected.
+const ALLOWED_STDERR_REDIRECT_TOKEN = /(^|\s)2>(\$null|&1|\/dev\/null)(?=[\s;|]|$)/g;
+
+// Monotonic counter so two identical-cwd read-only probes never share a resource key.
+let readOnlyShellRunSequence = 0;
+
+/** True when a quoted span holds a pipe, semicolon or redirect, or quotes are unbalanced. */
+function quotesUnsafeOrUnbalanced(command: string): boolean {
+  let quote = '';
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) quote = '';
+      else if (ch === '|' || ch === ';' || ch === '>') return true;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    }
+  }
+  return quote !== '';
+}
+
+function gitCommandIsReadOnly(words: string[]): boolean {
+  let rest = words.slice(1);
+  if (rest[0] === '-C') {
+    if (rest.length < 2) return false;
+    rest = rest.slice(2);
+  }
+  const sub = (rest[0] || '').toLowerCase();
+  const args = rest.slice(1);
+  if (sub === '--version') return rest.length === 1;
+  if (!READ_ONLY_GIT_SUBCOMMANDS.has(sub)) {
+    if (sub === 'remote') return args.length === 0 || (args.length === 1 && args[0] === '-v');
+    if (sub === 'branch') return args.every((arg) => READ_ONLY_GIT_BRANCH_FLAGS.has(arg));
+    if (sub === 'worktree' || sub === 'stash') return args.length === 1 && args[0] === 'list';
+    if (sub === 'config') return args.length >= 1 && (args[0] === '--get' || args[0] === '--list');
+    return false;
+  }
+  if ((sub === 'diff' || sub === 'log') && args.some((arg) => arg.startsWith('--output'))) return false;
+  return true;
+}
+
+function rgArgsAreReadOnly(words: string[]): boolean {
+  return !words.slice(1).some((word) =>
+    word.startsWith('--pre') || word.startsWith('--replace') || word === '-r'
+    || (word.startsWith('-') && !word.startsWith('--') && /r/.test(word)));
+}
+
+function stageIsReadOnly(stage: string, first: boolean): boolean {
+  const words = stage.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const head = words[0].toLowerCase();
+  if (!first) return READ_ONLY_SHELL_FILTERS.has(head);
+  if (head === 'rg') return rgArgsAreReadOnly(words);
+  if (head === 'git') return gitCommandIsReadOnly(words);
+  if (head === 'node' || head === 'npm') return words.length === 2 && words[1] === '--version';
+  return READ_ONLY_SHELL_READERS.has(head);
+}
+
+/**
+ * Conservative allowlist check for a shell command. Returns true only when every
+ * `;`/`&&`/`||` segment is a read-only pipeline of allowed readers and filters.
+ */
+export function isReadOnlyShellCommand(command: string): boolean {
+  if (typeof command !== 'string') return false;
+  const text = command.trim();
+  if (!text || /[\r\n]/.test(text)) return false;
+  if (/[`<(){}@]/.test(text) || text.includes('$(')) return false;
+  if (/\b(invoke-expression|iex|start-process|function|for|foreach|while)\b/i.test(text)) return false;
+  if (/-exec\b/i.test(text)) return false;
+  if (quotesUnsafeOrUnbalanced(text)) return false;
+  const stripped = text.replace(ALLOWED_STDERR_REDIRECT_TOKEN, '$1');
+  if (stripped.includes('>')) return false;
+  if (stripped.replace(/&&/g, '').includes('&')) return false;
+  if (/\$[A-Za-z_][\w:]*\s*=(?!=)/.test(stripped)) return false;
+  for (const segment of stripped.split(/;|&&|\|\|/)) {
+    const stages = segment.split('|');
+    if (stages.some((stage) => !stage.trim())) return false;
+    if (stages.length === 1 && /^['"]/.test(stages[0].trim())) continue; // section-header literal
+    if (!stageIsReadOnly(stages[0], true)) return false;
+    for (const stage of stages.slice(1)) {
+      if (!stageIsReadOnly(stage, false)) return false;
+    }
+  }
+  return true;
 }
 
 function callFingerprint(call: ParallelToolCall): string {
@@ -193,7 +314,7 @@ export function canExecuteToolCallsInParallel(calls: readonly ParallelToolCall[]
       if (shellResources.has(operation.resource)) return false;
       shellResources.add(operation.resource);
       if (operation.kind === 'wait') hasWait = true;
-      else hasStartOrRun = true;
+      else if (!operation.readOnly) hasStartOrRun = true;
     } else hasOtherTool = true;
   }
   // A wait in the same batch as a new start is likely dependent, even when
