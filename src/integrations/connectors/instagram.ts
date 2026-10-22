@@ -13,6 +13,7 @@
 // Docs: developers.facebook.com/docs/instagram-platform/content-publishing
 
 import { OAuthConnector, OAuthConnectorConfig, ConnectorTokens } from '../oauth-base.js';
+import { assertTokenRefreshAllowed } from '../../gateway/runtime/preview-mode';
 
 export const IG_GRAPH = 'https://graph.instagram.com';
 export const IG_API_VERSION = process.env.INSTAGRAM_API_VERSION || 'v26.0';
@@ -96,6 +97,7 @@ export class InstagramConnector extends OAuthConnector {
 
   /** Long-lived tokens refresh with themselves (no refresh_token / client secret). */
   async refreshTokens(existing: ConnectorTokens): Promise<ConnectorTokens> {
+    assertTokenRefreshAllowed('instagram');
     const res = await fetch(`${IG_GRAPH}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(existing.access_token)}`);
     const body: any = await res.json().catch(() => ({}));
     if (!res.ok || !body?.access_token) {

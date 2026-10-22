@@ -768,7 +768,7 @@ const mainChatTimerRunner = new MainChatTimerRunner({
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
   telegramChannel,
 });
-mainChatTimerRunner.start();
+if (!skipInPreview('main-chat-timers')) mainChatTimerRunner.start();
 initSessionWake({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
@@ -1465,6 +1465,7 @@ async function startGatewayListeners(): Promise<void> {
     const delayedInternalWatchStart = setTimeout(() => {
       if (shuttingDown || draining) return;
       startupMark('internal watch callback entered');
+      if (skipInPreview('internal-watch')) return;
       internalWatchRunner.start();
       startupMark('internal watch runner started after listen');
     }, 250);
@@ -1472,6 +1473,7 @@ async function startGatewayListeners(): Promise<void> {
     const delayedThreadSupervisionStart = setTimeout(() => {
       if (shuttingDown || draining) return;
       startupMark('thread supervision callback entered');
+      if (skipInPreview('thread-supervision')) return;
       const supervisionStartAt = Date.now();
       stopThreadSupervisionRunner = activeThreadSupervisionController.start();
       startupMark(`thread supervision started after listen (${Date.now() - supervisionStartAt}ms)`);
@@ -1559,6 +1561,7 @@ async function startGatewayListeners(): Promise<void> {
       ? Math.max(10_000, Number(process.env.PROMETHEUS_HOT_TELEGRAM_PERSONA_STARTUP_DELAY_MS || 30_000))
       : 0;
     const personaBotStartupTimer = setTimeout(() => {
+      if (skipInPreview('telegram-persona-bots')) return;
       telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
     }, personaBotStartupDelayMs);
     if (typeof (personaBotStartupTimer as any).unref === 'function') (personaBotStartupTimer as any).unref();

@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getConfig } from '../../config/config';
 import { getVault } from '../../security/vault';
+import { assertTokenRefreshAllowed } from '../runtime/preview-mode';
 
 export const router = Router();
 
@@ -264,6 +265,8 @@ async function buildVerifiedSession(accessToken: string, refreshToken: string = 
 
 async function refreshAccessToken(refreshToken: string, timeoutMs = 10000): Promise<{ accessToken: string; refreshToken: string; expiresAt: number } | null> {
   try {
+    // Preview gateways must not rotate the live account's Supabase refresh token.
+    assertTokenRefreshAllowed('supabase-account');
     const data = await sbFetch('/auth/v1/token?grant_type=refresh_token', {
       method: 'POST',
       body: JSON.stringify({ refresh_token: refreshToken }),

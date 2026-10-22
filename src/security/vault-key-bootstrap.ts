@@ -17,6 +17,7 @@
  */
 
 import fs from 'fs';
+import tty from 'tty';
 
 let injectedKeyHex: string | null = null;
 let attempted = false;
@@ -59,6 +60,9 @@ function bootstrap(): void {
   if (attempted) return;
   attempted = true;
   if (!isStdinVaultKeyMode()) return;
+  // A TTY stdin means nobody is piping a key (e.g. the flag leaked into an
+  // interactive shell). Reading would block forever; fall back to the key file.
+  try { if (tty.isatty(0)) return; } catch { /* treat as non-TTY */ }
   try {
     const hex = readKeyLineSync();
     if (/^[0-9a-fA-F]{64}$/.test(hex)) {
