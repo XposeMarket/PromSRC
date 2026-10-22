@@ -141,6 +141,7 @@
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:background-spawn-tool-surface": "tsx src/gateway/tasks/background-spawn-tool-surface.regression.ts",
+    "test:background-wait-early-return": "tsx src/gateway/tasks/background-wait-early-return.regression.ts",
     "test:goal-final-reply-placement": "tsx src/gateway/goal-final-reply-placement.regression.ts",
     "test:goal-stop-recovery": "tsx src/gateway/goal-stop-recovery.regression.ts",
 

@@ -1226,6 +1226,24 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
   };
 }
 
+/**
+ * Resolve as soon as every promise settles (fulfilled or rejected), or when
+ * timeoutMs elapses, whichever comes first. The timeout timer is always
+ * cleared so an early return does not leave a long-lived timer armed.
+ * Resolves true when everything settled before the timeout.
+ */
+export async function waitForSettledOrTimeout(promises: Array<Promise<unknown>>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.all(promises.map((p) => Promise.resolve(p).catch(() => undefined))).then(() => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs)); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function backgroundWait(input: {
   backgroundId?: string;
   backgroundIds?: string[];
@@ -1249,10 +1267,8 @@ export async function backgroundWait(input: {
   if (records.length === 0 && restoredStatuses.length > 0) {
     // Nothing live to wait on: answer immediately from the receipts.
   } else if (records.length > 0) {
-    await Promise.race([
-      Promise.all(records.map((rec) => rec.promise.catch(() => undefined))),
-      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-    ]);
+    // Returns as soon as every waited agent settles; timeoutMs is only a cap.
+    await waitForSettledOrTimeout(records.map((rec) => rec.promise), timeoutMs);
   } else if (timeoutMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, timeoutMs));
   }

@@ -1489,7 +1489,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'background_ops',
         description:
-          'Background agents. spawn starts a parallel agent (this turn cannot finalize until same-turn workers finish and their results are injected); steer sends live guidance to an active worker; wait briefly pauses this turn; status/progress check state; join is system-only.',
+          'Background agents. spawn starts a parallel agent (this turn cannot finalize until same-turn workers finish and their results are injected); steer sends live guidance to an active worker; wait pauses this turn until the waited agents finish or wait_ms elapses (returns early on completion); status/progress check state; join is system-only.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -1522,7 +1522,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             wait_ms: {
               type: 'number',
-              description: 'For wait: foreground pause duration in milliseconds.',
+              description: 'For wait: maximum milliseconds to wait. The wait returns early as soon as all waited agents finish, so a generous value (e.g. 300000) costs nothing extra.',
             },
             timeout_ms: {
               type: 'number',
@@ -1614,7 +1614,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'background_wait',
         description:
-          'Pause this foreground turn briefly while background agents work. Use after background_spawn when you want to give workers time before continuing reasoning, e.g. wait_ms/timeout_ms=30000. ' +
+          'Pause this foreground turn until the waited background agents finish, or until wait_ms/timeout_ms elapses, whichever comes first. It returns early as soon as they all finish, so prefer one generous wait (e.g. 300000) over repeated short polls. ' +
           'If background_id/background_ids are omitted, waits on active background agents spawned by this chat session. This does not merge results; the finalization gate still merges all same-turn background results before the final reply.',
         parameters: {
           type: 'object',
@@ -1622,7 +1622,7 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             background_id: { type: 'string', description: 'Optional single background agent ID returned by background_spawn.' },
             background_ids: { type: 'array', items: { type: 'string' }, description: 'Optional list of background agent IDs returned by background_spawn.' },
-            wait_ms: { type: 'number', description: 'How long to wait in milliseconds. Example: 30000.' },
+            wait_ms: { type: 'number', description: 'Maximum milliseconds to wait; returns early when all waited agents finish. Example: 300000.' },
             timeout_ms: { type: 'number', description: 'Alias for wait_ms.' },
           },
         },
