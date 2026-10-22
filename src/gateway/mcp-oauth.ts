@@ -15,6 +15,7 @@
  * fresh bearer token (refreshing when expired) for the MCP transport to use.
  */
 import crypto from 'crypto';
+import { assertTokenRefreshAllowed } from './runtime/preview-mode';
 import http from 'http';
 import { spawn } from 'child_process';
 import { getConfig } from '../config/config.js';
@@ -371,6 +372,8 @@ export async function getValidMcpAccessToken(serverId: string): Promise<string |
   const client = loadClient(serverId);
   if (!tokens.refresh_token || !client) return tokens.access_token; // best effort
   try {
+    // Inside the try: a preview refusal degrades to the current access token, like any refresh failure.
+    assertTokenRefreshAllowed('mcp-oauth');
     const refreshed = await postToken(client.metadata, {
       grant_type: 'refresh_token',
       refresh_token: tokens.refresh_token,

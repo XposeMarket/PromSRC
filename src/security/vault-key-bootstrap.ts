@@ -11,6 +11,7 @@
  * executes before SecretVault is constructed. loadOrCreateMasterKey() is synchronous,
  * so an async stdin read would race; a blocking fs.readSync on fd 0 avoids that.
  *
+ * PROMETHEUS_VAULT_KEY_STDIN=1 also enables the stdin read for non-Electron launchers (preview gateways).
  * In non-managed runs (Docker, `npm run gateway`) PROMETHEUS_ELECTRON_MANAGED is
  * unset and this module is a no-op — the vault falls back to its local key file.
  */
@@ -47,7 +48,7 @@ function readKeyLineSync(): string {
 function bootstrap(): void {
   if (attempted) return;
   attempted = true;
-  if (process.env.PROMETHEUS_ELECTRON_MANAGED !== '1') return;
+  if (process.env.PROMETHEUS_ELECTRON_MANAGED !== '1' && process.env.PROMETHEUS_VAULT_KEY_STDIN !== '1') return;
   try {
     const hex = readKeyLineSync();
     if (/^[0-9a-fA-F]{64}$/.test(hex)) {

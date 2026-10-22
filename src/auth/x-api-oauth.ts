@@ -10,6 +10,7 @@
  */
 
 import crypto from 'crypto';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import fs from 'fs';
 import http from 'http';
 import os from 'os';
@@ -362,6 +363,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, flow: 
 }
 
 export async function refreshXApiTokens(configDir: string): Promise<XApiTokens> {
+  assertTokenRefreshAllowed('x-api');
   const existing = loadXApiTokens(configDir);
   const credentials = loadXApiCredentials(configDir);
   if (!existing?.refresh_token) throw new Error('No X API refresh token; reconnect X API OAuth.');

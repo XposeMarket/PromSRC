@@ -8,6 +8,7 @@
  */
 
 import crypto from 'crypto';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import http from 'http';
 import { exec } from 'child_process';
 import { getVault } from '../security/vault';
@@ -140,6 +141,7 @@ export function isDefinitiveXaiRefreshRejection(body: string): boolean {
 }
 
 export async function refreshXAITokens(configDir: string, accountId?: string): Promise<XAITokens> {
+  assertTokenRefreshAllowed('xai');
   const existing = loadXAITokens(configDir, accountId);
   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
   const tokenEndpoint = validateXaiEndpoint(existing.token_endpoint || (await discovery()).token_endpoint, 'token_endpoint');

@@ -19,6 +19,7 @@
  */
 
 import { getConfig } from '../config/config';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import { readModelUsageLifetimeTotals, readRecentModelUsageEvents, type ModelUsageEvent } from './model-usage';
 import type { UsageLifetimeTotal } from './model-usage-index';
 
@@ -643,6 +644,7 @@ function saveLocalGrokAuth(auth: GrokAuth, update: any): void {
 }
 
 async function refreshLocalGrokAuth(auth: GrokAuth): Promise<GrokAuth | null> {
+  assertTokenRefreshAllowed('provider-usage');
   if (!auth.refresh_token) return null;
   const endpoint = auth.token_endpoint || 'https://auth.x.ai/oauth/token';
   const url = new URL(endpoint);
