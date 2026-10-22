@@ -955,7 +955,8 @@ export function rollbackImportJob(id: string, ownerId: string): ImportJob {
     try {
       const project = getProject(projectId);
       if (project?.externalImport?.jobId !== job.id) continue;
-      if (deleteProject(projectId)) removedProjects.push(projectId);
+      // Rollback removes the project it created together with the chats it imported (the loop above).
+      if (deleteProject(projectId, { keepSessions: false })) removedProjects.push(projectId);
     } catch { /* retain project tombstone metadata and continue rollback */ }
   }
   if (job.kind === 'setup') {

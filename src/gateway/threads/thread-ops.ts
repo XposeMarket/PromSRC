@@ -17,6 +17,16 @@ import {
   touchSession,
 } from '../session';
 import { searchSessionSummariesInWorker } from './session-search-worker-client.js';
+import {
+  attachSessionToProject,
+  createProject,
+  detachSessionFromProject,
+  findProjectBySessionId,
+  getProject,
+  listProjects,
+  resolveAllowedProjectDirectory,
+  type Project,
+} from '../projects/project-store';
 import { unsettleSessionSafely } from '../session-settlement';
 import { fireThreadCallbacks, registerThreadCallback } from '../session-wake';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
@@ -671,6 +681,39 @@ export function buildPrometheusThreadLinksArtifact(args: any, output: any): Reco
   };
 }
 
+/** Exactly one of project_id / project_name must be given. Names match case-insensitively and must be unique. */
+function resolveProjectLocator(args: any): Project {
+  const projectId = String(args?.project_id || '').trim();
+  const projectName = String(args?.project_name || '').trim();
+  if (!!projectId === !!projectName) {
+    throw new Error('Provide exactly one of project_id or project_name.');
+  }
+  const all = listProjects();
+  if (projectId) {
+    const project = getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}. Candidates: ${formatProjectCandidates(all)}`);
+    return project;
+  }
+  const wanted = projectName.toLowerCase();
+  const matches = all.filter((project) => String(project.name || '').trim().toLowerCase() === wanted);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    throw new Error(`No project named "${projectName}". Candidates: ${formatProjectCandidates(all) || 'none (create_project first)'}. Retry with project_id.`);
+  }
+  throw new Error(`Project name "${projectName}" is ambiguous. Matches: ${formatProjectCandidates(matches)}. Retry with project_id.`);
+}
+
+function formatProjectCandidates(projects: Project[]): string {
+  return projects.map((project) => `"${project.name}" (id ${project.id})`).join(', ');
+}
+
+function requireExistingSessionId(args: any): string {
+  const sessionId = String(args?.session_id || '').trim();
+  if (!sessionId) throw new Error('session_id is required.');
+  if (!sessionExists(sessionId)) throw new Error(`Session not found: ${sessionId}`);
+  return sessionId;
+}
+
 export async function executePrometheusThreadOps(
   ownerSessionId: string,
   args: any,
@@ -685,6 +728,51 @@ export async function executePrometheusThreadOps(
 
   if (isHiddenSupervisor && !hiddenAllowedActions.has(action)) {
     throw new Error('The hidden supervision runtime may only inspect and manage its existing target workflow.');
+  }
+
+  // Project membership actions. They are reversible and never delete a chat or a project.
+  // The hidden supervisor guard above already rejects them (they are not in hiddenAllowedActions).
+  if (action === 'list_projects') {
+    return {
+      projects: listProjects().map((project) => ({
+        id: project.id,
+        name: project.name,
+        ...(project.workspacePath ? { workspacePath: project.workspacePath } : {}),
+        ...(project.pinnedAt ? { pinnedAt: project.pinnedAt } : {}),
+        sessionCount: project.sessions.length,
+        sessions: project.sessions.map((sess) => ({ id: sess.id, title: sess.title })),
+      })),
+    };
+  }
+
+  if (action === 'create_project') {
+    const title = String(args?.title || '').trim();
+    if (!title) throw new Error('create_project requires a non-empty title.');
+    const workspace = resolveAllowedProjectDirectory(args?.workspace);
+    const project = createProject(title, workspace);
+    return { project: { id: project.id, name: project.name } };
+  }
+
+  if (action === 'move_to_project') {
+    const sessionId = requireExistingSessionId(args);
+    const target = resolveProjectLocator(args);
+    const previousOwner = findProjectBySessionId(sessionId);
+    const moved = attachSessionToProject(target.id, sessionId);
+    if (!moved) throw new Error(`Project not found: ${target.id}`);
+    return {
+      sessionId,
+      project: { id: moved.id, name: moved.name },
+      ...(previousOwner && previousOwner.id !== moved.id ? { movedFromProjectId: previousOwner.id } : {}),
+    };
+  }
+
+  if (action === 'remove_from_project') {
+    const sessionId = requireExistingSessionId(args);
+    const owner = findProjectBySessionId(sessionId);
+    if (!owner || !detachSessionFromProject(owner.id, sessionId)) {
+      return { removed: false, reason: 'not_in_project', sessionId };
+    }
+    return { removed: true, sessionId, projectId: owner.id };
   }
 
   if (action === 'list') {

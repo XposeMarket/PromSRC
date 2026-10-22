@@ -945,6 +945,111 @@ function _renderSessionHoverPreviewTitle(popover, id, title) {
   popover.append(row, options);
 }
 
+function _chatProjectsRequest(url, method = 'GET', body = null) {
+  const init = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) init.body = JSON.stringify(body);
+  return fetch(url, init).then(async (response) => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+    return data;
+  });
+}
+
+function _refreshAfterChatProjectChange() {
+  if (typeof window.loadProjects === 'function') window.loadProjects();
+  if (typeof window.loadChatSessions === 'function') window.loadChatSessions();
+}
+
+// Chat titles are read from the rendered row by id, never interpolated into inline handler source.
+function _chatTitleFor(sessionId) {
+  const row = document.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+  return row?.dataset?.sessionTitle || '';
+}
+
+// Move an existing chat into a project. Membership only: history is kept and the chat leaves its old project.
+window.openChatMoveToProjectPicker = function openChatMoveToProjectPicker(id) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return;
+  hideSessionHoverPreview();
+  _chatProjectsRequest('/api/projects').then((projects) => {
+    const list = Array.isArray(projects) ? projects : [];
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 24px 18px;max-width:420px;width:92%;max-height:70vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font)';
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:15px;font-weight:800;margin-bottom:10px';
+    heading.textContent = 'Move to project…';
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:14px';
+    note.textContent = `“${_chatTitleFor(sessionId) || 'this chat'}” keeps its history and leaves its current project.`;
+    box.append(heading, note);
+    const close = () => overlay.remove();
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:13px;color:var(--muted);margin-bottom:14px';
+      empty.textContent = 'No projects yet. Create one on the Projects page first.';
+      box.append(empty);
+    }
+    list.forEach((project) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'chat-move-project-option';
+      option.style.cssText = 'display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:13px;font-weight:700;cursor:pointer';
+      option.textContent = project.name || 'Untitled project';
+      option.addEventListener('click', async () => {
+        option.disabled = true;
+        try {
+          await _chatProjectsRequest(`/api/projects/${encodeURIComponent(project.id)}/sessions/attach`, 'POST', { sessionId });
+          close();
+          _refreshAfterChatProjectChange();
+        } catch (error) {
+          option.disabled = false;
+          window.showToast?.('Could not move chat.', 'error');
+          console.error(error);
+        }
+      });
+      box.append(option);
+    });
+    const cancelRow = document.createElement('div');
+    cancelRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:8px';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.style.cssText = 'border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', close);
+    cancelRow.append(cancel);
+    box.append(cancelRow);
+    overlay.append(box);
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    document.body.append(overlay);
+  }).catch((error) => {
+    window.showToast?.('Could not load projects.', 'error');
+    console.error(error);
+  });
+};
+
+// Remove a chat from its project. Detach only: the chat is kept (deleteChat=false).
+window.removeChatFromProjectNow = async function removeChatFromProjectNow(id) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return;
+  hideSessionHoverPreview();
+  try {
+    const projects = await _chatProjectsRequest('/api/projects');
+    const owner = (Array.isArray(projects) ? projects : []).find((project) => (project.sessions || []).some((sess) => sess.id === sessionId));
+    if (!owner) {
+      window.showToast?.('This chat is not in a project.', 'error');
+      _refreshAfterChatProjectChange();
+      return;
+    }
+    await _chatProjectsRequest(`/api/projects/${encodeURIComponent(owner.id)}/sessions/${encodeURIComponent(sessionId)}?deleteChat=false`, 'DELETE');
+    _refreshAfterChatProjectChange();
+  } catch (error) {
+    window.showToast?.('Could not remove chat from project.', 'error');
+    console.error(error);
+  }
+};
+
 function confirmSessionHoverDelete(id, title) {
   const sessionId = String(id || '').trim();
   if (!sessionId) return;
@@ -1720,8 +1825,15 @@ function renderChatSessionCard(s, options = {}) {
     ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
     : '';
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
+  const chatProjectOwned = !!(projectId || s.projectName || searchResult?.projectName);
+  const folderIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const detachIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
+  const moveProjectAction = `<button class="chat-session-action-btn chat-move-project-btn" onclick="event.preventDefault();event.stopPropagation();openChatMoveToProjectPicker('${escHtml(s.id)}')" title="Move to project…" aria-label="Move to project…">${folderIcon}</button>`;
+  const removeProjectAction = chatProjectOwned
+    ? `<button class="chat-session-action-btn chat-remove-project-btn" onclick="event.preventDefault();event.stopPropagation();removeChatFromProjectNow('${escHtml(s.id)}')" title="Remove from project" aria-label="Remove from project">${detachIcon}</button>`
+    : '';
   const projectDeleteAction = projectId && options.projectDelete
-    ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtml(s.title || 'New chat')}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
+    ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${escHtml(projectId)}','${escHtml(s.id)}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
   const settleLabel = isSettled ? 'Reopen chat' : 'Settle chat';
   const settleAction = isSettled
@@ -1734,6 +1846,8 @@ function renderChatSessionCard(s, options = {}) {
       ${settleButton}
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}
+      ${moveProjectAction}
+      ${removeProjectAction}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
           ${unreadDot}

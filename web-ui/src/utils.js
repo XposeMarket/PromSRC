@@ -167,7 +167,7 @@ export function bgtToast(title, body) {
 }
 
 export function showConfirm(message, onConfirm, onCancel, opts = {}) {
-  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false, details = '' } = opts;
+  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false, details = '', onDismiss = null } = opts;
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;animation:scToastIn 0.15s ease';
   const box = document.createElement('div');
@@ -186,7 +186,8 @@ export function showConfirm(message, onConfirm, onCancel, opts = {}) {
   const close = () => overlay.remove();
   box.querySelector('#__sc-confirm-cancel').onclick = () => { close(); if (onCancel) onCancel(); };
   box.querySelector('#__sc-confirm-ok').onclick = () => { close(); if (onConfirm) onConfirm(); };
-  overlay.addEventListener('click', e => { if (e.target === overlay) { close(); if (onCancel) onCancel(); } });
+  // onDismiss (outside click) lets a caller abort without triggering the Cancel/secondary choice.
+  overlay.addEventListener('click', e => { if (e.target === overlay) { close(); if (onDismiss) onDismiss(); else if (onCancel) onCancel(); } });
 }
 
 // ─── Logging ──────────────────────────────────────────────────

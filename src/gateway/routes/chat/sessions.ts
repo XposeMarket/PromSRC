@@ -22,7 +22,7 @@ import { mergeHistoryWithExistingMessageMetadata } from '../../history-reconcili
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../context/model-context';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../chat/chat-model-route';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../tool-observations';
-import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, listProjects, deleteSessionFromProject } from '../../projects/project-store.js';
 import { cancelThreadSupervision, listThreadSupervisions } from '../../threads/thread-supervision';
 import {
   blockMainChatGoalFromOwner,
@@ -867,7 +867,7 @@ router.delete('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
     }
     const project = findProjectBySessionId(sessionId);
     const deleted = project
-      ? !!removeSessionFromProject(project.id, sessionId)
+      ? !!deleteSessionFromProject(project.id, sessionId)
       : deleteSession(sessionId);
     if (!deleted) {
       res.status(404).json({ error: 'Session not found' });
