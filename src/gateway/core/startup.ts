@@ -821,6 +821,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   if (!skipInPreview('heartbeat')) {
     heartbeatRunner.start();
     startupMark('heartbeat runner started');
+    console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
   }
   await yieldStartup();
 
@@ -831,7 +832,6 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   } catch (brainErr: any) {
     console.warn('[BrainRunner] Could not start brain runner:', brainErr.message);
   }
-  console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
 
   startupMark('brain runner started');
   await yieldStartup();

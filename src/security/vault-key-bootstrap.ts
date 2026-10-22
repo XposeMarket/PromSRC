@@ -45,10 +45,20 @@ function readKeyLineSync(): string {
   return line.trim();
 }
 
+/**
+ * True when this process receives the vault master key as the first stdin line:
+ * the Electron-managed desktop gateway, or a launcher that opts in with
+ * PROMETHEUS_VAULT_KEY_STDIN=1 (PR preview gateways). Worker pools use the same
+ * check to forward the key to their forked children.
+ */
+export function isStdinVaultKeyMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PROMETHEUS_ELECTRON_MANAGED === '1' || env.PROMETHEUS_VAULT_KEY_STDIN === '1';
+}
+
 function bootstrap(): void {
   if (attempted) return;
   attempted = true;
-  if (process.env.PROMETHEUS_ELECTRON_MANAGED !== '1' && process.env.PROMETHEUS_VAULT_KEY_STDIN !== '1') return;
+  if (!isStdinVaultKeyMode()) return;
   try {
     const hex = readKeyLineSync();
     if (/^[0-9a-fA-F]{64}$/.test(hex)) {

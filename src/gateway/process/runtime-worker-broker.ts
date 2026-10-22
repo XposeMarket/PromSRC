@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getInjectedMasterKey } from '../../security/vault-key-bootstrap.js';
+import { getInjectedMasterKey, isStdinVaultKeyMode } from '../../security/vault-key-bootstrap.js';
 import {
   DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES,
   RUNTIME_WORKER_PROTOCOL_VERSION,
@@ -513,7 +513,7 @@ export class RuntimeWorkerBroker {
       // Electron-managed mode they need the same OS-unsealed key as the
       // gateway; otherwise they fall back to generating a separate plaintext
       // vault key and silently lose access to saved credentials.
-      const managedVaultKey = process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+      const managedVaultKey = isStdinVaultKeyMode()
         ? (getInjectedMasterKey()?.toString('hex') || '')
         : null;
       const child = fork(entry, [], {
