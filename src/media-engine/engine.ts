@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
-import { estimateCostUsd, getModel, type MediaModelManifest } from './catalog.js';
+import { estimateCostUsd, getModel, snapDuration, type MediaModelManifest } from './catalog.js';
 import { syncFalModels, priceForModel } from './fal-catalog.js';
 import { cancel, downloadOutput, falBilledUsd, missingRequiredFields, poll, submit, type ShotInput } from './providers.js';
 import {
@@ -182,7 +182,7 @@ async function resolveShotInput(workspacePath: string, p: VideoProject, shot: Sh
     startImage: abs(startImage),
     endImage: abs(shot.endImage),
     referenceImages: model.map.referenceImages && !startImage ? Array.from(new Set(refs)).slice(0, refLimitFor(model)).map((r) => abs(r)!) : undefined,
-    durationSec: shot.durationSec,
+    durationSec: snapDuration(model, shot.durationSec),
     aspectRatio: p.target.aspect,
     resolution: p.target.resolution,
     extra: shot.params,
@@ -261,16 +261,16 @@ export async function estimate(workspacePath: string, projectId: string, args: {
         else if (duration < minDurationSec) problems.push(`${model.id}: sourceVideo duration ${duration}s is below the ${minDurationSec}s minimum; slow or extend the reference clip before generating`);
       }
     } catch (e: any) { problems.push(String(e?.message || e)); }
-    if (priceForModel(model, { durationSec: shot.durationSec, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd && !model.pricing?.includedInSubscription) problems.push('model has no pricing; cost is unknown');
+    if (priceForModel(model, { durationSec: snapDuration(model, shot.durationSec), resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }) === undefined && !model.pricing?.perSecondUsd && !model.pricing?.perImageUsd && !model.pricing?.perRequestUsd && !model.pricing?.includedInSubscription) problems.push('model has no pricing; cost is unknown');
     if (model.source === 'fal-sync') {
       const { hydrateFalModelSchema } = await import('./fal-catalog.js');
       await hydrateFalModelSchema(model);
       if (model.unmappedRequired?.length) problems.push(`${model.id} requires ${model.unmappedRequired.join(', ')} which Prometheus cannot fill; add a curated manifest (add_model with defaults) first`);
       else if (!model.schemaLoaded) problems.push('unverified synced model: fal input schema could not be loaded; check models -> needs before approving a paid run');
     }
-    const shotUsd = estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect });
+    const shotUsd = estimateCostUsd(model, { durationSec: snapDuration(model, shot.durationSec), count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect });
     if (model.provider === 'fal') falUsd += shotUsd;
-    shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: shot.durationSec, count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }), problems });
+    shots.push({ shotId: id, title: shot.title, modelId: model.id, count, usd: estimateCostUsd(model, { durationSec: snapDuration(model, shot.durationSec), count, resolution: args.resolution || p.target.resolution, aspectRatio: p.target.aspect }), problems });
   }
   const total = Math.round(shots.reduce((s, x) => s + x.usd, 0) * 1000) / 1000;
   if (falUsd > 0 && !args.skipBalance) {
@@ -626,14 +626,45 @@ export async function generateCharacterAnchor(workspacePath: string, projectId: 
  * user approves framing + identity at ~4-7c a shot before paying for video.
  * Approved stills become the shot's first frame.
  */
+/**
+ * Pure: the prompt + reference list for one storyboard still. editFrom (a workspace path to
+ * the current frame) leads the refs and turns the request into a single-frame edit.
+ */
+export function buildStoryboardRequest(
+  p: VideoProject, shot: Shot, model: MediaModelManifest,
+  opts: { refs?: string[]; hasProduct?: boolean; editFrom?: string; instruction?: string } = {},
+): { prompt: string; refs: string[] } {
+  const aspectWords = p.target.aspect === '9:16' ? 'vertical 9:16 phone frame' : p.target.aspect === '1:1' ? 'square 1:1 frame' : `${p.target.aspect} widescreen frame`;
+  const refs = [...(opts.refs || [])];
+  const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
+  // Draw-to-video: the sketch leads, composition must be kept.
+  if (shot.sketch) refs.unshift(shot.sketch);
+  const editFrom = opts.editFrom?.trim();
+  if (editFrom) {
+    refs.unshift(editFrom);
+    const prompt = `Edit this exact frame: ${String(opts.instruction || '').trim()}. Keep the composition, people, product and lighting identical unless the edit says otherwise. ${aspectWords}. No on-screen text, no watermark.`;
+    return { prompt, refs: Array.from(new Set(refs)) };
+  }
+  const look = getPreset(shot.presetId)?.group === 'look' ? getPreset(shot.presetId)!.label : (style?.name || 'photorealistic');
+  const prompt = [
+    shot.sketch ? `Turn this sketch into a finished ${look} frame, keep composition.` : '',
+    `Storyboard frame: the exact opening frame of a video shot, ${aspectWords}.`,
+    composePrompt(p, { ...shot, line: undefined }),
+    opts.hasProduct ? 'The product must match the reference photo exactly: same shape, label, logo and colors.' : '',
+    refs.length ? 'Keep every person identical to the reference images.' : '',
+    'Photorealistic, natural light, no on-screen text, no captions, no watermark.',
+  ].filter(Boolean).join(' ');
+  return { prompt, refs };
+}
+
 export async function generateStoryboards(workspacePath: string, projectId: string, args: {
-  shotIds?: string[]; modelId?: string; approved?: boolean; count?: number;
+  shotIds?: string[]; modelId?: string; approved?: boolean; count?: number; editFrom?: string; instruction?: string;
 }): Promise<GenerateResult> {
   const p = loadProject(workspacePath, projectId);
   const model = getModel(args.modelId || p.defaults.imageModel);
   if (!model || model.kind !== 'image') throw new Error(`"${args.modelId || p.defaults.imageModel}" is not an image model.`);
   const shots = args.shotIds?.length ? p.shots.filter((s) => args.shotIds!.includes(s.id)) : p.shots.filter((s) => !s.storyboard && !s.takes.length);
-  const count = Math.max(1, Math.min(3, Number(args.count) || 1));
+  const count = Math.max(1, Math.min(4, Number(args.count) || 1));
   const per = estimateCostUsd(model, { count });
   const est = {
     total: Math.round(per * shots.length * 1000) / 1000,
@@ -648,7 +679,6 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
   if (!args.approved && est.total > p.budget.autoApproveUsd + 1e-9) {
     return { needsApproval: true, reason: `Storyboards cost ~$${est.total.toFixed(2)}, above auto-approve. Call again with approved:true after the user confirms.`, estimate: est, jobs: [] };
   }
-  const aspectWords = p.target.aspect === '9:16' ? 'vertical 9:16 phone frame' : p.target.aspect === '1:1' ? 'square 1:1 frame' : `${p.target.aspect} widescreen frame`;
   const abs = (r: string) => (/^(https?:|data:)/i.test(r) ? r : fromWorkspaceRel(workspacePath, r));
   const pending: Job[] = [];
   for (const shot of shots) {
@@ -663,25 +693,16 @@ export async function generateStoryboards(workspacePath: string, projectId: stri
     }
     const style = shot.styleId ? p.styles.find((s) => s.id === shot.styleId) : undefined;
     if (style) refs.push(...style.refs.slice(0, 1));
-    // Draw-to-video: the sketch leads, composition must be kept.
-    if (shot.sketch) refs.unshift(shot.sketch);
-    const look = getPreset(shot.presetId)?.group === 'look' ? getPreset(shot.presetId)!.label : (style?.name || 'photorealistic');
-    const prompt = [
-      shot.sketch ? `Turn this sketch into a finished ${look} frame, keep composition.` : '',
-      `Storyboard frame: the exact opening frame of a video shot, ${aspectWords}.`,
-      composePrompt(p, { ...shot, line: undefined }),
-      hasProduct ? 'The product must match the reference photo exactly: same shape, label, logo and colors.' : '',
-      refs.length ? 'Keep every person identical to the reference images.' : '',
-      'Photorealistic, natural light, no on-screen text, no captions, no watermark.',
-    ].filter(Boolean).join(' ');
-    // Sketch + product refs first, then the identity pack; the provider cap trims from the end.
-    const uniq = Array.from(new Set(refs)).slice(0, refLimitFor(model)).map(abs);
+    const req = buildStoryboardRequest(p, shot, model, { refs, hasProduct, editFrom: args.editFrom, instruction: args.instruction });
+    // Sketch / edit source + product refs first, then the identity pack; the provider cap trims from the end.
+    const uniq = Array.from(new Set(req.refs)).slice(0, refLimitFor(model)).map(abs);
     const input: ShotInput = {
-      prompt,
+      prompt: req.prompt,
       referenceImages: model.map.referenceImages && uniq.length ? uniq : undefined,
       startImage: !model.map.referenceImages && model.map.startImage ? uniq[0] : undefined,
       aspectRatio: p.target.aspect,
     };
+
     pending.push({
       id: newId('job'), target: { storyboardShotId: shot.id }, modelId: model.id, input: input as any, count,
       state: 'queued', estimateUsd: per, takeIds: [], createdAt: Date.now(), updatedAt: Date.now(),

@@ -21,6 +21,8 @@ import {
   storyboardSection, audioSection, autopilotSection, exportsSection,
   handleV2Click, handleV2Change, parityToolbar, kindBadge, loadPresets,
 } from './video-project-card/v2.js';
+import { nextAction, resolveMode } from './video-project-card/studio-model.js';
+import { openStudio, refreshStudio, checkStudioCard } from './video-project-card/studio.js';
 
 const STYLE_ID = 'prom-vp-card-style';
 const CARD_SEL = '.prom-vp-card[data-vp-project]:not([data-vp-mounted])';
@@ -428,6 +430,67 @@ function mountCard(el) {
     return parts.length ? `<section class="vpc-sec vpc-actions">${parts.join('')}</section>` : '';
   }
 
+  // ── compact studio card (default view; the full editor sits behind "⋯") ──
+  function studioCtx() {
+    return {
+      id, el, h, getProject: () => st.project, getState: () => st,
+      act, ops, generate, load, running, render,
+      approve: approvePending, cancel: cancelPending,
+      route: () => vpFetch(`/${encodeURIComponent(id)}/action`, { action: 'route', apply: false }).catch(() => null),
+    };
+  }
+
+  function openStudioFor() {
+    const nxt = st.project ? nextAction(st.project) : { shotIndex: -1 };
+    openStudio(studioCtx(), { shotIndex: nxt.shotIndex >= 0 ? nxt.shotIndex : undefined });
+  }
+
+  // Both gates land here: generate() (st.pending) and act() (st.actPending). The tap is the approval.
+  async function approvePending() {
+    const pend = st.pending;
+    if (pend) { st.pending = null; await generate(pend.path, pend.body, 'Submitting'); return; }
+    const a = st.actPending;
+    if (!a) return;
+    st.actPending = null;
+    await act(a.action, { ...a.args, approved: true }, 'Submitting');
+  }
+
+  function cancelPending() { st.pending = null; st.actPending = null; paint(); }
+
+  function compactHtml(p) {
+    const b = p.budget || {};
+    const auto = resolveMode(p) === 'auto';
+    const nxt = nextAction(p);
+    const cap = b.capUsd != null ? ` of ${usd(b.capUsd)}` : '';
+    const spend = `${auto ? 'Autopilot' : 'Step-by-step'} · ${usd(b.spentUsd)} spent${cap}`;
+    const tiles = (p.shots || []).map((s, i) => {
+      const t = selectedTake(s);
+      const kept = !!s.approvedAt;
+      const cur = i === nxt.shotIndex;
+      const badge = kept ? '<span class="vpc-cbadge is-ok">✓</span>' : cur ? '<span class="vpc-cbadge is-cur">●</span>' : '';
+      return `<div class="vpc-ctile${cur ? ' is-cur' : ''}">${shotThumb(s, t, p, h)}${badge}<span class="vpc-ctag">${i + 1} · ${esc(s.title || 'Shot')}</span></div>`;
+    }).join('');
+    const pend = st.pending || st.actPending;
+    const pendTotal = st.pending ? st.pending.estimate?.total : st.actPending?.usd;
+    const approve = pend ? `<div class="vpc-approve"><strong>Approve ${usd(pendTotal)}?</strong>
+      <div class="vpc-row"><button type="button" class="vpc-btn is-primary is-wide" data-vpa="approve-pending">${ICON.check}<span>Approve &amp; run · ${usd(pendTotal)}</span></button>
+      <button type="button" class="vpc-btn is-wide" data-vpa="cancel-pending">${ICON.x}<span>Cancel</span></button></div></div>` : '';
+    return `<section class="vpc-compact">
+      <div class="vpc-head">
+        <div class="vpc-headtext">
+          <span class="vpc-kicker">${ICON.film}Video project · ${esc(p.target?.aspect || '')}</span>
+          <strong class="vpc-title">${esc(p.title || p.id)}</strong>
+          <span class="vpc-muted">${spend}</span>
+        </div>
+        <div class="vpc-tools">${iconBtn('all-tools', '⋯', 'All tools', `aria-pressed="${!!st.allTools}"`)}</div>
+      </div>
+      <div class="vpc-ctiles">${tiles || '<p class="vpc-muted">No shots yet. Ask Prom to plan the shot list.</p>'}</div>
+      <p class="vpc-next">Next: <b>${esc(nxt.label)}</b></p>
+      ${approve}
+      <button type="button" class="vpc-btn is-primary is-wide vpc-continue" data-vpa="open-studio">Continue →</button>
+    </section>`;
+  }
+
   function paint() {
     if (!alive()) return;
     // Don't clobber an in-progress edit; the 'change' (blur) save repaints.
@@ -447,31 +510,35 @@ function mountCard(el) {
     const beforeRect = el.getBoundingClientRect?.();
     const oldTop = scroller?.scrollTop;
     const html = `<div class="vpc">
-      <div class="vpc-head">
-        <div class="vpc-headtext">
-          <span class="vpc-kicker">${ICON.film}Video project · ${esc(p.target?.aspect || '')}</span>
-          <strong class="vpc-title">${esc(p.title || p.id)}</strong>
-          <span class="vpc-muted">${usd(b.spentUsd)} spent${b.capUsd != null ? ` of ${usd(b.capUsd)}` : ''} · auto-approve under ${usd(b.autoApproveUsd ?? 1)}</span>
-        </div>
-        <div class="vpc-tools">
-          ${iconBtn('undo', ICON.undo, 'Undo', st.history?.undo ? '' : 'disabled')}
-          ${iconBtn('redo', ICON.redo, 'Redo', st.history?.redo ? '' : 'disabled')}
-          ${iconBtn('storyboard', ICON2.grid, 'Generate storyboard')}
-          ${iconBtn('qa', ICON2.gauge, 'QA: score selected takes')}
-          ${iconBtn('refresh', ICON.refresh, 'Refresh')}
-        </div>
-      </div>
+      ${compactHtml(p)}
       ${st.busy ? `<div class="vpc-busy"><span class="vpc-spin"></span>${esc(st.busy)}…</div>` : ''}
       ${st.error ? `<p class="vpc-err">${esc(st.error)}</p>` : ''}
       ${st.toast ? `<div class="vpc-toast">${esc(st.toast)}</div>` : ''}
-      ${charSection(p)}
-      ${storyboardSection(p, h)}
-      ${shotSection(p)}
-      ${audioSection(p, st, h)}
-      ${actionSection(p)}
-      ${autopilotSection(p, st, h)}
-      ${exportsSection(p, st, h)}
+      ${st.allTools ? `<div class="vpc-all">
+        <div class="vpc-head">
+          <div class="vpc-headtext">
+            <span class="vpc-kicker">${ICON.film}Video project · ${esc(p.target?.aspect || '')}</span>
+            <strong class="vpc-title">${esc(p.title || p.id)}</strong>
+            <span class="vpc-muted">${usd(b.spentUsd)} spent${b.capUsd != null ? ` of ${usd(b.capUsd)}` : ''} · auto-approve under ${usd(b.autoApproveUsd ?? 1)}</span>
+          </div>
+          <div class="vpc-tools">
+            ${iconBtn('undo', ICON.undo, 'Undo', st.history?.undo ? '' : 'disabled')}
+            ${iconBtn('redo', ICON.redo, 'Redo', st.history?.redo ? '' : 'disabled')}
+            ${iconBtn('storyboard', ICON2.grid, 'Generate storyboard')}
+            ${iconBtn('qa', ICON2.gauge, 'QA: score selected takes')}
+            ${iconBtn('refresh', ICON.refresh, 'Refresh')}
+          </div>
+        </div>
+        ${charSection(p)}
+        ${storyboardSection(p, h)}
+        ${shotSection(p)}
+        ${audioSection(p, st, h)}
+        ${actionSection(p)}
+        ${autopilotSection(p, st, h)}
+        ${exportsSection(p, st, h)}
+      </div>` : ''}
     </div>`;
+
     // Patch only sections whose markup changed. Keep unchanged media nodes alive
     // (especially playing video) and preserve horizontal strip scroll positions.
     const current = el.querySelector(':scope > .vpc');
@@ -499,6 +566,7 @@ function mountCard(el) {
       }
       oldParts.forEach((node) => { if (!node.__vpMatched) node.remove(); delete node.__vpMatched; });
     }
+    refreshStudio();
     if (scroller && beforeRect && oldTop != null && beforeRect.bottom < viewportTop) {
       const delta = el.getBoundingClientRect().bottom - beforeRect.bottom;
       if (delta) scroller.scrollTop = oldTop + delta;
@@ -511,7 +579,7 @@ function mountCard(el) {
     if (!t || !el.contains(t) || t.disabled) return;
     ev.preventDefault();
     ev.stopPropagation();
-    if (st.busy && t.dataset.vpa !== 'toggle' && t.dataset.vpa !== 'view') return;
+    if (st.busy && !['toggle', 'view', 'all-tools', 'open-studio'].includes(t.dataset.vpa)) return;
     const a = t.dataset.vpa;
     const d = t.dataset;
     switch (a) {
@@ -537,16 +605,13 @@ function mountCard(el) {
         await generate('/generate', { shotIds: ids, count: 1, approved: true }, 'Submitting');
         return;
       }
-      case 'approve-pending': {
-        const pend = st.pending;
-        if (!pend) return;
-        st.pending = null;
-        await generate(pend.path, pend.body, 'Submitting');
-        return;
-      }
-      case 'cancel-pending': st.pending = null; paint(); return;
+      case 'approve-pending': return approvePending();
+
+      case 'cancel-pending': cancelPending(); return;
       case 'assemble': await ops([{ op: 'timeline.assemble' }], 'Assembling'); return;
       case 'render': await render(); return;
+      case 'all-tools': st.allTools = !st.allTools; paint(); return;
+      case 'open-studio': openStudioFor(); return;
       default:
         st.toast = '';
         await handleV2Click(a, { st, d, act, ops, paint, h });
@@ -571,6 +636,7 @@ let observer = null;
 let scheduled = false;
 
 function hydrateAll(root = document) {
+  checkStudioCard();
   scheduled = false;
   root.querySelectorAll?.(CARD_SEL).forEach((el) => {
     try { mountCard(el); } catch (e) { console.warn('[video-project-card] mount failed', e); }
@@ -668,4 +734,14 @@ const CARD_CSS = `
 .prom-vp-card .vpc-final .vpc-row{margin-top:6px}
 .prom-vp-card .vpc-spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--vpc-line);border-top-color:var(--vpc-accent);animation:vpc-spin .8s linear infinite;flex:none}
 @keyframes vpc-spin{to{transform:rotate(360deg)}}
+.prom-vp-card .vpc-compact{padding:0 12px 12px}
+.prom-vp-card .vpc-ctiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;overflow-x:auto;padding:2px}
+.prom-vp-card .vpc-ctile{position:relative;min-width:0;aspect-ratio:9/12;border-radius:12px;overflow:hidden;border:1px solid var(--vpc-line);background:var(--vpc-soft)}
+.prom-vp-card .vpc-ctile.is-cur{border-color:var(--vpc-accent);box-shadow:0 0 0 1px var(--vpc-accent)}
+.prom-vp-card .vpc-ctile .vpc-thumb,.prom-vp-card .vpc-ctile img,.prom-vp-card .vpc-ctile video{display:block;width:100%;height:100%;object-fit:cover}
+.prom-vp-card .vpc-ctag{position:absolute;left:6px;bottom:6px;max-width:calc(100% - 12px);padding:1px 6px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prom-vp-card .vpc-cbadge{position:absolute;top:6px;right:6px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:11px;background:var(--vpc-accent);color:#fff}
+.prom-vp-card .vpc-cbadge.is-ok{background:var(--prom-success,#2eaa5c)}
+.prom-vp-card .vpc-next{margin:10px 0 8px;font-size:13px}
+.prom-vp-card .vpc-continue{min-height:40px;border-radius:12px;margin-top:4px}
 `;

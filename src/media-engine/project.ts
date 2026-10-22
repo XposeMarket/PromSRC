@@ -131,6 +131,8 @@ export interface Shot {
   presetId?: string;
   /** Render still takes with a slow Ken Burns push-in instead of a frozen frame. */
   kenBurns?: boolean;
+  /** Set when the shot is kept in the studio flow (cleared by shot.unapprove). */
+  approvedAt?: number;
 }
 
 export interface Track {
@@ -227,6 +229,8 @@ export interface VideoProject {
   lastRun?: RunState;
   templateId?: string;
   hookVariants?: string[];
+  /** Studio flow: 'step' = one shot at a time; 'auto' = autopilot plan. Undefined = UI default. */
+  mode?: 'step' | 'auto';
   opLog: OpRecord[];
   version: number;
   createdAt: number;
@@ -385,6 +389,7 @@ export function normalizeProject(raw: any): VideoProject {
     brand: raw.brand?.name ? raw.brand : undefined,
     lastRun: raw.lastRun || undefined,
     templateId: raw.templateId || undefined,
+    mode: raw.mode === 'step' || raw.mode === 'auto' ? raw.mode : undefined,
     hookVariants: raw.hookVariants ? arr<string>(raw.hookVariants) : undefined,
     opLog: arr<OpRecord>(raw.opLog).slice(-200),
     version: num(raw.version, 0),
@@ -583,6 +588,7 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
       if (o.brand !== undefined) p.brand = o.brand && o.brand.name ? o.brand : undefined;
       if (o.templateId !== undefined) p.templateId = o.templateId ? String(o.templateId) : undefined;
       if (o.hookVariants !== undefined) p.hookVariants = arr<string>(o.hookVariants);
+      if (o.mode === 'step' || o.mode === 'auto') p.mode = o.mode;
       if (o.audioMode === 'native' || o.audioMode === 'voiceover') {
         p.audioMode = o.audioMode;
         layoutVoiceover(p); // native drops the VO clips; voiceover restores them
@@ -807,6 +813,17 @@ function applyOp(p: VideoProject, o: ProjectOp): string {
       shot.storyboard = pick;
       shot.storyboardCandidates = (shot.storyboardCandidates || []).filter((x) => x !== pick);
       return `Approved storyboard for ${shot.title}`;
+    }
+    case 'shot.approve': {
+      const shot = findShot(p, o.id);
+      if (!shot.selectedTakeId || !shot.takes.some((t) => t.id === shot.selectedTakeId)) throw new Error('Shot has no take to keep.');
+      shot.approvedAt = Date.now();
+      return `Kept ${shot.title}`;
+    }
+    case 'shot.unapprove': {
+      const shot = findShot(p, o.id);
+      delete shot.approvedAt;
+      return `Unkept ${shot.title}`;
     }
     case 'shot.rejectStoryboard': {
       const shot = findShot(p, o.id);
