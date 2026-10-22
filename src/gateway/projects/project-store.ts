@@ -18,16 +18,13 @@
  *   workspace/projects/<id>/                ← project workspace folder
  *   workspace/projects/<id>/CONTEXT.md      ← living context/knowledge seed
  *   workspace/projects/<id>/knowledge/      ← uploaded knowledge files
- *
- * INSTALL: Place at src/gateway/projects/project-store.ts
- *          (create the projects/ directory first)
  */
 
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config.js';
-import { deleteSession } from '../session.js';
+import { deleteSession, getSession, sessionExists } from '../session.js';
 import {
   assertSafeStorageId,
   isSafeStorageId,
@@ -114,6 +111,7 @@ function copyMissingTree(sourceDir: string, targetDir: string): number {
 function migrateLegacyDevProjects(currentProjectsDir: string): void {
   if (legacyProjectMigrationComplete) return;
   legacyProjectMigrationComplete = true;
+  sessionOwnerIndex = null; // migrated project files are copied straight to disk; rebuild the index lazily
 
   const dataRoot = String(process.env.PROMETHEUS_DATA_DIR || '').trim();
   if (!dataRoot) return;
@@ -278,10 +276,39 @@ export function getProjectContextContent(projectId: string): string | null {
   try { return fs.readFileSync(contextPath, 'utf-8'); } catch { return null; }
 }
 
+// sessionId -> projectId. Built lazily from disk, then kept in step by every project write.
+// No watcher and no persisted index: any write that changes a project's sessions goes through saveProject.
+let sessionOwnerIndex: Map<string, string> | null = null;
+
+function ensureSessionOwnerIndex(): Map<string, string> {
+  if (sessionOwnerIndex) return sessionOwnerIndex;
+  const index = new Map<string, string>();
+  const dir = getProjectsDir();
+  if (fs.existsSync(dir)) {
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue;
+      const id = file.slice(0, -5);
+      if (!isSafeStorageId(id)) continue;
+      for (const sess of loadProjectFromDisk(id)?.sessions || []) index.set(sess.id, id);
+    }
+  }
+  sessionOwnerIndex = index;
+  return index;
+}
+
+function indexProjectSessions(projectId: string, sessionIds: string[]): void {
+  if (!sessionOwnerIndex) return; // not built yet: the next lookup reads disk, which already has this write
+  for (const [sid, pid] of sessionOwnerIndex) {
+    if (pid === projectId) sessionOwnerIndex.delete(sid);
+  }
+  for (const sid of sessionIds) sessionOwnerIndex.set(sid, projectId);
+}
+
 function saveProject(project: Project): void {
   project.id = assertSafeStorageId(project.id, 'project id');
   ensureProjectDirs(project.id);
   fs.writeFileSync(getProjectFile(project.id), JSON.stringify(project, null, 2), 'utf-8');
+  indexProjectSessions(project.id, project.sessions.map((sess) => sess.id));
 }
 
 function loadProjectFromDisk(id: string): Project | null {
@@ -397,13 +424,20 @@ export function updateProject(
   return project;
 }
 
-export function deleteProject(id: string): boolean {
+export interface DeleteProjectOptions {
+  /** Default true: chats survive and only lose project membership. Pass false to also delete the chats. */
+  keepSessions?: boolean;
+}
+
+export function deleteProject(id: string, options: DeleteProjectOptions = {}): boolean {
   const project = loadProjectFromDisk(id);
   if (!project) return false;
 
-  // Delete all owned session files
-  for (const sess of project.sessions) {
-    try { deleteSession(sess.id); } catch {}
+  const keepSessions = options.keepSessions !== false;
+  if (!keepSessions) {
+    for (const sess of project.sessions) {
+      try { deleteSession(sess.id); } catch {}
+    }
   }
 
   // Delete workspace folder
@@ -417,6 +451,7 @@ export function deleteProject(id: string): boolean {
   // Delete metadata file
   const projectFile = getProjectFile(id);
   if (fs.existsSync(projectFile)) { try { fs.unlinkSync(projectFile); } catch {} }
+  indexProjectSessions(id, []);
 
   console.log(`[ProjectStore] Deleted project ${id}`);
   return true;
@@ -459,25 +494,91 @@ export function updateProjectSessionTitle(
   }
 }
 
-export function removeSessionFromProject(
-  projectId: string,
-  sessionId: string
-): Project | null {
+/**
+ * Move an EXISTING session into this project. A chat has at most one owner, so it is
+ * removed from any other project first. Idempotent. Never creates a session.
+ * Returns null (nothing written) when the project or the session does not exist.
+ */
+export function attachSessionToProject(projectId: string, sessionId: string): Project | null {
+  assertSafeStorageId(projectId, 'project id');
+  const safeSessionId = assertSafeStorageId(sessionId, 'session id');
+  if (!sessionExists(safeSessionId)) return null;
+  const target = loadProjectFromDisk(projectId);
+  if (!target) return null;
+
+  const owner = findProjectBySessionId(safeSessionId);
+  if (owner && owner.id !== target.id) {
+    owner.sessions = owner.sessions.filter(s => s.id !== safeSessionId);
+    owner.updatedAt = Date.now();
+    saveProject(owner);
+  }
+  if (target.sessions.some(s => s.id === safeSessionId)) return target;
+
+  const now = Date.now();
+  const title = String(getSession(safeSessionId)?.title || '').trim() || 'New chat';
+  target.sessions.unshift({ id: safeSessionId, title, createdAt: now, updatedAt: now });
+  target.updatedAt = now;
+  saveProject(target);
+  return target;
+}
+
+/** Remove project membership only. The chat record is never deleted. */
+export function detachSessionFromProject(projectId: string, sessionId: string): boolean {
   assertSafeStorageId(projectId, 'project id');
   const safeSessionId = assertSafeStorageId(sessionId, 'session id');
   const project = loadProjectFromDisk(projectId);
-  if (!project) return null;
-  if (!project.sessions.some((session) => session.id === safeSessionId)) return null;
+  if (!project) return false;
+  if (!project.sessions.some((session) => session.id === safeSessionId)) return false;
   project.sessions = project.sessions.filter(s => s.id !== safeSessionId);
   project.updatedAt = Date.now();
   saveProject(project);
-  deleteSession(safeSessionId);
-  return project;
+  return true;
+}
+
+/** Explicit destructive path: detach membership, then delete the chat record. Callers must opt in. */
+export function deleteSessionFromProject(projectId: string, sessionId: string): boolean {
+  const safeSessionId = assertSafeStorageId(sessionId, 'session id');
+  detachSessionFromProject(projectId, safeSessionId);
+  return deleteSession(safeSessionId);
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * Validate a user/agent-supplied project directory against the configured workspace
+ * and allowed_paths. Shared by the REST router and prometheus_thread_ops.
+ * Returns '' when no directory was supplied.
+ */
+export function resolveAllowedProjectDirectory(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const selected = path.resolve(raw);
+  const cfg = getConfig().getConfig() as any;
+  const allowedRoots = [cfg?.workspace?.path, ...(Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
+    ? cfg.tools.permissions.files.allowed_paths
+    : [])]
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .map((entry) => path.resolve(entry));
+  if (!allowedRoots.some((root) => isPathInside(root, selected))) {
+    throw new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
+  }
+  return selected;
 }
 
 export function findProjectBySessionId(sessionId: string): Project | null {
   if (!isSafeStorageId(sessionId)) return null;
-  return listProjects().find(p => p.sessions.some(s => s.id === sessionId)) || null;
+  const ownerId = ensureSessionOwnerIndex().get(sessionId);
+  if (!ownerId) return null;
+  const owner = loadProjectFromDisk(ownerId);
+  if (owner && owner.sessions.some(s => s.id === sessionId)) return owner;
+  // Stale entry (file changed outside the store): rebuild from disk once and retry.
+  sessionOwnerIndex = null;
+  const rebuiltOwnerId = ensureSessionOwnerIndex().get(sessionId);
+  return rebuiltOwnerId ? loadProjectFromDisk(rebuiltOwnerId) : null;
 }
 
 // ─── Knowledge Files ─────────────────────────────────────────────────────────
