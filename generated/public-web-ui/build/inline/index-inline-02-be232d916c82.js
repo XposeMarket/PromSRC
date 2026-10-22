@@ -1,0 +1,1 @@
+if(document.documentElement.classList.contains("mobile-settings-handoff")){const preload=document.createElement("link");preload.rel="modulepreload",preload.href="/build/entries/settings-YIC3QLDT.js",document.head.appendChild(preload)}
