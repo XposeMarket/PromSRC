@@ -113,6 +113,10 @@ const measurements = {
 // live-data cards, card runtime + styles in web-ui/src/cards) render inside
 // renderMd, so they ship in this slice: measured 277816. Lazy-loading the card
 // renderers is the follow-up that should bring this back down.
-assert(measurements.gzipBytes <= 278000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #750 mobile approval card rebuild (action sheet, slide-to-confirm gesture
+// state machine, risk/expiry copy in mobile-approval-copy.js) renders inside
+// the chat thread, so it ships here too: main measured 276891, #750 measures
+// 278279 (+1388). Ceiling holds that measurement plus compression variance.
+assert(measurements.gzipBytes <= 278400, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

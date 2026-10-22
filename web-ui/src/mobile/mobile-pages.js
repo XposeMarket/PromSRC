@@ -4,7 +4,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
-import { mobileApprovalCardCopy, mobileApprovalRiskText } from './mobile-approval-copy.js';
+import { mobileApprovalCardCopy, mobileApprovalExpiryText, mobileApprovalRiskText, mobileApprovalSlideOutcome } from './mobile-approval-copy.js';
 import {
   formatMobileChatTime as _formatChatTime,
   formatMobileTimeAgo as _formatTimeAgo,
@@ -7087,20 +7087,6 @@ function _pmApprovalStatusCopy(status = 'pending') {
   return normalized || 'Approval required';
 }
 
-function _pmApprovalStatusIcon(status = 'pending') {
-  const normalized = String(status || 'pending').toLowerCase();
-  if (normalized === 'approved' || normalized === 'complete' || normalized === 'executed') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
-  }
-  if (normalized === 'rejected' || normalized === 'denied' || normalized === 'failed' || normalized === 'error' || normalized === 'expired') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
-  }
-  if (normalized === 'approving' || normalized === 'running' || normalized === 'executing') {
-    return '<span class="pm-chat-approval-spinner" aria-hidden="true"></span>';
-  }
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>';
-}
-
 function _pmApprovalParameterHtml(label, value, { code = false, multiline = false } = {}) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -7188,28 +7174,52 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     steps,
     expectedWorkflow,
   });
-  const { title, approveLabel, toolLabel } = copy;
-  return `<div class="pm-chat-approval ${pending ? 'pending' : 'resolved'} ${compact ? 'compact' : ''}" data-pm-approval-id="${escapeHtml(approval.id)}">
-    <div class="pm-chat-approval-head">
-      <span class="pm-chat-approval-icon">${_pmApprovalStatusIcon(status)}</span>
-      <div class="pm-chat-approval-heading">
-        <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
-        <code class="pm-chat-approval-tool">${escapeHtml(toolLabel)}</code>
+  const { title, approveLabel, slideLabel, denyLabel, confirmMode, riskLevel, subtitle, eyebrow, detailsOpenByDefault, isFinalAction } = copy;
+  const id = escapeHtml(approval.id);
+  const expiresAt = Number(approval?.finalAction?.expiresAt || 0);
+  const expiryText = pending && expiresAt > 0 ? mobileApprovalExpiryText(expiresAt) : '';
+  const alwaysHtml = _pmApprovalCanSave(approval)
+    ? `<div class="pm-approval-secondary">
+        <button type="button" class="pm-chat-approval-btn always" data-pm-approval-action="approve_always" data-pm-approval-id="${id}">Always allow</button>
+        <button type="button" class="pm-chat-approval-btn session" data-pm-approval-action="approve_session" data-pm-approval-id="${id}">This session</button>
+      </div>`
+    : '';
+  let actionsHtml;
+  if (!pending) {
+    actionsHtml = `<div class="pm-chat-approval-done">${escapeHtml(statusLabel)}</div>`;
+  } else if (confirmMode === 'slide') {
+    actionsHtml = `<div class="pm-chat-approval-actions pm-approval-actions">
+      <div class="pm-approval-slide" data-pm-approval-action="approve" data-pm-approval-id="${id}" data-pm-approval-slide="1">
+        <div class="pm-approval-slide-fill" aria-hidden="true"></div>
+        <span class="pm-approval-slide-label">${escapeHtml(slideLabel)}</span>
+        <button type="button" class="pm-approval-slide-knob" aria-label="${escapeHtml(slideLabel)}. Drag to the end to confirm, or press Enter.">→</button>
       </div>
+      <button type="button" class="pm-chat-approval-btn reject pm-approval-deny" data-pm-approval-action="reject" data-pm-approval-id="${id}">${escapeHtml(denyLabel)}</button>
+    </div>`;
+  } else {
+    actionsHtml = `<div class="pm-chat-approval-actions pm-approval-actions">
+      <button type="button" class="pm-chat-approval-btn approve pm-approval-primary" data-pm-approval-action="approve" data-pm-approval-id="${id}">${escapeHtml(approveLabel)}</button>
+      ${alwaysHtml}
+      <button type="button" class="pm-chat-approval-btn reject pm-approval-deny" data-pm-approval-action="reject" data-pm-approval-id="${id}">${escapeHtml(denyLabel)}</button>
+    </div>`;
+  }
+  return `<div class="pm-chat-approval pm-approval-sheet ${pending ? 'pending' : 'resolved'} ${compact ? 'compact' : ''} risk-${riskLevel || 'none'} mode-${confirmMode}" data-pm-approval-id="${id}">
+    <div class="pm-approval-meta">
+      <span class="pm-approval-dot" aria-hidden="true"></span>
+      <span class="pm-approval-eyebrow">${escapeHtml(pending ? eyebrow : statusLabel)}</span>
+      ${expiryText ? `<span class="pm-approval-expiry" data-pm-approval-expires-at="${escapeHtml(String(expiresAt))}">${escapeHtml(expiryText)}</span>` : ''}
     </div>
-    ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
-    ${parametersHtml ? `<details class="pm-approval-technical pm-chat-approval-details" open>
-      <summary>View details <span aria-hidden="true">⌃</span></summary>
+    <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
+    ${subtitle ? `<div class="pm-approval-sub ${isFinalAction ? '' : 'mono'}">${escapeHtml(subtitle)}</div>` : ''}
+    ${human.summary ? `<blockquote class="pm-approval-quote">${escapeHtml(human.summary)}</blockquote>` : ''}
+    ${pending ? _pmRenderCommandRunLink(approval) : ''}
+    ${actionsHtml}
+    ${parametersHtml ? `<details class="pm-approval-technical pm-chat-approval-details" ${detailsOpenByDefault ? 'open' : ''}>
+      <summary>Details <span aria-hidden="true">›</span></summary>
       <dl class="pm-chat-approval-parameters">${parametersHtml}</dl>
     </details>` : ''}
-    ${pending ? _pmRenderCommandRunLink(approval) : ''}
-    ${pending ? `<div class="pm-chat-approval-actions">
-      <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">${escapeHtml(approveLabel)}</button>
-      ${_pmApprovalCanSave(approval) ? `<button type="button" class="pm-chat-approval-btn always" data-pm-approval-action="approve_always" data-pm-approval-id="${escapeHtml(approval.id)}">Always allow</button>
-      <button type="button" class="pm-chat-approval-btn session" data-pm-approval-action="approve_session" data-pm-approval-id="${escapeHtml(approval.id)}">Allow this session</button>` : ''}
-      <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Keep verified' : 'Deny'}</button>
-    </div>` : `<div class="pm-chat-approval-done">${escapeHtml(statusLabel)}</div>`}
   </div>`;
+
 }
 
 function _mobileBackgroundSpawnIdFromSessionId(sessionId) {
@@ -7348,9 +7358,91 @@ function _mobileApprovalWasRecentlyResolved(id) {
   return false;
 }
 
+let _mobileApprovalExpiryTimer = null;
+
+function _tickMobileApprovalExpiry() {
+  const nodes = document.querySelectorAll('[data-pm-approval-expires-at]');
+  if (!nodes.length) {
+    clearInterval(_mobileApprovalExpiryTimer);
+    _mobileApprovalExpiryTimer = null;
+    return;
+  }
+  nodes.forEach((node) => {
+    const text = mobileApprovalExpiryText(Number(node.getAttribute('data-pm-approval-expires-at')));
+    node.textContent = text;
+    node.classList.toggle('expired', text === 'Expired');
+  });
+}
+
+function _ensureMobileApprovalExpiryTicker() {
+  if (_mobileApprovalExpiryTimer) return;
+  if (!document.querySelector('[data-pm-approval-expires-at]')) return;
+  _mobileApprovalExpiryTimer = setInterval(_tickMobileApprovalExpiry, 1000);
+}
+
+function _wireMobileApprovalSlide(track) {
+  const knob = track.querySelector('.pm-approval-slide-knob');
+  if (!knob) return;
+  let startX = 0;
+  let max = 0;
+  let x = 0;
+  let dragging = false;
+  const setX = (value) => {
+    x = value;
+    knob.style.transform = `translateX(${value}px)`;
+    track.style.setProperty('--pm-slide-p', String(max ? value / max : 0));
+  };
+  const confirmSlide = async () => {
+    track.classList.add('done');
+    knob.textContent = '✓';
+    try { pmHaptic?.(18); } catch {}
+    const ok = await _resolveMobileApprovalButton(track);
+    if (ok) return;
+    track.classList.remove('done');
+    knob.textContent = '→';
+    setX(0);
+  };
+  // Pure decision (mobileApprovalSlideOutcome): cancel and lost capture never approve.
+  const decide = (type, detail = 1) => {
+    const outcome = mobileApprovalSlideOutcome({ type, x, max, detail, done: track.classList.contains('done'), dragging });
+    dragging = false;
+    if (outcome === 'approve') {
+      knob.style.transition = '';
+      setX(max);
+      confirmSlide();
+    } else if (outcome === 'reset') {
+      knob.style.transition = '';
+      setX(0);
+    }
+  };
+  knob.addEventListener('pointerdown', (event) => {
+    if (track.classList.contains('done')) return;
+    startX = event.clientX;
+    max = Math.max(0, track.clientWidth - knob.offsetWidth - 8);
+    dragging = true;
+    try { knob.setPointerCapture(event.pointerId); } catch {}
+    knob.style.transition = 'none';
+  });
+  knob.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    setX(Math.min(max, Math.max(0, event.clientX - startX)));
+  });
+  knob.addEventListener('pointerup', (event) => decide('pointerup', event.detail));
+  knob.addEventListener('pointercancel', () => decide('pointercancel'));
+  knob.addEventListener('lostpointercapture', () => decide('lostpointercapture'));
+  // Keyboard / assistive-tech clicks arrive with detail === 0. A finger or mouse tap (detail >= 1) never approves.
+  knob.addEventListener('click', (event) => decide('click', event.detail));
+}
+
 function _wireMobileApprovalActionButton(button) {
   if (!button || button.dataset?.pmApprovalWired === '1') return;
   button.dataset.pmApprovalWired = '1';
+  _ensureMobileApprovalExpiryTicker();
+  // Slide tracks carry data-pm-approval-action="approve": they must never get the plain click handler.
+  if (button.dataset?.pmApprovalSlide === '1') {
+    _wireMobileApprovalSlide(button);
+    return;
+  }
   button.addEventListener('click', () => _resolveMobileApprovalButton(button));
 }
 
@@ -7441,14 +7533,15 @@ function _restoreMobileApprovalDetailsState(root, map) {
 async function _resolveMobileApprovalButton(button) {
   const id = String(button?.getAttribute?.('data-pm-approval-id') || '').trim();
   const action = String(button?.getAttribute?.('data-pm-approval-action') || '').trim();
-  if (!id || !action) return;
+  if (!id || !action) return false;
   if (mobileApprovalActionsInFlight.has(id)) {
     console.debug('[mobile approvals] duplicate action ignored', { id, action, reason: 'in_flight' });
-    return;
+    // Share the in-flight outcome so a second surface's slide doesn't snap back while it's pending.
+    return mobileApprovalActionsInFlight.get(id);
   }
   if (_mobileApprovalWasRecentlyResolved(id)) {
     console.debug('[mobile approvals] stale action ignored', { id, action, reason: 'recently_resolved' });
-    return;
+    return true;
   }
   const approved = action === 'approve' || action === 'approve_session' || action === 'approve_always';
   const grantScope = action === 'approve_session' ? 'session' : action === 'approve_always' ? 'always' : '';
@@ -7488,21 +7581,23 @@ async function _resolveMobileApprovalButton(button) {
           }
         }
       }
+      return true;
     } catch (err) {
       const message = String(err?.message || err || '').trim();
       const alreadyHandled = /approval(?:\s+is)?\s+already\s+(?:approved|rejected|resolved)|approval\s+could\s+not\s+be\s+resolved/i.test(message);
       if (alreadyHandled) {
         mobileApprovalResolvedAt.set(id, Date.now());
         await _reconcileMobilePendingApprovals({ retry: false }).catch(() => {});
-        return;
+        return true;
       }
       scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = false; });
       pmToast(`Approval failed: ${message}`, 'error');
+      return false;
     }
   })();
   mobileApprovalActionsInFlight.set(id, request);
   try {
-    await request;
+    return await request;
   } finally {
     if (mobileApprovalActionsInFlight.get(id) === request) mobileApprovalActionsInFlight.delete(id);
   }
