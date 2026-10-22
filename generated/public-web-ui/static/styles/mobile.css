@@ -12883,6 +12883,152 @@ body.pm-canvas-fullscreen-open {
   font-size: 12px;
   font-weight: 700;
 }
+/* Approval card rebuild: action sheet + slide-to-confirm (see .pr/SPEC.md section 5). */
+.pm-approval-sheet {
+  --pm-approval-danger: var(--pm-danger, #e5484d);
+  --pm-approval-warning: var(--pm-warning, #d99a1f);
+  --pm-approval-success: var(--pm-success, #3fa96b);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+.pm-approval-sheet.compact {
+  padding: 12px;
+  gap: 8px;
+}
+.pm-approval-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--pm-muted);
+}
+.pm-approval-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pm-muted);
+  flex: none;
+}
+.pm-approval-sheet.risk-low .pm-approval-dot { background: var(--pm-approval-success); }
+.pm-approval-sheet.risk-mid .pm-approval-dot { background: var(--pm-approval-warning); }
+.pm-approval-sheet.risk-high .pm-approval-dot { background: var(--pm-approval-danger); }
+.pm-approval-expiry {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.pm-approval-expiry.expired { color: var(--pm-approval-danger); }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-title,
+.pm-approval-sheet .pm-chat-approval-title {
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.25;
+  margin: 0;
+}
+.pm-approval-sub {
+  font-size: 14px;
+  color: var(--pm-muted);
+  margin-top: -6px;
+}
+.pm-approval-sub.mono {
+  font-family: var(--t-font-mono);
+  font-size: 12px;
+}
+.pm-approval-quote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid color-mix(in srgb, var(--pm-text) 16%, var(--pm-border));
+  background: color-mix(in srgb, var(--pm-bg-soft) 68%, var(--pm-surface));
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--pm-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9.5em;
+  overflow: auto;
+}
+.pm-approval-actions {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+}
+.pm-approval-primary {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.pm-approval-secondary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pm-approval-deny {
+  background: none;
+  border: 0;
+  color: var(--pm-approval-danger);
+  min-height: 40px;
+  font-size: 14px;
+  justify-self: center;
+}
+.pm-approval-slide {
+  --pm-slide-p: 0;
+  position: relative;
+  height: 56px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-bg-soft) 68%, var(--pm-surface));
+  border: 1px solid color-mix(in srgb, var(--pm-text) 14%, var(--pm-border));
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pm-approval-slide-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--pm-accent);
+  opacity: calc(var(--pm-slide-p) * .35);
+  pointer-events: none;
+}
+.pm-approval-slide-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--pm-muted);
+  pointer-events: none;
+}
+.pm-approval-slide-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--pm-accent);
+  color: #fff;
+  font-size: 20px;
+  touch-action: none;
+  cursor: grab;
+}
+.pm-approval-sheet.risk-high .pm-approval-slide-knob { background: var(--pm-approval-danger); }
+.pm-approval-slide.done .pm-approval-slide-fill {
+  opacity: .25;
+  background: var(--pm-approval-success);
+}
+.pm-approval-slide.done .pm-approval-slide-label { color: var(--pm-approval-success); }
+.pm-approval-sheet .pm-approval-technical,
+.pm-approval-sheet .pm-chat-approval-details { margin: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .pm-approval-slide-knob,
+  .pm-approval-slide-fill { transition: none !important; }
+}
+
 .pm-process-approval-link {
   display: grid;
   gap: 8px;

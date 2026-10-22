@@ -237,6 +237,8 @@ body.pm-mobile-active .pm-chat-approval > p { font: 500 14px/1.45 var(--pm-font)
 body.pm-mobile-active .pm-chat-approval :is(.pm-chat-approval-details summary, .pm-chat-approval-parameter dt) { font: var(--pm-pop-meta-font); font-weight: 650; }
 body.pm-mobile-active .pm-chat-approval .pm-chat-approval-parameter-value:not(.code) { font: var(--pm-pop-meta-font); }
 body.pm-mobile-active .pm-chat-approval .pm-chat-approval-btn { font: var(--pm-pop-font); font-weight: 600; font-size: 14px; }
+body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-title { font-size: 19px; font-weight: 650; line-height: 1.25; }
+
 
 /* ── Hub/Audit evidence review launcher: quiet row under the header ─────── */
 body.pm-mobile-active .pm-evidence-launch {

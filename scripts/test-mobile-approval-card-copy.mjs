@@ -1,49 +1,128 @@
-// Regression: mobile approval card copy for one-shot final actions vs normal tool approvals.
-// Before the fix, mobile showed "Allow this tool to run?" + "Allow once" + a bare "7" for final actions.
+// Regression: mobile approval card rules (action sheet layout, slide-to-confirm, countdown).
+// Covers both polarities: positive (slide / button shown) and negative (no slide / no approve).
 import assert from 'node:assert/strict';
-import { mobileApprovalCardCopy, mobileApprovalRiskText } from '../web-ui/src/mobile/mobile-approval-copy.js';
+import {
+  mobileApprovalCardCopy,
+  mobileApprovalConfirmMode,
+  mobileApprovalExpiryText,
+  mobileApprovalRiskLevel,
+  mobileApprovalRiskText,
+  mobileApprovalSlideReached,
+  mobileApprovalVerb,
+} from '../web-ui/src/mobile/mobile-approval-copy.js';
 
-// Final action (the exact shape from the UI test card Raul screenshotted).
-const finalAction = mobileApprovalCardCopy({
+// Final action, risk 7, targetLabel present: tap mode, meta line, collapsed details.
+const post = mobileApprovalCardCopy({
   status: 'pending',
   toolName: 'request_final_action_approval',
   approvalKind: 'final_action',
   riskScore: 7,
-  toolArgs: { action_kind: 'other', target_label: 'UI Test: Approve' },
+  finalAction: { actionKind: 'post', targetLabel: 'Post reply', surface: 'X in Chrome' },
 });
-assert.equal(finalAction.title, 'Confirm: UI Test: Approve');
-assert.equal(finalAction.toolLabel, 'Final action · other');
-assert.equal(finalAction.approveLabel, 'Approve');
-assert.equal(finalAction.riskText, '7/10');
-assert.equal(finalAction.oneShot, true);
+assert.equal(post.title, 'Post reply');
+assert.equal(post.approveLabel, 'Approve & post');
+assert.equal(post.confirmMode, 'tap');
+assert.equal(post.eyebrow, 'Needs your OK · one time · risk 7/10');
+assert.equal(post.subtitle, 'X in Chrome');
+assert.equal(post.detailsOpenByDefault, false);
+assert.equal(post.riskLevel, 'mid');
+assert.equal(post.oneShot, true);
+assert.equal(post.riskText, '7/10');
+assert.equal(post.slideLabel, 'Slide to post');
 
-// finalAction record wins over raw args; resolved card uses the resolved title.
+// Final action, risk 8 on a post: slide (the high-risk boundary is inclusive).
+assert.equal(mobileApprovalCardCopy({
+  status: 'pending', approvalKind: 'final_action', riskScore: 8, finalAction: { actionKind: 'post' },
+}).confirmMode, 'slide');
+
+// Final action, purchase, risk 3: slide even below the risk threshold.
+const buy = mobileApprovalCardCopy({
+  status: 'pending',
+  approvalKind: 'final_action',
+  riskScore: 3,
+  finalAction: { actionKind: 'purchase', targetLabel: 'Order #42' },
+});
+assert.equal(buy.confirmMode, 'slide');
+assert.equal(buy.slideLabel, 'Slide to buy');
+assert.equal(buy.approveLabel, 'Approve & buy');
+assert.equal(buy.title, 'Order #42');
+
+// Delete and transfer also slide regardless of risk.
+assert.equal(mobileApprovalConfirmMode({ status: 'pending', approvalKind: 'final_action', riskScore: 1, finalAction: { actionKind: 'delete' } }), 'slide');
+assert.equal(mobileApprovalConfirmMode({ status: 'pending', approvalKind: 'final_action', riskScore: 1, finalAction: { actionKind: 'transfer' } }), 'slide');
+
+// Elevated command, risk 8: slide, generic verb.
+const elevated = mobileApprovalCardCopy({ status: 'pending', approvalKind: 'elevated_command', riskScore: 8 });
+assert.equal(elevated.confirmMode, 'slide');
+assert.equal(elevated.slideLabel, 'Slide to approve');
+assert.equal(elevated.approveLabel, 'Approve');
+
+// Normal tool, risk 9, not one-shot: tap, Allow once, details open by default, tool name as subtitle.
+const tool = mobileApprovalCardCopy({ status: 'pending', toolName: 'run_command', riskScore: 9 });
+assert.equal(tool.confirmMode, 'tap');
+assert.equal(tool.approveLabel, 'Allow once');
+assert.equal(tool.detailsOpenByDefault, true);
+assert.equal(tool.subtitle, 'run_command');
+assert.equal(tool.title, 'Allow this tool to run?');
+assert.equal(tool.eyebrow, 'Needs your OK · risk 9/10');
+
+// Normal command, risk 4 with a policy tier: keeps the tier in riskText only.
+const command = mobileApprovalCardCopy({ status: 'pending', toolName: 'run_command', riskScore: 4, policyTier: 'commit' });
+assert.equal(command.riskText, '4/10 · commit');
+assert.equal(command.eyebrow, 'Needs your OK · risk 4/10');
+
+// dev_apply_live, risk 9: never slides, keeps its own labels.
+const live = mobileApprovalCardCopy({ status: 'pending', approvalKind: 'dev_apply_live', riskScore: 9 });
+assert.equal(live.confirmMode, 'tap');
+assert.equal(live.approveLabel, 'Apply live');
+assert.equal(live.denyLabel, 'Keep verified');
+
+// Resolved final purchase: never slides, no "Needs your OK", resolved title.
 const resolved = mobileApprovalCardCopy(
-  { status: 'approved', approvalKind: 'final_action', finalAction: { targetLabel: 'Post', actionKind: 'post' } },
+  { status: 'approved', approvalKind: 'final_action', riskScore: 3, finalAction: { actionKind: 'purchase', targetLabel: 'Order #42' } },
   { resolvedTitle: 'Final action approval' },
 );
+assert.equal(resolved.confirmMode, 'tap');
 assert.equal(resolved.title, 'Final action approval');
-assert.equal(resolved.toolLabel, 'Final action · post');
+assert.equal(resolved.toolLabel, 'Final action · purchase');
+assert.equal(resolved.eyebrow.includes('Needs your OK'), false);
+assert.equal(resolved.eyebrow, 'one time · risk 3/10');
 
-// Normal command approval keeps the reusable "Allow once" flow.
-const command = mobileApprovalCardCopy({ status: 'pending', toolName: 'run_command', riskScore: 4, policyTier: 'commit' });
-assert.equal(command.title, 'Allow this tool to run?');
-assert.equal(command.toolLabel, 'run_command');
-assert.equal(command.approveLabel, 'Allow once');
-assert.equal(command.riskText, '4/10 · commit');
-assert.equal(command.oneShot, false);
-assert.equal(command.isFinalAction, false);
+// Final action with no verb ('other'): plain Approve and Slide to approve.
+const other = mobileApprovalCardCopy({ status: 'pending', approvalKind: 'final_action', riskScore: 8, finalAction: { actionKind: 'other' } });
+assert.equal(other.approveLabel, 'Approve');
+assert.equal(other.slideLabel, 'Slide to approve');
+assert.equal(other.title, 'Confirm final action');
 
-// Other one-shot kinds.
-assert.equal(mobileApprovalCardCopy({ toolName: 'run_command', approvalKind: 'elevated_command' }).approveLabel, 'Approve');
-assert.equal(mobileApprovalCardCopy({ toolName: 'request_dev_source_edit' }).approveLabel, 'Approve');
-assert.equal(mobileApprovalCardCopy({ toolName: 'x', oneShot: true }).approveLabel, 'Approve');
-assert.equal(mobileApprovalCardCopy({ approvalKind: 'dev_apply_live', toolName: 'prom_apply_dev_changes' }).approveLabel, 'Apply live');
+// Verb mapping.
+assert.equal(mobileApprovalVerb('purchase'), 'buy');
+assert.equal(mobileApprovalVerb('other'), '');
+assert.equal(mobileApprovalVerb('POST'), 'post');
+assert.equal(mobileApprovalVerb(undefined), '');
 
-// Risk: none for 0 / missing / garbage.
+// Risk level tiers.
+assert.equal(mobileApprovalRiskLevel(0), '');
+assert.equal(mobileApprovalRiskLevel(3), 'low');
+assert.equal(mobileApprovalRiskLevel(5), 'mid');
+assert.equal(mobileApprovalRiskLevel(8), 'high');
+
+// Risk text.
 assert.equal(mobileApprovalRiskText(0), '');
-assert.equal(mobileApprovalRiskText(undefined), '');
-assert.equal(mobileApprovalRiskText('abc'), '');
-assert.equal(mobileApprovalCardCopy({ toolName: 'run_command' }).riskText, '');
+assert.equal(mobileApprovalRiskText(7, ''), '7/10');
 
-console.log('test-mobile-approval-card-copy: all assertions passed');
+// Countdown: m:ss, Expired at or past zero, empty when missing or invalid.
+const now = 1_700_000_000_000;
+assert.equal(mobileApprovalExpiryText(now + 292_000, now), '4:52');
+assert.equal(mobileApprovalExpiryText(now + 59_999, now), '0:59');
+assert.equal(mobileApprovalExpiryText(now - 1, now), 'Expired');
+assert.equal(mobileApprovalExpiryText(now, now), 'Expired');
+assert.equal(mobileApprovalExpiryText(undefined), '');
+assert.equal(mobileApprovalExpiryText('not a number'), '');
+
+// Slide threshold: 88% reaches, below does not, zero-width track never reaches.
+assert.equal(mobileApprovalSlideReached(88, 100), true);
+assert.equal(mobileApprovalSlideReached(87, 100), false);
+assert.equal(mobileApprovalSlideReached(50, 0), false);
+assert.equal(mobileApprovalSlideReached(100, 0), false);
+
+console.log('mobile approval card copy: all assertions passed');
