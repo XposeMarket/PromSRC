@@ -5,6 +5,7 @@ import {
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
+import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
 import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
@@ -1079,7 +1080,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
           <strong class="t-think" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
-          <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
+          <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
         </summary>
         <div class="pm-trace-tool-body">${_renderMobileLiveTrace(toolBodyEntries)}</div>
       </details>`;
