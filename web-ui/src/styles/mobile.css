@@ -13018,6 +13018,8 @@ body.pm-canvas-fullscreen-open {
   background: var(--pm-approval-success);
 }
 .pm-approval-slide.done .pm-approval-slide-label { color: var(--pm-approval-success); }
+/* Same specificity as the risk-high knob rule, declared later, so a confirmed slide always turns green. */
+.pm-approval-sheet .pm-approval-slide.done .pm-approval-slide-knob { background: var(--pm-approval-success); }
 .pm-approval-sheet .pm-approval-technical,
 .pm-approval-sheet .pm-chat-approval-details { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
