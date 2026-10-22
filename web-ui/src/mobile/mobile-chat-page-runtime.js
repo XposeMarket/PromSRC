@@ -1035,7 +1035,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     return target;
   }
 
+  function syncComposerProjectPlaceholder() {
+    // Project chats (including pinned ones opened from the Pinned section)
+    // point the composer at the project instead of the gateway.
+    const next = targetProjectLabel
+      ? `Work on ${targetProjectLabel}`
+      : (requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`);
+    try { window.__pmMobileComposerPlaceholder = next; } catch {}
+    const composerInput = document.getElementById('pm-composer-input');
+    const slashChip = document.getElementById('pm-chat-command-chip');
+    // An active slash command owns the placeholder; it restores ours on clear.
+    if (composerInput && (!slashChip || slashChip.hidden)) composerInput.placeholder = next;
+  }
+
   function renderChatProjectChip() {
+    syncComposerProjectPlaceholder();
     if (!projectChip) return;
     const value = projectChip.querySelector('.pm-new-chat-context-value');
     if (value) value.querySelector('strong').textContent = targetProjectLabel || 'Chat';
