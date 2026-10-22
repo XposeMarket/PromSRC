@@ -59,8 +59,10 @@ const webPush = read('src/gateway/notifications/web-push.ts');
 
 assert.match(router, /const foregroundActivity = createForegroundToolActivityTracker\(\)/,
   'main chat must track open tool calls independently of visible SSE output');
-assert.match(router, /payload\.message = foregroundConnectionMessage\(activity, idleMs, now\)/,
+assert.match(router, /const message = foregroundConnectionMessage\(activity, idleMs, now\);[\s\S]{0,120}payload\.message = message/,
   'heartbeats must describe the open tool instead of claiming generic work during silence');
+assert.match(router, /idleMs >= QUIET_CONNECTION_PILL_MS/,
+  'the Still connected pill must stay gated to the shared quiet threshold');
 assert.match(pages, /case 'heartbeat':[\s\S]{0,180}evt\.message && !reconnectStatus\.isReconnectPending\(\)[\s\S]{0,100}setChatConnectionStatus\(true, String\(evt\.message\), \{ mode: 'activity' \}\)/,
   'mobile chat must display tool-aware heartbeat status separately from reconnect status');
 assert.match(pages, /status\?\.run\?\.checkpoint\?\.connectionMessage/,
