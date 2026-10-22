@@ -77,7 +77,7 @@ import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCau
 import { fitToolDefinitionsToBudget } from '../tools/schema-compaction';
 import { currentTrace, getTrace, listRecentTraces, recordSpan, runInTrace, withSpan } from '../observability/turn-trace';
 import { evaluateToolDispatch, resolveIdleRoundLimit, resolveToolSurfaceEnforcementMode, toolNameSetOf, type ToolDispatchDecision } from '../chat/tool-dispatch-policy';
-import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
+import { createForegroundToolActivityTracker, foregroundConnectionMessage, QUIET_CONNECTION_PILL_MS, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
@@ -2375,9 +2375,14 @@ router.post('/api/chat', async (req, res) => {
     // Open calls are not proof of progress. Declared blocking waits have a
     // fixed timeout + grace in the owner watchdog; heartbeats cannot renew it.
     const payload: Record<string, any> = { state: 'processing', idleMs, activeTool: activity };
-    if (idleMs >= 45_000 && now - lastVisibleHeartbeatAt >= 45_000) {
-      lastVisibleHeartbeatAt = now;
-      payload.message = foregroundConnectionMessage(activity, idleMs, now);
+    // The pill only appears after QUIET_CONNECTION_PILL_MS of no visible
+    // update; known-duration waits get a client countdown instead.
+    if (idleMs >= QUIET_CONNECTION_PILL_MS && now - lastVisibleHeartbeatAt >= 45_000) {
+      const message = foregroundConnectionMessage(activity, idleMs, now);
+      if (message) {
+        lastVisibleHeartbeatAt = now;
+        payload.message = message;
+      }
     }
     try {
       if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');

@@ -39,12 +39,14 @@ export function summarizeMobileRuntime(runtime: any): Record<string, any> {
     && Number(rawActiveTool.startedAt) > 0
     ? {
         name: String(rawActiveTool.name || '').slice(0, 120),
-        kind: ['terminal', 'background', 'tool'].includes(rawActiveTool.kind) ? rawActiveTool.kind : 'tool',
+        kind: ['terminal', 'background', 'tool', 'wait'].includes(rawActiveTool.kind) ? rawActiveTool.kind : 'tool',
         startedAt: Number(rawActiveTool.startedAt),
         lastUpdateAt: Number(rawActiveTool.lastUpdateAt || rawActiveTool.startedAt),
         openCalls: Math.max(1, Number(rawActiveTool.openCalls || 1)),
+        ...(Number(rawActiveTool.waitUntil) > 0 ? { waitUntil: Number(rawActiveTool.waitUntil) } : {}),
       }
     : null;
+  const connectionMessage = activeTool ? foregroundConnectionMessage(activeTool, Date.now() - activeTool.lastUpdateAt) : '';
   const checkpointProcessEntries = Array.isArray(checkpoint?.processEntries)
     ? checkpoint.processEntries
       .slice(-500)
@@ -71,7 +73,7 @@ export function summarizeMobileRuntime(runtime: any): Record<string, any> {
       toolName: String(checkpoint.toolName || ''),
       message: truncateRuntimeProcessText(checkpoint.message || '', 4000),
       activeTool,
-      ...(activeTool ? { connectionMessage: foregroundConnectionMessage(activeTool, Date.now() - activeTool.lastUpdateAt) } : {}),
+      ...(connectionMessage ? { connectionMessage } : {}),
       processEntries: checkpointProcessEntries,
     } : null,
   };
