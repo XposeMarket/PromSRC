@@ -193,6 +193,26 @@ async function main(): Promise<void> {
   }
   assert.equal(isReadOnlyShellCommand('rg -n foo src | sort'), true, 'plain sort filter stays read-only');
 
+  // Review round 1 (Opus) false positives: each of these must NOT be read-only.
+  for (const command of [
+    "'rm' -rf build", '"calc.exe"', "echo hi; 'rm' -rf x", 'echo hi && "powershell" -c Remove-Item x',
+    'git grep -Ocalc foo', 'git grep -nOcalc foo', 'git grep --open-files-in-pager=calc foo', 'git -C . grep -Ocalc foo',
+    'git log --outp=x', 'git diff --ou=x', 'git cat-file --batch',
+    'rg --hostname-bin=calc foo', 'rg -z foo', 'rg --search-zip foo', 'rg -nz foo',
+    'tail -f app.log', 'Get-Content app.log -Wait', 'cat a.txt | tail -f',
+  ]) {
+    assert.equal(isReadOnlyShellCommand(command), false, `${command} must not be read-only`);
+  }
+  assert.equal(isParallelSafeToolCall(runCall("'rm' -rf build", { shell: 'bash' })), false, 'quoted program under bash is not a probe');
+  // Lone section headers and normal probes still pass.
+  assert.equal(isReadOnlyShellCommand("'---SELF'; git status --short; '---LOG'; git log --oneline -3", 'powershell'), true, 'section headers stay read-only in PowerShell');
+  assert.equal(isReadOnlyShellCommand("'---SELF'; git status --short", 'bash'), false, 'bash executes bare quoted words');
+  assert.equal(isReadOnlyShellCommand("'---SELF'; git status --short", 'cmd'), false, 'cmd executes bare quoted words');
+  assert.equal(isReadOnlyShellCommand('"calc.exe"', 'powershell'), false, 'a literal that can name a program is rejected even in PowerShell');
+  assert.equal(isReadOnlyShellCommand("'./run.sh'", 'powershell'), false, 'path-like literal rejected');
+  assert.equal(isReadOnlyShellCommand('git grep -n foo'), true, 'plain git grep stays read-only');
+  assert.equal(isReadOnlyShellCommand('tail -n 20 app.log'), true, 'bounded tail stays read-only');
+
   // Mixed-batch rule: only non-read-only shell runs/starts are refused with waits or other tools.
   assert.equal(canExecuteToolCallsInParallel([
     runCall('git status --short'),
@@ -215,6 +235,14 @@ async function main(): Promise<void> {
     runCall('npm run build', { parallel_safe: true, parallel_key: 'repo-a' }),
     { name: 'workspace_read', args: { action: 'read', path: 'a.ts' } },
   ]), false, 'mutating shell plus read stays serial');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('git status --short'),
+    runCall('git commit -m x', { parallel_safe: true, parallel_key: 'repo-a' }),
+  ]), false, 'keyed mutating run never races an unkeyed read-only probe');
+  assert.equal(canExecuteToolCallsInParallel([
+    runCall('npm run build', { parallel_safe: true, parallel_key: 'repo-a' }),
+    runCall('npm run build', { parallel_safe: true, parallel_key: 'repo-b' }),
+  ]), true, 'distinct keyed shells still overlap (unchanged behavior)');
 
   const partitionInput: ParallelToolCall[] = [
     runCall('rg -n foo src'),

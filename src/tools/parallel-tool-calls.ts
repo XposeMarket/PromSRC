@@ -135,10 +135,12 @@ function shellOperation(call: ParallelToolCall): { kind: 'run' | 'start' | 'wait
   if (action !== 'run' && action !== 'start') return { kind: 'other', resource: '' };
   const command = String(args.command || '').trim();
   const flagged = args.elevated === true || args.pty === true || args.stdin === true || args.visible === true;
-  if (action === 'run' && !flagged && command && isReadOnlyShellCommand(command)) {
+  if (action === 'run' && !flagged && command && isReadOnlyShellCommand(command, String(args.shell || 'auto'))) {
     // Unique per call: identical read-only probes must not collide on resource.
-    readOnlyShellRunSequence += 1;
-    return { kind: 'run', resource: `readonly:${readOnlyShellRunSequence}`, readOnly: true };
+    // Stable per call when the provider gave an id; counter only as a fallback.
+    const callId = String(call?.id || '').trim();
+    if (!callId) readOnlyShellRunSequence += 1;
+    return { kind: 'run', resource: callId ? `readonly:id:${callId}` : `readonly:n:${readOnlyShellRunSequence}`, readOnly: true };
   }
   const resource = String(args.parallel_key || '').trim().toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
   if (args.parallel_safe !== true || !resource || !String(args.command || '').trim()
@@ -233,20 +235,30 @@ function gitCommandIsReadOnly(words: string[]): boolean {
     if (sub === 'config') return args.length >= 1 && (args[0] === '--get' || args[0] === '--list');
     return false;
   }
-  if ((sub === 'diff' || sub === 'log' || sub === 'show') && args.some((arg) => arg.startsWith('--output'))) return false;
+  // Git accepts unambiguous long-option prefixes (--outp == --output), so match the prefix.
+  if (args.some((arg) => /^--ou/.test(arg))) return false;
+  // git grep -O / --open-files-in-pager launches an arbitrary program.
+  if (sub === 'grep' && args.some((arg) => /^-[A-Za-z]*O/.test(arg) || /^--op/.test(arg))) return false;
+  // cat-file --batch* reads stdin until EOF; not a bounded probe.
+  if (sub === 'cat-file' && args.some((arg) => /^--batch/.test(arg))) return false;
   return true;
 }
 
 function rgArgsAreReadOnly(words: string[]): boolean {
   return !words.slice(1).some((word) =>
     word.startsWith('--pre') || word.startsWith('--replace') || word === '-r'
-    || (word.startsWith('-') && !word.startsWith('--') && /r/.test(word)));
+    // --hostname-bin runs a program; -z/--search-zip spawn decompressors.
+    || word.startsWith('--hostname-bin') || word.startsWith('--search-zip')
+    || (word.startsWith('-') && !word.startsWith('--') && /[rz]/.test(word)));
 }
 
 function stageIsReadOnly(stage: string, first: boolean): boolean {
   const words = stage.trim().split(/\s+/).filter(Boolean);
   if (!words.length) return false;
   const head = words[0].toLowerCase();
+  // Follow/wait modes never exit (tail -f, Get-Content -Wait), so they are not probes.
+  if (['tail', 'get-content', 'gc', 'cat', 'type'].includes(head)
+    && words.slice(1).some((word) => /^(-f|--follow.*|-wait)$/i.test(word))) return false;
   if (!first) {
     if (!READ_ONLY_SHELL_FILTERS.has(head)) return false;
     // GNU sort can write a file (-o / --output); anything output-like is not read-only.
@@ -262,7 +274,11 @@ function stageIsReadOnly(stage: string, first: boolean): boolean {
  * Conservative allowlist check for a shell command. Returns true only when every
  * `;`/`&&`/`||` segment is a read-only pipeline of allowed readers and filters.
  */
-export function isReadOnlyShellCommand(command: string): boolean {
+export function isReadOnlyShellCommand(command: string, shell: string = 'auto'): boolean {
+  const shellName = String(shell || 'auto').toLowerCase();
+  // Only PowerShell prints a bare quoted string; bash/cmd execute it as a program.
+  const literalsArePrinted = shellName === 'powershell' || shellName === 'pwsh'
+    || (shellName === 'auto' && process.platform === 'win32');
   if (typeof command !== 'string') return false;
   const text = command.trim();
   if (!text || /[\r\n]/.test(text)) return false;
@@ -277,7 +293,11 @@ export function isReadOnlyShellCommand(command: string): boolean {
   for (const segment of stripped.split(/;|&&|\|\|/)) {
     const stages = segment.split('|');
     if (stages.some((stage) => !stage.trim())) return false;
-    if (stages.length === 1 && /^['"]/.test(stages[0].trim())) continue; // section-header literal
+    // A lone quoted literal is a section header (PowerShell prints it). Anything after the
+    // closing quote (e.g. 'rm' -rf x) would execute under bash/cmd, so it must not match.
+    // Header text must start with -, =, # or * and hold no path separators, so it can
+    // never name a program ('---SELF' yes; "calc.exe" / './x' no).
+    if (stages.length === 1 && literalsArePrinted && /^(['"])[-=#*][^'"\/\\]*\1$/.test(stages[0].trim())) continue;
     if (!stageIsReadOnly(stages[0], true)) return false;
     for (const stage of stages.slice(1)) {
       if (!stageIsReadOnly(stage, false)) return false;
@@ -308,6 +328,7 @@ export function canExecuteToolCallsInParallel(calls: readonly ParallelToolCall[]
   let hasStartOrRun = false;
   let hasWait = false;
   let hasOtherTool = false;
+  let hasReadOnlyRun = false;
   for (const call of calls) {
     if (!isParallelSafeToolCall(call)) return false;
     const fingerprint = callFingerprint(call);
@@ -318,13 +339,16 @@ export function canExecuteToolCallsInParallel(calls: readonly ParallelToolCall[]
       if (shellResources.has(operation.resource)) return false;
       shellResources.add(operation.resource);
       if (operation.kind === 'wait') hasWait = true;
-      else if (!operation.readOnly) hasStartOrRun = true;
+      else if (operation.readOnly) hasReadOnlyRun = true;
+      else hasStartOrRun = true;
     } else hasOtherTool = true;
   }
+  // A non-read-only shell run/start (even when keyed) may mutate what an unkeyed
+  // read-only probe inspects (e.g. git index.lock), so it never shares a batch with one.
   // A wait in the same batch as a new start is likely dependent, even when
   // the model supplied a runId. A shell run/start may also mutate data that a
   // separate read would inspect, so admit shell batches only with other shells.
-  return !(hasStartOrRun && (hasWait || hasOtherTool));
+  return !(hasStartOrRun && (hasWait || hasOtherTool || hasReadOnlyRun));
 }
 
 /**
