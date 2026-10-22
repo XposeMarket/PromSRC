@@ -4,6 +4,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
+import { mobileApprovalCardCopy, mobileApprovalRiskText } from './mobile-approval-copy.js';
 import {
   formatMobileChatTime as _formatChatTime,
   formatMobileTimeAgo as _formatTimeAgo,
@@ -7137,7 +7138,8 @@ function _pmApprovalParametersHtml(approval, human, technicalText, {
   ));
   if (steps.length) rows.push(_pmApprovalParameterHtml('Plan', steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
   if (expectedWorkflow.length) rows.push(_pmApprovalParameterHtml('Expected workflow', expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
-  if (risk) rows.push(_pmApprovalParameterHtml('Risk', String(risk)));
+  const riskText = mobileApprovalRiskText(risk, approval?.policyTier);
+  if (riskText) rows.push(_pmApprovalParameterHtml('Risk', riskText));
   if (!rows.length && technicalText) rows.push(_pmApprovalParameterHtml('Technical details', technicalText, { code: true, multiline: true }));
   return rows.filter(Boolean).join('');
 }
@@ -7151,7 +7153,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const pending = status === 'pending';
   const risk = Number(approval.riskScore || 0);
   const statusLabel = _pmApprovalStatusCopy(status);
-  const toolName = String(approval.toolName || _pmApprovalToolLabel(approval.toolName) || 'tool').trim();
+  const copy = mobileApprovalCardCopy(approval, { resolvedTitle: human.title });
   const devPlan = approval?.devSourceEdit?.plan || null;
   const sourceDirs = Array.isArray(approval?.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const devFiles = Array.isArray(approval?.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
@@ -7174,14 +7176,13 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     steps,
     expectedWorkflow,
   });
-  const title = pending ? 'Allow this tool to run?' : (human.title || 'Tool access');
-  const approveLabel = approval.approvalKind === 'dev_apply_live' ? 'Apply live' : 'Allow once';
+  const { title, approveLabel, toolLabel } = copy;
   return `<div class="pm-chat-approval ${pending ? 'pending' : 'resolved'} ${compact ? 'compact' : ''}" data-pm-approval-id="${escapeHtml(approval.id)}">
     <div class="pm-chat-approval-head">
       <span class="pm-chat-approval-icon">${_pmApprovalStatusIcon(status)}</span>
       <div class="pm-chat-approval-heading">
         <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
-        <code class="pm-chat-approval-tool">${escapeHtml(toolName)}</code>
+        <code class="pm-chat-approval-tool">${escapeHtml(toolLabel)}</code>
       </div>
     </div>
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}

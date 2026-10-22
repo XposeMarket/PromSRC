@@ -35,6 +35,7 @@
     "test:restart-notice-encoding": "tsx src/gateway/restart-notice-encoding.regression.ts",
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
     "test:mobile-project-chat-drawer": "node scripts/test-mobile-project-chat-drawer.mjs",
+    "test:mobile-approval-card-copy": "node scripts/test-mobile-approval-card-copy.mjs",
     "test:needs-you-hotpath": "node scripts/test-needs-you-hotpath.mjs",
     "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
     "test:desktop-background": "tsx src/gateway/desktop-background-dispatch.regression.ts",
