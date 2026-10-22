@@ -1,4 +1,5 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
+import { shouldShowActivityPill } from '../features/chat/tool-wait-countdown.js';
 import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorableBg, agentTitleHtml, alignBottomAbove as alignAbove } from './mobile-runtime-chrome.js';
@@ -3103,7 +3104,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         }
         hideReconnectingStatus();
         const activeToolMessage = String(status?.run?.checkpoint?.connectionMessage || '').trim();
-        if (activeToolMessage && !reconnectStatus.isReconnectPending()) setChatConnectionStatus(true, activeToolMessage, { mode: 'activity' });
+        if (shouldShowActivityPill(activeToolMessage) && !reconnectStatus.isReconnectPending()) setChatConnectionStatus(true, activeToolMessage, { mode: 'activity' });
         // Only carry a local cursor forward when it belongs to the SAME stream as
         // this replay. A gateway restart (or steer continuation) starts a new
         // stream at seq 1; merging the old stream's high lastSeq here made every
@@ -6376,7 +6377,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         return 'streaming';
       case 'heartbeat':
-        if (evt.message && !reconnectStatus.isReconnectPending()) setChatConnectionStatus(true, String(evt.message), { mode: 'activity' });
+        if (shouldShowActivityPill(evt.message) && !reconnectStatus.isReconnectPending()) setChatConnectionStatus(true, String(evt.message), { mode: 'activity' });
         return 'streaming';
       case 'progress_state':
         _applyMobileMainPlanProgress(evt, requestedSession);

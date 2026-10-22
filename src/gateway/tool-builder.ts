@@ -1242,7 +1242,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             elevated: { type: 'boolean', description: 'Windows only. Run through the administrator broker after a mandatory fresh one-shot approval. Goals, Lite mode, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Default 120000.' },
-            yieldTimeMs: { type: 'number', description: 'Return control if still running after this many milliseconds, 1000–30000. Default 10000. The supervised process keeps running and can be checked by runId.' },
+            yieldTimeMs: { type: 'number', description: 'Return control if still running after this many milliseconds, 1000–30000. Default 30000. The supervised process keeps running and can be checked by runId.' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
           },
         },

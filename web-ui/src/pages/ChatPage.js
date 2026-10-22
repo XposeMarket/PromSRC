@@ -21,6 +21,7 @@ import {
   setToolActivityDisclosureState,
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
+import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
 import { createSessionPersistenceScheduler, attachSessionPersistenceLifecycle } from '../features/chat/core/session-persistence-scheduler.js';
@@ -13662,7 +13663,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
         <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
-        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
       </summary>
       ${lazyClosedGroup && !openAttr && toolBodyEntries.length
         ? `<div class="live-turn-tool-body" data-lazy-trace="${escHtml(rememberLazyTraceBody(toolBodyEntries))}"></div>`
