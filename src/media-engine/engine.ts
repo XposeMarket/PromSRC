@@ -660,6 +660,12 @@ export function buildStoryboardRequest(
 export async function generateStoryboards(workspacePath: string, projectId: string, args: {
   shotIds?: string[]; modelId?: string; approved?: boolean; count?: number; editFrom?: string; instruction?: string;
 }): Promise<GenerateResult> {
+  // editFrom edits exactly one frame with a non-empty instruction; otherwise the prompt is "Edit this exact frame: ."
+  if (args.editFrom != null) {
+    if (!String(args.instruction ?? '').trim()) throw new Error('editFrom needs a non-empty instruction.');
+    if ((args.shotIds || []).length !== 1) throw new Error('editFrom needs exactly one shotId.');
+  }
+
   const p = loadProject(workspacePath, projectId);
   const model = getModel(args.modelId || p.defaults.imageModel);
   if (!model || model.kind !== 'image') throw new Error(`"${args.modelId || p.defaults.imageModel}" is not an image model.`);

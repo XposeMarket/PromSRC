@@ -6,6 +6,9 @@ import { loadModels, loadPresets } from './v2.js';
 
 const STEPS = [['frame', 'Frame'], ['setup', 'Setup'], ['prompt', 'Prompt'], ['take', 'Take']];
 const ICON_CHECK = '✓';
+// While a run is busy, only navigation/selection stays live. Every paid or mutating action is blocked.
+const BUSY_OK = new Set(['close', 'back', 'shot', 'cand', 'mode']);
+let pendingSave = null;
 
 let sheet = null;
 let scrim = null;
@@ -15,6 +18,51 @@ let keyHandler = null;
 let prevOverflow = '';
 
 function project() { return ctx?.getProject?.() || null; }
+function busyNow() { return !!ctx?.getState?.().busy; }
+function modelList() { const st = ctx?.getState?.() || {}; return (st.models?.length ? st.models : (view.models || [])); }
+function shortLabel(m, id) { return String(m?.label || id || 'model').replace(/\s+via\s+fal$/i, '').replace(/\s*\(image→video\)$/i, ''); }
+function snapLen(m, sec) {
+  const opts = m ? durationOptions(m) : [];
+  if (!opts.length) return Number(sec);
+  return opts.reduce((b, o) => (Math.abs(o - sec) < Math.abs(b - sec) ? o : b), opts[0]);
+}
+function chipsHtml(p, s) {
+  const m = modelList().find((x) => x.id === s.modelId);
+  const dur = snapLen(m, Number(s.durationSec));
+  const cam = s.presetId ? ((view.presets || []).find((x) => x.id === s.presetId)?.label || s.presetId) : '';
+  return `<span class="vps-chip">${esc(shortLabel(m, s.modelId || 'model'))}</span><span class="vps-chip">${esc(dur)}s</span>${cam ? `<span class="vps-chip">${esc(cam)}</span>` : ''}${p.target?.aspect ? `<span class="vps-chip">${esc(p.target.aspect)}</span>` : ''}`;
+}
+// Estimate cache per shot + model + duration. 'pending' while fetching; number or null when done.
+function priceKey(s) { return `price:${s.id}:${s.modelId || ''}:${s.durationSec}`; }
+function shotPrice(s) {
+  if (typeof ctx?.h?.vpFetch !== 'function') return null;
+  const k = priceKey(s);
+  const v = view.local[k];
+  if (v === undefined) {
+    view.local[k] = 'pending';
+    ctx.h.vpFetch(`/${encodeURIComponent(ctx.id)}/estimate`, { shotIds: [s.id] })
+      .then((r) => { const t = Number(r?.total ?? r?.estimate?.total ?? r?.totalUsd); view.local[k] = Number.isFinite(t) && t >= 0 ? t : null; })
+      .catch(() => { view.local[k] = null; })
+      .finally(() => { if (sheet) render(); });
+    return null;
+  }
+  return typeof v === 'number' ? v : null;
+}
+function priceSuffix(s) { const v = shotPrice(s); return v != null ? ` · ${usd(v)}` : ''; }
+async function flushFocused() {
+  const a = document.activeElement;
+  if (!a || !sheet?.contains(a) || !a.matches?.('[data-vps-f]')) return;
+  const shot = project()?.shots?.[view.index];
+  const field = a.dataset.vpsF;
+  if (!shot || (field !== 'prompt' && field !== 'line')) return;
+  if (String(shot[field] ?? '') === a.value) return;
+  await ctx.ops([{ op: 'shot.update', id: shot.id, [field]: a.value }], 'Saving');
+}
+// Save any in-flight prompt edit before a paid call so it generates from the new text.
+async function flushBeforePaid() {
+  if (pendingSave) { const p0 = pendingSave; pendingSave = null; await p0; }
+  await flushFocused();
+}
 function esc(s) { return ctx?.h?.esc ? ctx.h.esc(s) : String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function usd(v) { return ctx?.h?.usd ? ctx.h.usd(v) : `$${Number(v || 0).toFixed(2)}`; }
 function mediaUrl(rel) { return ctx?.h?.mediaUrl ? ctx.h.mediaUrl(rel) : rel; }
@@ -70,7 +118,7 @@ function approvePendingHtml() {
   const total = st.pending ? st.pending.estimate?.total : pend.usd;
   return `<div class="vps-approve" role="group" aria-label="Approve cost"><strong>Approve ${usd(total)}?</strong>
     <p class="vps-muted">${esc(st.pending?.reason || 'This run is paid. Nothing is sent until you approve.')}</p>
-    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="approve-pending">Approve &amp; run · ${usd(total)}</button>
+    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="approve-pending" ${busyNow() ? 'disabled' : ''}>Approve &amp; run · ${usd(total)}</button>
     <button type="button" class="vps-btn is-wide" data-vps="cancel-pending">Cancel</button></div></div>`;
 }
 
@@ -81,7 +129,7 @@ function frameHtml(p, i, s) {
   const prev = p.shots[i - 1];
   const prevTake = prev && (prev.takes || []).find((t) => t.id === prev.selectedTakeId);
   const chainOpt = i > 0 && prevTake?.kind === 'video'
-    ? `<button type="button" class="vps-opt" data-vps="chain-frame" data-i="${i}"><span>Continue from last frame</span><span class="vps-badge is-accent">Prom pick</span></button>` : '';
+    ? `<button type="button" class="vps-opt" data-vps="chain-frame" data-i="${i}" ${busyNow() ? 'disabled' : ''}><span class="vps-opt-main"><span>Continue from last frame</span><small class="vps-muted">Seamless. Picks up exactly where shot ${i} ends</small></span><span class="vps-badge is-accent">Prom pick</span></button>` : '';
   const tiles = cands.length
     ? `<div class="vps-car" data-vps-car="${esc(s.id)}">${cands.map((rel, k) => `
         <button type="button" class="vps-tile${k === active ? ' is-active' : ''}" data-vps="cand" data-k="${k}" data-path="${esc(rel)}" aria-label="Frame ${'ABCD'[k] || k + 1}">
@@ -89,10 +137,10 @@ function frameHtml(p, i, s) {
        <div class="vps-dots">${cands.map((_, k) => `<span class="vps-dot${k === active ? ' is-on' : ''}"></span>`).join('')}</div>`
     : '<p class="vps-muted">No frames yet. Generate four stills to pick from.</p>';
   const activePath = cands[active] || '';
-  return `<h3 class="vps-h">Pick a start frame</h3>${tiles}
+  return `<h3 class="vps-h">Pick a start frame</h3>${chainOpt ? `<div class="vps-list">${chainOpt}</div><p class="vps-muted">or pick a new frame</p>` : ''}${tiles}
     <form class="vps-field" data-vps-form="edit-frame"><input class="vps-input" name="instruction" placeholder="Change something in ${'ABCD'[active] || 'A'}… (e.g. cash in hand)" aria-label="Edit frame"><button type="submit" class="vps-btn" aria-label="Apply edit" ${activePath ? '' : 'disabled'}>↵</button></form>
     <div class="vps-row vps-stack">
-      <button type="button" class="vps-btn is-wide" data-vps="more-frames" data-i="${i}">↻ 4 more</button>
+      <button type="button" class="vps-btn is-wide" data-vps="more-frames" data-i="${i}" ${busyNow() ? 'disabled' : ''}>↻ 4 more</button>
       <button type="button" class="vps-btn is-primary is-wide" data-vps="use-frame" data-path="${esc(activePath)}" ${activePath ? '' : 'disabled'}>Use ${'ABCD'[active] || 'A'} →</button>
       ${chainOpt}
     </div>`;
@@ -100,7 +148,7 @@ function frameHtml(p, i, s) {
 
 function setupHtml(p, i, s) {
   const st = ctx.getState();
-  const models = (st.models || view.models || []).filter((m) => m.kind === 'video');
+  const models = modelList().filter((m) => m.kind === 'video');
   const current = models.find((m) => m.id === s.modelId) || models[0];
   const pick = view.routed && view.pick ? view.pick[s.id] : null;
   const rows = models.map((m) => `<button type="button" class="vps-opt${m.id === current?.id ? ' is-on' : ''}" data-vps="model" data-id="${esc(m.id)}">
@@ -109,7 +157,9 @@ function setupHtml(p, i, s) {
       ${pick === m.id ? '<span class="vps-badge is-accent">Prom pick</span>' : ''}</button>`).join('');
   const opts = durationOptions(current || {});
   const cur = Number(s.durationSec);
-  const lengths = opts.map((d) => `<button type="button" class="vps-chip${d === cur ? ' is-on' : ''}" data-vps="length" data-d="${d}">${d}s</button>`).join('');
+  // No known limits yet (models still loading or no limits): show only the shot's current value.
+  const lenVals = opts.length ? opts : [cur];
+  const lengths = lenVals.map((d) => `<button type="button" class="vps-chip${d === cur ? ' is-on' : ''}" data-vps="length" data-d="${d}" ${busyNow() ? 'disabled' : ''}>${d}s</button>`).join('');
   const cams = (view.presets || []).filter((x) => x.group === 'camera').slice(0, 8);
   const camChips = cams.map((c) => `<button type="button" class="vps-chip${c.id === s.presetId ? ' is-on' : ''}" data-vps="camera" data-id="${esc(c.id)}">${esc(c.label)}</button>`).join('');
   return `<h3 class="vps-h">Model <span class="vps-muted">· Prom pre-picked</span></h3>
@@ -124,9 +174,9 @@ function promptHtml(p, i, s) {
   return `<h3 class="vps-h">Prompt</h3>
     <textarea class="vps-text" data-vps-f="prompt" data-s="${esc(s.id)}" rows="4" aria-label="Shot prompt">${esc(s.prompt || '')}</textarea>
     <input class="vps-input" data-vps-f="line" data-s="${esc(s.id)}" value="${esc(s.line || '')}" placeholder="Spoken line (optional)" aria-label="Spoken line">
-    <div class="vps-chips"><span class="vps-chip">${esc(s.modelId || 'model')}</span><span class="vps-chip">${s.durationSec}s</span>${s.presetId ? `<span class="vps-chip">${esc(s.presetId)}</span>` : ''}</div>
+    <div class="vps-chips">${chipsHtml(p, s)}</div>
     ${approvePendingHtml()}
-    <button type="button" class="vps-btn is-primary is-wide" data-vps="generate" data-s="${esc(s.id)}">Generate${take ? ' again' : ''}</button>`;
+    ${(ctx.getState().pending || ctx.getState().actPending) ? '' : `<button type="button" class="vps-btn is-primary is-wide" data-vps="generate" data-s="${esc(s.id)}" ${busyNow() ? 'disabled' : ''}>Generate${take ? ' again' : ''}${priceSuffix(s)}</button>`}`;
 }
 
 function takeHtml(p, i, s) {
@@ -145,7 +195,7 @@ function takeHtml(p, i, s) {
     <form class="vps-field" data-vps-form="redo-note"><input class="vps-input" name="note" placeholder="What should change? (e.g. slower hand)" aria-label="Change note"><button type="submit" class="vps-btn" aria-label="Redo with note">↵</button></form>
     ${gen ? '<div class="vps-wait"><span class="vps-spin"></span> Generating… usually 1-3 min</div>' : ''}
     <div class="vps-row vps-stack">
-      <button type="button" class="vps-btn is-wide" data-vps="redo" data-s="${esc(s.id)}" ${gen ? 'disabled' : ''}>↻ Redo</button>
+      <button type="button" class="vps-btn is-wide" data-vps="redo" data-s="${esc(s.id)}" ${gen || busyNow() ? 'disabled' : ''}>↻ Redo${priceSuffix(s)}</button>
       ${kept ? `<button type="button" class="vps-btn is-wide" data-vps="unkeep" data-s="${esc(s.id)}">Unkeep</button>`
         : `<button type="button" class="vps-btn is-primary is-wide" data-vps="keep" data-s="${esc(s.id)}" ${sel ? '' : 'disabled'}>Keep ✓</button>`}
     </div>
@@ -200,7 +250,7 @@ function autoPlanHtml(p) {
     <p class="vps-muted">+ frames, QA rerolls (1 max), music</p>
     <p><strong>Total ${usd(total)}</strong>${cap != null ? ` / ${usd(cap)} cap` : ''}</p>
     <p class="vps-muted">I only stop early if a shot fails QA twice or the run would go over the cap.</p>
-    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="run-approve">Approve &amp; run · ${usd(total)}</button>
+    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="run-approve" ${busyNow() ? 'disabled' : ''}>${total > 0 ? `Approve &amp; run · ${usd(total)}` : 'Get quote &amp; run'}</button>
     <button type="button" class="vps-btn is-wide" data-vps="mode" data-to="step">Switch to step-by-step</button></div>`;
 }
 
@@ -275,7 +325,7 @@ async function onAction(t) {
     }
     case 'more-frames': return ctx.act('storyboard', { shotIds: [sid], count: 4 }, 'Generating frames');
     case 'model': {
-      const m = (view.models || []).find((x) => x.id === d.id);
+      const m = modelList().find((x) => x.id === d.id);
       const opts = m ? durationOptions(m) : [];
       const ops = [{ op: 'shot.update', id: sid, modelId: d.id }];
       if (opts.length && !opts.includes(Number(shot.durationSec))) ops[0].durationSec = opts.reduce((best, o) => (Math.abs(o - shot.durationSec) < Math.abs(best - shot.durationSec) ? o : best), opts[0]);
@@ -284,8 +334,10 @@ async function onAction(t) {
     case 'length': return ctx.ops([{ op: 'shot.update', id: sid, durationSec: Number(d.d) }], 'Setting length');
     case 'camera': return ctx.ops([{ op: 'shot.update', id: sid, presetId: d.id }], 'Setting camera');
     case 'next-step': view.local[sid] = d.to; return render();
-    case 'generate': return ctx.generate('/generate', { shotIds: [sid], count: 1 }, 'Estimating');
-    case 'redo': return ctx.generate('/generate', { shotIds: [sid], count: 1 }, 'Estimating');
+    case 'generate':
+    case 'redo':
+      await flushBeforePaid();
+      return ctx.generate('/generate', { shotIds: [sid], count: 1 }, 'Estimating');
     case 'take': return ctx.ops([{ op: 'take.select', shotId: sid, takeId: d.t }], 'Swapping take');
     case 'keep': return ctx.ops([{ op: 'shot.approve', id: sid }], 'Keeping');
     case 'unkeep': return ctx.ops([{ op: 'shot.unapprove', id: sid }], 'Unkeeping');
@@ -305,7 +357,9 @@ async function onAction(t) {
     case 'render': return ctx.render();
     case 'approve-pending': return ctx.approve();
     case 'cancel-pending': return ctx.cancel();
-    case 'run-approve': return ctx.act('run', { approved: true }, 'Starting autopilot');
+    // Never send approved:true from here. The server gate answers with needsApproval, which fills
+    // st.actPending; the shared approve row shows the real server price and is the only approve path.
+    case 'run-approve': await flushBeforePaid(); return ctx.act('run', {}, 'Starting autopilot');
     default: return;
   }
 }
@@ -336,7 +390,7 @@ const STUDIO_CSS = `
 .vps-thumb{display:block;width:100%;height:100%;object-fit:cover}
 .vps-thumb.is-empty{background:var(--prom-surface-secondary,rgba(127,127,127,.1))}
 .vps-shot-n{position:absolute;left:4px;bottom:4px;font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff}
-.vps-badge{position:absolute;top:4px;right:4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;background:var(--prom-accent,#ff7a1a);color:#fff}
+.vps-shots .vps-badge{position:absolute;top:4px;right:4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;background:var(--prom-accent,#ff7a1a);color:#fff}
 .vps-badge.is-ok{background:var(--prom-success,#2eaa5c)}
 .vps-rail{display:flex;gap:6px;flex-wrap:wrap}
 .vps-pill{min-height:28px;padding:4px 12px;border-radius:999px;font-size:12px;border:1px solid var(--prom-border,rgba(127,127,127,.25));color:var(--prom-muted,#8a8a8a);transition:all .25s ease}
@@ -397,6 +451,7 @@ function onKey(ev) {
 function onSheetClick(ev) {
   const t = ev.target.closest?.('[data-vps]');
   if (!t || !sheet.contains(t) || t.disabled) return;
+  if (busyNow() && !BUSY_OK.has(t.dataset.vps)) return;
   ev.preventDefault();
   void onAction(t);
 }
@@ -405,6 +460,7 @@ function onSheetSubmit(ev) {
   const f = ev.target.closest?.('[data-vps-form]');
   if (!f) return;
   ev.preventDefault();
+  if (busyNow()) return;
   const kind = f.dataset.vpsForm;
   const p = project();
   const shot = p?.shots?.[view.index];

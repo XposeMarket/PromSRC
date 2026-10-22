@@ -514,7 +514,7 @@ function mountCard(el) {
       ${st.busy ? `<div class="vpc-busy"><span class="vpc-spin"></span>${esc(st.busy)}…</div>` : ''}
       ${st.error ? `<p class="vpc-err">${esc(st.error)}</p>` : ''}
       ${st.toast ? `<div class="vpc-toast">${esc(st.toast)}</div>` : ''}
-      ${st.allTools ? `<div class="vpc-all">
+      ${st.allTools ? `
         <div class="vpc-head">
           <div class="vpc-headtext">
             <span class="vpc-kicker">${ICON.film}Video project · ${esc(p.target?.aspect || '')}</span>
@@ -535,8 +535,7 @@ function mountCard(el) {
         ${audioSection(p, st, h)}
         ${actionSection(p)}
         ${autopilotSection(p, st, h)}
-        ${exportsSection(p, st, h)}
-      </div>` : ''}
+        ${exportsSection(p, st, h)}` : ''}
     </div>`;
 
     // Patch only sections whose markup changed. Keep unchanged media nodes alive

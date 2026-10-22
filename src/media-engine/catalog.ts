@@ -450,6 +450,8 @@ export function listCuratedModels(): MediaModelManifest[] {
 export function durationsFor(model: MediaModelManifest): number[] {
   const l = model.limits || {};
   if (l.durations?.length) return [...l.durations].sort((a, b) => a - b);
+  // No limits at all: unknown set of accepted durations. Caller keeps the input unchanged.
+  if (l.minDurationSec == null && l.maxDurationSec == null) return [];
   const lo = Math.max(1, Math.ceil(l.minDurationSec ?? 1));
   const hi = Math.floor(l.maxDurationSec ?? 10);
   const out: number[] = [];

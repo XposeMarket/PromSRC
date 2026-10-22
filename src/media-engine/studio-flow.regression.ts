@@ -59,6 +59,10 @@ function testSnapping() {
   assert.equal(snapDuration(kling, 7.5), 10, 'tie goes up');
   const grok = getModel('xai/grok-imagine-video-1.5');
   assert.equal(snapDuration(grok, 6), 6, 'grok keeps 6s (range 1-15)');
+  // A model with no limits keeps its input unchanged (no invented 1..10 snap).
+  const noLimits = { id: 'test/no-limits', kind: 'video', limits: {} } as any;
+  assert.equal(snapDuration(noLimits, 12), 12, 'no limits keeps 12');
+  assert.deepEqual(durationsFor(noLimits), [], 'no limits -> empty list');
   assert.equal(snapDuration(undefined, 6), 6, 'unknown model unchanged');
 }
 
@@ -115,6 +119,14 @@ async function testWorkspace(ws: string) {
   assert.equal(four.estimate?.shots[0].count, 4, 'count 9 clamps to 4');
   assert.equal(four.jobs.length, 0, 'no job started');
   const two = await generateStoryboards(ws, id, { shotIds: ['shot_a'], count: 2 });
+  // editFrom guard: empty instruction and multi-shot both throw a clear error; a valid single-shot edit does not.
+  const guardErr = (e: unknown) => (e instanceof Error ? e.message : '');
+  const emptyInstr = await generateStoryboards(ws, id, { shotIds: ['shot_a'], editFrom: 'frame.png', instruction: '   ' }).then(() => '', guardErr);
+  assert.match(emptyInstr, /non-empty instruction/, 'editFrom with blank instruction throws');
+  const multiShot = await generateStoryboards(ws, id, { shotIds: ['shot_a', 'shot_b'], editFrom: 'frame.png', instruction: 'add rain' }).then(() => '', guardErr);
+  assert.match(multiShot, /exactly one shotId/, 'editFrom with two shots throws');
+  const validEdit = await generateStoryboards(ws, id, { shotIds: ['shot_a'], editFrom: 'frame.png', instruction: 'add rain' }).then(() => '', guardErr);
+  assert.doesNotMatch(validEdit, /editFrom needs/, 'valid single-shot editFrom passes the guard');
   assert.equal(two.estimate?.shots[0].count, 2, 'count 2 stays 2');
   assert.equal(loadProject(ws, id).jobs.length, 0, 'no jobs persisted');
 }

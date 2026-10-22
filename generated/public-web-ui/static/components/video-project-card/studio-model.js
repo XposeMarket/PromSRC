@@ -60,6 +60,7 @@ export function nextAction(project) {
 export function durationOptions(model) {
   const l = model?.limits || {};
   if (Array.isArray(l.durations) && l.durations.length) return l.durations.slice().sort((a, b) => a - b);
+  if (l.minDurationSec == null && l.maxDurationSec == null) return [];
   const lo = Math.max(1, Math.ceil(l.minDurationSec ?? 1));
   const hi = Math.floor(l.maxDurationSec ?? 10);
   const out = [];
