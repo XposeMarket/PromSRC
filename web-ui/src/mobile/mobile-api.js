@@ -1747,6 +1747,11 @@ function _normalizeSessionSummary(s) {
     lastActiveAt: Number(s?.lastActiveAt || s?.updatedAt || Date.now()),
     lastAssistantAt: Number(s?.lastAssistantAt || 0) || null,
     pinnedAt: Number(s?.pinnedAt || 0) || null,
+    // Project membership is attached by the gateway list routes. Keep it so the
+    // drawer can file a project chat under its project only (and never also in
+    // the plain chat list while the cached project list is still stale).
+    projectId: String(s?.projectId || '').trim() || null,
+    projectName: String(s?.projectName || '').trim() || null,
     settledAt: Number(s?.settledAt || 0) || null,
     settled: s?.settled === true || Number(s?.settledAt || 0) > 0,
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,

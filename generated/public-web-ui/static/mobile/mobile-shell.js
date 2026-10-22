@@ -2592,10 +2592,14 @@ function _mobileSessionTimeLabel(session) {
 function _projectSessionRows(project) {
   const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
   if (!_drawerExpandedProjectIds.has(String(project?.id || ''))) return '';
-  const rows = _hydrateDrawerSessionStates(sessions.map((session) => {
-    const row = { ...session, projectId: project.id, projectName: project.name };
-    return row;
-  }));
+  // A pinned project chat lives in the Pinned section instead of its project
+  // group; unpinning returns it here.
+  const rows = _hydrateDrawerSessionStates(sessions
+    .filter((session) => !_isPinned(session?.id))
+    .map((session) => {
+      const row = { ...session, projectId: project.id, projectName: project.name };
+      return row;
+    }));
   return '<div class="pm-project-chat-list">' + rows.map((session) => _sessionButtonHtml(session, { projectChild: true })).join('') + '</div>';
 }
 
