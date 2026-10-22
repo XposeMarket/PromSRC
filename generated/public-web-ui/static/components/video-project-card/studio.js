@@ -549,6 +549,12 @@ export function openStudio(next, opts = {}) {
   prevOverflow = document.body.style.overflow;
   document.body.style.overflow = 'hidden';
   scrim.addEventListener('click', closeStudio);
+  // Keep focus in a prompt/line field when a sheet button is pressed: otherwise blur saves + repaints
+  // and the button under the finger is replaced before 'click' lands (first tap dropped). The click
+  // handler's flushBeforePaid() saves the field instead.
+  sheet.addEventListener('mousedown', (e) => {
+    if (e.target.closest?.('button[data-vps]') && document.activeElement?.matches?.('[data-vps-f]') && sheet.contains(document.activeElement)) e.preventDefault();
+  });
   sheet.addEventListener('click', onSheetClick);
   sheet.addEventListener('submit', onSheetSubmit);
   sheet.addEventListener('change', onSheetChange);
