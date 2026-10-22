@@ -8,7 +8,6 @@ const STEPS = [['frame', 'Frame'], ['setup', 'Setup'], ['prompt', 'Prompt'], ['t
 const ICON_CHECK = '✓';
 // While a run is busy, only navigation/selection stays live. Every paid or mutating action is blocked.
 const BUSY_OK = new Set(['close', 'back', 'shot', 'cand', 'mode']);
-let pendingSave = null;
 
 let sheet = null;
 let scrim = null;
@@ -30,7 +29,8 @@ function chipsHtml(p, s) {
   const m = modelList().find((x) => x.id === s.modelId);
   const dur = snapLen(m, Number(s.durationSec));
   const cam = s.presetId ? ((view.presets || []).find((x) => x.id === s.presetId)?.label || s.presetId) : '';
-  return `<span class="vps-chip">${esc(shortLabel(m, s.modelId || 'model'))}</span><span class="vps-chip">${esc(dur)}s</span>${cam ? `<span class="vps-chip">${esc(cam)}</span>` : ''}${p.target?.aspect ? `<span class="vps-chip">${esc(p.target.aspect)}</span>` : ''}`;
+  const chip = (t) => `<span class="vps-chip is-static">${esc(t)}</span>`;
+  return `${chip(shortLabel(m, s.modelId || 'model'))}${chip(`${dur}s`)}${cam ? chip(cam) : ''}${p.target?.aspect ? chip(p.target.aspect) : ''}`;
 }
 // Estimate cache per shot + model + duration. 'pending' while fetching; number or null when done.
 function priceKey(s) { return `price:${s.id}:${s.modelId || ''}:${s.durationSec}`; }
@@ -60,7 +60,6 @@ async function flushFocused() {
 }
 // Save any in-flight prompt edit before a paid call so it generates from the new text.
 async function flushBeforePaid() {
-  if (pendingSave) { const p0 = pendingSave; pendingSave = null; await p0; }
   await flushFocused();
 }
 function esc(s) { return ctx?.h?.esc ? ctx.h.esc(s) : String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -152,7 +151,7 @@ function setupHtml(p, i, s) {
   const current = models.find((m) => m.id === s.modelId) || models[0];
   const pick = view.routed && view.pick ? view.pick[s.id] : null;
   const rows = models.map((m) => `<button type="button" class="vps-opt${m.id === current?.id ? ' is-on' : ''}" data-vps="model" data-id="${esc(m.id)}">
-      <span class="vps-opt-main"><span>${esc(m.label || m.id)}</span>
+      <span class="vps-opt-main"><span>${esc(shortLabel(m, m.id))}</span>
       <small class="vps-muted">${durationOptions(m).join('/')}s${m.pricing?.perSecondUsd ? ` · $${m.pricing.perSecondUsd}/s` : ''}</small></span>
       ${pick === m.id ? '<span class="vps-badge is-accent">Prom pick</span>' : ''}</button>`).join('');
   const opts = durationOptions(current || {});
@@ -392,6 +391,7 @@ const STUDIO_CSS = `
 .vps-shot-n{position:absolute;left:4px;bottom:4px;font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff}
 .vps-shots .vps-badge{position:absolute;top:4px;right:4px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;background:var(--prom-accent,#ff7a1a);color:#fff}
 .vps-badge.is-ok{background:var(--prom-success,#2eaa5c)}
+.vps-opt .vps-badge,.vps-badge.is-accent{flex:none;display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.02em;background:color-mix(in srgb,var(--prom-accent,#ff7a1a) 16%,transparent);color:var(--prom-accent,#ff7a1a)}
 .vps-rail{display:flex;gap:6px;flex-wrap:wrap}
 .vps-pill{min-height:28px;padding:4px 12px;border-radius:999px;font-size:12px;border:1px solid var(--prom-border,rgba(127,127,127,.25));color:var(--prom-muted,#8a8a8a);transition:all .25s ease}
 .vps-pill.is-on{background:var(--prom-accent,#ff7a1a);border-color:transparent;color:#fff;font-weight:600}
@@ -421,8 +421,9 @@ const STUDIO_CSS = `
 .vps-opt.is-on{border-color:var(--prom-accent,#ff7a1a)}
 .vps-opt-main{display:flex;flex-direction:column}
 .vps-chips{display:flex;gap:6px;flex-wrap:wrap}
-.vps-chip{min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--prom-border,rgba(127,127,127,.25));background:transparent;color:inherit;font:inherit;cursor:pointer;transition:all .25s ease}
+.vps-chip{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;min-height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--prom-border,rgba(127,127,127,.25));background:transparent;color:inherit;font:inherit;cursor:pointer;transition:all .25s ease}
 .vps-chip.is-on{background:var(--prom-accent,#ff7a1a);border-color:transparent;color:#fff}
+.vps-chip.is-static{min-height:0;height:30px;padding:0 12px;font-size:13px;cursor:default;color:var(--prom-muted,#8a8a8a);background:var(--prom-surface-secondary,rgba(127,127,127,.08));border-color:transparent}
 .vps-sl{display:flex;gap:10px;align-items:center;padding:8px;border-radius:16px;border:1px solid var(--prom-border,rgba(127,127,127,.25))}
 .vps-sl .vps-thumb{width:48px;height:64px;border-radius:10px;flex:none}
 .vps-approve{border:1px solid var(--prom-accent,#ff7a1a);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:8px}
