@@ -13,6 +13,7 @@ import { classifyCommandTermination } from './../../process/command-outcome';
 import { isTerminalFirstWorkspaceMode } from './../../../runtime/workspace-tool-mode.js';
 import { FILE_TOOL_DEFAULT_READ_LINES, FILE_TOOL_DEFAULT_BATCH_FILES, FILE_TOOL_MAX_BATCH_FILES, FILE_TOOL_DEFAULT_BATCH_LINES, FILE_TOOL_MAX_BATCH_LINES, FILE_TOOL_DEFAULT_TREE_DEPTH, FILE_TOOL_DEFAULT_TREE_ENTRIES, FILE_TOOL_BATCH_INLINE_LIMIT_CHARS, FILE_TOOL_TREE_INLINE_LIMIT_CHARS, trimReturnedFileLine, getPostSourceEditInstructionForSession, rejectInvalidSourceEdit, coerceBatchFileList, executeTool } from './../subagent-executor';
 import type { createWorkspaceHelpers } from '../workspace-helpers';
+import { DEFAULT_RUN_YIELD_MS } from './../../../tools/parallel-tool-calls';
 
 export interface handleWorkspaceToolContext extends ReturnType<typeof createWorkspaceHelpers> {
  name: string;
@@ -1849,10 +1850,10 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             return { name, args, result: `Administrator command failed: ${error?.message || error}`, error: true };
           }
         }
-        const requestedYieldMs = Number(args.yieldTimeMs ?? args.yield_time_ms ?? 10_000);
+        const requestedYieldMs = Number(args.yieldTimeMs ?? args.yield_time_ms ?? DEFAULT_RUN_YIELD_MS);
         const yieldTimeMs = Number.isFinite(requestedYieldMs)
           ? Math.max(1_000, Math.min(30_000, requestedYieldMs))
-          : 10_000;
+          : DEFAULT_RUN_YIELD_MS;
         let streamToSse = true;
         const onCommandOutput = (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => {
           if (!streamToSse) return;

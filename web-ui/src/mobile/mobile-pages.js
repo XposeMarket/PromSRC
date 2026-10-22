@@ -4,6 +4,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
+import { mobileApprovalCardCopy, mobileApprovalRiskText } from './mobile-approval-copy.js';
 import {
   formatMobileChatTime as _formatChatTime,
   formatMobileTimeAgo as _formatTimeAgo,
@@ -6237,13 +6238,19 @@ function _mobileCanonicalTextIsTrailingFragment(localValue, canonicalValue) {
 function _mobileRecoveredLiveTraceTarget(rows, candidate) {
   if (candidate?.role !== 'ai' || candidate._pmFinalReceived || candidate._done
     || candidate.workflowPart === 'before_interruption') return null;
-  const live = [...rows].reverse().find((row) => row?.role === 'ai' && row.streaming === true
-    && !row._pmFinalReceived && !row._done && row.workflowPart !== 'before_interruption');
+  const request = (row) => String(row?._clientRequestId || row?.clientRequestId || '').trim();
+  const candidateRequest = request(candidate);
+  // A gateway restart freezes the painted live row (streaming false, not final)
+  // and the resumed run gets a new stream id. The request id is the turn's
+  // identity across that boundary, so a same-request row may still target it.
+  const live = [...rows].reverse().find((row) => row?.role === 'ai'
+    && !row._pmFinalReceived && !row._done && row.workflowPart !== 'before_interruption'
+    && (row.streaming === true || (!!candidateRequest && request(row) === candidateRequest)));
   if (!live) return null;
   if ((candidate.workflowGroupId || live.workflowGroupId)
     && (candidate.workflowGroupId !== live.workflowGroupId || candidate.workflowPart !== live.workflowPart)) return null;
-  const request = (row) => String(row._clientRequestId || row.clientRequestId || '').trim();
-  if (request(candidate) && request(live) && request(candidate) !== request(live)) return null;
+  if (candidateRequest && request(live) && candidateRequest !== request(live)) return null;
+  if (candidateRequest && candidateRequest === request(live)) return live;
   const stream = (row) => String(row._streamId || row._pmLastStreamId || row.workflowStreamId || '').trim();
   if (stream(candidate) && stream(live)) return stream(candidate) === stream(live) ? live : null;
   const entries = (row) => [...(row.liveTraceEntries || []), ...(row.processEntries || [])];
@@ -6274,11 +6281,17 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
           .find((row) => next.some((item) => _mobileHistoryTurnsRepresentSameTurn(item, row)));
         const previousAnchor = incoming.slice(0, incomingIndex).reverse()
           .find((row) => next.some((item) => _mobileHistoryTurnsRepresentSameTurn(item, row)));
-        const insertAt = nextAnchor
+        let insertAt = nextAnchor
           ? next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, nextAnchor))
           : previousAnchor
             ? next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, previousAnchor)) + 1
             : next.length;
+        // An assistant never precedes the prompt that owns its request id.
+        const candidateRequest = candidate.role === 'ai'
+          ? String(candidate._clientRequestId || candidate.clientRequestId || '').trim() : '';
+        const ownerIndex = candidateRequest ? next.findIndex((item) => item?.role === 'user'
+          && String(item._clientRequestId || item.clientRequestId || '').trim() === candidateRequest) : -1;
+        if (ownerIndex >= 0 && insertAt <= ownerIndex) insertAt = ownerIndex + 1;
         next.splice(insertAt, 0, candidate);
         return;
       }
@@ -7137,7 +7150,8 @@ function _pmApprovalParametersHtml(approval, human, technicalText, {
   ));
   if (steps.length) rows.push(_pmApprovalParameterHtml('Plan', steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
   if (expectedWorkflow.length) rows.push(_pmApprovalParameterHtml('Expected workflow', expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
-  if (risk) rows.push(_pmApprovalParameterHtml('Risk', String(risk)));
+  const riskText = mobileApprovalRiskText(risk, approval?.policyTier);
+  if (riskText) rows.push(_pmApprovalParameterHtml('Risk', riskText));
   if (!rows.length && technicalText) rows.push(_pmApprovalParameterHtml('Technical details', technicalText, { code: true, multiline: true }));
   return rows.filter(Boolean).join('');
 }
@@ -7151,7 +7165,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const pending = status === 'pending';
   const risk = Number(approval.riskScore || 0);
   const statusLabel = _pmApprovalStatusCopy(status);
-  const toolName = String(approval.toolName || _pmApprovalToolLabel(approval.toolName) || 'tool').trim();
+  const copy = mobileApprovalCardCopy(approval, { resolvedTitle: human.title });
   const devPlan = approval?.devSourceEdit?.plan || null;
   const sourceDirs = Array.isArray(approval?.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const devFiles = Array.isArray(approval?.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
@@ -7174,14 +7188,13 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     steps,
     expectedWorkflow,
   });
-  const title = pending ? 'Allow this tool to run?' : (human.title || 'Tool access');
-  const approveLabel = approval.approvalKind === 'dev_apply_live' ? 'Apply live' : 'Allow once';
+  const { title, approveLabel, toolLabel } = copy;
   return `<div class="pm-chat-approval ${pending ? 'pending' : 'resolved'} ${compact ? 'compact' : ''}" data-pm-approval-id="${escapeHtml(approval.id)}">
     <div class="pm-chat-approval-head">
       <span class="pm-chat-approval-icon">${_pmApprovalStatusIcon(status)}</span>
       <div class="pm-chat-approval-heading">
         <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
-        <code class="pm-chat-approval-tool">${escapeHtml(toolName)}</code>
+        <code class="pm-chat-approval-tool">${escapeHtml(toolLabel)}</code>
       </div>
     </div>
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
