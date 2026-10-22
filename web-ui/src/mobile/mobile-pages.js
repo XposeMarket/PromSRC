@@ -7521,14 +7521,15 @@ function _restoreMobileApprovalDetailsState(root, map) {
 async function _resolveMobileApprovalButton(button) {
   const id = String(button?.getAttribute?.('data-pm-approval-id') || '').trim();
   const action = String(button?.getAttribute?.('data-pm-approval-action') || '').trim();
-  if (!id || !action) return;
+  if (!id || !action) return false;
   if (mobileApprovalActionsInFlight.has(id)) {
     console.debug('[mobile approvals] duplicate action ignored', { id, action, reason: 'in_flight' });
-    return;
+    // Share the in-flight outcome so a second surface's slide doesn't snap back while it's pending.
+    return mobileApprovalActionsInFlight.get(id);
   }
   if (_mobileApprovalWasRecentlyResolved(id)) {
     console.debug('[mobile approvals] stale action ignored', { id, action, reason: 'recently_resolved' });
-    return;
+    return true;
   }
   const approved = action === 'approve' || action === 'approve_session' || action === 'approve_always';
   const grantScope = action === 'approve_session' ? 'session' : action === 'approve_always' ? 'always' : '';

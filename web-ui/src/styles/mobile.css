@@ -12885,9 +12885,10 @@ body.pm-canvas-fullscreen-open {
 }
 /* Approval card rebuild: action sheet + slide-to-confirm (see .pr/SPEC.md section 5). */
 .pm-approval-sheet {
-  --pm-approval-danger: var(--err, #e5484d);
+  /* /mobile loads mobile-shell.css (--pm-red/--pm-green), not base.css (--err/--warn/--ok). */
+  --pm-approval-danger: var(--pm-red, var(--err, #e5484d));
   --pm-approval-warning: var(--warn, #d99a1f);
-  --pm-approval-success: var(--ok, #3fa96b);
+  --pm-approval-success: var(--pm-green, var(--ok, #3fa96b));
   padding: 16px;
   display: grid;
   gap: 10px;
