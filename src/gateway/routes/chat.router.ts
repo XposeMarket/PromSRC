@@ -165,7 +165,7 @@ import { runBootMd } from '../boot';
 import { ensurePrometheusThreadOpsForSupervision, getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
 import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
-import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, listProjects } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
 import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundStatus, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession, registerBackgroundCompletionWake } from '../tasks/task-runner';
 import { formatBackgroundSpawnContinuity } from '../tasks/background-spawn-continuity';

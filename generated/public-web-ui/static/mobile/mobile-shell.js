@@ -5,7 +5,7 @@ import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
 import { renderMd, timeAgo } from '../utils.js';
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
 import {
   getGateway,
   getGatewayFilter,
@@ -2724,6 +2724,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
   const pinned = isProject ? _isProjectPinned(project) : _isPinned(sessionId);
   const cachedSession = isProject ? null : _findCachedDrawerSession(sessionId);
   const settled = isProject ? project?.settled === true || Number(project?.settledAt || 0) > 0 : _drawerSessionView === 'settled' || cachedSession?.settled === true || Number(cachedSession?.settledAt || 0) > 0;
+  const owningProject = isProject ? null : (_drawerProjects || []).find((item) => (item?.sessions || []).some((sess) => String(sess?.id || '') === String(sessionId))) || null;
   const cb = callbacks || {};
 
   const scrim = document.createElement('div');
@@ -2770,6 +2771,8 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
           '<span class="pm-sess-action-icon pm-i">' + settleIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">' + (settled ? 'Unsettle chat' : 'Settle chat') + '</span>' +
         '</button>' +
+        (isProject ? '' : '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="move-project"><span class="pm-msheet-row-label">Move to project\u2026</span></button>') +
+        (owningProject ? '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="remove-project"><span class="pm-msheet-row-label">Remove from project</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
           '<span class="pm-msheet-row-label pm-sess-delete-label">Delete ' + itemLabel.toLowerCase() + '</span>' +
@@ -2876,6 +2879,31 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchor = n
         ? err.body.blockers.map(function(item) { return item && item.message; }).filter(Boolean).join(' ')
         : '';
       try { if (window.pmToast) window.pmToast(blockerMessage || (err && err.message) || 'Could not update chat state', 'error'); } catch(e) {}
+    }
+  });
+
+  var moveProjBtn = sheet.querySelector('[data-sess-action="move-project"]');
+  if (moveProjBtn) moveProjBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    _closeSessionSheetImmediate();
+    _openProjectPickerSheet(sessionId, sessionTitle).catch(function() {});
+  });
+
+  var removeProjBtn = sheet.querySelector('[data-sess-action="remove-project"]');
+  if (removeProjBtn) removeProjBtn.addEventListener('click', async function() {
+    pmHaptic(10);
+    removeProjBtn.disabled = true;
+    try {
+      await detachMobileSessionFromProject(owningProject.id, sessionId);
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState();
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast('Chat removed from project', 'success'); } catch(e) {}
+    } catch (err) {
+      removeProjBtn.disabled = false;
+      try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not remove chat from project', 'error'); } catch(e) {}
     }
   });
 
@@ -3000,6 +3028,67 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks, itemType = 
   });
 }
 
+// Project picker for "Move to project…". Reuses the session action sheet markup.
+async function _openProjectPickerSheet(sessionId, sessionTitle) {
+  _closeSessionSheetImmediate();
+  var projects = await _loadDrawerProjects();
+
+  var scrim = document.createElement('div');
+  scrim.id = 'pm-sess-sheet-scrim';
+  scrim.className = 'pm-msheet-scrim';
+
+  var sheet = document.createElement('div');
+  sheet.id = 'pm-sess-sheet';
+  sheet.className = 'pm-msheet';
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+
+  var titleSafe = escapeHtml(sessionTitle || 'This chat');
+  var rows = projects.length
+    ? projects.map(function(project) {
+        return '<button type="button" class="pm-msheet-row pm-sess-action-row" data-project-id="' + escapeHtml(String(project.id)) + '"><span class="pm-msheet-row-label">' + escapeHtml(project.name || 'Untitled project') + '</span></button>';
+      }).join('')
+    : '<p class="pm-sess-delete-msg">No projects yet. Create one first.</p>';
+  sheet.innerHTML =
+    '<div class="pm-msheet-handle"></div>' +
+    '<div class="pm-msheet-head">' +
+      '<div class="pm-msheet-title">Move to project\u2026</div>' +
+      '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
+      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D keeps its history and leaves its current project.</p>' +
+      '<div class="pm-msheet-rows">' + rows + '</div>' +
+    '</div>';
+
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+
+  var close = function() { _closeSessionSheet(); };
+  scrim.addEventListener('click', close);
+  var closeBtn = sheet.querySelector('.pm-msheet-close');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+
+  sheet.querySelectorAll('[data-project-id]').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      pmHaptic(10);
+      btn.disabled = true;
+      try {
+        await attachMobileSessionToProject(btn.getAttribute('data-project-id'), sessionId);
+        close();
+        if (_drawerEl && _drawerCallbacks) {
+          _resetDrawerPageState();
+          _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+        }
+        try { if (window.pmToast) window.pmToast('Chat moved to project', 'success'); } catch(e) {}
+      } catch (err) {
+        btn.disabled = false;
+        try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not move chat', 'error'); } catch(e) {}
+      }
+    });
+  });
+}
+
 function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, itemType = 'session') {
   _closeSessionSheetImmediate();
   var cb = callbacks || {};
@@ -3016,19 +3105,22 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
 
   var titleSafe = escapeHtml(sessionTitle || 'This chat');
   var trashIconSvg = ICONS.trash;
+  var isProjectDelete = itemType === 'project';
+  var deleteChatsToo = false;
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
     '<div class="pm-msheet-head">' +
-      '<div class="pm-msheet-title pm-sess-delete-title">Delete Chat?</div>' +
+      '<div class="pm-msheet-title pm-sess-delete-title">' + (isProjectDelete ? 'Delete project?' : 'Delete Chat?') + '</div>' +
       '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
     '</div>' +
     '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
-      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D will be permanently deleted and cannot be undone.</p>' +
+      '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D ' + (isProjectDelete ? 'will be deleted along with its files (instructions, knowledge, and workspace folder). Its chats are kept and move back to Chats.' : 'will be permanently deleted and cannot be undone.') + '</p>' +
       '<div class="pm-msheet-rows pm-sess-confirm-rows">' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-confirm-delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
-          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete permanently</span>' +
+          '<span class="pm-msheet-row-label pm-sess-delete-label">' + (isProjectDelete ? 'Delete project' : 'Delete permanently') + '</span>' +
         '</button>' +
+        (isProjectDelete ? '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-delete-chats-too"><span class="pm-msheet-row-label pm-sess-delete-label">Delete project and its chats</span></button>' : '') +
         '<button type="button" class="pm-msheet-row pm-sess-action-row" id="pm-sess-cancel-delete">' +
           '<span class="pm-msheet-row-label">Cancel</span>' +
         '</button>' +
@@ -3046,6 +3138,18 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
   var cancelBtn = document.getElementById('pm-sess-cancel-delete');
   if (cancelBtn) cancelBtn.addEventListener('click', close);
 
+  // Second, explicit step for "Delete project and its chats": the same confirm button now deletes with deleteSessions=true.
+  var chatsTooBtn = document.getElementById('pm-sess-delete-chats-too');
+  if (chatsTooBtn) chatsTooBtn.addEventListener('click', function() {
+    pmHaptic(10);
+    deleteChatsToo = true;
+    var msg = sheet.querySelector('.pm-sess-delete-msg');
+    if (msg) msg.innerHTML = '<strong>Delete the project and every chat in it?</strong> Their history will be permanently deleted and cannot be undone.';
+    chatsTooBtn.style.display = 'none';
+    var lblChats = document.querySelector('#pm-sess-confirm-delete .pm-msheet-row-label');
+    if (lblChats) lblChats.textContent = 'Delete project and chats';
+  });
+
   var confirmBtn = document.getElementById('pm-sess-confirm-delete');
   if (confirmBtn) confirmBtn.addEventListener('click', async function() {
     confirmBtn.disabled = true;
@@ -3053,7 +3157,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
     if (lbl) lbl.textContent = 'Deleting\u2026';
     try {
       await (itemType === 'project'
-         ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId), { method: 'DELETE' })
+         ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId) + (deleteChatsToo ? '?deleteSessions=true' : ''), { method: 'DELETE' })
          : _mobileSessionRequest(sessionId, '', { method: 'DELETE' }));
       pmHaptic(14);
       // Remove from pin list

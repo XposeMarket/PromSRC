@@ -20,7 +20,7 @@ import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMess
 import { deriveContextWindowUsage } from '../../context/context-window-usage';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../tool-observations';
 import { buildCisContextBlock } from '../../business/cis-context-builder.js';
-import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, listProjects } from '../../projects/project-store.js';
 import { loadSoul } from '../../../config/soul-loader.js';
 import {
 	  buildTools as _buildTools,

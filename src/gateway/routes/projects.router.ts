@@ -9,19 +9,16 @@
  *   POST   /api/projects                            { name }
  *   GET    /api/projects/:id
  *   PATCH  /api/projects/:id                        { name?, instructions?, memorySnapshot? }
- *   DELETE /api/projects/:id
+ *   DELETE /api/projects/:id?deleteSessions=true|false   (default false: chats are kept, only membership is removed)
  *   POST   /api/projects/:id/sessions               { isOnboarding? }
- *   DELETE /api/projects/:id/sessions/:sessionId
+ *   POST   /api/projects/:id/sessions/attach        { sessionId } (moves an existing chat in; leaves any other project)
+ *   DELETE /api/projects/:id/sessions/:sessionId?deleteChat=true|false   (default false: detach only)
  *   GET    /api/projects/:id/files
  *   POST   /api/projects/:id/files                  { filename, content?, base64?, mimeType? }
  *   GET    /api/projects/:id/files/:fileId/content
  *   DELETE /api/projects/:id/files/:fileId
  *
- * INSTALL:
- *   1. Create folder:  D:\Prometheus\src\gateway\projects\
- *   2. Place project-store.ts in that folder
- *   3. Place this file at  D:\Prometheus\src\gateway\routes\projects.router.ts
- *   4. In server-v2.ts, add import + mount (see bottom of file)
+ * Mounted by the gateway route index. Business logic lives in ../projects/project-store.ts.
  */
 
 import { Router, Request, Response } from 'express';
@@ -36,7 +33,10 @@ import {
   updateProject,
   deleteProject,
   addSessionToProject,
-  removeSessionFromProject,
+  attachSessionToProject,
+  detachSessionFromProject,
+  deleteSessionFromProject,
+  resolveAllowedProjectDirectory,
   addKnowledgeFile,
   removeKnowledgeFile,
   listKnowledgeFiles,
@@ -47,7 +47,6 @@ import {
 import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
 import { getSession, sessionExists } from '../session.js';
 import { isStorageBoundaryError } from '../storage/storage-paths.js';
-import { getConfig } from '../../config/config.js';
 
 const router = Router();
 
@@ -55,26 +54,12 @@ function sendProjectError(res: Response, err: any, fallback: string): void {
   res.status(isStorageBoundaryError(err) ? 400 : 500).json({ error: err?.message || fallback });
 }
 
-function isPathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function resolveAllowedProjectDirectory(value: unknown): string {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const selected = path.resolve(raw);
-  const cfg = getConfig().getConfig() as any;
-  const allowedRoots = [cfg?.workspace?.path, ...(Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
-    ? cfg.tools.permissions.files.allowed_paths
-    : [])]
-    .map((entry) => String(entry || '').trim())
-    .filter(Boolean)
-    .map((entry) => path.resolve(entry));
-  if (!allowedRoots.some((root) => isPathInside(root, selected))) {
-    throw new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
-  }
-  return selected;
+/** Strict boolean query parsing: only "true" or "false" are accepted. Returns null when invalid. */
+function parseStrictBooleanQuery(value: unknown, fallback: boolean): boolean | null {
+  if (value === undefined) return fallback;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
 }
 
 function hydrateProjectSessions(project: any): any {
@@ -87,11 +72,18 @@ function hydrateProjectSessions(project: any): any {
         if (!sessionExists(sessionId)) return stored;
         const session = getSession(sessionId);
         const firstUserMsg = session.history?.find((m: any) => m.role === 'user');
-        const title = session.externalImport?.source
-          ? (session.title || firstUserMsg?.content || stored.title || 'New chat')
+        // Prefer the real chat title (auto-generated or user-renamed) so project lists match the
+        // main chat list. Fall back to the stored title, then the first user message.
+        const sessionTitle = String(session.title || '').trim();
+        const storedTitle = String(stored.title || '').trim();
+        const isPlaceholder = (t: string) => !t || /^new chat$/i.test(t);
+        const title = !isPlaceholder(sessionTitle)
+          ? sessionTitle
+          : !isPlaceholder(storedTitle)
+          ? storedTitle
           : firstUserMsg?.content
-          ? String(firstUserMsg.content).slice(0, 60)
-          : (stored.title || 'New chat');
+          ? String(firstUserMsg.content).replace(/\s+/g, ' ').trim().slice(0, 60)
+          : 'New chat';
         const lastHistoryMessage = session.history?.[session.history.length - 1];
         return {
           ...stored,
@@ -152,10 +144,20 @@ router.patch('/api/projects/:id', (req: Request, res: Response) => {
   } catch (err: any) { sendProjectError(res, err, 'Failed to update project'); }
 });
 
+// DELETE /api/projects/:id?deleteSessions=true|false (default false: chats are kept and only lose membership)
 router.delete('/api/projects/:id', (req: Request, res: Response) => {
   try {
-    if (!deleteProject(req.params.id)) return res.status(404).json({ error: 'Project not found' });
-    res.json({ success: true });
+    const deleteSessions = parseStrictBooleanQuery(req.query.deleteSessions, false);
+    if (deleteSessions === null) return res.status(400).json({ error: 'deleteSessions must be true or false' });
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const chatCount = project.sessions.length;
+    if (!deleteProject(req.params.id, { keepSessions: !deleteSessions })) return res.status(404).json({ error: 'Project not found' });
+    res.json({
+      success: true,
+      deletedSessions: deleteSessions ? chatCount : 0,
+      keptSessions: deleteSessions ? 0 : chatCount,
+    });
   } catch (err: any) { sendProjectError(res, err, 'Failed to delete project'); }
 });
 
@@ -172,12 +174,33 @@ router.post('/api/projects/:id/sessions', (req: Request, res: Response) => {
   } catch (err: any) { sendProjectError(res, err, 'Failed to create session'); }
 });
 
+// POST /api/projects/:id/sessions/attach — move an EXISTING chat into this project (removes it from any other project).
+router.post('/api/projects/:id/sessions/attach', (req: Request, res: Response) => {
+  try {
+    const sessionId = String(req.body?.sessionId || '').trim();
+    if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+    const project = attachSessionToProject(req.params.id, sessionId);
+    if (!project) return res.status(404).json({ error: 'Project or session not found' });
+    res.json({ success: true, projectId: project.id, sessionId });
+  } catch (err: any) { sendProjectError(res, err, 'Failed to attach session'); }
+});
+
+// DELETE /api/projects/:id/sessions/:sessionId?deleteChat=true|false (default false: detach only; chat is kept)
 router.delete('/api/projects/:id/sessions/:sessionId', (req: Request, res: Response) => {
   try {
-    if (!removeSessionFromProject(req.params.id, req.params.sessionId))
-      return res.status(404).json({ error: 'Project or session not found' });
-    res.json({ success: true });
-  } catch (err: any) { sendProjectError(res, err, 'Failed to delete session'); }
+    const deleteChat = parseStrictBooleanQuery(req.query.deleteChat, false);
+    if (deleteChat === null) return res.status(400).json({ error: 'deleteChat must be true or false' });
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project.sessions.some((sess) => sess.id === req.params.sessionId))
+      return res.status(404).json({ error: 'Session not found in project' });
+    if (deleteChat) {
+      const deleted = deleteSessionFromProject(req.params.id, req.params.sessionId);
+      return res.json({ success: true, deleted });
+    }
+    detachSessionFromProject(req.params.id, req.params.sessionId);
+    res.json({ success: true, deleted: false });
+  } catch (err: any) { sendProjectError(res, err, 'Failed to remove session from project'); }
 });
 
 router.get('/api/projects/:id/files', (req: Request, res: Response) => {
@@ -235,28 +258,3 @@ router.delete('/api/projects/:id/files/:fileId', (req: Request, res: Response) =
 });
 
 export { router };
-
-/*
- * ─── server-v2.ts WIRING ─────────────────────────────────────────────────────
- *
- * Add this import alongside the other router imports:
- *   import { router as projectsRouter } from './routes/projects.router';
- *
- * Add this mount alongside the other app.use() calls:
- *   app.use('/', projectsRouter);
- *
- * ─── prompt-context.ts WIRING ────────────────────────────────────────────────
- *
- * In buildPersonalityContext(), after EACH of the 3 lines:
- *   const business = loadWorkspaceFile(workspacePath, 'BUSINESS.md', 1200);
- *
- * Add:
- *   let projectContextBlock = '';
- *   try {
- *     const { buildProjectContextBlock } = await import('./projects/project-store.js');
- *     projectContextBlock = buildProjectContextBlock(sessionId) || '';
- *   } catch {}
- *
- * Then in each parts[] array, after the business entry, add:
- *   projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
- */

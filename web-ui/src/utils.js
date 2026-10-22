@@ -167,7 +167,7 @@ export function bgtToast(title, body) {
 }
 
 export function showConfirm(message, onConfirm, onCancel, opts = {}) {
-  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false, details = '' } = opts;
+  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false, details = '', onDismiss = null } = opts;
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;animation:scToastIn 0.15s ease';
   const box = document.createElement('div');
@@ -186,7 +186,8 @@ export function showConfirm(message, onConfirm, onCancel, opts = {}) {
   const close = () => overlay.remove();
   box.querySelector('#__sc-confirm-cancel').onclick = () => { close(); if (onCancel) onCancel(); };
   box.querySelector('#__sc-confirm-ok').onclick = () => { close(); if (onConfirm) onConfirm(); };
-  overlay.addEventListener('click', e => { if (e.target === overlay) { close(); if (onCancel) onCancel(); } });
+  // onDismiss (outside click) lets a caller abort without triggering the Cancel/secondary choice.
+  overlay.addEventListener('click', e => { if (e.target === overlay) { close(); if (onDismiss) onDismiss(); else if (onCancel) onCancel(); } });
 }
 
 // ─── Logging ──────────────────────────────────────────────────
@@ -494,7 +495,21 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
   const stage = document.getElementById('mm-stage');
   const graphEl = document.getElementById('mm-graph');
   const mermaidSource = graphEl.textContent || '';
-  const baseMermaidThemeVariables = ${mermaidThemeVariables};
+  const toMermaidColor = (value) => {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw || /^#[0-9a-f]{3,8}$/i.test(raw) || /^rgba?\([\d\s.,%]+\)$/i.test(raw)) return raw;
+    try {
+      const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      const probe = document.createElement('span'); probe.style.color = raw; probe.style.display = 'none';
+      document.body.appendChild(probe); const resolved = getComputedStyle(probe).color; probe.remove();
+      cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = resolved || raw; cx.fillRect(0, 0, 1, 1);
+      const d = cx.getImageData(0, 0, 1, 1).data;
+      return d[3] >= 255 ? 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')' : 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + (d[3] / 255).toFixed(3) + ')';
+    } catch { return raw; }
+  };
+  const sanitizeMermaidVars = (vars) => { const out = {}; Object.keys(vars || {}).forEach((k) => { const v = vars[k]; out[k] = (typeof v === 'string' && /color|bkg|background|border|fill|stroke/i.test(k)) ? toMermaidColor(v) : v; }); return out; };
+  const baseMermaidThemeVariables = sanitizeMermaidVars(${mermaidThemeVariables});
   const zoomInBtn = document.getElementById('mm-zoom-in');
   const zoomOutBtn = document.getElementById('mm-zoom-out');
   const resetBtn = document.getElementById('mm-reset');
@@ -658,7 +673,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
       window.addEventListener('prometheus:visual-theme-change',(event)=>{
         const next=event.detail||{};
         graphEl.textContent=mermaidSource;
-        mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:Object.assign({},baseMermaidThemeVariables,{
+        mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:sanitizeMermaidVars(Object.assign({},baseMermaidThemeVariables,{
           primaryColor:next.surface||baseMermaidThemeVariables.primaryColor,
           primaryTextColor:next.text||baseMermaidThemeVariables.primaryTextColor,
           primaryBorderColor:next.borderStrong||baseMermaidThemeVariables.primaryBorderColor,
@@ -674,7 +689,7 @@ export function buildVisualSrcdoc(lang, code, themeInput) {
           nodeBorder:next.borderStrong||baseMermaidThemeVariables.nodeBorder,
           clusterBkg:next.surfaceSecondary||baseMermaidThemeVariables.clusterBkg,
           clusterBorder:next.border||baseMermaidThemeVariables.clusterBorder,
-        })});
+        }))});
         const rerun=mm.run?mm.run({querySelector:'#mm-graph'}):Promise.resolve(mm.init(undefined,graphEl));
         Promise.resolve(rerun).then(()=>{normalizeSvgSize();fitToViewport();}).catch(showRenderError);
       });
