@@ -185,7 +185,7 @@ const READ_ONLY_SHELL_READERS: ReadonlySet<string> = new Set([
 const READ_ONLY_SHELL_FILTERS: ReadonlySet<string> = new Set([
   'select-object', 'select', 'sort-object', 'sort', 'measure-object', 'measure',
   'format-table', 'ft', 'format-list', 'fl', 'out-string', 'where-object', '?', 'where',
-  'select-string', 'sls', 'findstr', 'grep', 'head', 'tail', 'wc', 'uniq', 'convertto-json',
+  'select-string', 'sls', 'findstr', 'grep', 'head', 'tail', 'wc', 'convertto-json',
 ]);
 
 const READ_ONLY_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -233,7 +233,7 @@ function gitCommandIsReadOnly(words: string[]): boolean {
     if (sub === 'config') return args.length >= 1 && (args[0] === '--get' || args[0] === '--list');
     return false;
   }
-  if ((sub === 'diff' || sub === 'log') && args.some((arg) => arg.startsWith('--output'))) return false;
+  if ((sub === 'diff' || sub === 'log' || sub === 'show') && args.some((arg) => arg.startsWith('--output'))) return false;
   return true;
 }
 
@@ -247,7 +247,11 @@ function stageIsReadOnly(stage: string, first: boolean): boolean {
   const words = stage.trim().split(/\s+/).filter(Boolean);
   if (!words.length) return false;
   const head = words[0].toLowerCase();
-  if (!first) return READ_ONLY_SHELL_FILTERS.has(head);
+  if (!first) {
+    if (!READ_ONLY_SHELL_FILTERS.has(head)) return false;
+    // GNU sort can write a file (-o / --output); anything output-like is not read-only.
+    return !words.slice(1).some((word) => /^-o/.test(word) || word.startsWith('--output'));
+  }
   if (head === 'rg') return rgArgsAreReadOnly(words);
   if (head === 'git') return gitCommandIsReadOnly(words);
   if (head === 'node' || head === 'npm') return words.length === 2 && words[1] === '--version';

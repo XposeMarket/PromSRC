@@ -187,6 +187,11 @@ async function main(): Promise<void> {
   assert.equal(isParallelSafeToolCall({ name: 'workspace_run', args: { action: 'start', command: 'git status --short' } }), false, 'start without the flag stays serial');
   assert.equal(isParallelSafeToolCall(runCall('npm test', { parallel_safe: true, parallel_key: 'repo-a' })), true, 'explicit keyed run keeps old behavior');
   assert.equal(DEFAULT_RUN_YIELD_MS, 30_000, 'default run yield must be 30s');
+  // File-writing filters and git output flags are never read-only.
+  for (const command of ['rg -n foo src | sort -o out.txt', 'cat a.txt | sort --output=b.txt', 'cat a.txt | uniq', 'git show HEAD --output=x.patch']) {
+    assert.equal(isReadOnlyShellCommand(command), false, `${command} must not be read-only`);
+  }
+  assert.equal(isReadOnlyShellCommand('rg -n foo src | sort'), true, 'plain sort filter stays read-only');
 
   // Mixed-batch rule: only non-read-only shell runs/starts are refused with waits or other tools.
   assert.equal(canExecuteToolCallsInParallel([
