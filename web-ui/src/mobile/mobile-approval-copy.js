@@ -129,3 +129,15 @@ export function mobileApprovalCardCopy(approval = {}, { resolvedTitle = '' } = {
     riskText,
   };
 }
+
+// Pure slide decision (F1). Cancel and lost-capture never approve; only pointerup past threshold or a keyboard click (detail 0) approves.
+export function mobileApprovalSlideOutcome({ type, x = 0, max = 0, detail = 1, done = false, dragging = false } = {}) {
+  if (done) return 'ignore';
+  if (type === 'pointerup') {
+    if (!dragging) return 'ignore';
+    return mobileApprovalSlideReached(x, max) ? 'approve' : 'reset';
+  }
+  if (type === 'pointercancel' || type === 'lostpointercapture') return dragging ? 'reset' : 'ignore';
+  if (type === 'click') return detail === 0 ? 'approve' : 'ignore';
+  return 'ignore';
+}

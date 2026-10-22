@@ -12885,9 +12885,9 @@ body.pm-canvas-fullscreen-open {
 }
 /* Approval card rebuild: action sheet + slide-to-confirm (see .pr/SPEC.md section 5). */
 .pm-approval-sheet {
-  --pm-approval-danger: var(--pm-danger, #e5484d);
-  --pm-approval-warning: var(--pm-warning, #d99a1f);
-  --pm-approval-success: var(--pm-success, #3fa96b);
+  --pm-approval-danger: var(--err, #e5484d);
+  --pm-approval-warning: var(--warn, #d99a1f);
+  --pm-approval-success: var(--ok, #3fa96b);
   padding: 16px;
   display: grid;
   gap: 10px;
@@ -12918,13 +12918,8 @@ body.pm-canvas-fullscreen-open {
   font-variant-numeric: tabular-nums;
 }
 .pm-approval-expiry.expired { color: var(--pm-approval-danger); }
-body.pm-mobile-active .pm-chat-approval.pm-approval-sheet .pm-chat-approval-title,
-.pm-approval-sheet .pm-chat-approval-title {
-  font-size: 19px;
-  font-weight: 650;
-  line-height: 1.25;
-  margin: 0;
-}
+.pm-approval-sheet .pm-chat-approval-details summary span { transform: none; }
+.pm-approval-sheet .pm-chat-approval-details[open] summary span { transform: rotate(90deg); }
 .pm-approval-sub {
   font-size: 14px;
   color: var(--pm-muted);

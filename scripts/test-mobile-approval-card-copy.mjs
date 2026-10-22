@@ -8,6 +8,7 @@ import {
   mobileApprovalRiskLevel,
   mobileApprovalRiskText,
   mobileApprovalSlideReached,
+  mobileApprovalSlideOutcome,
   mobileApprovalVerb,
 } from '../web-ui/src/mobile/mobile-approval-copy.js';
 
@@ -126,3 +127,16 @@ assert.equal(mobileApprovalSlideReached(50, 0), false);
 assert.equal(mobileApprovalSlideReached(100, 0), false);
 
 console.log('mobile approval card copy: all assertions passed');
+
+// Slide outcome (F1/F8): pointerup decides; cancel and lost capture never approve; only keyboard clicks approve.
+assert.equal(mobileApprovalSlideOutcome({ type: 'pointerup', x: 88, max: 100, dragging: true }), 'approve');
+assert.equal(mobileApprovalSlideOutcome({ type: 'pointerup', x: 87, max: 100, dragging: true }), 'reset');
+assert.equal(mobileApprovalSlideOutcome({ type: 'pointerup', x: 100, max: 100, dragging: false }), 'ignore');
+assert.equal(mobileApprovalSlideOutcome({ type: 'pointercancel', x: 100, max: 100, dragging: true }), 'reset');
+assert.equal(mobileApprovalSlideOutcome({ type: 'pointercancel', x: 100, max: 100, dragging: false }), 'ignore');
+assert.equal(mobileApprovalSlideOutcome({ type: 'lostpointercapture', x: 100, max: 100, dragging: true }), 'reset');
+assert.equal(mobileApprovalSlideOutcome({ type: 'lostpointercapture', x: 100, max: 100, dragging: false }), 'ignore');
+assert.equal(mobileApprovalSlideOutcome({ type: 'click', detail: 1, x: 100, max: 100 }), 'ignore');
+assert.equal(mobileApprovalSlideOutcome({ type: 'click', detail: 0, x: 0, max: 100 }), 'approve');
+assert.equal(mobileApprovalSlideOutcome({ type: 'click', detail: 0, done: true, x: 100, max: 100 }), 'ignore');
+console.log('mobile approval slide outcome: ok');

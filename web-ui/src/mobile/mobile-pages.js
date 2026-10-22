@@ -4,7 +4,7 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
-import { mobileApprovalCardCopy, mobileApprovalExpiryText, mobileApprovalRiskText, mobileApprovalSlideReached } from './mobile-approval-copy.js';
+import { mobileApprovalCardCopy, mobileApprovalExpiryText, mobileApprovalRiskText, mobileApprovalSlideOutcome } from './mobile-approval-copy.js';
 import {
   formatMobileChatTime as _formatChatTime,
   formatMobileTimeAgo as _formatTimeAgo,
@@ -7075,20 +7075,6 @@ function _pmApprovalStatusCopy(status = 'pending') {
   return normalized || 'Approval required';
 }
 
-function _pmApprovalStatusIcon(status = 'pending') {
-  const normalized = String(status || 'pending').toLowerCase();
-  if (normalized === 'approved' || normalized === 'complete' || normalized === 'executed') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
-  }
-  if (normalized === 'rejected' || normalized === 'denied' || normalized === 'failed' || normalized === 'error' || normalized === 'expired') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
-  }
-  if (normalized === 'approving' || normalized === 'running' || normalized === 'executing') {
-    return '<span class="pm-chat-approval-spinner" aria-hidden="true"></span>';
-  }
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>';
-}
-
 function _pmApprovalParameterHtml(label, value, { code = false, multiline = false } = {}) {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -7209,7 +7195,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     <div class="pm-approval-meta">
       <span class="pm-approval-dot" aria-hidden="true"></span>
       <span class="pm-approval-eyebrow">${escapeHtml(pending ? eyebrow : statusLabel)}</span>
-      ${expiryText ? `<span class="pm-approval-expiry" data-pm-approval-expires-at="${expiresAt}">${escapeHtml(expiryText)}</span>` : ''}
+      ${expiryText ? `<span class="pm-approval-expiry" data-pm-approval-expires-at="${escapeHtml(String(expiresAt))}">${escapeHtml(expiryText)}</span>` : ''}
     </div>
     <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
     ${subtitle ? `<div class="pm-approval-sub ${isFinalAction ? '' : 'mono'}">${escapeHtml(subtitle)}</div>` : ''}
@@ -7394,20 +7380,25 @@ function _wireMobileApprovalSlide(track) {
     knob.style.transform = `translateX(${value}px)`;
     track.style.setProperty('--pm-slide-p', String(max ? value / max : 0));
   };
-  const confirmSlide = () => {
+  const confirmSlide = async () => {
     track.classList.add('done');
     knob.textContent = '✓';
     try { pmHaptic?.(18); } catch {}
-    _resolveMobileApprovalButton(track);
+    const ok = await _resolveMobileApprovalButton(track);
+    if (ok) return;
+    track.classList.remove('done');
+    knob.textContent = '→';
+    setX(0);
   };
-  const finish = () => {
-    if (!dragging) return;
+  // Pure decision (mobileApprovalSlideOutcome): cancel and lost capture never approve.
+  const decide = (type, detail = 1) => {
+    const outcome = mobileApprovalSlideOutcome({ type, x, max, detail, done: track.classList.contains('done'), dragging });
     dragging = false;
-    if (mobileApprovalSlideReached(x, max)) {
+    if (outcome === 'approve') {
       knob.style.transition = '';
       setX(max);
       confirmSlide();
-    } else {
+    } else if (outcome === 'reset') {
       knob.style.transition = '';
       setX(0);
     }
@@ -7424,14 +7415,11 @@ function _wireMobileApprovalSlide(track) {
     if (!dragging) return;
     setX(Math.min(max, Math.max(0, event.clientX - startX)));
   });
-  knob.addEventListener('pointerup', finish);
-  knob.addEventListener('pointercancel', finish);
+  knob.addEventListener('pointerup', (event) => decide('pointerup', event.detail));
+  knob.addEventListener('pointercancel', () => decide('pointercancel'));
+  knob.addEventListener('lostpointercapture', () => decide('lostpointercapture'));
   // Keyboard / assistive-tech clicks arrive with detail === 0. A finger or mouse tap (detail >= 1) never approves.
-  knob.addEventListener('click', (event) => {
-    if (event.detail !== 0) return;
-    if (track.classList.contains('done')) return;
-    confirmSlide();
-  });
+  knob.addEventListener('click', (event) => decide('click', event.detail));
 }
 
 function _wireMobileApprovalActionButton(button) {
@@ -7580,21 +7568,23 @@ async function _resolveMobileApprovalButton(button) {
           }
         }
       }
+      return true;
     } catch (err) {
       const message = String(err?.message || err || '').trim();
       const alreadyHandled = /approval(?:\s+is)?\s+already\s+(?:approved|rejected|resolved)|approval\s+could\s+not\s+be\s+resolved/i.test(message);
       if (alreadyHandled) {
         mobileApprovalResolvedAt.set(id, Date.now());
         await _reconcileMobilePendingApprovals({ retry: false }).catch(() => {});
-        return;
+        return true;
       }
       scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = false; });
       pmToast(`Approval failed: ${message}`, 'error');
+      return false;
     }
   })();
   mobileApprovalActionsInFlight.set(id, request);
   try {
-    await request;
+    return await request;
   } finally {
     if (mobileApprovalActionsInFlight.get(id) === request) mobileApprovalActionsInFlight.delete(id);
   }
