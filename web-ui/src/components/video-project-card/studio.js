@@ -7,7 +7,7 @@ import { loadModels, loadPresets } from './v2.js';
 const STEPS = [['frame', 'Frame'], ['setup', 'Setup'], ['prompt', 'Prompt'], ['take', 'Take']];
 const ICON_CHECK = '✓';
 // While a run is busy, only navigation/selection stays live. Every paid or mutating action is blocked.
-const BUSY_OK = new Set(['close', 'back', 'shot', 'cand', 'mode']);
+const BUSY_OK = new Set(['close', 'back', 'shot', 'cand']);
 
 let sheet = null;
 let scrim = null;
@@ -114,10 +114,13 @@ function approvePendingHtml() {
   // Two gates feed one inline row: generate() (st.pending) and act() (st.actPending).
   const pend = st.pending || st.actPending;
   if (!pend) return '';
-  const total = st.pending ? st.pending.estimate?.total : pend.usd;
-  return `<div class="vps-approve" role="group" aria-label="Approve cost"><strong>Approve ${usd(total)}?</strong>
-    <p class="vps-muted">${esc(st.pending?.reason || 'This run is paid. Nothing is sent until you approve.')}</p>
-    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="approve-pending" ${busyNow() ? 'disabled' : ''}>Approve &amp; run · ${usd(total)}</button>
+  const raw = Number(st.pending ? (st.pending.estimate?.total ?? st.pending.estimate?.totalUsd) : (pend.usd ?? pend.totalUsd ?? pend.total));
+  // Never show a made-up $0.00: if the server quote has no readable price, say so and point at the reason text.
+  const known = Number.isFinite(raw) && raw > 0;
+  const price = known ? usd(raw) : '';
+  return `<div class="vps-approve" role="group" aria-label="Approve cost"><strong>${known ? `Approve ${price}?` : 'Approve this paid run?'}</strong>
+    <p class="vps-muted">${esc(st.pending?.reason || pend.reason || 'This run is paid. Nothing is sent until you approve.')}</p>
+    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="approve-pending" ${busyNow() ? 'disabled' : ''}>Approve &amp; run${known ? ` · ${price}` : ''}</button>
     <button type="button" class="vps-btn is-wide" data-vps="cancel-pending">Cancel</button></div></div>`;
 }
 
@@ -239,18 +242,32 @@ function bodyHtml(p) {
 
 function autoPlanHtml(p) {
   const plan = view.plan || {};
-  const rows = p.shots.map((s, i) => `<div class="vps-sl"><span class="vps-thumb is-empty"></span>
-    <span><strong>${i + 1}. ${esc(s.title || 'Shot')}</strong><small class="vps-muted">${esc(s.modelId || p.defaults?.videoModel || 'model')} · ${s.durationSec}s</small></span>
-    <span class="vps-muted">${usd(plan.perShot?.[s.id])}</span></div>`).join('');
-  const total = plan.total ?? 0;
+  const models = modelList();
+  const rows = p.shots.map((s, i) => {
+    const m = models.find((x) => x.id === (s.modelId || p.defaults?.videoModel));
+    const cam = s.presetId ? ((view.presets || []).find((x) => x.id === s.presetId)?.label || '') : '';
+    const price = s.approvedAt ? null : shotPrice(s);
+    const right = s.approvedAt ? '<span class="vps-badge is-accent">Kept</span>'
+      : price != null ? `<span class="vps-muted">${usd(price)}</span>` : '';
+    return `<div class="vps-sl">${shotThumb(s, p)}
+      <span class="vps-opt-main vps-grow"><strong>${i + 1}. ${esc(s.title || 'Shot')}</strong>
+      <small class="vps-muted">${esc(shortLabel(m, s.modelId || p.defaults?.videoModel || 'model'))} · ${esc(snapLen(m, Number(s.durationSec)))}s${cam ? ` · ${esc(cam)}` : ''}</small></span>
+      ${right}</div>`;
+  }).join('');
+  const total = Number(plan.total) || 0;
   const cap = p.budget?.capUsd;
+  const pend = ctx.getState().actPending;
+  // The server quote is the only price that can start a paid run: once it arrives, the approve row replaces the plan button.
+  const action = pend && pend.action === 'run'
+    ? approvePendingHtml()
+    : `<button type="button" class="vps-btn is-primary is-wide" data-vps="run-approve" ${busyNow() ? 'disabled' : ''}>Get quote &amp; run</button>`;
   return `<h3 class="vps-h">Autopilot plan <span class="vps-muted">· needs your OK</span></h3>
     <div class="vps-list">${rows}</div>
     <p class="vps-muted">+ frames, QA rerolls (1 max), music</p>
-    <p><strong>Total ${usd(total)}</strong>${cap != null ? ` / ${usd(cap)} cap` : ''}</p>
+    <p class="vps-total"><strong>${total > 0 ? `About ${usd(total)}` : 'Quoted before anything runs'}</strong>${cap != null ? `<span class="vps-muted"> / ${usd(cap)} cap</span>` : ''}</p>
     <p class="vps-muted">I only stop early if a shot fails QA twice or the run would go over the cap.</p>
-    <div class="vps-row vps-stack"><button type="button" class="vps-btn is-primary is-wide" data-vps="run-approve" ${busyNow() ? 'disabled' : ''}>${total > 0 ? `Approve &amp; run · ${usd(total)}` : 'Get quote &amp; run'}</button>
-    <button type="button" class="vps-btn is-wide" data-vps="mode" data-to="step">Switch to step-by-step</button></div>`;
+    <div class="vps-row vps-stack">${action}
+    <button type="button" class="vps-btn is-ghost is-wide" data-vps="mode" data-to="step" ${busyNow() ? 'disabled' : ''}>Switch to step-by-step</button></div>`;
 }
 
 function headerHtml(p) {
@@ -426,6 +443,11 @@ const STUDIO_CSS = `
 .vps-chip.is-static{min-height:0;height:30px;padding:0 12px;font-size:13px;cursor:default;color:var(--prom-muted,#8a8a8a);background:var(--prom-surface-secondary,rgba(127,127,127,.08));border-color:transparent}
 .vps-sl{display:flex;gap:10px;align-items:center;padding:8px;border-radius:16px;border:1px solid var(--prom-border,rgba(127,127,127,.25))}
 .vps-sl .vps-thumb{width:48px;height:64px;border-radius:10px;flex:none}
+.vps-grow{flex:1;min-width:0}
+.vps-opt-main small{margin-top:2px}
+.vps-list{display:flex;flex-direction:column;gap:8px}
+.vps-total{display:flex;align-items:baseline;gap:4px;margin:12px 0 4px}
+.vps-btn.is-ghost{background:transparent;border-color:transparent;color:var(--prom-muted,#8a8a8a)}
 .vps-approve{border:1px solid var(--prom-accent,#ff7a1a);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:8px}
 .vps-player{display:block;width:100%;aspect-ratio:9/16;max-height:60vh;border-radius:16px;background:var(--prom-surface-secondary,rgba(127,127,127,.1));object-fit:contain}
 .vps-wait,.vps-busy{display:flex;gap:8px;align-items:center;color:var(--prom-muted,#8a8a8a);font-size:12px}
