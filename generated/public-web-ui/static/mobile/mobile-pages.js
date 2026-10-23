@@ -2075,6 +2075,12 @@ function _mobileThreadLooksRoleGrouped(thread) {
 
 function _reconcileMobileThreadOrder(thread) {
   const list = Array.isArray(thread) ? thread : [];
+  // Invariant: one thread slot per row object. A repeated reference is one
+  // live row rendered twice; keep the occurrence after its owning prompt.
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const first = list.indexOf(list[index]);
+    if (first !== index) list.splice(first, 1);
+  }
   _pruneMobileRoleGroupedDuplicateTail(list);
   // A dropped transport can leave a finalized, trace-only failure row just
   // before the recovered live row for the same user prompt. It is one turn,
@@ -5914,6 +5920,10 @@ function _mergeMobileProductCarouselIntoMessage(message, carousel) {
 }
 
 function _mobileMessagesRepresentSameTurn(a, b) {
+  // Reflexive: a live row with no request id and no text yet (fresh recovery
+  // placeholder) must still match itself, or the local-artifact merge pushes
+  // the same object twice and it paints above and below its prompt.
+  if (a && a === b) return true;
   if (!a || !b || String(a.role || '') !== String(b.role || '')) return false;
   const aRequest = String(a._clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || '').trim();
