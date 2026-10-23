@@ -3,6 +3,11 @@ import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { ensureMobileShellStyles } from './mobile-style-owners.js';
 import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
 import { renderMd, timeAgo } from '../utils.js';
+let shareFileCache, shareOrDownloadFile;
+let shareModulePromise;
+const loadShareModule = () => shareModulePromise ||= import('../share-file-cache.js').then(m => {
+  ({ shareFileCache, shareOrDownloadFile } = m);
+});
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
@@ -3463,6 +3468,8 @@ export function initMobileCanvasSheet() {
         saveEl.dataset.href = tab?.download || tab?.src || '';
         saveEl.dataset.filename = tab?.name || 'file';
       }
+      // Warm media files so Save can open the iOS share sheet inside the tap.
+      if (tab && ['image', 'video', 'audio'].includes(tab.kind)) warmCanvasSaveFile(tab);
 
       // Show Preview button for file types that benefit from screenshot rendering
       const previewable = tab && tab.path && !['image', 'video', 'audio'].includes(tab.kind);
@@ -3489,7 +3496,7 @@ export function initMobileCanvasSheet() {
       if (tab.kind === 'image') {
         bodyEl.innerHTML = canvasZoomHtml(`<img src="${escapeHtml(tab.src)}" alt="${escapeHtml(tab.name)}">`);
       } else if (tab.kind === 'video') {
-        bodyEl.innerHTML = canvasZoomHtml(`<video src="${escapeHtml(tab.src)}" controls playsinline></video>`);
+        bodyEl.innerHTML = canvasZoomHtml(`<video src="${escapeHtml(tab.src)}" controls playsinline preload="metadata"></video>`);
       } else if (tab.kind === 'audio') {
         bodyEl.innerHTML = `<audio src="${escapeHtml(tab.src)}" controls></audio>`;
         sheetEl.classList.remove('is-interacting', 'is-inspecting');
@@ -3686,59 +3693,49 @@ function canvasSheetToast(message, kind = 'info') {
   try { console.info('[mobile canvas]', message); } catch {}
 }
 
-function canvasFilenameFromDisposition(value, fallback = 'file') {
-  const header = String(value || '');
-  const utf = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf?.[1]) {
-    try { return decodeURIComponent(utf[1]).replace(/[/\\]+/g, '-'); } catch {}
-  }
-  const plain = /filename="?([^";]+)"?/i.exec(header);
-  return String(plain?.[1] || fallback || 'file').replace(/[/\\]+/g, '-');
+function canvasSaveHref(tab) {
+  return String(tab?.download || tab?.src || '').trim();
+}
+
+function warmCanvasSaveFile(tab) {
+  const href = canvasSaveHref(tab);
+  if (!href || href === '#' || shareFileCache?.has(href)) return;
+  loadShareModule().then(() => shareFileCache.load(href, tab.name || 'file')).catch(() => {});
+}
+
+function reportCanvasSaveOutcome(outcome) {
+  if (outcome === 'needs-tap') canvasSheetToast('File is ready. Tap Save again to open the share sheet.', 'info');
+  else if (outcome === 'downloaded') canvasSheetToast('Download started.', 'success');
 }
 
 async function saveActiveCanvasFile(api) {
   const tab = api?.tabs?.[api.activeIdx];
   const saveBtn = document.getElementById('pm-canvas-save');
-  const href = String(tab?.download || tab?.src || saveBtn?.dataset?.href || '').trim();
+  const href = canvasSaveHref(tab) || String(saveBtn?.dataset?.href || '').trim();
   if (!tab || !href || href === '#') {
     canvasSheetToast('No file is open to save.', 'error');
+    return;
+  }
+  // Already downloaded: open the share sheet before any await so iOS keeps the
+  // tap's user activation (otherwise share() throws NotAllowedError).
+  const cached = shareFileCache?.get(href);
+  if (cached) {
+    try {
+      reportCanvasSaveOutcome(await shareOrDownloadFile(cached));
+    } catch (err) {
+      canvasSheetToast(err?.message || 'Could not save this file.', 'error');
+    }
     return;
   }
   const previous = saveBtn?.innerHTML || '';
   if (saveBtn) {
     saveBtn.disabled = true;
-    saveBtn.innerHTML = 'Saving...';
+    saveBtn.innerHTML = 'Preparing...';
   }
   try {
-    const res = await fetch(href, { credentials: 'include' });
-    if (!res.ok) throw new Error(`Save failed (${res.status})`);
-    const blob = await res.blob();
-    const filename = canvasFilenameFromDisposition(res.headers.get('Content-Disposition'), tab.name || 'file');
-    const mimeType = blob.type || 'application/octet-stream';
-    const file = typeof File !== 'undefined' ? new File([blob], filename, { type: mimeType }) : null;
-    if (file && navigator.canShare?.({ files: [file] }) && navigator.share) {
-      try {
-        await navigator.share({ files: [file], title: filename });
-      } catch (err) {
-        if (err?.name === 'AbortError') return;
-        throw err;
-      }
-      canvasSheetToast('Ready to save from the share sheet.', 'success');
-      return;
-    }
-    const objectUrl = URL.createObjectURL(blob);
-    try {
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      canvasSheetToast('Download started.', 'success');
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 15000);
-    }
+    await loadShareModule();
+    const file = await shareFileCache.load(href, tab.name || 'file');
+    reportCanvasSaveOutcome(await shareOrDownloadFile(file));
   } catch (err) {
     canvasSheetToast(err?.message || 'Could not save this file.', 'error');
   } finally {
