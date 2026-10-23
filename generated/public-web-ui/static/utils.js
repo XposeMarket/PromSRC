@@ -9,6 +9,7 @@
  */
 
 import { installGameProjectCards } from './components/game-project-card.js';
+import { shareFileCache, shareOrDownloadFile } from './share-file-cache.js';
 import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
 export { withoutInlineCards };
 
@@ -1162,7 +1163,8 @@ function resolveWorkspaceImageSources(html) {
     const caption = alt ? `<span class="prom-inline-caption">${alt}</span>` : '';
     if (INLINE_VIDEO_RE.test(decoded)) {
       const saveIcon = `<button type="button" class="prom-inline-save" aria-label="Save video" title="Save video" data-save-src="${escapeAttr(url)}" data-workspace-path="${pathAttr}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></button>`;
-      return `<span class="prom-inline-figure is-video"><video class="prom-inline-media" src="${escapeAttr(url)}" controls playsinline preload="metadata" data-workspace-path="${pathAttr}"></video><span class="prom-inline-video-row">${caption || '<span></span>'}${saveIcon}</span></span>`;
+      // #t=0.1 makes iOS paint a first frame instead of a black box.
+      return `<span class="prom-inline-figure is-video"><video class="prom-inline-media" src="${escapeAttr(url)}#t=0.1" controls playsinline preload="metadata" data-workspace-path="${pathAttr}" data-base-src="${escapeAttr(url)}"></video><span class="prom-inline-video-row">${caption || '<span></span>'}${saveIcon}</span></span>`;
     }
     const rest = attrs.replace(/\s(?:loading|class)="[^"]*"/gi, '');
     return `<span class="prom-inline-figure"><img${rest} src="${escapeAttr(url)}" class="prom-inline-media" loading="lazy" decoding="async" data-workspace-path="${pathAttr}" role="button" tabindex="0">${caption}</span>`;
@@ -1222,25 +1224,61 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
   // a File) offers "Save Video" to Photos. Safari drops the tap's user
   // activation if the download takes too long, so the file is cached: a second
   // tap then opens the sheet instantly. Desktop falls back to a download.
-  const savedFiles = new Map();
-  const loadFile = async (src, name) => {
-    if (savedFiles.has(src)) return savedFiles.get(src);
-    const res = await fetch(src, { credentials: 'include' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : 'video/mp4';
-    const file = new File([blob], name, { type });
-    savedFiles.set(src, file);
-    return file;
+  // The file is warmed (prefetched) as soon as the video shows it is playable,
+  // so the tap can call share() before its activation expires.
+  const isPhone = () => document.body?.classList?.contains('pm-mobile') || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '');
+  const saveNameFor = (path) => (String(path || '').split(/[\\/]/).pop() || 'video.mp4').replace(/[?#].*$/, '');
+  const warmInlineVideo = (video) => {
+    if (!isPhone()) return;
+    const btn = video.closest?.('.prom-inline-figure')?.querySelector?.('.prom-inline-save');
+    const src = btn?.getAttribute('data-save-src') || '';
+    if (!src || shareFileCache.has(src)) return;
+    shareFileCache.load(src, saveNameFor(btn.getAttribute('data-workspace-path')), 'video/mp4')
+      .then(() => btn.classList.add('is-warm'))
+      .catch(() => {});
   };
-  const downloadFile = (file) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file);
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  const onVideoReady = (event) => {
+    const video = event.target;
+    if (!(video instanceof HTMLVideoElement) || !video.classList.contains('prom-inline-media')) return;
+    video.closest('.prom-inline-figure')?.classList.remove('is-failed');
+    warmInlineVideo(video);
   };
+  document.addEventListener('loadedmetadata', onVideoReady, true);
+  document.addEventListener('play', onVideoReady, true);
+
+  // Inline videos sometimes fail on iOS (load aborted by a re-render or a
+  // flaky Funnel connection) and show the crossed-out play icon forever.
+  // Retry twice with backoff, then show an explicit "Tap to retry" state.
+  document.addEventListener('error', (event) => {
+    const video = event.target;
+    if (!(video instanceof HTMLVideoElement) || !video.classList.contains('prom-inline-media')) return;
+    const base = video.getAttribute('data-base-src') || '';
+    if (!base) return;
+    const tries = Number(video.dataset.retries || 0);
+    const figure = video.closest('.prom-inline-figure');
+    if (tries >= 2) { figure?.classList.add('is-failed'); return; }
+    video.dataset.retries = String(tries + 1);
+    setTimeout(() => {
+      if (!video.isConnected) return;
+      const sep = base.includes('?') ? '&' : '?';
+      video.src = `${base}${sep}r=${Date.now()}#t=0.1`;
+      video.load();
+    }, tries === 0 ? 800 : 2500);
+  }, true);
+  document.addEventListener('click', (event) => {
+    const figure = event.target?.closest?.('.prom-inline-figure.is-video.is-failed');
+    if (!figure || event.target?.closest?.('.prom-inline-save')) return;
+    const video = figure.querySelector('video.prom-inline-media');
+    const base = video?.getAttribute('data-base-src') || '';
+    if (!video || !base) return;
+    event.preventDefault();
+    figure.classList.remove('is-failed');
+    video.dataset.retries = '0';
+    const sep = base.includes('?') ? '&' : '?';
+    video.src = `${base}${sep}r=${Date.now()}#t=0.1`;
+    video.load();
+  });
+
   document.addEventListener('click', async (event) => {
     const btn = event.target?.closest?.('.prom-inline-save');
     if (!btn) return;
@@ -1249,24 +1287,30 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
     if (btn.dataset.busy === '1') return;
     const src = btn.getAttribute('data-save-src') || '';
     const path = btn.getAttribute('data-workspace-path') || '';
-    const name = (path.split(/[\\/]/).pop() || 'video.mp4').replace(/[?#].*$/, '');
+    const name = saveNameFor(path);
+    btn.classList.remove('is-ready', 'is-error');
+    // Cached: share synchronously inside the tap so iOS keeps the activation.
+    const cached = shareFileCache.get(src);
+    if (cached) {
+      try {
+        const outcome = await shareOrDownloadFile(cached);
+        if (outcome === 'needs-tap') btn.classList.add('is-ready');
+        else if (outcome !== 'cancelled') btn.classList.add('is-done');
+      } catch {
+        btn.classList.add('is-error');
+        setTimeout(() => btn.classList.remove('is-error'), 2000);
+      }
+      return;
+    }
     btn.dataset.busy = '1';
     btn.classList.add('is-busy');
     try {
-      const file = await loadFile(src, name);
-      if (navigator.canShare?.({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file] });
-          btn.classList.add('is-done');
-        } catch (err) {
-          // Activation expired during the download: file is cached now, so
-          // the next tap shares immediately.
-          if (err?.name === 'NotAllowedError') btn.classList.add('is-ready');
-        }
-      } else {
-        downloadFile(file);
-        btn.classList.add('is-done');
-      }
+      const file = await shareFileCache.load(src, name, 'video/mp4');
+      const outcome = await shareOrDownloadFile(file);
+      // Activation expired during the download: the file is cached now, so
+      // the next tap opens the share sheet immediately.
+      if (outcome === 'needs-tap') btn.classList.add('is-ready');
+      else if (outcome !== 'cancelled') btn.classList.add('is-done');
     } catch {
       btn.classList.add('is-error');
       setTimeout(() => btn.classList.remove('is-error'), 2000);
