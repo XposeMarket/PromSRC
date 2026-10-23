@@ -4,6 +4,7 @@
 // Follows the same PKCE + local callback server pattern as openai-oauth.ts.
 
 import fs from 'fs';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import path from 'path';
 import http from 'http';
 import crypto from 'crypto';
@@ -192,6 +193,7 @@ export abstract class OAuthConnector {
   }
 
   async refreshTokens(existing: ConnectorTokens): Promise<ConnectorTokens> {
+    assertTokenRefreshAllowed('connector-oauth');
     this.loadCredentialsFromVault();
     if (!existing.refresh_token) throw new Error(`No refresh token for ${this.cfg.name}.`);
     if (!this.cfg.clientId) {

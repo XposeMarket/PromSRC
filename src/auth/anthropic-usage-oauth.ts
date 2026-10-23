@@ -17,6 +17,7 @@
  */
 
 import { createHash, randomBytes } from 'crypto';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import { getVault } from '../security/vault';
 import { log } from '../security/log-scrubber';
 
@@ -165,6 +166,7 @@ function storeFromTokenResponse(configDir: string, json: any): void {
 }
 
 async function refreshUsageToken(configDir: string, tokens: UsageOAuthTokens): Promise<UsageOAuthTokens> {
+  assertTokenRefreshAllowed('anthropic-usage');
   if (!tokens.refresh_token) throw new Error('No refresh token; reconnect usage tracking.');
   const body = new URLSearchParams({
     grant_type: 'refresh_token',

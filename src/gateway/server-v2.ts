@@ -14,6 +14,7 @@
 import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
 import './startup-async-diagnostics.js';
+import { skipInPreview } from './runtime/preview-mode';
 
 // Background git reads (build-status, workspace session, coding context) run
 // `git status` with short timeouts. Without this, status takes .git/index.lock
@@ -727,6 +728,7 @@ startupMark('brain runner constructed');
   heartbeatRunner.registerAgent('main', mainWorkspace);
 }
 (function registerSubagentHeartbeats() {
+  if (skipInPreview('subagent-heartbeats')) return;
   try {
     // Heartbeats are available only to agents that are still configured.  The
     // previous directory scan resurrected deleted agents whenever an old
@@ -766,7 +768,7 @@ const mainChatTimerRunner = new MainChatTimerRunner({
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
   telegramChannel,
 });
-mainChatTimerRunner.start();
+if (!skipInPreview('main-chat-timers')) mainChatTimerRunner.start();
 initSessionWake({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
@@ -1392,14 +1394,14 @@ async function startGatewayListeners(): Promise<void> {
     // Accepted peer turns can die before the chat runtime registers. Drain
     // their durable queue independently of the interrupted-runtime ledger.
     try {
-      const resumed = resumeDurableDetachedTurns({ runInteractiveTurn, broadcastWS });
+      const resumed = skipInPreview('detached-turn-resume') ? 0 : resumeDurableDetachedTurns({ runInteractiveTurn, broadcastWS });
       if (resumed) console.info(`[runtime-recovery] Resumed ${resumed} queued detached thread turn(s).`);
     } catch (error) { console.warn('[runtime-recovery] Queued detached turn recovery failed:', error); }
     // Foreground recovery checkpoints are durable before the listener binds,
     // but their model turns are deliberately drained only after readiness.
     // Stagger admissions briefly to avoid a CPU-bound context backlog, but
     // do not let one long-running thread block every other session's recovery.
-    if (deferredMainChatRecoveries.length > 0) {
+    if (deferredMainChatRecoveries.length > 0 && !skipInPreview('main-chat-recovery')) {
       // A self-triggered mid-turn restart is a suspension of a turn the user is
       // actively watching, so it must resume promptly. Crash recovery is
       // staggered briefly without leaving other interrupted threads stranded.
@@ -1463,6 +1465,7 @@ async function startGatewayListeners(): Promise<void> {
     const delayedInternalWatchStart = setTimeout(() => {
       if (shuttingDown || draining) return;
       startupMark('internal watch callback entered');
+      if (skipInPreview('internal-watch')) return;
       internalWatchRunner.start();
       startupMark('internal watch runner started after listen');
     }, 250);
@@ -1470,6 +1473,7 @@ async function startGatewayListeners(): Promise<void> {
     const delayedThreadSupervisionStart = setTimeout(() => {
       if (shuttingDown || draining) return;
       startupMark('thread supervision callback entered');
+      if (skipInPreview('thread-supervision')) return;
       const supervisionStartAt = Date.now();
       stopThreadSupervisionRunner = activeThreadSupervisionController.start();
       startupMark(`thread supervision started after listen (${Date.now() - supervisionStartAt}ms)`);
@@ -1557,6 +1561,7 @@ async function startGatewayListeners(): Promise<void> {
       ? Math.max(10_000, Number(process.env.PROMETHEUS_HOT_TELEGRAM_PERSONA_STARTUP_DELAY_MS || 30_000))
       : 0;
     const personaBotStartupTimer = setTimeout(() => {
+      if (skipInPreview('telegram-persona-bots')) return;
       telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
     }, personaBotStartupDelayMs);
     if (typeof (personaBotStartupTimer as any).unref === 'function') (personaBotStartupTimer as any).unref();

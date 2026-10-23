@@ -10,6 +10,7 @@
  */
 
 import fs from 'fs';
+import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import path from 'path';
 import http from 'http';
 import crypto from 'crypto';
@@ -241,6 +242,7 @@ function generateChallenge(verifier: string): string {
 // ─── Token refresh ──────────────────────────────────────────────────────────────
 
 export async function refreshTokens(configDir: string, accountId?: string): Promise<OAuthTokens> {
+  assertTokenRefreshAllowed('openai-codex');
   accountId = resolveCodexAccountId(configDir, accountId);
   const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
   const existingRefresh = refreshInFlight.get(key);

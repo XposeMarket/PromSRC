@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import type { ModelStreamEvent } from '../../providers/LLMProvider.js';
-import { getInjectedMasterKey } from '../../security/vault-key-bootstrap.js';
+import { getInjectedMasterKey, isStdinVaultKeyMode } from '../../security/vault-key-bootstrap.js';
 import {
   registerRuntimeWorkerDiagnosticProvider,
   type RuntimeWorkerDiagnosticWorker,
@@ -661,7 +661,7 @@ function spawnSlot(slot: WorkerSlot): void {
     // model worker is another Node process, so it must receive the same key
     // before importing any provider/vault code. Passing it over the private
     // child stdin pipe keeps the key out of the process environment and disk.
-    const managedVaultKey = process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+    const managedVaultKey = isStdinVaultKeyMode()
       ? (getInjectedMasterKey()?.toString('hex') || '')
       : null;
     const child = fork(entry, [], {

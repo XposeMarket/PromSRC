@@ -59,6 +59,7 @@ import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
 import { getProvider } from '../../providers/factory';
 import { startAutoSettleScheduler } from '../auto-settle';
+import { skipInPreview, isPreviewMode, logPreviewModeBanner } from '../runtime/preview-mode';
 import type { LiveRuntimeSnapshot } from '../live-runtime-registry';
 
 function retireLegacySelfRepairStore(configDir: string): void {
@@ -248,6 +249,7 @@ const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runn
 // ─── Main startup function ────────────────────────────────────────────────────
 
 export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot[]> {
+  if (isPreviewMode()) logPreviewModeBanner();
   startupMark('runStartup entered');
   const {
     HOST, PORT, config, skillsManager,
@@ -387,6 +389,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     } catch (err: any) {
       console.error('[RuntimeRecovery] Operation ledger recovery failed; continuing runtime recovery. External side-effect dedupe may be unavailable until repaired:', err?.message || err);
     }
+    if (!skipInPreview('runtime-recovery')) {
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,
@@ -417,6 +420,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     if (recovery.inspected > 0) {
       console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), retriggered ${recovery.retriggeredChats.length} chat turn(s), deferred ${deferredMainChatRecoveries.length} foreground chat retrigger(s), preserved ${recovery.interruptedChats.length - recovery.retriggeredChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
     }
+    }
     // Main-chat goals resume only after gateway:startup has finalized ownership:
     // BOOT owns planned restart/apply boundaries, while runtime recovery owns
     // unexpected crashes. Starting either here would give two runtimes one chat.
@@ -428,17 +432,23 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
 
   // Auto-connect enabled MCP servers after the gateway is already responsive.
   // Network handshakes and broken credentials should not hold the startup UI hostage.
-  const mcpStartupTimer = setTimeout(() => {
-    getMCPManager().startEnabledServers().catch((err: any) => console.warn('[MCP] Startup error:', err?.message));
-  }, 120_000);
-  if (typeof (mcpStartupTimer as any).unref === 'function') (mcpStartupTimer as any).unref();
-  startupMark('mcp startup deferred');
+  if (!skipInPreview('mcp-servers')) {
+    const mcpStartupTimer = setTimeout(() => {
+      getMCPManager().startEnabledServers().catch((err: any) => console.warn('[MCP] Startup error:', err?.message));
+    }, 120_000);
+    if (typeof (mcpStartupTimer as any).unref === 'function') (mcpStartupTimer as any).unref();
+    startupMark('mcp startup deferred');
+  }
 
-  cronScheduler.start();
-  console.log('[CronScheduler] Tick loop started.');
-  startupMark('cron started');
-  startAutoSettleScheduler();
-  startupMark('auto-settle scheduler started');
+  if (!skipInPreview('cron-scheduler')) {
+    cronScheduler.start();
+    console.log('[CronScheduler] Tick loop started.');
+    startupMark('cron started');
+  }
+  if (!skipInPreview('auto-settle')) {
+    startAutoSettleScheduler();
+    startupMark('auto-settle scheduler started');
+  }
   await yieldStartup();
 
   // Inject full handleChat-based agent runner into team-manager-runner
@@ -808,18 +818,20 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
     startupMark('team registry verification failed');
   }
 
-  heartbeatRunner.start();
-  startupMark('heartbeat runner started');
+  if (!skipInPreview('heartbeat')) {
+    heartbeatRunner.start();
+    startupMark('heartbeat runner started');
+    console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
+  }
   await yieldStartup();
 
   // Brain system — continuous self-reflection (thoughts every 6h, dream nightly)
-  try {
+  if (!skipInPreview('brain')) try {
     brainRunner.start();
     console.log('[BrainRunner] Brain system started.');
   } catch (brainErr: any) {
     console.warn('[BrainRunner] Could not start brain runner:', brainErr.message);
   }
-  console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
 
   startupMark('brain runner started');
   await yieldStartup();
@@ -893,8 +905,10 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   const telegramStartDelayMs = isHotRestartBoot
     ? hotTelegramStartDelayMs
     : shouldStartTelegramImmediately ? 0 : configuredTelegramStartDelayMs;
-  const telegramStartTimer = setTimeout(startTelegram, telegramStartDelayMs);
-  if (typeof (telegramStartTimer as any).unref === 'function') (telegramStartTimer as any).unref();
+  if (!skipInPreview('telegram')) {
+    const telegramStartTimer = setTimeout(startTelegram, telegramStartDelayMs);
+    if (typeof (telegramStartTimer as any).unref === 'function') (telegramStartTimer as any).unref();
+  }
   startupMark(telegramStartDelayMs > 0 ? `telegram startup deferred ${telegramStartDelayMs}ms` : 'telegram startup scheduled immediately');
   await yieldStartup();
 
@@ -902,7 +916,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   if (bootWorkspace) {
     scheduleStartupProviderWarmup();
 
-    try {
+    if (!skipInPreview('audit-materializer')) try {
       startAuditMaterializer({
         workspacePath: bootWorkspace,
         configDir: getConfig().getConfigDir(),
@@ -939,11 +953,11 @@ export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
   // Personal Chrome relay (ws://127.0.0.1:9234). It used to start lazily on the
   // first browser tool call, so after every restart the paired extension had
   // nothing to reconnect to and "Use my Chrome" failed as "not paired".
-  try { require('../user-chrome-relay').getUserChromeRelay(); } catch (err: any) {
+  if (!skipInPreview('user-chrome-relay')) try { require('../user-chrome-relay').getUserChromeRelay(); } catch (err: any) {
     console.warn('[user-chrome] relay could not start:', err?.message || err);
   }
 
-  void (async () => {
+  if (!skipInPreview('tailscale-funnel')) void (async () => {
     // Re-establish Tailscale funnel if remote access was enabled before this
     // gateway session started, then keep a watchdog running so it auto-recovers
     // if Tailscale is restarted or the funnel drops unexpectedly.
