@@ -3,7 +3,11 @@ import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { ensureMobileShellStyles } from './mobile-style-owners.js';
 import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
 import { renderMd, timeAgo } from '../utils.js';
-import { shareFileCache, shareOrDownloadFile } from '../share-file-cache.js';
+let shareFileCache, shareOrDownloadFile;
+let shareModulePromise;
+const loadShareModule = () => shareModulePromise ||= import('../share-file-cache.js').then(m => {
+  ({ shareFileCache, shareOrDownloadFile } = m);
+});
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
@@ -3689,24 +3693,14 @@ function canvasSheetToast(message, kind = 'info') {
   try { console.info('[mobile canvas]', message); } catch {}
 }
 
-function canvasFilenameFromDisposition(value, fallback = 'file') {
-  const header = String(value || '');
-  const utf = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf?.[1]) {
-    try { return decodeURIComponent(utf[1]).replace(/[/\\]+/g, '-'); } catch {}
-  }
-  const plain = /filename="?([^";]+)"?/i.exec(header);
-  return String(plain?.[1] || fallback || 'file').replace(/[/\\]+/g, '-');
-}
-
 function canvasSaveHref(tab) {
   return String(tab?.download || tab?.src || '').trim();
 }
 
 function warmCanvasSaveFile(tab) {
   const href = canvasSaveHref(tab);
-  if (!href || href === '#' || shareFileCache.has(href)) return;
-  shareFileCache.load(href, tab.name || 'file').catch(() => {});
+  if (!href || href === '#' || shareFileCache?.has(href)) return;
+  loadShareModule().then(() => shareFileCache.load(href, tab.name || 'file')).catch(() => {});
 }
 
 function reportCanvasSaveOutcome(outcome) {
@@ -3724,7 +3718,7 @@ async function saveActiveCanvasFile(api) {
   }
   // Already downloaded: open the share sheet before any await so iOS keeps the
   // tap's user activation (otherwise share() throws NotAllowedError).
-  const cached = shareFileCache.get(href);
+  const cached = shareFileCache?.get(href);
   if (cached) {
     try {
       reportCanvasSaveOutcome(await shareOrDownloadFile(cached));
@@ -3739,6 +3733,7 @@ async function saveActiveCanvasFile(api) {
     saveBtn.innerHTML = 'Preparing...';
   }
   try {
+    await loadShareModule();
     const file = await shareFileCache.load(href, tab.name || 'file');
     reportCanvasSaveOutcome(await shareOrDownloadFile(file));
   } catch (err) {

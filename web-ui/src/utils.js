@@ -9,7 +9,11 @@
  */
 
 import { installGameProjectCards } from './components/game-project-card.js';
-import { shareFileCache, shareOrDownloadFile } from './share-file-cache.js';
+let shareFileCache, shareOrDownloadFile;
+let shareModulePromise;
+const loadShareModule = () => shareModulePromise ||= import('./share-file-cache.js').then(m => {
+  ({ shareFileCache, shareOrDownloadFile } = m);
+});
 import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
 export { withoutInlineCards };
 
@@ -1232,8 +1236,8 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
     if (!isPhone()) return;
     const btn = video.closest?.('.prom-inline-figure')?.querySelector?.('.prom-inline-save');
     const src = btn?.getAttribute('data-save-src') || '';
-    if (!src || shareFileCache.has(src)) return;
-    shareFileCache.load(src, saveNameFor(btn.getAttribute('data-workspace-path')), 'video/mp4')
+    if (!src || shareFileCache?.has(src)) return;
+    loadShareModule().then(() => shareFileCache.load(src, saveNameFor(btn.getAttribute('data-workspace-path')), 'video/mp4'))
       .then(() => btn.classList.add('is-warm'))
       .catch(() => {});
   };
@@ -1293,7 +1297,7 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
     const name = saveNameFor(path);
     btn.classList.remove('is-ready', 'is-error');
     // Cached: share synchronously inside the tap so iOS keeps the activation.
-    const cached = shareFileCache.get(src);
+    const cached = shareFileCache?.get(src);
     if (cached) {
       try {
         const outcome = await shareOrDownloadFile(cached);
@@ -1308,6 +1312,7 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
     btn.dataset.busy = '1';
     btn.classList.add('is-busy');
     try {
+      await loadShareModule();
       const file = await shareFileCache.load(src, name, 'video/mp4');
       const outcome = await shareOrDownloadFile(file);
       // Activation expired during the download: the file is cached now, so

@@ -74,8 +74,8 @@ assert.equal(downloaded, 1, 'desktop falls back to download');
 // download-then-share path is gone from the canvas sheet.
 const shell = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-shell.js'), 'utf8');
 const utils = fs.readFileSync(path.join(root, 'web-ui/src/utils.js'), 'utf8');
-assert.match(shell, /shareFileCache\.get\(href\)/);
-assert.match(utils, /shareFileCache\.get\(src\)/);
+assert.match(shell, /shareFileCache\?\.get\(href\)/);
+assert.match(utils, /shareFileCache\?\.get\(src\)/);
 assert.doesNotMatch(shell, /navigator\.share\(\{ files: \[file\], title: filename \}\)/);
 
 console.log('test-inline-video-save: ok');
@@ -91,9 +91,9 @@ console.log('test-inline-video-save: ok');
   let loads = 0;
   const cache = { has: () => false, load: () => { loads += 1; return Promise.resolve(); } };
   const onVideoReady = new Function(
-    'document', 'navigator', 'HTMLVideoElement', 'shareFileCache',
+    'document', 'navigator', 'HTMLVideoElement', 'shareFileCache', 'loadShareModule',
     `${utilsSrc.slice(start, end)}\nreturn onVideoReady;`,
-  )({ body: { classList: { contains: () => true } } }, { userAgent: 'iPhone' }, FakeVideo, cache);
+  )({ body: { classList: { contains: () => true } } }, { userAgent: 'iPhone' }, FakeVideo, cache, () => Promise.resolve());
   let failedCleared = false;
   const btn = { getAttribute: (k) => (k === 'data-save-src' ? '/api/clip.mp4' : k === 'data-workspace-path' ? 'clip.mp4' : null), classList: { add() {} } };
   const figure = { classList: { remove() { failedCleared = true; } }, querySelector: () => btn };
@@ -107,6 +107,7 @@ console.log('test-inline-video-save: ok');
   assert.equal(failedCleared, true, 'metadata clears failure state');
   assert.equal(video.dataset.retries, '1', 'metadata does not reset retries');
   onVideoReady({ type: 'play', target: video });
+  await Promise.resolve();
   assert.equal(loads, 1, 'play warms exactly once');
   console.log('PASS inline video warms on play only (metadata: 0 warm, play: 1 warm)');
 }
