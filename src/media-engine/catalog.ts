@@ -446,6 +446,32 @@ export function listCuratedModels(): MediaModelManifest[] {
   return [...BUILTIN, ...readUserManifests()];
 }
 
+/** Duration values a model accepts. Explicit list wins; otherwise integers from min..max (max 15 options). */
+export function durationsFor(model: MediaModelManifest): number[] {
+  const l = model.limits || {};
+  if (l.durations?.length) return [...l.durations].sort((a, b) => a - b);
+  // No limits at all: unknown set of accepted durations. Caller keeps the input unchanged.
+  if (l.minDurationSec == null && l.maxDurationSec == null) return [];
+  const lo = Math.max(1, Math.ceil(l.minDurationSec ?? 1));
+  const hi = Math.floor(l.maxDurationSec ?? 10);
+  const out: number[] = [];
+  for (let s = lo; s <= hi && out.length < 15; s++) out.push(s);
+  return out;
+}
+
+/** Nearest accepted duration (ties go up). Unknown model -> unchanged. */
+export function snapDuration(model: MediaModelManifest | undefined, sec: number): number {
+  if (!model) return sec;
+  const opts = durationsFor(model);
+  if (!opts.length) return sec;
+  let best = opts[0];
+  for (const o of opts) {
+    const d = Math.abs(o - sec), bd = Math.abs(best - sec);
+    if (d < bd || (d === bd && o > best)) best = o;
+  }
+  return best;
+}
+
 export function getModel(id: string): MediaModelManifest | undefined {
   const wanted = String(id || '').trim();
   return listModels().find((m) => m.id === wanted);
