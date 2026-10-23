@@ -46,6 +46,12 @@ export function createShareFileCache({
         throw err;
       }
       const blob = await res.blob();
+      // Content-Length can be missing (chunked/Funnel): check the real size too.
+      if (blob.size > maxBytes) {
+        const err = new Error('File is too large to save from here');
+        err.name = 'TooLargeError';
+        throw err;
+      }
       const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : fallbackType;
       const Ctor = FileCtor || globalThis.File;
       const file = new Ctor([blob], String(name || 'file'), { type });

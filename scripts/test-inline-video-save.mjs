@@ -79,3 +79,46 @@ assert.match(utils, /shareFileCache\.get\(src\)/);
 assert.doesNotMatch(shell, /navigator\.share\(\{ files: \[file\], title: filename \}\)/);
 
 console.log('test-inline-video-save: ok');
+
+// Regression (behavioral): inline video warms on play only. loadedmetadata must
+// clear a stale failure state and must NOT warm or touch retries; play warms once.
+{
+  const utilsSrc = fs.readFileSync(path.join(root, 'web-ui/src/utils.js'), 'utf8');
+  const start = utilsSrc.indexOf('  const isPhone = ()');
+  const end = utilsSrc.indexOf("  document.addEventListener('loadedmetadata', onVideoReady, true);");
+  assert.ok(start > 0 && end > start, 'inline video handler block found in utils.js');
+  class FakeVideo {}
+  let loads = 0;
+  const cache = { has: () => false, load: () => { loads += 1; return Promise.resolve(); } };
+  const onVideoReady = new Function(
+    'document', 'navigator', 'HTMLVideoElement', 'shareFileCache',
+    `${utilsSrc.slice(start, end)}\nreturn onVideoReady;`,
+  )({ body: { classList: { contains: () => true } } }, { userAgent: 'iPhone' }, FakeVideo, cache);
+  let failedCleared = false;
+  const btn = { getAttribute: (k) => (k === 'data-save-src' ? '/api/clip.mp4' : k === 'data-workspace-path' ? 'clip.mp4' : null), classList: { add() {} } };
+  const figure = { classList: { remove() { failedCleared = true; } }, querySelector: () => btn };
+  const video = Object.assign(Object.create(FakeVideo.prototype), {
+    classList: { contains: () => true },
+    closest: () => figure,
+    dataset: { retries: '1' },
+  });
+  onVideoReady({ type: 'loadedmetadata', target: video });
+  assert.equal(loads, 0, 'metadata does not warm');
+  assert.equal(failedCleared, true, 'metadata clears failure state');
+  assert.equal(video.dataset.retries, '1', 'metadata does not reset retries');
+  onVideoReady({ type: 'play', target: video });
+  assert.equal(loads, 1, 'play warms exactly once');
+  console.log('PASS inline video warms on play only (metadata: 0 warm, play: 1 warm)');
+}
+
+// Regression: oversize body rejected even without Content-Length (chunked/Funnel).
+{
+  const big = mod.createShareFileCache({
+    fetchImpl: async () => ({ ok: true, headers: new Map(), blob: async () => ({ size: 200, type: 'video/mp4' }) }),
+    FileCtor: FakeFile,
+    maxBytes: 100,
+  });
+  await assert.rejects(big.load('/api/big.mp4', 'big.mp4'), (err) => err.name === 'TooLargeError');
+  assert.equal(big.has('/api/big.mp4'), false, 'oversize file is not cached');
+  console.log('PASS oversize blob without Content-Length rejected as TooLargeError');
+}

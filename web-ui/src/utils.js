@@ -1241,7 +1241,10 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
     const video = event.target;
     if (!(video instanceof HTMLVideoElement) || !video.classList.contains('prom-inline-media')) return;
     video.closest('.prom-inline-figure')?.classList.remove('is-failed');
-    warmInlineVideo(video);
+    // Warm only on play. loadedmetadata just clears a stale failure state:
+    // warming on every rendered video would prefetch multi-MB files nobody plays.
+    // Metadata never resets retries, so a failing video cannot loop forever.
+    if (event.type === 'play') warmInlineVideo(video);
   };
   document.addEventListener('loadedmetadata', onVideoReady, true);
   document.addEventListener('play', onVideoReady, true);
