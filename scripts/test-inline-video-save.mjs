@@ -55,8 +55,13 @@ await assert.rejects(cache.load('/huge.mp4', 'h.mp4'), (e) => e.name === 'TooLar
 const file = new FakeFile([], 'x.mp4', { type: 'video/mp4' });
 const setNav = (nav) => Object.defineProperty(globalThis, 'navigator', { value: nav, configurable: true, writable: true });
 let shared = null;
+let shareInvokedSynchronously = false;
 setNav({ canShare: () => true, share: async (data) => { shared = data; } });
-assert.equal(await mod.shareOrDownloadFile(file, { download: () => assert.fail('no download') }), 'shared');
+// Activation proof: navigator.share must be invoked before the first await.
+const pendingShare = mod.shareOrDownloadFile(file, { download: () => assert.fail('no download') });
+shareInvokedSynchronously = shared !== null;
+assert.equal(shareInvokedSynchronously, true, 'navigator.share must be called synchronously, before any await');
+assert.equal(await pendingShare, 'shared');
 assert.deepEqual(Object.keys(shared), ['files'], 'no title/text: iOS hides Save Video otherwise');
 
 setNav({ canShare: () => true, share: async () => { const e = new Error('not allowed'); e.name = 'NotAllowedError'; throw e; } });
@@ -73,7 +78,7 @@ assert.equal(downloaded, 1, 'desktop falls back to download');
 // Wiring: both save surfaces use the shared cache, and the old pre-share
 // download-then-share path is gone from the canvas sheet.
 const shell = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-shell.js'), 'utf8');
-const utils = fs.readFileSync(path.join(root, 'web-ui/src/utils.js'), 'utf8');
+const utils = fs.readFileSync(path.join(root, 'web-ui/src/inline-video-controls.js'), 'utf8');
 assert.match(shell, /shareFileCache\?\.get\(href\)/);
 assert.match(utils, /shareFileCache\?\.get\(src\)/);
 assert.doesNotMatch(shell, /navigator\.share\(\{ files: \[file\], title: filename \}\)/);
@@ -83,7 +88,7 @@ console.log('test-inline-video-save: ok');
 // Regression (behavioral): inline video warms on play only. loadedmetadata must
 // clear a stale failure state and must NOT warm or touch retries; play warms once.
 {
-  const utilsSrc = fs.readFileSync(path.join(root, 'web-ui/src/utils.js'), 'utf8');
+  const utilsSrc = fs.readFileSync(path.join(root, 'web-ui/src/inline-video-controls.js'), 'utf8');
   const start = utilsSrc.indexOf('  const isPhone = ()');
   const end = utilsSrc.indexOf("  document.addEventListener('loadedmetadata', onVideoReady, true);");
   assert.ok(start > 0 && end > start, 'inline video handler block found in utils.js');
