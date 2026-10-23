@@ -9500,13 +9500,13 @@ button.source-panel-row:hover {
 .prom-inline-save.is-busy { opacity: .45; }
 .prom-inline-save.is-done { color: var(--prom-success, #22c55e); }
 .prom-inline-save.is-error { color: var(--prom-danger, #ef4444); }
-.prom-inline-figure.is-video { position: relative; }
+.prom-inline-figure.is-video{position:relative}
 .prom-inline-figure.is-video.is-failed::after {
   content: 'Video didn\2019t load. Click to retry';
-  position: absolute; left: 0; right: 0; top: 0; height: min(200px, 40vh);
+  position:absolute;left:0;right:0;top:0;height:min(200px,40vh);
   display: flex; align-items: center; justify-content: center;
   border-radius: 14px; background: rgba(0,0,0,.55); color: #fff;
-  font-size: 14px; font-weight: 600; cursor: pointer;
+  font-size:14px;font-weight:600;cursor:pointer;
 }
 
 .prom-inline-caption {
