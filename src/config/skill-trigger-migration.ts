@@ -277,17 +277,74 @@ export function runTriggerPolicyMigration(opts: TriggerMigrationOptions): Trigge
   return { ...base, applied: true, snapshotDir, counts: countItems(plan.items) };
 }
 
-/** Restore every file recorded in a snapshot manifest, byte-for-byte. */
-export function rollbackTriggerPolicyMigration(snapshotDir: string): { restored: string[] } {
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+const sha256Text = (text: string): string => crypto.createHash('sha256').update(text).digest('hex');
+
+export interface TriggerRollbackReport {
+  restored: string[];
+  /** Targets changed (or removed) since apply; left untouched so later user edits survive. */
+  conflicts: Array<{ id: string; target: string; reason: string }>;
+}
+
+/**
+ * Restore each file recorded in a snapshot manifest, byte-for-byte, but ONLY
+ * where the current file still holds the bytes this migration wrote
+ * (afterSha256). Anything edited since apply is reported in conflicts[] and
+ * left alone. Snapshot entries, targets and snapshot bytes are validated before
+ * any write; each restore is atomic (tmp + rename).
+ */
+export function rollbackTriggerPolicyMigration(snapshotDir: string): TriggerRollbackReport {
   const manifestPath = path.join(snapshotDir, 'manifest.json');
-  const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { writes: Array<{ id: string; target: string }> };
-  const restored: string[] = [];
-  for (const w of data.writes) {
-    const before = fs.readFileSync(path.join(snapshotDir, w.id, 'skill.json'), 'utf-8');
-    fs.writeFileSync(w.target, before, 'utf-8');
-    restored.push(w.target);
+  const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { version?: unknown; writes?: unknown };
+  if (data.version !== 1 || !Array.isArray(data.writes)) {
+    throw new Error(`rollback: invalid snapshot manifest at ${manifestPath}`);
   }
-  return { restored };
+
+  const plan = data.writes.map((raw) => {
+    const w = (raw ?? {}) as Record<string, unknown>;
+    const id = w.id;
+    const target = w.target;
+    const beforeSha = w.beforeSha256;
+    const afterSha = w.afterSha256;
+    if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/i.test(id) || id.includes('..')) {
+      throw new Error(`rollback: invalid snapshot id ${String(id)}`);
+    }
+    if (
+      typeof target !== 'string' ||
+      !path.isAbsolute(target) ||
+      path.basename(target) !== 'skill.json' ||
+      path.basename(path.dirname(target)) !== id
+    ) {
+      throw new Error(`rollback: invalid target for ${id}`);
+    }
+    if (typeof beforeSha !== 'string' || !SHA256_HEX.test(beforeSha) || typeof afterSha !== 'string' || !SHA256_HEX.test(afterSha)) {
+      throw new Error(`rollback: invalid sha256 fields for ${id}`);
+    }
+    const snapFile = path.join(snapshotDir, id, 'skill.json');
+    if (!fs.existsSync(snapFile)) throw new Error(`rollback: snapshot bytes missing for ${id}`);
+    const before = fs.readFileSync(snapFile, 'utf-8');
+    if (sha256Text(before) !== beforeSha) throw new Error(`rollback: snapshot bytes for ${id} fail sha256 check`);
+    return { id, target, before, afterSha };
+  });
+
+  const restored: string[] = [];
+  const conflicts: TriggerRollbackReport['conflicts'] = [];
+  for (const p of plan) {
+    if (!fs.existsSync(p.target)) {
+      conflicts.push({ id: p.id, target: p.target, reason: 'file removed since apply; not recreated' });
+      continue;
+    }
+    const current = fs.readFileSync(p.target, 'utf-8');
+    if (sha256Text(current) !== p.afterSha) {
+      conflicts.push({ id: p.id, target: p.target, reason: 'changed since apply; later edit preserved' });
+      continue;
+    }
+    const tmp = `${p.target}.rollback-tmp`;
+    fs.writeFileSync(tmp, p.before, 'utf-8');
+    fs.renameSync(tmp, p.target);
+    restored.push(p.target);
+  }
+  return { restored, conflicts };
 }
 
 /**

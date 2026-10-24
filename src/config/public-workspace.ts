@@ -155,12 +155,19 @@ export function seedBundledSkillsIntoDir(targetSkillsDir: string, bundledSkillsD
   // Trigger-only upgrade for skills already installed. Touches only skill.json triggerPolicy
   // on unchanged shipped manifests; never overwrites overlays, frontmatter, or resources.
   // No caller baseline is required: the shipped bundle yields a validated one.
-  const baseline = triggerBaseline ?? deriveTriggerBaseline(bundledSkillsDir).baseline;
-  const upgrade = runTriggerPolicyMigration({ skillsDir: targetSkillsDir, bundledSkillsDir, baseline, apply: true });
-  if (upgrade.fatal) console.warn(`[Skills] Trigger policy upgrade skipped: ${upgrade.fatal}`);
-  const pending = upgrade.items.filter(item => ['manual', 'preserved-custom', 'preserved-overlay'].includes(item.status));
-  if (pending.length) console.info(`[Skills] Trigger policy migration preserved ${pending.length} customized/ambiguous skills (${pending.slice(0, 8).map(item => item.id).join(', ')}). Review with scripts/migrate-skill-trigger-policies.mjs before applying changes.`);
-  if (upgrade.counts.add) console.info(`[Skills] Upgraded ${upgrade.counts.add} unchanged trigger policies; backup: ${upgrade.snapshotDir}`);
+  // Nonfatal: seeding above is already complete, and any filesystem failure here (e.g. an
+  // unwritable snapshot root) must not abort the caller or skip a later seed pass.
+  try {
+    const baseline = triggerBaseline ?? deriveTriggerBaseline(bundledSkillsDir).baseline;
+    const upgrade = runTriggerPolicyMigration({ skillsDir: targetSkillsDir, bundledSkillsDir, baseline, apply: true });
+    if (upgrade.fatal) console.warn(`[Skills] Trigger policy upgrade skipped: ${upgrade.fatal}`);
+    const pending = upgrade.items.filter(item => ['manual', 'preserved-custom', 'preserved-overlay'].includes(item.status));
+    if (pending.length) console.info(`[Skills] Trigger policy migration preserved ${pending.length} customized/ambiguous skills (${pending.slice(0, 8).map(item => item.id).join(', ')}). Review with scripts/migrate-skill-trigger-policies.mjs before applying changes.`);
+    if (upgrade.counts.add) console.info(`[Skills] Upgraded ${upgrade.counts.add} unchanged trigger policies; backup: ${upgrade.snapshotDir}`);
+  } catch (err) {
+    console.warn(`[Skills] Trigger policy upgrade failed (seeding continues): ${(err as Error).message}`);
+  }
+
 
 
   if (seeded > 0) {

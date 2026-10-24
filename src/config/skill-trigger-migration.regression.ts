@@ -150,3 +150,68 @@ function seedDefaultDerivesBaseline(): void {
 
 seedDefaultDerivesBaseline();
 main();
+seedBackupFaultSurvives();
+rollbackPreservesChangedSinceApply();
+
+function seedBackupFaultSurvives(): void {
+  // Default snapshot root is <parent of skillsDir>/.trigger-policy-backups. A regular file at
+  // that path makes the snapshot mkdir fail deterministically on every OS (no permission bits needed).
+  const t = setup();
+  fs.mkdirSync(path.join(t.bundled, 'fresh-skill'), { recursive: true });
+  fs.writeFileSync(path.join(t.bundled, 'fresh-skill', 'SKILL.md'), '# fresh\n');
+  fs.writeFileSync(path.join(t.root, '.trigger-policy-backups'), 'blocker');
+  const before = readInstalled(t.skills);
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+  try {
+    assert.doesNotThrow(() => seedBundledSkillsIntoDir(t.skills, t.bundled, t.baseline), 'first boot must not throw');
+    assert.doesNotThrow(() => seedBundledSkillsIntoDir(t.skills, t.bundled, t.baseline), 'second boot must not throw');
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(warnings.some((w) => w.includes('Trigger policy upgrade failed')), 'fault is observable as a warning');
+  assert.equal(fs.readFileSync(path.join(t.skills, 'fresh-skill', 'SKILL.md'), 'utf-8'), '# fresh\n', 'normal seeding completed');
+  assert.equal(readInstalled(t.skills), before, 'failed upgrade wrote nothing');
+}
+
+function rollbackPreservesChangedSinceApply(): void {
+  // Edited after apply: rollback must not overwrite it; it is reported as a conflict.
+  const t = setup();
+  const applied = runTriggerPolicyMigration({ skillsDir: t.skills, bundledSkillsDir: t.bundled, baseline: t.baseline, apply: true, backupRoot: t.backupRoot });
+  const target = path.join(t.skills, 'portrait-skill', 'skill.json');
+  const edited = JSON.stringify({ ...SHIPPED, triggerPolicy: POLICY, description: 'user edit after apply' }, null, 2);
+  fs.writeFileSync(target, edited);
+  const r = rollbackTriggerPolicyMigration(applied.snapshotDir!);
+  assert.deepEqual(r.restored, [], 'changed file is not restored');
+  assert.equal(r.conflicts.length, 1);
+  assert.equal(r.conflicts[0].id, 'portrait-skill');
+  assert.equal(readInstalled(t.skills), edited, 'user edit preserved');
+  assert.equal(fs.existsSync(`${target}.rollback-tmp`), false, 'no tmp file left behind');
+
+  // Unchanged since apply: restored byte-for-byte, no conflicts.
+  const u = setup();
+  const before = readInstalled(u.skills);
+  const a = runTriggerPolicyMigration({ skillsDir: u.skills, bundledSkillsDir: u.bundled, baseline: u.baseline, apply: true, backupRoot: u.backupRoot });
+  const ok = rollbackTriggerPolicyMigration(a.snapshotDir!);
+  assert.deepEqual(ok.conflicts, []);
+  assert.deepEqual(ok.restored, [path.join(u.skills, 'portrait-skill', 'skill.json')]);
+  assert.equal(readInstalled(u.skills), before, 'unchanged file restored');
+
+  // Tampered snapshot bytes: rejected before any write.
+  const x = setup();
+  const b = runTriggerPolicyMigration({ skillsDir: x.skills, bundledSkillsDir: x.bundled, baseline: x.baseline, apply: true, backupRoot: x.backupRoot });
+  fs.writeFileSync(path.join(b.snapshotDir!, 'portrait-skill', 'skill.json'), 'tampered');
+  assert.throws(() => rollbackTriggerPolicyMigration(b.snapshotDir!), /fail sha256/);
+  assert.deepEqual(JSON.parse(readInstalled(x.skills)).triggerPolicy, POLICY, 'migrated file untouched by rejected rollback');
+
+  // Target that does not belong to its entry id: rejected before any write.
+  const y = setup();
+  const c = runTriggerPolicyMigration({ skillsDir: y.skills, bundledSkillsDir: y.bundled, baseline: y.baseline, apply: true, backupRoot: y.backupRoot });
+  const mPath = path.join(c.snapshotDir!, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(mPath, 'utf-8'));
+  m.writes[0].target = path.join(y.skills, 'other-skill', 'skill.json');
+  fs.writeFileSync(mPath, JSON.stringify(m));
+  assert.throws(() => rollbackTriggerPolicyMigration(c.snapshotDir!), /invalid target/);
+}
+
