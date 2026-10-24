@@ -1036,6 +1036,9 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     prompt: prompt || undefined,
     triggers,
     promptSignals,
+    // Raw authored triggerPolicy (even if invalid) so the API roundtrips the
+    // value that was written, not the internal validation wrapper.
+    ...(triggerPolicy.present ? { triggerPolicy: rawTriggerPolicy } : {}),
     categories,
     requiredTools,
     requires,

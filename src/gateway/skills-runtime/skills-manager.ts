@@ -981,7 +981,12 @@ export class SkillsManager {
       promptPath: skill.promptPath,
       triggers: skill.triggers,
       promptSignals: skill.promptSignals,
-      triggerPolicy: skill.triggerPolicy,
+      // Raw API representation: the authored policy value (roundtrips), never the
+      // internal validation wrapper. Errors are reported separately.
+      triggerPolicy: Object.prototype.hasOwnProperty.call(skill.manifest || {}, 'triggerPolicy')
+        ? (skill.manifest as Record<string, unknown>).triggerPolicy
+        : undefined,
+      triggerPolicyErrors: skill.triggerPolicy?.errors || [],
       categories: skill.categories,
       requiredTools: skill.requiredTools,
       requires: skill.requires,
@@ -1007,6 +1012,11 @@ export class SkillsManager {
     const skillId = sanitizeSkillId(String(manifest?.id || existing?.id || id));
     const rootDir = existing?.rootDir || path.join(this.skillsDir, skillId);
     if (!fs.existsSync(rootDir)) throw new Error(`Skill "${id}" not found`);
+    // Validate authoring triggerPolicy BEFORE any filesystem write (snapshot included).
+    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggerPolicy') && manifest.triggerPolicy !== undefined) {
+      const earlyPolicy = validateSkillTriggerPolicy(manifest.triggerPolicy);
+      if (earlyPolicy.errors.length) throw new Error(`Invalid skill triggerPolicy: ${earlyPolicy.errors.join(', ')}`);
+    }
     const beforeHash = hashSkillDirectory(rootDir);
     const snapshotDir = this.snapshotSkill(existing || null, rootDir, 'manifest-overlay');
     const overlayPath = getSkillOverlayPath(rootDir, skillId);
@@ -1155,6 +1165,7 @@ export class SkillsManager {
     categories?: string[];
     requiredTools?: string[];
     implicitInvocation?: boolean;
+    triggerPolicy?: unknown;
     instructions: string;
   }): Skill {
     const id = sanitizeSkillId(data.id);
@@ -1163,6 +1174,8 @@ export class SkillsManager {
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
     const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
     if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    const policyValidation = validateSkillTriggerPolicy(data.triggerPolicy);
+    if (policyValidation.errors.length) throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
     // createSkill previously hardcoded these to [], so a caller that supplied
     // categories/requiredTools lost them with no error. Normalize and persist.
     const createCategories = normalizeSkillStringList(data.categories);
@@ -1230,6 +1243,7 @@ export class SkillsManager {
     if (typeof data.implicitInvocation === 'boolean') {
       manifest.implicitInvocation = data.implicitInvocation;
     }
+    if (policyValidation.present) manifest.triggerPolicy = data.triggerPolicy;
     // createSkill() has no permission input. Do not broaden the old contract
     // by claiming workspace-write access for a newly created skill.
     assertSkillScanAllowed(scanSkillText(JSON.stringify(manifest, null, 2), 'skill.json'), `Skill "${id}"`);
@@ -1276,6 +1290,7 @@ export class SkillsManager {
     triggerNegativePrompts?: string[];
     resources?: Array<{ path: string; content: string; type?: string; description?: string }>;
     overwrite?: boolean;
+    triggerPolicy?: unknown;
   }): Skill {
     const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
@@ -1283,6 +1298,8 @@ export class SkillsManager {
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
     const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
     if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    const policyValidation = validateSkillTriggerPolicy(data.triggerPolicy);
+    if (policyValidation.errors.length) throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
     if (triggerValidation.triggers.length || promptSignalValidation.signals) {
       const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
       const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
@@ -1334,6 +1351,7 @@ export class SkillsManager {
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
       promptSignals: promptSignalValidation.signals,
+      ...(policyValidation.present ? { triggerPolicy: data.triggerPolicy } : {}),
       categories: data.categories || [],
       requiredTools: data.requiredTools || [],
       requires: data.requires,
@@ -1433,6 +1451,10 @@ export class SkillsManager {
   async exportBundle(id: string, outputPath?: string): Promise<{ path: string; bytes: number }> {
     const skill = this.get(id);
     if (!skill) throw new Error(`Skill "${id}" not found`);
+    // Never export a bundle whose triggerPolicy is present-but-invalid (fail-closed).
+    if (skill.triggerPolicy?.errors?.length) {
+      throw new Error(`Skill "${id}" has invalid triggerPolicy: ${skill.triggerPolicy.errors.join(', ')}`);
+    }
     const JSZip = require('jszip');
     const zip = new JSZip();
     const root = path.resolve(skill.rootDir);
@@ -1529,6 +1551,13 @@ export class SkillsManager {
       if (!roots.length) throw new Error('No skill.json or SKILL.md found in bundle source');
       if (options?.id && roots.length !== 1) throw new Error('id override can only be used when importing a single skill bundle');
 
+      // Pre-pass: reject any invalid triggerPolicy across ALL roots before the first write.
+      for (const root of roots) {
+        const prePkg = loadSkillPackage(root, options?.id || path.basename(root));
+        if (prePkg?.triggerPolicy?.errors?.length) {
+          throw new Error(`Invalid skill bundle "${prePkg.id}" triggerPolicy: ${prePkg.triggerPolicy.errors.join(', ')}`);
+        }
+      }
       const installed: Skill[] = [];
       for (const root of roots) {
         const pkg = loadSkillPackage(root, options?.id || path.basename(root));
