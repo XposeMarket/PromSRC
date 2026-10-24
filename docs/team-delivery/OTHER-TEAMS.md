@@ -49,6 +49,16 @@ Gauntlet is a test fixture, not staff and not a KPI.
 
 No new team and no new schedule is created by this pack.
 
+## X team mapping: README, team description, teamContext, roles (Growth, Scout, Sage)
+
+- Live X README, team description, and teamContext: patch only the stale statements that say each item needs owner approval or that members never post, using the staged clause above. Keep the rest.
+- Growth, Scout, and Sage role text: keep research, scouting, and writing steps. Remove only the per-item-approval or never-draft clause. Their output is drafts only; they do not post.
+- Editor role (main chat): keeps selection, caps, kill switch, and approval. It is the only X poster.
+
+## Roblox quality mapping
+
+- Live quality bar (section 7) and TEAM QA references: use `roblox/QUALITY-ALIGNMENT.md`. Replace the older reference-floor and older eight-category clauses together (both are superseded). Stop on any unreconciled mismatch.
+
 ## Authority boundary (all teams)
 
-Team members never post, publish, spend, or change public release state. Only the main-chat editor acts externally, and only through the existing runtime approval gates. Prompt text does not grant permission.
+X team members never post, reply, like, repost, follow, or DM. Only the main-chat X editor acts externally on X, through the existing runtime approval gates. Roblox responsible roles may publish under standing owner authorization after QA PASS. Spending stays owner-only. Prompt text does not grant permission.

@@ -18,7 +18,7 @@ const REQUIRED_FILES = [
 ];
 
 const TEAMS = ['Roblox Studio', 'X Growth', 'Perf QA', 'Teams Gauntlet'];
-const ROLES = ['Forge', 'Probe', 'Designer', 'manager'];
+const ROLES = ['Forge', 'Probe', 'Designer', 'manager', 'Growth', 'Scout', 'Sage'];
 const SCHEDULES = [
   'Roblox Studio: Build Sprint (autonomous)',
   'Roblox Studio: Daily Pulse',
@@ -28,6 +28,7 @@ const SCHEDULES = [
 ];
 const OPERATIONS = ['replace', 'patch', 'no-op'];
 const REQUIRED_SECTIONS = {
+  'roblox/TEAM.md': ['DESIGN', 'REFS', 'TESTPLAN', 'BUILD', 'ledger', 'growth', 'OpenAI', 'toolbox', 'server-authoritative', 'kill', 'escalat'],
   'roblox/PIPELINE.md': ['Rollback', 'Snapshot', 'Evidence', 'Current-state'],
   'README.md': ['Rollback', 'Unique', 'Target', 'Preconditions'],
 };
@@ -90,6 +91,12 @@ export function checkPack(files) {
       if (!files[rel]?.toLowerCase().includes(w.toLowerCase())) errors.push(`missing "${w}" in ${rel}`);
     }
   }
+  // Contradictory clause: a blanket "all team members do not publish/post" ban conflicts with
+  // Roblox standing authorization and with X-only posting limits. Checks the clause, not a phrase.
+  const BLANKET_BAN = /\b(all|every)\s+(team\s+)?members?\b[^\n]{0,60}\b(do not|never|must not|may not)\s+(post|publish)/i;
+  for (const [rel, text] of Object.entries(files)) {
+    if (BLANKET_BAN.test(text)) errors.push(`contradictory blanket publish/post ban in ${rel}`);
+  }
   // Unresolved-target rule: the pack must say what happens when a name does not resolve uniquely.
   if (!/zero or multiple|more than one|ambiguous/i.test(files['README.md'] ?? '')) {
     errors.push('unresolved-target rule missing: README must state zero/multiple matches fail closed');
@@ -135,6 +142,11 @@ test('negative: missing rollback fails', () => {
 test('negative: live-activation claim fails', () => {
   const files = loadPack({ 'README.md': loadPack()['README.md'] + '\nThe X clause has been applied to the live Morning Brief.\n' });
   assert.ok(checkPack(files).some((e) => e.includes('live-activation claim')));
+});
+
+test('negative: blanket all-team publish ban contradicting standing authorization fails', () => {
+  const files = loadPack({ 'README.md': loadPack()['README.md'] + '\nAll team members do not publish public releases.\n' });
+  assert.ok(checkPack(files).some((e) => e.includes('blanket')));
 });
 
 test('negative: prohibited local path fails', () => {

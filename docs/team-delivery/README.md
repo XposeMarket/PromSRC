@@ -50,6 +50,20 @@ Operations: `replace` (write the full staged text into that target), `patch` (ch
 
 Unresolved targets fail closed: if a display name does not resolve, skip that target and stop for fresh review.
 
+## File and logical-path mapping (portable; no private paths)
+
+| Live object (logical path or display name) | Staged source | Operation |
+|---|---|---|
+| Roblox team contract: manager, Forge, Probe, Designer role text | `roblox/TEAM.md` (role sections) | replace only the role sections that conflict; keep non-conflicting role text |
+| Roblox pipeline and schedule clauses | `roblox/PIPELINE.md` | patch the named schedule clauses |
+| Roblox quality bar (live `projects/roblox-game/QUALITY-BAR.md`, section 7) | `roblox/QUALITY-ALIGNMENT.md` | reconcile Q1–Q10 thresholds (each at least 7, average at least 8); stop on any unreconciled mismatch |
+| Roblox TEAM QA references (live `projects/roblox-game/TEAM.md`) | `roblox/TEAM.md` and `roblox/QUALITY-ALIGNMENT.md` | replace stale reference-floor and Q1–Q8 clauses together |
+| Roblox pipeline (live `projects/roblox-game/PIPELINE.md`) | `roblox/PIPELINE.md` | replace the stale throttle and release wording |
+| X Growth skill source (`x-growth-engine`) | `OTHER-TEAMS.md` (authority clause) | patch two conflicting clauses only; no catalog change |
+| X Growth README and team description, teamContext (live `projects/x-growth/README.md`, `EDITOR.md`) | `OTHER-TEAMS.md` (X authority mapping) | patch stale authority wording only; preserve other text |
+| X Growth roles: Growth, Scout, Sage | `OTHER-TEAMS.md` (X role mapping) | keep role text; remove only the never-post or per-item-approval clause |
+| Perf QA and Teams Gauntlet contracts | `OTHER-TEAMS.md` | replace contract text; no schedule |
+
 ## Unique resolution (activation only, never in the repo)
 
 1. Search the current connector and team inventory by the exact display name.
@@ -61,7 +75,7 @@ Resolved IDs go only into the operator's private change record.
 
 ## Rollout preconditions
 
-1. Separate, explicit owner authorization for each target.
+1. One owner approval covering the named pack targets listed in the target map (not one approval per setting). Roblox standing authorization covers owned publish after QA PASS and does not need a new per-release confirmation.
 2. Active runs for the target are drained or settled. Do not rewrite or duplicate an active run.
 3. A local pre-change snapshot of the complete current text is captured privately for that target.
 4. Staged anchors are compared against the live text. A mismatch means a stop, not a best guess.
@@ -75,8 +89,10 @@ Pause the affected schedule with its supported control. Restore the exact pre-ch
 
 ## Authority boundaries
 
-- Team members research, build, review, and save drafts. They do not post, publish, spend, or change public release state.
-- Public release is separate from restricted staging. Each needs its own owner authority and its own tool-level approval.
+- All four teams: members research, build, review, and save drafts.
+- X Growth members never post, reply, like, repost, follow, or DM. Only the designated main-chat X editor posts, within caps and runtime approvals.
+- Roblox responsible roles may publish an owned version under standing owner authorization after an independent version-bound QA PASS and the actual tool approvals. No new per-release owner confirmation is required while that standing authorization is valid.
+- Spending and paid third-party tools stay owner-only. Restricted staging and public release are separate gates.
 - Prompt text does not grant platform permission and does not bypass runtime approval gates.
 
 ## Reviewing this PR

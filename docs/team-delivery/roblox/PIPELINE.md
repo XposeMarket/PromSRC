@@ -37,7 +37,7 @@ Each "Before" quotes only the anchor line. Everything not listed stays unchanged
 ### Roblox Studio: Build Sprint (autonomous) — patch
 
 - Before: `Do ONE milestone per sprint`
-- After: `Each scheduled run is a checkpoint. Reconcile active task IDs and status first. Advance at most one bounded accepted increment, then record the result. Do not start a second task for work already in progress. There is no per-sprint milestone cap.`
+- After: `Each scheduled run is a checkpoint. Reconcile active task IDs and status first. Continue successive ready bounded increments while budget remains; at budget end, checkpoint with the exact resumable next action. Do not start a second task for work already in progress. There is no per-sprint milestone cap.`
 - Before (quality line): the older reference floor wording (superseded)
 - After: `Score Q1–Q10 for the exact version. Each category at least 7, average at least 8. A category under 7 or an average under 8 is a FIX.`
 - Before (release line, if present): any wording that lets a staging or private test imply public release
