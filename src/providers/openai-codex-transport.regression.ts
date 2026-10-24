@@ -108,6 +108,27 @@ async function main(): Promise<void> {
   assert.equal(aborted.calls, 1, 'an aborted request must not be retried, even for a terminated TypeError');
   assert.ok(!(aborted.error instanceof CodexIncompleteStreamError), 'an aborted request must not be reclassified as a retryable stream failure');
 
+  // Completed then terminated: a socket termination after response.completed must keep the completed snapshot and must not re-send.
+  const completedChunk = `data: ${JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'Final answer.' }] }], usage: { input_tokens: 3, output_tokens: 2 } } })}\n\n`;
+  const completedThenTerminated = await chatWithFetch(() => erroringResponse(socketTerminated(), [completedChunk]));
+  assert.equal(completedThenTerminated.calls, 1, 'a socket termination after response.completed must not re-send the request');
+  assert.equal(completedThenTerminated.result?.message?.content, 'Final answer.', 'the completed snapshot must be preserved after a late socket termination');
+
+  // Completed then nontransport error: must propagate unchanged and must not be retried.
+  const completedThenBoom = await chatWithFetch(() => erroringResponse(new Error('boom'), [completedChunk]));
+  assert.equal(completedThenBoom.calls, 1, 'a nontransport error after response.completed must not be retried');
+  assert.equal((completedThenBoom.error as Error | undefined)?.message, 'boom', 'a nontransport error after response.completed must propagate unchanged');
+
+  // Completed then abort: an abort raised before the termination must not be retried or reclassified.
+  const completedAborter = new AbortController();
+  const completedThenAbort = await chatWithFetch(() => {
+    completedAborter.abort();
+    return erroringResponse(new TypeError('terminated'), [completedChunk]);
+  }, completedAborter);
+  assert.equal(completedThenAbort.calls, 1, 'an aborted request after response.completed must not be retried');
+  assert.ok(!(completedThenAbort.error instanceof CodexIncompleteStreamError), 'an aborted request after response.completed must not be reclassified as a retryable stream failure');
+
+
   console.log('openai-codex transport regression: ok');
 }
 

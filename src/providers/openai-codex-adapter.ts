@@ -738,6 +738,8 @@ export class OpenAICodexAdapter implements LLMProvider {
           // Classify it as a transient incomplete stream so the single existing retry applies.
           // Aborts and nontransport errors are rethrown unchanged.
           if (!options?.abortSignal?.aborted && isTransientCodexReadError(readErr)) {
+            // After response.completed the snapshot is already complete: end the stream instead of retrying (no replay).
+            if (sawCompleted) return { done: true as const, value: undefined };
             throw new CodexIncompleteStreamError('openai_codex stream terminated before response.completed.', {
               sawCompleted,
               eventTypes: eventTypes.slice(),
