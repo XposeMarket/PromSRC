@@ -153,3 +153,9 @@ When the UI disagrees with tool output, inspect `teams.router.ts` route response
 - [08 Agents, tasks & background](08-agents-tasks-background.md) · [10 Scheduling, automations & triggers](10-scheduling-automations-triggers.md) · [11 Memory, notes & Brain](11-memory-notes-brain.md)
 - [05 Tools & categories](05-tools-and-categories.md) · [25 Sharp edges](25-sharp-edges.md)
 - [tools inventory](generated/tools.md) · [routes inventory](generated/routes.md) · [test inventory](generated/tests.md) · [merged PR history](generated/changelog.md)
+
+
+## Staged team-delivery contract pack (DRAFT, not active)
+- Location: `docs/team-delivery/` (entry point `README.md`). Status: staged for review only. It is not applied to any live team, role, schedule, or skill, and it changes no runtime behavior, team store, or wake path.
+- Activation needs a separate explicit owner authorization and the per-target snapshot, compare, apply, readback, smoke, and rollback steps in `docs/team-delivery/README.md`.
+- This guidebook is unchanged apart from this pointer. Existing event routing and manager auto-wake behavior (see "Event routing and wake coalescing" above) remain the runtime source of truth.
