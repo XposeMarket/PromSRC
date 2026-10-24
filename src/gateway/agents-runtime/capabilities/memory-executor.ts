@@ -69,7 +69,12 @@ function migrateMemoryContent(raw: string): { content: string; archived: string[
 /** Atomic replace: write a unique tmp file, then rename over the target (copy+unlink fallback on Windows EPERM/EEXIST). */
 function atomicWriteMemoryFile(target: string, content: string): void {
   const tmp = `${target}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  fs.writeFileSync(tmp, content, 'utf-8');
+  try {
+    fs.writeFileSync(tmp, content, 'utf-8');
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
   try {
     fs.renameSync(tmp, target);
   } catch (err: any) {
@@ -679,7 +684,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (!fs.existsSync(memoryPath)) return { name, args, result: `${filename} not found at ${memoryPath}`, error: true };
         const raw = fs.readFileSync(memoryPath, 'utf-8');
         const migrated = migrateMemoryContent(raw);
-        if (migrated.content !== raw || migrated.archived.length) { const commitErr = commitMemoryFile(memoryPath, migrated.content, migrated.archived); if (commitErr) return { name, args, result: `memory_read: could not write migrated ${filename}: ${commitErr}`, error: true }; await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true }); }
+        if (migrated.content !== raw || migrated.archived.length) { const commitErr = commitMemoryFile(memoryPath, migrated.content, migrated.archived); if (commitErr) return { name, args, result: `memory_read: could not write migrated ${filename}: ${commitErr}`, error: true }; if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath)); await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true }); }
         return { name, args, result: renderMemoryIdsForPrompt(migrated.content), error: false };
       }
       case 'memory_search': {
