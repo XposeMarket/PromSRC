@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { deleteMemoryFact, ensureMemoryBulletIds, isPoisonMemoryFact, removeMemoryBulletById, renderMemoryIdsForPrompt, replaceMemoryBulletById, sanitizeMemoryRecallText, writeMemoryFact } from './memory-index/memory-recall.js';
+import { deleteMemoryFact, ensureMemoryBulletIds, findMemoryBulletById, isPoisonMemoryFact, nearestMemoryBullets, removeMemoryBulletById, renderMemoryIdsForPrompt, replaceMemoryBulletById, sanitizeMemoryRecallText, supersedeSectionConflicts, writeMemoryFact } from './memory-index/memory-recall.js';
 import { parseMemoryAtoms } from './memory-index/memory-atoms.js';
 import { closeSqliteMemoryConnections, refreshMemoryIndexFromAudit, searchMemoryIndex } from './memory-index/index.js';
 
@@ -105,6 +105,11 @@ function bulletIdChecks(): void {
   assert.equal(atomsA[0].id, atomsB[0].id, 'atom id unchanged by appended id comment');
   assert.match(atomsB[0].rawText, /\[m:abcde\]/, 'atom text renders [m:id]');
   assert.doesNotMatch(atomsB[0].rawText, /<!--/, 'atom text never carries raw comment');
+  // BUSINESS.md is indexed through the non-sanitized branch; its id comment must render too (finding 2/3).
+  const businessRaw = '## Team\n- Raul | Founder <!-- m:bizzz -->\n';
+  const businessRendered = renderMemoryIdsForPrompt(businessRaw);
+  assert.match(businessRendered, /\[m:bizzz\]/, 'business text renders [m:id]');
+  assert.doesNotMatch(businessRendered, /<!--/, 'business text never carries the raw comment');
 }
 
 bulletIdChecks();

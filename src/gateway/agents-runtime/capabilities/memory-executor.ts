@@ -24,6 +24,7 @@ import {
   removeMemoryBulletById,
   renderMemoryIdsForPrompt,
   replaceMemoryBulletById,
+  supersedeSectionConflicts,
   writeMemoryFact,
 } from '../../memory-index/memory-recall.js';
 import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
@@ -65,19 +66,43 @@ function migrateMemoryContent(raw: string): { content: string; archived: string[
   return { content: ensureMemoryBulletIds(kept.join('\n')).content, archived };
 }
 
-/** Writes the file only when its bytes change, and appends archived bullets lazily. */
-function commitMemoryFile(memoryPath: string, content: string, archived: string[]): void {
-  const current = fs.existsSync(memoryPath) ? fs.readFileSync(memoryPath, 'utf-8') : '';
-  if (content !== current) fs.writeFileSync(memoryPath, content, 'utf-8');
-  if (!archived.length) return;
-  const archivePath = archivePathFor(memoryPath);
-  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
-  const header = fs.existsSync(archivePath)
-    ? ''
-    : `# ${path.basename(memoryPath)} archive\n\nReplaced, superseded and deleted memory bullets. Never injected into prompts.\n\n`;
-  fs.appendFileSync(archivePath, `${header}${archived.join('\n')}\n`, 'utf-8');
+/** Atomic replace: write a unique tmp file, then rename over the target (copy+unlink fallback on Windows EPERM/EEXIST). */
+function atomicWriteMemoryFile(target: string, content: string): void {
+  const tmp = `${target}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  fs.writeFileSync(tmp, content, 'utf-8');
+  try {
+    fs.renameSync(tmp, target);
+  } catch (err: any) {
+    if (err?.code !== 'EPERM' && err?.code !== 'EEXIST') {
+      try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+      throw err;
+    }
+    try { fs.copyFileSync(tmp, target); } finally { try { fs.unlinkSync(tmp); } catch { /* best effort */ } }
+  }
 }
 
+/**
+ * Archive FIRST, then write the source atomically. If the archive append throws, the
+ * source is left byte-identical and the error is returned (callers must return error:true).
+ * Returns null on success.
+ */
+function commitMemoryFile(memoryPath: string, content: string, archived: string[]): string | null {
+  try {
+    if (archived.length) {
+      const archivePath = archivePathFor(memoryPath);
+      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+      const header = fs.existsSync(archivePath)
+        ? ''
+        : `# ${path.basename(memoryPath)} archive\n\nReplaced, superseded and deleted memory bullets. Never injected into prompts.\n\n`;
+      fs.appendFileSync(archivePath, `${header}${archived.join('\n')}\n`, 'utf-8');
+    }
+    const current = fs.existsSync(memoryPath) ? fs.readFileSync(memoryPath, 'utf-8') : '';
+    if (content !== current) atomicWriteMemoryFile(memoryPath, content);
+    return null;
+  } catch (err: any) {
+    return String(err?.message || err);
+  }
+}
 const MEMORY_TOOL_NAMES = new Set([
   'business_context_mode',
   'list_entities',
@@ -109,11 +134,12 @@ const MEMORY_TOOL_NAMES = new Set([
   'write_note',
 ]);
 
-function loadBusinessContextSnapshot(workspacePath: string, maxChars: number = 4000): string {
+export function loadBusinessContextSnapshot(workspacePath: string, maxChars: number = 4000): string {
   try {
     const businessPath = path.join(workspacePath, 'BUSINESS.md');
     if (!fs.existsSync(businessPath)) return '';
-    const content = fs.readFileSync(businessPath, 'utf-8').trim();
+    // Prompt text shows [m:id] and never the raw <!-- m:id --> comment.
+    const content = renderMemoryIdsForPrompt(fs.readFileSync(businessPath, 'utf-8')).trim();
     if (content.length <= maxChars) return content;
     return `${content.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
   } catch {
@@ -524,8 +550,9 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         const archived = [...migrated.archived];
         for (const old of write.superseded) {
           archived.push(`- ${old.id ? `[m:${old.id}] ` : ''}${old.text} [archived ${today}: superseded by m:${write.id}]`);
+          for (const child of (old.lines || []).slice(1)) archived.push(child);
         }
-        commitMemoryFile(memoryPath, write.content, archived);
+        { const commitErr = commitMemoryFile(memoryPath, write.content, archived); if (commitErr) return { name, args, result: `memory_write failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         // Do not leave a stale active row retrievable after a contradiction or poison write.
         await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
@@ -587,7 +614,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (poisoned) {
           // A poisoned candidate is retained and flagged; it never displaces the existing bullet.
           const write = writeMemoryFact(fileContent, found.category, content, today);
-          commitMemoryFile(memoryPath, write.content, archived);
+          { const commitErr = commitMemoryFile(memoryPath, write.content, archived); if (commitErr) return { name, args, result: `memory_update failed; ${filename} unchanged: ${commitErr}`, error: true }; }
           if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
           await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
           return { name, args, result: `Updated ${scope} ${filename} [${found.category}] m:${targetId}: kept "${found.text}". Candidate was flagged as untrusted instruction-like content and was not allowed to supersede the existing fact.`, error: false };
@@ -595,14 +622,18 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         // Same id, same line position: replace in place and archive the old text.
         const replaced = replaceMemoryBulletById(fileContent, targetId, content, today);
         archived.push(`- [m:${targetId}] ${found.text} [archived ${today}: replaced by m:${targetId}]`);
-        commitMemoryFile(memoryPath, replaced.content, archived);
+        for (const child of (replaced.previousLines || []).slice(1)) archived.push(child);
+        // Same supersede rule as write: other category bullets that conflict with the new text are archived too.
+        const swept = supersedeSectionConflicts(replaced.content, found.category, content, targetId);
+        for (const old of swept.superseded) {
+          archived.push(`- ${old.id ? `[m:${old.id}] ` : ''}${old.text} [archived ${today}: superseded by m:${targetId}]`);
+          for (const child of old.lines.slice(1)) archived.push(child);
+        }
+        { const commitErr = commitMemoryFile(memoryPath, swept.content, archived); if (commitErr) return { name, args, result: `memory_update failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
         return { name, args, result: `Updated ${scope} ${filename} [${found.category}] m:${targetId}: ${found.text} -> ${content}.`, error: false };
       }
-
-
-
       case 'memory_delete': {
         const { filename } = resolveMemoryFile(args.file);
         const idArg = normalizeBulletIdArg(String(args.id || ''));
@@ -624,15 +655,17 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           if (removed.removed === undefined) return { name, args, result: `memory_delete: no bullet with id m:${idArg} in ${filename}. Call memory read to see current ids.`, error: true };
           next = removed.content;
           archived.push(`- [m:${idArg}] ${removed.removed} [archived ${today}: deleted]`);
+          for (const child of (removed.removedLines || []).slice(1)) archived.push(child);
           label = `m:${idArg} [${removed.category}]: ${removed.removed}`;
         } else {
           const deleted = deleteMemoryFact(next, category, content);
           if (!deleted.deleted) return { name, args, result: `memory_delete: expected exactly one exact bullet match in ${filename} [${category}]`, error: true };
           next = deleted.content;
           archived.push(`- ${deleted.id ? `[m:${deleted.id}] ` : ''}${deleted.removed} [archived ${today}: deleted]`);
+          for (const child of (deleted.removedLines || []).slice(1)) archived.push(child);
           label = `[${category}]: ${content}`;
         }
-        commitMemoryFile(memoryPath, next, archived);
+        { const commitErr = commitMemoryFile(memoryPath, next, archived); if (commitErr) return { name, args, result: `memory_delete failed; ${filename} unchanged: ${commitErr}`, error: true }; }
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true });
         return { name, args, result: `Deleted from ${filename} ${label}. Removed from the refreshed retrieval index.`, error: false };
@@ -646,11 +679,9 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (!fs.existsSync(memoryPath)) return { name, args, result: `${filename} not found at ${memoryPath}`, error: true };
         const raw = fs.readFileSync(memoryPath, 'utf-8');
         const migrated = migrateMemoryContent(raw);
-        if (migrated.content !== raw || migrated.archived.length) commitMemoryFile(memoryPath, migrated.content, migrated.archived);
+        if (migrated.content !== raw || migrated.archived.length) { const commitErr = commitMemoryFile(memoryPath, migrated.content, migrated.archived); if (commitErr) return { name, args, result: `memory_read: could not write migrated ${filename}: ${commitErr}`, error: true }; await refreshMemoryIndexInWorker(path.dirname(memoryPath), { force: true, minIntervalMs: 0, maxChangedFiles: 500, syncSqlite: true }); }
         return { name, args, result: renderMemoryIdsForPrompt(migrated.content), error: false };
       }
-
-
       case 'memory_search': {
         try {
           const query = String(args.query || '').trim();

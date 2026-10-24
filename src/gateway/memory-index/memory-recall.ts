@@ -6,8 +6,6 @@ export type MemoryFactWriteResult = {
   flaggedAsUntrusted: boolean;
   nearDuplicates: Array<{ id?: string; category: string; text: string; score: number }>;
 };
-
-
 const STATUS_RE = /\s*\[(?:superseded(?:\s+[^\]]*)?|stale|memory-status:[^\]]*)\]/gi;
 const DATE_RE = /\s*\[\d{4}-\d{2}-\d{2}\]\s*$/;
 const FACT_STOP_WORDS = new Set([
@@ -17,6 +15,7 @@ const FACT_STOP_WORDS = new Set([
 function cleanFact(value: string): string {
   return String(value || '')
     .replace(BULLET_ID_RE, '')
+    .replace(/\s*<!--\s*m:[a-z0-9]{4,8}\s*-->\s*$/i, '')
     .replace(STATUS_RE, '')
     .replace(DATE_RE, '')
     .replace(/^\s*-\s*/, '')
@@ -117,12 +116,14 @@ function entryDate(value: string): number | undefined {
 // ── Stable bullet ids ────────────────────────────────────────────────────────
 // Each durable bullet carries `<!-- m:xxxxx -->` at line end. The comment is
 // invisible in markdown viewers; prompts render it as `[m:xxxxx]` up front.
-export const BULLET_ID_RE = /\s*<!--\s*m:([a-z0-9]{4,8})\s*-->\s*$/;
+export const BULLET_ID_RE = /\s*<!--\s*m:([a-z0-9]{4,8})\s*-->\s*$/i;
 const BULLET_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const BULLET_ID_LENGTH = 5;
 const BULLET_LINE_RE = /^\s*-\s+/;
 const HEADING_LINE_RE = /^##[ \t]+/;
-const FENCE_LINE_RE = /^\s*```/;
+const FENCE_LINE_RE = /^\s*(?:```|~~~)/;
+// Only top-level bullets (no indentation) get ids. Nested bullets belong to their parent unit.
+const TOP_BULLET_RE = /^- /;
 
 function randomBulletId(): string {
   let out = '';
@@ -132,9 +133,9 @@ function randomBulletId(): string {
 
 function collectBulletIds(content: string): Set<string> {
   const taken = new Set<string>();
-  const re = /<!--\s*m:([a-z0-9]{4,8})\s*-->/g;
+  const re = /<!--\s*m:([a-z0-9]{4,8})\s*-->/gi;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(content)) !== null) taken.add(match[1]);
+  while ((match = re.exec(content)) !== null) taken.add(match[1].toLowerCase());
   return taken;
 }
 
@@ -145,8 +146,11 @@ function newBulletId(taken: Set<string>): string {
   return id;
 }
 
-function takenBulletIds(content: string): Set<string> {
-  return collectBulletIds(content);
+/** Index just past a top-level bullet's directly following more-indented child lines (one unit). */
+function bulletBlockEnd(lines: string[], index: number): number {
+  let end = index + 1;
+  while (end < lines.length && /^[ \t]+\S/.test(lines[end])) end += 1;
+  return end;
 }
 
 /** Bullet text without the leading "- " and without the trailing id comment. */
@@ -186,7 +190,7 @@ function forEachSectionBullet(lines: string[], visit: (index: number, category: 
     const heading = bare.match(/^##[ \t]+(.+?)[ \t]*$/);
     if (heading) { category = heading[1].trim(); return; }
     if (HEADING_LINE_RE.test(bare) || !category) return;
-    if (BULLET_LINE_RE.test(bare)) visit(index, category);
+    if (TOP_BULLET_RE.test(bare)) visit(index, category);
   });
 }
 
@@ -201,7 +205,7 @@ export function ensureMemoryBulletIds(content: string): { content: string; assig
     const line = lines[index];
     const cr = line.endsWith('\r') ? '\r' : '';
     const body = cr ? line.slice(0, -1) : line;
-    const existing = body.match(BULLET_ID_RE)?.[1];
+    const existing = body.match(BULLET_ID_RE)?.[1]?.toLowerCase();
     if (existing && !seen.has(existing)) { seen.add(existing); return; }
     const stripped = existing ? body.replace(BULLET_ID_RE, '') : body.replace(/\s+$/, '');
     const id = newBulletId(taken);
@@ -221,7 +225,7 @@ export function findMemoryBulletById(content: string, id: string): { category: s
   forEachSectionBullet(lines, (index, category) => {
     if (found) return;
     const line = lines[index];
-    if (line.match(BULLET_ID_RE)?.[1] === wanted) found = { category, line, text: bulletBody(line) };
+    if (line.match(BULLET_ID_RE)?.[1]?.toLowerCase() === wanted) found = { category, line, text: bulletBody(line) };
   });
   return found;
 }
@@ -232,7 +236,7 @@ export function normalizeBulletIdArg(value: string): string {
 }
 
 /** Replaces the bullet with this id, keeping the SAME id. Returns previous text, or undefined when no match. */
-export function replaceMemoryBulletById(content: string, id: string, newFact: string, date: string): { content: string; previous?: string } {
+export function replaceMemoryBulletById(content: string, id: string, newFact: string, date: string): { content: string; previous?: string; previousLines?: string[] } {
   const wanted = normalizeBulletIdArg(id);
   const lines = String(content || '').split('\n');
   let target = -1;
@@ -243,11 +247,14 @@ export function replaceMemoryBulletById(content: string, id: string, newFact: st
   const line = lines[target];
   const cr = line.endsWith('\r') ? '\r' : '';
   const previous = bulletBody(line);
-  lines[target] = `- ${String(newFact).trim()} [${date}] <!-- m:${wanted} -->${cr}`;
-  return { content: lines.join('\n'), previous };
+  // The parent's child block is one unit: it is replaced with the parent (old lines returned for archiving).
+  const end = bulletBlockEnd(lines, target);
+  const previousLines = lines.slice(target, end).map((l) => l.replace(/\r$/, ''));
+  lines.splice(target, end - target, `- ${String(newFact).trim()} [${date}] <!-- m:${wanted} -->${cr}`);
+  return { content: lines.join('\n'), previous, previousLines };
 }
 
-export function removeMemoryBulletById(content: string, id: string): { content: string; removed?: string; category?: string } {
+export function removeMemoryBulletById(content: string, id: string): { content: string; removed?: string; category?: string; removedLines?: string[] } {
   const wanted = normalizeBulletIdArg(id);
   const lines = String(content || '').split('\n');
   let target = -1;
@@ -257,29 +264,70 @@ export function removeMemoryBulletById(content: string, id: string): { content: 
   });
   if (target === -1) return { content };
   const removed = bulletBody(lines[target]);
-  lines.splice(target, 1);
-  return { content: lines.join('\n'), removed, category };
+  const end = bulletBlockEnd(lines, target);
+  const removedLines = lines.slice(target, end).map((l) => l.replace(/\r$/, ''));
+  lines.splice(target, end - target);
+  return { content: lines.join('\n'), removed, category, removedLines };
 }
 
-/** Token Jaccard against every section bullet in the file (not just the category). */
+/**
+ * Same supersede rule as writeMemoryFact, applied after an in-place update: every OTHER
+ * top-level bullet in the category that memoryFactsConflict with the new text is removed
+ * (with its child block) and returned for archiving. The kept id is never touched.
+ */
+export function supersedeSectionConflicts(
+  fileContent: string,
+  category: string,
+  newFact: string,
+  keepId: string,
+): { content: string; superseded: Array<{ id?: string; text: string; lines: string[] }> } {
+  const section = categoryRange(fileContent, category);
+  if (!section) return { content: fileContent, superseded: [] };
+  const keep = normalizeBulletIdArg(keepId);
+  const sectionText = fileContent.slice(section.bodyStart, section.end);
+  const lines = sectionText.split(/\r?\n/);
+  const superseded: Array<{ id?: string; text: string; lines: string[] }> = [];
+  const kept: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const id = line.match(BULLET_ID_RE)?.[1]?.toLowerCase();
+    const isTop = TOP_BULLET_RE.test(line);
+    if (isTop && id !== keep && !/\[memory-status:untrusted/i.test(line) && memoryFactsConflict(line, newFact)) {
+      const end = bulletBlockEnd(lines, index);
+      superseded.push({ id, text: bulletBody(line), lines: lines.slice(index, end).map((l) => l.replace(/\r$/, '')) });
+      index = end;
+      continue;
+    }
+    kept.push(line);
+    index += 1;
+  }
+  if (!superseded.length) return { content: fileContent, superseded };
+  const eol = sectionText.includes('\r\n') ? '\r\n' : '\n';
+  return {
+    content: fileContent.slice(0, section.bodyStart) + kept.join(eol) + fileContent.slice(section.end),
+    superseded,
+  };
+}
+
+/** Token Jaccard against every top-level section bullet (not just the category). Untrusted bullets are never suggested. */
 export function nearestMemoryBullets(content: string, fact: string, limit = 3, minScore = 0.25): Array<{ id?: string; category: string; text: string; score: number }> {
   const lines = String(content || '').split('\n');
   const wanted = factTokens(fact);
   const scored: Array<{ id?: string; category: string; text: string; score: number }> = [];
   forEachSectionBullet(lines, (index, category) => {
     const line = lines[index];
+    if (/\[memory-status:untrusted/i.test(line)) return;
     const text = bulletBody(line);
     const score = tokenJaccard(wanted, factTokens(text));
-    if (score >= minScore) scored.push({ id: line.match(BULLET_ID_RE)?.[1], category, text, score });
+    if (score >= minScore) scored.push({ id: line.match(BULLET_ID_RE)?.[1]?.toLowerCase(), category, text, score });
   });
   return scored.sort((a, b) => b.score - a.score).slice(0, limit);
 }
-
-
 export function writeMemoryFact(fileContent: string, category: string, fact: string, date: string): MemoryFactWriteResult {
   const safeFact = String(fact || '').trim();
   const poisoned = isPoisonMemoryFact(safeFact);
-  const id = newBulletId(takenBulletIds(fileContent));
+  const id = newBulletId(collectBulletIds(fileContent));
   const flag = poisoned ? ' [memory-status:untrusted]' : '';
   const entry = `- ${safeFact} [${date}]${flag} <!-- m:${id} -->`;
   const section = categoryRange(fileContent, category);
@@ -292,14 +340,19 @@ export function writeMemoryFact(fileContent: string, category: string, fact: str
 
   const sectionText = fileContent.slice(section.bodyStart, section.end);
   const eol = sectionText.includes('\r\n') ? '\r\n' : '\n';
-  const superseded: Array<{ id?: string; text: string }> = [];
+  const superseded: Array<{ id?: string; text: string; lines?: string[] }> = [];
   const kept: string[] = [];
-  for (const line of sectionText.split(/\r?\n/)) {
+  const rawLines = sectionText.split(/\r?\n/);
+  for (let i = 0; i < rawLines.length;) {
+    const line = rawLines[i];
     if (!poisoned && line.startsWith('- ') && !/\[memory-status:untrusted/i.test(line) && memoryFactsConflict(line, safeFact)) {
-      superseded.push({ id: line.match(BULLET_ID_RE)?.[1], text: bulletBody(line) });
+      const end = bulletBlockEnd(rawLines, i);
+      superseded.push({ id: line.match(BULLET_ID_RE)?.[1]?.toLowerCase(), text: bulletBody(line), lines: rawLines.slice(i, end) });
+      i = end;
       continue;
     }
     kept.push(line);
+    i += 1;
   }
   // kept[0] is the (possibly empty) newline piece after the heading; always keep it so the
   // entry never lands on the heading line, even when every bullet was superseded.
@@ -311,7 +364,7 @@ export function writeMemoryFact(fileContent: string, category: string, fact: str
 function finishMemoryWrite(
   content: string,
   id: string,
-  superseded: Array<{ id?: string; text: string }>,
+  superseded: Array<{ id?: string; text: string; lines?: string[] }>,
   poisoned: boolean,
   safeFact: string,
 ): MemoryFactWriteResult {
@@ -319,25 +372,27 @@ function finishMemoryWrite(
   return { content, id, supersededCount: superseded.length, superseded, flaggedAsUntrusted: poisoned, nearDuplicates };
 }
 
-export function deleteMemoryFact(fileContent: string, category: string, exactContent: string): { content: string; deleted: boolean; id?: string; removed?: string } {
+export function deleteMemoryFact(fileContent: string, category: string, exactContent: string): { content: string; deleted: boolean; id?: string; removed?: string; removedLines?: string[] } {
   const section = categoryRange(fileContent, category);
   if (!section) return { content: fileContent, deleted: false };
   const target = cleanFact(exactContent);
   const sectionText = fileContent.slice(section.bodyStart, section.end);
   const lines = sectionText.split(/\r?\n/);
   const matchIndexes = lines.reduce<number[]>((matches, line, index) => {
-    if (line.trim().startsWith('- ') && cleanFact(line) === target) matches.push(index);
+    if (line.startsWith('- ') && cleanFact(line) === target) matches.push(index);
     return matches;
   }, []);
   if (matchIndexes.length !== 1) return { content: fileContent, deleted: false };
   const removedLine = lines[matchIndexes[0]];
-  lines.splice(matchIndexes[0], 1);
+  const block = lines.slice(matchIndexes[0], bulletBlockEnd(lines, matchIndexes[0])).map((l) => l.replace(/\r$/, ''));
+  lines.splice(matchIndexes[0], block.length);
   const newline = sectionText.includes('\r\n') ? '\r\n' : '\n';
   return {
     content: fileContent.slice(0, section.bodyStart) + lines.join(newline) + fileContent.slice(section.end),
     deleted: true,
     id: removedLine.match(BULLET_ID_RE)?.[1],
     removed: bulletBody(removedLine),
+    removedLines: block,
   };
 }
 

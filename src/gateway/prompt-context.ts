@@ -512,7 +512,8 @@ export function loadVoiceAgentMemory(workspacePath: string, maxChars: number = 5
 }
 
 function loadBusinessContextProfile(workspacePath: string, maxChars: number = 4000): string {
-  return loadWorkspaceFile(workspacePath, 'BUSINESS.md', maxChars);
+  // Business profile injection shows [m:id] and never the raw <!-- m:id --> comment.
+  return renderMemoryIdsForPrompt(loadWorkspaceFile(workspacePath, 'BUSINESS.md', maxChars));
 }
 
 function stripMemoryToolHints(content: string): string {
