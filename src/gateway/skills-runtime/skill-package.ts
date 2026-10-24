@@ -309,6 +309,201 @@ export function evaluateSkillPromptSignals(
   };
 }
 
+/**
+ * Strict v2 trigger policy (Boolean admission). v1 `promptSignals` and legacy
+ * `triggers` keep their weighted semantics; this only applies when the manifest
+ * carries a `triggerPolicy` field. Presence is authoritative: an invalid v2
+ * policy is ineligible and never falls back to legacy routing.
+ */
+export interface SkillTriggerPolicyRule {
+  allOf: string[];
+  anyOf?: string[];
+  noneOf?: string[];
+}
+
+export interface SkillTriggerPolicyV2 {
+  version: 2;
+  mode: 'auto' | 'explicit';
+  // Explicit (discovery-only) normalized policies carry no rules at all.
+  rules?: SkillTriggerPolicyRule[];
+}
+
+export interface SkillTriggerPolicyValidation {
+  present: boolean;
+  policy?: SkillTriggerPolicyV2;
+  errors: string[];
+}
+
+export interface SkillTriggerPolicyMatch {
+  present: boolean;
+  admitted: boolean;
+  discoveryOnly: boolean;
+  invalid: boolean;
+  matchedRuleIndex: number;
+  errors: string[];
+}
+
+const MAX_TRIGGER_POLICY_RULES = 64;
+const MAX_TRIGGER_POLICY_TERMS = 32;
+
+function normalizeTriggerPolicyTerms(
+  value: unknown,
+  field: string,
+  errors: string[],
+): string[] | undefined {
+  if (!Array.isArray(value)) {
+    errors.push(`${field}_must_be_array`);
+    return undefined;
+  }
+  if (value.length > MAX_TRIGGER_POLICY_TERMS) {
+    errors.push(`${field}_limit_${MAX_TRIGGER_POLICY_TERMS}`);
+    return undefined;
+  }
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') {
+      errors.push(`${field}_term_must_be_string`);
+      return undefined;
+    }
+    const term = normalizePromptSignalText(raw);
+    if (!term) {
+      errors.push(`${field}_term_empty`);
+      return undefined;
+    }
+    if (term.length > MAX_PROMPT_SIGNAL_LENGTH) {
+      errors.push(`${field}_term_too_long`);
+      return undefined;
+    }
+    if (!out.includes(term)) out.push(term);
+  }
+  return out;
+}
+
+/**
+ * Validates a raw `triggerPolicy` value. Any present value that is not a valid
+ * v2 policy yields `policy: undefined` and at least one error (fail-closed).
+ * Absent (undefined/null) is `present: false` and means "no v2 policy".
+ */
+export function validateSkillTriggerPolicy(value: unknown): SkillTriggerPolicyValidation {
+  // Only a truly absent value means "no v2 policy". Explicit null is present-invalid
+  // so it can never fall back to legacy/v1 routing.
+  if (value === undefined) return { present: false, errors: [] };
+  if (value === null) return { present: true, errors: ['triggerPolicy_null_invalid'] };
+  const errors: string[] = [];
+  if (!isPlainObject(value)) return { present: true, errors: ['triggerPolicy_must_be_object'] };
+  if (value.version !== 2) return { present: true, errors: ['triggerPolicy_unsupported_version'] };
+  const allowedKeys = new Set(['version', 'mode', 'rules']);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key) && !key.startsWith('x-') && !key.startsWith('x_')) {
+      // Unknown keys inside triggerPolicy are rejected: silently dropping a term
+      // or condition could turn an intended exclusion into a permissive policy.
+      errors.push(`triggerPolicy_unknown_key_${key}`);
+    }
+  }
+  let mode: 'auto' | 'explicit';
+  if (value.mode === undefined) mode = 'auto';
+  else if (value.mode === 'auto' || value.mode === 'explicit') mode = value.mode;
+  else return { present: true, errors: [...errors, 'triggerPolicy_unsupported_mode'] };
+
+  const rawRules = value.rules;
+  if (mode === 'explicit') {
+    if (rawRules !== undefined) errors.push('triggerPolicy_explicit_must_not_have_rules');
+    if (errors.length) return { present: true, errors };
+    return { present: true, errors: [], policy: { version: 2, mode: 'explicit' } };
+  }
+  if (!Array.isArray(rawRules) || rawRules.length === 0) {
+    errors.push('triggerPolicy_auto_requires_nonempty_rules');
+    return { present: true, errors };
+  }
+  if (rawRules.length > MAX_TRIGGER_POLICY_RULES) {
+    errors.push(`triggerPolicy_rules_limit_${MAX_TRIGGER_POLICY_RULES}`);
+    return { present: true, errors };
+  }
+  const rules: SkillTriggerPolicyRule[] = [];
+  rawRules.forEach((rawRule, index) => {
+    const where = `rules[${index}]`;
+    if (!isPlainObject(rawRule)) {
+      errors.push(`${where}_must_be_object`);
+      return;
+    }
+    for (const key of Object.keys(rawRule)) {
+      if (!['allOf', 'anyOf', 'noneOf'].includes(key)) errors.push(`${where}_unknown_key_${key}`);
+    }
+    if (rawRule.allOf === undefined) {
+      errors.push(`${where}_allOf_required`);
+      return;
+    }
+    const allOf = normalizeTriggerPolicyTerms(rawRule.allOf, `${where}.allOf`, errors);
+    if (!allOf || allOf.length === 0) {
+      if (allOf) errors.push(`${where}_allOf_empty`);
+      return;
+    }
+    const rule: SkillTriggerPolicyRule = { allOf };
+    if (rawRule.anyOf !== undefined) {
+      const anyOf = normalizeTriggerPolicyTerms(rawRule.anyOf, `${where}.anyOf`, errors);
+      if (!anyOf || anyOf.length === 0) {
+        if (anyOf) errors.push(`${where}_anyOf_empty`);
+        return;
+      }
+      rule.anyOf = anyOf;
+    }
+    if (rawRule.noneOf !== undefined) {
+      const noneOf = normalizeTriggerPolicyTerms(rawRule.noneOf, `${where}.noneOf`, errors);
+      if (!noneOf) return;
+      if (noneOf.length) rule.noneOf = noneOf;
+    }
+    rules.push(rule);
+  });
+  if (errors.length || rules.length === 0) {
+    if (!errors.length) errors.push('triggerPolicy_auto_requires_nonempty_rules');
+    return { present: true, errors };
+  }
+  return { present: true, errors: [], policy: { version: 2, mode: 'auto', rules } };
+}
+
+/**
+ * Boolean admission for one v2 policy. A rule matches iff every allOf term
+ * matches, at least one anyOf term matches when anyOf is present, and no noneOf
+ * term matches. The policy admits iff at least one rule matches (OR). Rank,
+ * legacy triggers, names and mentions never change this result.
+ */
+export function evaluateSkillTriggerPolicy(
+  validation: SkillTriggerPolicyValidation | undefined,
+  rawText: string,
+): SkillTriggerPolicyMatch {
+  if (!validation || !validation.present) {
+    return { present: false, admitted: false, discoveryOnly: false, invalid: false, matchedRuleIndex: -1, errors: [] };
+  }
+  if (!validation.policy) {
+    return {
+      present: true, admitted: false, discoveryOnly: false, invalid: true,
+      matchedRuleIndex: -1, errors: validation.errors.length ? validation.errors : ['triggerPolicy_invalid'],
+    };
+  }
+  if (validation.policy.mode === 'explicit') {
+    return { present: true, admitted: false, discoveryOnly: true, invalid: false, matchedRuleIndex: -1, errors: [] };
+  }
+  const normalizedText = normalizePromptSignalText(rawText);
+  if (!normalizedText) {
+    return { present: true, admitted: false, discoveryOnly: false, invalid: false, matchedRuleIndex: -1, errors: [] };
+  }
+  const hit = (term: string) => exactPromptSignalMatch(term, normalizedText);
+  const matchedRuleIndex = (validation.policy.rules || []).findIndex((rule) =>
+    rule.allOf.every(hit)
+    && (!rule.anyOf || rule.anyOf.some(hit))
+    && !(rule.noneOf || []).some(hit)
+  );
+  return {
+    present: true,
+    admitted: matchedRuleIndex >= 0,
+    discoveryOnly: false,
+    invalid: false,
+    matchedRuleIndex,
+    errors: [],
+  };
+}
+
+
 function triggerQuality(trigger: string): number {
   const words = trigger.split(/\s+/).filter(Boolean);
   const distinctive = words.filter((word) => !GENERIC_SINGLE_WORD_TRIGGERS.has(word));
@@ -387,6 +582,7 @@ export interface SkillManifest {
 }
 
 export interface LoadedSkillPackage {
+  triggerPolicy?: SkillTriggerPolicyValidation;
   id: string;
   kind: SkillKind;
   name: string;
@@ -755,6 +951,18 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   if (!Object.keys(manifestPromptSignalSource).length && Object.keys(frontmatterPromptSignalSource).length && !promptSignals) {
     warnings.push('Prompt signals were present in frontmatter but could not be normalized.');
   }
+  // v2 policy presence is authoritative: the raw value is kept even when invalid
+  // so an invalid policy stays ineligible instead of falling back to legacy routing.
+  // Own-property presence (not ??): a manifest `triggerPolicy: null` must stay present-invalid.
+  const rawTriggerPolicy = Object.prototype.hasOwnProperty.call(manifestRaw ?? {}, 'triggerPolicy')
+    ? manifestRaw?.triggerPolicy
+    : Object.prototype.hasOwnProperty.call(frontmatterData, 'triggerPolicy')
+      ? frontmatterData.triggerPolicy
+      : undefined;
+  const triggerPolicy = validateSkillTriggerPolicy(rawTriggerPolicy);
+  if (triggerPolicy.errors.length) {
+    warnings.push(`Invalid triggerPolicy (fail-closed, not admitted automatically): ${triggerPolicy.errors.join(', ')}`);
+  }
   const categories = asStringArray(manifestRaw?.categories ?? frontmatterData.categories).map((t) => t.toLowerCase());
   const requiredTools = asStringArray(
     manifestRaw?.requiredTools
@@ -854,6 +1062,7 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     version,
     triggers,
     promptSignals,
+    triggerPolicy,
     categories,
     requiredTools,
     requires,

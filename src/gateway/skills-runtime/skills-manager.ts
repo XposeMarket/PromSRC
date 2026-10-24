@@ -27,6 +27,9 @@ import {
   validateSkillTriggers,
   evaluateSkillPromptSignals,
   validateSkillPromptSignals,
+  validateSkillTriggerPolicy,
+  evaluateSkillTriggerPolicy,
+  type SkillTriggerPolicyValidation,
   MAX_SKILL_TRIGGERS,
   type LoadedSkillPackage,
   type SkillPromptSignals,
@@ -65,6 +68,7 @@ export interface Skill {
   kind: 'simple' | 'bundle';
   triggers: string[];
   promptSignals?: SkillPromptSignals;
+  triggerPolicy?: SkillTriggerPolicyValidation;
   categories: string[];
   requiredTools: string[];
   requires?: SkillRequires;
@@ -510,7 +514,7 @@ function triggerRouteScore(trigger: string, rawText: string, queryWords: Set<str
 export function rankSkillMatches(
   skills: Skill[],
   messageText: string,
-  options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; limit?: number },
+  options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; discovery?: boolean; limit?: number },
 ): SkillRouteMatch[] {
   const text = capSkillRoutingText(String(messageText || '').trim());
   if (!text) return [];
@@ -524,6 +528,9 @@ export function rankSkillMatches(
 
   for (const skill of skills) {
     if (skill.lifecycle === 'deprecated' || skill.lifecycle === 'archived') continue;
+    // Strict v2 policy is a Boolean pre-rank admission gate for automatic routing.
+    // Discovery (skill_list) stays broad; name/slug mentions and legacy triggers cannot bypass it.
+    if (!options?.discovery && skill.triggerPolicy?.present && !evaluateSkillTriggerPolicy(skill.triggerPolicy, text).admitted) continue;
     if (!options?.includeUnavailable && (skill.executionEnabled === false || skill.eligibility?.status !== 'ready')) continue;
     if (skill.status === 'blocked' || skill.health.state === 'blocked' || ['blocked', 'quarantined', 'unsupported'].includes(skill.eligibility.status)) continue;
     const explicitMentionScore = explicitSkillMentionScore(skill, text);
@@ -532,7 +539,13 @@ export function rankSkillMatches(
     const promptSignalRouteScore = promptSignalMatch.matched
       ? 155 + Math.min(35, promptSignalMatch.score * 3)
       : 0;
+    // v2 policy (when present) is the sole admission contract: v1 exclusion and
+    // minScore guards never apply to it. Admitted v2 contributes positive evidence.
+    const v2Match = skill.triggerPolicy?.present ? evaluateSkillTriggerPolicy(skill.triggerPolicy, text) : null;
+    const v2Present = !!v2Match;
+    const v2Admitted = !!v2Match?.admitted;
     const promptSignalEvidence = [
+      ...(v2Admitted ? [`triggerPolicy: rule ${(v2Match?.matchedRuleIndex ?? 0) + 1}`] : []),
       ...promptSignalMatch.matchedPhrases.map((phrase) => `phrase: ${phrase}`),
       ...promptSignalMatch.matchedAllOf.map((group) => `allOf: ${group.join(' + ')}`),
       ...promptSignalMatch.matchedAnyOf.map((term) => `anyOf: ${term}`),
@@ -546,9 +559,9 @@ export function rankSkillMatches(
     // A structured policy is authoritative against weak metadata/content
     // overlap, but an exact legacy trigger remains a valid explicit routing
     // contract for skills that have not migrated every phrase to promptSignals.
-    if (promptSignalMatch.configured && promptSignalMatch.excluded && !explicitMention) continue;
-    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
-    const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched;
+    if (!v2Present && promptSignalMatch.configured && promptSignalMatch.excluded && !explicitMention) continue;
+    if (!v2Present && promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
+    const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched || v2Admitted;
 
     const derived = getSkillRankDerived(skill);
     const skillDomains = derived.skillDomains;
@@ -559,6 +572,7 @@ export function rankSkillMatches(
     );
 
     let score = explicitMention ? explicitMentionScore : Math.max(bestTriggerScore, promptSignalRouteScore);
+    if (v2Admitted) score = Math.max(score, 155);
     // An exact user phrase is a stronger routing contract than a broad
     // coordinator's weak anyOf/allOf match (for example, "check process
     // status" should select the shell playbook over generic investigation).
@@ -967,6 +981,7 @@ export class SkillsManager {
       promptPath: skill.promptPath,
       triggers: skill.triggers,
       promptSignals: skill.promptSignals,
+      triggerPolicy: skill.triggerPolicy,
       categories: skill.categories,
       requiredTools: skill.requiredTools,
       requires: skill.requires,
@@ -1009,6 +1024,12 @@ export class SkillsManager {
         && (manifest.metadata as Record<string, unknown>).prompt_signals !== undefined)
     ));
     let nextTriggers = existing?.triggers || [];
+    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggerPolicy') && manifest.triggerPolicy !== undefined) {
+      const policyValidation = validateSkillTriggerPolicy(manifest.triggerPolicy);
+      if (policyValidation.errors.length) {
+        throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
+      }
+    }
     let nextPromptSignals = existing?.promptSignals;
     if (hasTriggerField) {
       const validation = validateSkillTriggers(manifest.triggers);

@@ -19,6 +19,7 @@ import {
 } from '../../skills-runtime/skill-curator';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import { rankSkillMatches } from '../../skills-runtime/skills-manager';
+import { validateSkillTriggerPolicy } from '../../skills-runtime/skill-package';
 import { submitSkillRoutingFeedback, getSkillRoutingEvidence, sha } from '../../learning/turn-recorder';
 import { resolveRoutingOriginal } from '../../skills-runtime/routing-original';
 
@@ -242,6 +243,22 @@ export function buildMetadataManifest(skill: any, args: any): Record<string, unk
       changed = true;
     }
   }
+  if (args.triggerPolicy !== undefined || args.trigger_policy !== undefined) {
+    // null is NOT a clear: it goes to the validator and is rejected (present-invalid).
+    const rawPolicy = args.triggerPolicy !== undefined ? args.triggerPolicy : args.trigger_policy;
+    let policyInput: unknown = rawPolicy;
+    if (typeof rawPolicy === 'string') {
+      try { policyInput = JSON.parse(rawPolicy); } catch { policyInput = rawPolicy; }
+    }
+    if (policyInput === undefined) {
+      // absent: no change
+    } else {
+      const policyValidation = validateSkillTriggerPolicy(policyInput);
+      if (policyValidation.errors.length) throw new Error(`Invalid triggerPolicy: ${policyValidation.errors.join(', ')}`);
+      manifest.triggerPolicy = policyInput;
+      changed = true;
+    }
+  }
   if (args.promptSignals !== undefined || args.prompt_signals !== undefined) {
     const promptSignals = parseOptionalObject(args.promptSignals ?? args.prompt_signals);
     if (JSON.stringify(promptSignals || null) !== JSON.stringify(skill?.promptSignals || null)) {
@@ -460,7 +477,7 @@ export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] 
   if (!q) {
     return skills.map((skill) => ({ skill, score: 0, confidence: 'strong', matchedTerms: [], matchedFields: [] }));
   }
-  return rankSkillMatches(skills, q, { limit: Math.max(1, skills.length) }).map((match) => ({
+  return rankSkillMatches(skills, q, { discovery: true, limit: Math.max(1, skills.length) }).map((match) => ({
     skill: match.skill,
     score: match.score,
     confidence: match.confidence === 'low' ? 'weak' : 'strong',

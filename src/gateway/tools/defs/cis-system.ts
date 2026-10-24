@@ -1739,6 +1739,7 @@ export function getCisSystemTools(): any[] {
             addTriggers: { type: 'string', description: 'Comma-separated trigger phrases or JSON array to append while preserving existing triggers. Prefer this for trigger-only fixes.' },
             removeTriggers: { type: 'string', description: 'Comma-separated trigger phrases or JSON array to remove from existing triggers.' },
             promptSignals: { type: 'object', description: 'Replace structured routing signals with phrases, allOf, anyOf, noneOf, and minScore.' },
+            triggerPolicy: { type: 'object', description: 'Strict v2 automatic admission: {version:2, mode:"auto", rules:[{allOf:[...], anyOf?:[...], noneOf?:[...]}]} (rules OR, terms AND within a rule) or {version:2, mode:"explicit"} for discovery-only. Invalid values are rejected.' },
             categories: { type: 'string', description: 'Comma-separated categories.' },
             requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
             lifecycle: { type: 'string', description: 'Lifecycle state: draft, active, experimental, deprecated, archived.' },
