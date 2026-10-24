@@ -37,7 +37,7 @@ const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
 export interface CodexStreamDiagnostics {
-  failureClass?: 'missing_completed' | 'empty_completion';
+  failureClass?: 'missing_completed' | 'empty_completion' | 'transport_terminated';
   sawCompleted: boolean;
   eventTypes: string[];
   outputItemTypes: string[];
@@ -56,6 +56,16 @@ export class CodexIncompleteStreamError extends Error {
     this.name = 'CodexIncompleteStreamError';
     this.diagnostics = diagnostics;
   }
+}
+
+// Transport-level failures from the response body reader (socket closed mid-stream).
+// Matches only recognized socket/terminated signatures; generic errors are not transient.
+export function isTransientCodexReadError(err: unknown): boolean {
+  const e = err as any;
+  if (!e || e.name === 'AbortError') return false;
+  const code = String(e.code || e.cause?.code || '');
+  if (code === 'UND_ERR_SOCKET' || code === 'ECONNRESET' || code === 'UND_ERR_CONNECT_TIMEOUT') return true;
+  return e instanceof TypeError && /^terminated$/i.test(String(e.message || ''));
 }
 
 // Models available via Codex OAuth (latest first; official OpenAI IDs only).
@@ -723,7 +733,24 @@ export class OpenAICodexAdapter implements LLMProvider {
 	    try {
       let streamDone = false;
       while (!streamDone) {
-        const { done, value } = await reader.read();
+        const { done, value } = await reader.read().catch((readErr: unknown) => {
+          // A socket closed mid-body rejects the reader (TypeError 'terminated', cause UND_ERR_SOCKET).
+          // Classify it as a transient incomplete stream so the single existing retry applies.
+          // Aborts and nontransport errors are rethrown unchanged.
+          if (!options?.abortSignal?.aborted && isTransientCodexReadError(readErr)) {
+            throw new CodexIncompleteStreamError('openai_codex stream terminated before response.completed.', {
+              sawCompleted,
+              eventTypes: eventTypes.slice(),
+              outputItemTypes: outputItemTypes.slice(),
+              outputItemCount,
+              finalTextChars: finalContent.trim().length,
+              toolCallCount: toolCalls.length,
+              usage,
+              failureClass: 'transport_terminated',
+            });
+          }
+          throw readErr;
+        });
         streamDone = done;
         if (value) {
           onActivity?.();
