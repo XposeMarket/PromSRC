@@ -476,7 +476,7 @@ function render() {
     });
   }
 
-  if (page === 'chat' || page === 'voice') {
+  if (page === 'chat' || page === 'voice' || isDedicatedAgentChatRoute({ page, arg, extra })) {
     try {
       if (typeof window.__PROM_ENSURE_MARKDOWN_LIBS === 'function') {
         window.__PROM_EXTERNAL_LIBS_READY = window.__PROM_ENSURE_MARKDOWN_LIBS();

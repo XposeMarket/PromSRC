@@ -70,6 +70,7 @@ import {
   _mobileReplayFrameToEvent,
   _renderMobileAgentChatList,
   _renderMobileAgentComposerHtml,
+  _wireMobileAgentMessageActions,
 } from './mobile-teams-pages.js';
 
 import {
@@ -978,7 +979,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   slot.innerHTML = `
     <div class="pm-sa-chat-shell" id="pm-sa-chat-card">
       <div class="pm-sa-chat-scrollport">
-        <div id="pm-sa-chat-list" class="pm-sa-chat-list"></div>
+        <div id="pm-sa-chat-list" class="pm-sa-chat-list pm-chat-thread"></div>
         <div id="pm-sa-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
       </div>
       <div id="pm-sa-chat-goal" class="pm-mobile-goal-strip pm-mobile-goal-strip-inline" hidden></div>
@@ -1168,7 +1169,10 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       sender: agent.name || agent.id || 'Subagent',
       live: m === liveMsg,
       keepLiveTraceVisible: m === liveMsg,
+      chatParity: true,
+      showSender: false,
     }));
+    _wireMobileAgentMessageActions(listEl);
     listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(listEl);
     scrollToLatest();

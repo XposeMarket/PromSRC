@@ -12367,6 +12367,8 @@ function _pmHasProcessRun(approval = {}) {
 
 export {
   ICONS,
+  _ttsSpeak,
+  _ttsStop,
   MOBILE_CHAT_SESSION_ID,
   PM_CHAT_VOICE_ICON_SRC,
   __pmChat,
