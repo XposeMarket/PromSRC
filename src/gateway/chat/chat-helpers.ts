@@ -693,7 +693,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[]; memoryMode?: 'full' | 'compact' },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[]; memoryMode?: 'full' | 'compact'; routingText?: string },
   signal?: AbortSignal,
   timing?: TurnTimingRecorder,
   onRetrieval?: (trace: import('../../runtime/retrieval-provenance').RetrievalTrace) => void,

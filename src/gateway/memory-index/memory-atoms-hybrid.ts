@@ -65,6 +65,13 @@ const COMMON_RELATION_TERMS = new Set([
   'current','future','use','using','used','need','needs','make','making','keep','relevant','runtime','workspace',
 ]);
 
+// Generic query words: they can't justify a direct memory hit on their own.
+const GENERIC_QUERY_TERMS = new Set([
+  'skill', 'memory', 'agent', 'subagent', 'team', 'prompt', 'runtime', 'video', 'creative', 'workflow', 'tool', 'chat',
+  'model', 'match', 'same', 'fix', 'build', 'update', 'day', 'work', 'good', 'improve', 'issue', 'thing', 'change',
+  'use', 'make', 'pr', 'run', 'task',
+].map(stem));
+
 const conceptByTerm = new Map<string, string>();
 for (const group of CONCEPT_GROUPS) {
   const concept = `concept:${group[0]}`;
@@ -256,6 +263,12 @@ function scoreDeterministic(snapshot: HybridSnapshot, atom: MemoryAtom, query: s
   const lexicalCoverage = weightedQuery > 0 ? weightedMatched / weightedQuery : 0;
   const conceptCoverage = queryConcepts.length ? matchedConcepts.length / queryConcepts.length : 0;
   const entityMatches = exactEntityMatches(atom, queryNormalized);
+  // A generic entity (memory, skill, video...) earns no bonus unless a specific term also matched.
+  const specificMatched = matchedTerms.filter((term) => !GENERIC_QUERY_TERMS.has(term) && !COMMON_RELATION_TERMS.has(term)).length;
+  const countedEntities = entityMatches.filter((entity) => {
+    const n = normalize(entity);
+    return !(GENERIC_QUERY_TERMS.has(n) || GENERIC_QUERY_TERMS.has(stem(n))) || specificMatched > 0;
+  });
   const normalizedAtom = normalize(atom.rawText);
   const exactPhrase = queryNormalized.length >= 12 && normalizedAtom.includes(queryNormalized);
 
@@ -267,7 +280,7 @@ function scoreDeterministic(snapshot: HybridSnapshot, atom: MemoryAtom, query: s
     && entityMatches.length === 0;
 
   let score = lexicalCoverage * 0.66
-    + Math.min(0.16, entityMatches.length * 0.10)
+    + Math.min(0.16, countedEntities.length * 0.10)
     + (exactPhrase ? 0.16 : 0);
   if (matchedConcepts.length >= 2) score += Math.min(0.16, conceptCoverage * 0.16);
   else if (matchedConcepts.length === 1 && matchedTerms.length > 0) score += 0.04;
@@ -298,13 +311,20 @@ function hybridScore(candidate: ScoredAtom, queryTermCount: number): number {
   return Math.min(1, (d * 0.60) + (s * 0.40) + Math.min(0.08, candidate.matchedTerms.length * 0.02));
 }
 
-function isDirectCandidate(candidate: ScoredAtom, queryTermCount: number, semanticUsed: boolean): boolean {
-  if (candidate.deterministicScore >= 0.20) return true;
+function specificTermCount(candidate: ScoredAtom): number {
+  return candidate.matchedTerms.filter((term) => !GENERIC_QUERY_TERMS.has(term) && !COMMON_RELATION_TERMS.has(term)).length;
+}
+
+// Direct recall needs a specific (non-generic) matched term, or a strong semantic signal.
+function isDirectCandidate(candidate: ScoredAtom, queryTermCount: number, semanticUsed: boolean, semanticTopRank: boolean): boolean {
+  const specific = specificTermCount(candidate);
+  const d = candidate.deterministicScore;
+  const s = candidate.semanticScore;
+  if (d >= 0.34 && specific >= 1) return true;
+  if (d >= 0.20 && specific >= 2) return true;
   if (!semanticUsed || queryTermCount < 3) return false;
-  // Pure semantic recall deliberately has a high gate. Durable memory is more
-  // damaging when falsely injected than when a marginal candidate is omitted.
-  if (candidate.semanticScore >= 0.54) return true;
-  if (candidate.semanticScore >= 0.48 && candidate.deterministicScore >= 0.08) return true;
+  if (s >= 0.60 && semanticTopRank) return true;
+  if (s >= 0.50 && d >= 0.12 && specific >= 1) return true;
   return false;
 }
 
@@ -328,7 +348,10 @@ function relationAnchors(snapshot: HybridSnapshot, direct: ScoredAtom[], queryTe
 function buildRelated(snapshot: HybridSnapshot, direct: ScoredAtom[], all: ScoredAtom[], queryTerms: Set<string>): MemoryAtomMatch[] {
   if (!direct.length) return [];
   const directIds = new Set(direct.map((entry) => entry.atom.id));
-  const anchors = relationAnchors(snapshot, direct, queryTerms);
+  // Related expansion only chains off strong direct anchors (combined score >= 0.40).
+  const anchorHits = direct.filter((entry) => entry.score >= 0.40);
+  if (!anchorHits.length) return [];
+  const anchors = relationAnchors(snapshot, anchorHits, queryTerms);
   const related: MemoryAtomMatch[] = [];
   for (const entry of all) {
     if (directIds.has(entry.atom.id)) continue;
@@ -644,8 +667,9 @@ export async function retrieveHybridMemoryAtoms(
     for (const candidate of scored) candidate.score = hybridScore(candidate, queryTerms.length);
   }
 
+  const semanticTopIds = new Set([...scored].sort((a, b) => b.semanticScore - a.semanticScore).slice(0, 2).map((c) => c.atom.id));
   const directCandidates = scored
-    .filter((candidate) => isDirectCandidate(candidate, queryTerms.length, semanticUsed))
+    .filter((candidate) => isDirectCandidate(candidate, queryTerms.length, semanticUsed, semanticTopIds.has(candidate.atom.id)))
     .sort((a, b) => b.score - a.score || b.semanticScore - a.semanticScore || a.atom.sourceStartLine - b.atom.sourceStartLine);
   const maxCandidates = Math.max(6, Math.min(50, Number(options.maxCandidates || 24) || 24));
   const reranked = rerankMmr(

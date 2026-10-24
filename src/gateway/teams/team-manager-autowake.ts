@@ -6,6 +6,7 @@ type HandleManagerConversationFn = (
   userMessage: string,
   broadcastFn?: BroadcastFn,
   autoContinue?: boolean,
+  options?: { toolCategoryDetectionText?: string },
 ) => Promise<void>;
 
 interface TeamManagerAutoWakeDeps {
@@ -89,6 +90,8 @@ async function flushTeamManagerWake(teamId: string): Promise<void> {
       buildWakePrompt(teamId, reasons),
       deps.broadcastTeamEvent,
       true,
+      // Routing text is the wake reasons only, never the boilerplate brief.
+      { toolCategoryDetectionText: reasons.join(' ').slice(0, 4000) },
     );
   } catch (err: any) {
     console.warn(`[TeamManagerAutoWake] Manager wake failed for ${teamId}:`, err?.message || err);

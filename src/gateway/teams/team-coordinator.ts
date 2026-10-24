@@ -48,6 +48,8 @@ type HandleChatFn = (
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   reasoningOptions?: undefined,
   providerOverride?: string,
+  callerOnToken?: (token: string) => void,
+  runtimeOptions?: { toolCategoryDetectionText?: string },
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 const TEAM_MANAGER_TOOL_FILTER: string[] | undefined = undefined;
@@ -71,6 +73,8 @@ interface CoordinatorDeps {
 }
 
 export interface CoordinatorConversationOptions {
+  /** Clean task text for skill/memory/tool-category matching; falls back to the message. */
+  toolCategoryDetectionText?: string;
   sendSSE?: (event: string, data: any) => void;
   abortSignal?: { aborted: boolean };
   sessionIdOverride?: string;
@@ -788,6 +792,8 @@ export async function runCoordinatorConversation(
 	        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	        undefined,
 	        managerRouting.providerOverride,
+	        undefined,
+	        { toolCategoryDetectionText: options.toolCategoryDetectionText },
 	      ));
 
 	      responseText = String(result.text || '').trim();
@@ -1080,9 +1086,11 @@ export async function runCoordinatorConversationDetailed(
           managerRouting.modelOverride,
           'team_manager',
           options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
-          turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
+	          turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	          undefined,
 	          managerRouting.providerOverride,
+	          undefined,
+	          { toolCategoryDetectionText: options.toolCategoryDetectionText },
 	        ));
 
 	        responseText = String(result.text || '').trim();
@@ -1371,6 +1379,8 @@ export async function runCoordinatorReview(
       undefined,
       undefined,
       managerRouting.providerOverride,
+      undefined,
+      { toolCategoryDetectionText: String(team.currentFocus || team.currentTask || team.purpose || '').trim().slice(0, 4000) || undefined },
     ));
 
     const responseText = String(result.text || '').trim();

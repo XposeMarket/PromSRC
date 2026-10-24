@@ -159,6 +159,8 @@ export interface BuildPersonalityContextOptions {
   /** Benchmark-only A/B control for the interactive MEMORY.md prompt budget. */
   memoryMode?: 'full' | 'compact';
   serializedSnapshot?: PersonalityContextSnapshot;
+  /** Clean task text (not wrapper boilerplate) used for skill and memory matching. Falls back to messageText. */
+  routingText?: string;
 }
 
 /**
@@ -1836,6 +1838,7 @@ export async function capturePersonalityContextSnapshot(
   }
   const skillContextOptions = {
     sessionId,
+    executionMode,
     excludedSkillIds: options?.excludedSkillIds || [],
     forcedSkillIds: options?.forcedSkillIds || [],
   };
@@ -1847,7 +1850,7 @@ export async function capturePersonalityContextSnapshot(
     runtimeActorMemory: loadRuntimeActorMemoryContext(sessionId),
     runtimeActorManagerMemory: loadRuntimeActorMemoryContext(sessionId, 8000),
     projectContextBlock,
-    skillTurnContext: skillsManager.buildTurnContext(messageText, skillContextOptions),
+    skillTurnContext: skillsManager.buildTurnContext(options?.routingText || messageText, skillContextOptions),
     activeSkillsContext: buildActiveSkillsContext(sessionId, skillsManager),
     memoryAtomContext,
     retrievedMemoryContext,

@@ -361,7 +361,7 @@ export async function buildPersonalityContextIsolated(
       const hybrid = await Promise.race([
         retrieveHybridMemoryAtoms(
           workspacePath,
-          messageText,
+          options?.routingText || messageText,
           {
             additionalContext: snapshot.projectContextBlock,
             maxAtoms: options?.profile === 'voice_agent' ? 4 : 6,
