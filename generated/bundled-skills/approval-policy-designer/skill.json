@@ -34,5 +34,22 @@
     "workspaceRead": true,
     "workspaceWrite": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "approval"
+        ],
+        "anyOf": [
+          "policy",
+          "policies",
+          "gate",
+          "gates",
+          "confirmation"
+        ]
+      }
+    ]
+  }
 }

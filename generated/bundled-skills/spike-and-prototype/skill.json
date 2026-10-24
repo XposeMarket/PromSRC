@@ -96,5 +96,42 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "spike"
+        ],
+        "anyOf": [
+          "run a",
+          "do a",
+          "technical",
+          "feasibility",
+          "throwaway"
+        ],
+        "noneOf": [
+          "volleyball",
+          "price spike",
+          "prices"
+        ]
+      },
+      {
+        "allOf": [
+          "prototype"
+        ],
+        "anyOf": [
+          "throwaway",
+          "quick",
+          "feasibility"
+        ],
+        "noneOf": [
+          "volleyball",
+          "price spike",
+          "prices"
+        ]
+      }
+    ]
+  }
 }

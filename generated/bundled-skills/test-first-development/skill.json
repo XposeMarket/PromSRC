@@ -31,5 +31,29 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "tdd"
+        ]
+      },
+      {
+        "allOf": [
+          "test first"
+        ]
+      },
+      {
+        "allOf": [
+          "failing test"
+        ],
+        "anyOf": [
+          "write",
+          "start with"
+        ]
+      }
+    ]
+  }
 }

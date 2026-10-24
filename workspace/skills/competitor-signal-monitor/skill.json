@@ -34,5 +34,34 @@
     "workspaceWrite": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "competitor"
+        ],
+        "anyOf": [
+          "monitor",
+          "changes",
+          "what changed",
+          "signals",
+          "track"
+        ]
+      },
+      {
+        "allOf": [
+          "competitors"
+        ],
+        "anyOf": [
+          "monitor",
+          "changes",
+          "what changed",
+          "signals",
+          "track"
+        ]
+      }
+    ]
+  }
 }

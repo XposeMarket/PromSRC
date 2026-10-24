@@ -29,5 +29,30 @@
   "lifecycle": "active",
   "id": "pitch-deck-builder",
   "name": "pitch-deck-builder",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pitch deck"
+        ]
+      },
+      {
+        "allOf": [
+          "investor deck"
+        ]
+      },
+      {
+        "allOf": [
+          "deck"
+        ],
+        "anyOf": [
+          "fundraising",
+          "seed round",
+          "investors"
+        ]
+      }
+    ]
+  }
 }

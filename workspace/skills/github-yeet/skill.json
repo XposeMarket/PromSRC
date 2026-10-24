@@ -74,5 +74,24 @@
       "path": "LICENSE.txt",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "github"
+        ],
+        "anyOf": [
+          "publish",
+          "push",
+          "yeet",
+          "open a pr"
+        ],
+        "noneOf": [
+          "prometheus"
+        ]
+      }
+    ]
+  }
 }

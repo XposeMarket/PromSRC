@@ -33,5 +33,29 @@
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "connector"
+        ],
+        "anyOf": [
+          "smoke test",
+          "verify",
+          "test",
+          "check it works"
+        ],
+        "noneOf": [
+          "car",
+          "battery",
+          "usb",
+          "cable",
+          "build a",
+          "brand new"
+        ]
+      }
+    ]
+  }
 }

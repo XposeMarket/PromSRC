@@ -421,5 +421,23 @@
       "path": "scripts/transcript-cut.mjs",
       "type": "script"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "media",
+          "b roll",
+          "footage",
+          "stock",
+          "music",
+          "sfx"
+        ]
+      }
+    ]
+  }
 }

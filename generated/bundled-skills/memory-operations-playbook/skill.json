@@ -13,5 +13,34 @@
     "consolidate memory claims",
     "refresh memory index",
     "memory-operations-playbook"
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "memory"
+        ],
+        "anyOf": [
+          "search",
+          "consolidate",
+          "recall",
+          "atoms",
+          "inspect",
+          "index",
+          "related"
+        ],
+        "noneOf": [
+          "ram",
+          "laptop",
+          "gpu"
+        ]
+      },
+      {
+        "allOf": [
+          "what did we decide"
+        ]
+      }
+    ]
+  }
 }

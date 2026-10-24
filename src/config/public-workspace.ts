@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { deriveTriggerBaseline, runTriggerPolicyMigration } from './skill-trigger-migration.js';
 
 const PUBLIC_WORKSPACE_DIRS = [
   '.prometheus/subagents',
@@ -121,7 +122,7 @@ const PUBLIC_WORKSPACE_FILES: Record<string, string> = {
  * Copy bundled skills from the app package into a skills directory.
  * Only copies skills that do not already exist — never overwrites user customizations.
  */
-export function seedBundledSkillsIntoDir(targetSkillsDir: string, bundledSkillsDir: string): void {
+export function seedBundledSkillsIntoDir(targetSkillsDir: string, bundledSkillsDir: string, triggerBaseline?: unknown): void {
   if (!fs.existsSync(bundledSkillsDir)) return;
   fs.mkdirSync(targetSkillsDir, { recursive: true });
 
@@ -150,6 +151,17 @@ export function seedBundledSkillsIntoDir(targetSkillsDir: string, bundledSkillsD
       // first-run workspace initialization.
     }
   }
+
+  // Trigger-only upgrade for skills already installed. Touches only skill.json triggerPolicy
+  // on unchanged shipped manifests; never overwrites overlays, frontmatter, or resources.
+  // No caller baseline is required: the shipped bundle yields a validated one.
+  const baseline = triggerBaseline ?? deriveTriggerBaseline(bundledSkillsDir).baseline;
+  const upgrade = runTriggerPolicyMigration({ skillsDir: targetSkillsDir, bundledSkillsDir, baseline, apply: true });
+  if (upgrade.fatal) console.warn(`[Skills] Trigger policy upgrade skipped: ${upgrade.fatal}`);
+  const pending = upgrade.items.filter(item => ['manual', 'preserved-custom', 'preserved-overlay'].includes(item.status));
+  if (pending.length) console.info(`[Skills] Trigger policy migration preserved ${pending.length} customized/ambiguous skills (${pending.slice(0, 8).map(item => item.id).join(', ')}). Review with scripts/migrate-skill-trigger-policies.mjs before applying changes.`);
+  if (upgrade.counts.add) console.info(`[Skills] Upgraded ${upgrade.counts.add} unchanged trigger policies; backup: ${upgrade.snapshotDir}`);
+
 
   if (seeded > 0) {
     console.log(`[Skills] Seeded ${seeded} bundled skill(s) into ${targetSkillsDir}`);

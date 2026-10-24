@@ -20,5 +20,34 @@
   "id": "memory-governance-playbook",
   "name": "memory-governance-playbook",
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "remember"
+        ],
+        "anyOf": [
+          "should you",
+          "where should",
+          "belongs"
+        ]
+      },
+      {
+        "allOf": [
+          "memory"
+        ],
+        "anyOf": [
+          "governance",
+          "belongs in",
+          "which file",
+          "user md",
+          "soul md",
+          "user memory",
+          "where should"
+        ]
+      }
+    ]
+  }
 }

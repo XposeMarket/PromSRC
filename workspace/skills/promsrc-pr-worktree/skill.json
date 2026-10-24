@@ -81,5 +81,27 @@
       "path": "references/example-runtime-to-tool-category-pr.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "promsrc"
+        ]
+      },
+      {
+        "allOf": [
+          "prometheus"
+        ],
+        "anyOf": [
+          "source change",
+          "worktree",
+          "pr",
+          "src edit",
+          "fix in source"
+        ]
+      }
+    ]
+  }
 }

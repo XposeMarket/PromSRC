@@ -20,5 +20,25 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "workspace"
+        ],
+        "anyOf": [
+          "edit",
+          "write",
+          "read",
+          "command",
+          "safe"
+        ],
+        "noneOf": [
+          "google workspace"
+        ]
+      }
+    ]
+  }
 }

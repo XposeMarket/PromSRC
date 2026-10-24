@@ -21,5 +21,43 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "connected"
+        ],
+        "anyOf": [
+          "app",
+          "apps",
+          "service",
+          "account"
+        ]
+      },
+      {
+        "allOf": [
+          "notion"
+        ],
+        "anyOf": [
+          "create",
+          "update",
+          "add",
+          "read"
+        ]
+      },
+      {
+        "allOf": [
+          "slack"
+        ],
+        "anyOf": [
+          "post",
+          "send",
+          "read",
+          "channel"
+        ]
+      }
+    ]
+  }
 }

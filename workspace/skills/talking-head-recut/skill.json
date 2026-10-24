@@ -101,5 +101,31 @@
       "path": "references/styles/xhs.html",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "talking head"
+        ],
+        "anyOf": [
+          "overlay",
+          "overlays",
+          "graphics",
+          "recut"
+        ]
+      },
+      {
+        "allOf": [
+          "interview"
+        ],
+        "anyOf": [
+          "overlay",
+          "overlays",
+          "graphics"
+        ]
+      }
+    ]
+  }
 }

@@ -29,5 +29,36 @@
   "lifecycle": "active",
   "name": "hr-recruiter",
   "id": "hr-recruiter",
-  "implicitInvocation": false
+  "implicitInvocation": false,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "job description"
+        ]
+      },
+      {
+        "allOf": [
+          "hiring"
+        ],
+        "anyOf": [
+          "plan",
+          "scorecard",
+          "interview",
+          "loop"
+        ]
+      },
+      {
+        "allOf": [
+          "interview"
+        ],
+        "anyOf": [
+          "questions for",
+          "loop",
+          "scorecard"
+        ]
+      }
+    ]
+  }
 }

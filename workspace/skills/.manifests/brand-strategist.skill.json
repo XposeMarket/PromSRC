@@ -29,5 +29,27 @@
   "lifecycle": "active",
   "name": "brand-strategist",
   "id": "brand-strategist",
-  "implicitInvocation": false
+  "implicitInvocation": false,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "brand"
+        ],
+        "anyOf": [
+          "positioning",
+          "strategy",
+          "messaging",
+          "differentiation",
+          "personality",
+          "naming",
+          "promise"
+        ],
+        "noneOf": [
+          "logo"
+        ]
+      }
+    ]
+  }
 }

@@ -68,5 +68,33 @@
     "shell": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "deploy"
+        ],
+        "anyOf": [
+          "production",
+          "release",
+          "vercel",
+          "staging",
+          "rollback"
+        ]
+      },
+      {
+        "allOf": [
+          "release"
+        ],
+        "anyOf": [
+          "cut",
+          "ship",
+          "tag",
+          "version"
+        ]
+      }
+    ]
+  }
 }

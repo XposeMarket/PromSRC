@@ -98,5 +98,33 @@
     "browser": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "action items"
+        ],
+        "anyOf": [
+          "contract",
+          "report",
+          "rfp",
+          "policy",
+          "document",
+          "pdf",
+          "attachment"
+        ]
+      },
+      {
+        "allOf": [
+          "obligations"
+        ],
+        "anyOf": [
+          "contract",
+          "rfp"
+        ]
+      }
+    ]
+  }
 }

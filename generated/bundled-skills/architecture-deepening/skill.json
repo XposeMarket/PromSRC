@@ -98,5 +98,28 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "architecture"
+        ],
+        "anyOf": [
+          "shallow modules",
+          "deepening",
+          "leaky",
+          "seams",
+          "locality",
+          "refactor opportunities"
+        ]
+      },
+      {
+        "allOf": [
+          "shallow modules"
+        ]
+      }
+    ]
+  }
 }

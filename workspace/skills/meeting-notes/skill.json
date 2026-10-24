@@ -42,5 +42,55 @@
       "type": "doc",
       "description": "Action extraction guardrails for meeting notes"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "meeting"
+        ],
+        "anyOf": [
+          "notes",
+          "transcript",
+          "minutes",
+          "summarize",
+          "action items"
+        ],
+        "noneOf": [
+          "teams meeting pipeline",
+          "graph api"
+        ]
+      },
+      {
+        "allOf": [
+          "transcript"
+        ],
+        "anyOf": [
+          "summarize",
+          "notes",
+          "action items"
+        ],
+        "noneOf": [
+          "teams meeting pipeline",
+          "graph api"
+        ]
+      },
+      {
+        "allOf": [
+          "minutes"
+        ],
+        "anyOf": [
+          "call",
+          "meeting",
+          "summarize"
+        ],
+        "noneOf": [
+          "teams meeting pipeline",
+          "graph api",
+          "in 20 minutes"
+        ]
+      }
+    ]
+  }
 }

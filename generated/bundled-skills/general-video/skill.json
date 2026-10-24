@@ -16,5 +16,20 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "video",
+          "edit",
+          "composition"
+        ]
+      }
+    ]
+  }
 }

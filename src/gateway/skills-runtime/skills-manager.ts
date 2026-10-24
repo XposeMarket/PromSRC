@@ -984,7 +984,7 @@ export class SkillsManager {
       // Raw API representation: the authored policy value (roundtrips), never the
       // internal validation wrapper. Errors are reported separately.
       triggerPolicy: Object.prototype.hasOwnProperty.call(skill.manifest || {}, 'triggerPolicy')
-        ? (skill.manifest as Record<string, unknown>).triggerPolicy
+        ? (skill.manifest as unknown as Record<string, unknown>).triggerPolicy
         : undefined,
       triggerPolicyErrors: skill.triggerPolicy?.errors || [],
       categories: skill.categories,

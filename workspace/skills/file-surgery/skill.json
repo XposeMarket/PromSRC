@@ -4,7 +4,9 @@
   "name": "file-surgery",
   "description": "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery.",
   "visibility": "public",
-  "publicExcludeResources": ["references/creative-artifact-presentation.md"],
+  "publicExcludeResources": [
+    "references/creative-artifact-presentation.md"
+  ],
   "version": "3.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -62,5 +64,36 @@
       "type": "doc",
       "description": "File tool routing, grep no-match, src-edit pointer"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "edit"
+        ],
+        "anyOf": [
+          "file",
+          "line",
+          "config",
+          "lines"
+        ]
+      },
+      {
+        "allOf": [
+          "replace"
+        ],
+        "anyOf": [
+          "file",
+          "readme",
+          "line",
+          "config"
+        ],
+        "noneOf": [
+          "photo",
+          "essay"
+        ]
+      }
+    ]
+  }
 }

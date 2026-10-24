@@ -86,5 +86,31 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "review"
+        ],
+        "anyOf": [
+          "pr",
+          "pull request",
+          "diff",
+          "this change",
+          "code",
+          "commit"
+        ],
+        "noneOf": [
+          "independent",
+          "fresh eyes",
+          "second opinion",
+          "address",
+          "feedback",
+          "comments"
+        ]
+      }
+    ]
+  }
 }

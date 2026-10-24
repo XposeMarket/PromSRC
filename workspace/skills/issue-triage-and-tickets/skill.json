@@ -95,5 +95,45 @@
     "browser": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "issues"
+        ],
+        "anyOf": [
+          "triage",
+          "label",
+          "labels"
+        ]
+      },
+      {
+        "allOf": [
+          "issue"
+        ],
+        "anyOf": [
+          "triage",
+          "label",
+          "ticket"
+        ]
+      },
+      {
+        "allOf": [
+          "ticket"
+        ],
+        "anyOf": [
+          "label",
+          "bug",
+          "triage"
+        ],
+        "noneOf": [
+          "concert",
+          "flight",
+          "parking"
+        ]
+      }
+    ]
+  }
 }

@@ -17,5 +17,22 @@
   "description": "Non-animation creative direction for HyperFrames videos. Use for design spec (frame.md / design.md) handling, palettes, typography, narration, beat planning, audio-reactive visuals, composition patterns, and brand / style decisions. For atomic motion patterns and scene blueprints, use `hyperframes-animation`.",
   "entrypoint": "SKILL.md",
   "triggers": [],
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "design direction",
+          "color palette",
+          "typography",
+          "style",
+          "look"
+        ]
+      }
+    ]
+  }
 }

@@ -68,5 +68,33 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "node"
+        ],
+        "anyOf": [
+          "memory leak",
+          "event loop",
+          "unhandled",
+          "esm",
+          "heap",
+          "runtime error"
+        ]
+      },
+      {
+        "allOf": [
+          "typescript"
+        ],
+        "anyOf": [
+          "runtime",
+          "esm",
+          "module resolution"
+        ]
+      }
+    ]
+  }
 }

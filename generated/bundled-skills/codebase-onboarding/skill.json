@@ -100,5 +100,34 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "codebase"
+        ],
+        "anyOf": [
+          "onboard",
+          "get up to speed",
+          "unfamiliar",
+          "new to",
+          "walk me through",
+          "map"
+        ]
+      },
+      {
+        "allOf": [
+          "repo"
+        ],
+        "anyOf": [
+          "get up to speed",
+          "unfamiliar",
+          "onboard",
+          "walk me through"
+        ]
+      }
+    ]
+  }
 }

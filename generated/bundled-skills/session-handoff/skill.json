@@ -84,5 +84,21 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "handoff"
+        ],
+        "anyOf": [
+          "session",
+          "fresh session",
+          "write",
+          "briefing"
+        ]
+      }
+    ]
+  }
 }

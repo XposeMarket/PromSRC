@@ -32,5 +32,24 @@
   "lifecycle": "active",
   "name": "mcp-ops-troubleshooting",
   "id": "mcp-ops-troubleshooting",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "mcp"
+        ],
+        "anyOf": [
+          "not working",
+          "broken",
+          "error",
+          "troubleshoot",
+          "diagnose",
+          "disconnected",
+          "failing"
+        ]
+      }
+    ]
+  }
 }

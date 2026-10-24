@@ -39,5 +39,41 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "task"
+        ],
+        "anyOf": [
+          "status",
+          "cancel",
+          "pause",
+          "resume",
+          "stuck",
+          "running"
+        ],
+        "noneOf": [
+          "to do list"
+        ]
+      },
+      {
+        "allOf": [
+          "tasks"
+        ],
+        "anyOf": [
+          "status",
+          "cancel",
+          "pause",
+          "running",
+          "stuck"
+        ],
+        "noneOf": [
+          "to do list"
+        ]
+      }
+    ]
+  }
 }
