@@ -1086,7 +1086,7 @@ export async function runCoordinatorConversationDetailed(
           managerRouting.modelOverride,
           'team_manager',
           options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
-	          turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
+          turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	          undefined,
 	          managerRouting.providerOverride,
 	          undefined,
