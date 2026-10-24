@@ -1,100 +1,71 @@
 # Team delivery contract pack (DRAFT, not active)
 
-Status: DRAFT for review. Nothing here is applied to any live team, role, schedule, prompt, or skill. Merging this PR does not change runtime behavior, the managed-team store, or any wake path. Any change to a live target needs a separate explicit owner authorization and follows the rollout steps below.
+This PR prepares concrete operating contracts; nothing is activated. Merge alone changes no live team, role, schedule, skill, game or runtime behavior. A later explicit authorization covering the named rollout is required. No new scheduler or agent seats. Static tests validate document structure, not model behavior, permissions or game quality.
 
-Scope: four managed teams (Roblox Studio, X Growth, Perf QA, Teams Gauntlet). Friendly display names only. No private IDs, job IDs, account names, local paths, tokens, or copied live prompt blobs appear in this pack.
+## Audit findings and evidence limits
 
-## Evidence and date limits
+2026-10-24 review covered Roblox Studio, X Growth, Perf QA and Teams Gauntlet using production artifacts, selected histories, current team inventory/schedules and source inspection. It was not an exhaustive replay or a fresh game playtest. Private transcripts/config snapshots are not committed.
 
-Source: a 2026-10-24 audit of the four teams, plus a live read of team inventory and schedule text on the same day. The audit notes are private and are not reproduced here. Each row below is the finding, the staged change, and what the evidence cannot show.
+- Roblox: the current sprint still carried a superseded one-milestone throttle; today's result targeted an obsolete fidelity floor. Latest reviewed runtime QA was FIX with missing required tests and inadequate play-mode evidence. Private testing was conflated with public release. Replacements below fix those contracts, not the actual game's defects.
+- Quality drift: the first scoring table had Q1–Q10, but the whole file also contained Q11 social/co-op, geometry and intro-cinematic amendments. Read the full current contract; do not freeze an older range. Current draft scores Q1–Q11, minimum7/average8.
+- X Growth: stale per-item approval language conflicts with the main Editor mandate. Morning Brief already correctly preserves member draft-only work, background build reconciliation, JSON/review validation and Radar steps; keep them. Missing post metrics are not proof of zero performance.
+- Perf QA: historical Oct1 before/after measurements and remaining issues are not current measurements. Keep it an on-demand verification service for actual changes.
+- Teams Gauntlet: historical routing/access/test-discovery friction followed by successful independent test runs; these are fixture cases, not proof current runtime is broken or production work shipped.
+- Runtime: existing completion events update room state and wake managers. No dropped-wake defect was demonstrated, so no scheduler/poller was added.
 
-| Team | Audit finding (2026-10-24) | Staged change | Evidence limit |
-|---|---|---|---|
-| Roblox Studio | Build Sprint schedule still carries a one-milestone-per-sprint throttle. Its 2026-10-24 13:01 result reported a Forge loop judged against a superseded reference floor. | Replace the throttle with checkpoint cadence and active-work reconciliation (PIPELINE.md, schedule payload). | Schedule text read on one day. A running task is not proven stalled. |
-| Roblox Studio | TEAM QA text still uses the superseded reference floor and older quality-range wording. | Replace with the Q1–Q10 alignment (QUALITY-ALIGNMENT.md, TEAM.md). | Read of the live contract on one day. The live file is not edited by this PR. |
-| Roblox Studio | Latest reviewed QA was FIX. Several required checks were NOT TESTED. Edit-mode images were used for appearance scoring, and the saved play-mode capture was missing. | NOT TESTED is not PASS. Appearance scoring uses saved play-mode evidence only. | Describes the audit snapshot, not the current build. |
-| Roblox Studio | The current-state table was stale. | One current-state block per title, with a version, verdict, and next action (PIPELINE.md). | No current title state is asserted here. |
-| X Growth | The x-growth-engine skill text says each item needs owner approval and team members never post. The newer editor mandate lets the main editor post within caps. | Staged authority clause (OTHER-TEAMS.md). The skill catalog is not changed. | Skill text as read on the audit day. |
-| X Growth | Morning Brief already assigns main-editor publishing, team drafts only, JSON validation, and build review. | Preserve. Patch only where a live conflict is found, otherwise no-op. | No current analytics or follower facts are claimed. |
-| Perf QA | Its measurements are historical, from 2026-10-01 sessions (for example, a session payload near 1 MB). | On-demand service for a named real diff. No schedule. | Oct 1 results are not current. No current performance claim or regression is inferred. |
-| Teams Gauntlet | Historical failures appear in the friction log. Later independent runs reading 5/5 and 3/3 passed when read on 2026-10-24. The old faults were not reproduced. | Fixture regression cases, not staff or KPI. Zero discovered tests is "no evidence". | Fixture only. Not a product quality measure. |
-| Runtime | Completion events already route to room state and manager auto-wake. No dropped-wake defect was proven. | No scheduler, poller, watcher, or runtime change. | Based on the existing source; not re-tested here. |
+## Operations and exact target mapping
 
-What this pack does not show: sample sizes, acquisition, retention, revenue, current analytics, live schedule state, Roblox quality of any current build, or whether any external change is safe to run.
+Logical file paths resolve under the selected user's configured workspace, never a built-in personal path. Resolve each team first, then its roles; there are two managers called Atlas, so a manager name alone is not unique. Builder means Forge in Roblox and Niko in X. No new roles are created.
 
-## Files
-
-- `roblox/TEAM.md`: full replacement text for the Roblox manager and role payloads (manager, Forge, Probe, Designer).
-- `roblox/PIPELINE.md`: full replacement pipeline with named gates, current-state block, and schedule clauses for Build Sprint, Daily Pulse, and Weekly Strategy.
-- `roblox/QUALITY-ALIGNMENT.md`: Q1–Q10 contract and evidence rules, aligned to one scoring threshold.
-- `OTHER-TEAMS.md`: X authority clause, X schedule anchors, and the Perf QA and Teams Gauntlet contract payloads.
-
-## Target map (friendly display names only)
-
-Operations: `replace` (write the full staged text into that target), `patch` (change only the listed anchor clauses), `no-op` (verify the live text already matches and change nothing).
-
-| Team | Target (display name) | Kind | Operation |
-|---|---|---|---|
-| Roblox Studio | Manager instructions | Team role payload | replace with roblox/TEAM.md manager section |
-| Roblox Studio | Forge role instructions | Team role payload | replace with roblox/TEAM.md Forge section |
-| Roblox Studio | Probe role instructions | Team role payload | replace with roblox/TEAM.md Probe section |
-| Roblox Studio | Designer role instructions | Team role payload | replace with roblox/TEAM.md Designer section |
-| Roblox Studio | Roblox Studio: Build Sprint (autonomous) | Schedule prompt | patch (PIPELINE.md, Build Sprint clauses) |
-| Roblox Studio | Roblox Studio: Daily Pulse | Schedule prompt | patch (PIPELINE.md, Daily Pulse status vocabulary) |
-| Roblox Studio | Roblox Studio: Weekly Strategy | Schedule prompt | patch (PIPELINE.md, Weekly Strategy clauses) |
-| X Growth | x-growth-engine skill source | Skill text (staged only) | patch (OTHER-TEAMS.md, authority clause) |
-| X Growth | X Growth: Morning Brief | Schedule prompt | no-op unless a live conflict matches the anchor; then patch |
-| X Growth | X Editor: auto-select + post | Schedule prompt | patch (OTHER-TEAMS.md, main-editor clause) |
-| Perf QA | Perf QA contract text | Team contract | replace with OTHER-TEAMS.md Perf QA payload (no schedule) |
-| Teams Gauntlet | Teams Gauntlet contract text | Team contract | replace with OTHER-TEAMS.md Gauntlet payload (no schedule) |
-
-Unresolved targets fail closed: if a display name does not resolve, skip that target and stop for fresh review.
-
-## File and logical-path mapping (portable; no private paths)
-
-| Live object (logical path or display name) | Staged source | Operation |
+| Team | Target | Operation / payload |
 |---|---|---|
-| Roblox team contract: manager, Forge, Probe, Designer role text | `roblox/TEAM.md` (role sections) | replace only the role sections that conflict; keep non-conflicting role text |
-| Roblox pipeline and schedule clauses | `roblox/PIPELINE.md` | patch the named schedule clauses |
-| Roblox quality bar (live `projects/roblox-game/QUALITY-BAR.md`, section 7) | `roblox/QUALITY-ALIGNMENT.md` | reconcile Q1–Q10 thresholds (each at least 7, average at least 8); stop on any unreconciled mismatch |
-| Roblox TEAM QA references (live `projects/roblox-game/TEAM.md`) | `roblox/TEAM.md` and `roblox/QUALITY-ALIGNMENT.md` | replace stale reference-floor and Q1–Q8 clauses together |
-| Roblox pipeline (live `projects/roblox-game/PIPELINE.md`) | `roblox/PIPELINE.md` | replace the stale throttle and release wording |
-| X Growth skill source (`x-growth-engine`) | `OTHER-TEAMS.md` (authority clause) | patch two conflicting clauses only; no catalog change |
-| X Growth README and team description, teamContext (live `projects/x-growth/README.md`, `EDITOR.md`) | `OTHER-TEAMS.md` (X authority mapping) | patch stale authority wording only; preserve other text |
-| X Growth roles: Growth, Scout, Sage | `OTHER-TEAMS.md` (X role mapping) | keep role text; remove only the never-post or per-item-approval clause |
-| Perf QA and Teams Gauntlet contracts | `OTHER-TEAMS.md` | replace contract text; no schedule |
+| Roblox Studio | `projects/roblox-game/TEAM.md` | replace file with roblox/TEAM.md; privately retain old file |
+| Roblox Studio | `projects/roblox-game/PIPELINE.md` | replace file with roblox/PIPELINE.md; migrate fresh state and archive old history first |
+| Roblox Studio | `projects/roblox-game/QUALITY-BAR.md` | preserve complete existing art/reference/amendment detail; append once Quality payload below; mismatch in current requirements stops activation |
+| Roblox Studio | manager / Forge / Probe / Designer / Growth role instructions; team context | append once Roblox role payload below; preserve unrelated role instructions and stop on conflicting authority |
+| Roblox Studio | Scout / Sage role instructions | no-op when role already matches TEAM.md; otherwise stop for a separately reviewed exact patch |
+| Roblox Studio | team description | replace with description below |
+| Roblox Studio | Roblox Studio: Build Sprint (autonomous) | exact two replacements + marked block in roblox/PIPELINE.md |
+| Roblox Studio | Roblox Studio: Daily Pulse | append marked checkpoint block in roblox/PIPELINE.md |
+| Roblox Studio | Roblox Studio: Weekly Strategy | append same checkpoint block; preserve research |
+| X Growth | `skills/x-growth-engine/SKILL.md`, project README, team description/context and member role text | targeted authority operations in OTHER-TEAMS.md; catalog not changed by this PR |
+| X Growth | X Growth: Morning Brief | no-op when current contract matches; otherwise exact authority replacements only |
+| X Growth | X Editor: auto-select + post | append-once Editor block in OTHER-TEAMS.md; retain caps/kill switch and approval controls |
+| Perf QA | team context and desktop/mobile verifier role instructions | append-once Perf QA contract in OTHER-TEAMS.md; no new schedule |
+| Teams Gauntlet | team context and manager instructions | append-once Gauntlet contract in OTHER-TEAMS.md; no new schedule |
 
-## Unique resolution (activation only, never in the repo)
+Team description replacement: `Build, independently test, release and grow polished original-IP Roblox games. One active build plus a monitoring lane. Evidence-bound quality gates, bounded continuous increments, authorized publishing and owner-only spend.`
 
-1. Search the current connector and team inventory by the exact display name.
-2. Exactly one match, and the revision matches the reviewed snapshot: proceed to the rollout steps.
-3. Zero or multiple matches: stop. Do not guess an ID and do not fall back to workspace files.
-4. Revision changed since review, or the live text has a workflow not covered by the staged anchor: skip that target and stop for fresh review.
+Roblox role/team-context payload (same scoped block for every listed target; role assignments remain in TEAM.md):
 
-Resolved IDs go only into the operator's private change record.
+```text
+[TEAM_DELIVERY_ROLE_V1]
+Read the selected studio project's TEAM.md, PIPELINE.md and entire QUALITY-BAR.md on every run. Follow your named role's authority and handoff contract there. Continue ready bounded increments within budget, reconcile active work before retry, and preserve exact versioned evidence. Manager owns gated publish; Forge builds; Probe independently verifies; Designer owns references and test plans; Growth owns distribution/monitoring. Restricted staging uses the pre-staging safety/authority gate, not final public-release PASS. No source change reuses an older PASS. Conflicting instructions must be reconciled before action, not silently ignored.
+[/TEAM_DELIVERY_ROLE_V1]
+```
 
-## Rollout preconditions
+Quality payload (append to the whole existing QUALITY-BAR, never replace its art guidance with the alignment summary):
 
-1. One owner approval covering the named pack targets listed in the target map (not one approval per setting). Roblox standing authorization covers owned publish after QA PASS and does not need a new per-release confirmation.
-2. Active runs for the target are drained or settled. Do not rewrite or duplicate an active run.
-3. A local pre-change snapshot of the complete current text is captured privately for that target.
-4. Staged anchors are compared against the live text. A mismatch means a stop, not a best guess.
-5. One target at a time: apply, read back, and diff against the staged operation.
-6. A paused schedule stays paused unless the owner resumes it. Do not unpause as a side effect.
-7. Post-apply smoke: read back the saved text. Confirm that no dispatch, post, publish, or spend was triggered.
+```text
+[TEAM_DELIVERY_QUALITY_V1]
+Apply every current scoring category and amendment. This revision includes Q1–Q11, each at least 7 and average at least 8; Q11 requires real two-player social/invite testing. No category may be self-declared N/A. Any exception needs dated owner approval recorded in DESIGN.md and QA. Match scores to the exact version and saved play-mode evidence; NOT TESTED is not PASS. The public-release PASS includes both local and restricted-staging tests. New categories added later must be included rather than silently omitted.
+[/TEAM_DELIVERY_QUALITY_V1]
+```
+
+## Unique resolution and Preconditions
+
+1. Obtain one explicit authorization covering the named rollout. This is not a new per-release approval requirement under existing standing authorization.
+2. Resolve live targets through current team/agent/schedule tools and the configured workspace. Zero or multiple matches, missing files, unknown role mapping or drift since the reviewed snapshot: stop for fresh review; never guess an ID.
+3. Snapshot full texts, context refs, revisions/hashes and enabled/paused states privately. Pause affected schedules, then wait for active runs to settle; do not rewrite or duplicate an active run. Teams not scheduled still require active-run reconciliation.
+4. Exact replacement anchors must occur exactly once. Zero or multiple occurrences stop that target. For append-once blocks: no marker permits append; exactly one identical complete block is no-op; duplicate, partial or different marker block stops for review. Existing conflicting instructions outside a marked block also stop; appending does not magically override them.
+5. Compare proposed complete texts, not just appended lines. Preserve valid security, reference, model, budget, authority and workflow instructions. Apply via supported `team_ops_wrapper` team updates/context refs, `agent_ops` instruction updates, `schedule_job_patch` preview then apply, and workspace file/skill edits only when explicitly authorized. No direct config database mutation.
+6. Read back and diff each target before moving on. Restore exactly its prior enabled/paused state only after all coupled targets are consistent; a paused schedule stays paused. Record applied/no-op/blocked for each mapped target. Do not auto-dispatch a run during installation.
+7. Separate post-activation acceptance: one bounded build → independent QA → repair → final QA → authorized publish → smoke → monitoring cycle with saved artifacts. Until that real cycle succeeds, report behavior UNVERIFIED even if every text readback matches. Use supported tools; never bypass action approvals for this test.
 
 ## Rollback
 
-Pause the affected schedule with its supported control. Restore the exact pre-change snapshot through the same authorized connector or UI, then verify the readback. If the restore cannot be verified, leave the target paused and escalate to the owner. Never reconstruct text from memory. Do not include snapshot contents in PR artifacts. No backfill, no replay, no automatic dispatch.
+Pause affected schedules. Restore exact private pre-change snapshots through the same supported tools, verify complete readbacks, then restore original enabled/paused states. If restore cannot be verified leave affected work paused and escalate. Do not reconstruct from memory, replay old dispatches, backfill publications or commit private snapshots. Keep history; rollback is configuration restoration, not erasing game data.
 
-## Authority boundaries
+## Static verification
 
-- All four teams: members research, build, review, and save drafts.
-- X Growth members never post, reply, like, repost, follow, or DM. Only the designated main-chat X editor posts, within caps and runtime approvals.
-- Roblox responsible roles may publish an owned version under standing owner authorization after an independent version-bound QA PASS and the actual tool approvals. No new per-release owner confirmation is required while that standing authorization is valid.
-- Spending and paid third-party tools stay owner-only. Restricted staging and public release are separate gates.
-- Prompt text does not grant platform permission and does not bypass runtime approval gates.
-
-## Reviewing this PR
-
-Static check only: `node --test tests/team-delivery-pack.test.mjs`. It verifies that the pack is complete (four teams, roles, five schedule names, operations, rollback, unresolved-target rule), that prohibited content is absent, and that negative fixtures fail as expected. It does not check live config, runtime behavior, Roblox quality, release readiness, or the safety of any external change.
+`node --test tests/team-delivery-pack.test.mjs` checks required artifacts, Target mapping, marker/rollback vocabulary and selected negative document fixtures. It does not resolve live targets, execute patch operations, detect every semantic contradiction, enforce QA or prove safety. Independent human/model review and the separate live acceptance cycle remain necessary.

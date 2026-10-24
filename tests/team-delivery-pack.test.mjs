@@ -135,7 +135,7 @@ test('negative: unresolved target without fail-closed rule fails', () => {
 });
 
 test('negative: missing rollback fails', () => {
-  const files = loadPack({ 'roblox/PIPELINE.md': loadPack()['roblox/PIPELINE.md'].replaceAll('Rollback', 'Undo') });
+  const files = loadPack({ 'roblox/PIPELINE.md': loadPack()['roblox/PIPELINE.md'].replace(/rollback/gi, 'Undo') });
   assert.ok(checkPack(files).some((e) => e.includes('"Rollback"')));
 });
 
@@ -152,4 +152,35 @@ test('negative: blanket all-team publish ban contradicting standing authorizatio
 test('negative: prohibited local path fails', () => {
   const files = loadPack({ 'README.md': loadPack()['README.md'] + '\nSee C:\\Users\\someone\\notes.\n' });
   assert.ok(checkPack(files).some((e) => e.includes('absolute Windows user path')));
+});
+
+// Selected content sentinels: review aids only, not a semantic policy engine.
+function preservedContracts(files) {
+  const team = files['roblox/TEAM.md'] ?? '';
+  const pipe = files['roblox/PIPELINE.md'] ?? '';
+  const quality = files['roblox/QUALITY-ALIGNMENT.md'] ?? '';
+  const readme = files['README.md'] ?? '';
+  return [
+    /1,000 plays/.test(team) && /15%/.test(team) && /12\+ minute/.test(team) && /two update cycles/.test(team),
+    /10 generations per new game and 4 per update/.test(team),
+    /Q11 Social loop/.test(quality) && /No self-declared N\/A/.test(quality),
+    pipe.indexOf('**Restricted staging:**') > 0 && pipe.indexOf('**Final QA PASS:**') > pipe.indexOf('**Restricted staging:**'),
+    /T\+24h/.test(pipe) && /T\+72h/.test(pipe),
+    /exactly once/.test(readme) && /duplicate, partial or different marker/.test(readme),
+  ];
+}
+test('preserves concrete gates, caps, Q11, staging order and rollout checks', () => {
+  assert.ok(preservedContracts(loadPack()).every(Boolean));
+});
+for (const [name, file, oldText] of [
+  ['numeric sample gate','roblox/TEAM.md','1,000 plays'],
+  ['image cap','roblox/TEAM.md','10 generations per new game and 4 per update'],
+  ['Q11','roblox/QUALITY-ALIGNMENT.md','Q11 Social loop'],
+  ['staging gate','roblox/PIPELINE.md','**Restricted staging:**'],
+  ['72-hour review','roblox/PIPELINE.md','T+72h'],
+  ['ambiguous marker rule','README.md','duplicate, partial or different marker'],
+]) test(`negative: removed ${name} is detected`, () => {
+  const files = loadPack();
+  files[file] = files[file].replaceAll(oldText, 'REMOVED');
+  assert.ok(preservedContracts(files).some(v => !v));
 });
