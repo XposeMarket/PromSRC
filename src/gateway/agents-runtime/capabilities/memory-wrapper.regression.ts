@@ -3,7 +3,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { loadBusinessContextSnapshot, memoryCapabilityExecutor } from './memory-executor';
-import { stripMemoryIdsForPreview } from '../../../../web-ui/src/onboarding/memory-confirm.js';
 import { ensureMemoryBulletIds, findMemoryBulletById, nearestMemoryBullets, removeMemoryBulletById, replaceMemoryBulletById } from '../../memory-index/memory-recall.js';
 
 async function main(): Promise<void> {
@@ -177,6 +176,9 @@ async function fixChecks(): Promise<void> {
 type FixExec = (workspacePath: string, args: any) => Promise<any>;
 
 async function fixChecksPartB(exec: FixExec, mkWorkspace: () => string): Promise<void> {
+  // web-ui module is plain JS without a declaration file: load it via a variable specifier so tsc does not follow it.
+  const onboardingPath: string = '../../../../web-ui/src/onboarding/memory-confirm.js';
+  const { stripMemoryIdsForPreview } = (await import(onboardingPath)) as { stripMemoryIdsForPreview: (text: string) => string };
   // Finding 3: BUSINESS.md snapshot (business_context_mode + [BUSINESS] injection) renders ids, never raw comments.
   {
     const ws = mkWorkspace();

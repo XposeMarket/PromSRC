@@ -2,7 +2,7 @@ export type MemoryFactWriteResult = {
   content: string;
   id: string;
   supersededCount: number;
-  superseded: Array<{ id?: string; text: string }>;
+  superseded: Array<{ id?: string; text: string; lines?: string[] }>;
   flaggedAsUntrusted: boolean;
   nearDuplicates: Array<{ id?: string; category: string; text: string; score: number }>;
 };
