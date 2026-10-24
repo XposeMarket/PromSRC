@@ -70,6 +70,10 @@ const checks = [
   // F. Action wiring
   ['action helper is exported from teams module', exportBlock(teams).includes('_wireMobileAgentMessageActions')],
   ['action helper is idempotent', teams.includes("listEl.dataset.pmAgentActionsWired === '1'")],
+  ['copy checks clipboard API before use', teams.includes("if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');")],
+  ['copy falls back to execCommand when clipboard is missing', teams.includes("document.execCommand('copy')") && teams.includes('_copyMobileAgentMessageText(text);')],
+  ['copy never calls clipboard.writeText unguarded', !teams.includes('navigator.clipboard.writeText(text).then(')],
+  ['actions read only the answer markdown, not trace drawers', teams.includes("querySelector(':scope > .pm-bubble > .markdown-body')") && !teams.includes("btn.closest('.pm-msg')?.querySelector('.markdown-body')")],
   ['subagent route wires actions', subagent.includes('_wireMobileAgentMessageActions(listEl)') && subagent.includes('_wireMobileAgentMessageActions,')],
   ['team route wires actions', teams.includes('_wireMobileAgentMessageActions(listEl);')],
   ['mobile-pages exports _ttsSpeak and _ttsStop', exportBlock(pages).includes('_ttsSpeak,') && exportBlock(pages).includes('_ttsStop,')],

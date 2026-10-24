@@ -581,6 +581,35 @@ function _renderMobileStreamProcess(message) {
 
 
 
+// Same fallback as main chat's copyMobileTextValue: plain-http gateways have no
+// navigator.clipboard, so fall back to a hidden textarea + execCommand.
+async function _copyMobileAgentMessageText(text) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+    pmToast('Message copied', 'success');
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      const ok = document.execCommand('copy');
+      pmToast(ok ? 'Message copied' : 'Copy failed', ok ? 'success' : 'error');
+      return !!ok;
+    } catch {
+      pmToast('Copy failed', 'error');
+      return false;
+    } finally {
+      ta.remove();
+    }
+  }
+}
+
 // Delegated Copy/Speak handler for finished AI replies in dedicated agent chats.
 // Idempotent: the list element survives re-renders, so the listener is bound once.
 function _wireMobileAgentMessageActions(listEl) {
@@ -590,12 +619,12 @@ function _wireMobileAgentMessageActions(listEl) {
     const btn = event.target?.closest?.('[data-pm-agent-msg-action]');
     if (!btn || !listEl.contains(btn)) return;
     const action = String(btn.dataset.pmAgentMsgAction || '');
-    const text = String(btn.closest('.pm-msg')?.querySelector('.markdown-body')?.innerText || '').trim();
+    // The answer is the bubble's direct .markdown-body child; trace drawers can
+    // hold their own nested markdown that must not be copied or spoken.
+    const text = String(btn.closest('.pm-msg')?.querySelector(':scope > .pm-bubble > .markdown-body')?.innerText || '').trim();
+    if (!text) return;
     if (action === 'copy') {
-      navigator.clipboard.writeText(text).then(
-        () => pmToast('Copied', 'success'),
-        () => pmToast('Copy failed', 'error'),
-      );
+      _copyMobileAgentMessageText(text);
       return;
     }
     if (action === 'speak') {
@@ -723,10 +752,9 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     const visibleTop = Math.max(0, Number(keyboardViewport?.offsetTop || 0));
     const visibleBottom = Math.max(0, Number(viewportBottom || 0));
     if (!rect || rect.height <= 0 || rect.bottom <= visibleTop || rect.top >= visibleBottom) return 0;
-    // Dedicated chats now hide the tab bar while the keyboard is up, like main
-    // chat, so this inset is 0 then. It still applies while the bar is visible.
-    // short gap used by its resting layout. Main chat and dedicated chats both
-    // hide the bar during keyboard focus, so the inset returns 0 when it is hidden.
+    // Dedicated chats hide the tab bar while the keyboard is up, like main
+    // chat, so this returns 0 then. While the bar is visible, keep the
+    // composer above it plus the short resting-layout gap.
     return Math.max(0, Math.round(visibleBottom - Math.max(rect.top, visibleTop) + 16));
   };
   let keyboardRaf = 0;
