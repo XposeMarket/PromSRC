@@ -2584,8 +2584,8 @@ If 0 items pass all 4 gates: write nothing to memory. This is normal.
 
 Memory mutation tool contract:
 - Add a new durable item with memory(action="write", file="user|soul|memory", category="...", content="...").
-- Correct one existing durable bullet with memory(action="update", file="user|soul|memory", category="...", previous_content="exact current bullet text after '- '", content="replacement text").
-- For update, copy previous_content exactly from the current file. The operation fails rather than guessing if zero or multiple bullets match.
+- Correct one existing durable bullet with memory(action="update", file="user|soul|memory", category="...", id="m:xxxxx", content="replacement text"). Use the stable id shown as [m:xxxxx] in memory read output or the prompt. The id keeps the same bullet and archives the old text.
+- Fallback when no id is known: memory(action="update", file="user|soul|memory", category="...", previous_content="exact current bullet text after '- '", content="replacement text"). The operation fails rather than guessing if zero or multiple bullets match.
 - Do not use generic workspace_edit/file-edit tools on USER.md, SOUL.md, or MEMORY.md in this pass.
 
 For items that pass:
