@@ -2,6 +2,12 @@
 // workspace memory files (USER.md / BUSINESS.md / TOOLS.md / MEMORY.md), with
 // per-file checkboxes. Nothing is persisted until they hit Save.
 
+// Display-only: hides the stable bullet id comment (<!-- m:xxxxx -->) from the preview.
+// Saved content is never changed by this helper.
+export function stripMemoryIdsForPreview(text) {
+  return String(text || '').replace(/\s*<!--\s*m:[a-z0-9]{4,8}\s*-->/gi, '');
+}
+
 export function showMemoryConfirm(profile, opts = {}) {
   const devTest = !!opts.devTest;
   return new Promise((resolve) => {
@@ -63,9 +69,10 @@ export function showMemoryConfirm(profile, opts = {}) {
         return;
       }
       plansEl.innerHTML = changedPlans.map((p, i) => {
-        const added = p.proposedContent.length - p.currentContent.length;
+        const proposedText = stripMemoryIdsForPreview(p.proposedContent);
+        const added = proposedText.length - stripMemoryIdsForPreview(p.currentContent).length;
         const verb = p.exists ? 'Update' : 'Create';
-        const proposedEsc = p.proposedContent
+        const proposedEsc = proposedText
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return `
           <div class="prom-onb-plan" style="border:1px solid var(--line,#e2e2e8);border-radius:10px;overflow:hidden">
