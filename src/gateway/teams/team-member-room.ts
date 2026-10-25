@@ -4,6 +4,7 @@ import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/conf
 import { parseProviderModelRef, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import {
   appendTeamChat,
+  peekAgentMessages,
   appendTeamRoomMessage,
   buildTeamRoomSummary,
   drainAgentMessages,
@@ -45,6 +46,8 @@ type HandleChatFn = (
   attachments?: undefined,
   reasoningOptions?: undefined,
   providerOverride?: string,
+  callerOnToken?: (token: string) => void,
+  runtimeOptions?: { toolCategoryDetectionText?: string },
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 interface TeamMemberRoomDeps {
@@ -58,6 +61,8 @@ export interface TeamMemberRoomTurnOptions {
   autoWakeReason?: string;
   autoWakeSource?: 'teammate_message' | 'dispatch_followup' | 'room_followup' | 'manager_message';
   autoWakeChainDepth?: number;
+  /** Clean routing text for skill/memory matching (queued teammate messages). */
+  routingText?: string;
 }
 
 type TeamMemberProcessEntry = {
@@ -248,6 +253,7 @@ export function scheduleTeamMemberAutoWake(
         autoWakeReason: options.reason,
         autoWakeSource: options.source || 'teammate_message',
         autoWakeChainDepth: chainDepth,
+        routingText: peekAgentMessages(teamId, agentId).join(' ').slice(0, 4000),
       },
     ).catch(() => {});
   }, delayMs);
@@ -905,6 +911,8 @@ async function runTeamMemberRoomTurnInternal(
       undefined,
       undefined,
       agentRouting.providerOverride,
+      undefined,
+      { toolCategoryDetectionText: String(options.routingText || '').trim() || undefined },
       ),
       resolveTeamMemberAllowedWorkPaths(agentId, teamId),
     );
