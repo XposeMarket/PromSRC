@@ -23,6 +23,8 @@ import {
   _wireMobileApprovalActionButton,
   _restoreTemporaryMobileSubagentVoiceProfile,
   _setTemporaryMobileSubagentVoiceProfile,
+  _ttsSpeak,
+  _ttsStop,
   _uploadMobileChatAttachments,
   _wireMobileChatEnhancements,
   _wireMobileProcessRunActions,
@@ -579,6 +581,58 @@ function _renderMobileStreamProcess(message) {
 
 
 
+// Same fallback as main chat's copyMobileTextValue: plain-http gateways have no
+// navigator.clipboard, so fall back to a hidden textarea + execCommand.
+async function _copyMobileAgentMessageText(text) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+    pmToast('Message copied', 'success');
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      const ok = document.execCommand('copy');
+      pmToast(ok ? 'Message copied' : 'Copy failed', ok ? 'success' : 'error');
+      return !!ok;
+    } catch {
+      pmToast('Copy failed', 'error');
+      return false;
+    } finally {
+      ta.remove();
+    }
+  }
+}
+
+// Delegated Copy/Speak handler for finished AI replies in dedicated agent chats.
+// Idempotent: the list element survives re-renders, so the listener is bound once.
+function _wireMobileAgentMessageActions(listEl) {
+  if (!listEl || listEl.dataset.pmAgentActionsWired === '1') return;
+  listEl.dataset.pmAgentActionsWired = '1';
+  listEl.addEventListener('click', (event) => {
+    const btn = event.target?.closest?.('[data-pm-agent-msg-action]');
+    if (!btn || !listEl.contains(btn)) return;
+    const action = String(btn.dataset.pmAgentMsgAction || '');
+    // The answer is the bubble's direct .markdown-body child; trace drawers can
+    // hold their own nested markdown that must not be copied or spoken.
+    const text = String(btn.closest('.pm-msg')?.querySelector(':scope > .pm-bubble > .markdown-body')?.innerText || '').trim();
+    if (!text) return;
+    if (action === 'copy') {
+      _copyMobileAgentMessageText(text);
+      return;
+    }
+    if (action === 'speak') {
+      try { _ttsStop(); _ttsSpeak(text); } catch {}
+    }
+  });
+}
+
 function _renderMobileAgentChatList(listEl, messages, renderMessage) {
   if (!listEl) return;
   const expandedDrawers = new Set();
@@ -698,9 +752,9 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     const visibleTop = Math.max(0, Number(keyboardViewport?.offsetTop || 0));
     const visibleBottom = Math.max(0, Number(viewportBottom || 0));
     if (!rect || rect.height <= 0 || rect.bottom <= visibleTop || rect.top >= visibleBottom) return 0;
-    // Keep the dedicated composer above the persistent tab bar, including the
-    // short gap used by its resting layout. The main chat may hide its bar
-    // during keyboard focus; dedicated chats intentionally do not.
+    // Dedicated chats hide the tab bar while the keyboard is up, like main
+    // chat, so this returns 0 then. While the bar is visible, keep the
+    // composer above it plus the short resting-layout gap.
     return Math.max(0, Math.round(visibleBottom - Math.max(rect.top, visibleTop) + 16));
   };
   let keyboardRaf = 0;
@@ -743,6 +797,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   const placeAboveKeyboard = () => {
     keyboardRaf = 0;
     if (!form || !keyboardManaged || !keyboardActive) return;
+    keyboardTabbar?.style.setProperty('display', 'none', 'important');
     const layoutHeight = Math.max(
       Number(window.innerHeight || 0),
       Number(document.documentElement?.clientHeight || 0),
@@ -821,6 +876,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     if (!keyboardManaged) return;
     keyboardActive = true;
     keyboardFocusGraceUntil = performance.now() + 1600;
+    keyboardTabbar?.style.setProperty('display', 'none', 'important');
     keyboardBaselineHeight = Math.max(
       keyboardBaselineHeight,
       Number(window.innerHeight || 0),
@@ -1332,7 +1388,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 async function _renderTeamChatTab(slot, teamId, { standalone = false, team = null } = {}) {
   slot.innerHTML = `
     <div class="${standalone ? 'pm-sa-chat-shell pm-team-chat-page-shell' : 'pm-card'} pm-team-chat-card" id="pm-team-chat-card">
-      <div id="pm-team-chat-list" class="pm-team-chat-list${standalone ? ' pm-sa-chat-scrollport pm-sa-chat-list' : ''}" aria-live="polite">
+      <div id="pm-team-chat-list" class="pm-team-chat-list${standalone ? ' pm-chat-thread pm-sa-chat-scrollport pm-sa-chat-list' : ''}" aria-live="polite">
         <div class="pm-team-chat-status">Loading team chat&hellip;</div>
       </div>
       <div id="pm-team-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
@@ -1412,6 +1468,7 @@ async function _renderTeamChatTab(slot, teamId, { standalone = false, team = nul
       return _renderMobileAgentChatBubble(normalized, {
         sender: normalized.fromLabel,
         senderIconHtml: senderIcon,
+        chatParity: true,
         live: message === liveMsg,
         keepLiveTraceVisible: message === liveMsg,
       });
@@ -1547,6 +1604,7 @@ async function _renderTeamChatTab(slot, teamId, { standalone = false, team = nul
       return;
     }
     _renderMobileAgentChatList(listEl, rendered, renderTeamChatMessage);
+    _wireMobileAgentMessageActions(listEl);
     listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(listEl);
     listEl.scrollTop = listEl.scrollHeight;
@@ -1637,6 +1695,12 @@ async function _renderTeamChatTab(slot, teamId, { standalone = false, team = nul
   wsEventBus?.on?.('approval_denied', onApprovalDenied);
   wsEventBus?.on?.('approval_expired', onApprovalExpired);
   wsEventBus?.on?.('approval_failed', onApprovalFailed);
+  // Cold launches can paint before marked/DOMPurify load. Re-render history
+  // once they are ready, same as the subagent chat route.
+  const onMarkdownReady = () => {
+    if (!cleanupDone) renderList();
+  };
+  window.addEventListener('prometheus:markdown-ready', onMarkdownReady);
   document.addEventListener('visibilitychange', onVisibility);
   slot._pmCleanup = () => {
     if (cleanupDone) return;
@@ -1650,6 +1714,7 @@ async function _renderTeamChatTab(slot, teamId, { standalone = false, team = nul
     wsEventBus?.off?.('approval_denied', onApprovalDenied);
     wsEventBus?.off?.('approval_expired', onApprovalExpired);
     wsEventBus?.off?.('approval_failed', onApprovalFailed);
+    window.removeEventListener('prometheus:markdown-ready', onMarkdownReady);
     document.removeEventListener('visibilitychange', onVisibility);
   };
   reconcile();
@@ -1986,4 +2051,5 @@ export {
   _mobileReplayFrameToEvent,
   _renderMobileAgentChatList,
   _renderMobileAgentComposerHtml,
+  _wireMobileAgentMessageActions,
 };

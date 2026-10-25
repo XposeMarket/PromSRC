@@ -427,3 +427,51 @@ for (const [name, observation, state] of [
   assert.equal(entry.activity.terminal.completed === true, state === 'exited', name);
   assert.match(renderToolActivityEntry(entry), state === 'exited' ? /completed/i : /running/i, name);
 }
+
+// Multi-query web_search and multi-URL web_fetch must show every angle, not only the first.
+{
+  const entries = [];
+  const called = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'ws_multi', action: 'web_search',
+    args: { query: 'NFL week 8 odds', queries: ['NFL schedule Oct 25', 'NBA odds Oct 25', 'NFL week 8 odds'] },
+  });
+  assert.match(called.text, /3 queries in parallel/, 'multi-query search label shows the query count');
+  const done = applyToolActivityEvent(entries, 'result', { toolCallId: 'ws_multi', action: 'web_search', ok: true, result: 'ok' });
+  const html = renderToolActivityEntry(done);
+  assert.match(html, /Query 1/); assert.match(html, /Query 3/); assert.match(html, /NBA odds Oct 25/);
+  assert.doesNotMatch(html, /Query 4/, 'duplicate of primary query is not listed twice');
+}
+{
+  const entries = [];
+  const single = applyToolActivityEvent(entries, 'call', { toolCallId: 'ws_single', action: 'web_search', args: { query: 'only one', queries: [] } });
+  assert.match(single.text, /Searching the web for/, 'single-query label unchanged');
+}
+{
+  const entries = [];
+  const called = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'wf_multi', action: 'web_fetch',
+    args: { urls: ['https://www.espn.com/a', 'https://espn.com/b', 'https://nfl.com/c'] },
+  });
+  assert.match(called.text, /3 pages in parallel/, 'multi-URL fetch label shows the page count');
+  assert.match(called.text, /espn\.com, nfl\.com/, 'hosts are deduped');
+  const done = applyToolActivityEvent(entries, 'result', { toolCallId: 'wf_multi', action: 'web_fetch', ok: true, result: 'ok' });
+  const html = renderToolActivityEntry(done);
+  assert.match(html, /Page 3/); assert.match(html, /nfl\.com\/c/);
+}
+
+// Collapsed summary counts the real fan-out (queries / pages), not just tool calls.
+{
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', { toolCallId: 's1', action: 'web_search', args: { query: 'a', queries: ['b', 'c'] } });
+  applyToolActivityEvent(entries, 'result', { toolCallId: 's1', action: 'web_search', ok: true, result: 'ok' });
+  applyToolActivityEvent(entries, 'call', { toolCallId: 's2', action: 'web_search', args: { query: 'd', queries: ['e'] } });
+  applyToolActivityEvent(entries, 'result', { toolCallId: 's2', action: 'web_search', ok: true, result: 'ok' });
+  applyToolActivityEvent(entries, 'call', { toolCallId: 'f1', action: 'web_fetch', args: { urls: ['https://a.com/1', 'https://b.com/2'] } });
+  applyToolActivityEvent(entries, 'result', { toolCallId: 'f1', action: 'web_fetch', ok: true, result: 'ok' });
+  applyToolActivityEvent(entries, 'call', { toolCallId: 'f2', action: 'web_fetch', args: { url: 'https://c.com/3' } });
+  applyToolActivityEvent(entries, 'result', { toolCallId: 'f2', action: 'web_fetch', ok: true, result: 'ok' });
+  const summary = toolActivitySummary(entries);
+  assert.match(summary, /2 web searches · 5 queries/, `summary shows query fan-out: ${summary}`);
+  assert.match(summary, /2 page fetches · 3 pages/, `summary shows page fan-out: ${summary}`);
+}
+console.log('[tool-activity-stream] multi-query search / multi-URL fetch labels passed');

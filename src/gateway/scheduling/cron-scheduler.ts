@@ -1668,7 +1668,12 @@ export class CronScheduler {
             managerPrompt,
             broadcastTeamEvent,
             true,
-            { suppressOriginatingSessionProgress: true, toolFilter: previewToolFilter },
+            {
+              suppressOriginatingSessionProgress: true,
+              toolFilter: previewToolFilter,
+              // Skill/memory routing sees the scheduled task, not the run-brief wrapper.
+              toolCategoryDetectionText: String(effectivePrompt || '').trim().slice(0, 4000) || undefined,
+            },
           );
           scheduledTeamRunResult = managerResult;
           const reason = String(managerResult?.reason || 'error');

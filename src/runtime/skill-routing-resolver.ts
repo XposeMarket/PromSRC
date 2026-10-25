@@ -102,7 +102,7 @@ function isExplicitSkillInvocation(message: string, skill: SkillRoutingSkill): b
   const raw = String(message || '');
   const escapedId = skill.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (new RegExp(`(?:^|\\s)(?:\\$${escapedId}|skill:${escapedId})(?=$|\\s|[.,;!?])`, 'i').test(raw)) return true;
-  if (/\b(what is|what does|define|explain|tell me about|describe)\b/i.test(raw)) return false;
+  if (DEFINITIONAL_START_RE.test(definitionalHead(raw))) return false;
   const names = [skill.id.replace(/[-_]+/g, ' '), skill.name].map((value) => value.trim()).filter(Boolean);
   return names.some((name) => {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
@@ -110,8 +110,17 @@ function isExplicitSkillInvocation(message: string, skill: SkillRoutingSkill): b
   });
 }
 
+/** Definitional/guard words only count at the start of a request (first sentence or 160 chars). */
+function definitionalHead(message: string): string {
+  const text = String(message || '').trim();
+  const firstSentence = text.split(/(?<=[.!?])\s+|\n+/)[0] || '';
+  return firstSentence.slice(0, 160);
+}
+
+const DEFINITIONAL_START_RE = /^\s*(?:what is|what are|what does|define|explain|tell me about|describe|how does)\b/i;
+
 function isDefinitionalMention(message: string): boolean {
-  return /\b(what is|what are|what does|define|explain|tell me about|describe|how does)\b/i.test(String(message || ''));
+  return DEFINITIONAL_START_RE.test(definitionalHead(message));
 }
 
 export function getSkillRoutingMode(): SkillRoutingMode {
@@ -185,15 +194,21 @@ export function resolveSkillRuntimeRouting(input: {
   };
 }
 
+const WORKER_EXECUTION_MODES = new Set(['background_agent', 'team_subagent', 'team_manager', 'background_task', 'cron', 'proposal_execution']);
+const WORKER_SKILL_HINT = 'If this task matches a reusable workflow (QA, verification, research, coding, publishing, a team playbook), call skill_list with a short task query before starting.';
+
 export function buildActiveSkillRoutingContext(input: {
   report: SkillRoutingReport;
   skills: SkillRoutingSkill[];
+  executionMode?: string;
 }): string {
   const byId = new Map(input.skills.map((skill) => [skill.id, skill]));
   const lines = [
     '[SKILLS]',
     'Skills are tested playbooks for how work gets done here. For any actual task (build, fix, investigate, test, research, review, write, automate, deploy, clean up), check skills before the first action and read EVERY skill whose procedure covers a part of the task. Real tasks often need two or three: a domain skill for what you are working on plus workflow skills for how (for example a coding-loop skill for code edits, a verification skill before claiming done, a PR/worktree skill for source changes). Read them together in one parallel batch. Skip a candidate only when it shares words with the request but not the work. Skip skills for greetings, small talk, and quick factual answers.',
   ];
+  // Heartbeat gets only the [SKILLS] header: no candidates, discovery, or "no skill" line.
+  if (input.executionMode === 'heartbeat') return lines[0];
   if (input.report.candidates.length) {
     lines.push('', '[MATCHING_SKILLS] — candidates only; instructions are not loaded');
     for (const candidate of input.report.candidates) {
@@ -207,7 +222,7 @@ export function buildActiveSkillRoutingContext(input: {
   if (input.report.discoveryRecommended) {
     lines.push('', '[SKILL_DISCOVERY_REQUIRED]', 'This is an actionable task and no installed skill matched by trigger. Before acting, call skill_list with a concise task-style query (one query per distinct phase if the task spans several, in parallel), then skill_read every strong result that covers part of the task. If nothing strong comes back, continue without a skill and, if the workflow proved reusable, offer to create one afterwards.');
   } else if (!input.report.candidates.length) {
-    lines.push('', 'No skill is required for this turn. Do not call skill_list or skill_read unless the task develops into a genuinely specialized workflow.');
+    lines.push('', WORKER_EXECUTION_MODES.has(input.executionMode || '') ? WORKER_SKILL_HINT : 'No skill is required for this turn. Do not call skill_list or skill_read unless the task develops into a genuinely specialized workflow.');
   }
   lines.push('', 'After completing a genuinely reusable workflow with no good skill fit, offer to create one or submit an evidence-backed candidate; never mutate the skill catalog automatically.');
   return lines.join('\n');

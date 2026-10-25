@@ -132,6 +132,7 @@ type BuildTurnContextOptions = {
   excludedSkillIds?: Iterable<string> | string[];
   forcedSkillIds?: string[];
   sessionId?: string;
+  executionMode?: string;
 };
 
 function normalizeSkillIdSet(value: unknown): Set<string> {
@@ -498,9 +499,11 @@ function explicitSkillMentionScore(skill: Skill, rawText: string): number {
 
 function triggerRouteScore(trigger: string, rawText: string, queryWords: Set<string>): number {
   const triggerText = normalizeSkillMatchTextLoose(trigger);
-  const triggerWords = triggerText.split(' ').filter((word) => word.length >= 3);
+  const triggerWords = triggerText.split(' ').filter((word) => word.length >= 3 || COMPOSER_SKILL_MATCH_SHORT_WORDS.has(word));
   if (!triggerWords.length) return 0;
   if (exactPhraseInText(triggerText, rawText)) return 150 + Math.min(20, triggerWords.length * 4);
+  // A trigger that lost words to the length filter (not allowlisted) may only match by exact phrase.
+  if (triggerText.split(' ').some((word) => word.length > 0 && word.length < 3 && !COMPOSER_SKILL_MATCH_SHORT_WORDS.has(word))) return 0;
   const overlap = triggerWords.filter((word) => queryWords.has(word)).length;
   if (triggerWords.length >= 2 && overlap === triggerWords.length) return 52;
   if (triggerWords.length >= 3 && overlap >= 2 && overlap / triggerWords.length >= 0.66) return 34;
@@ -1754,7 +1757,9 @@ export class SkillsManager {
       .filter((skill): skill is Skill => !!skill && skill.health.state !== 'blocked' && skill.status !== 'blocked')
       .slice(0, 3);
     const selectedIds = new Set(selectedSkills.map((skill) => skill.id));
-    const allRankedMatches = rankSkillMatches(all, _messageText, { limit: 12 })
+    const executionMode = typeof optionsOrMaxChars === 'number' ? '' : String(optionsOrMaxChars?.executionMode || '');
+    // Heartbeat turns never get implicit skill offers (they were 855 bogus offers and 0 reads).
+    const allRankedMatches = (executionMode === 'heartbeat' ? [] : rankSkillMatches(all, _messageText, { limit: 12 }))
       .filter((match) => !excludedSkillIds.has(match.id.toLowerCase()));
     const rankedMatches = allRankedMatches
       .filter((match) => !selectedIds.has(match.id));
@@ -1820,7 +1825,7 @@ export class SkillsManager {
         ].join('\n')
       : '';
     return getSkillRoutingMode() === 'active'
-      ? [buildActiveSkillRoutingContext({ report, skills: all }), forcedInstructions].filter(Boolean).join('\n\n')
+      ? [buildActiveSkillRoutingContext({ report, skills: all, executionMode }), forcedInstructions].filter(Boolean).join('\n\n')
       : legacyContext;
   }
 

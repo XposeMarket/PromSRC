@@ -286,7 +286,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
 		            };
 		          }
 		          try {
-		            const { createProposal } = require('../../proposals/proposal-store');
+		            const { createProposal, actionProposalPlanError } = require('../../proposals/proposal-store');
                 let teamExecution: any = undefined;
                 let sourceTeamId: string | undefined = undefined;
                 if (teamNoteForProposal?.authorType === 'manager') {
@@ -409,7 +409,16 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
 	                  repairDepth: Math.max(1, Number(proposalTask?.proposalExecution?.repairContext?.repairDepth || 0) + 1),
 	                }
 	              : undefined;
-	            const proposal = createProposal({
+	            const planError = actionProposalPlanError({
+              executionMode: String(args.execution_mode || args.executionMode || '').trim()
+                || ((Array.isArray(args.affected_files) && (args.affected_files as Array<{ path?: unknown }>).some((f) => /^(\.\/)?(src|web-ui)\//.test(String(f?.path || '').replace(/\\/g, '/')))) ? 'code_change' : ''),
+              executionSteps: args.execution_steps,
+              repair: allowRepairProposal,
+            });
+            if (planError) {
+              return { name, args, result: `write_proposal error: ${planError}`, error: true };
+            }
+            const proposal = createProposal({
 	              type: args.type || 'general',
                 executionMode: ['code_change', 'action', 'general', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
                   ? (String(args.execution_mode || args.executionMode).trim() === 'review' ? 'general' : String(args.execution_mode || args.executionMode).trim()) as any
