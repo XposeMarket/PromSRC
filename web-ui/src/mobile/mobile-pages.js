@@ -4911,7 +4911,15 @@ wsEventBus.on('workspace_changes', (message = {}) => {
 });
 
 document.addEventListener('toggle', async (event) => {
-  const terminal = event.target?.closest?.('.tool-command-terminal.is-complete');
+  // Mobile command rows are the disclosure for their terminal: the inner
+  // terminal is always open and the row decides visibility. Load the log
+  // when the row opens, never while it is still collapsed.
+  const target = event.target;
+  const terminal = target?.classList?.contains?.('tool-activity-terminal-row')
+    ? (target.open ? target.querySelector('.tool-command-terminal.is-complete') : null)
+    : target?.closest?.('.tool-command-terminal.is-complete');
+  const row = terminal?.closest?.('.tool-activity-terminal-row');
+  if (row && !row.open) return;
   if (!terminal?.open || terminal.dataset.logLoaded === '1' || terminal.dataset.logLoading === '1') return;
   const runId = String(terminal.dataset.commandRunId || '').trim();
   if (!runId) return;
@@ -4927,6 +4935,18 @@ document.addEventListener('toggle', async (event) => {
   } finally {
     delete terminal.dataset.logLoading;
   }
+}, true);
+
+// Trace screenshot thumbnails open in the shared mobile media viewer.
+document.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('[data-pm-live-vision-preview]');
+  if (!button) return;
+  const img = button.querySelector('img');
+  const src = String(img?.currentSrc || img?.src || '').trim();
+  if (!src) return;
+  event.preventDefault();
+  event.stopPropagation();
+  _openMobileMediaTarget({ kind: 'image', src, download: src, name: String(img?.alt || button.title || 'Screenshot').trim() });
 }, true);
 
 function _appendMobileCompactionTrace(message, status = 'compacting', summary = '', extra = null) {

@@ -166,6 +166,8 @@ Always validate the URL format against the current router and gateway document s
 ## Recovery invariants
 - A final assistant message is immutable under later restart snapshots.
 - A live tool trace is reconciled by stable IDs, not concatenated on every reconnect.
+- Command rows (workspace_run etc.) on mobile: the tool row itself is the disclosure (`details.tool-activity-terminal-row`, key `terminal-row:<activityKey>`, closed by default even while live). The inner `.tool-command-terminal` is always open with its summary hidden by CSS; completed-run logs lazy-load when the row opens (`mobile-pages.js` toggle listener). Desktop keeps the separate "Terminal output" box (`renderToolActivityEntry` in `web-ui/src/tool-activity.js` switches on `body.pm-mobile-active`).
+- Trace screenshots (`.pm-trace-vision-break .pm-live-vision-preview`) are small thumbnails (~1/3 column); tapping opens `_openMobileMediaTarget` (canvas sheet or media viewer). `vision_injected` is in `MAIN_CHAT_WS_DIRECT_EVENTS` (`src/gateway/chat/main-chat-stream.ts`) so previews arrive live; as update-only frames a later direct frame advanced the client's lastSeq past them and the image only appeared after a reload.
 - A stopped/aborted turn remains stopped; recovery must not silently restart execution.
 - A question-suspended turn remains pending until the user answers or the server explicitly expires/cancels it.
 - A plan/agent runtime dock is associated with its chat/session, not a global last-seen turn.
