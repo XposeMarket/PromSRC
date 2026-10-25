@@ -4399,6 +4399,9 @@ html.pm-session-context-open * {
   -webkit-tap-highlight-color: transparent;
 }
 .pm-trace-tool-body .tool-command-terminal > summary::-webkit-details-marker { display: none; }
+/* The tool row is the disclosure on mobile: hide the terminal's own header. */
+.pm-trace-tool-body .tool-activity-terminal-row .tool-command-terminal > summary { display: none; }
+.pm-trace-tool-body .tool-activity-terminal-row .tool-command-terminal > pre { border-top: 0; }
 .pm-trace-tool-body .tool-command-terminal > summary em { color: #707886; font-style: normal; font-weight: 650; }
 .pm-trace-tool-body .tool-command-terminal.is-live > summary em { color: #6fce91; }
 .pm-trace-tool-body .tool-command-terminal > summary i { color: #737b87; font-style: normal; font-size: 13px; transform: rotate(0); transition: transform .15s ease; }
@@ -4504,16 +4507,24 @@ html.pm-session-context-open * {
   object-fit: contain;
   transform: translateZ(0);
 }
+/* Trace screenshots are compact thumbnails (about a third of the column);
+   tap opens the full image in the media viewer. */
 .pm-trace-vision-break .pm-live-vision-preview {
-  width: 100%;
-  max-height: none;
-  aspect-ratio: auto;
-  margin: 10px 0;
+  width: min(34%, 168px);
+  min-width: 96px;
+  max-height: 140px;
+  aspect-ratio: var(--pm-vision-aspect, 16 / 9);
+  margin: 6px 0;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
 }
 .pm-trace-vision-break .pm-live-vision-preview img {
-  height: auto;
-  max-height: 60vh;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  object-position: top center;
 }
+.pm-live-vision-preview:active { opacity: .82; }
 .pm-vision-carousel {
   display: flex;
   gap: 12px;
@@ -4522,7 +4533,7 @@ html.pm-session-context-open * {
   scroll-snap-type: x mandatory;
 }
 .pm-vision-carousel .pm-live-vision-preview {
-  flex: 0 0 calc(100% - 24px);
+  flex: 0 0 min(40%, 180px);
   scroll-snap-align: start;
 }
 .pm-trace-tool-group-shell {

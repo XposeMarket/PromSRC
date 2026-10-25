@@ -128,6 +128,10 @@ const TERMINAL_COMMAND_ACTIONS = new Set([
   'start_process',
 ]);
 
+function isMobileToolActivitySurface() {
+  return typeof document !== 'undefined' && document.body?.classList?.contains?.('pm-mobile-active') === true;
+}
+
 function disclosureState() {
   if (typeof window === 'undefined') return null;
   if (!(window.__toolActivityDisclosureState instanceof Map)) window.__toolActivityDisclosureState = new Map();
@@ -1392,7 +1396,10 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   const terminalOutput = String(renderedTerminal?.output || '').trim();
   const terminalDisclosureKey = `terminal:${terminal?.runId || activityKey}`;
   const storedTerminalDisclosure = disclosureState()?.get(terminalDisclosureKey);
-  const terminalOpen = storedTerminalDisclosure === true || (storedTerminalDisclosure == null && terminalActive);
+  // Mobile: the tool row itself is the disclosure for its terminal. The inner
+  // terminal block stays open and is shown/hidden by the row (closed by default).
+  const mobileSurface = isMobileToolActivitySurface();
+  const terminalOpen = mobileSurface || storedTerminalDisclosure === true || (storedTerminalDisclosure == null && terminalActive);
   const terminalHtml = showTerminal ? `<details class="tool-command-terminal${terminalActive ? ' is-live' : ' is-complete'}" data-tool-disclosure-key="${esc(terminalDisclosureKey)}" data-command-run-id="${esc(terminal.runId || '')}"${terminalOpen ? ' open' : ''}>
     <summary><span>${terminalActive ? 'Live terminal' : 'Terminal output'}</span><em>${terminalActive ? 'streaming' : 'completed'}</em><i aria-hidden="true">›</i></summary>
     <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(renderedTerminal?.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
@@ -1407,8 +1414,11 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     : editDiff
       ? `<div class="tool-activity-inline-detail tool-activity-file-diff" aria-label="File diff" role="region"><span class="tool-activity-diff-sr">File changes</span>${renderDiffLines(editDiff, esc, activity.target)}</div>`
       : readableDetail;
-  if (inlineDetailHtml) {
-    return `<details class="tool-activity-wrap tool-activity-disclosure" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(inlineDisclosureKey)}"${inlineOpen ? ' open' : ''}>
+  const terminalRow = mobileSurface && !!terminalHtml;
+  const rowDisclosureKey = inlineDisclosureKey || (terminalRow ? `terminal-row:${activityKey}` : '');
+  const rowOpen = inlineDisclosureKey ? inlineOpen : (terminalRow && disclosureState()?.get(rowDisclosureKey) === true);
+  if (inlineDetailHtml || terminalRow) {
+    return `<details class="tool-activity-wrap tool-activity-disclosure${terminalRow ? ' tool-activity-terminal-row' : ''}" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(rowDisclosureKey)}"${rowOpen ? ' open' : ''}>
   <summary class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span><i class="tool-activity-chevron" aria-hidden="true">›</i></div>
   </summary>

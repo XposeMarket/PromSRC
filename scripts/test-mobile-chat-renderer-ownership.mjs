@@ -117,6 +117,9 @@ const measurements = {
 // state machine, risk/expiry copy in mobile-approval-copy.js) renders inside
 // the chat thread, so it ships here too: main measured 276891, #750 measures
 // 278279 (+1388). Ceiling holds that measurement plus compression variance.
-assert(measurements.gzipBytes <= 278400, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #762 mobile terminal-row disclosure, small tappable trace thumbnails and
+// delivery/recovery thread ordering (mobile-thread-order.js) render in the thread:
+// measured 279412 (+1012 over the #750 ceiling).
+assert(measurements.gzipBytes <= 279600, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

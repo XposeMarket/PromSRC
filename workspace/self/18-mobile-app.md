@@ -166,6 +166,8 @@ Always validate the URL format against the current router and gateway document s
 ## Recovery invariants
 - A final assistant message is immutable under later restart snapshots.
 - A live tool trace is reconciled by stable IDs, not concatenated on every reconnect.
+- Command rows (workspace_run etc.) on mobile: the tool row itself is the disclosure (`details.tool-activity-terminal-row`, key `terminal-row:<activityKey>`, closed by default even while live). The inner `.tool-command-terminal` is always open with its summary hidden by CSS; completed-run logs lazy-load when the row opens (`mobile-pages.js` toggle listener). Desktop keeps the separate "Terminal output" box (`renderToolActivityEntry` in `web-ui/src/tool-activity.js` switches on `body.pm-mobile-active`).
+- Trace screenshots (`.pm-trace-vision-break .pm-live-vision-preview`) are small thumbnails (~1/3 column); tapping opens `_openMobileMediaTarget` (canvas sheet or media viewer). `vision_injected` is in `MAIN_CHAT_WS_DIRECT_EVENTS` (`src/gateway/chat/main-chat-stream.ts`) so previews arrive live; as update-only frames a later direct frame advanced the client's lastSeq past them and the image only appeared after a reload.
 - A stopped/aborted turn remains stopped; recovery must not silently restart execution.
 - A question-suspended turn remains pending until the user answers or the server explicitly expires/cancels it.
 - A plan/agent runtime dock is associated with its chat/session, not a global last-seen turn.
@@ -174,6 +176,11 @@ Always validate the URL format against the current router and gateway document s
 - Multiple gateway processes can share pending question/approval state; don't assume one process owns every event.
 - Test during warm handoff and ordinary process restart separately; their timing differs.
 - Keep any recovery payload bounded; do not replay an entire transcript as a tool event.
+- Thread ordering helpers live in `web-ui/src/mobile/mobile-thread-order.js` (pure, tested by `scripts/test-mobile-thread-order.mjs`) and run inside `_reconcileMobileThreadOrder`:
+  - `repairMobileLiveRowPlacement`: a live (`streaming`) assistant row is never above every prompt or above a prompt older than its start. It moves after its owning prompt (`_clientRequestId`), else to the thread end; an empty stale duplicate of the same request is folded into the row already in that turn. `_mergeMobileHistoryRecords(appendOnlyNewer)` also no longer anchors an ownerless live/untimed row before the page's first matched row (that was the "Working for..." row at index 0).
+  - `orderMobileTurnDeliveries`: delivery rows (`messageKind`/`channelLabel === 'delivery'`, written by the gateway mid-turn as `delivery_<batch>`) that land between a prompt and its assistant row move directly after the assistant row, in send order. Deliveries older than the prompt stay put.
+  - Presentation: `_renderThread` uses `buildMobileDeliveryPaintPlan`; an assistant row with answer text followed by deliveries paints as trace row (`key`) -> deliveries -> answer row (`key:answer`, no timer). Source rows are never mutated, so reload/reconnect yields the same order as live. `_patchMobileThreadMessage` falls back to a full render for split rows.
+  - Live `delivery_notification` rows carry `messageKind:'delivery'` and `messageId:'delivery_<batchId>'` so a history refresh merges rather than duplicates them.
 
 
 ## Mobile debugging first-response notes
