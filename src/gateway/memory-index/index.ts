@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { getConfig } from '../../config/config.js';
 import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord, getRelatedOperationalRecords } from './operational.js';
 import { parseMemoryNoteDocument } from './memory-note.js';
-import { sanitizeMemoryRecallText } from './memory-recall.js';
+import { renderMemoryIdsForPrompt, sanitizeMemoryRecallText } from './memory-recall.js';
 import {
   backfillMemoryEmbeddingsInWorker,
   getMemoryIndexRefreshWorkerStatus,
@@ -240,7 +240,7 @@ const MAX_RECORDS_FOR_FULL_SEMANTIC_RELATIONS = 900;
 const STOP = new Set(['a','an','and','are','as','at','be','by','for','from','had','has','have','i','if','in','is','it','its','of','on','or','that','the','their','them','they','this','to','was','we','were','what','when','where','who','why','will','with','you','your']);
 const ROOT_DIRS = ['chats', 'tasks', 'cron', 'teams', 'proposals', 'memory', 'projects', 'schedules', 'obsidian'] as const;
 const WORKSPACE_FILE_PREFIX = 'workspace/files/';
-const WORKSPACE_EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.next', '.nuxt', 'dist', 'build', 'out', 'coverage', '.cache', '.parcel-cache', '.turbo', 'tmp', 'temp']);
+const WORKSPACE_EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.next', '.nuxt', 'dist', 'build', 'out', 'coverage', '.cache', '.parcel-cache', '.turbo', 'tmp', 'temp', 'memory-archive']);
 const WORKSPACE_EXCLUDED_ROOTS = new Set(['audit']);
 const WORKSPACE_PRIORITY_ROOTS = [
   'downloads',
@@ -1149,7 +1149,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     // bullets must not become model-facing recall evidence.
     const recallText = relPath === `${WORKSPACE_FILE_PREFIX}MEMORY.md` || relPath === `${WORKSPACE_FILE_PREFIX}USER.md` || relPath === `${WORKSPACE_FILE_PREFIX}SOUL.md`
       ? sanitizeMemoryRecallText(parsed.text)
-      : parsed.text;
+      : renderMemoryIdsForPrompt(parsed.text);
     const chunks = makeChunks(rec, recallText);
     const previousChunkCount = prev?.chunkIds?.length || 0;
     const previousChunkTextChars = (prev?.chunkIds || []).reduce(

@@ -41,6 +41,8 @@ import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profi
 import { renderNotesForPrompt } from './memory/intraday-notes';
 import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
 import { buildMemoryAtomReferenceContext, retrieveMemoryAtoms, formatMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
+import { renderMemoryIdsForPrompt } from './memory-index/memory-recall.js';
+
 import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
 import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
@@ -510,7 +512,8 @@ export function loadVoiceAgentMemory(workspacePath: string, maxChars: number = 5
 }
 
 function loadBusinessContextProfile(workspacePath: string, maxChars: number = 4000): string {
-  return loadWorkspaceFile(workspacePath, 'BUSINESS.md', maxChars);
+  // Business profile injection shows [m:id] and never the raw <!-- m:id --> comment.
+  return renderMemoryIdsForPrompt(loadWorkspaceFile(workspacePath, 'BUSINESS.md', maxChars));
 }
 
 function stripMemoryToolHints(content: string): string {
@@ -536,7 +539,8 @@ function readMemoryProfileFile(filePath: string, maxChars?: number): string {
   try {
     const content = readPromptProfileText(filePath).trim();
     if (!content) return '';
-    const cleaned = stripMemoryToolHints(content);
+    // Prompt text shows [m:id] and never the raw <!-- m:id --> comment. Rendering never writes the file.
+    const cleaned = renderMemoryIdsForPrompt(stripMemoryToolHints(content));
     if (typeof maxChars !== 'number' || maxChars <= 0 || cleaned.length <= maxChars) return cleaned;
     return `${cleaned.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
   } catch {
