@@ -234,7 +234,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           const requested = String(filename || '').replace(/\\/g, '/');
-          return { name, args, result: recoverWorkspacePathError(err, requested, 'list_dir'), error: true };
+          return { name, args, result: await recoverWorkspacePathError(err, requested, 'list_dir'), error: true };
         }
         const filePath = resolvedFile.absPath;
         const content = fs.readFileSync(filePath, 'utf-8');
@@ -258,7 +258,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.mkdirSync(resolved.absPath, { recursive: true });
 	          return withWorkspaceSnapshots({ name, args, result: `OK directory created: ${resolved.normalizedRel}`, error: false }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, requestedPath, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, requestedPath, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -278,7 +278,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	          return withWorkspaceSnapshots({ name, args, result: `OK created ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -295,7 +295,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	          return withWorkspaceSnapshots({ name, args, result: `OK wrote ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -312,7 +312,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.appendFileSync(resolved.absPath, content, 'utf-8');
 	          return withWorkspaceSnapshots({ name, args, result: `OK appended ${content.length} characters to ${resolved.normalizedRel}.`, error: false }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -347,7 +347,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	            error: false,
 	          }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -380,7 +380,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	            error: false,
 	          }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -415,7 +415,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	            error: false,
 	          }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -450,7 +450,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	            error: false,
 	          }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -473,7 +473,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.renameSync(oldResolved.absPath, newResolved.absPath);
 	          return withWorkspaceSnapshots({ name, args, result: `OK renamed ${oldResolved.normalizedRel} to ${newResolved.normalizedRel}.`, error: false }, snapshots);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, oldPath, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, oldPath, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -488,7 +488,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	          fs.unlinkSync(resolved.absPath);
 	          return withWorkspaceSnapshots({ name, args, result: `OK deleted ${resolved.normalizedRel}.`, error: false }, [snapshot]);
 	        } catch (err: any) {
-	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	          return { name, args, result: await recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -665,7 +665,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: validate_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         if (!fs.statSync(absPath).isFile()) return { name, args, result: `"src/${normalizedRel}" is not a file`, error: true };
         return validateSyntaxFileResult(`src/${normalizedRel}`, absPath);
@@ -682,7 +682,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         }
         const promDisplay = resolved.normalizedRel || rel;
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         if (!fs.statSync(resolved.absPath).isFile()) return { name, args, result: `"${promDisplay}" is not a file`, error: true };
         return validateSyntaxFileResult(promDisplay, resolved.absPath);
@@ -699,7 +699,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: validate_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         if (!fs.statSync(absPath).isFile()) return { name, args, result: `"web-ui/${normalizedRel}" is not a file`, error: true };
         return validateSyntaxFileResult(`web-ui/${normalizedRel}`, absPath);
@@ -768,7 +768,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         }
         const promDisplay = resolved.normalizedRel || '.';
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (!stat.isFile()) return { name, args, result: `"${promDisplay}" is not a file`, error: true };
@@ -1094,7 +1094,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -1141,7 +1141,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -1186,7 +1186,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -1228,7 +1228,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -1276,7 +1276,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: find_replace_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(frs_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${frs_rel}`, frs_srcRoot, frs_rel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${frs_rel}`, frs_srcRoot, frs_rel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const frs_content = fs.readFileSync(frs_absPath, 'utf-8');
         const frs_replaceAll = args.replace_all === true;
@@ -1327,7 +1327,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         }
         if (!fs.existsSync(rls_absPath)) {
           const rls_normalizedRel = rls_rel.replace(/^\.?\/?src\//, '');
-          return { name, args, result: buildPathNotFoundRecovery(`src/${rls_normalizedRel}`, rls_srcRoot, rls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${rls_normalizedRel}`, rls_srcRoot, rls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const rls_content = fs.readFileSync(rls_absPath, 'utf-8');
         const rls_originalLines = splitLinesEolSafe(rls_content);
@@ -1375,7 +1375,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         }
         if (!fs.existsSync(ias_absPath)) {
           const ias_normalizedRel = ias_rel.replace(/^\.?\/?src\//, '');
-          return { name, args, result: buildPathNotFoundRecovery(`src/${ias_normalizedRel}`, ias_srcRoot, ias_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${ias_normalizedRel}`, ias_srcRoot, ias_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const ias_fileContent = fs.readFileSync(ias_absPath, 'utf-8');
         const ias_inserted = applyInsertAfterEolSafe(ias_fileContent, ias_afterLine, ias_content);
@@ -1419,7 +1419,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         }
         if (!fs.existsSync(dls_absPath)) {
           const dls_normalizedRel = dls_rel.replace(/^\.?\/?src\//, '');
-          return { name, args, result: buildPathNotFoundRecovery(`src/${dls_normalizedRel}`, dls_srcRoot, dls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${dls_normalizedRel}`, dls_srcRoot, dls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const dls_content = fs.readFileSync(dls_absPath, 'utf-8');
         const dls_originalLines = splitLinesEolSafe(dls_content);
@@ -1469,7 +1469,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: find_replace_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(frwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_webUiRoot, frwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_webUiRoot, frwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const frwu_content = fs.readFileSync(frwu_absPath, 'utf-8');
         const frwu_replaceAll = args.replace_all === true;
@@ -1520,7 +1520,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: replace_lines_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rlwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rlwu_rel}`, rlwu_webUiRoot, rlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${rlwu_rel}`, rlwu_webUiRoot, rlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rlwu_content = fs.readFileSync(rlwu_absPath, 'utf-8');
         const rlwu_originalLines = splitLinesEolSafe(rlwu_content);
@@ -1567,7 +1567,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: insert_after_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(iawu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${iawu_rel}`, iawu_webUiRoot, iawu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${iawu_rel}`, iawu_webUiRoot, iawu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const iawu_fileContent = fs.readFileSync(iawu_absPath, 'utf-8');
         const iawu_inserted = applyInsertAfterEolSafe(iawu_fileContent, iawu_afterLine, iawu_content);
@@ -1610,7 +1610,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
           return { name, args, result: 'ERROR: delete_lines_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(dlwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${dlwu_rel}`, dlwu_webUiRoot, dlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${dlwu_rel}`, dlwu_webUiRoot, dlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const dlwu_content = fs.readFileSync(dlwu_absPath, 'utf-8');
         const dlwu_originalLines = splitLinesEolSafe(dlwu_content);

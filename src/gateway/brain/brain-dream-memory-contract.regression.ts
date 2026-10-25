@@ -10,6 +10,9 @@ assert.ok(!names.has('memory_write'), 'legacy memory_write must remain internal 
 const memoryDef = definitions.find((tool: any) => tool?.function?.name === 'memory');
 assert.ok(memoryDef?.function?.parameters?.properties?.action?.enum?.includes('update'), 'unified memory schema must expose exact update');
 assert.ok(memoryDef?.function?.parameters?.properties?.previous_content, 'unified memory update must expose previous_content');
+assert.ok(memoryDef?.function?.parameters?.properties?.id, 'unified memory schema must expose id for update/delete');
+assert.match(String(memoryDef?.function?.parameters?.properties?.id?.description || ''), /\[m:xxxxx\]/, 'id description tells the model the [m:xxxxx] form');
+
 
 const runner = fs.readFileSync(path.join(process.cwd(), 'src/gateway/brain/brain-runner.ts'), 'utf8');
 const dreamStart = runner.indexOf("`CONTEXT: Automated Brain Dream run for ${dateStr}");
