@@ -411,7 +411,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
 	              : undefined;
 	            const planError = actionProposalPlanError({
               executionMode: String(args.execution_mode || args.executionMode || '').trim()
-                || ((Array.isArray(args.affected_files) && args.affected_files.some((f: any) => /^(\.\/)?(src|web-ui)\//.test(String(f?.path || '').replace(/\\/g, '/')))) ? 'code_change' : ''),
+                || ((Array.isArray(args.affected_files) && (args.affected_files as Array<{ path?: unknown }>).some((f) => /^(\.\/)?(src|web-ui)\//.test(String(f?.path || '').replace(/\\/g, '/')))) ? 'code_change' : ''),
               executionSteps: args.execution_steps,
               repair: allowRepairProposal,
             });
