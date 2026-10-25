@@ -445,6 +445,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }).join('') + (tasks.length > visibleLimit
       ? `<button type="button" class="pm-btn ghost" data-pm-task-load-more style="display:block;margin:16px auto 24px;">Show more tasks (${Math.min(taskPageSize, tasks.length - visibleLimit)} of ${tasks.length - visibleLimit} remaining)</button>`
       : '');
+    if (nyEntries.length) {
+      listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
+      wireNyEntries();
+    }
     wireTaskCards();
     const nextJournal = listEl.querySelector('[data-pm-task-journal]');
     if (nextJournal && journalSnapshot) {
@@ -467,10 +471,6 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       visibleLimit += taskPageSize;
       paint();
     });
-    if (nyEntries.length) {
-      listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
-      wireNyEntries();
-    }
     listEl.querySelectorAll('.pm-task-card').forEach(card => {
       card.addEventListener('click', async (event) => {
         if (event.target.closest('button, textarea, input, a, summary')) return;
@@ -539,6 +539,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       filterEl.querySelectorAll('button').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
       currentFilter = b.getAttribute('data-filter');
+      nyAutoOpened = true; // user picked a tab; never auto-switch away from it
       expandedId = '';
       visibleLimit = taskPageSize;
       paint();
@@ -671,7 +672,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   };
   taskEventNames.forEach((eventName) => wsEventBus.on(eventName, onTaskEvent));
   const onNeedsYouChange = () => { load({ force: true }).catch(() => {}); };
-  ['question_created', 'question_answered', 'question_cancelled', 'question_expired', 'approval_created', 'approval_resolved', 'proposal_created'].forEach((eventName) => wsEventBus.on(eventName, onNeedsYouChange));
+  const needsYouEventNames = ['needs_you_changed', 'question_created', 'question_answered', 'question_cancelled', 'question_expired', 'approval_created', 'approval_resolved', 'proposal_created'];
+  needsYouEventNames.forEach((eventName) => wsEventBus.on(eventName, onNeedsYouChange));
 
   page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true, force: true }); });
   const cachedTasks = getCachedMobilePageData('tasks', 21_600_000);
@@ -686,6 +688,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     if (refreshTimer) clearInterval(refreshTimer);
     if (eventRefreshTimer) clearTimeout(eventRefreshTimer);
     taskEventNames.forEach((eventName) => wsEventBus.off(eventName, onTaskEvent));
+    needsYouEventNames.forEach((eventName) => wsEventBus.off(eventName, onNeedsYouChange));
   };
 }
 
