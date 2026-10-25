@@ -7,6 +7,7 @@ import {
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { buildMobileDeliveryPaintPlan, isMobileDeliveryRow, mobileDeliverySplitMessage } from './mobile-thread-order.js';
 import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
@@ -2025,8 +2026,17 @@ export function createMobileChatRendererRuntime(context = {}) {
           </button>
         </div>`
       : '';
-    const renderedMessages = timeline.paintEntries
-      .map((entry) => _renderChatMessageHtml(entry.msg, entry.originalIndex, entry.key, entry.signature))
+    // delivery_send rows sit after their turn's trace; when that turn has
+    // answer text, paint it as trace row -> deliveries -> answer row.
+    const renderedMessages = buildMobileDeliveryPaintPlan(timeline.paintEntries)
+      .map(({ entry, part }) => (part === 'full'
+        ? _renderChatMessageHtml(entry.msg, entry.originalIndex, entry.key, entry.signature)
+        : _renderChatMessageHtml(
+          mobileDeliverySplitMessage(entry.msg, part),
+          entry.originalIndex,
+          part === 'answer' ? `${entry.key}:answer` : entry.key,
+          `${entry.signature}:${part}`,
+        )))
       .join('');
     reconcileKeyedTimelineRows(threadEl, (olderMessagesControl + renderedMessages) || (
       sid === MOBILE_CHAT_SESSION_ID
@@ -2391,6 +2401,10 @@ export function createMobileChatRendererRuntime(context = {}) {
     _captureMobileWorkerDeckViewState(threadEl);
     const msgIndex = Number.isFinite(Number(index)) ? Number(index) : _activeMobileThread().indexOf(message);
     if (msgIndex < 0) return false;
+    // A turn followed by delivery rows is painted split (trace / deliveries /
+    // answer); a single-row patch would duplicate the answer. Full render.
+    if (String(message?.body?.text || '').trim()
+      && isMobileDeliveryRow(_activeMobileThread()[msgIndex + 1])) return false;
     const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
     if (!currentEl) return false;
     const nextWrap = document.createElement('div');
