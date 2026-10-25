@@ -2760,7 +2760,7 @@ async function refreshTeams() {
 
 // --- Canvas Rendering --------------------------------------------------------
 // Team tiles and the board header now render a lead pet plus a crew stack (agent-pets.js).
-// The old house SVG (HOUSE_PALETTES / drawHouseSVG) was removed. hashStr stays: other team code uses it.
+// The old house sprite was removed. hashStr stays: other team code uses it.
 function hashStr(s) {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
