@@ -883,3 +883,22 @@ export function scanAndImportAgentProposals(): number {
   }
   return imported;
 }
+
+/** Execution steps the executor can actually run: objects with a non-empty title or description. */
+export function countExecutableProposalSteps(steps: unknown): number {
+  if (!Array.isArray(steps)) return 0;
+  return steps.filter((step: any) => !!step && typeof step === 'object'
+    && String(step.title || step.description || '').trim().length > 0).length;
+}
+
+/**
+ * Action/code_change proposals exist to run something after approval. Without at least two
+ * executable steps the approval is recorded but no executor task can start
+ * (dispatchApprovedProposal requires two). Returns an error message, or null when fine.
+ */
+export function actionProposalPlanError(input: { executionMode?: unknown; executionSteps?: unknown; repair?: boolean }): string | null {
+  const lane = String(input.executionMode || '').trim().toLowerCase();
+  if (input.repair || (lane !== 'action' && lane !== 'code_change')) return null;
+  if (countExecutableProposalSteps(input.executionSteps) >= 2) return null;
+  return `${lane} proposals must include at least two execution_steps as objects, e.g. execution_steps: [{"title":"Re-check current state"},{"title":"Do the approved action"},{"title":"Verify and report"}]. Without them, approval cannot start an executor task.`;
+}

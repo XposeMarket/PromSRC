@@ -16,7 +16,8 @@ async function run(): Promise<void> {
   } = await import('./proposal-store.js');
   const { createTask, loadTask } = await import('../tasks/task-store.js');
   const { BackgroundTaskRunner } = await import('../tasks/background-task-runner.js');
-  const { approveProposalAction } = await import('../routes/proposals.router.js');
+  const { approveProposalAction, proposalHasExecutionPlan } = await import('../routes/proposals.router.js');
+  const { actionProposalPlanError, countExecutableProposalSteps } = await import('./proposal-store.js');
   const {
     compactProposalError,
     normalizeProposalExecutorResponse,
@@ -89,6 +90,39 @@ async function run(): Promise<void> {
   assert.equal(loadTask(runtimeTask.id)?.status, 'failed');
   assert.equal(loadProposal(runtimeProposal.id)?.status, 'failed');
   assert.match(loadProposal(runtimeProposal.id)?.executionResult || '', /malformed|usable response/i);
+
+  // Steps-only action proposals (no executor_prompt, no affected_files) are runnable plans,
+  // so approval dispatches them instead of silently recording an idle approval.
+  const steps = [{ title: 'Re-check state' }, { title: 'Do the action' }, { title: 'Report' }];
+  assert.equal(proposalHasExecutionPlan({ executionMode: 'action', affectedFiles: [], executionSteps: steps }), true);
+  assert.equal(proposalHasExecutionPlan({ executionMode: 'action', affectedFiles: [], executionSteps: [{ title: 'Only one' }] }), false);
+  assert.equal(proposalHasExecutionPlan({ executionMode: 'action', affectedFiles: [], executionSteps: ['a', 'b'] }), false);
+
+  // An action proposal with no runnable plan is refused and stays pending.
+  const planless = createProposal({
+    type: 'general',
+    executionMode: 'action',
+    priority: 'medium',
+    title: 'Planless action',
+    summary: 'Action proposal without enough steps.',
+    details: 'Should not be approvable.',
+    sourceAgentId: 'proposal-regression',
+    affectedFiles: [],
+    executionSteps: [{ title: 'Only one' }],
+    requiresBuild: false,
+  } as any);
+  await assert.rejects(
+    () => approveProposalAction(planless.id),
+    (err: any) => err.statusCode === 422 && /execution_steps/.test(String(err.message)),
+  );
+  assert.equal(loadProposal(planless.id)?.status, 'pending');
+
+  // write_proposal guard.
+  assert.match(actionProposalPlanError({ executionMode: 'action', executionSteps: [] }) || '', /at least two execution_steps/);
+  assert.equal(actionProposalPlanError({ executionMode: 'action', executionSteps: steps }), null);
+  assert.equal(actionProposalPlanError({ executionMode: 'general', executionSteps: [] }), null);
+  assert.equal(actionProposalPlanError({ executionMode: 'code_change', executionSteps: [], repair: true }), null);
+  assert.equal(countExecutableProposalSteps([{ title: ' ' }, { description: 'x' }, null, 'y']), 1);
 
   console.log('proposal approval flow regression passed');
 }
