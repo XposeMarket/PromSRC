@@ -76,6 +76,19 @@ for (const rel of ['web-ui/src/pages/SubagentsPage.js', 'web-ui/src/pages/TeamsP
   assert.doesNotMatch(src, /drawAgentSVG|drawHouseSVG|AGENT_EMOJIS/, `${rel} has no robot/house avatar code left`);
 }
 
+// 8b. Rewrite guard: every agent/pet helper a surface calls is defined or imported there
+// (catches helpers deleted alongside the old avatar code, which node --check cannot see).
+const helperCall = /\b((?:get|render|draw|resolve|remember)\w*(?:Agent|Subagent|Pet|Team)\w*)\s*\(/g;
+for (const rel of surfaces) {
+  const src = fs.readFileSync(path.join(root, rel), 'utf8');
+  const called = new Set([...src.matchAll(helperCall)].map(m => m[1]));
+  for (const name of called) {
+    const defined = new RegExp(`(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\s*=|\\b${name}\\s*:\\s*(?:async\\s*)?(?:function|\\()|import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}|\\.${name}\\s*\\(|\\b${name}\\s*\\([^)]*\\)\\s*\\{)`).test(src);
+    assert.ok(defined || /window\.|globalThis\./.test(src.slice(Math.max(0, src.indexOf(name + '(') - 8), src.indexOf(name + '('))), `${rel} calls ${name}() but never defines or imports it`);
+  }
+}
+
+
 // 9. Backend: the optional pet field is declared in config schema and the agent_update tool.
 const schema = fs.readFileSync(path.join(root, 'src/config/config-schema.ts'), 'utf8');
 assert.match(schema, /pet:\s+z\.string\(\)\.optional\(\)/, 'config schema declares pet');

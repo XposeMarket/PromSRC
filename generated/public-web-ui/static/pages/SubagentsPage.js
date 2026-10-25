@@ -77,6 +77,11 @@ function subagentChatJsArg(value) {
     .replace(/>/g, '&gt;');
 }
 
+function getActiveSubagentName(agentId) {
+  const agent = subagentsData.find(a => a.id === agentId);
+  return agent?.name || agentId || 'Agent';
+}
+
 function getSubagentChatSessionId(agentId) {
   return subagentChatSessionId(agentId);
 }
