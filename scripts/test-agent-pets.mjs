@@ -94,5 +94,11 @@ const schema = fs.readFileSync(path.join(root, 'src/config/config-schema.ts'), '
 assert.match(schema, /pet:\s+z\.string\(\)\.optional\(\)/, 'config schema declares pet');
 const toolDef = fs.readFileSync(path.join(root, 'src/gateway/tools/defs/agent-team-schedule.ts'), 'utf8');
 assert.match(toolDef, /pet: \{ type: 'string'/, 'agent_update advertises a pet param');
+// Every normalizeAgentDefinition copy must carry pet, or /api/agents saves silently drop it.
+for (const rel of ['src/gateway/agents/agent-normalize.ts', 'src/gateway/routes/channels.router.ts']) {
+  const src = fs.readFileSync(path.join(root, rel), 'utf8');
+  const body = src.slice(src.indexOf('function normalizeAgentDefinition'));
+  assert.match(body.slice(0, 2500), /raw\?\.pet !== undefined/, `${rel} normalizeAgentDefinition keeps pet`);
+}
 
 console.log('agent-pets: ok (12 pets, resolution, escaping, picker, stylesheet, surface wiring, backend schema)');
