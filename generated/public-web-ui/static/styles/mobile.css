@@ -11644,7 +11644,6 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 13px;
 }
-.pm-team-tile .pm-house { font-size: 56px; line-height: 1; }
 .pm-team-tile .pm-team-name { font-size: 13px; font-weight: 700; line-height: 1.25; }
 .pm-team-tile .pm-team-agents {
   font-size: 12px; color: var(--pm-muted); display: inline-flex; align-items: center; gap: 4px;
@@ -11713,7 +11712,6 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   display: flex; align-items: flex-start; gap: 12px;
   padding: 0 6px;
 }
-.pm-detail-head .pm-house-icon { font-size: 30px; line-height: 1; }
 .pm-detail-head h1 {
   flex: 1; margin: 0;
   font-size: 22px; font-weight: 800; line-height: 1.2; letter-spacing: -.3px;

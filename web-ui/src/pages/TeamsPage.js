@@ -2539,7 +2539,6 @@ function renderTeamWorkflowAvatar(agentId, label = '') {
   return renderAgentPet(isManager ? 'manager' : cleanAgentId, { size: 20 });
 }
 
-function teamDesktopStreamMessage(stream, label, idPrefix) {
 
 
 function teamDesktopStreamMessage(stream, label, idPrefix) {

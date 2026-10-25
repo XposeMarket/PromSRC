@@ -2,6 +2,7 @@
 // expected by mobile-pages.js. Keep this layer thin; do not put rendering here.
 
 import { api } from '../api.js';
+import { renderAgentPet, rememberAgentPets } from '../components/agent-pets.js';
 import { API } from '../state.js';
 import { presentChatError } from '../chat-error-presentation.js';
 import { createChatHistoryClient } from '../features/chat/runtime/history-client.js';
@@ -678,7 +679,7 @@ function pickEmoji(job) {
   if (id === 'brain_dream'   || name.includes('dream'))   return '💤';
   if (name.includes('collector') || name.includes('signal')) return '📡';
   if (name.includes('radar') || name.includes('opportunity')) return '🎯';
-  if (name.includes('standup') || name.includes('team'))   return '🏠';
+  if (name.includes('standup') || name.includes('team'))   return '';
   return '⏰';
 }
 
@@ -906,6 +907,8 @@ export async function loadMobileTeams({ force = false } = {}) {
     name: t.name || t.id,
     agents: Array.isArray(t.subagentIds) ? t.subagentIds.length : 0,
     house: i % 2 === 1 ? 'blue' : 'brown',
+    leadId: (Array.isArray(t.subagentIds) && t.subagentIds[0]) || t.id,
+    crewIds: Array.isArray(t.subagentIds) ? t.subagentIds.slice(1, 6) : [],
     featured: i === 0,
     emoji: _teamEmoji(t),
   }));
@@ -930,7 +933,7 @@ function _memberDisplayName(id) {
 // render it as text in the house slot.
 function _teamEmoji(t) {
   const e = String(t?.emoji || '').trim();
-  return !e || e.toLowerCase() === 'team' ? '🏠' : e;
+  return !e || e.toLowerCase() === 'team' ? '' : e;
 }
 
 function _normalizeTeam(t) {
@@ -947,18 +950,19 @@ function _normalizeTeam(t) {
     id: t.id,
     name: t.name || t.id,
     emoji: _teamEmoji(t),
+    leadId: subagentIds[0] || t.id,
     subagents: subagentIds.length,
     totalRuns: t.totalRuns || 0,
     runsDone: t.recentRunsDone ?? Math.min(t.totalRuns || 0, 7),
     runsTotal: t.recentRunsTotal ?? 7,
     paused: t.manager?.paused === true,
     members: [
-      { id: 'manager', name: 'Manager', color: '#7d6bd6', avatar: '🧠' },
+      { id: 'manager', name: 'Manager', color: '#7d6bd6', avatar: renderAgentPet('manager', { size: 22 }) },
       ...subagentIds.slice(0, 5).map((id, i) => ({
         id,
         name: _memberDisplayName(id),
         color: MEMBER_COLORS[i % MEMBER_COLORS.length],
-        avatar: MEMBER_AVATARS[i % MEMBER_AVATARS.length],
+        avatar: renderAgentPet(id, { size: 22 }),
       })),
     ],
     purpose:     purpose || 'No purpose set yet.',
@@ -1146,17 +1150,8 @@ export async function loadMemoryGraph() {
 
 /* ---------------- subagents ---------------- */
 
-const SUBAGENT_AVATARS = ['🤖', '🛸', '🦊', '🐙', '🐍', '🐺', '🦉', '🦅', '🐉', '🦄'];
-const SUBAGENT_COLORS = ['#ea6a1f', '#7d6bd6', '#3aa3ff', '#19a062', '#d8473a', '#c08ddc', '#0d4faf', '#f0a85e'];
+// Subagent identity is a pixel pet (web-ui/src/components/agent-pets.js). The emoji list is gone.
 
-function _subagentAvatarFor(id, idx) {
-  const key = String(id || '').toLowerCase();
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
-  const a = SUBAGENT_AVATARS[Math.abs(h) % SUBAGENT_AVATARS.length];
-  const c = SUBAGENT_COLORS[(Math.abs(h) + (idx || 0)) % SUBAGENT_COLORS.length];
-  return { avatar: a, color: c };
-}
 
 function _subagentStatus(agent) {
   if (agent?.lastRun?.inProgress) return 'running';
@@ -1176,10 +1171,12 @@ export async function loadMobileSubagents({ force = false } = {}) {
     if (fallback) return fallback;
   }
   const rawAgents = Array.isArray(r?.agents) ? r.agents : [];
+  rememberAgentPets(rawAgents);
   // Match desktop: hide default and synthetic shells; show team members with a badge instead.
   const agents = rawAgents.filter(a => !a.default && !a.isSynthetic);
   const normalized = agents.map((a, idx) => {
-    const { avatar, color } = _subagentAvatarFor(a.id, idx);
+    const avatar = renderAgentPet(a, { size: 22 });
+    const color = '';
     return {
       id: a.id,
       name: a.name || a.id,
@@ -1190,6 +1187,7 @@ export async function loadMobileSubagents({ force = false } = {}) {
       reasoningEffort: a.reasoning_effort || a.reasoning || '',
       avatar,
       color,
+      pet: a.pet || null,
       status: _subagentStatus(a),
       lastRunAt: a.lastRun?.finishedAt || a.lastRun?.startedAt || null,
       isTeamMember: a.isTeamMember === true,
