@@ -176,6 +176,11 @@ Always validate the URL format against the current router and gateway document s
 - Multiple gateway processes can share pending question/approval state; don't assume one process owns every event.
 - Test during warm handoff and ordinary process restart separately; their timing differs.
 - Keep any recovery payload bounded; do not replay an entire transcript as a tool event.
+- Thread ordering helpers live in `web-ui/src/mobile/mobile-thread-order.js` (pure, tested by `scripts/test-mobile-thread-order.mjs`) and run inside `_reconcileMobileThreadOrder`:
+  - `repairMobileLiveRowPlacement`: a live (`streaming`) assistant row is never above every prompt or above a prompt older than its start. It moves after its owning prompt (`_clientRequestId`), else to the thread end; an empty stale duplicate of the same request is folded into the row already in that turn. `_mergeMobileHistoryRecords(appendOnlyNewer)` also no longer anchors an ownerless live/untimed row before the page's first matched row (that was the "Working for..." row at index 0).
+  - `orderMobileTurnDeliveries`: delivery rows (`messageKind`/`channelLabel === 'delivery'`, written by the gateway mid-turn as `delivery_<batch>`) that land between a prompt and its assistant row move directly after the assistant row, in send order. Deliveries older than the prompt stay put.
+  - Presentation: `_renderThread` uses `buildMobileDeliveryPaintPlan`; an assistant row with answer text followed by deliveries paints as trace row (`key`) -> deliveries -> answer row (`key:answer`, no timer). Source rows are never mutated, so reload/reconnect yields the same order as live. `_patchMobileThreadMessage` falls back to a full render for split rows.
+  - Live `delivery_notification` rows carry `messageKind:'delivery'` and `messageId:'delivery_<batchId>'` so a history refresh merges rather than duplicates them.
 
 
 ## Mobile debugging first-response notes
