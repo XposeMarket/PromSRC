@@ -59,6 +59,34 @@ function quote(value, max = 72) {
   return text ? `“${text}”` : '';
 }
 
+// web_search accepts query + queries[] (run in parallel); web_fetch accepts url + urls[].
+// Labels and details must reflect every angle, not just the first one.
+function webSearchQueries(args = {}) {
+  const out = [];
+  const push = (value) => {
+    const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+    if (text && !out.includes(text)) out.push(text);
+  };
+  push(args.query ?? args.q);
+  if (Array.isArray(args.queries)) args.queries.forEach(push);
+  return out;
+}
+
+function webFetchUrls(args = {}) {
+  const out = [];
+  const push = (value) => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (text && !out.includes(text)) out.push(text);
+  };
+  push(args.url);
+  if (Array.isArray(args.urls)) args.urls.forEach(push);
+  return out;
+}
+
+function urlHost(value) {
+  try { return new URL(value).hostname.replace(/^www\./, ''); } catch { return compact(value, 40); }
+}
+
 function parseArgs(value) {
   if (!value) return {};
   if (typeof value === 'object' && !Array.isArray(value)) return value;
@@ -598,7 +626,20 @@ function describeTool(actionRaw, argsRaw = {}) {
     return make(`browser.${name}`, 'browser action', 'Preparing browser action…', `${titleCase(name)} in browser`, `${titleCase(name)} completed`, { family: 'browser', target, countNoun: 'browser action' });
   }
 
-  if (action === 'web_search') return make('web.search', 'web search', 'Preparing web search…', search ? `Searching the web for ${quote(search)}` : 'Searching the web', 'Searched the web', { family: 'web', target: search, countNoun: 'web search' });
+  if (action === 'web_search') {
+    const queries = webSearchQueries(args);
+    if (queries.length > 1) {
+      const n = queries.length;
+      return make('web.search', 'web search', 'Preparing web search…', `Searching the web · ${n} queries in parallel: ${quote(queries[0], 48)} +${n - 1}`, `Searched the web · ${n} queries`, { family: 'web', target: queries[0], countNoun: 'web search' });
+    }
+    return make('web.search', 'web search', 'Preparing web search…', search ? `Searching the web for ${quote(search)}` : 'Searching the web', 'Searched the web', { family: 'web', target: search, countNoun: 'web search' });
+  }
+  if (action === 'web_fetch' && webFetchUrls(args).length > 1) {
+    const urls = webFetchUrls(args);
+    const hosts = [...new Set(urls.map(urlHost))];
+    const hostText = compact(hosts.slice(0, 3).join(', ') + (hosts.length > 3 ? ` +${hosts.length - 3}` : ''), 80);
+    return make('web.fetch', 'web fetch', 'Preparing page fetch…', `Fetching ${urls.length} pages in parallel · ${hostText}`, `Fetched ${urls.length} pages · ${hostText}`, { family: 'web', target: hostText, countNoun: 'page fetch' });
+  }
   if (action === 'web_fetch') return make('web.fetch', 'web fetch', 'Preparing page fetch…', url ? `Fetching ${compact(url, 90)}` : 'Fetching page', url ? `Fetched ${compact(url, 90)}` : 'Fetched page', { family: 'web', target: url, countNoun: 'page fetch' });
   if (/^(?:present_visual|render_visual|generate_visual|interactive_visual)$/.test(action)) {
     const renderer = firstValue(args, ['renderer', 'format', 'type'], 40);
@@ -1037,7 +1078,17 @@ export function toolActivitySummary(entriesInput, { live = false } = {}) {
     if (list.length === 1) parts.push(activityText(first).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));
     else if (first.family === 'command') parts.push(`Ran ${list.length} commands`);
     else if (first.key === 'background.spawn') parts.push(`Spawned ${list.length} agents`);
-    else parts.push(`${list.length} ${first.countNoun || 'tool calls'}${/s$/i.test(first.countNoun || '') ? '' : 's'}`);
+    else if (first.key === 'web.search') {
+      // Each web_search call can fan out into several parallel queries; surface the real total.
+      const queryTotal = list.reduce((sum, activity) => sum + Math.max(1, webSearchQueries(parseArgs(activity.args)).length), 0);
+      parts.push(`${list.length} web searches${queryTotal > list.length ? ` · ${queryTotal} queries` : ''}`);
+    } else if (first.key === 'web.fetch') {
+      const pageTotal = list.reduce((sum, activity) => sum + Math.max(1, webFetchUrls(parseArgs(activity.args)).length), 0);
+      parts.push(`${list.length} page fetches${pageTotal > list.length ? ` · ${pageTotal} pages` : ''}`);
+    } else {
+      const noun = first.countNoun || 'tool call';
+      parts.push(`${list.length} ${/s$/i.test(noun) ? noun : /(?:sh|ch|x|z)$/i.test(noun) ? `${noun}es` : `${noun}s`}`);
+    }
   }
   if (failed.length === 1) parts.push(activityText(failed[0]).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));
   else if (failed.length > 1) parts.push(`${failed.length} operations failed`);
@@ -1292,8 +1343,12 @@ function readableActivityDetail(activity, esc) {
     if (args.x != null && args.y != null) add('Position', `${args.x}, ${args.y}`);
     add('Action', titleCase(args.action || action.replace(/^(desktop|browser)_/, '')));
   } else if (['web_search', 'web_fetch', 'analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(action)) {
-    add('Search', args.query || args.q);
-    add('Page', args.url);
+    const queries = action === 'web_search' ? webSearchQueries(args) : [];
+    if (queries.length > 1) queries.forEach((q, i) => add(`Query ${i + 1}`, q));
+    else add('Search', args.query || args.q);
+    const urls = action === 'web_fetch' ? webFetchUrls(args) : [];
+    if (urls.length > 1) urls.forEach((u, i) => add(`Page ${i + 1}`, u));
+    else add('Page', args.url);
     add('File', args.file_path || args.path || args.video_path || args.image_path);
     add('Instructions', args.prompt || args.question);
   }
