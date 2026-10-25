@@ -143,8 +143,20 @@ export interface ApproveProposalActionResult {
 const IDEMPOTENT_APPROVAL_STATUSES = new Set<ProposalStatus>(['approved', 'executing', 'repairing', 'executed']);
 const proposalApprovalInFlight = new Map<string, Promise<ApproveProposalActionResult>>();
 
-function proposalHasExecutionPlan(proposal: any): boolean {
-  return !!(proposal?.executorPrompt || (proposal?.affectedFiles?.length && proposal?.details));
+export function proposalHasExecutionPlan(proposal: any): boolean {
+  // Approved execution_steps are the executor's checklist (dispatchApprovedProposal requires two).
+  // Steps-only proposals (no executor_prompt, no affected_files) used to be approved without any
+  // task starting, and the approved-without-task recovery path could not pick them up either.
+  return !!(
+    proposal?.executorPrompt
+    || (proposal?.affectedFiles?.length && proposal?.details)
+    || getApprovedExecutionSteps(proposal).length >= 2
+  );
+}
+
+function proposalExpectsExecution(proposal: any): boolean {
+  const lane = normalizeProposalExecutionLane(proposal?.executionMode || proposal?.execution_mode);
+  return lane === 'action' || lane === 'code_change';
 }
 
 function compactProposalState(proposal: any): Record<string, any> | undefined {
@@ -630,6 +642,16 @@ async function approveProposalActionOnce(
         loadProposal(existing.id) || existing,
       );
     }
+  }
+
+  // An action/code_change proposal exists to run something. If it has no runnable plan, refuse
+  // the approval and leave it pending instead of recording an approval that starts nothing.
+  if (proposalExpectsExecution(existing) && !existing?.repairContext && getApprovedExecutionSteps(existing).length < 2) {
+    throw proposalActionError(
+      422,
+      'No runnable plan: action proposals need at least two execution_steps, so approval could not start a task. Left pending; revise it with steps or deny it.',
+      existing,
+    );
   }
 
   const proposal = approveProposal(proposalId, opts.notes);
