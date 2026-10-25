@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { boundRetrievalTrace, type RetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sanitizeMemoryRecallText } from './memory-recall.js';
+import { renderMemoryIdsForPrompt, sanitizeMemoryRecallText } from './memory-recall.js';
 
 
 export type MemoryAtomKind = 'project_fact' | 'decision' | 'workflow_rule' | 'continuity';
@@ -193,11 +193,19 @@ function finalizeAtom(raw: string, lines: SourceLine[], startIndex: number, endI
   const first = lines[startIndex];
   const last = lines[endIndex];
   if (!first || !last || !/^\s*[-*+]\s+/.test(first.text)) return null;
-  const rawText = raw.slice(first.start, last.end);
-  if (!rawText.trim()) return null;
-  const contentHash = hash(rawText);
-  const kind = classifyAtom(section, rawText);
-  const entities = extractEntities(rawText);
+  const sourceText = raw.slice(first.start, last.end);
+  if (!sourceText.trim()) return null;
+  // Identity ignores the id token (stored `<!-- m:id -->` or rendered `[m:id]`) so
+  // atom ids stay stable when the migration appends ids to existing bullets.
+  const identityText = sourceText
+    .replace(/^(\s*-\s+)\[m:[a-z0-9]{4,8}\]\s*/i, '$1')
+    .replace(/\s*<!--\s*m:[a-z0-9]{4,8}\s*-->\s*$/, '');
+  const rawText = renderMemoryIdsForPrompt(sourceText);
+  const contentHash = hash(identityText);
+  const kind = classifyAtom(section, identityText);
+  const entities = extractEntities(identityText);
+
+
   return {
     id: `matom_${hash(`workspace/MEMORY.md:${first.number}-${last.number}:${contentHash}`)}`,
     sourcePath: 'workspace/MEMORY.md',
@@ -210,7 +218,7 @@ function finalizeAtom(raw: string, lines: SourceLine[], startIndex: number, endI
     authority: 'durable_memory_file',
     durability: 1,
     status: 'active',
-    terms: tokenize(`${section} ${rawText}`),
+    terms: tokenize(`${section} ${identityText}`),
     entities,
     tags: atomTags(section, rawText, kind),
   };

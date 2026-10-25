@@ -7,6 +7,7 @@ import {
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { buildMobileDeliveryPaintPlan, isMobileDeliveryRow, mobileDeliverySplitMessage } from './mobile-thread-order.js';
 import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
@@ -2025,8 +2026,17 @@ export function createMobileChatRendererRuntime(context = {}) {
           </button>
         </div>`
       : '';
-    const renderedMessages = timeline.paintEntries
-      .map((entry) => _renderChatMessageHtml(entry.msg, entry.originalIndex, entry.key, entry.signature))
+    // delivery_send rows sit after their turn's trace; when that turn has
+    // answer text, paint it as trace row -> deliveries -> answer row.
+    const renderedMessages = buildMobileDeliveryPaintPlan(timeline.paintEntries)
+      .map(({ entry, part }) => (part === 'full'
+        ? _renderChatMessageHtml(entry.msg, entry.originalIndex, entry.key, entry.signature)
+        : _renderChatMessageHtml(
+          mobileDeliverySplitMessage(entry.msg, part),
+          entry.originalIndex,
+          part === 'answer' ? `${entry.key}:answer` : entry.key,
+          `${entry.signature}:${part}`,
+        )))
       .join('');
     reconcileKeyedTimelineRows(threadEl, (olderMessagesControl + renderedMessages) || (
       sid === MOBILE_CHAT_SESSION_ID
@@ -2391,6 +2401,10 @@ export function createMobileChatRendererRuntime(context = {}) {
     _captureMobileWorkerDeckViewState(threadEl);
     const msgIndex = Number.isFinite(Number(index)) ? Number(index) : _activeMobileThread().indexOf(message);
     if (msgIndex < 0) return false;
+    // A turn followed by delivery rows is painted split (trace / deliveries /
+    // answer); a single-row patch would duplicate the answer. Full render.
+    if (String(message?.body?.text || '').trim()
+      && isMobileDeliveryRow(_activeMobileThread()[msgIndex + 1])) return false;
     const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
     if (!currentEl) return false;
     const nextWrap = document.createElement('div');
@@ -3251,6 +3265,7 @@ function _mobileBackgroundDisplayTraceEntries(entries) {
 function _renderMobileAgentChatBubble(message, options = {}) {
   const role = String(message?.role || message?.from || options.role || 'agent').toLowerCase();
   const fromUser = role === 'user' || role === 'you' || role === 'human';
+  const chatParity = options.chatParity === true;
   const timeValue = message?.createdAt || message?.timestamp || message?.ts;
   const time = timeValue ? _formatTimeAgo(timeValue) : '';
   const text = String(message?.content || message?.message || message?.text || message?.body?.text || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
@@ -3297,9 +3312,13 @@ function _renderMobileAgentChatBubble(message, options = {}) {
   } else {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
     const senderIconHtml = typeof options.senderIconHtml === 'string' ? options.senderIconHtml : '';
+    if (options.showSender === false) {
+      if (voiceMeta) inner += `<span class="pm-sender">${escapeHtml(voiceMeta)}</span>`;
+    } else {
     inner += senderIconHtml
       ? `<span class="pm-sender pm-sender-with-icon">${senderIconHtml}<span class="pm-sender-name">${escapeHtml(voiceMeta || sender)}</span></span>`
       : `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
+    }
     inner += _renderMobileWorkTimer(traceMessage, { expanded: traceExpanded });
     const answerStarted = !!String(text || '').trim();
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
@@ -3359,6 +3378,12 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     ? ` data-pm-background-agent-message="${escapeHtml(String(options.backgroundAgentId))}" data-pm-background-segment="${escapeHtml(String(options.backgroundSegmentKey || 'main'))}"`
     : '';
   const backgroundAgentId = String(options.backgroundAgentId || '').trim();
+  const chatActionHtml = chatParity && !fromUser && !streaming && text && !backgroundAgentId
+    ? `<div class="pm-msg-actions">
+        <button type="button" class="pm-msg-action" data-pm-agent-msg-action="copy" title="Copy" aria-label="Copy">${ICONS.clipboard}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+        <button type="button" class="pm-msg-action" data-pm-agent-msg-action="speak" title="Speak response" aria-label="Speak response">${ICONS.volume || ICONS.play}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+      </div>`
+    : '';
   const backgroundActionHtml = backgroundAgentId && options.backgroundActions !== false && !fromUser && terminalFrameReceived
     ? `<div class="pm-msg-actions pm-background-agent-actions" data-pm-background-actions="${escapeHtml(backgroundAgentId)}">
         <button type="button" class="pm-msg-action" data-pm-background-action="copy" data-pm-background-id="${escapeHtml(backgroundAgentId)}" title="Copy" aria-label="Copy">${ICONS.clipboard}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
@@ -3370,9 +3395,9 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg"${streaming && !fromUser ? ' data-streaming="1"' : ''}${backgroundDetailAttr}>
       <div class="pm-bubble">
         ${inner}
-        ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
+        ${time && !chatParity ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
         ${backgroundActionHtml}
-      </div>
+      </div>${chatActionHtml}${chatParity && time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(time)}</span>` : ''}
     </div>`;
 }
 

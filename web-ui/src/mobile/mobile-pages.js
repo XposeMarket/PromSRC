@@ -1,5 +1,6 @@
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
+import { orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
@@ -2117,6 +2118,13 @@ function _reconcileMobileThreadOrder(thread) {
     list.splice(index, 1);
   }
   _dedupeMobileAssistantTurns(list);
+  // Recovery can surface the live "Working for..." row with a zero/stale
+  // timestamp ahead of older history. Pin it after its owning prompt (or the
+  // thread end) and fold stale duplicates of the same request.
+  repairMobileLiveRowPlacement(list, {
+    merge: (target, source) => _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText: true }),
+    hasVisibleAnswer: _mobileAssistantHasVisibleAnswer,
+  });
   // A recovery refresh can briefly return the completed assistant before the
   // matching user record. Stable request identity makes the intended pair
   // unambiguous, so restore user -> assistant ordering before rendering.
@@ -2136,6 +2144,9 @@ function _reconcileMobileThreadOrder(thread) {
     list.splice(list.indexOf(user) + 1, 0, reply);
   }
   _repairMobileRealtimeExchangeOrder(list);
+  // delivery_send rows land in history while the turn streams; keep them
+  // after that turn's assistant row (see mobile-thread-order.js).
+  orderMobileTurnDeliveries(list);
   _reindexMobileThread(list);
   return list;
 }
@@ -4911,7 +4922,15 @@ wsEventBus.on('workspace_changes', (message = {}) => {
 });
 
 document.addEventListener('toggle', async (event) => {
-  const terminal = event.target?.closest?.('.tool-command-terminal.is-complete');
+  // Mobile command rows are the disclosure for their terminal: the inner
+  // terminal is always open and the row decides visibility. Load the log
+  // when the row opens, never while it is still collapsed.
+  const target = event.target;
+  const terminal = target?.classList?.contains?.('tool-activity-terminal-row')
+    ? (target.open ? target.querySelector('.tool-command-terminal.is-complete') : null)
+    : target?.closest?.('.tool-command-terminal.is-complete');
+  const row = terminal?.closest?.('.tool-activity-terminal-row');
+  if (row && !row.open) return;
   if (!terminal?.open || terminal.dataset.logLoaded === '1' || terminal.dataset.logLoading === '1') return;
   const runId = String(terminal.dataset.commandRunId || '').trim();
   if (!runId) return;
@@ -4927,6 +4946,18 @@ document.addEventListener('toggle', async (event) => {
   } finally {
     delete terminal.dataset.logLoading;
   }
+}, true);
+
+// Trace screenshot thumbnails open in the shared mobile media viewer.
+document.addEventListener('click', (event) => {
+  const button = event.target?.closest?.('[data-pm-live-vision-preview]');
+  if (!button) return;
+  const img = button.querySelector('img');
+  const src = String(img?.currentSrc || img?.src || '').trim();
+  if (!src) return;
+  event.preventDefault();
+  event.stopPropagation();
+  _openMobileMediaTarget({ kind: 'image', src, download: src, name: String(img?.alt || button.title || 'Screenshot').trim() });
 }, true);
 
 function _appendMobileCompactionTrace(message, status = 'compacting', summary = '', extra = null) {
@@ -6302,6 +6333,16 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
         const ownerIndex = candidateRequest ? next.findIndex((item) => item?.role === 'user'
           && String(item._clientRequestId || item.clientRequestId || '').trim() === candidateRequest) : -1;
         if (ownerIndex >= 0 && insertAt <= ownerIndex) insertAt = ownerIndex + 1;
+        // A recovered live/untimed assistant row has no trustworthy page
+        // position: anchoring it before the page's first matched row put the
+        // "Working for..." row at index 0, above older history. Without an
+        // owning prompt it follows its previous anchor or goes to the end.
+        if (candidate.role === 'ai' && ownerIndex < 0
+          && (candidate.streaming === true || !(Number(candidate.timestamp || 0) > 0))) {
+          insertAt = previousAnchor
+            ? next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, previousAnchor)) + 1
+            : next.length;
+        }
         next.splice(insertAt, 0, candidate);
         return;
       }
@@ -6769,11 +6810,15 @@ function _appendMobileDeliveryNotification(msg = {}) {
     source: String(msg.source || 'delivery'),
     channel: String(msg.target || 'mobile'),
     channelLabel: 'delivery',
+    messageKind: 'delivery',
+    // Same id the gateway writes to history, so a refresh merges, not dupes.
+    messageId: batchId ? `delivery_${batchId}` : undefined,
     deliveryBatchId: batchId,
     deliveryBatchCount: Number(msg.batchCount || 0),
   };
   if (media) _mergeMobileMediaIntoMessage(turn, [media]);
   __pmChat.threads[sid].push(turn);
+  orderMobileTurnDeliveries(__pmChat.threads[sid]);
   // Delivery notifications are session-scoped background updates. They may
   // refresh the thread already on screen, but must never select their session.
   // A tool finishing in chat A can emit a delivery while the user is composing
@@ -7770,7 +7815,7 @@ function _renderMobileVariantNav(index) {
 
 function _renderMobileMessageActions(m, index) {
   const terminalFrameReceived = m?._pmFinalReceived === true || m?._done === true;
-  if ((m?.streaming && !terminalFrameReceived) || index < 0) return '';
+  if ((m?.streaming && !terminalFrameReceived) || index < 0 || m?._pmHideActions === true) return '';
   const isUser = m?.role === 'user';
   // User messages: no inline action bar — long-press the bubble opens the popover instead.
   if (isUser) {
@@ -12367,6 +12412,8 @@ function _pmHasProcessRun(approval = {}) {
 
 export {
   ICONS,
+  _ttsSpeak,
+  _ttsStop,
   MOBILE_CHAT_SESSION_ID,
   PM_CHAT_VOICE_ICON_SRC,
   __pmChat,

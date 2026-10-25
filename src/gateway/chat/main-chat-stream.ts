@@ -36,6 +36,10 @@ export const MAIN_CHAT_WS_DIRECT_EVENTS: ReadonlySet<string> = new Set([
   'error',
   'warn',
   'runtime_registered',
+  // Screenshot/vision previews must reach connected clients immediately.
+  // As update-only frames, a later direct frame advanced the client's lastSeq
+  // past them, so mobile never fetched the image until a full reload.
+  'vision_injected',
 ]);
 
 export function classifyMainChatStreamEvent(type: string, data: any): MainChatStreamDelivery {

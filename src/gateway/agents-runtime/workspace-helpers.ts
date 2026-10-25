@@ -6,6 +6,7 @@ import { getConfig, getResolvedConfigDir } from './../../config/config';
 import { getToolPermissionMode } from './../tool-approval-mode';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from './../../tools/workspace-context';
 import { isCanonicalPathInsideSync } from './../../tools/workspace-boundary';
+import { findPathSuggestions } from './workspace-path-recovery';
 import { createWorkspaceSnapshot, toSnapshotRef } from './../../workspace-history';
 import { formatPhysicalLineWindow, formatSyntaxValidationResult, resolvePositiveLineArg, resolveResultCharBudget, validateFileSyntax } from './../../tools/file-intelligence';
 import { applyLineEndingTolerantFindReplace, splitLinesEolSafe } from './../dev-source-patchset';
@@ -476,43 +477,20 @@ export function createWorkspaceHelpers(ctx: WorkspaceHelperContext) {
     score -= Math.abs(candidate.length - requested.length) / 8;
     return score;
   }
-  function buildPathNotFoundRecovery(
+  async function buildPathNotFoundRecovery(
     displayPath: string,
     rootDir: string,
     requestedRel: string,
     browseToolName: string,
     options: { displayPrefix?: string; directoriesOnly?: boolean; include?: (rel: string, isDirectory: boolean) => boolean } = {}
-  ): string {
-    const suggestions: Array<{ rel: string; isDirectory: boolean; score: number }> = [];
-    const skipDirs = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.next', '.vite', '.turbo', '.pnpm-store']);
-    const maxVisited = 4000;
-    let visited = 0;
-    const walk = (dir: string) => {
-      if (visited >= maxVisited) return;
-      let dirents: fs.Dirent[];
-      try {
-        dirents = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of dirents) {
-        if (visited >= maxVisited) return;
-        if (entry.isDirectory() && skipDirs.has(entry.name)) continue;
-        const abs = path.join(dir, entry.name);
-        const rel = path.relative(rootDir, abs).replace(/\\/g, '/');
-        const isDirectory = entry.isDirectory();
-        if ((isDirectory || entry.isFile()) && (!options.directoriesOnly || isDirectory) && (!options.include || options.include(rel, isDirectory))) {
-          visited += 1;
-          const score = scorePathSuggestion(requestedRel, rel);
-          if (score > 0) suggestions.push({ rel, isDirectory, score });
-        }
-        if (isDirectory) walk(abs);
-      }
-    };
-    walk(rootDir);
-    const top = suggestions
-      .sort((a, b) => b.score - a.score || a.rel.length - b.rel.length)
-      .slice(0, 3);
+  ): Promise<string> {
+    const ranked = await findPathSuggestions({
+      rootDir,
+      score: (rel) => scorePathSuggestion(requestedRel, rel),
+      directoriesOnly: options.directoriesOnly,
+      include: options.include,
+    });
+    const top = ranked.slice(0, 3);
     if (!top.length) {
       return `ERROR: ${displayPath} not found. No close path candidate found. Use ${browseToolName} to browse nearby files.`;
     }
@@ -522,17 +500,18 @@ export function createWorkspaceHelpers(ctx: WorkspaceHelperContext) {
       .join('\n');
     return `ERROR: ${displayPath} not found. Likely intended paths:\n${rendered}\n\nNext: retry with one candidate, or use ${browseToolName} to browse nearby files.`;
   }
+
   function buildLineOutOfRangeRecovery(displayPath: string, allLines: string[], requestedLine: number, readToolName: string, lineLabel = 'line'): string {
     const lineCount = allLines.length;
     const tailStart = Math.max(1, lineCount - 7);
     const tail = renderCandidateSnippetForRecovery(allLines, tailStart, lineCount);
     return `ERROR: ${lineLabel} ${requestedLine} past end of ${displayPath} (${lineCount} lines).\nLast lines:\n${tail}\n\nNext: use ${readToolName} with start_line near ${tailStart}, or retry with a line <= ${lineCount}.`;
   }
-  function recoverWorkspacePathError(err: any, requested: unknown, browseToolName = 'list_dir'): string {
+  async function recoverWorkspacePathError(err: any, requested: unknown, browseToolName = 'list_dir'): Promise<string> {
     const message = String(err?.message || err);
     if (/not found/i.test(message)) {
       const requestedRel = String(requested || '').replace(/\\/g, '/');
-      return buildPathNotFoundRecovery(requestedRel, workspacePath, requestedRel, browseToolName);
+      return await buildPathNotFoundRecovery(requestedRel, workspacePath, requestedRel, browseToolName);
     }
     return `ERROR: ${message}`;
   }

@@ -4399,6 +4399,9 @@ html.pm-session-context-open * {
   -webkit-tap-highlight-color: transparent;
 }
 .pm-trace-tool-body .tool-command-terminal > summary::-webkit-details-marker { display: none; }
+/* The tool row is the disclosure on mobile: hide the terminal's own header. */
+.pm-trace-tool-body .tool-activity-terminal-row .tool-command-terminal > summary { display: none; }
+.pm-trace-tool-body .tool-activity-terminal-row .tool-command-terminal > pre { border-top: 0; }
 .pm-trace-tool-body .tool-command-terminal > summary em { color: #707886; font-style: normal; font-weight: 650; }
 .pm-trace-tool-body .tool-command-terminal.is-live > summary em { color: #6fce91; }
 .pm-trace-tool-body .tool-command-terminal > summary i { color: #737b87; font-style: normal; font-size: 13px; transform: rotate(0); transition: transform .15s ease; }
@@ -4504,16 +4507,24 @@ html.pm-session-context-open * {
   object-fit: contain;
   transform: translateZ(0);
 }
+/* Trace screenshots are compact thumbnails (about a third of the column);
+   tap opens the full image in the media viewer. */
 .pm-trace-vision-break .pm-live-vision-preview {
-  width: 100%;
-  max-height: none;
-  aspect-ratio: auto;
-  margin: 10px 0;
+  width: min(34%, 168px);
+  min-width: 96px;
+  max-height: 140px;
+  aspect-ratio: var(--pm-vision-aspect, 16 / 9);
+  margin: 6px 0;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
 }
 .pm-trace-vision-break .pm-live-vision-preview img {
-  height: auto;
-  max-height: 60vh;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  object-position: top center;
 }
+.pm-live-vision-preview:active { opacity: .82; }
 .pm-vision-carousel {
   display: flex;
   gap: 12px;
@@ -4522,7 +4533,7 @@ html.pm-session-context-open * {
   scroll-snap-type: x mandatory;
 }
 .pm-vision-carousel .pm-live-vision-preview {
-  flex: 0 0 calc(100% - 24px);
+  flex: 0 0 min(40%, 180px);
   scroll-snap-align: start;
 }
 .pm-trace-tool-group-shell {
@@ -8942,7 +8953,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 
 /* P1 chat: quiet graphite user panels, white conversation text, gold activity. */
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg.from-user .pm-bubble {
   border: 0;
   background: #363638;
   color: #fff;
@@ -8950,25 +8961,25 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     inset 0 1px 0 rgba(255, 255, 255, .055),
     0 8px 20px rgba(0, 0, 0, .18);
 }
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user.voice-worker-handoff .pm-bubble {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   border: 0;
   background: #363638;
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body.pm-mobile-active .pm-chat-body .pm-msg .pm-bubble {
   border: 0;
 }
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, strong, em) {
   color: #fff;
 }
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai .pm-bubble,
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg.from-ai .pm-bubble,
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg.from-ai :where(.markdown-body, .pm-live-md, .pm-live-prose, .pm-live-text, .pm-final-answer) {
   color: #f7f5ef;
 }
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-work-timer,
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-handoff-sender {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-work-timer,
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-handoff-sender {
   color: var(--pm-p1-gold-light);
 }
-:root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
+:root[data-skin="p1"] body.pm-mobile-active :is(.pm-chat-body, .pm-agent-chat-page) .pm-msg-status-divider {
   background: linear-gradient(90deg, rgba(214, 183, 94, .42), rgba(214, 183, 94, .06));
 }
 :root[data-skin="p1"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
@@ -17718,22 +17729,13 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-com
 }
 body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page .pm-agent-chat-mode-launcher {
   display: none !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
 }
-/* Dedicated agent chats keep the persistent tab bar mounted while the
-   composer is open. The main-chat keyboard rule is broader and would
-   otherwise hide this route's tab bar as a side effect of textarea focus. */
-body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page + .pm-tabbar {
-  display: grid !important;
-  visibility: visible !important;
-  pointer-events: auto !important;
-}
+/* Dedicated subagent/team chats hide the tab bar while the composer is open,
+   same as main chat (the keyboard rule above). The fallback keeps the composer
+   just above the keyboard until visualViewport measurement writes the exact
+   top edge; never fall back to fixed-position static placement. */
 body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer {
-  /* The tab bar stays visible on dedicated team/subagent chats. Keep the
-     keyboard fallback anchor above it until visualViewport measurement writes
-     the precise top edge; never fall back to fixed-position static placement. */
-  bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-tabbar-h, 60px) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px)) !important;
+  bottom: calc(var(--pm-keyboard-offset, 0px) + 8px) !important;
   z-index: 50 !important;
 }
 
@@ -19039,4 +19041,14 @@ body.pm-mobile-active .pm-sess-lift-clone > .pm-session-row {
 html.pm-session-reordering .pm-drawer-scroll { scroll-behavior: auto; }
 html.pm-session-reordering .pm-drawer :is([data-session-id], .pm-haptic-host) {
   transition: transform .16s ease;
+}
+
+/* Dedicated subagent/team chats render with the main chat thread system. */
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread .pm-msg.pm-agent-chat-msg {
+  margin-bottom: 0;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
 }
