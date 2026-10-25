@@ -22,6 +22,7 @@ import {
 } from './mobile-teams-pages.js';
 
 import { wsEventBus } from '../ws.js';
+import { isNeedsYouTask, needsYouCount, needsYouEntries, needsYouTaskIds, nyRelTime } from '../needs-you-view-model.js';
 import {
   approveMobileApproval,
   denyMobileApproval,
@@ -31,193 +32,11 @@ import {
 
 /* ---------------- TASKS PAGE ---------------- */
 
-// Agent prompts open with [SUBAGENT]/IDENTITY/WORKSPACE RULES boilerplate.
-// Show the actual task line (same rule as desktop TasksPage bgtNeedsYouSummary).
-function needsYouSummary(payload = {}) {
-  const raw = String(payload.content || payload.reason || payload.prompt || payload.toolName || payload.title || payload.targetTitle || '');
-  const task = raw.match(/\b(?:YOUR TASK|TASK|ASSIGNMENT|GOAL|OBJECTIVE)\s*:\s*([\s\S]+)/)?.[1]
-    || raw.replace(/^\s*\[[^\]]+\]\s*/, '')
-      .split(/\n\s*\n|(?=\b(?:IDENTITY|WORKSPACE RULES|CONTEXT|CONSTRAINTS)\s*:)/)
-      .find((block) => block.trim().length > 12 && !/^\s*(IDENTITY|WORKSPACE RULES|RULES|CONTEXT|CONSTRAINTS)\s*:/.test(block))
-    || '';
-  const text = task.replace(/\s+/g, ' ').trim() || 'Waiting for your input.';
-  return text.length > 220 ? `${text.slice(0, 217)}…` : text;
-}
-
-// Needs you: items blocked on the user. Resolved through the same endpoints chat uses.
-// Item ids are namespaced by the aggregator ("approval:<id>", "task:<id>"); the
-// resolve endpoints need the raw store id, which lives on payload.id.
-const NY_KIND_LABEL = {
-  final_action_approval: 'Final action',
-  tool_approval: 'Tool approval',
-  question: 'Question',
-  browser_login: 'Login needed',
-  dev_source_edit_proposal: 'Source edit proposal',
-  needs_user_supervision: 'Thread blocked',
-  team_escalation: 'Team needs you',
-  paused_agent_run: 'Paused agent run',
-  video_approval: 'Paid video run',
-};
-const NY_PAUSE_REASON = {
-  error: 'Stopped on an error',
-  awaiting_user_input: 'Waiting for your reply',
-  awaiting_approval: 'Waiting for an approval',
-  awaiting_command_approval: 'Waiting for command approval',
-  awaiting_final_action_approval: 'Waiting for final-action approval',
-  awaiting_prometheus_question_response: 'Waiting for a question answer',
-};
-
-function nyRawId(item) {
-  const fromPayload = String(item?.payload?.id || '').trim();
-  if (fromPayload) return fromPayload;
-  return String(item?.id || '').replace(/^[a-z-]+:/i, '');
-}
-
-function nyRelTime(value) {
-  const t = typeof value === 'number' ? value : Date.parse(String(value || ''));
-  if (!Number.isFinite(t) || t <= 0) return '';
-  const diff = Date.now() - t;
-  const s = Math.abs(diff) / 1000;
-  const label = s < 60 ? `${Math.max(1, Math.round(s))}s`
-    : s < 3600 ? `${Math.round(s / 60)}m`
-      : s < 86400 ? `${Math.round(s / 3600)}h`
-        : `${Math.round(s / 86400)}d`;
-  return diff < 0 ? `in ${label}` : `${label} ago`;
-}
-
-const nyCap = (s) => { const v = String(s || '').trim(); return v ? v.charAt(0).toUpperCase() + v.slice(1) : ''; };
-
-/** Headline + labelled facts so the card says what will happen without opening the thread. */
-export function needsYouDetails(item = {}) {
-  const kind = String(item.kind || '');
-  const p = item.payload || {};
-  const rows = [];
-  let headline = '';
-  const push = (label, value) => { const v = String(value ?? '').trim(); if (v) rows.push([label, v]); };
-  if (kind === 'final_action_approval' || kind === 'tool_approval') {
-    const fa = p.finalAction || {};
-    const args = p.toolArgs && typeof p.toolArgs === 'object' ? p.toolArgs : {};
-    const actionKind = String(fa.actionKind || args.action_kind || '').trim();
-    const surface = String(fa.surface || args.surface || (Array.isArray(p.affectedSystems) ? p.affectedSystems[0] : '') || '').trim();
-    if (kind === 'final_action_approval') {
-      headline = actionKind ? `${nyCap(actionKind)}${surface ? ` on ${surface}` : ''}` : 'Approve final action';
-      push('Button', fa.targetLabel || args.target_label);
-      push('Next step', fa.nextToolName || args.next_tool_name);
-    } else {
-      headline = String(p.action || '').trim() || `Run ${String(p.toolName || 'tool').replace(/_/g, ' ')}`;
-      push('Tool', p.toolName);
-      push('Command', args.command);
-      push('Path', args.path || args.filename || p.pathAccess?.requestedPath);
-      push('Directory', args.cwd);
-      if (!actionKind) push('Where', surface);
-    }
-    if (p.riskScore != null && p.riskScore !== '') push('Risk', `${p.riskScore}/10${p.policyTier ? ` · ${p.policyTier}` : ''}`);
-    push('Requested', nyRelTime(p.createdAt || item.createdAt));
-    const exp = Number(fa.expiresAt || p.expiresAt || 0);
-    if (exp > Date.now()) push('Expires', nyRelTime(exp));
-  } else if (kind === 'paused_agent_run') {
-    const status = String(p.pauseReason || p.status || '').toLowerCase();
-    headline = NY_PAUSE_REASON[status] || nyCap(String(p.status || 'paused').replace(/_/g, ' '));
-    const plan = Array.isArray(p.plan) ? p.plan : [];
-    const idx = Number(p.currentStepIndex);
-    const step = Number.isFinite(idx) && plan[idx] ? String(plan[idx].description || plan[idx].title || plan[idx].text || '') : '';
-    if (plan.length) push('Step', `${Math.min(plan.length, (Number.isFinite(idx) ? idx : 0) + 1)} of ${plan.length}${step ? `: ${step.slice(0, 90)}` : ''}`);
-    const items = Array.isArray(p.runtimeProgress?.items) ? p.runtimeProgress.items : [];
-    if (items.length) push('Progress', `${items.filter((x) => x?.status === 'done').length}/${items.length} tool steps done`);
-    push('Model', p.executorProvider);
-    push('Last activity', nyRelTime(p.lastProgressAt));
-    push('Started', nyRelTime(p.startedAt || item.createdAt));
-  } else {
-    push('Requested', nyRelTime(item.createdAt));
-  }
-  return { headline, rows };
-}
-
-function renderNeedsYouCard(item) {
-  const kind = String(item.kind || '');
-  const rawId = escapeHtml(nyRawId(item));
-  const origin = escapeHtml(String(item.sessionId || ''));
-  const payload = item.payload || {};
-  const source = escapeHtml(String(item.source || 'Chat'));
-  const kindLabel = escapeHtml(NY_KIND_LABEL[kind] || nyCap(kind.replace(/_/g, ' ')));
-  const when = escapeHtml(nyRelTime(item.createdAt));
-  const { headline, rows } = needsYouDetails(item);
-  const isApproval = kind === 'tool_approval' || kind === 'final_action_approval';
-  const summaryText = needsYouSummary(payload);
-  const summary = escapeHtml(isApproval ? String(payload.finalAction?.summary || payload.reason || summaryText) : summaryText);
-  let actions = '';
-  if (isApproval) {
-    actions = `<button class="pm-btn" data-ny-deny="${rawId}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${rawId}">Approve</button>`;
-  } else if (kind === 'question' || kind === 'browser_login') {
-    actions = `<button class="pm-btn" data-ny-skip="${rawId}">Cancel</button><button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Answer in chat</button>`;
-  } else if (kind === 'paused_agent_run') {
-    actions = `<button class="pm-btn" data-ny-run="${rawId}">Details</button><button class="pm-btn pm-btn-primary" data-ny-resume="${rawId}">Resume</button>`;
-  } else {
-    actions = `<button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Open thread</button>`;
-  }
-  const threadBtn = origin && !actions.includes('data-ny-open')
-    ? `<button class="pm-btn" data-ny-link="${origin}" aria-label="Open source thread" title="Open source thread">Thread</button>`
-    : '';
-  const facts = rows.length
-    ? `<dl class="ny-facts">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
-    : '';
-  return `<div class="pm-card needs-you-card" data-kind="${escapeHtml(kind)}" data-needs-you-id="${escapeHtml(String(item.id || ''))}">
-    <div class="pm-card-head"><span class="ny-dot" aria-hidden="true"></span><strong>${kindLabel}</strong>${when ? `<time>${when}</time>` : ''}</div>
-    <div class="ny-source">from ${source}</div>
-    ${headline ? `<div class="ny-headline">${escapeHtml(headline)}</div>` : ''}
-    ${summary ? `<div class="pm-card-body">${summary}</div>` : ''}
-    ${facts}
-    <div class="pm-card-actions">${actions}${threadBtn}</div>
-  </div>`;
-}
-
 function nyOpenThread(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid) return;
   if (typeof window.pmOpenPrometheusThread === 'function') window.pmOpenPrometheusThread(sid);
   else window.location.hash = `#mobile/chat/${encodeURIComponent(sid)}`;
-}
-
-async function paintNeedsYouSection(page) {
-  const host = page.querySelector('#pm-needs-you');
-  if (!host) return;
-  let items = [];
-  try { items = await loadMobileNeedsYou(); } catch { items = []; }
-  host.innerHTML = items.length
-    ? `<h3 class="pm-section-title">Needs you</h3>${items.map(renderNeedsYouCard).join('')}`
-    : '';
-  // Every action shows a busy state and surfaces failures; a swallowed 404 used
-  // to make Approve/Reject look dead.
-  const wire = (selector, run, okMessage) => host.querySelectorAll(selector).forEach((el) => el.addEventListener('click', async (e) => {
-    e.preventDefault();
-    if (el.disabled) return;
-    const card = el.closest('.needs-you-card');
-    card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-    el.classList.add('is-busy');
-    try {
-      await run(el);
-      if (okMessage) pmToast(okMessage, 'success');
-    } catch (err) {
-      pmToast(String(err?.message || err || 'Action failed'), 'error');
-      card?.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-      el.classList.remove('is-busy');
-      return;
-    }
-    await paintNeedsYouSection(page);
-  }));
-  wire('[data-ny-approve]', (el) => approveMobileApproval(el.dataset.nyApprove, '', { source: 'mobile' }), 'Approved');
-  wire('[data-ny-deny]', (el) => denyMobileApproval(el.dataset.nyDeny, { source: 'mobile' }), 'Rejected');
-  wire('[data-ny-skip]', (el) => cancelMobileQuestion(el.dataset.nySkip), 'Cancelled');
-  wire('[data-ny-resume]', (el) => runBgTaskAction(el.dataset.nyResume, 'resume'), 'Resumed');
-  host.querySelectorAll('[data-ny-open],[data-ny-link]').forEach((el) => el.addEventListener('click', (e) => {
-    e.preventDefault();
-    nyOpenThread(el.dataset.nyOpen || el.dataset.nyLink);
-  }));
-  host.querySelectorAll('[data-ny-run]').forEach((el) => el.addEventListener('click', (e) => {
-    e.preventDefault();
-    const id = el.dataset.nyRun;
-    if (id) window.location.hash = `#mobile/tasks/${encodeURIComponent(id)}`;
-  }));
 }
 
 const TASK_PILL = {
@@ -501,7 +320,6 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
-      <div id="pm-needs-you"></div>
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;overflow-x:auto;justify-content:flex-start;">
         ${PM_TASK_FILTERS.map((f, i) => `<button class="${i === 0 ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
       </div>
@@ -516,6 +334,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let allTasks = [];
   let currentFilter = 'running';
   let expandedId = String(taskId || '').trim();
+  let needsYouItems = [];
+  let nyExpandedId = '';
+  let nyAutoOpened = false;
+  const filterOf = (t) => (isNeedsYouTask(t, needsYouTaskIds(needsYouItems)) ? 'needs_you' : _pmTaskFilter(t.status));
   let visibleLimit = taskPageSize;
   let lastPaintSignature = '';
   let details = {};
@@ -525,14 +347,16 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   function paint() {
     const counts = PM_TASK_FILTERS.reduce((acc, f) => { acc[f.key] = 0; return acc; }, {});
-    for (const t of allTasks) counts[_pmTaskFilter(t.status)] = (counts[_pmTaskFilter(t.status)] || 0) + 1;
+    for (const t of allTasks) counts[filterOf(t)] = (counts[filterOf(t)] || 0) + 1;
+    counts.needs_you = needsYouCount(allTasks, needsYouItems);
     for (const f of PM_TASK_FILTERS) {
       const el = filterEl.querySelector(`[data-count="${f.key}"]`);
       if (el) el.textContent = counts[f.key] ? `(${counts[f.key]})` : '';
     }
 
-    const tasks = allTasks.filter(t => _pmTaskFilter(t.status) === currentFilter);
-    if (!tasks.length) {
+    const nyEntries = currentFilter === 'needs_you' ? needsYouEntries(needsYouItems) : [];
+    const tasks = allTasks.filter(t => filterOf(t) === currentFilter);
+    if (!tasks.length && !nyEntries.length) {
       lastPaintSignature = '';
       listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p></div>`;
       return;
@@ -542,6 +366,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     const linkedTask = expandedId && tasks.find(t => String(t.id || '') === expandedId);
     if (linkedTask && !visibleTasks.includes(linkedTask)) visibleTasks.unshift(linkedTask);
     const paintSignature = JSON.stringify({
+      ny: needsYouItems,
+      nyExpandedId,
       filter: currentFilter,
       visibleLimit,
       expandedId,
@@ -641,6 +467,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       visibleLimit += taskPageSize;
       paint();
     });
+    if (nyEntries.length) {
+      listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
+      wireNyEntries();
+    }
     listEl.querySelectorAll('.pm-task-card').forEach(card => {
       card.addEventListener('click', async (event) => {
         if (event.target.closest('button, textarea, input, a, summary')) return;
@@ -715,18 +545,80 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     });
   });
 
+  function nyEntryHtml(entry) {
+    const id = escapeHtml(entry.id);
+    const origin = escapeHtml(entry.sessionId);
+    const isApproval = entry.kind === 'tool_approval' || entry.kind === 'final_action_approval';
+    const rawId = escapeHtml(entry.rawId);
+    let actions;
+    if (isApproval) actions = `<button class="pm-btn" data-ny-deny="${rawId}">Reject</button><button class="pm-btn pm-btn-primary" data-ny-approve="${rawId}">Approve</button>`;
+    else if (entry.kind === 'question' || entry.kind === 'browser_login') actions = `<button class="pm-btn" data-ny-skip="${rawId}">Cancel</button><button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Answer in chat</button>`;
+    else actions = `<button class="pm-btn pm-btn-primary" data-ny-open="${origin}">Open thread</button>`;
+    const facts = nyExpandedId === entry.id && entry.facts.length
+      ? `<dl class="ny-facts">${entry.facts.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>`
+      : '';
+    return `<article class="pm-card pm-ny-entry" style="padding:12px 14px;cursor:pointer;" data-ny-entry="${id}" data-kind="${escapeHtml(entry.kind)}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <strong style="flex:1;font-size:13px;line-height:1.3;">${escapeHtml(entry.title)}</strong>
+        <span class="pm-pill orange">${escapeHtml(entry.kindLabel)}</span>
+      </div>
+      ${entry.summary ? `<div class="pm-card-body" style="font-size:12px;color:var(--pm-text-soft);margin-bottom:4px;">${escapeHtml(entry.summary)}</div>` : ''}
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--pm-muted);gap:10px;">
+        <span>${escapeHtml(entry.source)}</span><span>${escapeHtml(nyRelTime(entry.createdAt))}</span>
+      </div>
+      ${facts}
+      <div class="pm-card-actions">${actions}</div>
+    </article>`;
+  }
+
+  // Every action shows a busy state and surfaces failures; a failure re-enables the buttons.
+  function wireNyEntries() {
+    const busy = (el, run, okMessage) => el.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (el.disabled) return;
+      const card = el.closest('.pm-ny-entry');
+      card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      el.classList.add('is-busy');
+      try {
+        await run(el);
+        if (okMessage) pmToast(okMessage, 'success');
+      } catch (err) {
+        pmToast(String(err?.message || err || 'Action failed'), 'error');
+        card?.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        el.classList.remove('is-busy');
+        return;
+      }
+      load({ force: true }).catch(() => {});
+    });
+    listEl.querySelectorAll('[data-ny-approve]').forEach((el) => busy(el, (b) => approveMobileApproval(b.dataset.nyApprove, '', { source: 'mobile' }), 'Approved'));
+    listEl.querySelectorAll('[data-ny-deny]').forEach((el) => busy(el, (b) => denyMobileApproval(b.dataset.nyDeny, { source: 'mobile' }), 'Rejected'));
+    listEl.querySelectorAll('[data-ny-skip]').forEach((el) => busy(el, (b) => cancelMobileQuestion(b.dataset.nySkip), 'Cancelled'));
+    listEl.querySelectorAll('[data-ny-open]').forEach((el) => el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      nyOpenThread(el.dataset.nyOpen);
+    }));
+    listEl.querySelectorAll('.pm-ny-entry').forEach((card) => card.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, input, textarea')) return;
+      const id = card.getAttribute('data-ny-entry') || '';
+      nyExpandedId = nyExpandedId === id ? '' : id;
+      paint();
+    }));
+  }
+
   function applyTaskList(nextTasks) {
     allTasks = Array.isArray(nextTasks) ? nextTasks : [];
     if (expandedId) {
       const linkedTask = allTasks.find(t => String(t.id || '') === expandedId);
       if (linkedTask) {
-        currentFilter = _pmTaskFilter(linkedTask.status);
+        currentFilter = filterOf(linkedTask);
         filterEl.querySelectorAll('button').forEach(x => {
           x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter);
         });
       }
-    } else if (allTasks.length && !allTasks.some(t => _pmTaskFilter(t.status) === currentFilter)) {
-      const fallbackFilter = PM_TASK_FILTERS.find(f => allTasks.some(t => _pmTaskFilter(t.status) === f.key))?.key;
+    } else if (allTasks.length && !allTasks.some(t => filterOf(t) === currentFilter) && !(currentFilter === 'needs_you' && needsYouEntries(needsYouItems).length)) {
+      const fallbackFilter = PM_TASK_FILTERS.find(f => allTasks.some(t => filterOf(t) === f.key))?.key;
       if (fallbackFilter) {
         currentFilter = fallbackFilter;
         filterEl.querySelectorAll('button').forEach(x => {
@@ -741,7 +633,18 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   async function load({ resetExpandedDetail = false, force = false } = {}) {
     try {
-      applyTaskList(await loadBgTasks({ force }));
+      const [tasksRes, nyRes] = await Promise.allSettled([loadBgTasks({ force }), loadMobileNeedsYou()]);
+      if (nyRes.status === 'fulfilled' && Array.isArray(nyRes.value)) needsYouItems = nyRes.value;
+      if (tasksRes.status === 'rejected') throw tasksRes.reason;
+      applyTaskList(tasksRes.value);
+      if (!nyAutoOpened) {
+        nyAutoOpened = true;
+        if (!expandedId && needsYouCount(allTasks, needsYouItems) > 0) {
+          currentFilter = 'needs_you';
+          filterEl.querySelectorAll('button').forEach(x => x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter));
+          paint();
+        }
+      }
       if (expandedId) {
         if (resetExpandedDetail) delete details[expandedId];
         await loadDetail(expandedId);
@@ -767,9 +670,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }, 120);
   };
   taskEventNames.forEach((eventName) => wsEventBus.on(eventName, onTaskEvent));
-  const onNeedsYouChange = () => { paintNeedsYouSection(page).catch(() => {}); };
+  const onNeedsYouChange = () => { load({ force: true }).catch(() => {}); };
   ['question_created', 'question_answered', 'question_cancelled', 'question_expired', 'approval_created', 'approval_resolved', 'proposal_created'].forEach((eventName) => wsEventBus.on(eventName, onNeedsYouChange));
-  paintNeedsYouSection(page).catch(() => {});
 
   page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true, force: true }); });
   const cachedTasks = getCachedMobilePageData('tasks', 21_600_000);

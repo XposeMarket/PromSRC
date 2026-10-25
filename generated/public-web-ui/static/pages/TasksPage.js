@@ -20,6 +20,7 @@ import { api } from '../api.js';
 import { buildTeamReplyPayload } from '../needs-you-team-reply.js';
 import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
+import { isNeedsYouTask, needsYouCount, needsYouEntries, needsYouTaskIds } from '../needs-you-view-model.js';
 import { installProcessRunCardHandlers, loadRecentProcessRuns, renderProcessRunsHTML } from '../components/ProcessRunCard.js';
 import { installCodingWorkspaceHandlers, loadCodingWorkspace, renderCodingWorkspacePanel } from '../components/CodingWorkspacePanel.js';
 
@@ -374,20 +375,6 @@ async function bgtHandleColumnDrop(e, targetStatus) {
 }
 
 // --- Needs you: video approvals, team escalation replies, live refresh ---------
-// Agent prompts open with identity/workspace boilerplate. Show the actual task
-// line instead, collapsed to a short single paragraph.
-function bgtNeedsYouSummary(payload = {}) {
-  const raw = String(payload.content || payload.reason || payload.prompt || payload.title || 'Waiting for your input.');
-  // Prefer an explicit task header anywhere in the prompt; otherwise drop the
-  // [SUBAGENT: x] tag and any leading IDENTITY/WORKSPACE RULES/CONTEXT blocks.
-  const task = raw.match(/\b(?:YOUR TASK|TASK|ASSIGNMENT|GOAL|OBJECTIVE)\s*:\s*([\s\S]+)/)?.[1]
-    || raw.replace(/^\s*\[[^\]]+\]\s*/, '')
-      .split(/\n\s*\n|(?=\b(?:IDENTITY|WORKSPACE RULES|CONTEXT|CONSTRAINTS)\s*:)/)
-      .find((block) => block.trim().length > 12 && !/^\s*(IDENTITY|WORKSPACE RULES|RULES|CONTEXT|CONSTRAINTS)\s*:/.test(block))
-    || '';
-  const text = task.replace(/\s+/g, ' ').trim();
-  return text.length > 220 ? `${text.slice(0, 217)}…` : text;
-}
 
 function renderVideoApprovalCard(item) {
   const p = item.payload || {};
@@ -481,7 +468,7 @@ function startNeedsYouLive() {
     // Fallback while the Tasks page is visible; ws push covers the normal case.
     bgtNeedsYouPollTimer = setInterval(() => {
       if (document.hidden) return;
-      if (!document.getElementById('bgt-needs-you')) return;
+      if (!document.getElementById('bgt-board')) return;
       refreshNeedsYouNow();
     }, 20000);
   }
@@ -653,48 +640,14 @@ function renderBgTasks() {
   updateBgtHeartbeatLabel();
   updateBgtSearchUI(visibleTasks.length + visibleManagedThreads.length);
 
-  // User-blocking work stays above the project/task board and keeps its source pending ID.
-  const needsYouSection = document.getElementById('bgt-needs-you');
-  if (needsYouSection) {
-    needsYouSection.innerHTML = bgtNeedsYouItems.length
-      ? bgtNeedsYouItems.map((item) => {
-        const id = String(item.id || '');
-        const origin = String(item.sessionId || '');
-        const payload = item.payload || {};
-        const question = payload.loginHandoff ? { ...payload, loginHandoff: payload.loginHandoff } : payload;
-        const content = item.kind === 'question' || item.kind === 'browser_login'
-          ? (typeof window.renderInlinePrometheusQuestion === 'function' ? window.renderInlinePrometheusQuestion(question) : '')
-          : ['final_action_approval', 'tool_approval'].includes(item.kind)
-            ? renderTaskApprovalCard({ ...payload, sourceSessionId: origin })
-            : item.kind === 'video_approval'
-              ? renderVideoApprovalCard(item)
-              : item.kind === 'team_escalation'
-                ? renderTeamEscalationCard(item)
-                : (bgtNeedsYouSummary(payload) ? `<p class="bgt-needs-you-summary">${escHtml(bgtNeedsYouSummary(payload))}</p>` : '');
-        const runId = item.kind === 'paused_agent_run' ? String(payload.id || '') : '';
-        const kindLabel = String(item.kind || '').replace(/_/g, ' ');
-        return `<article class="bgt-needs-you-card" data-kind="${escHtml(String(item.kind || ''))}" title="${escHtml(id)}">
-          <div class="bgt-needs-you-meta">
-            <span class="bgt-needs-you-dot" aria-hidden="true"></span>
-            <strong>${escHtml(kindLabel.charAt(0).toUpperCase() + kindLabel.slice(1))}</strong>
-            <span class="bgt-needs-you-source">${escHtml(String(item.source || 'Chat'))}</span>
-            <span class="bgt-needs-you-actions">
-              ${runId ? `<button type="button" class="bgt-needs-you-open" onclick="bgtOpenCardFromClick(null,'${escHtml(runId)}')">Open run</button>` : ''}
-              ${origin ? `<button type="button" class="bgt-icon-btn" title="Open origin chat" aria-label="Open origin chat" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>` : ''}
-            </span>
-          </div>
-          ${content}
-          <small data-needs-you-id="${escHtml(id)}" hidden>${escHtml(id)}</small>
-        </article>`;
-      }).join('')
-      : '<div class="pm-empty">Nothing is waiting on you.</div>';
-  }
 
   // Only render non-empty columns
+  const nyTaskIds = needsYouTaskIds(bgtNeedsYouItems);
   const byStatus = {};
   for (const col of BGT_COLUMNS) byStatus[col.key] = [];
+  for (const entry of needsYouEntries(bgtNeedsYouItems)) byStatus.needs_assistance.push({ type: 'ny_entry', entry });
   for (const t of visibleTasks) {
-    const normalizedStatus = bgtNormalizeStatus(t.status);
+    const normalizedStatus = isNeedsYouTask(t, nyTaskIds) ? 'needs_assistance' : bgtNormalizeStatus(t.status);
     if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push({ type: 'task', task: t });
     else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'task', task: t });
   }
@@ -705,7 +658,12 @@ function renderBgTasks() {
   }
 
   board.innerHTML = '';
-  for (const col of BGT_COLUMNS) {
+  // Needs You is the leftmost column whenever something is waiting on the user.
+  const nyCol = BGT_COLUMNS.find((c) => c.key === 'needs_assistance');
+  const orderedCols = byStatus.needs_assistance.length
+    ? [nyCol, ...BGT_COLUMNS.filter((c) => c.key !== 'needs_assistance')]
+    : BGT_COLUMNS;
+  for (const col of orderedCols) {
     const items = byStatus[col.key];
     if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
@@ -716,9 +674,9 @@ function renderBgTasks() {
         <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${items.length}</span>
       </div>
       <div class="bgt-col-cards" data-bgt-drop-status="${col.key}" ondragover="bgtHandleColumnDragOver(event,'${col.key}')" ondragenter="bgtHandleColumnDragEnter(event,'${col.key}')" ondragleave="bgtHandleColumnDragLeave(event,'${col.key}')" ondrop="bgtHandleColumnDrop(event,'${col.key}')" style="display:flex;flex-direction:column;gap:8px;min-height:60px;border-radius:12px;transition:outline 0.15s,background 0.15s">
-        ${items.slice(0,5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}
+        ${items.slice(0,5).map(item => bgtColumnItemHTML(item, col)).join('')}
         ${items.length > 5 ? `
-        <div id="bgt-more-${col.key}" style="display:none;">${items.slice(5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}</div>
+        <div id="bgt-more-${col.key}" style="display:none;">${items.slice(5).map(item => bgtColumnItemHTML(item, col)).join('')}</div>
         <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${items.length - 5} more'" style="border:1px solid color-mix(in srgb, var(--text) 12%, transparent);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${items.length - 5} more</button>` : ''}
       </div>
     `;
@@ -776,6 +734,39 @@ function bgtManagedThreadCardHTML(record, col) {
       ${rawStatus === 'active' ? `<button onclick="event.stopPropagation();cancelManagedThread('${escHtml(record.id)}')" style="border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px">Stop following</button>` : `<span style="font-size:10px;color:var(--brand);font-weight:700">Open thread</span>`}
     </div>
   </div>`;
+}
+
+function bgtColumnItemHTML(item, col) {
+  if (item.type === 'managed_thread') return bgtManagedThreadCardHTML(item.record, col);
+  if (item.type === 'ny_entry') return bgtNeedsYouEntryHTML(item.entry);
+  return bgtCardHTML(item.task, col);
+}
+
+// Needs You entry (approval, question, escalation, video run) in the task-card shell.
+function bgtNeedsYouEntryHTML(entry) {
+  const item = entry.item || {};
+  const payload = item.payload || {};
+  const origin = String(entry.sessionId || '');
+  let body;
+  if (entry.kind === 'final_action_approval' || entry.kind === 'tool_approval') {
+    body = renderTaskApprovalCard({ ...payload, sourceSessionId: origin });
+  } else if (entry.kind === 'question' || entry.kind === 'browser_login') {
+    body = typeof window.renderInlinePrometheusQuestion === 'function' ? window.renderInlinePrometheusQuestion(payload) : '';
+  } else if (entry.kind === 'video_approval') {
+    body = renderVideoApprovalCard(item);
+  } else if (entry.kind === 'team_escalation') {
+    body = renderTeamEscalationCard(item);
+  } else {
+    body = `<p class="bgt-ny-summary">${escHtml(entry.summary || '')}</p>`;
+  }
+  return `<article class="bgt-ny-entry" data-kind="${escHtml(String(entry.kind || ''))}" data-ny-entry="${escHtml(String(entry.id || ''))}">
+    <div class="bgt-ny-entry-head">
+      <span class="bgt-ny-entry-title">${escHtml(entry.title || entry.kindLabel || '')}</span>
+      <span class="bgt-ny-entry-kind">${escHtml(entry.kindLabel || '')}</span>
+      ${origin ? `<button type="button" class="bgt-icon-btn" title="Open origin chat" aria-label="Open origin chat" onclick="bgtOpenOriginChat(event,'${escHtml(origin)}')">Chat</button>` : ''}
+    </div>
+    ${body}
+  </article>`;
 }
 
 function bgtCardHTML(t, col) {
