@@ -82,7 +82,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: source_stats only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"src/${normalizedRel}" is not a file`, error: true };
@@ -106,7 +106,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: webui_source_stats only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"web-ui/${normalizedRel}" is not a file`, error: true };
@@ -269,7 +269,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         if (gs_useSrc) {
           const gs_srcTarget = gs_rawPath ? path.resolve(gs_srcRoot, gs_rawPath.replace(/^\.?\/?src\//, '')) : gs_srcRoot;
           if (!gs_srcTarget.startsWith(gs_srcRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside src/`, error: true };
-          if (!fs.existsSync(gs_srcTarget)) return { name, args, result: buildPathNotFoundRecovery(`src/${gs_rawPath.replace(/^\.?\/?src\//, '')}`, gs_srcRoot, gs_rawPath.replace(/^\.?\/?src\//, ''), 'list_source', { displayPrefix: 'src/' }), error: true };
+          if (!fs.existsSync(gs_srcTarget)) return { name, args, result: await buildPathNotFoundRecovery(`src/${gs_rawPath.replace(/^\.?\/?src\//, '')}`, gs_srcRoot, gs_rawPath.replace(/^\.?\/?src\//, ''), 'list_source', { displayPrefix: 'src/' }), error: true };
           if (!gs_searchOneFile(gs_srcTarget, gs_srcRoot, 'src')) {
             if (!fs.statSync(gs_srcTarget).isDirectory()) {
               return { name, args, result: `ERROR: path "${gs_rawPath}" is not a searchable file or directory under src/`, error: true };
@@ -280,7 +280,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         if (gs_useWebUi) {
           const gs_webUiTarget = gs_rawPath ? path.resolve(gs_webUiRoot, gs_rawPath.replace(/^\.?\/?web-ui\//, '')) : gs_webUiRoot;
           if (!gs_webUiTarget.startsWith(gs_webUiRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside web-ui/`, error: true };
-          if (!fs.existsSync(gs_webUiTarget)) return { name, args, result: buildPathNotFoundRecovery(`web-ui/${gs_rawPath.replace(/^\.?\/?web-ui\//, '')}`, gs_webUiRoot, gs_rawPath.replace(/^\.?\/?web-ui\//, ''), 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          if (!fs.existsSync(gs_webUiTarget)) return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${gs_rawPath.replace(/^\.?\/?web-ui\//, '')}`, gs_webUiRoot, gs_rawPath.replace(/^\.?\/?web-ui\//, ''), 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
           if (!gs_searchOneFile(gs_webUiTarget, gs_webUiRoot, 'web-ui')) {
             if (!fs.statSync(gs_webUiTarget).isDirectory()) {
               return { name, args, result: `ERROR: path "${gs_rawPath}" is not a searchable file or directory under web-ui/`, error: true };
@@ -334,7 +334,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(gp_resolved.absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(gp_resolved.normalizedRel || '.', gp_projectRoot, gp_resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(gp_resolved.normalizedRel || '.', gp_projectRoot, gp_resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const gp_rootStat = fs.statSync(gp_resolved.absPath);
         const gp_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
@@ -688,7 +688,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: read_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (stat.isDirectory()) {
@@ -719,7 +719,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
 	        }
 	        if (!fs.existsSync(ds_absPath)) {
 	          const ds_normalizedRel = ds_rel.replace(/^\.?\/?src\//, '');
-	          return { name, args, result: buildPathNotFoundRecovery(`src/${ds_normalizedRel}`, ds_srcRoot, ds_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(`src/${ds_normalizedRel}`, ds_srcRoot, ds_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
 	        }
 	        const ds_stat = fs.statSync(ds_absPath);
 	        if (!ds_stat.isFile()) return { name, args, result: `"src/${ds_rel.replace(/^\.?\/?src\//, '')}" is not a file`, error: true };
@@ -738,7 +738,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: list_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
         }
         const entries = renderDirectoryEntries(absPath);
         const displayPath = rel ? `src/${rel}` : 'src';
@@ -755,7 +755,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (rel) => isPromAllowedPath(rel) }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (rel) => isPromAllowedPath(rel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (!stat.isDirectory()) {
@@ -781,7 +781,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (stat.isDirectory()) {
@@ -842,7 +842,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -861,7 +861,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: list_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(lwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
         }
         const lwu_entries = renderDirectoryEntries(lwu_absPath);
         const lwu_displayPath = lwu_rel ? `web-ui/${lwu_rel}` : 'web-ui';
@@ -879,7 +879,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: read_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rwu_stat = fs.statSync(rwu_absPath);
         if (rwu_stat.isDirectory()) {
@@ -933,7 +933,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: list_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
         }
         const entries = fs.readdirSync(absPath).map(e => {
           try {
@@ -955,7 +955,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: list_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(lwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
         }
         const lwu_entries = fs.readdirSync(lwu_absPath).map(e => {
           try {
@@ -978,7 +978,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
           return { name, args, result: 'ERROR: read_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rwu_absPath)) {
-          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rwu_stat = fs.statSync(rwu_absPath);
         if (rwu_stat.isDirectory()) {
@@ -1065,7 +1065,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
 	          return { name, args, result: 'ERROR: delete_webui_source only allows access to web-ui/ directory.', error: true };
 	        }
 	        if (!fs.existsSync(dwu_absPath)) {
-	          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${dwu_rel}`, dwu_webUiRoot, dwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+	          return { name, args, result: await buildPathNotFoundRecovery(`web-ui/${dwu_rel}`, dwu_webUiRoot, dwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
 	        }
 	        const dwu_stat = fs.statSync(dwu_absPath);
 	        if (!dwu_stat.isFile()) return { name, args, result: `"web-ui/${dwu_rel}" is not a file`, error: true };
