@@ -329,3 +329,43 @@ if (process.argv.includes('--write-fixture')) {
   <script src="../web-ui/vendor/marked/marked.min.js"></script><script src="../node_modules/dompurify/dist/purify.min.js"></script><script>${markdownScript}\nwindow.renderMd=renderMd;${toolScript}\ndocument.querySelector('.pm-trace-tool-body').innerHTML=${JSON.stringify(displayRows)}.map(row=>window.renderToolActivityEntry(row)).join('');const page=document.querySelector('.pm-page'),sideSheet=document.querySelector('.pm-mobile-side-sheet'),threadEl=document.querySelector('.pm-mobile-side-thread'),sideInput=document.querySelector('.pm-composer-input'),sideComposer=document.querySelector('.pm-mobile-side-composer'),sideState={},escapeHtml=${escapeHtml.toString()},_materializeMobileCompletedTrace=()=>{},__pmChat={};${script}\n${handler}\nsyncMobileSideSheetViewport();renderMobileSideSheetPlan(${JSON.stringify(saved)});window.addEventListener('resize',syncMobileSideSheetViewport);window.visualViewport?.addEventListener('resize',syncMobileSideSheetViewport);</script></body></html>`);
 }
 console.log('[background presentation] replay cursor, commentary, model, plan, previews, readable details and keyboard geometry passed');
+
+// Mixed checkpoints must not globally reorder existing tool/other-stream rows.
+const mixedLater = { type: 'think', text: 'later', streamId: 's', seq: 5 };
+const mixedMiddle = { type: 'tool', text: 'middle' };
+const mixedEarlier = { type: 'think', text: 'earlier', streamId: 's', seq: 3 };
+assert.deepEqual(mergeMobileBackgroundTraceEntries([mixedLater, mixedMiddle], [mixedEarlier]).map(row => row.text), ['earlier', 'later', 'middle']);
+const otherStream = { type: 'think', text: 'other', streamId: 'other', seq: 1 };
+const leadingTool = { type: 'tool', text: 'leading', id: 'tool-leading' };
+const recoveredOlder = { type: 'think', text: 'oldest', extra: { streamId: 's', seq: 2 } };
+const mixedCurrent = [leadingTool, otherStream, mixedLater, mixedMiddle];
+const mixedRecovered = [mixedEarlier, recoveredOlder, { ...mixedLater, text: 'duplicate sequence' }, { ...leadingTool, text: 'duplicate id' }, mixedEarlier];
+const mixedMerged = mergeMobileBackgroundTraceEntries(mixedCurrent, mixedRecovered);
+assert.deepEqual(mixedMerged.map(row => row.text), ['leading', 'other', 'oldest', 'earlier', 'later', 'middle']);
+assert.deepEqual(mixedMerged.filter(row => mixedCurrent.includes(row)), mixedCurrent);
+assert.deepEqual(mergeMobileBackgroundTraceEntries(mixedCurrent, mixedRecovered, 3).map(row => row.text), ['earlier', 'later', 'middle']);
+assert.deepEqual(mergeMobileBackgroundTraceEntries(mixedMerged, mixedRecovered), mixedMerged);
+
+// The actual gateway mapper must retain summary visibility/kind together.
+const gatewayTrace = { exports: {} };
+vm.createContext(gatewayTrace);
+vm.runInContext(ts.transpileModule(fs.readFileSync('src/gateway/tasks/background-agent-trace.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, gatewayTrace);
+for (const event of ['thinking', 'agent_thought']) {
+  const summary = gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Tagged summary', visibility: 'summary' });
+  assert.equal(summary.extra.reasoningKind, 'summary');
+  assert.equal(summary.extra.visibility, 'summary');
+  assert.equal(gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Public thought', visibility: 'user' }).extra.reasoningKind, 'full_thought');
+  assert.equal(gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Private thought', visibility: 'private' }), null);
+}
+// Terminal answer tokens belong to the final body, not a second commentary row.
+for (const eventType of ['final', 'done', 'final_response_start']) {
+  const trace = desktop.backgroundAgentEventsToLiveTraceEntries([
+    { eventType: 'token', text: 'Final answer' }, { eventType },
+  ]);
+  assert.equal(trace.filter(row => row.type === 'preamble').length, 0);
+}
+const explicitBoundaryTrace = desktop.backgroundAgentEventsToLiveTraceEntries([
+  { eventType: 'token', text: 'Commentary boundary' },
+  { eventType: 'token_narration_boundary', text: 'Commentary boundary' },
+]);
+assert.equal(explicitBoundaryTrace.filter(row => row.text === 'Commentary boundary').length, 1);
