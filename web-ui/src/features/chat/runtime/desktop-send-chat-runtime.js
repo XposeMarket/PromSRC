@@ -1151,29 +1151,30 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
                   // reasoning_summary is already an explicit user-safe progress channel.
                   // Treat every transport delta as part of the single replaceable status slot;
                   // classifying individual chunks leaks markdown/token boundaries into the UI.
-                  setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+                  setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace, { source: 'reasoning_summary', delta: event.type !== 'reasoning_summary', replace: event.type === 'reasoning_summary' });
 	              }
 	            }
 	            break;
 	          }
 
+	          case 'reasoning_summary':
 	          case 'reasoning_summary_delta': {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
                 // reasoning_summary is already an explicit user-safe progress channel.
                 // Treat every transport delta as part of the single replaceable status slot;
                 // classifying individual chunks leaks markdown/token boundaries into the UI.
-                setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+                setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace, { source: 'reasoning_summary', delta: event.type !== 'reasoning_summary', replace: event.type === 'reasoning_summary' });
 	            }
 	            break;
 	          }
 
 	          case 'agent_thought': {
-	            const thoughtText = String(event.thinking || event.text || '').trim();
+	            const thoughtText = String(event.thinking || event.text || '');
 	            const visibility = chatProgressVisibility(event);
 	            if (thoughtText && visibility !== 'private') {
 	              if (isDesktopSummaryThoughtEvent(event)) {
-	                setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	                setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility: 'summary', source: 'reasoning_summary' });
 	              } else {
 	                collectTurnThinking(thoughtText);
 	                appendDesktopDurableThought(streamState, thoughtText, appendLiveTrace, event);
@@ -1184,9 +1185,9 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 
 	          case 'thinking':
 	            if (event.thinking && String(event.thinking).trim() && chatProgressVisibility(event) !== 'private') {
-	              const thinkingText = String(event.thinking).trim();
+	              const thinkingText = String(event.thinking);
 	              if (isDesktopSummaryThoughtEvent(event)) {
-	                setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	                setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, { replace: true, visibility: 'summary', source: 'reasoning_summary' });
 	              } else {
 	                collectTurnThinking(thinkingText);
 	                appendDesktopDurableThought(streamState, thinkingText, appendLiveTrace, event);

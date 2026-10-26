@@ -4132,7 +4132,7 @@ function _mobileDurableReasoningEntries(entries) {
   return (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
 }
 
-function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary', source = 'agent_progress' } = {}) {
+function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary', source = 'agent_progress', delta = false } = {}) {
   if (!message) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -4144,6 +4144,11 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
     && String(activeProgressEntry?.extra?.source || activeProgressEntry?.source || '').toLowerCase() === source
     ? activeProgressEntry
     : null;
+  if (source === 'reasoning_summary' && existing) {
+    existing.text = delta && !replace ? String(existing.text || '') + incoming : incoming;
+    existing.extra = { ...(existing.extra || {}), visibility: 'summary', source, reasoningKind: 'summary' };
+    return true;
+  }
   if (!existing) {
     message.liveTraceEntries.push({
       id: `mtrace_progress_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -4193,7 +4198,7 @@ function _handleMobileThinkingDelta(message, evt) {
     // Keep it in the single replaceable tool-stream status slot even when the
     // prose does not start with one of the action verbs in
     // `_isMobileProgressNarration`.
-    _setMobileLiveProgressNarration(message, chunk, { source: 'reasoning_summary' });
+    _setMobileLiveProgressNarration(message, chunk, { source: 'reasoning_summary', delta: true });
   }
   return true;
 }
@@ -4205,7 +4210,7 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
   // This event type is the authoritative, user-visible reasoning summary.
   // Complete summary packets replace the active label; delta packets append.
   // The shared renderer also retains their safe prose in each tool phase.
-  _setMobileLiveProgressNarration(message, chunk, { replace: String(evt?.type || '') === 'reasoning_summary', source: 'reasoning_summary' });
+  _setMobileLiveProgressNarration(message, chunk, { source: 'reasoning_summary', delta: String(evt?.type || '') !== 'reasoning_summary', replace: String(evt?.type || '') === 'reasoning_summary' });
   return true;
 }
 
@@ -4213,8 +4218,8 @@ function _handleMobileCleanThought(message, evt) {
   if (!message) return false;
   const visibility = chatProgressVisibility(evt);
   if (visibility === 'private') return false;
-  const text = String(evt?.thinking || evt?.text || '').trim();
-  if (!text) return false;
+  const text = String(evt?.thinking || evt?.text || '');
+  if (!text.trim()) return false;
   const reasoningKind = String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase();
   const source = String(evt?.source || evt?.extra?.source || '').trim().toLowerCase();
   const isSummary = reasoningKind !== 'full_thought'

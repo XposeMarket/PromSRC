@@ -15,7 +15,7 @@ const mobileGenerated = fs.readFileSync(new URL('../generated/public-web-ui/stat
 const legacySplit = /if \(isDesktopProgressNarration\(chunk\)\) setDesktopLiveProgressNarration\(streamState, chunk, (appendLiveTrace|appendTrace)\);\s*else appendDesktopReasoningSummary\(streamState, chunk, \1\);/g;
 assert.equal([...desktop.matchAll(legacySplit)].length, 0);
 assert.equal([...desktopGenerated.matchAll(legacySplit)].length, 0);
-const directPattern = /setDesktopLiveProgressNarration\(streamState, chunk, (appendLiveTrace|appendTrace)\);/g;
+const directPattern = /setDesktopLiveProgressNarration\(streamState, chunk, (appendLiveTrace|appendTrace), \{ source: 'reasoning_summary', delta:/g;
 assert.ok([...desktop.matchAll(directPattern)].length >= 4);
 assert.ok([...desktopGenerated.matchAll(directPattern)].length >= 4);
 for (const text of [desktop, desktopGenerated]) {
@@ -37,5 +37,5 @@ for (const css of [desktopCss, desktopGeneratedCss]) {
   assert.match(css, /\.live-turn-tool-group:not\(\[data-live-trace-current="1"\]\) \.t-think-text::before/);
   assert.match(css, /\.t-think-text\.is-exit[\s\S]*?transform:\s*translateY\(-8px\)[\s\S]*?filter:\s*blur\(2px\)/);
 }
-for (const text of [mobile, mobileGenerated]) assert.match(text, /reasoning_summary[^]*?explicit user-safe progress channel[^]*?_setMobileLiveProgressNarration\(message, chunk\)/);
+for (const text of [mobile, mobileGenerated]) assert.match(text, /reasoning_summary[^]*?explicit user-safe progress channel[^]*?_setMobileLiveProgressNarration\(message, chunk, \{ source: 'reasoning_summary', delta: true \}\)/);
 console.log('desktop reasoning-summary stream parity regression passed');
