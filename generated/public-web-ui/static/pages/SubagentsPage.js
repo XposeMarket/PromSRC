@@ -30,6 +30,10 @@ installToolActivityExpansionPersistence();
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
 let activeSubagentId = null;     // Currently open detail panel
+let subagentSelectionGeneration = 0;
+function isCurrentSubagentSelection(agentId, generation) {
+  return agentId === activeSubagentId && generation === subagentSelectionGeneration;
+}
 let subagentDetailTab = 'overview'; // overview | chat | workspace | memory | runs | heartbeat
 let subagentRuns = [];
 let activeSubagentRunId = '';
@@ -837,6 +841,8 @@ function renderSubagentsCanvas() {
 
 // ── Detail Panel ──────────────────────────────────────────────────────────────
 async function openSubagentDetail(agentId) {
+  const generation = ++subagentSelectionGeneration;
+  stopSubagentPolling();
   activeSubagentId = agentId;
   subagentDetailTab = getSubagentStreamingState(agentId) ? 'chat' : 'overview';
   syncSubagentSourcePanelContext(agentId);
@@ -865,7 +871,7 @@ async function openSubagentDetail(agentId) {
   board.style.display = 'flex';
   board.style.width = '62%';
   board.style.opacity = '0';
-  setTimeout(() => { board.style.opacity = '1'; }, 60);
+  setTimeout(() => { if (isCurrentSubagentSelection(agentId, generation)) board.style.opacity = '1'; }, 60);
 
   // Dim inactive cards
   document.querySelectorAll('.subagent-card').forEach(el => {
@@ -876,13 +882,15 @@ async function openSubagentDetail(agentId) {
   });
 
   renderSubagentsCanvas();
-  await loadSubagentBoardData(agentId);
+  await loadSubagentBoardData(agentId, generation);
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   renderSubagentBoard(agentId);
   if (subagentDetailTab === 'chat') restoreSubagentChatScroll({ hadChat: false }, { forceBottom: true });
   startSubagentPolling(agentId);
 }
 
 function closeSubagentDetail() {
+  const generation = ++subagentSelectionGeneration;
   stopSubagentPolling();
   activeSubagentId = null;
   syncSubagentSourcePanelContext();
@@ -893,6 +901,7 @@ function closeSubagentDetail() {
 
   board.style.opacity = '0';
   setTimeout(() => {
+    if (generation !== subagentSelectionGeneration) return;
     board.style.display = 'none';
     board.style.width = '0';
   }, 300);
@@ -908,7 +917,7 @@ function closeSubagentDetail() {
   renderSubagentsCanvas();
 }
 
-async function loadSubagentBoardData(agentId) {
+async function loadSubagentBoardData(agentId, generation = subagentSelectionGeneration) {
   try {
     const [runsData, chatData, ctxData, skillsData] = await Promise.all([
       api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => ({ runs: [] })),
@@ -916,6 +925,7 @@ async function loadSubagentBoardData(agentId) {
       api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ refs: [] })),
       api('/api/skills').catch(() => ({ skills: [] })),
     ]);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentRuns = runsData.runs || [];
     subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(chatData.messages || []));
     subagentContextRefs = ctxData.refs || [];
@@ -3490,18 +3500,19 @@ async function uploadSubagentContextFile(agentId, input) {
 }
 
 // ── Memory Tab Actions ────────────────────────────────────────────────────────
-async function reloadSubagentMemory(agentId, { render = true } = {}) {
+async function reloadSubagentMemory(agentId, { render = true, generation = subagentSelectionGeneration } = {}) {
   try {
     const [agentMd, memoryMd] = await Promise.all([
       api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({})),
       api(`/api/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => ({})),
     ]);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentSystemPrompt = agentMd.content || '';
     subagentMemoryNotes = memoryMd.content || '';
     subagentMemoryExists = memoryMd.exists === true;
     if (render) renderSubagentBoard(agentId);
   } catch (err) {
-    showToast('Error', err.message, 'error');
+    if (isCurrentSubagentSelection(agentId, generation)) showToast('Error', err.message, 'error');
   }
 }
 
@@ -3591,12 +3602,16 @@ async function spawnSubagentTask(agentId) {
 }
 
 async function refreshSubagentDetail(agentId) {
+  const generation = subagentSelectionGeneration;
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   subagentSystemPrompt = '';
   subagentHbMd = '';
-  await loadSubagentBoardData(agentId);
+  await loadSubagentBoardData(agentId, generation);
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   // Reload current tab data too.
   if (subagentDetailTab === 'memory') {
-    await reloadSubagentMemory(agentId, { render: false });
+    await reloadSubagentMemory(agentId, { render: false, generation });
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
   }
   if (subagentDetailTab === 'heartbeat') {
     try {
@@ -3604,11 +3619,13 @@ async function refreshSubagentDetail(agentId) {
         api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({})),
         api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({})),
       ]);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       const cfg = cfgD?.config || {};
       subagentHbConfig = { enabled: cfg.enabled === true, intervalMinutes: cfg.intervalMinutes || 30 };
       subagentHbMd = mdD?.content || '';
     } catch {}
   }
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   renderSubagentBoard(agentId);
 }
 
@@ -3626,11 +3643,13 @@ function openSubagentSettings(agentId) {
 
 // ── Polling ───────────────────────────────────────────────────────────────────
 function startSubagentPolling(agentId) {
+  const generation = subagentSelectionGeneration;
   stopSubagentPolling();
   _subagentDetailPolling = setInterval(async () => {
-    if (!activeSubagentId) return stopSubagentPolling();
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     try {
       const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       const fresh = d.runs || [];
 	      if (fresh.length !== subagentRuns.length) {
 	        subagentRuns = fresh;
@@ -3638,6 +3657,7 @@ function startSubagentPolling(agentId) {
 	      }
 	      if (subagentDetailTab === 'chat') {
 	        const chat = await api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=100`);
+	        if (!isCurrentSubagentSelection(agentId, generation)) return;
 	        const freshChat = normalizeSubagentChatMessages(chat.messages || []);
 	        if (freshChat.length !== subagentChatHistory.length) {
 	          subagentChatHistory = preserveSubagentProcessMetadata(freshChat);
@@ -3706,7 +3726,11 @@ async function uninstallAgentProfilePack(agentId) {
     });
     if (!data?.success) throw new Error(data?.error || 'Uninstall failed');
     showToast?.(`Uninstalled ${agentId}`);
-    activeSubagentId = null;
+    if (activeSubagentId === agentId) {
+      ++subagentSelectionGeneration;
+      stopSubagentPolling();
+      activeSubagentId = null;
+    }
     await refreshSubagents();
   } catch (err) {
     showToast?.(`Profile pack uninstall failed: ${err.message || err}`);
@@ -3720,6 +3744,7 @@ function stopSubagentPolling() {
 
 // ── Page lifecycle ────────────────────────────────────────────────────────────
 function subagentsPageActivate() {
+  ++subagentSelectionGeneration;
   stopSubagentPolling();
   activeSubagentId = null;
   syncSubagentSourcePanelContext();
@@ -4034,12 +4059,15 @@ wsEventBus.on('subagent_chat_stream_event', (data) => {
 wsEventBus.on('subagent_run_updated', async (data = {}) => {
   const agentId = String(data.agentId || '').trim();
   if (!agentId || agentId !== activeSubagentId) return;
+  const generation = subagentSelectionGeneration;
   try {
     const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentRuns = runsData.runs || [];
     const taskId = String(data.taskId || '').trim();
     if (taskId && subagentRunDetails[taskId]?.task) {
       const detail = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`).catch(() => null);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       if (detail?.task) subagentRunDetails[taskId] = { task: detail.task, run: detail.run || null, evidenceBus: detail.evidenceBus || null };
     }
     if (subagentDetailTab === 'runs') renderSubagentBoard(agentId);

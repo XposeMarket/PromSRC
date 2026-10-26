@@ -8862,7 +8862,6 @@ function toggleSessionsEditMode() {
 
 async function deleteChatSession(id, ev) {
   if (ev) ev.stopPropagation();
-  const idx = window.chatSessions.findIndex(s => s.id === id);
   try {
     await deleteSessionFromServer(id);
   } catch (err) {
@@ -8870,6 +8869,8 @@ async function deleteChatSession(id, ev) {
     return;
   }
 
+  // The session list may have changed while the server delete was pending.
+  const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx !== -1) window.chatSessions.splice(idx, 1);
   if (Array.isArray(window.terminalSessions)) {
     window.terminalSessions = window.terminalSessions.filter(s => s.id !== id);
