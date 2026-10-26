@@ -162,6 +162,13 @@ for (const kind of kinds) {
     assert.equal(result.success, true); assert.ok(f.servers[0].closed); assert.ok(f.timers[0].cleared);
   });
 }
+for (const kind of ['openai-blocking', 'openai-background'] as const) test(`${kind}: malformed manual input preserves pending login`, async () => {
+  const f = await flow(kind); const before = f.requests.length;
+  const result = await f.api.exchangeManualCodeFromPending('/fixture', 'not-a-url', 'test');
+  assert.equal(result.success, false); assert.equal(f.requests.length, before); assert.equal(f.servers[0].closed, 0);
+  assert.ok(!f.timers[0].cleared); assert.ok(!f.poll()?.done && !f.poll()?.success);
+  await f.callback({ state: f.state, code: 'good' }); assert.equal(f.poll().success, true);
+});
 test('X API default localhost binds explicit loopback', async () => {
   const f = await flow('x-api'); assert.equal(f.servers[0].listenArgs[1], '127.0.0.1');
   assert.equal(new URL(f.auth.searchParams.get('redirect_uri')!).hostname, 'localhost');

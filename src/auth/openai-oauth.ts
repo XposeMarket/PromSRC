@@ -579,6 +579,7 @@ export async function exchangeManualCodeFromPending(
   const flow = getFlow(configDir);
   if (!flow) return { success: false, error: 'No active OAuth session — click Connect again.' };
 
+  let claimed = false;
   try {
     const url           = new URL(redirectedUrl);
     const code          = url.searchParams.get('code');
@@ -587,6 +588,7 @@ export async function exchangeManualCodeFromPending(
     if (!code) return { success: false, error: 'No code in URL.' };
     if (returnedState !== flow.state) return { success: false, error: 'State mismatch.' };
     if (!flow.lifecycle?.claim()) return { success: false, error: 'OAuth callback already handled or expired.' };
+    claimed = true;
 
     const tokenRes = await fetch(TOKEN_URL, {
       method:  'POST',
@@ -627,7 +629,7 @@ export async function exchangeManualCodeFromPending(
     flow.lifecycle.finish({ success: true, account_id: oauthAccountId });
     return { success: true, account_id: oauthAccountId };
   } catch (err: any) {
-    flow.lifecycle?.finish({ success: false, error: err.message });
+    if (claimed) flow.lifecycle?.finish({ success: false, error: err.message });
     return { success: false, error: err.message };
   }
 }
