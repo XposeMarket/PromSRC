@@ -18,7 +18,6 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
-    "test:codex-cache": "tsx src/providers/openai-codex-cache.regression.ts",
     "test:source-panel-mini": "node scripts/test-source-panel-mini-caps.mjs",
     "test:anthropic-stream-terminated": "tsx src/providers/anthropic-stream-terminated.regression.ts",
     "test:proposal-approval-flow": "tsx src/gateway/proposals/proposal-approval-flow.regression.ts",
@@ -232,6 +231,7 @@
     "test:brain-scheduled-chat": "tsx src/gateway/brain/brain-runner-scheduled-chat.regression.ts",
     "test:brain-curator-rejections": "tsx src/gateway/skills-runtime/skill-curator-rejections.regression.ts",
     "test:brain-run-budget": "tsx src/gateway/agents-runtime/brain-run-budget.regression.ts && tsx src/gateway/brain/brain-runner-budget.regression.ts",
+    "test:codex-cache": "tsx src/providers/openai-codex-cache.regression.ts",
     "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
     "test:openai-compat-reasoning": "tsx src/providers/openai-compat-adapter.regression.ts",
     "test:memory-worker-readiness": "tsx src/gateway/memory-index/memory-search-worker-readiness.regression.ts",

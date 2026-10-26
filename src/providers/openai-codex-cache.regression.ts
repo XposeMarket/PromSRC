@@ -34,6 +34,13 @@ async function main() {
   await adapter.chat([...messages('Tool context'),{role:'assistant',content:'',tool_calls:[{id:'call-1',type:'function',function:{name:'lookup',arguments:{}}}]},{role:'tool',tool_call_id:'call-1',content:'Tool output'}] as any,'gpt-5.4-mini');
   assert.deepEqual(requests[4].body.input.slice(-2).map((x:any)=>x.type),['function_call','function_call_output']);
   assert.ok(!JSON.stringify(requests).includes(PROMPT_CACHE_MARKER));
+  (adapter as any).getHeaders = async () => ({'Content-Type':'application/json','ChatGPT-Account-ID':'other-account'});
+  await adapter.chat(messages('Now Monday'),'gpt-5.4-mini');
+  assert.notEqual(requests[5].body.prompt_cache_key,requests[0].body.prompt_cache_key,'account isolation');
+  await adapter.chat(messages('Now Monday'),'gpt-5.4');
+  assert.notEqual(requests[6].body.prompt_cache_key,requests[5].body.prompt_cache_key,'model isolation');
+  await adapter.chat([{role:'system',content:PROMPT_CACHE_MARKER+'Only volatile'},{role:'user',content:'Hi'}],'gpt-5.4-mini');
+  assert.equal(requests[7].body.instructions,'Only volatile');assert.equal(requests[7].body.input.length,1);
   console.log('PASS captured HTTP: stable instructions/key, volatile developer tail, no mutation, images/tool ordering, missing-marker/user fallback, cached-token usage');
  } finally {globalThis.fetch=original;}
 }
