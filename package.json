@@ -278,6 +278,7 @@
     "test:memory-tool-latency": "tsx src/gateway/agents-runtime/capabilities/memory-tool-latency.regression.ts",
     "test:automatic-memory-search": "tsx src/gateway/memory-index/automatic-memory-search.regression.ts",
     "test:runtime-workers": "tsx src/gateway/process/runtime-worker-broker.regression.ts && tsx src/gateway/memory-index/memory-index.regression.ts && tsx src/gateway/memory-index/automatic-memory-search.regression.ts",
+    "test:model-call-worker-interactive": "tsx src/gateway/process/model-call-worker-pool-interactive.regression.ts && tsx src/gateway/process/model-call-worker-pool-interactive.regression.ts --single",
     "test:model-call-worker-pool": "tsx src/gateway/process/model-call-worker-pool.regression.ts && tsx src/gateway/process/model-call-worker-pool-expansion.regression.ts",
     "test:node-runtime": "tsx src/gateway/runtime/node-runtime.regression.ts",
     "test:gateway-progress-lease": "tsx src/gateway/gateway-progress-lease.regression.ts",
