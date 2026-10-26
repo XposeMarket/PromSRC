@@ -4,6 +4,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
 import ts from 'typescript';
+import { execFileSync } from 'node:child_process';
+
+const readSource = (file: string) => process.argv.includes('--baseline')
+  ? execFileSync('git', ['show', `origin/main:src/gateway/${file}`], { encoding: 'utf8' })
+  : fs.readFileSync(path.join(__dirname, file), 'utf8');
 
 // Execute the production module with isolated config/pairing dependencies: no
 // gateway, vault, filesystem persistence, sockets, or live credentials are used.
@@ -12,7 +17,7 @@ let resolution: string | undefined;
 let resolutionThrows = false;
 const env: Record<string, string> = {};
 const moduleObject = { exports: {} as any };
-const source = fs.readFileSync(path.join(__dirname, 'gateway-auth.ts'), 'utf8');
+const source = readSource('gateway-auth.ts');
 const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
 const config = { getConfig: () => ({ gateway }), resolveSecret: (value: string) => {
   if (resolutionThrows) throw new Error('sensitive vault backend details');
@@ -30,6 +35,19 @@ vm.runInNewContext(js, {
   },
 }, { filename: 'gateway-auth.ts' });
 const auth = moduleObject.exports;
+const pairingModule = { exports: {} as any };
+const pairingJs = ts.transpileModule(readSource('pairing/pairing-admin-auth.ts'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+vm.runInNewContext(pairingJs, {
+  exports: pairingModule.exports, module: pairingModule, Buffer, URL, process: { env },
+  require: (name: string) => {
+    if (name === 'crypto') return crypto;
+    if (name === '../../config/config') return { getConfig: () => config };
+    if (name === '../../config/gateway-port') return { resolveGatewayPort: () => gateway.port };
+    if (name === '../gateway-auth') return auth;
+    throw new Error(`Unexpected pairing dependency: ${name}`);
+  },
+});
+const pairing = pairingModule.exports;
 const remote = '198.51.100.7';
 const local = '127.0.0.1';
 const request = (headers: Record<string, string> = {}, ip = local, url = '/api/tasks') => ({ method: 'GET', headers, socket: { remoteAddress: ip }, url });
@@ -154,6 +172,27 @@ check('explicit capability can authorize non-browser file client, CORS never tru
   gateway.auth.token = 'explicit-capability';
   assert.equal(status({ origin: 'null', authorization: 'Bearer explicit-capability' }), 200);
   assert.equal(cors('null'), false);
+});
+check('pairing admin fails closed with typed sanitized 403, not 500 or ambient trust', () => {
+  gateway.auth.token = 'env:PRIVATE_REFERENCE';
+  let code = 200; let nextCalled = false; let body: any;
+  const res = { status(value: number) { code = value; return this; }, json(value: unknown) { body = value; } };
+  pairing.requirePairingAdmin(request(), res, () => { nextCalled = true; });
+  assert.equal(code, 403); assert.equal(nextCalled, false);
+  assert.match(body.error, /configuration.*secret.*resolved/i);
+  assert.doesNotMatch(body.error, /PRIVATE_REFERENCE|stack|gateway-auth.ts/);
+});
+check('Electron desktop capability still administers pairing with broken gateway secret', () => {
+  gateway.auth.token = 'vault:ABSENT';
+  env.PROMETHEUS_PAIRING_ADMIN_TOKEN = 'desktop-capability'; env.PROMETHEUS_ELECTRON_MANAGED = '1';
+  assert.equal(pairing.evaluatePairingAdminRequest(request({ 'x-prometheus-pairing-admin': 'desktop-capability' })).ok, true);
+  assert.equal(pairing.evaluatePairingAdminRequest(request({ 'x-prometheus-pairing-admin': 'wrong' })).status, 403);
+});
+check('resolved gateway pairing credential and unconfigured local pairing still work', () => {
+  assert.equal(pairing.evaluatePairingAdminRequest(request()).ok, true);
+  gateway.auth.token = 'env:RESOLVED'; resolution = 'pairing-gateway-capability';
+  assert.equal(pairing.evaluatePairingAdminRequest(request({ authorization: 'Bearer pairing-gateway-capability' }, remote)).ok, true);
+  assert.equal(pairing.evaluatePairingAdminRequest(request({}, remote)).status, 403);
 });
 console.log(`METRICS unresolved-reference accepted ${unresolvedAccepted}/2; null-origin status ${nullStatus}; opaque CORS accepted ${opaqueCorsAccepted}/3`);
 console.log(`gateway-auth-fail-closed: ${passed} passed, ${failed} failed, ${passed + failed} total`);
