@@ -123,7 +123,8 @@ check('configured gateway and optional HTTPS listener use exact origins', () => 
 });
 let opaqueCorsAccepted = 0;
 check('opaque CORS blocked even for pairing preflight and media grants', () => {
-  for (const headers of [{}, { 'x-pairing-token': 'paired-test-capability' }, { 'access-control-request-headers': 'X-Pairing-Token' }]) {
+  const variants: Array<Record<string, string>> = [{}, { 'x-pairing-token': 'paired-test-capability' }, { 'access-control-request-headers': 'X-Pairing-Token' }];
+  for (const headers of variants) {
     if (cors('null', headers)) opaqueCorsAccepted++;
   }
   assert.equal(opaqueCorsAccepted, 0);
