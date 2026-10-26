@@ -168,6 +168,9 @@ Before wiring a new adapter, compare with `LLMProvider` and the registry:
 
 Keep provider selection, tool permissions and UI provider metadata in separate owner layers. A registry descriptor can tell the UI a provider is supported while an adapter bug still breaks runtime; tests need to exercise the factory-selected adapter, not only the descriptor.
 
+### Pending PR: feat/model-family-picker-terra61
+Pending implementation groups desktop/mobile chat models through shared `web-ui/src/model-family-grouping.js` and adds `gpt-6.1-terra` metadata for OpenAI/OpenAI Codex: catalogs/fallbacks, reasoning (none/low/medium/high/xhigh/max), context and pricing. This is pending PR work, not live/on-device verified.
+
 ## Operational model-state distinctions
 
 | Question | Do not confuse it with | Source of truth |
@@ -185,7 +188,3 @@ Concurrent interactive sessions can be on different providers/accounts, especial
 `OpenAICodexAdapter.chat` splits `PROMPT_CACHE_MARKER`: stable policy stays in `instructions`, and volatile turn context is a developer input item immediately before the latest user item. Conversation/tool/image ordering and caller messages remain untouched. Missing marker, empty stable prefix or no user retains the full stripped instructions. An opaque SHA-256-derived session/account/model affinity (independent of instructions) is sent as `prompt_cache_key` and Codex's `session_id` header; it is not conversation state, contains no raw prompt/account text and needs no in-memory map. Optional session identity flows from ollama-client's usage context/current trace through ChatOptions and the model-worker protocol; anonymous calls get a per-call random key, reused only across that call's retries. ChatGPT web and API-key/OpenAI-compatible endpoints are unchanged. `usage.input_tokens_details.cached_tokens` still feeds `cacheReadTokens`; captured-wire tests cannot establish a production cache-hit or TTFT improvement. Validate repeated real calls after deployment.
 
 Codex cache affinity (2026-10-26): `prompt_cache_key` and `session_id` hash conversation identity plus account/model only, never instructions (tool menus, memory and runtime blocks can change). Missing identity gets a fresh per-call UUID retained through retries, not a shared global key. Marked volatile system tails become developer context next to the latest user. The opt-in synthetic probe sends eight requests (shared-key versus session-scoped four-turn loops); low concurrency cannot reproduce shared-key routing overflow, so its results are a warm-prefix smoke test, not a production savings estimate.
-
-
-### Pending PR: feat/model-family-picker-terra61
-Pending implementation groups desktop/mobile chat models through shared `web-ui/src/model-family-grouping.js` and adds `gpt-6.1-terra` metadata for OpenAI/OpenAI Codex: catalogs/fallbacks, reasoning (none/low/medium/high/xhigh/max), context and pricing. This is pending PR work, not live/on-device verified.
