@@ -199,25 +199,39 @@ export function slimToolsForExtraUsageRetryDetailed(
 export const VOLATILE_TURN_CONTEXT_HEADER = '[PER-TURN RUNTIME CONTEXT: injected by Prometheus, not typed by the user. Same authority as the system prompt.]';
 
 /**
- * Append the system prompt's volatile tail as a trailing, uncached text block on
- * the final user message, AFTER the rolling-history cache breakpoint. History
- * blocks never contain it, so the next request (tool round or new user turn)
- * still hits the cached tools + stable system + history prefix.
+ * Pin runtime context to the original user input that started this turn, not
+ * the synthetic user messages holding subsequent tool results. Keep a fixed
+ * breakpoint here alongside the rolling history breakpoint (at most four total).
+ * The source history stays unmodified; changed runtime context still takes effect.
  */
-export function attachVolatileContextToUserTurn(messages: any[], volatile: string): boolean {
+export function attachVolatileContextToUserTurn(messages: any[], volatile: string, turnUserIndex = -1): boolean {
   const text = String(volatile || '').trim();
-  const last = messages[messages.length - 1];
+  const last = messages[turnUserIndex >= 0 ? turnUserIndex : messages.length - 1];
   if (!text || !last || last.role !== 'user') return false;
   if (typeof last.content === 'string') {
     if (!last.content.trim()) return false;
-    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+    last.content = [{ type: 'text', text: last.content }];
   }
   if (!Array.isArray(last.content) || last.content.length === 0) return false;
-  const tail = last.content[last.content.length - 1];
-  if (tail && typeof tail === 'object' && !tail.cache_control) tail.cache_control = { type: 'ephemeral' };
-  last.content.push({ type: 'text', text: `${VOLATILE_TURN_CONTEXT_HEADER}\n${text}` });
+  for (const block of last.content) delete block.cache_control;
+  last.content.push({ type: 'text', text: `${VOLATILE_TURN_CONTEXT_HEADER}\n${text}`, cache_control: { type: 'ephemeral' } });
   return true;
 }
+
+/** Sparse unattended workloads benefit from 1h stable prefixes; unknown/main stay 5m. */
+export function anthropicStableCacheTtl(workload?: string): '5m' | '1h' {
+  return /^(heartbeat|cron|scheduled|schedule|background|background_agent|background_task|subagent|direct_subagent|team_subagent|team_manager)$/.test(workload || '') ? '1h' : '5m';
+}
+
+export function applyAnthropicStableCacheTtl(body: any, workload?: string): void {
+  if (anthropicStableCacheTtl(workload) !== '1h') return;
+  // Cache hierarchy is tools -> system -> messages. Longer TTLs must come first.
+  // Both stable breakpoints use 1h; per-turn context/history remains 5m.
+  for (const block of [...(body.tools || []), ...(body.system || [])]) {
+    if (block.cache_control) block.cache_control = { type: 'ephemeral', ttl: '1h' };
+  }
+}
+
 
 export function slimToolsForExtraUsageRetry(
   tools: any[] | undefined,
@@ -568,8 +582,9 @@ export class AnthropicAdapter implements LLMProvider {
 
   // --- Convert Prometheus ChatMessage[] ? Anthropic messages format ------------
 
-  private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): Promise<{ system: string; messages: any[] }> {
+  private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): Promise<{ system: string; messages: any[]; turnUserIndex: number }> {
     let systemPrompt = '';
+    let turnUserIndex = -1;
     const anthropicMessages: any[] = [];
     const pendingToolUseIds: string[] = [];
     const knownToolUseIds = new Set<string>();
@@ -683,6 +698,7 @@ export class AnthropicAdapter implements LLMProvider {
         const parts = await normalizeAnthropicContent(m.content);
 
         if (parts.length === 0) continue;
+        if (m.role === 'user') turnUserIndex = anthropicMessages.length;
         anthropicMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: parts });
         continue;
       }
@@ -691,6 +707,7 @@ export class AnthropicAdapter implements LLMProvider {
       // Plain text message - validate content is non-empty
       const textContent = typeof m.content === 'string' ? m.content.trim() : '';
       if (!textContent) continue;  // Skip empty messages
+      if (m.role === 'user') turnUserIndex = anthropicMessages.length;
 
       anthropicMessages.push({
         role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -731,7 +748,7 @@ export class AnthropicAdapter implements LLMProvider {
       systemPrompt = systemPrompt.replace(/\[TODAY_NOTES[^\]]*\][\s\S]*?(?=\n\n\[|\n\n##|\s*$)/g, '').trim();
     }
 
-    return { system: systemPrompt, messages: anthropicMessages };
+    return { system: systemPrompt, messages: anthropicMessages, turnUserIndex };
   }
 
 
@@ -897,12 +914,14 @@ export class AnthropicAdapter implements LLMProvider {
     const outputTokens = Number(usage.output_tokens || 0);
     const cacheReadTokens = Number(usage.cache_read_input_tokens || 0);
     const cacheWriteTokens = Number(usage.cache_creation_input_tokens || 0);
+    const cacheWrite1hTokens = Number(usage.cache_creation?.ephemeral_1h_input_tokens || 0);
     const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
     return {
       inputTokens,
       outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
+      cacheWrite1hTokens,
       totalTokens,
       source: 'provider',
     };
@@ -923,7 +942,7 @@ export class AnthropicAdapter implements LLMProvider {
       ? loadTokens(this.configDir, this.accountId)
       : null;
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
-    const { system, messages: anthropicMessages } = await this.buildMessages(messages, options?.omitIntradayNotes);
+    const { system, messages: anthropicMessages, turnUserIndex } = await this.buildMessages(messages, options?.omitIntradayNotes);
 
     const body: any = {
       model,
@@ -964,7 +983,7 @@ export class AnthropicAdapter implements LLMProvider {
       let systemForBlocks = trimmed;
       if ((anthropicCfg as any).volatile_context_in_system !== true) {
         const { stable, volatile } = splitOnCacheMarker(trimmed);
-        if (volatile.trim() && stable.trim() && attachVolatileContextToUserTurn(anthropicMessages, volatile)) {
+        if (volatile.trim() && stable.trim() && attachVolatileContextToUserTurn(anthropicMessages, volatile, turnUserIndex)) {
           systemForBlocks = stable;
         }
       }
@@ -980,6 +999,8 @@ export class AnthropicAdapter implements LLMProvider {
     if (isOAuth && body.system?.[0]?.text !== claudeCodePreamble.text) {
       throw new Error('Claude setup-token request is missing its first system block.');
     }
+
+    applyAnthropicStableCacheTtl(body, options?.cacheWorkload);
 
     // `output_config.effort` only goes to models that accept it natively
     // (nativeEffort). Manual-thinking-only models (Sonnet 4.5, Haiku 4.5,
@@ -1223,6 +1244,7 @@ export class AnthropicAdapter implements LLMProvider {
           if (result) {
             console.warn(`[anthropic] ${model}: retry ${attempt + 1} after extra-usage rejection with ${result.tools.length}/${originalTools.length} tools (dropped categories: ${result.droppedCategories.join(', ') || 'none'}; wrapper duplicates: ${result.droppedDirectDuplicates})`);
             body.tools = result.tools;
+            applyAnthropicStableCacheTtl(body, options?.cacheWorkload);
             const notice = buildSlimRetryNotice(result);
             if (Array.isArray(body.system)) {
               body.system = body.system.filter((block: any) => !String(block?.text || '').startsWith(SLIM_RETRY_NOTICE_MARKER));
@@ -1297,6 +1319,7 @@ export class AnthropicAdapter implements LLMProvider {
     let outputTokens = 0;
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
+    let cacheWrite1hTokens = 0;
     let stopReason: unknown;
     let stopDetails: any;
     let messageStopped = false;
@@ -1366,6 +1389,7 @@ export class AnthropicAdapter implements LLMProvider {
               inputTokens = Number(usage.input_tokens || inputTokens || 0);
               cacheReadTokens = Number(usage.cache_read_input_tokens || cacheReadTokens || 0);
               cacheWriteTokens = Number(usage.cache_creation_input_tokens || cacheWriteTokens || 0);
+              cacheWrite1hTokens = Number(usage.cache_creation?.ephemeral_1h_input_tokens || cacheWrite1hTokens || 0);
             }
 
             if (type === 'message_delta' && event.delta && 'stop_reason' in event.delta) {
@@ -1497,7 +1521,7 @@ export class AnthropicAdapter implements LLMProvider {
     return {
       message,
       thinking: thinking || undefined,
-      usage: this.mergeStreamingUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+      usage: this.mergeStreamingUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheWrite1hTokens),
       stopReason: effectiveStopReason,
       incompleteCause: effectiveStopReason === 'incomplete_stream' ? incompleteCause : undefined,
     };
@@ -1518,7 +1542,7 @@ export class AnthropicAdapter implements LLMProvider {
     } catch { /* Diagnostics must never change provider handling. */ }
   }
 
-  private mergeStreamingUsage(inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): ModelUsage | undefined {
+  private mergeStreamingUsage(inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number, cacheWrite1hTokens = 0): ModelUsage | undefined {
     const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
     if (!totalTokens) return undefined;
     return {
@@ -1526,6 +1550,7 @@ export class AnthropicAdapter implements LLMProvider {
       outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
+      cacheWrite1hTokens,
       totalTokens,
       source: 'provider',
     };
