@@ -14,11 +14,12 @@
  */
 
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { loadTokens, getValidToken, refreshTokens, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { isRetryableAccountFailure } from '../auth/provider-account-pool';
-import { contentToString, stripCacheMarker } from './content-utils';
+import { contentToString, stripCacheMarker, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
 import { ChatGPTWebAdapter } from './chatgpt-web/chatgpt-web-adapter';
@@ -454,18 +455,23 @@ export class OpenAICodexAdapter implements LLMProvider {
     if (isChatGPTWebModel(model)) return this.chatViaChatGPTWeb(messages, model, options);
     const accountCandidates = this.getAccountCandidates();
 
-    // Extract system message as instructions
     const systemMsg = messages.find(m => m.role === 'system');
-    // Codex auto-caches on a stable instructions+input prefix; strip the cache
-    // sentinel so it never reaches the model (it has no API role here).
-    const instructions = (systemMsg ? stripCacheMarker(contentToString(systemMsg.content)) : '').trim()
-      || DEFAULT_CODEX_INSTRUCTIONS;
+    const systemText = systemMsg ? contentToString(systemMsg.content) : '';
+    const { stable, volatile } = splitOnCacheMarker(systemText);
+    let instructions = stripCacheMarker(systemText).trim() || DEFAULT_CODEX_INSTRUCTIONS;
 
     const hasTools = Array.isArray(options?.tools) && options!.tools!.length > 0;
     const _cfgRootCodex = getConfig().getConfig() as any;
     const _codexToolChoiceCfg = String(_cfgRootCodex?.llm?.providers?.openai_codex?.tool_choice || '').trim();
     const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
     const input = this.buildInput(messages);
+    const latestUser = input.map(item => item.role).lastIndexOf('user');
+    if (stable.trim() && volatile.trim() && latestUser >= 0) {
+      instructions = stripCacheMarker(stable).trim();
+      // Developer priority preserves the system tail's authority. Put it by the
+      // current user turn so instructions + preceding conversation stay stable.
+      input.splice(latestUser, 0, { role: 'developer', content: stripCacheMarker(volatile).trim() });
+    }
 
     const configuredModel = String(model || '').trim();
     // Account indexes for which a forced token refresh has already been
@@ -532,6 +538,14 @@ export class OpenAICodexAdapter implements LLMProvider {
         parallel_tool_calls: true,
       };
       body.instructions = instructions;
+      // Opaque prefix affinity, not conversation state. Deriving it avoids an
+      // unbounded map and works across isolated model workers. Never log inputs.
+      const cacheKey = 'prom-' + createHash('sha256').update(JSON.stringify([
+        'codex-prefix-v1', activeAccountId || 'default', headers['ChatGPT-Account-ID'] || headers['ChatGPT-Account-Id'] || '', requestedModel, instructions,
+      ])).digest('hex').slice(0, 48);
+      body.prompt_cache_key = cacheKey;
+      // OpenAI Codex CLI uses session_id for ChatGPT cache affinity as well.
+      headers = { ...headers, session_id: cacheKey };
       // Reasoning effort support (Codex reasoning models).
       // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
       const cfgRoot = getConfig().getConfig() as any;
