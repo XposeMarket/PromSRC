@@ -85,6 +85,16 @@ async function main(): Promise<void> {
     'handoff retry window must cover a slow replacement handoff without becoming unbounded',
   );
 
+  // A provably draining predecessor may take longer than the ordinary budget.
+  let slowMs = 0;
+  await listenWithHandoffRetry(async () => {
+    if (slowMs < 95_000) throw Object.assign(new Error('slow predecessor'), { code: 'EADDRINUSE' });
+  }, {
+    enabled: true, now: () => slowMs, sleep: async (ms) => { slowMs += ms; },
+    predecessorOwnsListener: async () => true,
+  });
+  assert.ok(slowMs >= 95_000);
+
   let elapsedMs = 0;
   let deadlineAttempts = 0;
   await assert.rejects(listenWithHandoffRetry(async () => {

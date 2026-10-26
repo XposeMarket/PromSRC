@@ -678,6 +678,11 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   };
   if (raw?.description !== undefined) normalized.description = String(raw.description || '').trim();
   if (raw?.emoji !== undefined) normalized.emoji = String(raw.emoji || '').trim();
+  if (raw?.pet !== undefined) {
+    // Pixel pet id (mirrors src/gateway/agents/agent-normalize.ts). Empty/invalid drops the key = "auto".
+    const pet = String(raw.pet || '').trim().toLowerCase();
+    if (/^[a-z0-9-]{1,24}$/.test(pet)) normalized.pet = pet;
+  }
   if (raw?.identity && typeof raw.identity === 'object') normalized.identity = raw.identity;
   if (raw?.roleType !== undefined) normalized.roleType = String(raw.roleType || '').trim();
   if (raw?.teamRole !== undefined) normalized.teamRole = String(raw.teamRole || '').trim();

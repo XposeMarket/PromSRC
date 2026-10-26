@@ -59,5 +59,26 @@
       "path": "references/section-visual-system-and-restraint.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "website"
+        ],
+        "anyOf": [
+          "redesign",
+          "visual design",
+          "look better",
+          "design system"
+        ]
+      },
+      {
+        "allOf": [
+          "web design"
+        ]
+      }
+    ]
+  }
 }

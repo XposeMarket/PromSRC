@@ -30,5 +30,25 @@
   "lifecycle": "active",
   "name": "marketing-campaign-builder",
   "id": "marketing-campaign-builder",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "campaign"
+        ],
+        "anyOf": [
+          "marketing",
+          "launch",
+          "plan",
+          "channels"
+        ],
+        "noneOf": [
+          "political",
+          "election"
+        ]
+      }
+    ]
+  }
 }

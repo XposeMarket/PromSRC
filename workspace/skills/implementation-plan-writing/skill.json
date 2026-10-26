@@ -92,5 +92,31 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "implementation plan"
+        ],
+        "anyOf": [
+          "write",
+          "create",
+          "turn",
+          "draft"
+        ]
+      },
+      {
+        "allOf": [
+          "spec"
+        ],
+        "anyOf": [
+          "into tasks",
+          "into a plan",
+          "break down"
+        ]
+      }
+    ]
+  }
 }

@@ -89,5 +89,30 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "conflict"
+        ],
+        "anyOf": [
+          "merge",
+          "rebase",
+          "git"
+        ]
+      },
+      {
+        "allOf": [
+          "conflicts"
+        ],
+        "anyOf": [
+          "merge",
+          "rebase",
+          "git"
+        ]
+      }
+    ]
+  }
 }

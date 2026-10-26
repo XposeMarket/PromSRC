@@ -122,5 +122,28 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "skill"
+        ],
+        "anyOf": [
+          "evaluate",
+          "benchmark",
+          "a b",
+          "test whether",
+          "tune triggers",
+          "should fire",
+          "near miss"
+        ],
+        "noneOf": [
+          "skills i should learn",
+          "job"
+        ]
+      }
+    ]
+  }
 }

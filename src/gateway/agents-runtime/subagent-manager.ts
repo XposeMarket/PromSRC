@@ -30,6 +30,7 @@ export interface SubagentDefinition {
   model?: string;  // Override from main config
   reasoning_effort?: string;
   voice?: Record<string, any>;
+  pet?: string;
   executionWorkspace?: string;
   allowedWorkPaths?: string[];
   
@@ -777,6 +778,7 @@ export class SubagentManager {
       if (def.teamAssignment) entry.teamAssignment = def.teamAssignment;
       if (def.identity) entry.identity = def.identity;
       if (def.voice && typeof def.voice === 'object') entry.voice = def.voice;
+      if (def.pet) entry.pet = def.pet;
 	      agents.push(entry);
       configManager.updateConfig({ agents } as any);
       console.log(`[SubagentManager] Registered "${def.id}" into config.json (isTeamManager=${!!opts.isTeamManager})`);
@@ -898,6 +900,12 @@ export class SubagentManager {
         next.reasoning_effort = reasoningEffort;
       }
     }
+    if (patch.pet !== undefined) {
+      // Empty string (or an invalid id) clears the pet back to auto (hash of the agent id).
+      const pet = String(patch.pet ?? '').trim().toLowerCase();
+      if (/^[a-z0-9-]{1,24}$/.test(pet)) (next as any).pet = pet;
+      else delete (next as any).pet;
+    }
     if (patch.voice !== undefined) {
       if (patch.voice && typeof patch.voice === 'object') next.voice = patch.voice;
       else delete (next as any).voice;
@@ -934,6 +942,7 @@ export class SubagentManager {
       allowedWorkPaths: next.allowedWorkPaths,
       skillIds: next.skillIds || [],
       voice: next.voice && typeof next.voice === 'object' ? next.voice : undefined,
+      pet: next.pet || undefined,
       modifiedAt: next.modified_at,
 	      teamRole: next.teamRole,
       teamAssignment: next.teamAssignment,

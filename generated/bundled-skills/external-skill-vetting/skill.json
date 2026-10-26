@@ -30,5 +30,27 @@
     "workspaceWrite": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "skill"
+        ],
+        "anyOf": [
+          "third party",
+          "downloaded",
+          "before enabling",
+          "vet",
+          "is it safe",
+          "from github"
+        ],
+        "noneOf": [
+          "skill matching",
+          "trigger system"
+        ]
+      }
+    ]
+  }
 }

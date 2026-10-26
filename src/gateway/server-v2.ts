@@ -84,6 +84,7 @@ import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
 import { closeListeningHandle, listenWithHandoffRetry } from './runtime/handoff-replacement-bind';
+import { predecessorOwnsHandoffListener } from './runtime/gateway-handoff-safe-abort';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
 import { resumeDurableDetachedTurns } from './threads/thread-ops';
@@ -1212,7 +1213,14 @@ setShutdownHooks({
   // Release the listeners so the replacement can bind, but leave established
   // connections (in-flight chat SSE responses) alone: they end when their turn
   // ends. WebSocket clients are terminated so they reconnect to the replacement.
+  hasListeningGateway: () => server.listening || !!secureBundle?.server.listening,
   closeListenersForHandoff: async () => {
+    // Release first: if it fails, do not tear down WebSocket/voice services on
+    // the predecessor that must continue serving. Existing SSE is untouched.
+    await Promise.all([
+      closeListeningHandle(server),
+      ...(secureBundle ? [closeListeningHandle(secureBundle.server)] : []),
+    ]);
     const terminateClients = (socketServer: any): void => {
       try {
         socketServer?.clients?.forEach((client: any) => {
@@ -1231,12 +1239,7 @@ setShutdownHooks({
     void import('./user-chrome-relay').then((m) => m.stopUserChromeRelayForHandoff()).catch(() => {});
     try { (server as any).closeIdleConnections?.(); } catch {}
     try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
-    // server.close() stops accepting immediately but its callback waits for
-    // active SSE requests. Wait for the listening handle to be released instead.
-    await Promise.all([
-      closeListeningHandle(server),
-      ...(secureBundle ? [closeListeningHandle(secureBundle.server)] : []),
-    ]);
+    // The listening handles were already released before these service stops.
   }
 });
 
@@ -1580,7 +1583,7 @@ async function startGatewayListeners(): Promise<void> {
       target.once('error', onError);
       try { target.listen(port, host); } catch (error) { cleanup(); reject(error); }
     }),
-    { enabled: handoffBindRetry },
+    { enabled: handoffBindRetry, predecessorOwnsListener: () => predecessorOwnsHandoffListener(configManager.getConfigDir(), port, target !== server) },
   );
   try {
     await bind(server, PORT, HOST);

@@ -30,5 +30,37 @@
   "lifecycle": "active",
   "name": "financial-model",
   "id": "financial-model",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "financial model"
+        ]
+      },
+      {
+        "allOf": [
+          "forecast"
+        ],
+        "anyOf": [
+          "revenue",
+          "budget",
+          "scenario",
+          "3 year",
+          "p&l"
+        ]
+      },
+      {
+        "allOf": [
+          "budget"
+        ],
+        "anyOf": [
+          "build",
+          "model",
+          "scenario"
+        ]
+      }
+    ]
+  }
 }

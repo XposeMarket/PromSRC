@@ -40,5 +40,21 @@
       "path": "references/tool-crosswalk.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "prometheus",
+          "creative workspace",
+          "bridge",
+          "integrate"
+        ]
+      }
+    ]
+  }
 }

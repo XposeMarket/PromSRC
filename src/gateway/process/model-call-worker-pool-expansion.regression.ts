@@ -44,8 +44,8 @@ async function main(): Promise<void> {
     assert.equal(firstLive, 1, 'a single request should start only one configured model slot');
 
     const concurrent = [
-      dispatchModelCallWorker(request(1_200)),
-      dispatchModelCallWorker(request(1_200)),
+      dispatchModelCallWorker(request(1_200), { priority: 'interactive' }),
+      dispatchModelCallWorker(request(1_200), { priority: 'interactive' }),
     ];
     await waitFor(() => getModelCallWorkerPoolStatus().active === 3);
     const expanded = getModelCallWorkerPoolStatus();

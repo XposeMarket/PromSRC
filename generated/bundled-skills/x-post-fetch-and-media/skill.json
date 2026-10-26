@@ -34,5 +34,32 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "x com"
+        ],
+        "anyOf": [
+          "status",
+          "post",
+          "thread",
+          "video"
+        ]
+      },
+      {
+        "allOf": [
+          "twitter com"
+        ],
+        "anyOf": [
+          "status",
+          "post",
+          "thread",
+          "video"
+        ]
+      }
+    ]
+  }
 }

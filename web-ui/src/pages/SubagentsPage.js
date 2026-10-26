@@ -13,6 +13,7 @@ import { wsEventBus } from '../ws.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderReasoningSelector, wireReasoningSelector } from '../components/reasoning-selector.js';
+import { renderAgentPet, renderAgentPetPickerHtml, agentPetStateFromRun, rememberAgentPets, wireAgentPetPicker } from '../components/agent-pets.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { SOURCE_PANEL_SURFACE, subagentChatSessionId } from '../source-panel-context.js';
 import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
@@ -30,6 +31,10 @@ installToolActivityExpansionPersistence();
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
 let activeSubagentId = null;     // Currently open detail panel
+let subagentSelectionGeneration = 0;
+function isCurrentSubagentSelection(agentId, generation) {
+  return agentId === activeSubagentId && generation === subagentSelectionGeneration;
+}
 let subagentDetailTab = 'overview'; // overview | chat | workspace | memory | runs | heartbeat
 let subagentRuns = [];
 let activeSubagentRunId = '';
@@ -74,6 +79,11 @@ function subagentChatJsArg(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function getActiveSubagentName(agentId) {
+  const agent = subagentsData.find(a => a.id === agentId);
+  return agent?.name || agentId || 'Agent';
 }
 
 function getSubagentChatSessionId(agentId) {
@@ -654,93 +664,12 @@ let subagentHbConfig = { enabled: false, intervalMinutes: 30 };
 let subagentHbMd = '';
 let _subagentCtxRefEditId = null;   // ref id currently in edit modal
 
-// ── Avatar colors / icons ──────────────────────────────────────────────────
-const AGENT_COLORS = ['#4c8dff','#31b884','#d6a64f','#e05c5c','#a78bfa','#38bdf8','#fb923c','#4ade80'];
-const AGENT_EMOJIS = ['🤖','🦾','⚡','🧬','🛸','👾','🔬','🧠'];
-
-function _hashStr(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
-  return Math.abs(h);
-}
-
-function agentColor(id) { return AGENT_COLORS[_hashStr(id) % AGENT_COLORS.length]; }
-function getActiveSubagentName(agentId) {
-  const agent = subagentsData.find(a => a.id === agentId);
-  return agent?.name || agentId || 'Agent';
-}
-function agentEmoji(agent) {
-  if (agent.emoji) return agent.emoji;
-  return AGENT_EMOJIS[_hashStr(agent.id || '') % AGENT_EMOJIS.length];
-}
-
-// ── Robot SVG Avatar ──────────────────────────────────────────────────────────
-function drawAgentSVG(agent, isActive, scale = 1) {
-  const color = agentColor(agent.id);
-  const h = _hashStr(agent.id);
-  const eyeStyle = h % 3; // 0=round, 1=square, 2=visor
-  const antenna = !!(h % 2);
-  const glowColor = isActive ? 'rgba(76,141,255,0.55)' : 'none';
-  const W = 80, H = 90;
-
-  const eyesHtml = eyeStyle === 1
-    ? `<rect x="20" y="34" width="12" height="10" rx="1" fill="#fff" opacity="0.9"/>
-       <rect x="48" y="34" width="12" height="10" rx="1" fill="#fff" opacity="0.9"/>
-       <rect x="23" y="37" width="6" height="4" rx="1" fill="${color}" opacity="0.8"/>
-       <rect x="51" y="37" width="6" height="4" rx="1" fill="${color}" opacity="0.8"/>`
-    : eyeStyle === 2
-    ? `<rect x="18" y="32" width="44" height="14" rx="4" fill="rgba(0,0,0,0.4)"/>
-       <rect x="22" y="35" width="14" height="8" rx="2" fill="#7df" opacity="0.85"/>
-       <rect x="44" y="35" width="14" height="8" rx="2" fill="#7df" opacity="0.85"/>`
-    : `<circle cx="28" cy="38" r="7" fill="#fff" opacity="0.9"/>
-       <circle cx="52" cy="38" r="7" fill="#fff" opacity="0.9"/>
-       <circle cx="28" cy="38" r="4" fill="${color}" opacity="0.8"/>
-       <circle cx="52" cy="38" r="4" fill="${color}" opacity="0.8"/>
-       <circle cx="29" cy="37" r="1.5" fill="#fff"/>
-       <circle cx="53" cy="37" r="1.5" fill="#fff"/>`;
-
-  const mouthY = 52;
-  const mouthHtml = h % 4 === 0
-    ? `<path d="M26 ${mouthY} Q40 ${mouthY+8} 54 ${mouthY}" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity="0.7"/>`
-    : h % 4 === 1
-    ? `<rect x="26" y="${mouthY}" width="28" height="5" rx="2" fill="rgba(0,0,0,0.3)"/>
-       <rect x="28" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="34" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="40" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="46" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>`
-    : `<line x1="26" y1="${mouthY+2}" x2="54" y2="${mouthY+2}" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity="0.7"/>`;
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="${W*scale}" height="${H*scale}" xmlns="http://www.w3.org/2000/svg" style="overflow:visible;filter:${glowColor !== 'none' ? `drop-shadow(0 0 9px ${glowColor})` : 'none'};transition:filter 0.2s">
-    <!-- Shadow -->
-    <ellipse cx="40" cy="${H-4}" rx="28" ry="4" fill="rgba(0,0,0,0.12)"/>
-    <!-- Body -->
-    <rect x="20" y="62" width="40" height="22" rx="6" fill="${color}" opacity="0.85"/>
-    <!-- Arms -->
-    <rect x="8" y="64" width="10" height="16" rx="4" fill="${color}" opacity="0.7"/>
-    <rect x="62" y="64" width="10" height="16" rx="4" fill="${color}" opacity="0.7"/>
-    <!-- Legs -->
-    <rect x="24" y="80" width="11" height="8" rx="3" fill="${color}" opacity="0.7"/>
-    <rect x="45" y="80" width="11" height="8" rx="3" fill="${color}" opacity="0.7"/>
-    <!-- Head -->
-    <rect x="14" y="20" width="52" height="42" rx="10" fill="${color}"/>
-    <rect x="16" y="22" width="48" height="38" rx="9" fill="${color}" opacity="0.7"/>
-    <!-- Eyes -->
-    ${eyesHtml}
-    <!-- Mouth -->
-    ${mouthHtml}
-    <!-- Chest light -->
-    <circle cx="40" cy="71" r="4" fill="rgba(255,255,255,0.25)"/>
-    <circle cx="40" cy="71" r="2.5" fill="${isActive ? '#fff' : 'rgba(255,255,255,0.5)'}"/>
-    <!-- Antenna -->
-    ${antenna ? `<line x1="40" y1="20" x2="40" y2="10" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-    <circle cx="40" cy="8" r="3.5" fill="${color}"/>
-    <circle cx="40" cy="8" r="2" fill="#fff" opacity="0.8"/>` : ''}
-  </svg>`;
-}
-
+// ── Agent identity: pixel pets (shared module, see web-ui/src/components/agent-pets.js) ──
+// The robot SVG, emoji and color-circle avatars were replaced by renderAgentPet().
 function renderSubagentWorkflowAvatar(agent) {
-  return drawAgentSVG(agent || { id: '' }, false, 0.24);
+  return renderAgentPet(agent || { id: '' }, { size: 20 });
 }
+
 
 // ── Fetch & Render ────────────────────────────────────────────────────────────
 async function refreshSubagents() {
@@ -751,6 +680,7 @@ async function refreshSubagents() {
     // Show all non-default, non-synthetic agents — including team members (with badge)
     subagentsData = (data.agents || []).filter(a => !a.default && !a.isSynthetic);
     window.subagentsData = subagentsData;
+    rememberAgentPets(data.agents || []);
     renderSubagentsCanvas();
   } catch (err) {
     console.error('[SubagentsPage] refreshSubagents error:', err);
@@ -819,9 +749,9 @@ function renderSubagentsCanvas() {
     return `
       <div class="subagent-card" data-agent-id="${agent.id}"
            onclick="openSubagentDetail('${escHtml(agent.id)}')"
-           style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px 12px;border-radius:16px;transition:all 0.2s;position:relative;${isActive ? 'background:var(--panel-2);box-shadow:0 0 0 2px var(--brand);transform:scale(1.04)' : 'background:var(--panel);border:1px solid var(--line)'}">
+           style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px 12px;border-radius:16px;transition:all 0.2s;position:relative;${isActive ? 'background:transparent;border:1px solid var(--brand)' : 'background:transparent;border:1px solid var(--line)'}">
         <div style="position:relative">
-          ${drawAgentSVG(agent, isActive, 0.9)}
+          ${renderAgentPet(agent, { size: 48, state: agentPetStateFromRun(agent) })}
           ${teamBadge}
           ${schedBadge}
           ${marketplaceBadge}
@@ -837,6 +767,8 @@ function renderSubagentsCanvas() {
 
 // ── Detail Panel ──────────────────────────────────────────────────────────────
 async function openSubagentDetail(agentId) {
+  const generation = ++subagentSelectionGeneration;
+  stopSubagentPolling();
   activeSubagentId = agentId;
   subagentDetailTab = getSubagentStreamingState(agentId) ? 'chat' : 'overview';
   syncSubagentSourcePanelContext(agentId);
@@ -865,7 +797,7 @@ async function openSubagentDetail(agentId) {
   board.style.display = 'flex';
   board.style.width = '62%';
   board.style.opacity = '0';
-  setTimeout(() => { board.style.opacity = '1'; }, 60);
+  setTimeout(() => { if (isCurrentSubagentSelection(agentId, generation)) board.style.opacity = '1'; }, 60);
 
   // Dim inactive cards
   document.querySelectorAll('.subagent-card').forEach(el => {
@@ -876,13 +808,15 @@ async function openSubagentDetail(agentId) {
   });
 
   renderSubagentsCanvas();
-  await loadSubagentBoardData(agentId);
+  await loadSubagentBoardData(agentId, generation);
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   renderSubagentBoard(agentId);
   if (subagentDetailTab === 'chat') restoreSubagentChatScroll({ hadChat: false }, { forceBottom: true });
   startSubagentPolling(agentId);
 }
 
 function closeSubagentDetail() {
+  const generation = ++subagentSelectionGeneration;
   stopSubagentPolling();
   activeSubagentId = null;
   syncSubagentSourcePanelContext();
@@ -893,6 +827,7 @@ function closeSubagentDetail() {
 
   board.style.opacity = '0';
   setTimeout(() => {
+    if (generation !== subagentSelectionGeneration) return;
     board.style.display = 'none';
     board.style.width = '0';
   }, 300);
@@ -908,7 +843,7 @@ function closeSubagentDetail() {
   renderSubagentsCanvas();
 }
 
-async function loadSubagentBoardData(agentId) {
+async function loadSubagentBoardData(agentId, generation = subagentSelectionGeneration) {
   try {
     const [runsData, chatData, ctxData, skillsData] = await Promise.all([
       api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => ({ runs: [] })),
@@ -916,6 +851,7 @@ async function loadSubagentBoardData(agentId) {
       api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ refs: [] })),
       api('/api/skills').catch(() => ({ skills: [] })),
     ]);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentRuns = runsData.runs || [];
     subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(chatData.messages || []));
     subagentContextRefs = ctxData.refs || [];
@@ -1596,8 +1532,6 @@ async function reconcileSubagentChatFromServer(agentId, streamState, sinceTs = 0
 function renderSubagentStreamingBubble(agent) {
   const streamState = getSubagentStreamingState(agent.id) || (subagentStreamingState?.agentId === agent.id ? subagentStreamingState : null);
   if (!streamState) return '';
-  const color = agentColor(agent.id);
-  const emoji = agentEmoji(agent);
   const liveTraceHtml = renderSubagentGroupedTrace(streamState.liveTraceEntries || streamState.processEntries || [], { streaming: true });
   const progressHtml = Array.isArray(streamState.progressLines) && streamState.progressLines.length
     ? `<div id="subagent-streaming-progress-lines" style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
@@ -1609,7 +1543,7 @@ function renderSubagentStreamingBubble(agent) {
   const workLine = `<div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:6px">Working for ${formatSubagentElapsedSeconds(elapsedSec)}</div>`;
   return `
     <div class="msg ai">
-      <div class="msg-avatar" style="background:${color};border-color:${color};font-size:15px">${emoji}</div>
+      <div class="msg-avatar" style="background:transparent;border-color:transparent">${renderAgentPet(agent, { size: 20 })}</div>
       <div class="msg-body">
         <div class="msg-role">${escHtml(agent.name || agent.id)}</div>
         ${workLine}
@@ -2026,8 +1960,6 @@ function renderSubagentBoard(agentId) {
   const body = document.getElementById('subagent-board-body');
   if (!header || !body) return;
 
-  const color = agentColor(agentId);
-  const emoji = agentEmoji(agent);
   const chatDraftSelection = captureSubagentChatDraft();
   const chatScrollSnapshot = getSubagentChatScrollSnapshot();
   closeSubagentReasoningPopover({ restoreFocus: false });
@@ -2042,7 +1974,7 @@ function renderSubagentBoard(agentId) {
 
   header.innerHTML = isChat ? '' : `
     <div style="display:flex;align-items:center;gap:12px;min-width:0">
-      <div style="width:36px;height:36px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${emoji}</div>
+      <div style="flex-shrink:0">${renderAgentPet(agent, { size: 36, state: agentPetStateFromRun(agent) })}</div>
       <div style="min-width:0">
         <div style="font-size:14px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(agent.name || agent.id)}</div>
         ${agent.description ? `<div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(agent.description)}</div>` : ''}
@@ -2074,6 +2006,14 @@ function renderSubagentBoard(agentId) {
   if (subagentDetailTab === 'overview') {
     agentModelPickerHydrate('sa-model', agent);
     agentVoicePickerHydrate('sa-voice', agent);
+    wireAgentPetPicker(document.getElementById('subagent-board-body'), agent.id, (choice) => {
+      const row = subagentsData.find((a) => a.id === agent.id);
+      if (row) { if (choice) row.pet = choice; else delete row.pet; }
+      window.subagentsData = subagentsData;
+      rememberAgentPets(subagentsData);
+      refreshSubagents().catch(() => {});
+      openSubagentDetail(agent.id).catch(() => {});
+    });
   }
   if (subagentDetailTab === 'chat') {
     document.getElementById(subagentReasoningDomId(agentId))?.addEventListener('click', () => openSubagentReasoningPopover(agentId));
@@ -2172,7 +2112,6 @@ registerAgentVoicePickerOnSaved('sa-voice', async (agentId) => {
 
 // ── Tab Renderers ─────────────────────────────────────────────────────────────
 function renderSubagentOverviewTab(agent) {
-  const color = agentColor(agent.id);
   const lastRunEntry = subagentRuns[0];
   const nextRun = agent.cronSchedule ? `<code style="background:var(--panel-2);padding:2px 6px;border-radius:4px;font-size:11px">${escHtml(agent.cronSchedule)}</code>` : '<span style="color:var(--muted)">Not scheduled</span>';
   const status = getSubagentStreamingState(agent.id) || agent.lastRun?.inProgress
@@ -2235,7 +2174,7 @@ function renderSubagentOverviewTab(agent) {
   return `
     <div style="display:flex;flex-direction:column;gap:14px">
       <div style="display:flex;align-items:center;gap:14px">
-        <div style="flex-shrink:0">${drawAgentSVG(agent, true, 0.8)}</div>
+        <div style="flex-shrink:0">${renderAgentPet(agent, { size: 40, state: agentPetStateFromRun(agent) })}</div>
         <div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:15px;font-weight:800">${escHtml(agent.name||agent.id)}</div><span style="font-size:10px;font-weight:800;text-transform:capitalize;color:${status.color};background:${status.bg};border:1px solid ${status.border};border-radius:999px;padding:2px 8px">${status.label}</span></div>
           ${agent.description ? `<div style="font-size:12px;color:var(--muted);line-height:1.5">${escHtml(agent.description)}</div>` : ''}
@@ -2257,6 +2196,10 @@ function renderSubagentOverviewTab(agent) {
 
       ${_renderAgentModelPicker(agent, 'sa-model')}
       ${_renderAgentVoicePicker(agent, 'sa-voice')}
+      <div class="agent-pet-section" style="display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Pet</div>
+        ${renderAgentPetPickerHtml(agent)}
+      </div>
 
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
         <section style="border:1px solid var(--line);border-radius:10px;padding:11px;background:var(--panel-2)">
@@ -2605,7 +2548,7 @@ function renderSubagentRunRecovery(task, agentId) {
         const isUser = turn?.role === 'user';
         const attachments = Array.isArray(turn?.attachmentPreviews) ? turn.attachmentPreviews : [];
         return `<div class="msg ${isUser ? 'user' : 'ai'}" style="width:100%">
-          ${!isUser ? `<div class="msg-avatar" style="background:${agentColor(agentId)};border-color:${agentColor(agentId)};font-size:14px">${agentEmoji({ id: agentId })}</div>` : ''}
+          ${!isUser ? `<div class="msg-avatar" style="background:transparent;border-color:transparent">${renderAgentPet(agentId, { size: 20 })}</div>` : ''}
           <div class="msg-body">
             ${!isUser ? `<div class="msg-role">Recovery · <span style="font-weight:400;opacity:.75">${timeAgo(turn?.timestamp || Date.now())}</span></div>` : ''}
             <div class="msg-content ${isUser ? '' : 'markdown-body'}">
@@ -3490,18 +3433,19 @@ async function uploadSubagentContextFile(agentId, input) {
 }
 
 // ── Memory Tab Actions ────────────────────────────────────────────────────────
-async function reloadSubagentMemory(agentId, { render = true } = {}) {
+async function reloadSubagentMemory(agentId, { render = true, generation = subagentSelectionGeneration } = {}) {
   try {
     const [agentMd, memoryMd] = await Promise.all([
       api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({})),
       api(`/api/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => ({})),
     ]);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentSystemPrompt = agentMd.content || '';
     subagentMemoryNotes = memoryMd.content || '';
     subagentMemoryExists = memoryMd.exists === true;
     if (render) renderSubagentBoard(agentId);
   } catch (err) {
-    showToast('Error', err.message, 'error');
+    if (isCurrentSubagentSelection(agentId, generation)) showToast('Error', err.message, 'error');
   }
 }
 
@@ -3591,12 +3535,16 @@ async function spawnSubagentTask(agentId) {
 }
 
 async function refreshSubagentDetail(agentId) {
+  const generation = subagentSelectionGeneration;
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   subagentSystemPrompt = '';
   subagentHbMd = '';
-  await loadSubagentBoardData(agentId);
+  await loadSubagentBoardData(agentId, generation);
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   // Reload current tab data too.
   if (subagentDetailTab === 'memory') {
-    await reloadSubagentMemory(agentId, { render: false });
+    await reloadSubagentMemory(agentId, { render: false, generation });
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
   }
   if (subagentDetailTab === 'heartbeat') {
     try {
@@ -3604,11 +3552,13 @@ async function refreshSubagentDetail(agentId) {
         api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({})),
         api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({})),
       ]);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       const cfg = cfgD?.config || {};
       subagentHbConfig = { enabled: cfg.enabled === true, intervalMinutes: cfg.intervalMinutes || 30 };
       subagentHbMd = mdD?.content || '';
     } catch {}
   }
+  if (!isCurrentSubagentSelection(agentId, generation)) return;
   renderSubagentBoard(agentId);
 }
 
@@ -3626,11 +3576,13 @@ function openSubagentSettings(agentId) {
 
 // ── Polling ───────────────────────────────────────────────────────────────────
 function startSubagentPolling(agentId) {
+  const generation = subagentSelectionGeneration;
   stopSubagentPolling();
   _subagentDetailPolling = setInterval(async () => {
-    if (!activeSubagentId) return stopSubagentPolling();
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     try {
       const d = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       const fresh = d.runs || [];
 	      if (fresh.length !== subagentRuns.length) {
 	        subagentRuns = fresh;
@@ -3638,6 +3590,7 @@ function startSubagentPolling(agentId) {
 	      }
 	      if (subagentDetailTab === 'chat') {
 	        const chat = await api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=100`);
+	        if (!isCurrentSubagentSelection(agentId, generation)) return;
 	        const freshChat = normalizeSubagentChatMessages(chat.messages || []);
 	        if (freshChat.length !== subagentChatHistory.length) {
 	          subagentChatHistory = preserveSubagentProcessMetadata(freshChat);
@@ -3706,7 +3659,11 @@ async function uninstallAgentProfilePack(agentId) {
     });
     if (!data?.success) throw new Error(data?.error || 'Uninstall failed');
     showToast?.(`Uninstalled ${agentId}`);
-    activeSubagentId = null;
+    if (activeSubagentId === agentId) {
+      ++subagentSelectionGeneration;
+      stopSubagentPolling();
+      activeSubagentId = null;
+    }
     await refreshSubagents();
   } catch (err) {
     showToast?.(`Profile pack uninstall failed: ${err.message || err}`);
@@ -3720,6 +3677,7 @@ function stopSubagentPolling() {
 
 // ── Page lifecycle ────────────────────────────────────────────────────────────
 function subagentsPageActivate() {
+  ++subagentSelectionGeneration;
   stopSubagentPolling();
   activeSubagentId = null;
   syncSubagentSourcePanelContext();
@@ -4034,12 +3992,15 @@ wsEventBus.on('subagent_chat_stream_event', (data) => {
 wsEventBus.on('subagent_run_updated', async (data = {}) => {
   const agentId = String(data.agentId || '').trim();
   if (!agentId || agentId !== activeSubagentId) return;
+  const generation = subagentSelectionGeneration;
   try {
     const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`);
+    if (!isCurrentSubagentSelection(agentId, generation)) return;
     subagentRuns = runsData.runs || [];
     const taskId = String(data.taskId || '').trim();
     if (taskId && subagentRunDetails[taskId]?.task) {
       const detail = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`).catch(() => null);
+      if (!isCurrentSubagentSelection(agentId, generation)) return;
       if (detail?.task) subagentRunDetails[taskId] = { task: detail.task, run: detail.run || null, evidenceBus: detail.evidenceBus || null };
     }
     if (subagentDetailTab === 'runs') renderSubagentBoard(agentId);

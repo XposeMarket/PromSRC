@@ -38,5 +38,37 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "image"
+        ],
+        "anyOf": [
+          "what is in",
+          "analyze",
+          "describe",
+          "read",
+          "extract"
+        ],
+        "noneOf": [
+          "generate",
+          "create"
+        ]
+      },
+      {
+        "allOf": [
+          "screenshot"
+        ],
+        "anyOf": [
+          "what does",
+          "analyze",
+          "read",
+          "explain"
+        ]
+      }
+    ]
+  }
 }

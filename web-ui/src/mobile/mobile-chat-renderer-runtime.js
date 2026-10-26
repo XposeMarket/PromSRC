@@ -7,6 +7,7 @@ import {
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { waitCountdownHtml } from '../features/chat/tool-wait-countdown.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
+import { createVoiceWorkerRecovery } from './mobile-voice-worker-recovery.js';
 import { buildMobileDeliveryPaintPlan, isMobileDeliveryRow, mobileDeliverySplitMessage } from './mobile-thread-order.js';
 import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
@@ -1697,7 +1698,10 @@ export function createMobileChatRendererRuntime(context = {}) {
   }
   
   const _mobileVoiceWorkgroupRestoreRequests = new Map();
-  const _pendingMobileVoiceBackgroundEvents = new Map();
+  const _mobileVoiceWorkerRecovery = createVoiceWorkerRecovery({
+    fetchGroup: (id) => mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(id)}`).then((data) => data?.workgroup),
+    onGroup: (group, sessionId) => _upsertMobileVoiceWorkgroup(sessionId, group),
+  });
   
   function _mobileBackgroundVoiceWorkgroupId(msg = {}) {
     const direct = String(msg.voiceWorkgroupId || msg.workgroupId || '').trim();
@@ -1738,16 +1742,8 @@ export function createMobileChatRendererRuntime(context = {}) {
     const workgroupId = _mobileBackgroundVoiceWorkgroupId(event);
     const found = taskId ? _findMobileVoiceWorkerByTaskId(taskId) : null;
     if (!found?.worker) {
-      if (taskId) {
-        const queued = _pendingMobileVoiceBackgroundEvents.get(taskId) || [];
-        queued.push({ event, done });
-        _pendingMobileVoiceBackgroundEvents.set(taskId, queued.slice(-40));
-      }
-      if (workgroupId) {
-        mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroupId)}`)
-          .then((data) => _upsertMobileVoiceWorkgroup(event.sessionId, data?.workgroup))
-          .catch(() => {});
-      }
+      if (taskId) _mobileVoiceWorkerRecovery.enqueue(taskId, workgroupId, { event, done });
+      if (workgroupId) _mobileVoiceWorkerRecovery.fetch(workgroupId, event.sessionId);
       return true;
     }
     const eventType = String(event.eventType || event.type || '').trim();
@@ -1776,11 +1772,11 @@ export function createMobileChatRendererRuntime(context = {}) {
   function _drainPendingMobileVoiceBackgroundEvents(workgroup) {
     (Array.isArray(workgroup?.workers) ? workgroup.workers : []).forEach((worker) => {
       const taskId = String(worker?.taskId || '').trim();
-      const queued = taskId ? _pendingMobileVoiceBackgroundEvents.get(taskId) : null;
+      const queued = taskId ? _mobileVoiceWorkerRecovery.take(taskId) : null;
       if (!queued?.length) return;
-      _pendingMobileVoiceBackgroundEvents.delete(taskId);
       queued.forEach((item) => _routeMobileVoiceBackgroundEvent(item.event, item.done));
     });
+    _mobileVoiceWorkerRecovery.clearGroup(String(workgroup?.id || ''));
   }
   
   function _restoreMobileVoiceWorkgroupsForSession(sessionId, { render = true } = {}) {
@@ -1855,18 +1851,17 @@ export function createMobileChatRendererRuntime(context = {}) {
   if (typeof window !== 'undefined' && !window.__pmMobileVoiceWorkgroupBridgeInstalled) {
     window.__pmMobileVoiceWorkgroupBridgeInstalled = true;
     wsEventBus.on('voice_workgroup_dispatched', (event = {}) => {
+      const groupId = String(event.workgroup?.id || event.workgroupId || '').trim();
+      _mobileVoiceWorkerRecovery.invalidate(groupId);
       _upsertMobileVoiceWorkgroup(event.sessionId, event.workgroup || { id: event.workgroupId, workers: event.tasks, mode: event.mode, delivery: event.delivery }, event.acknowledgement);
+      _mobileVoiceWorkerRecovery.clearGroup(groupId);
     });
     wsEventBus.on('voice_worker_update', (event = {}) => {
       if (_applyMobileVoiceWorkerUpdate(event)) return;
       const workgroupId = String(event.workgroupId || '').trim();
       if (!workgroupId) return;
-      mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroupId)}`)
-        .then((data) => {
-          const message = _upsertMobileVoiceWorkgroup(event.sessionId, data?.workgroup);
-          if (message) _applyMobileVoiceWorkerUpdate(event);
-        })
-        .catch(() => {});
+      return _mobileVoiceWorkerRecovery.fetch(workgroupId, event.sessionId)
+        .then((group) => { if (group) _applyMobileVoiceWorkerUpdate(event); });
     });
     wsEventBus.on('bg_agent_event', (event = {}) => _routeMobileVoiceBackgroundEvent(event, false));
     wsEventBus.on('bg_agent_done', (event = {}) => _routeMobileVoiceBackgroundEvent(event, true));

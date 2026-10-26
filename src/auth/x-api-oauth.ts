@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import fs from 'fs';
 import http from 'http';
+import { OAuthCallbackLifecycle, oauthErrorResponse } from './oauth-callback-lifecycle';
 import os from 'os';
 import path from 'path';
 import { exec } from 'child_process';
@@ -184,6 +185,7 @@ type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: s
 
 let _bgResult: BgOAuthResult = { done: false };
 let _activeFlow: {
+  lifecycle?: OAuthCallbackLifecycle<BgOAuthResult>;
   verifier: string;
   state: string;
   authUrl: string;
@@ -358,6 +360,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, flow: 
     expires_at: Date.now() + Number(data.expires_in || 7200) * 1000,
     stored_at: Date.now(),
   };
+  flow.lifecycle!.assertActive();
   saveTokens(configDir, tokens);
   return tokens;
 }
@@ -449,6 +452,7 @@ export async function startXApiOAuthFlowBackground(configDir: string): Promise<{
     return { authUrl: _activeFlow.authUrl };
   }
 
+  _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'OAuth session expired.' });
   const verifier = generateVerifier();
   const state = crypto.randomBytes(16).toString('hex');
   const params = new URLSearchParams({
@@ -461,55 +465,51 @@ export async function startXApiOAuthFlowBackground(configDir: string): Promise<{
     code_challenge_method: 'S256',
   });
   const authUrl = `${AUTHORIZATION_URL}?${params.toString()}`;
-  _activeFlow = { verifier, state, authUrl, createdAt: Date.now(), redirectUri: credentials.redirect_uri, credentials };
+  const flow: NonNullable<typeof _activeFlow> = { verifier, state, authUrl, createdAt: Date.now(), redirectUri: credentials.redirect_uri, credentials };
+  _activeFlow = flow;
   _bgResult = { done: false };
+  const lifecycle = flow.lifecycle = new OAuthCallbackLifecycle<BgOAuthResult>(
+    () => _activeFlow === flow,
+    result => { _activeFlow = null; _bgResult = result; },
+  );
 
   const callbackUrl = new URL(credentials.redirect_uri);
   const server = http.createServer(async (req, res) => {
     if (!req.url?.startsWith(callbackUrl.pathname || DEFAULT_CALLBACK_PATH)) { res.writeHead(404); res.end(); return; }
     const url = new URL(req.url, credentials.redirect_uri);
     const code = url.searchParams.get('code');
-    const returnedState = url.searchParams.get('state');
     const error = url.searchParams.get('error');
 
     const fail = (msg: string) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
-      server.close(); _activeFlow = null;
-      _bgResult = { done: true, success: false, error: msg };
+      oauthErrorResponse(res, msg);
+      lifecycle.finish({ done: true, success: false, error: msg });
     };
 
+    if (!lifecycle.accept(url, res, state)) return;
     if (error || !code) return fail(error || 'No code returned by X.');
-    if (returnedState !== state) return fail('State mismatch; restart X API OAuth.');
 
     try {
-      const tokens = await exchangeAuthorizationCode(configDir, code, _activeFlow!);
+      const tokens = await exchangeAuthorizationCode(configDir, code, flow);
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>Connected X API OAuth to Prometheus</h2><p>You can close this window.</p></body></html>');
-      server.close(); _activeFlow = null;
-      _bgResult = { done: true, success: true, username: tokens.username, user_id: tokens.user_id };
+      lifecycle.finish({ done: true, success: true, username: tokens.username, user_id: tokens.user_id });
     } catch (err: any) {
       fail(String(err?.message || err));
     }
   });
 
+  lifecycle.attach(server);
   server.on('error', (err: any) => {
-    _activeFlow = null;
-    _bgResult = { done: true, success: false, error: `X API OAuth callback server error: ${err.message}` };
+    lifecycle.finish({ done: true, success: false, error: `X API OAuth callback server error: ${err.message}` });
   });
 
   const listenPort = Number(callbackUrl.port || DEFAULT_CALLBACK_PORT);
   const onListen = () => {
     openBrowser(authUrl);
-    setTimeout(() => {
-      if (!(_bgResult as any).done) {
-        server.close(); _activeFlow = null;
-        _bgResult = { done: true, success: false, error: 'Timed out waiting for X API OAuth callback.' };
-      }
-    }, 5 * 60 * 1000);
+    lifecycle.arm({ done: true, success: false, error: 'Timed out waiting for X API OAuth callback.' });
   };
   if (callbackUrl.hostname === 'localhost') {
-    server.listen(listenPort, onListen);
+    server.listen(listenPort, '127.0.0.1', onListen);
   } else {
     server.listen(listenPort, callbackUrl.hostname, onListen);
   }
@@ -524,14 +524,14 @@ export async function completeXApiOAuthWithCode(configDir: string, code: string)
   }
   const trimmed = String(code || '').trim();
   if (!trimmed) return { success: false, error: 'Paste the X API OAuth code first.' };
+  if (!flow.lifecycle?.claim()) return { success: false, error: 'OAuth callback already handled or expired.' };
   try {
     const tokens = await exchangeAuthorizationCode(configDir, trimmed, flow);
-    _activeFlow = null;
-    _bgResult = { done: true, success: true, username: tokens.username, user_id: tokens.user_id };
+    flow.lifecycle.finish({ done: true, success: true, username: tokens.username, user_id: tokens.user_id });
     return { success: true, username: tokens.username, user_id: tokens.user_id };
   } catch (err: any) {
     const error = String(err?.message || err);
-    _bgResult = { done: true, success: false, error };
+    flow.lifecycle?.finish({ done: true, success: false, error });
     return { success: false, error };
   }
 }

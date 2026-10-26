@@ -32,5 +32,27 @@
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "linear"
+        ],
+        "anyOf": [
+          "issue",
+          "issues",
+          "project",
+          "cycle",
+          "ticket",
+          "team"
+        ],
+        "noneOf": [
+          "linear algebra",
+          "linear regression"
+        ]
+      }
+    ]
+  }
 }

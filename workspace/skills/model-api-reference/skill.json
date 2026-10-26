@@ -30,5 +30,23 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "api"
+        ],
+        "anyOf": [
+          "openai",
+          "anthropic",
+          "claude",
+          "gemini",
+          "responses api",
+          "messages api"
+        ]
+      }
+    ]
+  }
 }

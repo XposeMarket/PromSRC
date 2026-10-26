@@ -25,5 +25,20 @@
   ],
   "implicitInvocation": false,
   "lifecycle": "active",
-  "id": "css-animations"
+  "id": "css-animations",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "css keyframes",
+          "css animation",
+          "keyframes css"
+        ]
+      }
+    ]
+  }
 }

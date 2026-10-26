@@ -28,5 +28,28 @@
   "lifecycle": "active",
   "name": "email-composer",
   "id": "email-composer",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "email"
+        ],
+        "anyOf": [
+          "draft",
+          "write",
+          "reply",
+          "rewrite",
+          "polish",
+          "respond"
+        ],
+        "noneOf": [
+          "cold email",
+          "inbox",
+          "triage"
+        ]
+      }
+    ]
+  }
 }

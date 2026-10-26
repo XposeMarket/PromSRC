@@ -20,5 +20,59 @@
   ],
   "requiredTools": [
     "connector_github"
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "github"
+        ],
+        "anyOf": [
+          "open prs",
+          "pull requests",
+          "issues",
+          "repo",
+          "repos",
+          "my prs"
+        ],
+        "noneOf": [
+          "publish",
+          "push my"
+        ]
+      },
+      {
+        "allOf": [
+          "pr"
+        ],
+        "anyOf": [
+          "open",
+          "list",
+          "status"
+        ],
+        "noneOf": [
+          "publish",
+          "push my",
+          "strategy",
+          "campaign"
+        ]
+      },
+      {
+        "allOf": [
+          "repo"
+        ],
+        "anyOf": [
+          "issues",
+          "open prs",
+          "pull requests"
+        ],
+        "noneOf": [
+          "publish",
+          "push my",
+          "triage",
+          "label"
+        ]
+      }
+    ]
+  }
 }

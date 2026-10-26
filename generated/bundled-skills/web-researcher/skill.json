@@ -80,5 +80,41 @@
       "path": "references/grounded-claim-review.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "research"
+        ],
+        "anyOf": [
+          "latest",
+          "current",
+          "sources",
+          "online",
+          "web"
+        ],
+        "noneOf": [
+          "market size",
+          "competitor"
+        ]
+      },
+      {
+        "allOf": [
+          "online"
+        ],
+        "anyOf": [
+          "current info",
+          "latest",
+          "find out"
+        ],
+        "noneOf": [
+          "market size",
+          "competitor",
+          "buy"
+        ]
+      }
+    ]
+  }
 }

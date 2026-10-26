@@ -69,5 +69,31 @@
       "type": "template",
       "description": "Concise report template for local browser/file verification results."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "localhost"
+        ],
+        "anyOf": [
+          "open",
+          "verify",
+          "check",
+          "screenshot"
+        ]
+      },
+      {
+        "allOf": [
+          "html"
+        ],
+        "anyOf": [
+          "open in browser",
+          "verify in browser",
+          "check it renders"
+        ]
+      }
+    ]
+  }
 }

@@ -43,5 +43,30 @@
     }
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "blog"
+        ],
+        "anyOf": [
+          "post",
+          "article",
+          "write",
+          "seo"
+        ]
+      },
+      {
+        "allOf": [
+          "seo"
+        ],
+        "anyOf": [
+          "article",
+          "post"
+        ]
+      }
+    ]
+  }
 }

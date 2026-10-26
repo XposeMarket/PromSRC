@@ -20,5 +20,36 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "proposal"
+        ],
+        "anyOf": [
+          "approve",
+          "pending",
+          "reject",
+          "review the",
+          "lifecycle"
+        ],
+        "noneOf": [
+          "marriage",
+          "business proposal"
+        ]
+      },
+      {
+        "allOf": [
+          "proposals"
+        ],
+        "anyOf": [
+          "pending",
+          "approve",
+          "reject"
+        ]
+      }
+    ]
+  }
 }

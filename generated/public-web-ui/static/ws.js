@@ -17,6 +17,15 @@
 const _handlers = new Map();
 const _prefixes = new Map();
 
+function invokeWsHandler(fn, msg, type) {
+  const report = (error) => console.error(`[WS] Error in '${type}' handler:`, error);
+  try {
+    // Observe async subscribers without delaying other exact/prefix listeners.
+    const result = fn(msg);
+    if (result && typeof result.then === 'function') Promise.resolve(result).catch(report);
+  } catch (error) { report(error); }
+}
+
 export const wsEventBus = {
   on(type, fn) {
     if (type.endsWith('*')) {
@@ -42,11 +51,11 @@ export const wsEventBus = {
     if (!type) return;
 
     const exact = _handlers.get(type);
-    if (exact) exact.forEach(fn => { try { fn(msg); } catch (e) { console.error(`[WS] Error in '${type}' handler:`, e); } });
+    if (exact) exact.forEach(fn => invokeWsHandler(fn, msg, type));
 
     for (const [prefix, fns] of _prefixes) {
       if (type.startsWith(prefix)) {
-        fns.forEach(fn => { try { fn(msg); } catch (e) { console.error(`[WS] Error in '${prefix}*' handler:`, e); } });
+        fns.forEach(fn => invokeWsHandler(fn, msg, `${prefix}*`));
       }
     }
   },

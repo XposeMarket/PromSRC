@@ -1,7 +1,9 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { renderAgentPet } from '../components/agent-pets.js';
 import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
+import { animatePanelWidth } from '../features/shell/panel-motion.js';
 import { renderSourcePills } from '../cards/index.js';
 import { animateThinkingTextSwap, escHtml, renderMd, withoutInlineCards, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend, syncWsStreamFocus } from '../ws.js';
@@ -8862,7 +8864,6 @@ function toggleSessionsEditMode() {
 
 async function deleteChatSession(id, ev) {
   if (ev) ev.stopPropagation();
-  const idx = window.chatSessions.findIndex(s => s.id === id);
   try {
     await deleteSessionFromServer(id);
   } catch (err) {
@@ -8870,6 +8871,8 @@ async function deleteChatSession(id, ev) {
     return;
   }
 
+  // The session list may have changed while the server delete was pending.
+  const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx !== -1) window.chatSessions.splice(idx, 1);
   if (Array.isArray(window.terminalSessions)) {
     window.terminalSessions = window.terminalSessions.filter(s => s.id !== id);
@@ -14539,10 +14542,7 @@ function renderWorkflowTransitionLabelHtml(msg, label) {
 }
 
 function renderBackgroundAgentWorkflowAvatar(identity) {
-  const name = String(identity?.name || 'Agent').trim() || 'Agent';
-  const initials = name.split(/\s+/).map((part) => part[0] || '').join('').slice(0, 2).toUpperCase();
-  const color = String(identity?.color || 'var(--brand)').trim();
-  return `<span class="background-spawn-avatar" style="--background-agent-color:${escHtml(color)};width:20px;height:20px;font-size:8px">${escHtml(initials)}</span>`;
+  return renderAgentPet(identity?.agentId || identity?.name || 'agent', { size: 20, state: identity?.status === 'running' ? 'working' : 'idle' });
 }
 
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
@@ -41801,25 +41801,52 @@ function syncHeaderCanvasChrome() {
   }
 }
 
+// Idempotent: during a collapse slide the sidebar does not carry `.collapsed` yet,
+// so a plain toggle here would re-expand it.
+function collapseSidebarForWidePanel() {
+  if (typeof window.setSidebarCollapsed === 'function') {
+    window.setSidebarCollapsed(true);
+    return;
+  }
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar && !sidebar.classList.contains('collapsed') && typeof window.toggleSidebar === 'function') window.toggleSidebar();
+}
+
 function toggleRightPanel() {
   const panel = document.getElementById('right-panel');
   const toggleBtn = document.getElementById('drawerToggle');
   if (!panel) return;
-  const wasOpen = panel.classList.contains('open');
-  const isOpen = panel.classList.toggle('open');
-  document.body.classList.toggle('right-collapsed', !isOpen);
+  const isOpen = !panel.classList.contains('open');
   if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
-  // When closing: clear inline resize styles so CSS width:0 takes effect
-  if (!isOpen && wasOpen) {
-    if (canvasOpen) toggleCanvas(false, { force: true });
-    panel.style.removeProperty('width');
-    panel.style.removeProperty('min-width');
-    panel.style.removeProperty('max-width');
-  } else if (isOpen && !wasOpen) {
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar && !sidebar.classList.contains('collapsed')) {
-      if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
-    }
+  // A closed panel is just its left border; read it while styles are clean.
+  const closedWidth = isOpen ? null : (Number.parseFloat(getComputedStyle(panel).borderLeftWidth) || 0);
+  // The state change runs inside the shared slide motion: it animates to the end
+  // width and hands sizing back to CSS when it settles.
+  const panelContent = () => [...panel.children].filter((child) => child.id !== 'canvas-panel'
+    && !child.classList.contains('rp-resize-handle') && !child.classList.contains('panel-collapse-btn'));
+  animatePanelWidth(panel, {
+    measureTo: isOpen ? null : () => closedWidth,
+    content: panelContent,
+    // Opening used to snap content opacity 0 -> 1 (the CSS fade only exists on close).
+    fade: isOpen ? panelContent : null,
+    apply: () => {
+      panel.classList.toggle('open', isOpen);
+      document.body.classList.toggle('right-collapsed', !isOpen);
+      if (!isOpen) {
+        // When closing: clear inline resize styles so CSS width:0 takes effect
+        if (canvasOpen) toggleCanvas(false, { force: true });
+        panel.style.removeProperty('width');
+        panel.style.removeProperty('min-width');
+        panel.style.removeProperty('max-width');
+      }
+    },
+    onSettle: () => {
+      if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
+      queueNativeBrowserSurfaceSync({ force: true });
+    },
+  });
+  if (isOpen) {
+    collapseSidebarForWidePanel();
     hideSourcesMinimizedPanel({ resetFilter: false });
     ensureSourcePanelContext(window.activeChatSessionId || window.agentSessionId);
     if (chatResourcesState.sessionId) loadChatResources({ sessionId: chatResourcesState.sessionId, background: true }).catch(() => {});
@@ -41851,10 +41878,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
     }
     document.body.classList.remove('right-collapsed');
     // Auto-collapse sidebar for more canvas space
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar && !sidebar.classList.contains('collapsed')) {
-      if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
-    }
+    collapseSidebarForWidePanel();
     panel.style.display = 'flex';
     if (isCreativeModeLocked()) {
       // Closing the right drawer clears its inline width. Reopening Canvas

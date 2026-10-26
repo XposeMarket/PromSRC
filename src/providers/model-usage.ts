@@ -32,6 +32,7 @@ export interface ModelUsageEvent {
   reasoningTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheWrite1hTokens?: number;
   totalTokens: number;
   source: 'provider' | 'estimated';
   inputCostMicros?: number;
@@ -259,6 +260,7 @@ export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
     reasoningTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    cacheWrite1hTokens: Math.min(cacheWriteTokens, normalizeCount(usage?.cacheWrite1hTokens)),
     totalTokens,
     source: usage?.source || 'estimated',
     requestedModel: usage?.requestedModel || '',
@@ -295,6 +297,7 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       reasoningTokens: normalizeCount(event.reasoningTokens),
       cacheReadTokens: normalizeCount(event.cacheReadTokens),
       cacheWriteTokens: normalizeCount(event.cacheWriteTokens),
+      ...(event.cacheWrite1hTokens !== undefined ? { cacheWrite1hTokens: Math.min(normalizeCount(event.cacheWriteTokens), normalizeCount(event.cacheWrite1hTokens)) } : {}),
       totalTokens: normalizeCount(event.totalTokens),
       source: event.source || 'estimated',
       durationMs: normalizeCount(event.durationMs),

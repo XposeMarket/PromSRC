@@ -54,5 +54,45 @@
       "type": "template",
       "description": "Provenance manifest"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "logo"
+        ],
+        "anyOf": [
+          "official",
+          "download",
+          "find",
+          "svg",
+          "get"
+        ],
+        "noneOf": [
+          "design",
+          "create",
+          "make a",
+          "redesign"
+        ]
+      },
+      {
+        "allOf": [
+          "logos"
+        ],
+        "anyOf": [
+          "official",
+          "download",
+          "find",
+          "svg",
+          "get"
+        ],
+        "noneOf": [
+          "design",
+          "create",
+          "make a"
+        ]
+      }
+    ]
+  }
 }

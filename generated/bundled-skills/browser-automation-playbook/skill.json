@@ -74,5 +74,35 @@
       "type": "doc",
       "description": "Add workflow recipe to browser-automation-playbook"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "browser"
+        ],
+        "anyOf": [
+          "click",
+          "fill",
+          "log in",
+          "login",
+          "navigate",
+          "form",
+          "upload",
+          "automate"
+        ]
+      },
+      {
+        "allOf": [
+          "website"
+        ],
+        "anyOf": [
+          "fill out",
+          "click through",
+          "log into"
+        ]
+      }
+    ]
+  }
 }

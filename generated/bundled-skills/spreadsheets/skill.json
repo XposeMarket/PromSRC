@@ -38,5 +38,47 @@
       "path": "references/writing.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "xlsx"
+        ],
+        "noneOf": [
+          "desktop app"
+        ]
+      },
+      {
+        "allOf": [
+          "spreadsheet"
+        ],
+        "anyOf": [
+          "create",
+          "edit",
+          "analyze",
+          "read",
+          "make"
+        ],
+        "noneOf": [
+          "desktop app"
+        ]
+      },
+      {
+        "allOf": [
+          "excel"
+        ],
+        "anyOf": [
+          "file",
+          "sheet",
+          "workbook",
+          "formula"
+        ],
+        "noneOf": [
+          "desktop app"
+        ]
+      }
+    ]
+  }
 }

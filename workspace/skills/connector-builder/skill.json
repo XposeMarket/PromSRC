@@ -66,5 +66,38 @@
       "type": "doc",
       "description": "Add workflow recipe to connector-builder"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "connector"
+        ],
+        "anyOf": [
+          "build",
+          "create",
+          "new",
+          "design",
+          "edit"
+        ],
+        "noneOf": [
+          "smoke test",
+          "test the"
+        ]
+      },
+      {
+        "allOf": [
+          "plugin"
+        ],
+        "anyOf": [
+          "build",
+          "create"
+        ],
+        "noneOf": [
+          "wordpress"
+        ]
+      }
+    ]
+  }
 }

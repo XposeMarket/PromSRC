@@ -76,5 +76,29 @@
       "type": "template",
       "description": "Reviewer verdict"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "second opinion"
+        ]
+      },
+      {
+        "allOf": [
+          "fresh eyes"
+        ]
+      },
+      {
+        "allOf": [
+          "independent"
+        ],
+        "anyOf": [
+          "review",
+          "reviewer"
+        ]
+      }
+    ]
+  }
 }

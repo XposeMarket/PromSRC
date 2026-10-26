@@ -48,5 +48,49 @@
     }
   ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hook"
+        ],
+        "anyOf": [
+          "opening",
+          "post",
+          "video",
+          "tiktok",
+          "reel",
+          "viral",
+          "ideas"
+        ],
+        "noneOf": [
+          "webhook",
+          "react hook",
+          "git hook",
+          "usestate"
+        ]
+      },
+      {
+        "allOf": [
+          "hooks"
+        ],
+        "anyOf": [
+          "opening",
+          "post",
+          "video",
+          "tiktok",
+          "reel",
+          "viral",
+          "ideas"
+        ],
+        "noneOf": [
+          "webhook",
+          "react",
+          "git"
+        ]
+      }
+    ]
+  }
 }

@@ -1,4 +1,5 @@
 // Subagents route owner. Loaded only when its route or a shared dependent feature is requested.
+import { renderAgentPetPickerHtml, wireAgentPetPicker } from '../components/agent-pets.js';
 import {
   ICONS,
   __pmChat,
@@ -292,6 +293,10 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
 
       ${_renderAgentModelPicker(agent, modelPickerScope)}
       ${_renderAgentVoicePicker(agent, voicePickerScope)}
+      <div class="pm-agent-pet-section">
+        <div class="pm-detail-sub">Pet</div>
+        ${renderAgentPetPickerHtml(agent)}
+      </div>
 
       <div class="pm-card" id="pm-subagent-ctxrefs">
         <div class="pm-card-head">${ICONS.doc} Context References</div>
@@ -328,6 +333,11 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   registerAgentVoicePickerOnSaved(voicePickerScope, refreshOverview);
   agentModelPickerHydrate(modelPickerScope, agent);
   agentVoicePickerHydrate(voicePickerScope, agent);
+  wireAgentPetPicker(body, agent.id, async () => {
+    // Mobile caches subagent data for 6h; force a reload so the new pet shows on every list.
+    try { await loadMobileSubagents({ force: true }); } catch {}
+    refreshOverview();
+  });
 
   async function selectTab(tabName) {
     try { tabSlot?._pmCleanup?.(); } catch {}

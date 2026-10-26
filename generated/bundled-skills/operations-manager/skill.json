@@ -30,5 +30,27 @@
   "lifecycle": "active",
   "name": "operations-manager",
   "id": "operations-manager",
-  "implicitInvocation": false
+  "implicitInvocation": false,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "sop"
+        ]
+      },
+      {
+        "allOf": [
+          "process"
+        ],
+        "anyOf": [
+          "operating",
+          "handoff",
+          "ownership",
+          "standardize",
+          "improve our"
+        ]
+      }
+    ]
+  }
 }

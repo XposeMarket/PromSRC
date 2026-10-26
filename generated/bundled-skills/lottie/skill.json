@@ -44,5 +44,20 @@
     "blockedCapabilities": {},
     "lastVerified": "2026-07-12"
   },
-  "name": "lottie"
+  "name": "lottie",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "lottie"
+        ]
+      },
+      {
+        "allOf": [
+          "dotlottie"
+        ]
+      }
+    ]
+  }
 }

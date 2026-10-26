@@ -4,6 +4,8 @@ import os from 'os';
 import { resolveSkillsRoot } from '../skills/store.js';
 import {
   evaluateSkillPromptSignals,
+  evaluateSkillTriggerPolicy,
+  type SkillTriggerPolicyValidation,
   loadSkillPackage,
   type SkillPromptSignals,
 } from '../gateway/skills-runtime/skill-package.js';
@@ -125,6 +127,7 @@ export interface SkillInfo {
   description?: string;
   triggers?: string[];
   promptSignals?: SkillPromptSignals;
+  triggerPolicy?: SkillTriggerPolicyValidation;
   templates?: Array<{ action?: string; label?: string; command?: string }>;
 }
 
@@ -152,6 +155,7 @@ export function loadSkills(): SkillInfo[] {
         description: pkg.description,
         triggers: Array.isArray(pkg.triggers) ? pkg.triggers : [],
         promptSignals: pkg.promptSignals,
+        triggerPolicy: pkg.triggerPolicy,
         templates: Array.isArray((pkg.manifest as any)?.templates) ? (pkg.manifest as any).templates : [],
       });
     }
@@ -215,9 +219,13 @@ function skillTriggerScore(trigger: string, query: string): number {
 }
 
 export function selectSkillSlugsForMessage(message: string, max = 2): string[] {
+  return selectSkillSlugsFromSkills(loadSkills(), message, max);
+}
+
+/** Pure selector over already-loaded skills (exported for regression tests). */
+export function selectSkillSlugsFromSkills(skills: SkillInfo[], message: string, max = 2): string[] {
   const query = String(message || '').trim().toLowerCase();
   if (!query) return [];
-  const skills = loadSkills();
   if (!skills.length) return [];
   const tokens = tokenizeSkillQuery(query);
   const scored: Array<{ slug: string; score: number }> = [];
@@ -228,14 +236,20 @@ export function selectSkillSlugsForMessage(message: string, max = 2): string[] {
     const desc = String(s.description || '').toLowerCase();
     const content = String(s.content || '').toLowerCase();
     const triggers = Array.isArray(s.triggers) ? s.triggers : [];
+    // Strict v2 policy is authoritative: non-admitted v2 is ineligible; admitted v2
+    // skips the v1 guards below and gets positive evidence. Mentions cannot bypass it.
+    const v2Present = !!s.triggerPolicy?.present;
+    const v2Admitted = v2Present && evaluateSkillTriggerPolicy(s.triggerPolicy, query).admitted;
+    if (v2Present && !v2Admitted) continue;
     const promptSignalMatch = evaluateSkillPromptSignals(s.promptSignals, query);
     const explicitSkillMention = [slug, name]
       .filter(Boolean)
       .some((value) => normalizeSkillTriggerText(query).includes(normalizeSkillTriggerText(value)));
-    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitSkillMention) continue;
+    if (!v2Present && promptSignalMatch.configured && !promptSignalMatch.matched && !explicitSkillMention) continue;
     const templates = Array.isArray(s.templates) ? s.templates : [];
     let score = 0;
 
+    if (v2Admitted) score += 100;
     if (promptSignalMatch.matched) {
       score += 100 + Math.min(40, promptSignalMatch.score * 4);
     }

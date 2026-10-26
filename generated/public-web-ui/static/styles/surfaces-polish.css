@@ -309,3 +309,10 @@ body:not(.pm-mobile-active) #sidebar.collapsed .sidebar-scroll { display: flex !
 body:not(.pm-mobile-active) #sidebar.collapsed .nav-group { gap: 4px !important; }
 body:not(.pm-mobile-active) #sidebar.collapsed :is(.nav-item, .new-chat) { padding: 0 !important; gap: 0 !important; }
 body:not(.pm-mobile-active) #sidebar.collapsed :is(.nav-item, .new-chat):hover { background: color-mix(in srgb, var(--text) 8%, transparent) !important; }
+
+/* ── Desktop shell panel motion (web-ui/src/features/shell/panel-motion.js) ──
+   The helper animates width with the Web Animations API, freezes content with
+   inline widths and fades with opacity animations, so the only stylesheet need is
+   clipping during the slide. Keep this self-only: descendant rules keyed on the
+   motion classes restyle the whole panel subtree on every toggle. */
+body:not(.pm-mobile-active) :is(#sidebar, #right-panel).pm-panel-motion { overflow: hidden !important; }

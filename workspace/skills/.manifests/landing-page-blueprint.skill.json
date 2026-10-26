@@ -30,5 +30,23 @@
   "lifecycle": "active",
   "name": "landing-page-blueprint",
   "id": "landing-page-blueprint",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "landing page"
+        ],
+        "anyOf": [
+          "plan",
+          "improve",
+          "conversion",
+          "copy",
+          "blueprint",
+          "structure"
+        ]
+      }
+    ]
+  }
 }

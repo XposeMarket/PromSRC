@@ -3,6 +3,7 @@ import type { CorsOptions } from 'cors';
 import type { NextFunction, Request, Response } from 'express';
 import type { PrometheusConfig } from '../types';
 import { getConfig } from '../config/config';
+import { parseGatewayPort, resolveGatewayPort } from '../config/gateway-port';
 import { evaluateCreativeRenderGrant } from './security/scoped-render-auth';
 
 /** Typed accessor for the gateway config block — avoids untyped `as any` reads. */
@@ -104,7 +105,13 @@ export function resolveGatewayAuthToken(): string {
   const gateway = cm.getConfig().gateway;
   const rawToken = String(gateway?.auth?.token || gateway?.auth_token || '').trim();
   if (!rawToken) return '';
-  return String(cm.resolveSecret(rawToken) || rawToken).trim();
+  // resolveSecret already preserves literal tokens. Never substitute an env:/
+  // vault: reference when it cannot be resolved, or downgrade it to no token.
+  try {
+    const token = String(cm.resolveSecret(rawToken) || '').trim();
+    if (token) return token;
+  } catch { /* Do not expose vault errors, reference names, or secret material. */ }
+  throw new Error('Gateway authentication configuration error: configured secret could not be resolved.');
 }
 
 export function isGatewayAuthEnabled(): boolean {
@@ -114,25 +121,33 @@ export function isGatewayAuthEnabled(): boolean {
 export function isTrustedGatewayOrigin(origin: string | undefined | null): boolean {
   const normalizedOrigin = String(origin || '').trim();
   if (!normalizedOrigin) return true;
-  if (normalizedOrigin === 'null' || normalizedOrigin.toLowerCase().startsWith('file://')) return true;
   try {
     const url = new URL(normalizedOrigin);
-    const host = String(url.hostname || '').trim().toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
-
-    const configuredHost = String(getGatewayConfig()?.host || '').trim().toLowerCase();
-    if (
-      configuredHost &&
-      configuredHost !== '0.0.0.0' &&
-      configuredHost !== '::' &&
-      host === configuredHost
-    ) {
-      return true;
-    }
+    // An Origin is a serialized HTTP(S) origin, never an opaque/file/custom
+    // scheme, credentials, or a URL path. Electron loads the HTTP gateway.
+    if (!isHttpOrigin(normalizedOrigin)) return false;
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    const gateway = getGatewayConfig();
+    const configuredHost = String(gateway?.host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+    if (!isLoopbackAddress(host) && (!configuredHost || configuredHost === '0.0.0.0' || configuredHost === '::' || host !== configuredHost)) return false;
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    if (url.protocol === 'https:') return !!gateway?.https?.enabled && port === Number(gateway.https.port);
+    const publicPort = parseGatewayPort(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT)
+      || resolveGatewayPort(getConfig().getConfig());
+    return port === publicPort;
   } catch {
     return false;
   }
-  return false;
+}
+
+function isHttpOrigin(origin: string | undefined | null): boolean {
+  try {
+    const value = String(origin || '').trim();
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value;
+  } catch {
+    return false;
+  }
 }
 
 function isHttpsOrigin(origin: string | undefined | null): boolean {
@@ -254,7 +269,12 @@ export function evaluateGatewayRequest(
     }
   }
 
-  const configuredToken = resolveGatewayAuthToken();
+  let configuredToken: string;
+  try {
+    configuredToken = resolveGatewayAuthToken();
+  } catch {
+    return { ok: false, status: 401, message: 'Gateway authentication configuration error: configured secret could not be resolved.' };
+  }
   if (configuredToken) {
     const providedToken = extractGatewayToken(req, opts?.allowQueryToken === true);
     if (providedToken && safeEqual(providedToken, configuredToken)) return { ok: true };
@@ -306,6 +326,9 @@ export function buildGatewayCorsOptions(request?: Pick<Request, 'headers' | 'met
       // preflight before the token is sent; gateway auth verifies the token on
       // the actual request. This permits a phone PWA to use two independent
       // gateways without forwarding cookies or account credentials.
+      // Pairing preflight is not a capability: never let it bypass opaque
+      // origin rejection. Explicit HTTP(S) PWA origins retain the bridge.
+      if (origin && !isHttpOrigin(origin)) { callback(null, false); return; }
       const bridgeOrigin = Boolean(origin) && isHttpsOrigin(origin) && isMobileGatewayBridgePath(request);
       const pairedMobileOrigin = Boolean(origin) && (
         hasPairingHeaderOrPreflightRequest(request) ||

@@ -64,9 +64,13 @@ export type ModelStreamEvent =
   | { type: 'provider_event'; nativeType: string; data?: unknown; provider?: string; model?: string };
 
 export interface ChatOptions {
+  /** Runtime workload kind for provider stable-prefix caching; unknown keeps short TTL. */
+  cacheWorkload?: string;
   temperature?: number;
   max_tokens?: number;
   num_ctx?: number;
+  /** Internal conversation identity for provider cache affinity; never a raw wire key. */
+  sessionId?: string;
   tools?: any[];
   think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   /** Provider speed tier for this chat route. */
@@ -100,6 +104,8 @@ export interface ModelUsage {
   reasoningTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Subset of cacheWriteTokens created with Anthropic's 1h TTL. */
+  cacheWrite1hTokens?: number;
   totalTokens?: number;
   source?: 'provider' | 'estimated';
   requestedModel?: string;
