@@ -73,7 +73,9 @@ import {
 } from '../background-agent-work.js';
 import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 installToolActivityExpansionPersistence();
-const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+// Paints yield to typing: hold a stream paint until the composer has been idle 150ms,
+// never more than 400ms, so keystrokes are not queued behind a bubble patch (4x tail).
+const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180, inputIdleMs: 150, maxInputDeferMs: 400 });
 
 const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
   mergeBackgroundAgentEvents,
@@ -13242,8 +13244,8 @@ function renderLiveTraceCompactionBreak(entry) {
   </details>`;
 }
 
-function renderLiveTraceList(entries) {
-  const list = visibleLiveTraceEntries(entries);
+function renderLiveTraceList(entries, { presented = false } = {}) {
+  const list = presented ? entries : visibleLiveTraceEntries(entries);
   if (!list.length) return '';
   return `<div class="live-turn-trace">${list.map(renderLiveTraceEntry).join('')}</div>`;
 }
@@ -13533,8 +13535,8 @@ function liveTraceLogicalGroupText(calls) {
   return `${first.past} ${count} ${first.plural}${tail}`;
 }
 
-function liveTraceToolSummary(entries) {
-  const structured = toolActivitySummary(entries);
+function liveTraceToolSummary(entries, { coalesced = false } = {}) {
+  const structured = toolActivitySummary(entries, { coalesced });
   if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const groups = new Map();
@@ -13549,8 +13551,8 @@ function liveTraceToolSummary(entries) {
   return `Used ${count} tool${count === 1 ? '' : 's'}`;
 }
 
-function liveTraceCurrentToolLabel(entries) {
-  const structured = toolActivitySummary(entries, { live: true });
+function liveTraceCurrentToolLabel(entries, { coalesced = false } = {}) {
+  const structured = toolActivitySummary(entries, { live: true, coalesced });
   if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const call = calls[calls.length - 1];
@@ -13560,7 +13562,7 @@ function liveTraceCurrentToolLabel(entries) {
     if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
     return `${call.gerund} ${call.noun}`;
   }
-  return liveTraceToolSummary(entries);
+  return liveTraceToolSummary(entries, { coalesced });
 }
 
 function liveTraceSummaryKey(text) {
@@ -13649,9 +13651,11 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
     const progressSummary = desktopTraceProgressSummary(group.entries);
-    const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
+    // liveTraceGroups already folded and filtered this presentation list.
+    // Replaying it here (and again for the body) rebuilds every tool payload.
+    const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries, { coalesced: true }) : liveTraceToolSummary(group.entries, { coalesced: true }));
     const summaryKey = liveTraceSummaryKey(summary);
-    const visibleEntries = visibleLiveTraceEntries(group.entries);
+    const visibleEntries = group.entries;
     // The mutable progress packet is rendered in the header only. Leaving it
     // in the body creates a duplicate summary and makes the next event appear
     // to overwrite the stream instead of extending it.
@@ -13670,7 +13674,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       </summary>
       ${lazyClosedGroup && !openAttr && toolBodyEntries.length
         ? `<div class="live-turn-tool-body" data-lazy-trace="${escHtml(rememberLazyTraceBody(toolBodyEntries))}"></div>`
-        : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>`}
+        : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries, { presented: true })}</div>`}
     </details>`;
   }).join('')}</div>`;
 }
@@ -15775,7 +15779,6 @@ function patchStreamingChatBubble(sessionId) {
   return true;
 }
 
-const streamingChatFrames = new Map();
 const streamingChatFlushHooks = new Map();
 // Visible = the active chat plus an open side/split pane. A failed patch redraws
 // only that pane (coalesced in the same frame); the active chat keeps its full fallback.
@@ -15795,13 +15798,12 @@ function redrawSideChatStreamPane(sid) {
 function renderStreamingChatUpdate(sessionId, onFlushed = null) {
   const sid = String(sessionId || '').trim();
   if (!sid || document.hidden || !isSessionVisibleInChatSurface(sid)) return;
-  // onFlushed runs after the DOM write in the rAF flush (first-visible metric, motion hook).
+  // Reuse the cost/input-aware scheduler instead of a token-driven rAF loop.
+  // Hooks still run after the DOM write (first-visible metric, motion hook).
   if (typeof onFlushed === 'function') {
     streamingChatFlushHooks.set(sid, [...(streamingChatFlushHooks.get(sid) || []), onFlushed]);
   }
-  if (streamingChatFrames.has(sid)) return;
-  streamingChatFrames.set(sid, requestAnimationFrame(() => {
-    streamingChatFrames.delete(sid);
+  desktopStreamRenderScheduler.schedule(`desktop-bubble:${sid}`, () => {
     const hooks = streamingChatFlushHooks.get(sid) || [];
     streamingChatFlushHooks.delete(sid);
     if (document.hidden || !isSessionVisibleInChatSurface(sid)) return;
@@ -15810,7 +15812,7 @@ function renderStreamingChatUpdate(sessionId, onFlushed = null) {
       if (!paneOnly) renderChatMessages();
     }
     for (const hook of hooks) { try { hook(); } catch {} }
-  }));
+  }, { minimumDelay: sid === String(window.activeChatSessionId || '') && window.chatMessagesUserScrolledUp ? 250 : 0 });
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -47107,21 +47109,15 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   if (sid !== window.activeChatSessionId) sess.unread = true;
   // Defer background index saves; terminal events flush synchronously.
   const terminalEvent = evt.type === 'done' || evt.type === 'error';
-  scheduleMainChatStreamSessionBookkeeping(!MAIN_CHAT_STREAM_HOT_EVENT_TYPES.has(evt.type));
-  if (terminalEvent || evt.type === 'session_title' || evt.type === 'user_message') flushChatSessionsSave();
+  // Sorting + re-rendering the whole sidebar was the second-largest streaming cost at 4x
+  // (renderSessionsList ~0.8s per 10s): every tool call, latency mark and model event ran it
+  // synchronously. Only turn boundaries need it now; everything else rides the 1s throttle.
+  const sessionBoundary = terminalEvent || evt.type === 'session_title' || evt.type === 'user_message';
+  scheduleMainChatStreamSessionBookkeeping(sessionBoundary);
+  if (sessionBoundary) flushChatSessionsSave();
   restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, sid);
 }
 
-const MAIN_CHAT_STREAM_HOT_EVENT_TYPES = new Set([
-  'token',
-  'thinking_delta',
-  'reasoning_delta',
-  'thinking',
-  'text_delta',
-  'progress_state',
-  'tool_progress',
-  'heartbeat',
-]);
 let _mainChatStreamBookkeepingTimer = null;
 let _mainChatStreamBookkeepingLastAt = 0;
 const MAIN_CHAT_STREAM_BOOKKEEPING_INTERVAL_MS = 1000;
