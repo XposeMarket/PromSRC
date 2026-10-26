@@ -63,5 +63,25 @@
       "type": "doc",
       "description": "Design note recommending first-class trigger metadata and auto-injection for skill resources/templates/examples."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "browse sh"
+        ]
+      },
+      {
+        "allOf": [
+          "browserbase"
+        ],
+        "anyOf": [
+          "skill",
+          "skills",
+          "extraction"
+        ]
+      }
+    ]
+  }
 }

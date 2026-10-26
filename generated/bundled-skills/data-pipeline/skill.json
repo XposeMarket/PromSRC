@@ -30,5 +30,60 @@
   "lifecycle": "active",
   "name": "data-pipeline",
   "id": "data-pipeline",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "csv"
+        ],
+        "anyOf": [
+          "clean",
+          "merge",
+          "dedupe",
+          "deduplicate",
+          "transform",
+          "convert"
+        ]
+      },
+      {
+        "allOf": [
+          "csvs"
+        ],
+        "anyOf": [
+          "clean",
+          "merge",
+          "dedupe",
+          "deduplicate",
+          "transform",
+          "convert",
+          "combine"
+        ]
+      },
+      {
+        "allOf": [
+          "json"
+        ],
+        "anyOf": [
+          "convert",
+          "transform",
+          "flatten",
+          "merge"
+        ]
+      },
+      {
+        "allOf": [
+          "dataset"
+        ],
+        "anyOf": [
+          "clean",
+          "merge",
+          "dedupe",
+          "deduplicate",
+          "aggregate"
+        ]
+      }
+    ]
+  }
 }

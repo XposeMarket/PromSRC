@@ -179,6 +179,7 @@ const AgentDefinitionSchema = z.object({
   name:        z.string().min(1),
   description: z.string().optional(),
   emoji:       z.string().optional(),
+  pet:         z.string().optional(),
   identity:    AgentIdentitySchema.optional(),
   roleType:    z.string().optional(),
   teamRole:    z.string().optional(),

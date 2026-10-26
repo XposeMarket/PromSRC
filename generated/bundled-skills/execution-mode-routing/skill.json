@@ -21,5 +21,25 @@
     "automation"
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "background"
+        ],
+        "anyOf": [
+          "or inline",
+          "durable task",
+          "should this run"
+        ]
+      },
+      {
+        "allOf": [
+          "execution mode"
+        ]
+      }
+    ]
+  }
 }

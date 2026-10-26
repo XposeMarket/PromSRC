@@ -27,5 +27,20 @@
     "workspaceRead": true,
     "workspaceWrite": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "task orchestration"
+        ]
+      },
+      {
+        "allOf": [
+          "taskflow"
+        ]
+      }
+    ]
+  }
 }

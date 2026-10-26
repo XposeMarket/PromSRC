@@ -273,5 +273,47 @@
       "path": "sub-agents/frame-worker.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "music"
+        ],
+        "anyOf": [
+          "video",
+          "visualizer",
+          "lyric video"
+        ],
+        "noneOf": [
+          "background music",
+          "add music"
+        ]
+      },
+      {
+        "allOf": [
+          "song"
+        ],
+        "anyOf": [
+          "video",
+          "visualizer",
+          "lyric video"
+        ],
+        "noneOf": [
+          "background music",
+          "add music"
+        ]
+      },
+      {
+        "allOf": [
+          "lyric video"
+        ],
+        "noneOf": [
+          "background music",
+          "add music"
+        ]
+      }
+    ]
+  }
 }

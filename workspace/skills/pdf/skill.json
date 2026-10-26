@@ -20,5 +20,38 @@
     "pdf"
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pdf"
+        ],
+        "anyOf": [
+          "read",
+          "extract",
+          "ocr",
+          "create",
+          "edit",
+          "merge",
+          "split",
+          "fill"
+        ]
+      },
+      {
+        "allOf": [
+          "pdfs"
+        ],
+        "anyOf": [
+          "read",
+          "extract",
+          "ocr",
+          "merge",
+          "split",
+          "combine"
+        ]
+      }
+    ]
+  }
 }

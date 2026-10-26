@@ -50,5 +50,44 @@
       "type": "doc",
       "description": "Guardrail for safely using GitHub authentication without leaking tokens; use the GitHub connector for API operations."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "git"
+        ],
+        "anyOf": [
+          "commit",
+          "branch",
+          "rebase",
+          "stash",
+          "diff",
+          "status",
+          "log",
+          "cherry pick"
+        ],
+        "noneOf": [
+          "merge conflict",
+          "conflicts"
+        ]
+      },
+      {
+        "allOf": [
+          "commit"
+        ],
+        "anyOf": [
+          "branch",
+          "these changes",
+          "staged"
+        ],
+        "noneOf": [
+          "merge conflict",
+          "conflicts",
+          "commit to"
+        ]
+      }
+    ]
+  }
 }

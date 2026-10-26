@@ -104,5 +104,21 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "verify"
+        ],
+        "anyOf": [
+          "end to end",
+          "user story",
+          "works on device",
+          "e2e"
+        ]
+      }
+    ]
+  }
 }

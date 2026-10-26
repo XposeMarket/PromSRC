@@ -50,5 +50,32 @@
       "type": "doc"
     }
   ],
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "three js"
+        ],
+        "anyOf": [
+          "iphone",
+          "mobile",
+          "ios",
+          "safari"
+        ]
+      },
+      {
+        "allOf": [
+          "webgl"
+        ],
+        "anyOf": [
+          "iphone",
+          "mobile",
+          "ios",
+          "safari"
+        ]
+      }
+    ]
+  }
 }

@@ -85,5 +85,35 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "fact check"
+        ]
+      },
+      {
+        "allOf": [
+          "citations"
+        ],
+        "anyOf": [
+          "every claim",
+          "source ledger",
+          "verify",
+          "add"
+        ]
+      },
+      {
+        "allOf": [
+          "source"
+        ],
+        "anyOf": [
+          "every claim",
+          "each claim"
+        ]
+      }
+    ]
+  }
 }

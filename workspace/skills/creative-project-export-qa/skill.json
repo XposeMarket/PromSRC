@@ -20,5 +20,31 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "creative"
+        ],
+        "anyOf": [
+          "export",
+          "blank frames",
+          "render check",
+          "timeline qa"
+        ]
+      },
+      {
+        "allOf": [
+          "export"
+        ],
+        "anyOf": [
+          "blank",
+          "black frames",
+          "broken render"
+        ]
+      }
+    ]
+  }
 }

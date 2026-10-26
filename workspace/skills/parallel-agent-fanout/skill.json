@@ -83,5 +83,26 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "parallel"
+        ],
+        "anyOf": [
+          "agents",
+          "fan out",
+          "fanout",
+          "workers"
+        ]
+      },
+      {
+        "allOf": [
+          "fan out"
+        ]
+      }
+    ]
+  }
 }

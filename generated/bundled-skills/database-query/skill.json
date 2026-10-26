@@ -41,5 +41,34 @@
     ],
     "blockedCapabilities": {},
     "lastVerified": "2026-07-12"
+  },
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "sql"
+        ],
+        "anyOf": [
+          "write",
+          "query",
+          "optimize",
+          "run",
+          "review"
+        ]
+      },
+      {
+        "allOf": [
+          "query"
+        ],
+        "anyOf": [
+          "postgres",
+          "mysql",
+          "sqlite",
+          "database",
+          "table"
+        ]
+      }
+    ]
   }
 }

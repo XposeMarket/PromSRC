@@ -30,5 +30,35 @@
   "lifecycle": "active",
   "name": "financial-analyst",
   "id": "financial-analyst",
-  "implicitInvocation": false
+  "implicitInvocation": false,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "financial statements"
+        ]
+      },
+      {
+        "allOf": [
+          "cash flow"
+        ],
+        "anyOf": [
+          "analyze",
+          "analysis",
+          "review"
+        ]
+      },
+      {
+        "allOf": [
+          "unit economics"
+        ]
+      },
+      {
+        "allOf": [
+          "10 k"
+        ]
+      }
+    ]
+  }
 }

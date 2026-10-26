@@ -8,6 +8,8 @@
  */
 
 import crypto from 'crypto';
+import path from 'path';
+import { OAuthCallbackLifecycle, oauthErrorResponse } from './oauth-callback-lifecycle';
 import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import http from 'http';
 import { exec } from 'child_process';
@@ -49,7 +51,8 @@ export interface XAIRuntimeCredentials {
 
 type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; accountId?: string };
 let _bgResult: BgOAuthResult = { done: false };
-let _activeFlow: { verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string; accountId?: string } | null = null;
+interface XAIFlow { lifecycle?: OAuthCallbackLifecycle<BgOAuthResult>; verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string; accountId?: string }
+let _activeFlow: XAIFlow | null = null;
 
 function generateVerifier(): string {
   return crypto.randomBytes(32).toString('base64url');
@@ -140,8 +143,20 @@ export function isDefinitiveXaiRefreshRejection(body: string): boolean {
   return /invalid_grant|refresh token (?:has )?(?:expired|been revoked|is invalid)|token (?:was )?revoked/i.test(text);
 }
 
+const refreshInFlight = new Map<string, Promise<XAITokens>>();
+
 export async function refreshXAITokens(configDir: string, accountId?: string): Promise<XAITokens> {
   assertTokenRefreshAllowed('xai');
+  const key = JSON.stringify([path.resolve(configDir), accountVaultKey(accountId)]);
+  const pending = refreshInFlight.get(key);
+  if (pending) return pending;
+  const refresh = refreshXAITokensOnce(configDir, accountId);
+  refreshInFlight.set(key, refresh);
+  try { return await refresh; }
+  finally { if (refreshInFlight.get(key) === refresh) refreshInFlight.delete(key); }
+}
+
+async function refreshXAITokensOnce(configDir: string, accountId?: string): Promise<XAITokens> {
   const existing = loadXAITokens(configDir, accountId);
   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
   const tokenEndpoint = validateXaiEndpoint(existing.token_endpoint || (await discovery()).token_endpoint, 'token_endpoint');
@@ -163,7 +178,10 @@ export async function refreshXAITokens(configDir: string, accountId?: string): P
       // error) used to wipe the saved login, which forced a manual reconnect
       // for a problem that would have cleared on the next attempt.
       if (isDefinitiveXaiRefreshRejection(text)) {
-        clearXAITokens(configDir, accountId);
+        // A reconnect or another credential owner may have replaced this refresh token.
+        if (loadXAITokens(configDir, accountId)?.refresh_token === existing.refresh_token) {
+          clearXAITokens(configDir, accountId);
+        }
         throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
       }
       throw new Error(`xAI token refresh rejected (${res.status}); saved login kept. ${text.slice(0, 200)}`);
@@ -182,6 +200,12 @@ export async function refreshXAITokens(configDir: string, accountId?: string): P
     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
     refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : existing.refresh_token_expires_at,
   };
+  const current = loadXAITokens(configDir, accountId);
+  if (current?.refresh_token !== existing.refresh_token) {
+    if (current) return current;
+    throw new Error('xAI OAuth disconnected during refresh.');
+  }
+  // One synchronous vault set replaces the whole credential record, without delete/set gap.
   saveTokens(configDir, tokens, accountId);
   return tokens;
 }
@@ -233,6 +257,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, redire
   const data = await tokenRes.json() as any;
   if (!data?.access_token || !data?.refresh_token) throw new Error('xAI OAuth response missing access or refresh token.');
   const rtExpiresIn = Number(data.refresh_token_expires_in || 0);
+  flow.lifecycle!.assertActive();
   saveTokens(configDir, {
     access_token: String(data.access_token),
     refresh_token: String(data.refresh_token),
@@ -252,16 +277,16 @@ export async function completeXAIOAuthWithCode(configDir: string, code: string, 
   }
   const trimmed = String(code || '').trim();
   if (!trimmed) return { success: false, error: 'Paste the code shown by xAI.' };
+  if (!flow.lifecycle?.claim()) return { success: false, error: 'OAuth callback already handled or expired.' };
   try {
     if (accountId && !flow.accountId) flow.accountId = accountId;
     await exchangeAuthorizationCode(configDir, trimmed, CALLBACK_URL, flow);
     const completedAccountId = flow.accountId;
-    _activeFlow = null;
-    _bgResult = { done: true, success: true, accountId: completedAccountId };
+    flow.lifecycle.finish({ done: true, success: true, accountId: completedAccountId });
     return { success: true, accountId: completedAccountId };
   } catch (err: any) {
     const error = String(err?.message || err);
-    _bgResult = { done: true, success: false, error };
+    flow.lifecycle?.finish({ done: true, success: false, error });
     return { success: false, error };
   }
 }
@@ -279,7 +304,10 @@ export async function startXAIOAuthFlowBackground(configDir: string, accountId?:
     return { authUrl: _activeFlow.authUrl };
   }
 
+  _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'OAuth session expired.' });
   const endpoints = await discovery();
+  // Discovery yields: another caller may have started the listener while we waited.
+  if (_activeFlow) return { authUrl: _activeFlow.authUrl };
   const verifier = generateVerifier();
   const challenge = generateChallenge(verifier);
   const state = crypto.randomBytes(16).toString('hex');
@@ -297,49 +325,45 @@ export async function startXAIOAuthFlowBackground(configDir: string, accountId?:
   });
   const authUrl = `${endpoints.authorization_endpoint}?${params.toString()}`;
   const account = String(accountId || '').trim() || undefined;
-  _activeFlow = { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint, accountId: account };
+  const flow: XAIFlow = { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint, accountId: account };
+  _activeFlow = flow;
   _bgResult = { done: false };
+  const lifecycle = flow.lifecycle = new OAuthCallbackLifecycle<BgOAuthResult>(
+    () => _activeFlow === flow,
+    result => { _activeFlow = null; _bgResult = result; },
+  );
 
   const server = http.createServer(async (req, res) => {
     if (!req.url?.startsWith(CALLBACK_PATH)) { res.writeHead(404); res.end(); return; }
     const url = new URL(req.url, CALLBACK_URL);
     const code = url.searchParams.get('code');
-    const returnedState = url.searchParams.get('state');
     const error = url.searchParams.get('error');
 
     const fail = (msg: string) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<html><body><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
-      server.close(); _activeFlow = null;
-      _bgResult = { done: true, success: false, error: msg };
+      oauthErrorResponse(res, msg);
+      lifecycle.finish({ done: true, success: false, error: msg });
     };
 
+    if (!lifecycle.accept(url, res, state)) return;
     if (error || !code) return fail(error || 'No code returned');
-    if (returnedState !== state) return fail('State mismatch; restart xAI login.');
 
     try {
-      await exchangeAuthorizationCode(configDir, code, CALLBACK_URL, { verifier, state, authUrl, createdAt: Date.now(), tokenEndpoint: endpoints.token_endpoint, accountId: account });
+      await exchangeAuthorizationCode(configDir, code, CALLBACK_URL, flow);
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>Connected to Prometheus xAI OAuth</h2><p>You can close this window.</p></body></html>');
-      server.close(); _activeFlow = null;
-      _bgResult = { done: true, success: true, accountId: account };
+      lifecycle.finish({ done: true, success: true, accountId: account });
     } catch (err: any) {
       fail(String(err?.message || err));
     }
   });
 
+  lifecycle.attach(server);
   server.on('error', (err: any) => {
-    _activeFlow = null;
-    _bgResult = { done: true, success: false, error: `Callback server error: ${err.message}` };
+    lifecycle.finish({ done: true, success: false, error: `Callback server error: ${err.message}` });
   });
   server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
     openBrowser(authUrl);
-    setTimeout(() => {
-      if (!(_bgResult as any).done) {
-        server.close(); _activeFlow = null;
-        _bgResult = { done: true, success: false, error: 'Timed out waiting for xAI OAuth callback.' };
-      }
-    }, 5 * 60 * 1000);
+    lifecycle.arm({ done: true, success: false, error: 'Timed out waiting for xAI OAuth callback.' });
   });
 
   return { authUrl };
@@ -365,7 +389,7 @@ export function startXAITokenKeepAlive(configDir: string): void {
       await refreshXAITokens(configDir);
       log.security('[xai-oauth] Keep-alive token refresh succeeded');
     } catch (err: any) {
-      // refreshXAITokens already clears stale tokens on 4xx, so just log.
+      // Only definitive rejection of the still-current refresh token clears the login.
       log.security(`[xai-oauth] Keep-alive refresh failed: ${err?.message}`);
     }
   }, KEEPALIVE_INTERVAL_MS);

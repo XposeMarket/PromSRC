@@ -19,6 +19,7 @@ type PairingAdminRequestLike = {
 export type PairingAdminPolicy = {
   desktopToken: string;
   gatewayToken: string;
+  gatewayAuthError?: boolean;
   electronManaged: boolean;
   gatewayHost: string;
   gatewayPort: number;
@@ -78,6 +79,10 @@ export function evaluatePairingAdminRequestWithPolicy(
     return { ok: true, authority: 'electron' };
   }
 
+  if (policy.gatewayAuthError) {
+    return { ok: false, status: 403, message: 'Gateway authentication configuration error: configured secret could not be resolved.' };
+  }
+
   const suppliedGatewayToken = gatewayCredential(req);
   if (policy.gatewayToken && safeEqual(suppliedGatewayToken, policy.gatewayToken)) {
     return { ok: true, authority: 'gateway-token' };
@@ -125,9 +130,14 @@ export function getPairingAdminPolicy(): PairingAdminPolicy {
   const config = getConfig().getConfig() as any;
   const gateway = config?.gateway || {};
   const https = gateway.https || {};
+  let gatewayToken = '';
+  let gatewayAuthError = false;
+  try { gatewayToken = resolveGatewayAuthToken(); }
+  catch { gatewayAuthError = true; }
   return {
     desktopToken: String(process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN || '').trim(),
-    gatewayToken: resolveGatewayAuthToken(),
+    gatewayToken,
+    gatewayAuthError,
     electronManaged: String(process.env.PROMETHEUS_ELECTRON_MANAGED || '').trim() === '1',
     gatewayHost: String(gateway.host || '127.0.0.1').trim(),
     gatewayPort: Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || 0) || resolveGatewayPort(config),

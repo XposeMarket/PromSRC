@@ -89,5 +89,29 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "retro"
+        ],
+        "anyOf": [
+          "session",
+          "this chat",
+          "what went wrong"
+        ]
+      },
+      {
+        "allOf": [
+          "retrospective"
+        ],
+        "anyOf": [
+          "session",
+          "this chat"
+        ]
+      }
+    ]
+  }
 }

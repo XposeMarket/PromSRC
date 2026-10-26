@@ -1,4 +1,5 @@
 // Teams route owner. Loaded only when its route or a shared dependent feature is requested.
+import { renderAgentPet, renderAgentPetStack } from '../components/agent-pets.js';
 import {
   ICONS,
   PM_CHAT_VOICE_ICON_SRC,
@@ -61,11 +62,11 @@ import {
 
 /* ---------------- TEAMS OVERVIEW ---------------- */
 function teamTileHtml(t) {
-  const houseColor = t.house === 'blue' ? '#4a82d1' : '#a4682b';
   return `
     <button class="pm-team-tile ${t.featured ? 'featured' : ''}" data-team="${t.id}">
       ${t.featured ? '<span class="pm-star">★</span>' : ''}
-      <span class="pm-house" style="color:${houseColor}">🏠</span>
+      <span class="pm-team-lead">${renderAgentPet(t.leadId || t.id, { size: 36 })}</span>
+      ${t.crewIds?.length ? renderAgentPetStack(t.crewIds, { size: 16, max: 5 }) : ''}
       <span class="pm-team-name">${escapeHtml(t.name)}</span>
       <span class="pm-team-agents">${ICONS.users} ${t.agents} agents</span>
     </button>
@@ -73,7 +74,7 @@ function teamTileHtml(t) {
 }
 
 function teamsSkeletonHtml() {
-  const tile = `<div class="pm-team-tile" style="opacity:.55"><span class="pm-house" style="opacity:.4">🏠</span><span class="pm-team-name" style="background:rgba(0,0,0,.06);color:transparent;border-radius:6px;height:16px;width:80%;">loading</span></div>`;
+  const tile = `<div class="pm-team-tile" style="opacity:.55"><span class="pm-team-lead" style="opacity:.4">${renderAgentPet('team', { size: 36 })}</span><span class="pm-team-name" style="background:rgba(0,0,0,.06);color:transparent;border-radius:6px;height:16px;width:80%;">loading</span></div>`;
   return `<div class="pm-team-grid">${tile.repeat(4)}</div>`;
 }
 
@@ -117,13 +118,13 @@ export async function renderTeamsPage(page, { navigate }) {
     const previewHtml = detail ? `
       <div class="pm-team-preview">
         <div class="pm-team-preview-head">
-          <span class="pm-mini-house">${escapeHtml(detail.emoji || '🏠')}</span>
+          <span class="pm-mini-house">${renderAgentPet(detail.leadId || detail.id, { size: 24 })}</span>
           <h3>${escapeHtml(detail.name)}</h3>
           <button class="pm-pill-btn" data-go="${escapeHtml(detail.id)}">View Team ${ICONS.chev}</button>
         </div>
         <div style="font-size:13px;color:var(--pm-muted);font-weight:700;margin-top:4px;">Team members</div>
         <div class="pm-chip-row">
-          ${detail.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:${m.color}">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
+          ${detail.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:transparent">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
         </div>
         <div class="pm-divider"></div>
         <button type="button" class="pm-row pm-row-link" data-go-ws="${escapeHtml(detail.id)}"><span>🗂️ Workspace</span><span style="color:var(--pm-muted);display:inline-flex;align-items:center;gap:4px;">Open ${ICONS.chev}</span></button>
@@ -167,7 +168,7 @@ export async function renderTeamsPage(page, { navigate }) {
 /* ---------------- TEAM DETAIL ---------------- */
 function teamDetailSkeleton() {
   return `
-    <div class="pm-detail-head"><span class="pm-house-icon">🏠</span><h1 style="background:rgba(0,0,0,.06);color:transparent;border-radius:8px;height:24px;flex:1;">loading</h1></div>
+    <div class="pm-detail-head"><span class="pm-house-icon">${renderAgentPet('team', { size: 30 })}</span><h1 style="background:rgba(0,0,0,.06);color:transparent;border-radius:8px;height:24px;flex:1;">loading</h1></div>
     <div class="pm-detail-sub">…</div>
     <div class="pm-action-row">
       <button class="pm-action-btn primary">${ICONS.play} Start Run</button>
@@ -204,7 +205,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   const tabs = ['Context','Subagents','Workspace','Memory','Runs','Team Chat'];
   body.innerHTML = `
     <div class="pm-detail-head">
-      <span class="pm-house-icon">${escapeHtml(t.emoji || '🏠')}</span>
+      <span class="pm-house-icon">${renderAgentPet(t.leadId || t.id, { size: 30 })}</span>
       <h1>${escapeHtml(t.name)}</h1>
       <button class="pm-icon-btn pm-overflow" aria-label="More">${ICONS.dots}</button>
     </div>
@@ -226,12 +227,12 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
     <div id="pm-context-slot">
     <div class="pm-team-preview">
       <div class="pm-team-preview-head">
-        <span class="pm-mini-house">${escapeHtml(t.emoji || '🏠')}</span>
+        <span class="pm-mini-house">${renderAgentPet(t.leadId || t.id, { size: 24 })}</span>
         <h3>${escapeHtml(t.name)}</h3>
       </div>
       <div style="font-size:13px;color:var(--pm-muted);">${t.subagents} subagents · ${t.totalRuns} total runs</div>
       <div class="pm-chip-row">
-        ${t.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:${m.color}">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
+        ${t.members.map(m => `<span class="pm-member-chip"><span class="pm-avatar" style="background:transparent">${m.avatar}</span>${escapeHtml(m.name)}</span>`).join('')}
       </div>
     </div>
 
@@ -1836,7 +1837,7 @@ export async function renderTeamChatPage(page, { teamId, navigate }) {
     const team = await loadMobileTeamDetail(teamId);
     if (!team) throw new Error('Team not found');
     if (cleanupDone || page.isConnected === false) return;
-    if (badgeLabel) badgeLabel.textContent = `${team.emoji || '🏠'} ${team.name}`;
+    if (badgeLabel) badgeLabel.textContent = team.name;
     await _renderTeamChatTab(body, teamId, { standalone: true, team });
   } catch (err) {
     body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>Couldn’t load team chat</h2><p>${escapeHtml(err?.message || 'Network error')}</p></div>`;

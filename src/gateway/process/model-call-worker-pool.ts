@@ -33,7 +33,7 @@ export interface ModelCallCallbacks {
   /** Numeric/category-only lifecycle telemetry; never receives model payloads. */
   onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
   signal?: AbortSignal;
-  /** Interactive (user-facing) calls jump ahead of queued background calls. */
+  /** Interactive calls share fair admission and retain one slot free of background work. */
   priority?: 'interactive' | 'background';
 }
 
@@ -782,6 +782,28 @@ function runTask(slot: WorkerSlot, task: Task): void {
   }
 }
 
+const backgroundLimit = Math.max(1, workerCount - 1);
+let lastDispatchedPriority: 'interactive' | 'background' = 'background';
+
+function activeBackgroundCount(): number {
+  return slots.filter((slot) => slot.task && slot.task.callbacks.priority !== 'interactive').length;
+}
+
+function nextQueuedTask(): Task | undefined {
+  const interactive = queue.findIndex((task) => task.callbacks.priority === 'interactive');
+  const background = activeBackgroundCount() < backgroundLimit
+    ? queue.findIndex((task) => task.callbacks.priority !== 'interactive') : -1;
+  // Alternate eligible classes, not individual callers. FIFO within each class;
+  // background gets the next release after an interactive dispatch, but never
+  // consumes the reserved slot. Running (billable) calls are never preempted.
+  const index = background >= 0 && (interactive < 0 || lastDispatchedPriority === 'interactive')
+    ? background : interactive;
+  if (index < 0) return undefined;
+  const [task] = queue.splice(index, 1);
+  lastDispatchedPriority = task.callbacks.priority === 'interactive' ? 'interactive' : 'background';
+  return task;
+}
+
 function scheduleDrain(): void {
   if (drainScheduled || shuttingDown) return;
   drainScheduled = true;
@@ -790,7 +812,7 @@ function scheduleDrain(): void {
     for (const slot of slots) {
       if (!queue.length) break;
       if (slot.state === 'ready' && slot.child?.connected && !slot.task) {
-        const task = queue.shift();
+        const task = nextQueuedTask();
         if (task) runTask(slot, task);
       }
     }
@@ -801,7 +823,9 @@ function scheduleDrain(): void {
     // nominally bounded pool pay the full resident-memory cost immediately.
     const activeSlots = slots.filter((slot) => slot.state === 'busy' || Boolean(slot.task)).length;
     const liveSlots = slots.filter((slot) => slot.child && slot.state !== 'stopping').length;
-    const desiredSlots = Math.min(workerCount, Math.max(1, activeSlots + queue.length));
+    const queuedInteractive = queue.filter((task) => task.callbacks.priority === 'interactive').length;
+    const eligibleBackground = Math.min(queue.length - queuedInteractive, backgroundLimit - activeBackgroundCount());
+    const desiredSlots = Math.min(workerCount, activeSlots + queuedInteractive + eligibleBackground);
     let slotsToStart = Math.max(0, desiredSlots - liveSlots);
     for (const slot of slots) {
       if (!slotsToStart || !queue.length) break;
@@ -863,7 +887,11 @@ export async function dispatchModelCallWorker(
       false,
     );
   }
-  const immediatelyAvailable = slots.some((slot) => slot.state === 'ready' && !slot.task);
+  const readySlots = slots.filter((slot) => slot.state === 'ready' && slot.child?.connected && !slot.task).length;
+  const queuedInteractive = queue.filter((task) => task.callbacks.priority === 'interactive').length;
+  const immediatelyAvailable = callbacks.priority === 'interactive'
+    ? readySlots > queuedInteractive
+    : readySlots > queue.length && activeBackgroundCount() + queue.length - queuedInteractive < backgroundLimit;
   if (!immediatelyAvailable && queue.length >= maxQueued) {
     throw new ModelCallWorkerError(
       `Model-call worker queue is full (${maxQueued} queued maximum).`,

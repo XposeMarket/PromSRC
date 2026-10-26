@@ -33,5 +33,27 @@
     "shell": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "mcp"
+        ],
+        "anyOf": [
+          "build",
+          "create",
+          "register",
+          "new server",
+          "write"
+        ],
+        "noneOf": [
+          "not working",
+          "broken",
+          "troubleshoot"
+        ]
+      }
+    ]
+  }
 }

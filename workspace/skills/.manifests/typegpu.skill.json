@@ -30,5 +30,24 @@
   ],
   "implicitInvocation": false,
   "lifecycle": "active",
-  "id": "typegpu"
+  "id": "typegpu",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "typegpu"
+        ]
+      },
+      {
+        "allOf": [
+          "webgpu"
+        ],
+        "anyOf": [
+          "hyperframes",
+          "composition"
+        ]
+      }
+    ]
+  }
 }

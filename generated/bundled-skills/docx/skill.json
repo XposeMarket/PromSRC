@@ -19,5 +19,34 @@
     "docx"
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "docx"
+        ]
+      },
+      {
+        "allOf": [
+          "word document"
+        ]
+      },
+      {
+        "allOf": [
+          "word"
+        ],
+        "anyOf": [
+          "file",
+          ".doc",
+          "edit the"
+        ],
+        "noneOf": [
+          "word count",
+          "crossword"
+        ]
+      }
+    ]
+  }
 }

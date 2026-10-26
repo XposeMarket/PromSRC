@@ -244,6 +244,7 @@ async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, bat
   providerStarted = true;
   if (request.operation === 'chat') {
     return provider.chat(request.messages, request.model, {
+      sessionId: request.options?.sessionId,
       temperature: request.options?.temperature,
       max_tokens: request.options?.maxTokens,
       num_ctx: request.options?.numCtx,
@@ -251,6 +252,7 @@ async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, bat
       think: request.options?.think,
       speed: request.options?.speed,
       omitIntradayNotes: request.options?.omitIntradayNotes,
+      cacheWorkload: request.options?.cacheWorkload,
       abortSignal: signal,
       onToken: (value) => batcher.enqueue('token', value),
       onThinking: (value) => batcher.enqueue('thinking', value),

@@ -50,5 +50,29 @@
       "type": "schema",
       "description": "Evidence schema"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "agent system"
+        ],
+        "anyOf": [
+          "revenue",
+          "sales",
+          "pipeline"
+        ]
+      },
+      {
+        "allOf": [
+          "agents"
+        ],
+        "anyOf": [
+          "revenue engine",
+          "sales pipeline"
+        ]
+      }
+    ]
+  }
 }

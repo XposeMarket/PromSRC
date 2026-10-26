@@ -37,5 +37,31 @@
       "path": "references/evaluation-loop.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "skill"
+        ],
+        "anyOf": [
+          "create a",
+          "new skill",
+          "write a",
+          "update the",
+          "improve the",
+          "turn this into",
+          "reusable skill",
+          "into a skill"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "skills i should learn",
+          "resume"
+        ]
+      }
+    ]
+  }
 }

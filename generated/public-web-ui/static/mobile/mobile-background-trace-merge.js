@@ -23,20 +23,23 @@ function traceIdentity(entry) {
 export function mergeMobileBackgroundTraceEntries(currentEntries = [], recoveredEntries = [], limit = 500) {
   const seen = new Set();
   const merged = [];
-  for (const entry of [...(Array.isArray(currentEntries) ? currentEntries : []), ...(Array.isArray(recoveredEntries) ? recoveredEntries : [])]) {
+  const append = (entry, recovered = false) => {
     const key = traceIdentity(entry);
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
-    merged.push(entry);
-  }
-  // A checkpoint may restore earlier commentary after newer tool rows arrived.
-  // Insert it at its stream position, not at the tail of the live journal.
-  merged.sort((a, b) => {
-    const aStream = String(a?.streamId || a?.extra?.streamId || a?.activity?.streamId || '');
-    const bStream = String(b?.streamId || b?.extra?.streamId || b?.activity?.streamId || '');
-    const aSeq = Number(a?.seq || a?.extra?.seq || a?.activity?.seq || 0);
-    const bSeq = Number(b?.seq || b?.extra?.seq || b?.activity?.seq || 0);
-    return aStream && aStream === bStream && aSeq > 0 && bSeq > 0 ? aSeq - bSeq : 0;
-  });
+    const stream = String(entry?.streamId || entry?.extra?.streamId || entry?.activity?.streamId || '').trim();
+    const seq = Number(entry?.seq || entry?.extra?.seq || entry?.activity?.seq || 0);
+    // Only recovered rows move. A global partial comparator is not transitive
+    // across unsequenced/other-stream rows and can leave earlier prose at the tail.
+    const before = recovered && stream && seq > 0 ? merged.findIndex(candidate => {
+      const candidateStream = String(candidate?.streamId || candidate?.extra?.streamId || candidate?.activity?.streamId || '').trim();
+      const candidateSeq = Number(candidate?.seq || candidate?.extra?.seq || candidate?.activity?.seq || 0);
+      return candidateStream === stream && candidateSeq > seq;
+    }) : -1;
+    if (before < 0) merged.push(entry);
+    else merged.splice(before, 0, entry);
+  };
+  (Array.isArray(currentEntries) ? currentEntries : []).forEach(entry => append(entry));
+  (Array.isArray(recoveredEntries) ? recoveredEntries : []).forEach(entry => append(entry, true));
   return merged.slice(-Math.max(1, Number(limit) || 500));
 }

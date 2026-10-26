@@ -87,5 +87,25 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "feature"
+        ],
+        "anyOf": [
+          "build",
+          "implement",
+          "add",
+          "develop"
+        ],
+        "noneOf": [
+          "feature film",
+          "featured"
+        ]
+      }
+    ]
+  }
 }

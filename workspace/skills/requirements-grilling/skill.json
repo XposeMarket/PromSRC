@@ -98,5 +98,25 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "grill me"
+        ]
+      },
+      {
+        "allOf": [
+          "requirements"
+        ],
+        "anyOf": [
+          "interview me",
+          "ask me questions",
+          "clarify"
+        ]
+      }
+    ]
+  }
 }

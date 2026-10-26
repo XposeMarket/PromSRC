@@ -1050,7 +1050,8 @@ const NON_CACHEABLE_TOOL_SURFACE_CATEGORIES = new Set<string>([
 const toolBuildCache = new Map<string, { at: number; ttlMs: number; tools: any[] }>();
 
 function stableCategoryKey(categories: Set<string>): string {
-  return Array.from(categories).sort().join(',');
+  // Order is part of the model-facing prefix: a newly activated pack appends.
+  return Array.from(categories).join(',');
 }
 
 function trimToolBuildCache(): void {
@@ -1729,6 +1730,17 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
         return true;
       }
       return cat === null || normalizedActiveCategories.has(cat);
+    });
+    const categoryOrder = new Map([...normalizedActiveCategories].map((category, index) => [category, index + 1]));
+    const rank = (tool: any): number => {
+      const category = getToolCategory(String(tool?.function?.name || ''));
+      return category === null ? 0 : (categoryOrder.get(category) ?? categoryOrder.get('prometheus_source_read') ?? Number.MAX_SAFE_INTEGER);
+    };
+    filteredTools.sort((left: any, right: any) => {
+      const group = rank(left) - rank(right);
+      const a = String(left?.function?.name || '');
+      const b = String(right?.function?.name || '');
+      return group || (a < b ? -1 : a > b ? 1 : 0);
     });
     if (cacheKey) {
       toolBuildCache.set(cacheKey, { at: Date.now(), ttlMs: cacheTtlMs, tools: filteredTools });

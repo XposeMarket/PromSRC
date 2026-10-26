@@ -35,5 +35,31 @@
       "type": "doc",
       "description": "Add workflow recipe to context-pack-builder"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "context pack"
+        ]
+      },
+      {
+        "allOf": [
+          "briefing pack"
+        ]
+      },
+      {
+        "allOf": [
+          "briefing"
+        ],
+        "anyOf": [
+          "from memory",
+          "for the agent",
+          "for the team",
+          "assemble"
+        ]
+      }
+    ]
+  }
 }

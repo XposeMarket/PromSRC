@@ -49,5 +49,26 @@
     }
   ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "mnq"
+        ]
+      },
+      {
+        "allOf": [
+          "mgc"
+        ],
+        "anyOf": [
+          "trade",
+          "trading",
+          "futures",
+          "plan"
+        ]
+      }
+    ]
+  }
 }

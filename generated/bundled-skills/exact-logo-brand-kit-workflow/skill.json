@@ -93,5 +93,26 @@
     "match this logo"
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "brand kit"
+        ]
+      },
+      {
+        "allOf": [
+          "logo"
+        ],
+        "anyOf": [
+          "mockup",
+          "mockups",
+          "exact",
+          "without redrawing"
+        ]
+      }
+    ]
+  }
 }

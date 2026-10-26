@@ -171,7 +171,7 @@ router.post('/api/skills/import', async (req, res) => {
 
 router.post('/api/skills/bundle', (req, res) => {
   try {
-    const { id, name, description, instructions, version, triggers, promptSignals, categories, requiredTools, requires, assignment, toolBinding, permissions, resources, overwrite } = req.body || {};
+    const { id, name, description, instructions, version, triggers, promptSignals, triggerPolicy, categories, requiredTools, requires, assignment, toolBinding, permissions, resources, overwrite } = req.body || {};
     if (!id || !name || !instructions) { res.status(400).json({ success: false, error: 'id, name, and instructions required' }); return; }
     const toArray = (value: any) => Array.isArray(value)
       ? value.map((v) => String(v || '').trim()).filter(Boolean)
@@ -184,6 +184,7 @@ router.post('/api/skills/bundle', (req, res) => {
       version: version ? String(version) : undefined,
       triggers: toArray(triggers),
       promptSignals,
+      triggerPolicy,
       categories: toArray(categories),
       requiredTools: toArray(requiredTools),
       requires: requires && typeof requires === 'object' ? requires : undefined,

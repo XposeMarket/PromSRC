@@ -128,5 +128,34 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "price"
+        ],
+        "anyOf": [
+          "watch",
+          "track",
+          "alert",
+          "drops",
+          "notify"
+        ]
+      },
+      {
+        "allOf": [
+          "alert me"
+        ],
+        "anyOf": [
+          "changes",
+          "available",
+          "back in stock",
+          "new listing",
+          "new listings"
+        ]
+      }
+    ]
+  }
 }

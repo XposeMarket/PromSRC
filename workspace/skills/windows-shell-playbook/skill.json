@@ -37,5 +37,35 @@
     }
   ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "powershell"
+        ]
+      },
+      {
+        "allOf": [
+          "cmd"
+        ],
+        "anyOf": [
+          "command",
+          "error",
+          "script"
+        ]
+      },
+      {
+        "allOf": [
+          "terminal"
+        ],
+        "anyOf": [
+          "error",
+          "command",
+          "windows"
+        ]
+      }
+    ]
+  }
 }

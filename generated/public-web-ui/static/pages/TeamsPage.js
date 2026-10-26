@@ -13,6 +13,7 @@
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { api } from '../api.js';
+import { renderAgentPet, renderAgentPetStack, rememberAgentPets } from '../components/agent-pets.js';
 import { escHtml, renderMd, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { applyToolActivityEvent } from '../tool-activity.js';
@@ -2535,18 +2536,10 @@ function normalizeTeamDesktopChatMessage(message) {
 function renderTeamWorkflowAvatar(agentId, label = '') {
   const cleanAgentId = String(agentId || '').trim();
   const isManager = !cleanAgentId || String(label || '').trim().toLowerCase() === 'manager';
-  const team = getTeamById(activeTeamId);
-  const memberIndex = cleanAgentId && team
-    ? (team.subagentIds || []).findIndex((id) => String(id) === cleanAgentId)
-    : -1;
-  const colors = ['#4c8dff', '#31b884', '#d6a64f', '#e05c5c', '#a78bfa', '#4c8dff'];
-  const emojis = ['🧠', '🤖', '👾', '🦾', '⚡', '🛸'];
-  const agent = cleanAgentId ? _findAgentInTeam(cleanAgentId) : null;
-  const paletteIndex = memberIndex >= 0 ? (memberIndex + 1) % colors.length : 0;
-  const emoji = isManager ? '🧠' : (agent?.emoji || emojis[paletteIndex]);
-  const color = isManager ? colors[0] : colors[paletteIndex];
-  return `<span class="team-workflow-avatar" style="display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;flex:0 0 20px;border:1px solid ${color};border-radius:7px;background:${color};font-size:12px;line-height:1">${escHtml(emoji)}</span>`;
+  return renderAgentPet(isManager ? 'manager' : cleanAgentId, { size: 20 });
 }
+
+
 
 function teamDesktopStreamMessage(stream, label, idPrefix) {
   const startedAt = Number(stream?.startedAt || Date.now()) || Date.now();
@@ -2765,68 +2758,14 @@ async function refreshTeams() {
 }
 
 // --- Canvas Rendering --------------------------------------------------------
-const HOUSE_PALETTES = [
-  { wall:'#6c8ebf', roof:'#3a5a8c', door:'#8b4513', window:'#fffbe6', smoke:'#b0b8d0' },
-  { wall:'#7cb87c', roof:'#3a6e3a', door:'#6b3a10', window:'#e6f7ff', smoke:'#b8d0b8' },
-  { wall:'#c48a4a', roof:'#7a4a10', door:'#3a3a8c', window:'#fff8e6', smoke:'#d0c0a0' },
-  { wall:'#b87ca8', roof:'#6a3a6a', door:'#3a7a3a', window:'#f0e6ff', smoke:'#c8b0c8' },
-  { wall:'#7ab8c8', roof:'#3a6a7a', door:'#7a4a10', window:'#e6fff8', smoke:'#b0c8d0' },
-  { wall:'#c87878', roof:'#7a3a3a', door:'#3a6a3a', window:'#fff0f0', smoke:'#d0b0b0' },
-];
-
+// Team tiles and the board header now render a lead pet plus a crew stack (agent-pets.js).
+// The old house sprite was removed. hashStr stays: other team code uses it.
 function hashStr(s) {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
   return Math.abs(h);
 }
 
-function drawHouseSVG(team, isActive, isHovered, scale=1) {
-  const h = hashStr(team.id);
-  const pal = HOUSE_PALETTES[h % HOUSE_PALETTES.length];
-  const roofStyle = h % 3; // 0=triangle, 1=flat, 2=pointy
-  const hasChimney = !!(h % 2);
-  const windowCount = 1 + (h % 2); // 1 or 2 windows
-  const doorOffset = h % 3 === 0 ? 'left' : h % 3 === 1 ? 'center' : 'right';
-  const glowColor = isActive ? 'rgba(76,141,255,0.5)' : isHovered ? 'rgba(49,184,132,0.5)' : 'none';
-  const W = 100, H = 110;
-  const wallY = roofStyle === 1 ? 45 : 40;
-  const wallH = H - wallY - 15;
-  const doorX = doorOffset === 'left' ? 12 : doorOffset === 'center' ? 38 : 62;
-  const roofPts = roofStyle === 2
-    ? `50,5 92,${wallY} 8,${wallY}`
-    : roofStyle === 0
-    ? `50,12 90,${wallY} 10,${wallY}`
-    : `8,${wallY-12} 92,${wallY-12} 92,${wallY} 8,${wallY}`;
-
-  const win1X = 16, win2X = 62;
-  const winY = wallY + 12;
-  const smokes = isActive ? `
-    <circle cx="${hasChimney?78:72}" cy="${wallY-10}" r="3" fill="${pal.smoke}" opacity="0.6">
-      <animate attributeName="cy" values="${wallY-10};${wallY-22};${wallY-10}" dur="1.8s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="0.6;0;0.6" dur="1.8s" repeatCount="indefinite"/>
-    </circle>` : '';
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="${W*scale}" height="${H*scale}" xmlns="http://www.w3.org/2000/svg" style="overflow:visible;filter:${glowColor !== 'none' ? `drop-shadow(0 0 10px ${glowColor})` : 'none'};transition:filter 0.2s">
-    <!-- Ground shadow -->
-    <ellipse cx="50" cy="${H-6}" rx="42" ry="5" fill="rgba(0,0,0,0.12)"/>
-    <!-- Roof -->
-    <polygon points="${roofPts}" fill="${pal.roof}"/>
-    ${hasChimney ? `<rect x="74" y="${wallY-20}" width="8" height="16" fill="${pal.roof}" rx="1"/>` : ''}
-    ${smokes}
-    <!-- Wall -->
-    <rect x="8" y="${wallY}" width="84" height="${wallH}" fill="${pal.wall}" rx="2"/>
-    <!-- Windows -->
-    <rect x="${win1X}" y="${winY}" width="14" height="13" fill="${pal.window}" rx="1" stroke="${pal.roof}" stroke-width="1.5"/>
-    ${windowCount === 2 ? `<rect x="${win2X}" y="${winY}" width="14" height="13" fill="${pal.window}" rx="1" stroke="${pal.roof}" stroke-width="1.5"/>` : ''}
-    <!-- Window cross -->
-    <line x1="${win1X+7}" y1="${winY}" x2="${win1X+7}" y2="${winY+13}" stroke="${pal.roof}" stroke-width="1"/>
-    <line x1="${win1X}" y1="${winY+6}" x2="${win1X+14}" y2="${winY+6}" stroke="${pal.roof}" stroke-width="1"/>
-    ${windowCount === 2 ? `<line x1="${win2X+7}" y1="${winY}" x2="${win2X+7}" y2="${winY+13}" stroke="${pal.roof}" stroke-width="1"/><line x1="${win2X}" y1="${winY+6}" x2="${win2X+14}" y2="${winY+6}" stroke="${pal.roof}" stroke-width="1"/>` : ''}
-    <!-- Door -->
-    <rect x="${doorX}" y="${wallY+wallH-24}" width="18" height="24" fill="${pal.door}" rx="2"/>
-    <circle cx="${doorX+14}" cy="${wallY+wallH-12}" r="2" fill="${pal.window}"/>
-  </svg>`;
-}
 
 function renderTeamsCanvas() {
   const canvas = document.getElementById('teams-canvas');
@@ -2838,7 +2777,7 @@ function renderTeamsCanvas() {
   if (teamsData.length === 0) {
     canvas.innerHTML = `
       <div style="text-align:center;color:var(--muted);padding:60px 20px">
-        <div style="font-size:48px;margin-bottom:16px">🏘️</div>
+        <div style="margin-bottom:16px;display:flex;justify-content:center">${renderAgentPet('team', { size: 48 })}</div>
         <div style="font-size:18px;font-weight:700;margin-bottom:8px">No teams yet</div>
         <div style="font-size:13px;margin-bottom:20px">Teams group your scheduled agents under a manager who reviews their performance and improves them automatically.</div>
         <button onclick="openCreateTeamModal()" style="background:var(--brand);color:#fff;border:none;border-radius:10px;padding:10px 24px;font-size:13px;font-weight:700;cursor:pointer">+ Create Team</button>
@@ -2858,11 +2797,12 @@ function renderTeamsCanvas() {
            onmouseleave="hideHousePopover()"
            style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px;border-radius:16px;transition:all 0.2s;position:relative;${isActive ? 'transform:scale(1.05)' : ''};${isPaused ? 'opacity:0.72' : ''}">
         <div class="house-svg" style="position:relative">
-          ${drawHouseSVG(team, isActive, false)}
+          ${renderAgentPet(team.subagentIds?.[0] || team.id, { size: 36 })}
           ${hasPending ? `<div style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#e05c5c;border:2px solid var(--bg)"></div>` : ''}
           ${isPaused ? `<div style="position:absolute;bottom:-4px;right:-6px;font-size:11px;background:#fff6e9;color:#7a5a00;border:1px solid #f2dfbd;border-radius:999px;padding:1px 5px;font-weight:700">⏸</div>` : ''}
         </div>
         <div style="font-size:11px;font-weight:800;color:var(--text);letter-spacing:-0.01em;max-width:110px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(team.name)}</div>
+        ${team.subagentIds?.length ? `<div style="display:flex;justify-content:center">${renderAgentPetStack(team.subagentIds, { size: 16, max: 5 })}</div>` : ''}
         <div style="font-size:10px;color:var(--muted);font-weight:600">${agentCount} agent${agentCount !== 1 ? 's' : ''}${isPaused ? ' · paused' : ''}</div>
       </div>`;
   }).join('');
@@ -2986,12 +2926,12 @@ function _buildHousePanel(team) {
   return `
     <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;flex-shrink:0">
       <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
-        ${drawHouseSVG(team, true, false, 0.85)}
+        ${renderAgentPet(team.subagentIds?.[0] || team.id, { size: 40 })}
         <div style="font-size:13px;font-weight:800;color:var(--text);text-align:center">${escHtml(team.name)}</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center">
           ${allAgents.map(a => `
             <div style="display:flex;align-items:center;gap:5px;background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:3px 10px 3px 4px">
-              <div style="width:22px;height:22px;border-radius:50%;background:${a.color};display:flex;align-items:center;justify-content:center;font-size:12px">${a.emoji}</div>
+              <div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center">${renderAgentPet(a.id === '__manager__' ? 'manager' : a.id, { size: 22 })}</div>
               <span title="${escHtml(a.label)}" style="font-size:11px;font-weight:700;color:var(--text);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.label)}</span>
             </div>`).join('')}
         </div>
@@ -3430,6 +3370,7 @@ async function loadTeamBoardData(teamId) {
     ]);
     if (agentsData?.agents) {
       window._allAgentsForTeam = agentsData.agents;
+      rememberAgentPets(agentsData.agents || []);
     }
     teamRuns = runsData.runs || [];
     teamSchedules = Array.isArray(schedulesData?.schedules) ? schedulesData.schedules : [];
@@ -4082,13 +4023,12 @@ function renderTeamContextTab(team) {
         const hasNotes = true; // will be shown in drawer
         const agentObj = window._allAgentsForTeam ? window._allAgentsForTeam.find(a => a.id === id) : null;
         const schedule = agentObj?.cronSchedule || '';
-        const agentEmoji = agentObj?.emoji || '🤖';
         const agentDisplayName = agentObj?.name || id;
         return `
         <div class="subagent-accordion-item" style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;overflow:hidden">
         <div style="display:flex;align-items:center;gap:0">
           <div onclick="toggleSubagentAccordion('${team.id}','${id}')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;user-select:none;flex:1;min-width:0">
-            <div style="width:28px;height:28px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;border:2px solid var(--bg)">${escHtml(agentEmoji)}</div>
+            <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0">${renderAgentPet(agentObj || id, { size: 28 })}</div>
               <div style="flex:1;min-width:0">
                   <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(agentDisplayName)}</div>
                   <div style="display:flex;gap:6px;margin-top:2px;align-items:center;flex-wrap:wrap">
@@ -6539,7 +6479,6 @@ if (typeof timeAgo === 'undefined') {
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.refreshTeams = refreshTeams;
 window.renderTeamsCanvas = renderTeamsCanvas;
-window.drawHouseSVG = drawHouseSVG;
 window.showHousePopover = showHousePopover;
 window.hideHousePopover = hideHousePopover;
 window.openTeamBoard = openTeamBoard;

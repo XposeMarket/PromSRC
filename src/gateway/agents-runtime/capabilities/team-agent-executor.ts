@@ -406,6 +406,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
                 description: updated.description,
                 model: updated.model || null,
                 reasoning_effort: updated.reasoning_effort || null,
+                pet: (updated as any).pet || null,
                 executionWorkspace: updated.executionWorkspace || null,
                 allowedWorkPaths: updated.allowedWorkPaths || [],
                 max_steps: updated.max_steps,

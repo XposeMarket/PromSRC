@@ -94,5 +94,26 @@
     "browser": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "review feedback"
+        ]
+      },
+      {
+        "allOf": [
+          "reviewer"
+        ],
+        "anyOf": [
+          "said",
+          "suggested",
+          "comments",
+          "pushback"
+        ]
+      }
+    ]
+  }
 }

@@ -23,6 +23,7 @@ import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../config/gateway-p
 import { getConfig } from '../config/config.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
+import { releaseHandoffListeners, canExitAfterFailedHandoff } from './runtime/gateway-handoff-safe-abort';
 import { prepareActiveRuntimesForGatewayShutdown, prepareInitiatingRuntimesForGatewayHandoff } from './runtime-recovery';
 import { recordActiveMainChatGoalsInterruptedForRestart, recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
@@ -529,6 +530,7 @@ interface ShutdownHooks {
   stopSchedulersForHandoff?: () => void | Promise<void>;
   /** Warm handoff: release the listeners without destroying active SSE responses. */
   closeListenersForHandoff?: () => Promise<void>;
+  hasListeningGateway?: () => boolean;
 }
 
 let _shutdownHooks: ShutdownHooks = {};
@@ -891,6 +893,14 @@ function spawnDetachedReplacementGateway(root: string, handoffHostPid: number | 
 }
 
 async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHandoffPlan): Promise<void> {
+  // Prove release before any checkpoint, persistence freeze or scheduler stop.
+  // Missing hooks must not silently launch a replacement against our own port.
+  try {
+    await releaseHandoffListeners(_shutdownHooks);
+  } catch (error: any) {
+    console.error('[lifecycle] Warm handoff safely aborted before launch:', error?.message || error);
+    return;
+  }
   _handoffDraining = true;
   const trigger = (
     restartCtx.devEditContinuation
@@ -956,10 +966,7 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   try { await _shutdownHooks.stopSchedulersForHandoff?.(); } catch (e: any) {
     console.warn('[lifecycle] Handoff scheduler stop error:', e.message);
   }
-  // 4. Release the port. Active SSE responses stay open on their sockets.
-  try { await _shutdownHooks.closeListenersForHandoff?.(); } catch (e: any) {
-    console.warn('[lifecycle] Handoff listener close error:', e.message);
-  }
+  // 4. Listener release was verified before any drain mutations.
 
   // 5. Start the replacement.
   const notice: GatewayHandoffLauncherNotice = {
@@ -989,7 +996,13 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   void runGatewayHandoffDrain(host, carriedRuntimeIds.length);
 }
 
-async function restartAfterFailedHandoff(): Promise<void> {
+async function restartAfterFailedHandoff(): Promise<boolean> {
+  const listening = _shutdownHooks.hasListeningGateway?.() ?? true;
+  const running = listLocalRunningRuntimes().length;
+  if (!canExitAfterFailedHandoff(listening, running)) {
+    console.error(`[lifecycle] Failed replacement: retaining predecessor (listening=${listening}, runtimes=${running}). No agents interrupted; handoff channel remains available.`);
+    return false;
+  }
   await completeGatewayHandoffHost([]);
   const restartContext = readRestartContext();
   if (restartContext?.handoff) {
@@ -1000,11 +1013,11 @@ async function restartAfterFailedHandoff(): Promise<void> {
     // Exit as a failed gateway child so the existing supervisor relaunches only
     // the gateway; code 42 would unnecessarily restart the entire desktop app.
     setTimeout(() => process.exit(1), 250);
-    return;
+    return true;
   }
   if (process.env.PROMETHEUS_ELECTRON_MANAGED === '1') {
     setTimeout(() => process.exit(42), 250);
-    return;
+    return true;
   }
   try {
     spawnDetachedReplacementGateway(getProjectRoot(), null);
@@ -1013,14 +1026,18 @@ async function restartAfterFailedHandoff(): Promise<void> {
     console.error(`[lifecycle] Could not restart after failed handoff: ${error?.message || error}`);
     setTimeout(() => process.exit(1), 250);
   }
+  return true;
 }
 
 async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise<boolean>; status(): { connected: boolean } }, carriedCount: number): Promise<void> {
   const maxMs = handoffMaxDrainMs();
   const connected = await host.waitForClient(90_000);
   if (!connected) {
-    console.error('[lifecycle] Replacement gateway did not connect; restarting the draining host through its launcher.');
-    await restartAfterFailedHandoff();
+    console.error('[lifecycle] Replacement gateway did not connect; checking safe recovery without interrupting carried work.');
+    if (!await restartAfterFailedHandoff()) {
+      const retry = setTimeout(() => void runGatewayHandoffDrain(host, carriedCount), 5_000);
+      retry.unref?.();
+    }
     return;
   }
   let lastLogAt = 0;
@@ -1039,8 +1056,11 @@ async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise
     },
   });
   if (drain.aborted) {
-    console.error('[lifecycle] Replacement stayed disconnected for 30s; restarting through the normal handoff fallback.');
-    await restartAfterFailedHandoff();
+    console.error('[lifecycle] Replacement stayed disconnected for 30s; checking safe recovery without interrupting carried work.');
+    if (!await restartAfterFailedHandoff()) {
+      const retry = setTimeout(() => void runGatewayHandoffDrain(host, carriedCount), 5_000);
+      retry.unref?.();
+    }
     return;
   }
   let interruptedIds: string[] = [];
@@ -1123,7 +1143,13 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
 
   const handoffPlan = planGatewayHandoff(restartCtx);
   if (handoffPlan.eligible) {
-    await beginGatewayHandoff(restartCtx, handoffPlan);
+    try {
+      await beginGatewayHandoff(restartCtx, handoffPlan);
+    } catch (error: any) {
+      // The watchdog caller historically exits on rejection. A partially
+      // prepared handoff is NOT permission to destroy the runtimes still here.
+      console.error('[lifecycle] Handoff preparation failed; predecessor retained:', error?.message || error);
+    }
     return;
   }
   console.log(`[lifecycle] Warm handoff not used (${handoffPlan.reason}); performing a full restart.`);

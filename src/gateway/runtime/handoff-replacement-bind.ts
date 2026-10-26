@@ -21,6 +21,8 @@ type BindRetryOptions = {
   maxDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** Fresh local health + handoff-manifest proof, never just EADDRINUSE or a PID. */
+  predecessorOwnsListener?: () => Promise<boolean>;
 };
 
 /** Retry only handoff replacement binds; ordinary gateway starts retain fail-fast behaviour. */
@@ -41,9 +43,15 @@ export async function listenWithHandoffRetry(
       return;
     } catch (error) {
       const bindError = error as NodeJS.ErrnoException;
-      if (bindError?.code !== 'EADDRINUSE' || now() >= deadline) throw error;
+      if (bindError?.code !== 'EADDRINUSE') throw error;
+      if (now() >= deadline) {
+        // Re-prove ownership on EVERY extension; vanished/foreign owners stop.
+        let stillDraining = false;
+        try { stillDraining = await options.predecessorOwnsListener?.() || false; } catch {}
+        if (!stillDraining) throw error;
+      }
       const remaining = deadline - now();
-      await sleep(Math.min(delay, remaining));
+      await sleep(remaining > 0 ? Math.min(delay, remaining) : delay);
       delay = Math.min(maxDelay, delay * 2);
     }
   }

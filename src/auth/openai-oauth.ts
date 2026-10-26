@@ -10,6 +10,7 @@
  */
 
 import fs from 'fs';
+import { OAuthCallbackLifecycle, oauthErrorResponse } from './oauth-callback-lifecycle';
 import { assertTokenRefreshAllowed } from '../gateway/runtime/preview-mode';
 import path from 'path';
 import http from 'http';
@@ -104,6 +105,7 @@ async function tryExchangeForApiKey(idToken: string): Promise<string | null> {
 // ─── Pending / active flow state ────────────────────────────────────────────────
 
 interface OAuthFlowState {
+  lifecycle?: OAuthCallbackLifecycle<OAuthFlowResult>;
   verifier: string;
   state: string;
   authUrl: string;
@@ -122,7 +124,7 @@ function setFlow(configDir: string, flow: OAuthFlowState) {
 function getFlow(configDir: string): OAuthFlowState | null {
   const f = activeFlows.get(path.resolve(configDir));
   if (!f) return null;
-  if (Date.now() - f.createdAt > FLOW_TTL_MS) { activeFlows.delete(path.resolve(configDir)); return null; }
+  if (Date.now() - f.createdAt > FLOW_TTL_MS) { f.lifecycle?.finish({ success: false, error: 'OAuth session expired.' }); activeFlows.delete(path.resolve(configDir)); return null; }
   return f;
 }
 function clearFlow(configDir: string) {
@@ -358,26 +360,28 @@ export async function startOAuthFlow(configDir: string, accountId?: string): Pro
 
   const authUrl = `${AUTH_URL}?${params.toString()}`;
   const account = String(accountId || '').trim() || undefined;
-  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now(), accountId: account });
+  const flow: OAuthFlowState = { verifier, state, authUrl, createdAt: Date.now(), accountId: account };
+  setFlow(configDir, flow);
 
   return new Promise((resolve) => {
+    const lifecycle = flow.lifecycle = new OAuthCallbackLifecycle<OAuthFlowResult>(
+      () => activeFlows.get(path.resolve(configDir)) === flow,
+      result => { clearFlow(configDir); resolve(result); },
+    );
     const server = http.createServer(async (req, res) => {
       if (!req.url?.startsWith(CALLBACK_PATH)) { res.writeHead(404); res.end(); return; }
 
       const url           = new URL(req.url, `http://${CALLBACK_HOST}:${CALLBACK_PORT}`);
       const code          = url.searchParams.get('code');
-      const returnedState = url.searchParams.get('state');
       const error         = url.searchParams.get('error');
 
       const fail = (msg: string) => {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<html><body><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
-        server.close(); clearFlow(configDir);
-        resolve({ success: false, error: msg });
+        oauthErrorResponse(res, msg);
+        lifecycle.finish({ success: false, error: msg });
       };
 
+      if (!lifecycle.accept(url, res, state)) return;
       if (error || !code) return fail(error || 'No code returned');
-      if (returnedState !== state) return fail('State mismatch — possible CSRF');
 
       try {
         const tokenRes = await fetch(TOKEN_URL, {
@@ -414,28 +418,27 @@ export async function startOAuthFlow(configDir: string, accountId?: string): Pro
           id_token:      idToken,
         };
 
+        lifecycle.assertActive();
         saveTokens(configDir, tokens, account);
-        clearFlow(configDir);
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>✅ Connected to Prometheus!</h2><p>You can close this window and return to the app.</p></body></html>');
-        server.close();
-        resolve({ success: true, account_id: accountId });
+        lifecycle.finish({ success: true, account_id: accountId });
       } catch (err: any) {
         fail(err.message);
       }
     });
 
+    lifecycle.attach(server);
     server.on('error', () => {
+      if (!lifecycle.isActive()) return;
+      lifecycle.closeListener();
       resolve({ success: false, needsManualPaste: true, authUrl });
     });
 
     server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
       openBrowser(authUrl);
-      setTimeout(() => {
-        server.close(); clearFlow(configDir);
-        resolve({ success: false, error: 'Timed out waiting for OAuth callback (5 min).' });
-      }, 5 * 60 * 1000);
+      lifecycle.arm({ success: false, error: 'Timed out waiting for OAuth callback (5 min).' });
     });
   });
 }
@@ -444,6 +447,7 @@ export async function startOAuthFlow(configDir: string, accountId?: string): Pro
 
 type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; account_id?: string };
 let _bgResult: BgOAuthResult = { done: false };
+let _bgFlow: OAuthFlowState | undefined;
 
 export function startOAuthFlowBackground(configDir: string, accountId?: string): { authUrl: string } | { error: string } {
   const existing = getFlow(configDir);
@@ -478,8 +482,14 @@ export function startOAuthFlowBackground(configDir: string, accountId?: string):
 
   const authUrl = `${AUTH_URL}?${params.toString()}`;
   const account = String(accountId || '').trim() || undefined;
-  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now(), accountId: account });
+  const flow: OAuthFlowState = { verifier, state, authUrl, createdAt: Date.now(), accountId: account };
+  setFlow(configDir, flow);
+  _bgFlow = flow;
   _bgResult = { done: false };
+  const lifecycle = flow.lifecycle = new OAuthCallbackLifecycle<OAuthFlowResult>(
+    () => activeFlows.get(path.resolve(configDir)) === flow,
+    result => { clearFlow(configDir); if (_bgFlow === flow) _bgResult = { done: true, ...result }; },
+  );
 
   // Start callback server in background — do NOT await
   const server = http.createServer(async (req, res) => {
@@ -487,18 +497,15 @@ export function startOAuthFlowBackground(configDir: string, accountId?: string):
 
     const url           = new URL(req.url, `http://${CALLBACK_HOST}:${CALLBACK_PORT}`);
     const code          = url.searchParams.get('code');
-    const returnedState = url.searchParams.get('state');
     const error         = url.searchParams.get('error');
 
     const fail = (msg: string) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<html><body><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
-      server.close(); clearFlow(configDir);
-      _bgResult = { done: true, success: false, error: msg };
+      oauthErrorResponse(res, msg);
+      lifecycle.finish({ success: false, error: msg });
     };
 
+    if (!lifecycle.accept(url, res, state)) return;
     if (error || !code) return fail(error || 'No code returned');
-    if (returnedState !== state) return fail('State mismatch — possible CSRF');
 
     try {
       const tokenRes = await fetch(TOKEN_URL, {
@@ -535,30 +542,24 @@ export function startOAuthFlowBackground(configDir: string, accountId?: string):
         id_token:      idToken,
       };
 
+      lifecycle.assertActive();
       saveTokens(configDir, tokens, account);
-      clearFlow(configDir);
 
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>✅ Connected to Prometheus!</h2><p>You can close this window and return to the app.</p></body></html>');
-      server.close();
-      _bgResult = { done: true, success: true, account_id: accountId };
+      lifecycle.finish({ success: true, account_id: accountId });
     } catch (err: any) {
       fail(err.message);
     }
   });
 
+  lifecycle.attach(server);
   server.on('error', (err: any) => {
-    clearFlow(configDir);
-    _bgResult = { done: true, success: false, error: `Callback server error: ${err.message}` };
+    lifecycle.finish({ success: false, error: `Callback server error: ${err.message}` });
   });
 
   server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
-    setTimeout(() => {
-      if (!(_bgResult as any).done) {
-        server.close(); clearFlow(configDir);
-        _bgResult = { done: true, success: false, error: 'Timed out waiting for OAuth callback (5 min).' };
-      }
-    }, 5 * 60 * 1000);
+    lifecycle.arm({ success: false, error: 'Timed out waiting for OAuth callback (5 min).' });
   });
 
   return { authUrl };
@@ -578,6 +579,7 @@ export async function exchangeManualCodeFromPending(
   const flow = getFlow(configDir);
   if (!flow) return { success: false, error: 'No active OAuth session — click Connect again.' };
 
+  let claimed = false;
   try {
     const url           = new URL(redirectedUrl);
     const code          = url.searchParams.get('code');
@@ -585,6 +587,8 @@ export async function exchangeManualCodeFromPending(
 
     if (!code) return { success: false, error: 'No code in URL.' };
     if (returnedState !== flow.state) return { success: false, error: 'State mismatch.' };
+    if (!flow.lifecycle?.claim()) return { success: false, error: 'OAuth callback already handled or expired.' };
+    claimed = true;
 
     const tokenRes = await fetch(TOKEN_URL, {
       method:  'POST',
@@ -620,10 +624,12 @@ export async function exchangeManualCodeFromPending(
       id_token:      idToken,
     };
 
+    flow.lifecycle.assertActive();
     saveTokens(configDir, tokens, flow.accountId || accountId);
-    clearFlow(configDir);
+    flow.lifecycle.finish({ success: true, account_id: oauthAccountId });
     return { success: true, account_id: oauthAccountId };
   } catch (err: any) {
+    if (claimed) flow.lifecycle?.finish({ success: false, error: err.message });
     return { success: false, error: err.message };
   }
 }

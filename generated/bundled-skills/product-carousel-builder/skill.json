@@ -60,5 +60,51 @@
       "type": "doc",
       "description": "Guardrail from the user's 2026-06-05 correction: research current best models first, then product-search exact candidates for broad/high-consideration shopping requests."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "buy"
+        ],
+        "anyOf": [
+          "best",
+          "under",
+          "recommend",
+          "options"
+        ]
+      },
+      {
+        "allOf": [
+          "products"
+        ],
+        "anyOf": [
+          "compare",
+          "recommend",
+          "show me"
+        ]
+      },
+      {
+        "allOf": [
+          "shopping"
+        ]
+      },
+      {
+        "allOf": [
+          "under"
+        ],
+        "anyOf": [
+          "best",
+          "recommend",
+          "cheapest"
+        ],
+        "noneOf": [
+          "stock",
+          "stocks",
+          "under the hood"
+        ]
+      }
+    ]
+  }
 }
