@@ -1,4 +1,5 @@
 import { markClientPerformance } from './performance.js';
+import { animatePanelWidth, getPanelMotionTarget, getPanelMotionTiming } from './features/shell/panel-motion.js';
 
 /**
  * app.js — F1 Scaffold
@@ -695,6 +696,7 @@ export function updateAppearanceBackgroundOpacity(value) {
 // ── Right panel (inline drawer) ───────────────────────────────
 const RIGHT_PANEL_W = 380;
 const SIDEBAR_DEFAULT_W = 280; // matches --sidebar-w
+const SIDEBAR_RAIL_W = 64; // matches the collapsed desktop rail (surfaces-polish.css)
 const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 400;
 const SIDEBAR_PAGES_COLLAPSED_KEY = 'sidebar_pages_collapsed';
@@ -710,6 +712,9 @@ function _resetSidebarWidth() {
 function _getRightPanelWidth() {
   const panel = document.getElementById('right-panel');
   if (!panel || !panel.classList.contains('open')) return 0;
+  // Mid-slide, layout follows the destination width, not the animating one.
+  const motionTarget = getPanelMotionTarget(panel);
+  if (motionTarget != null) return Math.round(motionTarget);
   return panel.offsetWidth || RIGHT_PANEL_W;
 }
 
@@ -747,16 +752,27 @@ function _syncPageViewPositions() {
   // Single source of truth: the rendered sidebar width. This follows the 64px rail
   // (automatic browser rail or collapsed state) and the dragged width, so pages never
   // keep a stale full-width offset after the rail appears or disappears.
-  const renderedSidebarW = Math.round(sidebar?.getBoundingClientRect().width || 0);
+  // While the sidebar slides, use its destination width: measuring here would read
+  // the start of the motion and leave page views with a stale offset.
+  const motionTargetW = getPanelMotionTarget(sidebar);
+  const renderedSidebarW = Math.round(motionTargetW ?? (sidebar?.getBoundingClientRect().width || 0));
   const left = `${renderedSidebarW > 0 ? renderedSidebarW : sidebarRight}px`;
   const rightW = _getRightPanelWidth() + _getSourcesMinimizedLayoutWidth();
   const right = rightW > 0 ? `${rightW}px` : '0';
+  // Page views glide with a sliding panel (same timing); otherwise they snap.
+  const motion = getPanelMotionTiming(sidebar) || getPanelMotionTiming(document.getElementById('right-panel'));
+  const transition = motion ? `left ${motion.duration}ms ${motion.ease}, right ${motion.duration}ms ${motion.ease}` : '';
   document.querySelectorAll('.page-view').forEach(el => {
-    el.style.setProperty('left', left, 'important');
-    el.style.setProperty('right', right, 'important');
+    if (el.style.transition !== transition) el.style.transition = transition;
+    if (el.style.left !== left) el.style.setProperty('left', left, 'important');
+    if (el.style.right !== right) el.style.setProperty('right', right, 'important');
   });
   const cv = document.getElementById('connector-view');
-  if (cv) { cv.style.left = left; cv.style.right = right; }
+  if (cv) {
+    if (cv.style.transition !== transition) cv.style.transition = transition;
+    if (cv.style.left !== left) cv.style.left = left;
+    if (cv.style.right !== right) cv.style.right = right;
+  }
   if (typeof window.syncCenterColumnVisibility === 'function') {
     window.syncCenterColumnVisibility();
   }
@@ -778,11 +794,7 @@ export function toggleRightPanel() {
     panel.style.removeProperty('max-width');
   } else if (isOpen && !wasOpen) {
     // Opening canvas: collapse sidebar AND reset its width
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar && !sidebar.classList.contains('collapsed')) {
-      _resetSidebarWidth();
-      toggleSidebar();
-    }
+    setSidebarCollapsed(true);
   }
 
   _syncPageViewPositions();
@@ -816,14 +828,47 @@ function updateSidebarToggleControls(collapsed) {
   syncSidebarEdgeReveal(false);
 }
 
+// A collapse keeps the expanded layout while the edge slides in and swaps to the
+// rail when the motion ends, so "collapsed" intent is the class OR a closing motion.
+function _isSidebarCollapsedIntent(sidebar) {
+  return sidebar.classList.contains('collapsed') || sidebar.classList.contains('pm-panel-motion--closing');
+}
+
+export function setSidebarCollapsed(nextCollapsed) {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const collapsed = Boolean(nextCollapsed);
+  if (_isSidebarCollapsedIntent(sidebar) === collapsed) return;
+  try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
+  updateSidebarToggleControls(collapsed);
+  animatePanelWidth(sidebar, {
+    apply: () => sidebar.classList.toggle('collapsed', collapsed),
+    revert: () => sidebar.classList.toggle('collapsed', !collapsed),
+    deferApply: collapsed,
+    content: () => sidebar.querySelectorAll(':scope > .sidebar-fixed, :scope > .sidebar-scroll, :scope > .sidebar-footer'),
+    // The session list fades out as the rail closes in. Expanding is a clip reveal of
+    // the frozen content: no fade, so the long list is not repainted per frame.
+    fade: collapsed ? () => sidebar.querySelectorAll(':scope > .sidebar-scroll') : null,
+    // Known destinations (the desktop rail, or the dragged/default width) skip a forced
+    // layout. Canvas mode resizes the sidebar through its own rules: measure there.
+    measureTo: () => {
+      if (document.querySelector('.right-panel.open.canvas-open')) return null;
+      return collapsed
+        ? SIDEBAR_RAIL_W
+        : (_sidebarDragW || Number.parseFloat(document.documentElement.style.getPropertyValue('--sidebar-w')) || SIDEBAR_DEFAULT_W);
+    },
+    onSettle: () => {
+      if (sidebar.classList.contains('collapsed')) _resetSidebarWidth();
+      _syncPageViewPositions();
+    },
+  });
+  _syncPageViewPositions();
+}
+
 export function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
-  const collapsed = sidebar.classList.toggle('collapsed');
-  if (collapsed) _resetSidebarWidth();
-  try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
-  updateSidebarToggleControls(collapsed);
-  _syncPageViewPositions();
+  setSidebarCollapsed(!_isSidebarCollapsedIntent(sidebar));
 }
 
 // Keeps the page navigation available without making it compete with a long
@@ -1256,6 +1301,7 @@ window.toggleMoreMenu = toggleMoreMenu;
 window.toggleMorePopover = toggleMorePopover;
 window.closeMorePopover = closeMorePopover;
 window.toggleSidebar = toggleSidebar;
+window.setSidebarCollapsed = setSidebarCollapsed;
 window.toggleSidebarPages = toggleSidebarPages;
 window.setSidebarPagesCollapsed = setSidebarPagesCollapsed;
 window.toggleRightPanel = toggleRightPanel;
