@@ -1,5 +1,5 @@
 import { markClientPerformance } from './performance.js';
-import { animatePanelWidth, getPanelMotionTarget, getPanelMotionTiming } from './features/shell/panel-motion.js';
+import { animatePanelWidth, finishPanelMotion, getPanelMotionTarget, getPanelMotionTiming } from './features/shell/panel-motion.js';
 
 /**
  * app.js — F1 Scaffold
@@ -980,8 +980,11 @@ function _initSidebarResize() {
   let startW = 0;
 
   handle.addEventListener('pointerdown', (e) => {
-    if (sidebar.classList.contains('collapsed')) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // The drag takes over sizing: land an in-flight slide first, or its animation
+    // (which outranks the inline width) snaps the panel back to a stale target.
+    finishPanelMotion(sidebar);
+    if (sidebar.classList.contains('collapsed')) return;
     e.preventDefault();
     startX = e.clientX;
     startW = sidebar.getBoundingClientRect().width || SIDEBAR_DEFAULT_W;

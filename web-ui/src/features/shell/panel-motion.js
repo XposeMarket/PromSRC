@@ -114,7 +114,17 @@ export function animatePanelWidth(el, {
   const canMeasure = Number.isFinite(known) || !deferApply || typeof revert === 'function';
   if (shouldReducePanelMotion(win) || typeof el.animate !== 'function' || !el.isConnected
     || !el.getClientRects().length || !canMeasure) {
-    apply();
+    // Instant must mean one frame. The stylesheet still has a width transition on the
+    // panel, so commit the state with it suppressed; otherwise the CSS slide runs
+    // anyway and onSettle (page-view offsets) measures the start width.
+    const prevInstantTransition = readInline(el, 'transition');
+    el.style.setProperty('transition', 'none', 'important');
+    try {
+      apply();
+    } finally {
+      flushStyle(el, win);
+      writeInline(el, 'transition', prevInstantTransition);
+    }
     settle();
     return { instant: true, from: null, to: null };
   }

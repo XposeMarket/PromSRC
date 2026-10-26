@@ -240,4 +240,28 @@ await test('fade(): opacity-only animations (in when opening, out when closing),
   assert.equal(node.style.writes.length, 0, 'fade never writes inline styles');
 });
 
+await test('instant paths (reduced motion, hidden tab, no WAAPI) commit with the CSS transition suppressed, then restore it', async () => {
+  for (const [label, envOpts, panelOpts] of [['reduced', { reduced: true }, {}], ['hidden', { hidden: true }, {}], ['no WAAPI', {}, { waapi: false }]]) {
+    const env = makeEnv(envOpts);
+    let flushes = 0;
+    const gcs = env.win.getComputedStyle;
+    env.win.getComputedStyle = (...a) => { flushes += 1; return gcs(...a); };
+    const el = makePanel(env, { open: true, openW: 280, closedW: 64, ...panelOpts });
+    el.style.setProperty('transition', 'opacity 1s');
+    let during = null;
+    let settled = null;
+    const r = animatePanelWidth(el, {
+      apply: () => { during = el.style.getPropertyValue('transition'); el.classList.remove('open'); },
+      onSettle: () => { settled = { transition: el.style.getPropertyValue('transition'), width: el.getBoundingClientRect().width, flushes }; },
+      win: env.win,
+    });
+    assert.equal(r.instant, true, label);
+    assert.equal(during, 'none', `${label}: panel width transition suppressed while the state commits`);
+    assert.ok(settled.flushes >= 1, `${label}: style flushed before the transition is restored`);
+    assert.equal(settled.transition, 'opacity 1s', `${label}: caller inline transition restored before onSettle`);
+    assert.equal(settled.width, 64, `${label}: onSettle (page-view sync) measures the final width, not the start`);
+    assert.equal(el.animations.length, 0, `${label}: no width animation`);
+  }
+});
+
 console.log(`\n${passed} passed`);
