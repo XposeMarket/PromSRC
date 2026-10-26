@@ -41,5 +41,15 @@
     }
   ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "gsap"
+        ]
+      }
+    ]
+  }
 }

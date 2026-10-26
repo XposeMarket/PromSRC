@@ -98,5 +98,30 @@
       "description": "Historical workflow recipe retained for reference."
     }
   ],
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "desktop"
+        ],
+        "anyOf": [
+          "app",
+          "click",
+          "window",
+          "automate",
+          "open"
+        ],
+        "noneOf": [
+          "chatgpt desktop"
+        ]
+      },
+      {
+        "allOf": [
+          "windows app"
+        ]
+      }
+    ]
+  }
 }

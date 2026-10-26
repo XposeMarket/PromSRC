@@ -54,5 +54,46 @@
     }
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "api key"
+        ],
+        "anyOf": [
+          "rotate",
+          "store",
+          "leaked",
+          "set",
+          "vault"
+        ]
+      },
+      {
+        "allOf": [
+          "token"
+        ],
+        "anyOf": [
+          "rotate",
+          "store",
+          "leaked",
+          "expired",
+          "vault"
+        ]
+      },
+      {
+        "allOf": [
+          "secret"
+        ],
+        "anyOf": [
+          "rotate",
+          "store",
+          "leaked",
+          "vault",
+          "env"
+        ]
+      }
+    ]
+  }
 }

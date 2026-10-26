@@ -88,5 +88,54 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "is there"
+        ],
+        "anyOf": [
+          "skill for",
+          "connector",
+          "plugin",
+          "mcp",
+          "tool category"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      },
+      {
+        "allOf": [
+          "do we have"
+        ],
+        "anyOf": [
+          "skill",
+          "connector",
+          "integration",
+          "plugin",
+          "mcp"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      },
+      {
+        "allOf": [
+          "existing capability"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      }
+    ]
+  }
 }

@@ -213,6 +213,7 @@ export function estimateModelUsageCost(input: {
   reasoningTokens?: unknown;
   cacheReadTokens?: unknown;
   cacheWriteTokens?: unknown;
+  cacheWrite1hTokens?: unknown;
 }): ModelUsageCostEstimate {
   const pricing = resolveModelPricing(input.provider, input.model);
   const inputTokens = normalizeTokenCount(input.inputTokens);
@@ -227,7 +228,10 @@ export function estimateModelUsageCost(input: {
   const outputCostMicros = roundMicros(outputTokens, pricing.outputMicrosPerToken);
   const reasoningCostMicros = roundMicros(reasoningTokens, pricing.reasoningMicrosPerToken);
   const cacheReadCostMicros = roundMicros(cacheReadTokens, pricing.cacheReadMicrosPerToken);
-  const cacheWriteCostMicros = roundMicros(cacheWriteTokens, pricing.cacheWriteMicrosPerToken);
+  const cacheWrite1hTokens = pricing.provider === 'anthropic'
+    ? Math.min(cacheWriteTokens, normalizeTokenCount(input.cacheWrite1hTokens)) : 0;
+  const cacheWriteCostMicros = roundMicros(cacheWriteTokens - cacheWrite1hTokens, pricing.cacheWriteMicrosPerToken)
+    + roundMicros(cacheWrite1hTokens, 2 * pricing.inputMicrosPerToken);
   const totalCostMicros = inputCostMicros
     + outputCostMicros
     + reasoningCostMicros

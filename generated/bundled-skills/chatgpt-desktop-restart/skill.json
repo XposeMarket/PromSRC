@@ -21,5 +21,21 @@
   "description": "Close, relaunch, refocus, and visually verify the ChatGPT desktop app on Windows when the user explicitly asks to restart or reopen it. Do not invoke for ordinary ChatGPT or coding requests.",
   "entrypoint": "SKILL.md",
   "triggers": [],
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "chatgpt"
+        ],
+        "anyOf": [
+          "restart",
+          "relaunch",
+          "reopen",
+          "frozen"
+        ]
+      }
+    ]
+  }
 }

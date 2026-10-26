@@ -33,5 +33,34 @@
     "workspaceRead": true,
     "workspaceWrite": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "artifact"
+        ],
+        "anyOf": [
+          "find",
+          "where",
+          "locate",
+          "index",
+          "retrieve"
+        ]
+      },
+      {
+        "allOf": [
+          "artifacts"
+        ],
+        "anyOf": [
+          "find",
+          "where",
+          "locate",
+          "index",
+          "retrieve"
+        ]
+      }
+    ]
+  }
 }

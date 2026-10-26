@@ -36,5 +36,26 @@
       "path": "scripts/verify-roundtrip.mjs",
       "type": "script"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pptx"
+        ]
+      },
+      {
+        "allOf": [
+          "powerpoint"
+        ],
+        "anyOf": [
+          "create",
+          "make",
+          "edit",
+          "file"
+        ]
+      }
+    ]
+  }
 }

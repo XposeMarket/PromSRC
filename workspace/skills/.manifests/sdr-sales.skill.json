@@ -31,5 +31,27 @@
   "lifecycle": "active",
   "name": "sdr-sales",
   "id": "sdr-sales",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "sdr"
+        ]
+      },
+      {
+        "allOf": [
+          "sales"
+        ],
+        "anyOf": [
+          "motion",
+          "cadence",
+          "prospecting process",
+          "qualification",
+          "icp"
+        ]
+      }
+    ]
+  }
 }

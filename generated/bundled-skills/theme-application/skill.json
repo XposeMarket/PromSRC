@@ -107,5 +107,22 @@
       "type": "reference",
       "description": "Ten original Prometheus themes with color roles and Office-safe and web font pairings"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "theme"
+        ],
+        "anyOf": [
+          "apply",
+          "consistent",
+          "preview",
+          "dark",
+          "color"
+        ]
+      }
+    ]
+  }
 }

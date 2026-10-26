@@ -2764,7 +2764,13 @@ void main() {
     const settings = context.__pmVoice.settings || {};
     const registry = context.__pmVoice.lastVoiceStatus?.registry || {};
     const providers = Array.isArray(registry.providers) ? registry.providers : [];
-    const selectedId = String(registry.defaults?.provider || settings.provider || settings.voiceMode || '').trim();
+    // The user's live pick (settings.provider) wins; server defaults are applied
+    // once on open by _applyMobileVoiceProviderDefaults. Preferring the default
+    // here snapped the picker back every time a different provider was chosen.
+    const pickedId = String(settings.provider || settings.voiceMode || '').trim();
+    const selectedId = providers.some((provider) => String(provider?.id || '') === pickedId)
+      ? pickedId
+      : String(registry.defaults?.provider || pickedId || '').trim();
     const selected = providers.find((provider) => String(provider?.id || '') === selectedId) || providers[0] || null;
     const providerId = String(selected?.id || selectedId).trim();
     const connected = selected?.connected === true;

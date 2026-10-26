@@ -25,5 +25,25 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "webhook"
+        ],
+        "anyOf": [
+          "trigger",
+          "endpoint",
+          "prometheus"
+        ]
+      },
+      {
+        "allOf": [
+          "trigger endpoint"
+        ]
+      }
+    ]
+  }
 }

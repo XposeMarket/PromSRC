@@ -46,5 +46,21 @@
       "type": "test",
       "description": "Routing tests"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "bookmarks"
+        ],
+        "anyOf": [
+          "skill",
+          "skills",
+          "workflows",
+          "distill"
+        ]
+      }
+    ]
+  }
 }

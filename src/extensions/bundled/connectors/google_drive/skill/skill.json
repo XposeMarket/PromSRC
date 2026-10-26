@@ -14,5 +14,36 @@
   ],
   "requiredTools": [
     "connector_google_drive"
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "drive"
+        ],
+        "anyOf": [
+          "google",
+          "my drive",
+          "shared drive",
+          "in drive"
+        ],
+        "noneOf": [
+          "test drive",
+          "usb drive",
+          "hard drive"
+        ]
+      },
+      {
+        "allOf": [
+          "google docs"
+        ],
+        "anyOf": [
+          "find",
+          "open",
+          "list"
+        ]
+      }
+    ]
+  }
 }

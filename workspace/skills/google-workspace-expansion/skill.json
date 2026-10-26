@@ -33,5 +33,22 @@
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "google"
+        ],
+        "anyOf": [
+          "calendar connector",
+          "docs connector",
+          "sheets connector",
+          "extend connector",
+          "workspace connector"
+        ]
+      }
+    ]
+  }
 }

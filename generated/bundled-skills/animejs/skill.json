@@ -43,5 +43,20 @@
     "blockedCapabilities": {},
     "lastVerified": "2026-07-12"
   },
-  "name": "animejs"
+  "name": "animejs",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "anime js"
+        ]
+      },
+      {
+        "allOf": [
+          "animejs"
+        ]
+      }
+    ]
+  }
 }

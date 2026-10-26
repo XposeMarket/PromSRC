@@ -1,5 +1,6 @@
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
+import { renderAgentPet } from '../components/agent-pets.js';
 import { orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
@@ -12345,59 +12346,12 @@ function _subagentColor(id) {
   return SUBAGENT_AGENT_COLORS[_subagentHash(id) % SUBAGENT_AGENT_COLORS.length];
 }
 
-function _drawAgentSVG(agentId, { isActive = false, scale = 1 } = {}) {
-  const color = _subagentColor(agentId);
-  const h = _subagentHash(agentId);
-  const eyeStyle = h % 3;
-  const antenna  = !!(h % 2);
-  const glow = isActive ? 'rgba(76,141,255,0.55)' : 'none';
-  const W = 80, H = 90;
-
-  const eyesHtml = eyeStyle === 1
-    ? `<rect x="20" y="34" width="12" height="10" rx="1" fill="#fff" opacity="0.9"/>
-       <rect x="48" y="34" width="12" height="10" rx="1" fill="#fff" opacity="0.9"/>
-       <rect x="23" y="37" width="6" height="4" rx="1" fill="${color}" opacity="0.8"/>
-       <rect x="51" y="37" width="6" height="4" rx="1" fill="${color}" opacity="0.8"/>`
-    : eyeStyle === 2
-    ? `<rect x="18" y="32" width="44" height="14" rx="4" fill="rgba(0,0,0,0.4)"/>
-       <rect x="22" y="35" width="14" height="8" rx="2" fill="#7df" opacity="0.85"/>
-       <rect x="44" y="35" width="14" height="8" rx="2" fill="#7df" opacity="0.85"/>`
-    : `<circle cx="28" cy="38" r="7" fill="#fff" opacity="0.9"/>
-       <circle cx="52" cy="38" r="7" fill="#fff" opacity="0.9"/>
-       <circle cx="28" cy="38" r="4" fill="${color}" opacity="0.8"/>
-       <circle cx="52" cy="38" r="4" fill="${color}" opacity="0.8"/>
-       <circle cx="29" cy="37" r="1.5" fill="#fff"/>
-       <circle cx="53" cy="37" r="1.5" fill="#fff"/>`;
-
-  const mouthY = 52;
-  const mouthHtml = h % 4 === 0
-    ? `<path d="M26 ${mouthY} Q40 ${mouthY+8} 54 ${mouthY}" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity="0.7"/>`
-    : h % 4 === 1
-    ? `<rect x="26" y="${mouthY}" width="28" height="5" rx="2" fill="rgba(0,0,0,0.3)"/>
-       <rect x="28" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="34" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="40" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>
-       <rect x="46" y="${mouthY+1}" width="4" height="3" rx="1" fill="#fff" opacity="0.6"/>`
-    : `<line x1="26" y1="${mouthY+2}" x2="54" y2="${mouthY+2}" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity="0.7"/>`;
-
-  return `<svg viewBox="0 0 ${W} ${H}" width="${W*scale}" height="${H*scale}" xmlns="http://www.w3.org/2000/svg" style="overflow:visible;filter:${glow !== 'none' ? `drop-shadow(0 0 9px ${glow})` : 'none'};transition:filter 0.2s">
-    <ellipse cx="40" cy="${H-4}" rx="28" ry="4" fill="rgba(0,0,0,0.12)"/>
-    <rect x="20" y="62" width="40" height="22" rx="6" fill="${color}" opacity="0.85"/>
-    <rect x="8"  y="64" width="10" height="16" rx="4" fill="${color}" opacity="0.7"/>
-    <rect x="62" y="64" width="10" height="16" rx="4" fill="${color}" opacity="0.7"/>
-    <rect x="24" y="80" width="11" height="8"  rx="3" fill="${color}" opacity="0.7"/>
-    <rect x="45" y="80" width="11" height="8"  rx="3" fill="${color}" opacity="0.7"/>
-    <rect x="14" y="20" width="52" height="42" rx="10" fill="${color}"/>
-    <rect x="16" y="22" width="48" height="38" rx="9"  fill="${color}" opacity="0.7"/>
-    ${eyesHtml}
-    ${mouthHtml}
-    <circle cx="40" cy="71" r="4"   fill="rgba(255,255,255,0.25)"/>
-    <circle cx="40" cy="71" r="2.5" fill="${isActive ? '#fff' : 'rgba(255,255,255,0.5)'}"/>
-    ${antenna ? `<line x1="40" y1="20" x2="40" y2="10" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-    <circle cx="40" cy="8" r="3.5" fill="${color}"/>
-    <circle cx="40" cy="8" r="2"   fill="#fff" opacity="0.8"/>` : ''}
-  </svg>`;
+// Kept as a thin wrapper so existing mobile callers need no edits. The robot SVG is gone;
+// every agent identity renders as a pixel pet from the shared module (agent-pets.js).
+function _drawAgentSVG(agentId, { scale = 1 } = {}) {
+  return renderAgentPet(agentId, { size: Math.round(80 * scale) });
 }
+
 
 function _pmApprovalCanSave(approval = {}) {
   return _pmIsCommandApproval(approval)

@@ -19,6 +19,7 @@ import {
 } from '../../skills-runtime/skill-curator';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import { rankSkillMatches } from '../../skills-runtime/skills-manager';
+import { validateSkillTriggerPolicy } from '../../skills-runtime/skill-package';
 import { submitSkillRoutingFeedback, getSkillRoutingEvidence, sha } from '../../learning/turn-recorder';
 import { resolveRoutingOriginal } from '../../skills-runtime/routing-original';
 
@@ -70,6 +71,16 @@ function parseOptionalObject(value: any): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Raw triggerPolicy authoring arg. Only undefined means "not supplied". null and
+// malformed strings are passed through so the validator rejects them (never a clear).
+function parseTriggerPolicyArg(value: any): unknown {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  return value;
 }
 
 export interface SkillMetadataAudit {
@@ -239,6 +250,22 @@ export function buildMetadataManifest(skill: any, args: any): Record<string, unk
     const after = deduped.map((t: string) => t.toLowerCase()).join('\n');
     if (deduped.length && before !== after) {
       manifest.triggers = deduped;
+      changed = true;
+    }
+  }
+  if (args.triggerPolicy !== undefined || args.trigger_policy !== undefined) {
+    // null is NOT a clear: it goes to the validator and is rejected (present-invalid).
+    const rawPolicy = args.triggerPolicy !== undefined ? args.triggerPolicy : args.trigger_policy;
+    let policyInput: unknown = rawPolicy;
+    if (typeof rawPolicy === 'string') {
+      try { policyInput = JSON.parse(rawPolicy); } catch { policyInput = rawPolicy; }
+    }
+    if (policyInput === undefined) {
+      // absent: no change
+    } else {
+      const policyValidation = validateSkillTriggerPolicy(policyInput);
+      if (policyValidation.errors.length) throw new Error(`Invalid triggerPolicy: ${policyValidation.errors.join(', ')}`);
+      manifest.triggerPolicy = policyInput;
       changed = true;
     }
   }
@@ -460,7 +487,7 @@ export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] 
   if (!q) {
     return skills.map((skill) => ({ skill, score: 0, confidence: 'strong', matchedTerms: [], matchedFields: [] }));
   }
-  return rankSkillMatches(skills, q, { limit: Math.max(1, skills.length) }).map((match) => ({
+  const ranked: RankedSkill[] = rankSkillMatches(skills, q, { discovery: true, limit: Math.max(1, skills.length) }).map((match) => ({
     skill: match.skill,
     score: match.score,
     confidence: match.confidence === 'low' ? 'weak' : 'strong',
@@ -472,6 +499,22 @@ export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] 
       ...(match.explicitMention ? ['explicit-name'] : []),
     ],
   }));
+  // Discovery-only exact fallback: a query that is exactly an available skill's
+  // id or name always returns that skill, even when the ranker's generic-short-name
+  // rules score a bare word like "figma" below threshold. Automatic routing is unchanged.
+  const needle = q.toLowerCase();
+  const seen = new Set(ranked.map((item) => String(item.skill?.id || '')));
+  const exact = skills.filter((skill) =>
+    !seen.has(String(skill?.id || ''))
+    && (String(skill?.id || '').toLowerCase() === needle || String(skill?.name || '').trim().toLowerCase() === needle)
+  ).map((skill) => ({
+    skill,
+    score: 100,
+    confidence: 'strong' as const,
+    matchedTerms: [],
+    matchedFields: ['explicit-name'],
+  }));
+  return [...exact, ...ranked];
 }
 
 export function formatCompactSkillList(skills: any[], args: any): string {
@@ -822,6 +865,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             requiredTools: splitCsv(args.requiredTools || args.required_tools),
             permissions: args.permissions && typeof args.permissions === 'object' ? args.permissions : undefined,
             implicitInvocation: args.implicitInvocation ?? args.implicit_invocation,
+            triggerPolicy: parseTriggerPolicyArg(args.triggerPolicy !== undefined ? args.triggerPolicy : args.trigger_policy),
             resources: Array.isArray(args.resources) ? args.resources : [],
             overwrite: args.overwrite === true,
           });
@@ -930,6 +974,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
             triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
             implicitInvocation: args.implicitInvocation ?? args.implicit_invocation,
+            triggerPolicy: parseTriggerPolicyArg(args.triggerPolicy !== undefined ? args.triggerPolicy : args.trigger_policy),
             instructions: scInstructions,
           });
           return {

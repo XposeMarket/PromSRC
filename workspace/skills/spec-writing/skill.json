@@ -87,5 +87,25 @@
     "browser": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "spec"
+        ],
+        "anyOf": [
+          "write",
+          "save",
+          "draft"
+        ],
+        "noneOf": [
+          "specs of",
+          "phone specs",
+          "laptop specs"
+        ]
+      }
+    ]
+  }
 }

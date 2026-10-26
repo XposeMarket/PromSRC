@@ -13,5 +13,39 @@
     "timer tool",
     "file watch",
     "task watch"
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "remind me"
+        ]
+      },
+      {
+        "allOf": [
+          "timer"
+        ],
+        "anyOf": [
+          "set",
+          "cancel",
+          "reschedule",
+          "minutes",
+          "hours"
+        ]
+      },
+      {
+        "allOf": [
+          "watch"
+        ],
+        "anyOf": [
+          "file",
+          "task",
+          "event queue",
+          "internal watch",
+          "job"
+        ]
+      }
+    ]
+  }
 }

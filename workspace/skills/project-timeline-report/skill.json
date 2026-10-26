@@ -92,5 +92,38 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "timeline"
+        ],
+        "anyOf": [
+          "project",
+          "history",
+          "what happened"
+        ]
+      },
+      {
+        "allOf": [
+          "history of"
+        ],
+        "anyOf": [
+          "project",
+          "this project"
+        ]
+      },
+      {
+        "allOf": [
+          "what happened"
+        ],
+        "anyOf": [
+          "this project",
+          "the project"
+        ]
+      }
+    ]
+  }
 }

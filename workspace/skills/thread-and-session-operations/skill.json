@@ -20,5 +20,29 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "session"
+        ],
+        "anyOf": [
+          "peer",
+          "supervised thread",
+          "other session"
+        ]
+      },
+      {
+        "allOf": [
+          "thread"
+        ],
+        "anyOf": [
+          "supervised",
+          "peer session"
+        ]
+      }
+    ]
+  }
 }

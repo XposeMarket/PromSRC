@@ -20,5 +20,21 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "composite"
+        ],
+        "anyOf": [
+          "tool",
+          "tools",
+          "create",
+          "save"
+        ]
+      }
+    ]
+  }
 }

@@ -28,5 +28,26 @@
   },
   "resources": [],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "prometheus"
+        ],
+        "anyOf": [
+          "repair yourself",
+          "self repair",
+          "fix yourself",
+          "your tools are broken"
+        ]
+      },
+      {
+        "allOf": [
+          "self repair"
+        ]
+      }
+    ]
+  }
 }

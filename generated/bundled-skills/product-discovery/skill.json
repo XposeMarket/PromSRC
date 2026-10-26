@@ -34,5 +34,26 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "feature idea"
+        ]
+      },
+      {
+        "allOf": [
+          "product"
+        ],
+        "anyOf": [
+          "opportunity",
+          "discovery",
+          "validate the idea",
+          "problem space"
+        ]
+      }
+    ]
+  }
 }

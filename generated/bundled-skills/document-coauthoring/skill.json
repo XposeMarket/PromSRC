@@ -28,5 +28,32 @@
     "workspaceWrite": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "document"
+        ],
+        "anyOf": [
+          "co author",
+          "coauthor",
+          "draft together",
+          "help me write",
+          "structure"
+        ]
+      },
+      {
+        "allOf": [
+          "whitepaper"
+        ]
+      },
+      {
+        "allOf": [
+          "proposal document"
+        ]
+      }
+    ]
+  }
 }

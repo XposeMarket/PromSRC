@@ -28,5 +28,25 @@
   ],
   "implicitInvocation": false,
   "lifecycle": "active",
-  "id": "three"
+  "id": "three",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "three js"
+        ],
+        "anyOf": [
+          "hyperframes",
+          "composition",
+          "video"
+        ],
+        "noneOf": [
+          "iphone",
+          "mobile",
+          "ios"
+        ]
+      }
+    ]
+  }
 }

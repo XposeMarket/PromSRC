@@ -97,5 +97,31 @@
     "browser": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pandas"
+        ]
+      },
+      {
+        "allOf": [
+          "jupyter"
+        ]
+      },
+      {
+        "allOf": [
+          "python"
+        ],
+        "anyOf": [
+          "analyze",
+          "analysis",
+          "dataframe",
+          "statistics"
+        ]
+      }
+    ]
+  }
 }

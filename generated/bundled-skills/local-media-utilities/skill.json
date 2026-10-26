@@ -35,5 +35,43 @@
     "workspaceWrite": true,
     "shell": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "convert"
+        ],
+        "anyOf": [
+          "mp4",
+          "mp3",
+          "wav",
+          "video file",
+          "audio file",
+          "gif"
+        ]
+      },
+      {
+        "allOf": [
+          "trim"
+        ],
+        "anyOf": [
+          "video",
+          "audio",
+          "clip"
+        ]
+      },
+      {
+        "allOf": [
+          "compress"
+        ],
+        "anyOf": [
+          "video",
+          "image",
+          "audio"
+        ]
+      }
+    ]
+  }
 }

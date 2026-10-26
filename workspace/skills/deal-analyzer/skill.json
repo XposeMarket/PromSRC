@@ -31,5 +31,27 @@
     }
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "deal"
+        ],
+        "anyOf": [
+          "analyze",
+          "terms",
+          "negotiate",
+          "leverage",
+          "evaluate"
+        ]
+      },
+      {
+        "allOf": [
+          "term sheet"
+        ]
+      }
+    ]
+  }
 }

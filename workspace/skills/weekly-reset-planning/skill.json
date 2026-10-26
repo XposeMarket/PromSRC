@@ -29,5 +29,25 @@
     "workspaceWrite": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "weekly"
+        ],
+        "anyOf": [
+          "review",
+          "reset",
+          "plan my week"
+        ]
+      },
+      {
+        "allOf": [
+          "plan my week"
+        ]
+      }
+    ]
+  }
 }

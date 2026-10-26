@@ -195,3 +195,7 @@ Always validate the URL format against the current router and gateway document s
 - Glass menu is invisible: inspect canvas readiness event and fallback contrast before deleting CSS or compositor initialization.
 - Appearance differs between desktop and phone: inspect theme-to-mobile token mapping and cache state before hardcoding colors.
 - Funnel URL fails from phone: first verify the Funnel is active on the expected public hostname/port; tailnet Serve is inaccessible from Raul's phone.
+
+### New-chat reasoning and first-output status
+The mobile saved model preference carries provider/model/speed/account, not the last chat's reasoning effort. A fresh draft shows `Default (<configured main_chat effort>)`; an explicit slider choice affects that draft/chat only. `Use default` resets the current selection. The draft-to-session step resolves the configured main-chat default before creating an explicit model route (omitting effort there would instead use a provider fallback).
+`mobile-ttft-state.js` owns a row-local custom element: after four seconds without public output it shows `Thinking · Ns`, or `Waiting for a model slot` only when a queue event was received. Its one-second clock updates only its text node, stops on public output/tool/terminal events, and disconnects on navigation/removal. Private reasoning deltas are not surfaced. No live deployment is implied by these source changes.

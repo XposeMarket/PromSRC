@@ -37,5 +37,25 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "account"
+        ],
+        "anyOf": [
+          "analyze",
+          "engagement",
+          "what posts",
+          "performance"
+        ],
+        "noneOf": [
+          "bank account",
+          "email account"
+        ]
+      }
+    ]
+  }
 }

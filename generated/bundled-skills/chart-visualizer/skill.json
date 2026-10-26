@@ -39,5 +39,54 @@
       "path": "references/config-examples.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "chart"
+        ],
+        "anyOf": [
+          "make",
+          "plot",
+          "create",
+          "draw",
+          "show",
+          "this data"
+        ],
+        "noneOf": [
+          "org chart",
+          "flowchart",
+          "seating chart"
+        ]
+      },
+      {
+        "allOf": [
+          "graph"
+        ],
+        "anyOf": [
+          "plot",
+          "make",
+          "show",
+          "this data"
+        ],
+        "noneOf": [
+          "knowledge graph",
+          "graph database"
+        ]
+      },
+      {
+        "allOf": [
+          "plot"
+        ],
+        "anyOf": [
+          "data",
+          "numbers",
+          "trend",
+          "values"
+        ]
+      }
+    ]
+  }
 }

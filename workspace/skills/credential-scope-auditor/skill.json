@@ -30,5 +30,39 @@
     "workspaceRead": true,
     "workspaceWrite": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "oauth"
+        ],
+        "anyOf": [
+          "scopes",
+          "scope",
+          "least privilege"
+        ]
+      },
+      {
+        "allOf": [
+          "credential"
+        ],
+        "anyOf": [
+          "audit",
+          "scope",
+          "scopes"
+        ]
+      },
+      {
+        "allOf": [
+          "connector"
+        ],
+        "anyOf": [
+          "scopes",
+          "permissions audit"
+        ]
+      }
+    ]
+  }
 }

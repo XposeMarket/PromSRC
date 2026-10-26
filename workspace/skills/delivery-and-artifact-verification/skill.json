@@ -20,5 +20,34 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "send"
+        ],
+        "anyOf": [
+          "the file",
+          "the report",
+          "screenshot",
+          "attachment"
+        ],
+        "noneOf": [
+          "email"
+        ]
+      },
+      {
+        "allOf": [
+          "deliver"
+        ],
+        "anyOf": [
+          "file",
+          "report",
+          "attachment"
+        ]
+      }
+    ]
+  }
 }

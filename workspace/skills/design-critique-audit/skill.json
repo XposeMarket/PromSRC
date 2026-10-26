@@ -106,5 +106,36 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "critique"
+        ],
+        "anyOf": [
+          "design",
+          "ui",
+          "site",
+          "page",
+          "interface"
+        ]
+      },
+      {
+        "allOf": [
+          "ui"
+        ],
+        "anyOf": [
+          "audit",
+          "review",
+          "feedback"
+        ],
+        "noneOf": [
+          "build",
+          "implement"
+        ]
+      }
+    ]
+  }
 }

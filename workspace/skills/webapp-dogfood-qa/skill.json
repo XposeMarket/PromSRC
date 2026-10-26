@@ -98,5 +98,26 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "dogfood"
+        ]
+      },
+      {
+        "allOf": [
+          "app"
+        ],
+        "anyOf": [
+          "qa",
+          "explore like a user",
+          "find bugs",
+          "exploratory"
+        ]
+      }
+    ]
+  }
 }

@@ -15,7 +15,7 @@ import { getAgentById, getConfig } from '../../config/config';
 import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
 import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, captureToolCategoryActivationState, getActivatedToolCategories, restoreToolCategoryActivationState, type ToolCategoryActivationSnapshot } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
 import { startupModelReady } from '../onboarding/startup-model-ready';
@@ -90,13 +90,13 @@ import {
   TOOL_TO_MEMORY_CATS,
   type SkillWindow,
 } from '../prompt-context';
-import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
+
 import { isBrainThoughtRunActive } from '../brain/brain-thought-runtime.js';
-import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
-import { verifyToolCategorySurface } from '../tool-category-provisioning';
-import { planMessageExtensionActivation } from '../../extensions/activation-planner.js';
+
+
+
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
-import { getWorkspaceToolMode } from '../../runtime/workspace-tool-mode';
+
 import type { TurnTimingRecorder } from './turn-timing';
 import {
   browserOpen,
@@ -738,79 +738,9 @@ export function buildTools(
     },
   );
 }
-
-// ─── Auto-detect and activate tool categories on first turn ───────────────────
-// Maps detected intent categories to tool categories and silently activates them.
-export interface AutoActivatedToolCategory {
-  category: string;
-  surfaceToolCountBefore: number;
-  surfaceToolCountAfter: number;
-  activationStateBefore: ToolCategoryActivationSnapshot;
-}
-
-export function autoActivateToolCategories(
-  sessionId: string,
-  message: string,
-  historyLength: number,
-  mark?: (label: string, fields?: Record<string, unknown>) => void,
-): AutoActivatedToolCategory[] {
-  // Run on every turn so late-intent shifts (e.g., greeting first, then browser task)
-  // still activate required tool categories in the same session.
-  void historyLength; // retained for call-site compatibility
-  const cats = detectToolCategories(message);
-  mark?.('pre_context.toolcats.detect_done', { detected: cats.size });
-  let connectedExtensionIds: Set<string> | undefined;
-  try {
-    connectedExtensionIds = new Set(
-      getMCPManager().getAllTools().map((tool: any) => String(tool?.serverId || '').trim()).filter(Boolean),
-    );
-  } catch {
-    connectedExtensionIds = undefined;
-  }
-  mark?.('pre_context.toolcats.mcp_tools_listed', { servers: connectedExtensionIds?.size ?? -1 });
-  const extensionPlan = planMessageExtensionActivation({ message, connectedExtensionIds });
-  mark?.('pre_context.toolcats.extension_plan_done', { categories: extensionPlan.categories.length });
-  for (const category of extensionPlan.categories) cats.add(category);
-  if (cats.has('external_apps') && !extensionPlan.categories.includes('external_apps')) {
-    const genericConnectorRequest = /\b(?:connected app|connected apps|connected account|connected service|external app|external apps|connector|plugin|connector_list|list connectors)\b/i.test(message);
-    if (!genericConnectorRequest || !extensionPlan.hasConnectedExtension || extensionPlan.blockedExtensionIds.length > 0) {
-      // A provider-specific mention must not fall through to another connected
-      // provider's tool surface, and a generic request cannot expose an empty
-      // or disconnected connector set.
-      cats.delete('external_apps');
-    }
-  }
-  const runtimeCategories = new Set<string>(getRuntimeToolCategoryIds());
-  const normalizedDetectedCategories = new Set<string>();
-  for (const detected of cats) {
-    normalizedDetectedCategories.add(normalizeManifestToolCategory(detected) || detected);
-  }
-  const provisionedCategories: AutoActivatedToolCategory[] = [];
-  for (const toolCategory of runtimeCategories) {
-    if (!normalizedDetectedCategories.has(toolCategory)) continue;
-    const activationStateBefore = captureToolCategoryActivationState(sessionId, toolCategory);
-    const surfaceToolCountBefore = buildTools(sessionId).length;
-    activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
-    const surface = buildTools(sessionId);
-    const verification = verifyToolCategorySurface(toolCategory, surface, {
-      unboundedTools: surface,
-      workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
-    });
-    if (!verification.ok) {
-      restoreToolCategoryActivationState(sessionId, activationStateBefore);
-      console.warn('[tool-category-provisioning] automatic activation failed:', verification);
-      continue;
-    }
-    provisionedCategories.push({
-      category: toolCategory,
-      surfaceToolCountBefore,
-      surfaceToolCountAfter: surface.length,
-      activationStateBefore,
-    });
-  }
-  mark?.('pre_context.toolcats.provision_done', { provisioned: provisionedCategories.length });
-  return provisionedCategories;
-}
+// Automatic keyword routing is hint-only; explicit category requests retain
+// their existing scoped activation/expiry and provisioning verification.
+export { autoActivateToolCategories, type AutoActivatedToolCategory } from '../tool-category-auto-activation';
 
 
 // ─── Tool Execution ────────────────────────────────────────────────────────────

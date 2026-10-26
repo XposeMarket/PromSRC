@@ -55,5 +55,21 @@
       "type": "template",
       "description": "Goal normalization"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "goal"
+        ],
+        "anyOf": [
+          "lanes",
+          "orchestrate",
+          "supervise",
+          "parallel"
+        ]
+      }
+    ]
+  }
 }

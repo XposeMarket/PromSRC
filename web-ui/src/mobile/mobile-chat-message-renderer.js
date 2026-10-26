@@ -1,3 +1,4 @@
+import { pendingStatusMarkup } from './mobile-ttft-state.js';
 import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
 
 /**
@@ -137,6 +138,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // from cache after the transport has already finished.
       inner += `<div class="pm-trace-drawer" data-trace-completed="1"${renderCompletedTraceNow ? '' : ' data-pm-trace-lazy="1"'}>${completedTraceHtml}</div>`;
     } else if (messageIsLive && !answerStarted && !hasPendingImageGeneration) {
+      inner += pendingStatusMarkup(m);
       inner += `<div class="pm-thinking-dots"><span></span><span></span><span></span>${window.PROM_THEME_ENGINE?.loadingWordHtml(String(m?.id || m?.timestamp || ''), 'prom-loading-word', 'em') || ''}</div>`;
     }
     if (hasPendingImageGeneration) {

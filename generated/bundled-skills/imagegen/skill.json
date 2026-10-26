@@ -53,5 +53,45 @@
       "path": "references/provider-recovery.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "image"
+        ],
+        "anyOf": [
+          "generate",
+          "create",
+          "make",
+          "edit this"
+        ],
+        "noneOf": [
+          "what is in",
+          "describe"
+        ]
+      },
+      {
+        "allOf": [
+          "picture"
+        ],
+        "anyOf": [
+          "generate",
+          "make",
+          "draw"
+        ]
+      },
+      {
+        "allOf": [
+          "illustration"
+        ],
+        "anyOf": [
+          "generate",
+          "make",
+          "create"
+        ]
+      }
+    ]
+  }
 }

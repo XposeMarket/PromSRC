@@ -1,0 +1,64 @@
+/* Agent pixel pets: shared by desktop (index.html) and mobile (mobile.html). */
+.agent-pet {
+  display: inline-grid;
+  place-items: center;
+  width: var(--agent-pet-size, 24px);
+  height: var(--agent-pet-size, 24px);
+  flex: 0 0 var(--agent-pet-size, 24px);
+  position: relative;
+  line-height: 0;
+  vertical-align: middle;
+}
+.agent-pet svg { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+
+.agent-pet--working svg { animation: agent-pet-hop 0.7s steps(2, end) infinite; }
+.agent-pet--done svg { animation: agent-pet-hop 0.5s steps(2, end) 2; }
+.agent-pet--failed svg { filter: grayscale(0.85); opacity: 0.7; }
+.agent-pet--paused svg { opacity: 0.45; }
+.agent-pet--working::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: max(4px, calc(var(--agent-pet-size, 24px) * 0.22));
+  height: max(4px, calc(var(--agent-pet-size, 24px) * 0.22));
+  border-radius: 50%;
+  background: var(--prom-accent, #4c8dff);
+  box-shadow: 0 0 0 1.5px var(--prom-bg, #fff);
+}
+
+@keyframes agent-pet-hop {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-8%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-pet svg { animation: none !important; }
+}
+
+.agent-pet-stack { display: inline-flex; align-items: center; }
+.agent-pet-stack > .agent-pet { margin-left: calc(var(--agent-pet-size, 16px) * -0.25); }
+.agent-pet-stack > .agent-pet:first-child { margin-left: 0; }
+.agent-pet-stack-more { margin-left: 6px; font-size: 11px; color: var(--prom-muted, #8a8f9c); }
+
+.agent-pet-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+}
+.agent-pet-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--prom-muted, #8a8f9c);
+  font: 11px system-ui, sans-serif;
+  cursor: pointer;
+}
+.agent-pet-choice:hover { background: var(--prom-surface-secondary, rgba(127, 127, 127, 0.1)); }
+.agent-pet-choice.is-selected { border-color: var(--prom-accent, #4c8dff); color: var(--prom-text, inherit); }
+.agent-pet-choice:focus-visible { outline: 2px solid var(--prom-accent, #4c8dff); outline-offset: 2px; }

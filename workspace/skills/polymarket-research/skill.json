@@ -55,5 +55,15 @@
       "description": "Bundled Python CLI helper for read-only Polymarket searches, market details, books, histories, and trades."
     }
   ],
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "polymarket"
+        ]
+      }
+    ]
+  }
 }

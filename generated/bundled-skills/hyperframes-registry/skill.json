@@ -35,5 +35,21 @@
   },
   "resources": [],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "install block",
+          "install component",
+          "registry",
+          "wire"
+        ]
+      }
+    ]
+  }
 }

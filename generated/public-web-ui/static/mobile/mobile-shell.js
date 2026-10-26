@@ -3238,27 +3238,74 @@ function _escHandler(e) {
   if (e.key === 'Escape') closeDrawer();
 }
 
+// The drawer slide is a compositor transform. Main-thread work started during it
+// (list rebuilds, refresh renders) is what makes it stutter on phones, so open and
+// close defer that work until the slide has finished.
+let _drawerOpenWorkTimers = [];
+let _drawerCloseResetTimer = null;
+
+function _drawerSlideMs() {
+  try {
+    const raw = getComputedStyle(document.body).getPropertyValue('--pm-motion-layout-duration').trim();
+    const value = Number.parseFloat(raw);
+    if (!Number.isFinite(value)) return 300;
+    const ms = /ms$/.test(raw) ? value : /s$/.test(raw) ? value * 1000 : value;
+    return Math.max(0, Math.min(800, ms));
+  } catch {
+    return 300;
+  }
+}
+
+function _isDrawerOpen() {
+  return document.body.classList.contains('pm-mobile-drawer-open');
+}
+
 export function openDrawer() {
   if (!_drawerEl || !_scrimEl) return;
+  if (_drawerCloseResetTimer) {
+    // Reopened before the previous close finished: apply its pending reset now.
+    clearTimeout(_drawerCloseResetTimer);
+    _drawerCloseResetTimer = null;
+    _resetDrawerSearch();
+  }
   document.body.classList.add('pm-mobile-drawer-open');
   _drawerEl.classList.add('open');
   _scrimEl.classList.add('open');
   _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
-    _renderDrawerSessions(_drawerCallbacks).catch(() => {});
-    // Always reconcile against the gateway when the drawer opens. A recovered
-    // run may have changed state while the mobile client was disconnected.
-    setTimeout(() => refreshMobileDrawerSessions({ force: true }).catch(() => {}), 180);
+    _drawerOpenWorkTimers.forEach(clearTimeout);
+    const settleMs = _drawerSlideMs() + 40;
+    // The previously rendered list stays visible while the drawer slides in.
+    _drawerOpenWorkTimers = [
+      setTimeout(() => {
+        if (_isDrawerOpen() && _drawerCallbacks) _renderDrawerSessions(_drawerCallbacks).catch(() => {});
+      }, settleMs),
+      // Always reconcile against the gateway when the drawer opens. A recovered
+      // run may have changed state while the mobile client was disconnected.
+      setTimeout(() => {
+        if (_isDrawerOpen()) refreshMobileDrawerSessions({ force: true }).catch(() => {});
+      }, settleMs + 180),
+    ];
   }
 }
 
 export function closeDrawer() {
-  _resetDrawerSearch();
-  if (!_drawerEl || !_scrimEl) return;
+  _drawerOpenWorkTimers.forEach(clearTimeout);
+  _drawerOpenWorkTimers = [];
+  if (!_drawerEl || !_scrimEl) {
+    _resetDrawerSearch();
+    return;
+  }
   document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');
   _scrimEl.classList.remove('open');
   _stopDrawerGatewayHeartbeat();
+  // Clearing search re-renders the list; run it once the drawer is off screen.
+  clearTimeout(_drawerCloseResetTimer);
+  _drawerCloseResetTimer = setTimeout(() => {
+    _drawerCloseResetTimer = null;
+    if (!_isDrawerOpen()) _resetDrawerSearch();
+  }, _drawerSlideMs() + 40);
   setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
 }
 

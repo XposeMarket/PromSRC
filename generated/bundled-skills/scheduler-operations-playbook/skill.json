@@ -105,5 +105,43 @@
       "type": "doc",
       "description": "Add workflow recipe to scheduler-operations-playbook"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "schedule"
+        ],
+        "anyOf": [
+          "job",
+          "automation",
+          "every day",
+          "every week",
+          "recurring",
+          "cron"
+        ]
+      },
+      {
+        "allOf": [
+          "scheduled"
+        ],
+        "anyOf": [
+          "job",
+          "task",
+          "automation"
+        ]
+      },
+      {
+        "allOf": [
+          "recurring"
+        ],
+        "anyOf": [
+          "job",
+          "task",
+          "automation"
+        ]
+      }
+    ]
+  }
 }

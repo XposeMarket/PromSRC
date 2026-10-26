@@ -40,5 +40,24 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "website"
+        ],
+        "anyOf": [
+          "audit",
+          "seo",
+          "conversion",
+          "analyze"
+        ],
+        "noneOf": [
+          "redesign"
+        ]
+      }
+    ]
+  }
 }

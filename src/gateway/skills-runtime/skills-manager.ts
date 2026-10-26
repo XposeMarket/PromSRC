@@ -27,6 +27,9 @@ import {
   validateSkillTriggers,
   evaluateSkillPromptSignals,
   validateSkillPromptSignals,
+  validateSkillTriggerPolicy,
+  evaluateSkillTriggerPolicy,
+  type SkillTriggerPolicyValidation,
   MAX_SKILL_TRIGGERS,
   type LoadedSkillPackage,
   type SkillPromptSignals,
@@ -65,6 +68,7 @@ export interface Skill {
   kind: 'simple' | 'bundle';
   triggers: string[];
   promptSignals?: SkillPromptSignals;
+  triggerPolicy?: SkillTriggerPolicyValidation;
   categories: string[];
   requiredTools: string[];
   requires?: SkillRequires;
@@ -513,7 +517,7 @@ function triggerRouteScore(trigger: string, rawText: string, queryWords: Set<str
 export function rankSkillMatches(
   skills: Skill[],
   messageText: string,
-  options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; limit?: number },
+  options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; discovery?: boolean; limit?: number },
 ): SkillRouteMatch[] {
   const text = capSkillRoutingText(String(messageText || '').trim());
   if (!text) return [];
@@ -527,6 +531,9 @@ export function rankSkillMatches(
 
   for (const skill of skills) {
     if (skill.lifecycle === 'deprecated' || skill.lifecycle === 'archived') continue;
+    // Strict v2 policy is a Boolean pre-rank admission gate for automatic routing.
+    // Discovery (skill_list) stays broad; name/slug mentions and legacy triggers cannot bypass it.
+    if (!options?.discovery && skill.triggerPolicy?.present && !evaluateSkillTriggerPolicy(skill.triggerPolicy, text).admitted) continue;
     if (!options?.includeUnavailable && (skill.executionEnabled === false || skill.eligibility?.status !== 'ready')) continue;
     if (skill.status === 'blocked' || skill.health.state === 'blocked' || ['blocked', 'quarantined', 'unsupported'].includes(skill.eligibility.status)) continue;
     const explicitMentionScore = explicitSkillMentionScore(skill, text);
@@ -535,7 +542,13 @@ export function rankSkillMatches(
     const promptSignalRouteScore = promptSignalMatch.matched
       ? 155 + Math.min(35, promptSignalMatch.score * 3)
       : 0;
+    // v2 policy (when present) is the sole admission contract: v1 exclusion and
+    // minScore guards never apply to it. Admitted v2 contributes positive evidence.
+    const v2Match = skill.triggerPolicy?.present ? evaluateSkillTriggerPolicy(skill.triggerPolicy, text) : null;
+    const v2Present = !!v2Match;
+    const v2Admitted = !!v2Match?.admitted;
     const promptSignalEvidence = [
+      ...(v2Admitted ? [`triggerPolicy: rule ${(v2Match?.matchedRuleIndex ?? 0) + 1}`] : []),
       ...promptSignalMatch.matchedPhrases.map((phrase) => `phrase: ${phrase}`),
       ...promptSignalMatch.matchedAllOf.map((group) => `allOf: ${group.join(' + ')}`),
       ...promptSignalMatch.matchedAnyOf.map((term) => `anyOf: ${term}`),
@@ -549,9 +562,9 @@ export function rankSkillMatches(
     // A structured policy is authoritative against weak metadata/content
     // overlap, but an exact legacy trigger remains a valid explicit routing
     // contract for skills that have not migrated every phrase to promptSignals.
-    if (promptSignalMatch.configured && promptSignalMatch.excluded && !explicitMention) continue;
-    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
-    const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched;
+    if (!v2Present && promptSignalMatch.configured && promptSignalMatch.excluded && !explicitMention) continue;
+    if (!v2Present && promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
+    const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched || v2Admitted;
 
     const derived = getSkillRankDerived(skill);
     const skillDomains = derived.skillDomains;
@@ -562,6 +575,7 @@ export function rankSkillMatches(
     );
 
     let score = explicitMention ? explicitMentionScore : Math.max(bestTriggerScore, promptSignalRouteScore);
+    if (v2Admitted) score = Math.max(score, 155);
     // An exact user phrase is a stronger routing contract than a broad
     // coordinator's weak anyOf/allOf match (for example, "check process
     // status" should select the shell playbook over generic investigation).
@@ -970,6 +984,12 @@ export class SkillsManager {
       promptPath: skill.promptPath,
       triggers: skill.triggers,
       promptSignals: skill.promptSignals,
+      // Raw API representation: the authored policy value (roundtrips), never the
+      // internal validation wrapper. Errors are reported separately.
+      triggerPolicy: Object.prototype.hasOwnProperty.call(skill.manifest || {}, 'triggerPolicy')
+        ? (skill.manifest as unknown as Record<string, unknown>).triggerPolicy
+        : undefined,
+      triggerPolicyErrors: skill.triggerPolicy?.errors || [],
       categories: skill.categories,
       requiredTools: skill.requiredTools,
       requires: skill.requires,
@@ -995,6 +1015,11 @@ export class SkillsManager {
     const skillId = sanitizeSkillId(String(manifest?.id || existing?.id || id));
     const rootDir = existing?.rootDir || path.join(this.skillsDir, skillId);
     if (!fs.existsSync(rootDir)) throw new Error(`Skill "${id}" not found`);
+    // Validate authoring triggerPolicy BEFORE any filesystem write (snapshot included).
+    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggerPolicy') && manifest.triggerPolicy !== undefined) {
+      const earlyPolicy = validateSkillTriggerPolicy(manifest.triggerPolicy);
+      if (earlyPolicy.errors.length) throw new Error(`Invalid skill triggerPolicy: ${earlyPolicy.errors.join(', ')}`);
+    }
     const beforeHash = hashSkillDirectory(rootDir);
     const snapshotDir = this.snapshotSkill(existing || null, rootDir, 'manifest-overlay');
     const overlayPath = getSkillOverlayPath(rootDir, skillId);
@@ -1012,6 +1037,12 @@ export class SkillsManager {
         && (manifest.metadata as Record<string, unknown>).prompt_signals !== undefined)
     ));
     let nextTriggers = existing?.triggers || [];
+    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggerPolicy') && manifest.triggerPolicy !== undefined) {
+      const policyValidation = validateSkillTriggerPolicy(manifest.triggerPolicy);
+      if (policyValidation.errors.length) {
+        throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
+      }
+    }
     let nextPromptSignals = existing?.promptSignals;
     if (hasTriggerField) {
       const validation = validateSkillTriggers(manifest.triggers);
@@ -1137,6 +1168,7 @@ export class SkillsManager {
     categories?: string[];
     requiredTools?: string[];
     implicitInvocation?: boolean;
+    triggerPolicy?: unknown;
     instructions: string;
   }): Skill {
     const id = sanitizeSkillId(data.id);
@@ -1145,6 +1177,8 @@ export class SkillsManager {
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
     const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
     if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    const policyValidation = validateSkillTriggerPolicy(data.triggerPolicy);
+    if (policyValidation.errors.length) throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
     // createSkill previously hardcoded these to [], so a caller that supplied
     // categories/requiredTools lost them with no error. Normalize and persist.
     const createCategories = normalizeSkillStringList(data.categories);
@@ -1212,6 +1246,7 @@ export class SkillsManager {
     if (typeof data.implicitInvocation === 'boolean') {
       manifest.implicitInvocation = data.implicitInvocation;
     }
+    if (policyValidation.present) manifest.triggerPolicy = data.triggerPolicy;
     // createSkill() has no permission input. Do not broaden the old contract
     // by claiming workspace-write access for a newly created skill.
     assertSkillScanAllowed(scanSkillText(JSON.stringify(manifest, null, 2), 'skill.json'), `Skill "${id}"`);
@@ -1258,6 +1293,7 @@ export class SkillsManager {
     triggerNegativePrompts?: string[];
     resources?: Array<{ path: string; content: string; type?: string; description?: string }>;
     overwrite?: boolean;
+    triggerPolicy?: unknown;
   }): Skill {
     const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
@@ -1265,6 +1301,8 @@ export class SkillsManager {
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
     const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
     if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    const policyValidation = validateSkillTriggerPolicy(data.triggerPolicy);
+    if (policyValidation.errors.length) throw new Error(`Invalid skill triggerPolicy: ${policyValidation.errors.join(', ')}`);
     if (triggerValidation.triggers.length || promptSignalValidation.signals) {
       const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
       const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
@@ -1316,6 +1354,7 @@ export class SkillsManager {
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
       promptSignals: promptSignalValidation.signals,
+      ...(policyValidation.present ? { triggerPolicy: data.triggerPolicy } : {}),
       categories: data.categories || [],
       requiredTools: data.requiredTools || [],
       requires: data.requires,
@@ -1415,6 +1454,10 @@ export class SkillsManager {
   async exportBundle(id: string, outputPath?: string): Promise<{ path: string; bytes: number }> {
     const skill = this.get(id);
     if (!skill) throw new Error(`Skill "${id}" not found`);
+    // Never export a bundle whose triggerPolicy is present-but-invalid (fail-closed).
+    if (skill.triggerPolicy?.errors?.length) {
+      throw new Error(`Skill "${id}" has invalid triggerPolicy: ${skill.triggerPolicy.errors.join(', ')}`);
+    }
     const JSZip = require('jszip');
     const zip = new JSZip();
     const root = path.resolve(skill.rootDir);
@@ -1511,6 +1554,13 @@ export class SkillsManager {
       if (!roots.length) throw new Error('No skill.json or SKILL.md found in bundle source');
       if (options?.id && roots.length !== 1) throw new Error('id override can only be used when importing a single skill bundle');
 
+      // Pre-pass: reject any invalid triggerPolicy across ALL roots before the first write.
+      for (const root of roots) {
+        const prePkg = loadSkillPackage(root, options?.id || path.basename(root));
+        if (prePkg?.triggerPolicy?.errors?.length) {
+          throw new Error(`Invalid skill bundle "${prePkg.id}" triggerPolicy: ${prePkg.triggerPolicy.errors.join(', ')}`);
+        }
+      }
       const installed: Skill[] = [];
       for (const root of roots) {
         const pkg = loadSkillPackage(root, options?.id || path.basename(root));

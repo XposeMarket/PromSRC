@@ -34,5 +34,31 @@
       "type": "doc",
       "description": "Add workflow recipe to ghostwriter"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "in my voice"
+        ]
+      },
+      {
+        "allOf": [
+          "ghostwrite"
+        ]
+      },
+      {
+        "allOf": [
+          "voice"
+        ],
+        "anyOf": [
+          "brand voice",
+          "sound like me",
+          "in his voice",
+          "in her voice"
+        ]
+      }
+    ]
+  }
 }

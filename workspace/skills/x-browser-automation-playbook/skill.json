@@ -4,7 +4,13 @@
   "name": "x-browser-automation-playbook",
   "description": "Operate X/Twitter interactively in an authenticated browser session: search, navigate, post, reply, like, inspect bookmarks, and recover from X-specific UI state. Use only when the user requests live X interaction; use x-post-fetch-and-media for reading a known post and general browser automation for non-X sites.",
   "visibility": "public",
-  "publicExcludeResources": ["examples/daily-x-signal-radar-readonly-collector.md","examples/on-demand-x-vibe-check.md","references/examples/grok-via-x-oauth-release-thread.md","references/examples/live-x-navigation-and-composite-maintenance.md","references/scheduled-x-jobs-and-composer.md"],
+  "publicExcludeResources": [
+    "examples/daily-x-signal-radar-readonly-collector.md",
+    "examples/on-demand-x-vibe-check.md",
+    "references/examples/grok-via-x-oauth-release-thread.md",
+    "references/examples/live-x-navigation-and-composite-maintenance.md",
+    "references/scheduled-x-jobs-and-composer.md"
+  ],
   "version": "2.6.0",
   "entrypoint": "SKILL.md",
   "triggers": [
@@ -109,5 +115,44 @@
       "path": "references/workflows/x-bookmarks-corpus-audit.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "x"
+        ],
+        "anyOf": [
+          "post this",
+          "reply to",
+          "like",
+          "dm",
+          "browser",
+          "notifications"
+        ],
+        "noneOf": [
+          "x ray",
+          "times x"
+        ]
+      },
+      {
+        "allOf": [
+          "twitter"
+        ],
+        "anyOf": [
+          "post this",
+          "reply to",
+          "like",
+          "dm",
+          "browser",
+          "notifications"
+        ],
+        "noneOf": [
+          "x ray",
+          "times x"
+        ]
+      }
+    ]
+  }
 }

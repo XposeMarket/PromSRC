@@ -35,5 +35,31 @@
       "path": "references/revenue-system-handoff.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "leads"
+        ],
+        "anyOf": [
+          "local",
+          "businesses",
+          "near",
+          "in"
+        ]
+      },
+      {
+        "allOf": [
+          "local businesses"
+        ],
+        "anyOf": [
+          "find",
+          "list",
+          "prospects"
+        ]
+      }
+    ]
+  }
 }

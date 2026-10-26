@@ -41,5 +41,35 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "cold"
+        ],
+        "anyOf": [
+          "email",
+          "emails",
+          "outreach",
+          "dm",
+          "dms"
+        ]
+      },
+      {
+        "allOf": [
+          "prospecting"
+        ],
+        "anyOf": [
+          "email",
+          "emails",
+          "message",
+          "messages",
+          "dm",
+          "dms"
+        ]
+      }
+    ]
+  }
 }

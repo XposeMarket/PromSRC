@@ -2,6 +2,7 @@ import './legacy-desktop-bootstrap.js';
 import './context-review-entry.js';
 import { checkSessionDetailed, mountLoginScreen, getAccount, getPersistedAccount } from './auth/account.js';
 import { installMobileSettingsReturnBridge } from './settings-return.js';
+import { finishPanelMotion } from './features/shell/panel-motion.js';
 
 installMobileSettingsReturnBridge(window);
 
@@ -300,6 +301,8 @@ window.refreshAccountDisplay = function refreshAccountDisplay() {
       event.preventDefault();
       return;
     }
+    // Land an in-flight open/close slide before the drag takes over the width.
+    finishPanelMotion(rightPanel);
     startX = event.clientX;
     startWidth = rightPanel.offsetWidth;
     previousTransition = rightPanel.style.transition;
