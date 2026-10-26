@@ -30,11 +30,17 @@ export function saveBackgroundExecution(record: Record<string, any>): void {
   const envelope: BackgroundExecutionEnvelope = {
     version: 1, id: record.id, ownerPid: process.pid, ownerToken, savedAt: Date.now(), record: serializable,
   };
-  const fd = fs.openSync(temp, 'wx', 0o600);
-  try { fs.writeFileSync(fd, JSON.stringify(envelope)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  // Node rename replaces the target on supported Windows/Unix filesystems. Never
-  // fall back to deleting/copying over authoritative executable state.
-  fs.renameSync(temp, file);
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(temp, 'wx', 0o600);
+    fs.writeFileSync(fd, JSON.stringify(envelope)); fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    // Never delete/copy over authoritative executable state.
+    fs.renameSync(temp, file);
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* preserve original error */ } }
+    try { fs.unlinkSync(temp); } catch { /* renamed or failed creation */ }
+  }
 }
 export function readBackgroundExecutions(): BackgroundExecutionEnvelope[] {
   let files: string[];
@@ -50,7 +56,7 @@ export function readBackgroundExecutions(): BackgroundExecutionEnvelope[] {
         || !Number.isFinite(r.timeoutMs) || !['wait_all', 'wait_until_timeout', 'best_effort_merge'].includes(r.joinPolicy)
         || !Array.isArray(r.toolCategories) || (r.toolCeiling !== undefined && (!Array.isArray(r.toolCeiling) || !r.toolCeiling.length))
         || !Array.isArray(r.outstandingTools) || typeof r.workDir !== 'string' || !path.isAbsolute(r.workDir)
-        || !Number.isSafeInteger(item.ownerPid) || typeof item.ownerToken !== 'string'
+        || !Number.isSafeInteger(item.ownerPid) || item.ownerPid < 1 || typeof item.ownerToken !== 'string' || !item.ownerToken
         || !r.toolCategories.every((v: any) => typeof v === 'string')
         || (r.toolCeiling !== undefined && !r.toolCeiling.every((v: any) => typeof v === 'string' && v.length > 0))
         || (r.allowedWorkPaths !== undefined && (!Array.isArray(r.allowedWorkPaths) || !r.allowedWorkPaths.every((v: any) => typeof v === 'string' && path.isAbsolute(v))))
@@ -64,19 +70,26 @@ export function readBackgroundExecutions(): BackgroundExecutionEnvelope[] {
   }
   return records;
 }
-/** Lock + re-read + owner liveness: no two replacement gateways may claim. */
+/** SQLite's process lock is automatically released even when a claimant dies. */
 export function claimBackgroundExecution(item: BackgroundExecutionEnvelope): boolean {
-  const file = target(item.id);
-  let fd: number;
+  let db: import('better-sqlite3').Database | undefined;
   try {
-    fd = fs.openSync(`${file}.claim`, 'wx', 0o600);
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token: ownerToken }));
-    fs.fsyncSync(fd);
-  } catch { return false; }
-  try {
-    const current = JSON.parse(fs.readFileSync(file, 'utf8')) as BackgroundExecutionEnvelope;
-    if (current.ownerToken !== item.ownerToken || alive(current.ownerPid)) return false;
+    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
+    db = new Database(path.join(root(), 'claims.sqlite'), { timeout: 1000 });
+    db.exec('BEGIN IMMEDIATE');
+    // The JSON envelope remains authoritative. Serialize the complete re-read,
+    // owner-liveness check and atomic owner rewrite across replacement processes.
+    const current = readBackgroundExecutions().find((entry) => entry.id === item.id);
+    if (!current || current.ownerToken !== item.ownerToken || current.ownerPid !== item.ownerPid
+      || alive(current.ownerPid)) return false;
     saveBackgroundExecution(current.record);
+    db.exec('COMMIT');
     return true;
-  } finally { fs.closeSync(fd); fs.unlinkSync(`${file}.claim`); }
+  } catch { return false; } // unknown/busy ownership is never permission to execute
+  finally {
+    if (db) {
+      try { if (db.inTransaction) db.exec('ROLLBACK'); } catch { /* close still releases the OS lock */ }
+      try { db.close(); } catch { /* failed cleanup never grants execution */ }
+    }
+  }
 }
