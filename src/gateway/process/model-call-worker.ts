@@ -244,6 +244,7 @@ async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, bat
   providerStarted = true;
   if (request.operation === 'chat') {
     return provider.chat(request.messages, request.model, {
+      sessionId: request.options?.sessionId,
       temperature: request.options?.temperature,
       max_tokens: request.options?.maxTokens,
       num_ctx: request.options?.numCtx,

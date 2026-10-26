@@ -29,6 +29,7 @@ export interface ModelCallChatRequest {
   model: string;
   messages: ChatMessage[];
   options?: {
+    sessionId?: string;
     temperature?: number;
     maxTokens?: number;
     numCtx?: number;
