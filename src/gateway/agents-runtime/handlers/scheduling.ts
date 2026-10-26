@@ -310,6 +310,7 @@ export async function handleSchedulingTool(ctx: handleSchedulingToolContext): Pr
           let created = deps.cronScheduler.createJob({
             name: nameValue,
             prompt: instructionPrompt,
+            precheck: args.precheck,
             type: normalizedSchedule.kind === 'one-shot' ? 'one-shot' : 'recurring',
             schedule: normalizedSchedule.kind === 'recurring' ? normalizedSchedule.cron : undefined,
             runAt: normalizedSchedule.kind === 'one-shot' ? normalizedSchedule.runAt : undefined,
@@ -328,6 +329,7 @@ export async function handleSchedulingTool(ctx: handleSchedulingToolContext): Pr
               scheduleId: created.id,
               scheduleName: created.name,
               prompt: instructionPrompt,
+            precheck: args.precheck,
               model: modelOverride,
             });
           }
@@ -395,6 +397,7 @@ export async function handleSchedulingTool(ctx: handleSchedulingToolContext): Pr
         if (action === 'update') {
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
           const patch: Record<string, any> = {};
+          if (args.precheck !== undefined) patch.precheck = args.precheck;
 
           if (args.name !== undefined) patch.name = String(args.name || '').trim();
           if (args.instruction_prompt !== undefined || args.prompt !== undefined) {

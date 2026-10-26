@@ -87,6 +87,7 @@ router.post('/api/tasks', (req, res) => {
     systemEventText,
     model,
     subagent_id,
+    precheck: req.body.precheck,
     assignmentTarget: subagent_id ? 'subagent' : 'main',
     deliverToMainChannel: !subagent_id,
   });
