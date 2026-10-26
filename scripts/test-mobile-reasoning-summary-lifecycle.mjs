@@ -183,7 +183,7 @@ const summaryTitle = new Function('_dedupeMobileTraceProseText',
   `${rendererFunction('_mobileTraceProgressSummary', '_renderMobileLiveTrace')}return _mobileTraceProgressSummary;`,
 )((text) => text);
 assert.equal(summaryTitle(background.liveTraceEntries), '', 'reasoning summaries must not be promoted into public progress titles');
-assert.equal(summaryTitle(groups[0].entries), '');
+assert.equal(summaryTitle(groups[0].entries), '', 'summary prose stays with its reasoning segment');
 
 const renderEntry = new Function('renderToolActivityEntry', 'escapeHtml', '_renderMobileLiveTracePreview',
   '_isMobileTraceReasoningSummaryType', '_renderMobileMarkdown', '_dedupeMobileTraceProseText',
