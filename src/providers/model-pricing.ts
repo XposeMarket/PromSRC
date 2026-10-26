@@ -39,6 +39,8 @@ type PricingRule = {
 // Rates are USD per 1M tokens. Because cost is stored in micro-dollars,
 // the per-token micro-dollar rate has the same numeric value.
 const BUILT_IN_RULES: PricingRule[] = [
+  { provider: /^openai$/i, model: /^gpt-6\.1-terra(?:-|$)/i, input: 1, output: 5, cacheRead: 0.05 },
+  { provider: /^openai_codex$/i, model: /^gpt-6\.1-terra(?:-|$)/i, input: 1, output: 5, cacheRead: 0.05 },
   { provider: /^(ollama|llama_cpp|lm_studio)$/i, model: /.*/, input: 0, output: 0, source: 'local' },
 
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-6-astra(?:-|$)/i, input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
@@ -217,6 +219,13 @@ export function estimateModelUsageCost(input: {
 }): ModelUsageCostEstimate {
   const pricing = resolveModelPricing(input.provider, input.model);
   const inputTokens = normalizeTokenCount(input.inputTokens);
+  if (pricing.source === 'built_in_estimate' && /^(openai|openai_codex)$/.test(pricing.provider) && /^gpt-6\.1-terra(?:-|$)/i.test(pricing.model)) {
+    const long = inputTokens > 272000;
+    pricing.inputMicrosPerToken *= (long ? 2 : 1);
+    pricing.cacheReadMicrosPerToken *= (long ? 2 : 1);
+    pricing.outputMicrosPerToken *= (long ? 1.5 : 1);
+    pricing.reasoningMicrosPerToken *= (long ? 1.5 : 1);
+  }
   const outputTokens = normalizeTokenCount(input.outputTokens);
   const reasoningTokens = normalizeTokenCount(input.reasoningTokens);
   const cacheReadTokens = normalizeTokenCount(input.cacheReadTokens);

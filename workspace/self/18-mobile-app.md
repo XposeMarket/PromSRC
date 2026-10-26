@@ -199,3 +199,7 @@ Always validate the URL format against the current router and gateway document s
 ### New-chat reasoning and first-output status
 The mobile saved model preference carries provider/model/speed/account, not the last chat's reasoning effort. A fresh draft shows `Default (<configured main_chat effort>)`; an explicit slider choice affects that draft/chat only. `Use default` resets the current selection. The draft-to-session step resolves the configured main-chat default before creating an explicit model route (omitting effort there would instead use a provider fallback).
 `mobile-ttft-state.js` owns a row-local custom element: after four seconds without public output it shows `Thinking · Ns`, or `Waiting for a model slot` only when a queue event was received. Its one-second clock updates only its text node, stops on public output/tool/terminal events, and disconnects on navigation/removal. Private reasoning deltas are not surfaced. No live deployment is implied by these source changes.
+
+
+### Pending PR: feat/model-family-picker-terra61
+Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js` for provider → family → model navigation, paired with desktop; Terra metadata and exact `gpt-6.1-terra` fallback entries include mobile Settings and supported reasoning levels. This is pending PR work, not live/on-device verified.

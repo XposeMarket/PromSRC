@@ -1,7 +1,6 @@
-// Public, selectable reasoning levels. `none` and `minimal` remain accepted
-// only as legacy input aliases and are normalized to `low`; they must never
-// be advertised as model capabilities or selector options.
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+// Public reasoning levels. Terra 6.1 natively supports `none`; other models
+// retain the legacy none/minimal -> low normalization.
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface ReasoningCapability {
   efforts: ReasoningEffort[];
@@ -47,6 +46,10 @@ export function hasReasoningCapabilityPolicy(provider: string): boolean {
 export function getReasoningCapability(provider: string, model: string): ReasoningCapability {
   const id = String(provider || '').trim().toLowerCase();
   const name = slug(model);
+
+  if ((id === 'openai' || id === 'openai_codex') && /^gpt-6\.1-terra(?:-|$)/.test(name)) {
+    return { efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' };
+  }
 
   if (id === 'openai_codex') {
     // ChatGPT (web backend): efforts carry ChatGPT modes, see
@@ -116,6 +119,7 @@ export function normalizeReasoningEffort(provider: string, model: string, value:
   const rawValue = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
   // Older saved routes used these as a disabled/minimal level. Keep them
   // recoverable without allowing either value back into the public contract.
+  if (rawValue === 'none' && getReasoningCapability(provider, model).efforts.includes('none')) return 'none';
   const raw = (rawValue === 'none' || rawValue === 'minimal' ? 'low' : rawValue) as ReasoningEffort;
   if (!raw) return undefined;
   const capability = getReasoningCapability(provider, model);
@@ -129,6 +133,7 @@ export function supportsFastSpeed(provider: string, model: string): boolean {
   // sending speed: 'fast' there now errors - so 4.7 must not be listed here.
   if (id === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
   if (id === 'openai' || id === 'openai_codex') {
+    if (/^gpt-6\.1-terra(?:-|$)/.test(name)) return true;
     return /^(?:gpt-6(?:\.1)?-(?:astra|sol|luna)|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   }
   return false;

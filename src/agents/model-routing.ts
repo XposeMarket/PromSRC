@@ -63,6 +63,7 @@ const OPENAI_CODEX_MODEL_ALIASES: Record<string, string> = {
   'luna-6': 'gpt-6-luna',
   'sol-6.1': 'gpt-6.1-sol',
   'gpt-6.1-sol': 'gpt-6.1-sol',
+  'gpt-6.1-terra': 'gpt-6.1-terra',
   'gpt-6-sol': 'gpt-6-sol',
   'gpt-6-luna': 'gpt-6-luna',
 };

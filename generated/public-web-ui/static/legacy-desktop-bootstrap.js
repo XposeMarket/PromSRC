@@ -1,3 +1,5 @@
+import { groupModelsByFamily } from './model-family-grouping.js';
+
 // ═══ CHAT PAGE — EXTRACTED to src/pages/ChatPage.js (F3f) ═══
 // Sessions, sendChat, renderChatMessages, process log, progress panel,
 // agent execution, canvas, file upload (~2,421 lines)
@@ -3049,13 +3051,31 @@ async function _renderDesktopSwitcherProviders(state, controller = _desktopSwitc
   }));
 }
 
-async function _renderDesktopSwitcherModels(state, provider, controller = _desktopSwitcherController()) {
+async function _renderDesktopSwitcherModels(state, provider, controller = _desktopSwitcherController(), familyKey = '') {
   _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>', controller);
-  const models = await _desktopSwitcherModelsFor(provider, state);
-  _desktopSwitcherShowDetail('Model', models.length ? models.map((model) => _desktopSwitcherOption(
+  const allModels = await _desktopSwitcherModelsFor(provider, state);
+  const groups = groupModelsByFamily(provider, allModels, provider === state.provider ? state.model : '');
+  const grouped = ['openai', 'openai_codex', 'anthropic'].includes(provider);
+  const family = grouped ? groups.find((group) => group.key === familyKey) : { label: 'Model', models: allModels };
+  if (!family) {
+    _desktopSwitcherShowDetail('Model families', groups.length ? groups.map((group) => _desktopSwitcherOption(
+      group.label, `${group.models.length} model${group.models.length === 1 ? '' : 's'}`, provider === state.provider && group.models.includes(state.model), `data-switcher-family="${escHtml(group.key)}"`,
+    )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>', controller);
+    controller.detail?.querySelectorAll('[data-switcher-family]').forEach((button) => button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      _renderDesktopSwitcherModels(state, provider, controller, button.getAttribute('data-switcher-family'));
+    }));
+    return;
+  }
+  const models = family.models;
+  _desktopSwitcherShowDetail(family.label, (grouped ? '<button type="button" class="model-switcher-option" data-switcher-family-back>‹ Model families</button>' : '') + (models.length ? models.map((model) => _desktopSwitcherOption(
     typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, provider) : model,
     '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`,
-  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>', controller);
+  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>'), controller);
+  controller.detail?.querySelector('[data-switcher-family-back]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _renderDesktopSwitcherModels(state, provider, controller);
+  });
   controller.detail?.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', async () => {
     const model = button.getAttribute('data-switcher-model') || '';
     if (!model) return;
@@ -3645,8 +3665,8 @@ const AMD_SLOTS = {
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai:       ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],

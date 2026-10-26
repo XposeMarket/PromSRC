@@ -336,6 +336,7 @@
     "build:public:mac:arm64": "npm run prepare:public:desktop && npm run build:desktop-helper:mac && electron-builder --mac --arm64 --config electron-builder-public.yml && npm run verify:public-release:mac -- --arch=arm64",
     "release": "npm run build:public && electron-builder --win --config electron-builder-public.yml --prepackaged release-public/win-unpacked --publish=always",
     "postinstall": "node scripts/postinstall.js",
+    "test:model-family-picker": "node scripts/test-model-family-picker.mjs && tsx scripts/test-terra-metadata.ts",
     "test:chat-selection-refresh": "node scripts/test-chat-selection-refresh-contract.mjs",
     "test:kling-min-duration": "tsx src/media-engine/kling-min-duration.regression.ts",
     "test:fal-balance": "tsx src/media-engine/fal-balance.regression.ts",
