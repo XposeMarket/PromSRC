@@ -71,7 +71,9 @@ import {
 } from '../background-agent-work.js';
 import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 installToolActivityExpansionPersistence();
-const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+// Paints yield to typing: hold a stream paint until the composer has been idle 150ms,
+// never more than 400ms, so keystrokes are not queued behind a bubble patch (4x tail).
+const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180, inputIdleMs: 150, maxInputDeferMs: 400 });
 
 const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
   mergeBackgroundAgentEvents,
@@ -47083,21 +47085,15 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   if (sid !== window.activeChatSessionId) sess.unread = true;
   // Defer background index saves; terminal events flush synchronously.
   const terminalEvent = evt.type === 'done' || evt.type === 'error';
-  scheduleMainChatStreamSessionBookkeeping(!MAIN_CHAT_STREAM_HOT_EVENT_TYPES.has(evt.type));
-  if (terminalEvent || evt.type === 'session_title' || evt.type === 'user_message') flushChatSessionsSave();
+  // Sorting + re-rendering the whole sidebar was the second-largest streaming cost at 4x
+  // (renderSessionsList ~0.8s per 10s): every tool call, latency mark and model event ran it
+  // synchronously. Only turn boundaries need it now; everything else rides the 1s throttle.
+  const sessionBoundary = terminalEvent || evt.type === 'session_title' || evt.type === 'user_message';
+  scheduleMainChatStreamSessionBookkeeping(sessionBoundary);
+  if (sessionBoundary) flushChatSessionsSave();
   restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, sid);
 }
 
-const MAIN_CHAT_STREAM_HOT_EVENT_TYPES = new Set([
-  'token',
-  'thinking_delta',
-  'reasoning_delta',
-  'thinking',
-  'text_delta',
-  'progress_state',
-  'tool_progress',
-  'heartbeat',
-]);
 let _mainChatStreamBookkeepingTimer = null;
 let _mainChatStreamBookkeepingLastAt = 0;
 const MAIN_CHAT_STREAM_BOOKKEEPING_INTERVAL_MS = 1000;

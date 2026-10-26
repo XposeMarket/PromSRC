@@ -83,3 +83,68 @@ doc.hidden = true; pending.get('desktop-bubble:a').fn(); assert.equal(patches, 1
 doc.hidden = false; stream.renderStreamingChatUpdate('a'); view.activeChatSessionId = 'b'; pending.get('desktop-bubble:a').fn();
 assert.equal(patches, 1, 'switched chat never gets stale callback');
 console.log('PASS desktop stream scheduling: burst coalescing, input/read-up budget, hooks, hidden/switch guards');
+
+// 4x tail (follow-up to 2dc5035cf): adaptive paints yield to typing (opt-in, capped),
+// structural flushes never wait, and the sidebar re-sorts immediately only at turn boundaries.
+const { createAdaptiveStreamScheduler } = await import(pathToFileURL(path.join(root, 'web-ui/src/features/chat/timeline/adaptive-stream-scheduler.js')).href);
+function fakeScheduler(extra = {}) {
+  let t = 0; let seq = 0; const timers = new Map();
+  const clock = {
+    now: () => t,
+    setTimer: (fn, ms) => { const id = ++seq; timers.set(id, { at: t + Math.max(0, Number(ms) || 0), fn }); return id; },
+    clearTimer: (id) => { timers.delete(id); },
+    advance(to) {
+      for (;;) {
+        let next = null;
+        for (const [id, timer] of timers) if (timer.at <= to && (!next || timer.at < next.timer.at)) next = { id, timer };
+        if (!next) break;
+        timers.delete(next.id); t = next.timer.at; next.timer.fn();
+      }
+      t = to;
+    },
+  };
+  const documentRef = { visibilityState: 'visible', hidden: false, addEventListener() {}, removeEventListener() {} };
+  const scheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, documentRef, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, requestFrame: (cb) => clock.setTimer(() => cb(t), 16), ...extra });
+  return { clock, scheduler };
+}
+{
+  const { clock, scheduler } = fakeScheduler({ inputIdleMs: 150, maxInputDeferMs: 400 });
+  let paints = 0;
+  scheduler.noteInput(0); scheduler.schedule('k', () => { paints += 1; });
+  clock.advance(140); assert.equal(paints, 0, 'paint waits while the user is typing');
+  clock.advance(160); assert.equal(paints, 1, 'paint lands once input has been idle 150ms');
+}
+{
+  const { clock, scheduler } = fakeScheduler({ inputIdleMs: 150, maxInputDeferMs: 400 });
+  let paintedAt = null;
+  for (let at = 0; at <= 1000 && paintedAt == null; at += 40) {
+    clock.advance(at); scheduler.noteInput(at);
+    if (at === 0) scheduler.schedule('k', () => { paintedAt = clock.now(); });
+  }
+  assert.ok(paintedAt != null && paintedAt <= 400, `continuous typing never starves the stream past 400ms (painted at ${paintedAt})`);
+}
+{
+  const { scheduler } = fakeScheduler({ inputIdleMs: 150, maxInputDeferMs: 400 });
+  let paints = 0;
+  scheduler.noteInput(0); scheduler.flush('k', () => { paints += 1; });
+  assert.equal(paints, 1, 'structural flush paints immediately even mid-typing');
+}
+{
+  const { clock, scheduler } = fakeScheduler();
+  let paints = 0;
+  scheduler.noteInput(0); scheduler.schedule('k', () => { paints += 1; });
+  clock.advance(1); assert.equal(paints, 1, 'schedulers without the option keep their cadence (mobile, process log)');
+}
+assert.match(chat, /desktopStreamRenderScheduler = createAdaptiveStreamScheduler\(\{[^}]*inputIdleMs: \d+, maxInputDeferMs: \d+/, 'desktop chat opts into input yield');
+assert.match(chat, /scheduleMainChatStreamSessionBookkeeping\(sessionBoundary\)/, 'sidebar bookkeeping is immediate only at turn boundaries');
+console.log('PASS desktop stream input yield: typing defers paints (capped 400ms), flush is immediate, opt-out unchanged, boundary-only sidebar bookkeeping');
+{
+  const seen = [];
+  const documentRef = { visibilityState: 'visible', hidden: false, addEventListener(type) { seen.push(type); }, removeEventListener() {} };
+  createAdaptiveStreamScheduler({ documentRef, inputIdleMs: 150, maxInputDeferMs: 400 });
+  assert.ok(seen.includes('wheel'), 'opt-in scheduler also yields to wheel scrolling');
+  seen.length = 0;
+  createAdaptiveStreamScheduler({ documentRef });
+  assert.ok(!seen.includes('wheel'), 'default schedulers (mobile, process log) add no wheel listener');
+  console.log('PASS desktop stream input yield: wheel scrolling is opt-in only');
+}
