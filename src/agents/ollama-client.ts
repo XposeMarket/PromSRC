@@ -273,7 +273,7 @@ export class OllamaClient {
       tools: options?.tools,
       context: options?.usageContext?.promptManifest,
     });
-    const manifest = options?.usageContext?.promptManifest;
+    const manifest = promptManifest;
     const session = options?.usageContext?.sessionId || '';
     const cacheWorkload = (manifest?.runtimeRole && !['main', 'unknown'].includes(manifest.runtimeRole) ? manifest.runtimeRole : undefined)
       || (manifest?.executionMode !== 'interactive' ? manifest?.executionMode : undefined)
