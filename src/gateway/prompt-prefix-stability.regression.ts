@@ -86,7 +86,7 @@ async function main(): Promise<void> {
     assert.equal(countOf(t2A.volatile, '[TOOLS]'), 1, 'Tier2 tool menu must appear exactly once in volatile');
     assert.ok(!t2A.stable.includes('[TOOLS]'), 'Tier2 tool menu must not be in stable prefix');
     assert.notEqual(t2A.volatile, t2B.volatile, 'Tier2 volatile tail must reflect different tool categories');
-    assert.ok(t2A.volatile.indexOf(rosterA) < t2A.volatile.indexOf('[TOOLS]'), 'Tier2 roster must precede tools as in original order');
+    assert.ok(t2A.volatile.indexOf(rosterA) < t2A.volatile.indexOf('[TOOLS]'), 'Tier2 roster must precede the tool menu in the volatile tail');
 
     // Tier 1 (first turn): tool activation changes, durable profile fixed.
     const t1A = splitPrompt(await render(root, 'prefix_t1', { historyLength: 0, snap: snapshot({ activatedToolCategories: toolsA }) }));
@@ -118,7 +118,11 @@ async function main(): Promise<void> {
 
     // Empty dynamic inputs must not leave undefined text.
     const empty = await render(root, 'prefix_t2', { historyLength: 3, snap: snapshot({ activatedToolCategories: [], subagentsRosterBlock: '' }) });
+    const emptyParts = splitPrompt(empty);
     assert.ok(!empty.includes('undefined'), 'empty dynamic inputs must not emit undefined');
+    assert.ok(emptyParts.stable.includes('USER_PROFILE_EDITED'), 'empty dynamic inputs retain the durable profile');
+    assert.equal(countOf(emptyParts.volatile, '[TOOLS]'), 1, 'empty categories retain the core tool menu');
+    assert.ok(!empty.includes(rosterA) && !empty.includes(rosterB), 'removed roster entries must not leak from a prior snapshot');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
