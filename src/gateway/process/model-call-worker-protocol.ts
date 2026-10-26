@@ -36,6 +36,7 @@ export interface ModelCallChatRequest {
     think?: ModelCallThinkMode;
     speed?: 'standard' | 'fast';
     omitIntradayNotes?: boolean;
+    cacheWorkload?: string;
   };
 }
 

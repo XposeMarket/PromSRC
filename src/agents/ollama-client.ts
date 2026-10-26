@@ -107,6 +107,7 @@ export class OllamaClient {
       onReasoningSummary?: (chunk: string) => void;
       onModelEvent?: (event: ModelStreamEvent) => void;
       onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
+      cacheWorkload?: string;
       workerPriority?: 'interactive' | 'background';
       abortSignal?: AbortSignal;
       omitIntradayNotes?: boolean;
@@ -125,6 +126,7 @@ export class OllamaClient {
       onModelEvent: options?.onModelEvent,
       abortSignal: options?.abortSignal,
       omitIntradayNotes: options?.omitIntradayNotes,
+      cacheWorkload: options?.cacheWorkload,
     });
     if (!areModelCallWorkersEnabled()) return direct();
     const identity = getProviderRuntimeIdentity(activeProvider);
@@ -146,6 +148,7 @@ export class OllamaClient {
         think: options?.think,
         speed: options?.speed,
         omitIntradayNotes: options?.omitIntradayNotes,
+        cacheWorkload: options?.cacheWorkload,
       },
     };
     try {
@@ -270,7 +273,12 @@ export class OllamaClient {
       tools: options?.tools,
       context: options?.usageContext?.promptManifest,
     });
-    const result = await this.callProviderChatRaw(activeProvider, messages, model, options);
+    const manifest = promptManifest;
+    const session = options?.usageContext?.sessionId || '';
+    const cacheWorkload = (manifest?.runtimeRole && !['main', 'unknown'].includes(manifest.runtimeRole) ? manifest.runtimeRole : undefined)
+      || (manifest?.executionMode !== 'interactive' ? manifest?.executionMode : undefined)
+      || (/^(?:background_|subagent_|team_|cron_|heartbeat[_:-]|schedule[_:-])/i.test(session) ? 'background' : role);
+    const result = await this.callProviderChatRaw(activeProvider, messages, model, { ...options, cacheWorkload });
     const estimatedMessageInputTokens = estimateMessagesTokens(messages);
     const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
     const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);
