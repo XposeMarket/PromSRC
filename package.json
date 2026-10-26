@@ -31,6 +31,7 @@
     "test:codex-realtime-model-fallback": "tsx src/gateway/realtime/codex-realtime-model-fallback.regression.ts",
     "test:goal-timer-cancel": "tsx src/gateway/goal-timer-cancel.regression.ts",
     "test:gateway-auth-proxy": "tsx src/gateway/gateway-auth-proxy.regression.ts",
+    "test:gateway-auth-fail-closed": "tsx src/gateway/gateway-auth-fail-closed.regression.ts",
     "test:final-action-gate": "tsx src/gateway/final-action-gate.regression.ts",
     "test:operation-ledger": "tsx src/gateway/operation-ledger.regression.ts",
     "test:timer-stranded": "tsx src/gateway/timer-stranded.regression.ts",
