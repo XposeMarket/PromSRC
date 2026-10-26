@@ -15,7 +15,8 @@ const identity = (text) => text;
 const progress = (evt) => evt.visibility || evt.extra?.visibility || (evt.source === 'reasoning_summary' ? 'summary' : 'private');
 const desktopReducer = new Function('normalizeLiveTraceProseText', 'dedupeDesktopTraceProseText', 'appendFinalResponseDelta', `${extract(desktop, 'setDesktopLiveProgressNarration')}\nreturn setDesktopLiveProgressNarration;`)(identity, identity, (a, b) => a + b);
 const mobileHandlers = new Function('_nowTime', '_appendMobileStreamingText', 'chatProgressVisibility', `${['_setMobileLiveProgressNarration', '_handleMobileThinkingDelta', '_handleMobileReasoningSummaryDelta', '_handleMobileCleanThought'].map((name) => extract(mobile, name)).join('\n')}\nreturn {_setMobileLiveProgressNarration,_handleMobileThinkingDelta,_handleMobileReasoningSummaryDelta,_handleMobileCleanThought};`)(() => 'now', (a, b) => a + b, progress);
-const chunks = ['*', '*', 'UPPER', '**', '\n', 'I', '!', '.', '  ', 'repeat', 'repeat', '\n\n', 'Next paragraph', '\n '];
+// IMG_1178: exact heading and isolated-fragment sequence from mobile MAIN chat.
+const chunks = ['Optimizing tool performance', '*', '*', '\n', '!', ' ', 'I', ' ', '?', '\n\n', 'Managing token budget', '*', '*', '\n', 'UPPER', '**', '\n', 'I', '!', '.', '  ', 'repeat', 'repeat', '\n\n', 'Next paragraph', '\n '];
 for (const platform of ['desktop', 'mobile']) {
   const state = { liveTraceEntries: [] };
   const append = (type, text, options) => state.liveTraceEntries.push({ type, text, ...options });
