@@ -21,5 +21,36 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "entity"
+        ],
+        "anyOf": [
+          "client",
+          "project",
+          "contact",
+          "record"
+        ]
+      },
+      {
+        "allOf": [
+          "client record"
+        ]
+      },
+      {
+        "allOf": [
+          "business context"
+        ],
+        "anyOf": [
+          "update",
+          "add",
+          "save"
+        ]
+      }
+    ]
+  }
 }

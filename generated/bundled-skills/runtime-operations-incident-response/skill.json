@@ -20,5 +20,22 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "gateway"
+        ],
+        "anyOf": [
+          "down",
+          "restart",
+          "not responding",
+          "crash",
+          "stuck"
+        ]
+      }
+    ]
+  }
 }

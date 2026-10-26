@@ -21,5 +21,37 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "team"
+        ],
+        "anyOf": [
+          "subagent",
+          "subagents",
+          "managed team",
+          "delegate",
+          "steer",
+          "worker",
+          "workers"
+        ]
+      },
+      {
+        "allOf": [
+          "subagent"
+        ],
+        "anyOf": [
+          "delegate",
+          "assign",
+          "steer",
+          "recover",
+          "spawn",
+          "create"
+        ]
+      }
+    ]
+  }
 }

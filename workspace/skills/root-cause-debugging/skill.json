@@ -27,5 +27,47 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "root cause"
+        ],
+        "anyOf": [
+          "bug",
+          "failure",
+          "error",
+          "test",
+          "crash",
+          "failing",
+          "outage",
+          "exception",
+          "regression"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      },
+      {
+        "allOf": [
+          "why"
+        ],
+        "anyOf": [
+          "failing",
+          "crashes",
+          "exception",
+          "stack trace"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      }
+    ]
+  }
 }

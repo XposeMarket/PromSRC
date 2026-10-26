@@ -28,5 +28,20 @@
   "lifecycle": "active",
   "name": "tailwind",
   "id": "tailwind",
-  "implicitInvocation": false
+  "implicitInvocation": false,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "tailwind"
+        ],
+        "anyOf": [
+          "hyperframes",
+          "composition",
+          "video"
+        ]
+      }
+    ]
+  }
 }

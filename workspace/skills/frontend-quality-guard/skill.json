@@ -95,5 +95,33 @@
       "path": "references/anti-slop-and-visual-evidence.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "frontend"
+        ],
+        "anyOf": [
+          "build",
+          "polish",
+          "page",
+          "ui",
+          "component"
+        ]
+      },
+      {
+        "allOf": [
+          "ui"
+        ],
+        "anyOf": [
+          "build",
+          "implement",
+          "make it look",
+          "polish"
+        ]
+      }
+    ]
+  }
 }

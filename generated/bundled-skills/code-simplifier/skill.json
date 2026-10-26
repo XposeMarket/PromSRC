@@ -87,5 +87,31 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "simplify"
+        ],
+        "anyOf": [
+          "code",
+          "function",
+          "module",
+          "this change",
+          "refactor"
+        ]
+      },
+      {
+        "allOf": [
+          "clean up"
+        ],
+        "anyOf": [
+          "code",
+          "function"
+        ]
+      }
+    ]
+  }
 }

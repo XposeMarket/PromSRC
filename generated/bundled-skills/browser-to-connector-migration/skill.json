@@ -36,5 +36,32 @@
     "browser": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "connector"
+        ],
+        "anyOf": [
+          "instead of browser",
+          "replace browser",
+          "brittle",
+          "migrate"
+        ]
+      },
+      {
+        "allOf": [
+          "browser workflow"
+        ],
+        "anyOf": [
+          "connector",
+          "composite",
+          "macro",
+          "migrate"
+        ]
+      }
+    ]
+  }
 }

@@ -39,5 +39,41 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "thread"
+        ],
+        "anyOf": [
+          "x",
+          "twitter",
+          "tweet"
+        ],
+        "noneOf": [
+          "peer session",
+          "supervised",
+          "summarize",
+          "read this",
+          "x com",
+          "twitter com"
+        ]
+      },
+      {
+        "allOf": [
+          "tweetstorm"
+        ],
+        "noneOf": [
+          "peer session",
+          "supervised",
+          "summarize",
+          "read this",
+          "x com",
+          "twitter com"
+        ]
+      }
+    ]
+  }
 }

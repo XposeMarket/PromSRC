@@ -38,5 +38,39 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system"
+        ]
+      },
+      {
+        "allOf": [
+          "video"
+        ],
+        "anyOf": [
+          "make",
+          "create",
+          "render",
+          "animate"
+        ],
+        "noneOf": [
+          "skill matching",
+          "matching skill",
+          "trigger system",
+          "audit",
+          "summarize",
+          "watch"
+        ]
+      }
+    ]
+  }
 }

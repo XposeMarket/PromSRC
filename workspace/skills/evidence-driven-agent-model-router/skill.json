@@ -50,5 +50,31 @@
       "type": "template",
       "description": "Routing table"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "benchmark"
+        ],
+        "anyOf": [
+          "models",
+          "model",
+          "agent roles"
+        ]
+      },
+      {
+        "allOf": [
+          "which model"
+        ],
+        "anyOf": [
+          "agent",
+          "role",
+          "subagent",
+          "route"
+        ]
+      }
+    ]
+  }
 }

@@ -34,5 +34,31 @@
     "shell": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "cli"
+        ],
+        "anyOf": [
+          "adapter",
+          "wrap",
+          "wrapper",
+          "typed"
+        ]
+      },
+      {
+        "allOf": [
+          "command line tool"
+        ],
+        "anyOf": [
+          "adapter",
+          "wrap",
+          "wrapper"
+        ]
+      }
+    ]
+  }
 }

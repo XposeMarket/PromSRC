@@ -48,5 +48,30 @@
     }
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "integration"
+        ],
+        "anyOf": [
+          "set up",
+          "setup",
+          "connect",
+          "configure"
+        ]
+      },
+      {
+        "allOf": [
+          "connect"
+        ],
+        "anyOf": [
+          "my account",
+          "prometheus to"
+        ]
+      }
+    ]
+  }
 }

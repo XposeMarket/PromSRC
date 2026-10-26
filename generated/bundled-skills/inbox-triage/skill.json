@@ -28,5 +28,32 @@
     "workspaceWrite": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "inbox"
+        ],
+        "anyOf": [
+          "triage",
+          "go through",
+          "prioritize",
+          "what needs",
+          "catch up"
+        ]
+      },
+      {
+        "allOf": [
+          "emails"
+        ],
+        "anyOf": [
+          "triage",
+          "prioritize",
+          "which need replies"
+        ]
+      }
+    ]
+  }
 }

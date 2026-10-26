@@ -75,5 +75,29 @@
       "path": "scripts/generate_report.py",
       "type": "script"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "first customers"
+        ]
+      },
+      {
+        "allOf": [
+          "design partners"
+        ]
+      },
+      {
+        "allOf": [
+          "early customers"
+        ],
+        "anyOf": [
+          "find",
+          "who"
+        ]
+      }
+    ]
+  }
 }

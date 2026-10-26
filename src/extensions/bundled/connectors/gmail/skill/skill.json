@@ -15,5 +15,26 @@
   ],
   "requiredTools": [
     "connector_gmail"
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "gmail"
+        ]
+      },
+      {
+        "allOf": [
+          "inbox"
+        ],
+        "anyOf": [
+          "list",
+          "show",
+          "unread",
+          "latest"
+        ]
+      }
+    ]
+  }
 }

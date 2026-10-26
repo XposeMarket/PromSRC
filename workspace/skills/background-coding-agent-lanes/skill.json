@@ -42,5 +42,23 @@
       "path": "references/supervised-fresh-review-modes.md",
       "type": "doc"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "background"
+        ],
+        "anyOf": [
+          "coding agent",
+          "coding agents",
+          "lane",
+          "lanes",
+          "worktree",
+          "worktrees"
+        ]
+      }
+    ]
+  }
 }

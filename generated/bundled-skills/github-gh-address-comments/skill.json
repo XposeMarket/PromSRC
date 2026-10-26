@@ -65,5 +65,42 @@
       "path": "LICENSE.txt",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "review comments"
+        ],
+        "anyOf": [
+          "address",
+          "fix",
+          "resolve",
+          "respond"
+        ]
+      },
+      {
+        "allOf": [
+          "pr"
+        ],
+        "anyOf": [
+          "address feedback",
+          "address the comments",
+          "resolve comments"
+        ]
+      },
+      {
+        "allOf": [
+          "pull request"
+        ],
+        "anyOf": [
+          "resolve comments",
+          "reviewers flagged",
+          "review feedback",
+          "address"
+        ]
+      }
+    ]
+  }
 }

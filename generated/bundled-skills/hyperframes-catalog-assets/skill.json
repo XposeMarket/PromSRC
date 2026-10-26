@@ -69,5 +69,21 @@
       "type": "script",
       "description": "Refresh the offline manifest and category map from the pinned HyperFrames CLI catalog."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "hyperframes"
+        ],
+        "anyOf": [
+          "catalog",
+          "official block",
+          "registry asset",
+          "find a block"
+        ]
+      }
+    ]
+  }
 }

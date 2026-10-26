@@ -94,5 +94,21 @@
     "shell": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pr"
+        ],
+        "anyOf": [
+          "lenses",
+          "security review",
+          "thorough review",
+          "multi angle"
+        ]
+      }
+    ]
+  }
 }

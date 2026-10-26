@@ -29,5 +29,42 @@
   "lifecycle": "active",
   "id": "market-research",
   "name": "market-research",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "market"
+        ],
+        "anyOf": [
+          "research",
+          "size",
+          "sizing",
+          "tam",
+          "segment",
+          "demand"
+        ],
+        "noneOf": [
+          "stock market",
+          "farmers market"
+        ]
+      },
+      {
+        "allOf": [
+          "segment"
+        ],
+        "anyOf": [
+          "demand",
+          "customers",
+          "size"
+        ],
+        "noneOf": [
+          "stock market",
+          "farmers market",
+          "video segment"
+        ]
+      }
+    ]
+  }
 }

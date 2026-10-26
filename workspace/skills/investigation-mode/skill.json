@@ -284,5 +284,36 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "site"
+        ],
+        "anyOf": [
+          "down",
+          "broken",
+          "not loading",
+          "500"
+        ]
+      },
+      {
+        "allOf": [
+          "investigate"
+        ],
+        "anyOf": [
+          "outage",
+          "failure",
+          "broken",
+          "why"
+        ],
+        "noneOf": [
+          "skill matching",
+          "trigger system"
+        ]
+      }
+    ]
+  }
 }

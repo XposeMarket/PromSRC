@@ -57,5 +57,36 @@
       "type": "doc",
       "description": "File tool routing, grep no-match, src-edit pointer"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "edit"
+        ],
+        "anyOf": [
+          "file",
+          "line",
+          "config",
+          "lines"
+        ]
+      },
+      {
+        "allOf": [
+          "replace"
+        ],
+        "anyOf": [
+          "file",
+          "readme",
+          "line",
+          "config"
+        ],
+        "noneOf": [
+          "photo",
+          "essay"
+        ]
+      }
+    ]
+  }
 }

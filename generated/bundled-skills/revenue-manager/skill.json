@@ -19,5 +19,26 @@
     "model revenue optimization"
   ],
   "implicitInvocation": false,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "pricing"
+        ],
+        "anyOf": [
+          "packaging",
+          "tiers",
+          "monetization",
+          "strategy"
+        ]
+      },
+      {
+        "allOf": [
+          "monetization"
+        ]
+      }
+    ]
+  }
 }

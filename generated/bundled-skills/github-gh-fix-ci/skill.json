@@ -81,5 +81,35 @@
       "path": "LICENSE.txt",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "ci"
+        ],
+        "anyOf": [
+          "failing",
+          "fix",
+          "red",
+          "broken",
+          "failed"
+        ]
+      },
+      {
+        "allOf": [
+          "github actions"
+        ],
+        "anyOf": [
+          "failing",
+          "fix",
+          "broken",
+          "red",
+          "failed",
+          "failure"
+        ]
+      }
+    ]
+  }
 }

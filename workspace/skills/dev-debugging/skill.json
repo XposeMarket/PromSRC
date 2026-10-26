@@ -49,5 +49,9 @@
       "type": "template",
       "description": "Diagnostic-only ChatGPT handoff template for a stuck approved proposal; it preserves the governed source-execution boundary."
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "mode": "explicit"
+  }
 }

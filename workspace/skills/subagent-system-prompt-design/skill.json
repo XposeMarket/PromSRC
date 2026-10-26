@@ -23,5 +23,20 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "system prompt"
+        ],
+        "anyOf": [
+          "subagent",
+          "agent",
+          "role"
+        ]
+      }
+    ]
+  }
 }

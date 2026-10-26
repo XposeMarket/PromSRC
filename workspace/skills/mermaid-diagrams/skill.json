@@ -41,5 +41,30 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "mermaid"
+        ]
+      },
+      {
+        "allOf": [
+          "flowchart"
+        ],
+        "anyOf": [
+          "make",
+          "create",
+          "draw"
+        ]
+      },
+      {
+        "allOf": [
+          "sequence diagram"
+        ]
+      }
+    ]
+  }
 }

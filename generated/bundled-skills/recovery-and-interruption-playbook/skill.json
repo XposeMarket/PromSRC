@@ -20,5 +20,31 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "interrupted"
+        ],
+        "anyOf": [
+          "task",
+          "work",
+          "resume",
+          "run"
+        ]
+      },
+      {
+        "allOf": [
+          "resume"
+        ],
+        "anyOf": [
+          "where you left off",
+          "from checkpoint",
+          "the interrupted"
+        ]
+      }
+    ]
+  }
 }

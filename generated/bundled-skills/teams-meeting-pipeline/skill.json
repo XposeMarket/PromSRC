@@ -33,5 +33,21 @@
     "workspaceWrite": true,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "teams"
+        ],
+        "anyOf": [
+          "graph",
+          "transcript pipeline",
+          "meeting pipeline",
+          "microsoft"
+        ]
+      }
+    ]
+  }
 }

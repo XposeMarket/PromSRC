@@ -31,5 +31,21 @@
     "externalSideEffects": true
   },
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "webhook"
+        ],
+        "anyOf": [
+          "receiver",
+          "inbound",
+          "signature",
+          "verify payload"
+        ]
+      }
+    ]
+  }
 }

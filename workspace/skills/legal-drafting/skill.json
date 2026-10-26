@@ -19,5 +19,41 @@
     "draft an nda"
   ],
   "implicitInvocation": true,
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "nda"
+        ]
+      },
+      {
+        "allOf": [
+          "contract"
+        ],
+        "anyOf": [
+          "draft",
+          "clause",
+          "revise",
+          "explain"
+        ]
+      },
+      {
+        "allOf": [
+          "terms of service"
+        ]
+      },
+      {
+        "allOf": [
+          "privacy policy"
+        ],
+        "anyOf": [
+          "draft",
+          "write",
+          "review"
+        ]
+      }
+    ]
+  }
 }

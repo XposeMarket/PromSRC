@@ -40,5 +40,25 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "svg"
+        ],
+        "anyOf": [
+          "diagram",
+          "architecture",
+          "illustration"
+        ]
+      },
+      {
+        "allOf": [
+          "architecture diagram"
+        ]
+      }
+    ]
+  }
 }

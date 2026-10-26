@@ -20,5 +20,50 @@
     "workspaceWrite": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "download"
+        ],
+        "anyOf": [
+          "video",
+          "image",
+          "images",
+          "audio",
+          "media"
+        ]
+      },
+      {
+        "allOf": [
+          "media"
+        ],
+        "anyOf": [
+          "organize",
+          "persist",
+          "deliver",
+          "assets"
+        ],
+        "noneOf": [
+          "social media"
+        ]
+      },
+      {
+        "allOf": [
+          "from this url"
+        ],
+        "anyOf": [
+          "audio",
+          "video",
+          "image",
+          "mp3"
+        ],
+        "noneOf": [
+          "social media"
+        ]
+      }
+    ]
+  }
 }

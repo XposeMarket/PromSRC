@@ -94,5 +94,21 @@
     "browser": false,
     "externalSideEffects": true
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "plan"
+        ],
+        "anyOf": [
+          "execute",
+          "implement the",
+          "task by task",
+          "work through"
+        ]
+      }
+    ]
+  }
 }

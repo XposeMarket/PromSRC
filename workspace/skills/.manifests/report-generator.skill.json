@@ -30,5 +30,26 @@
   "lifecycle": "active",
   "name": "report-generator",
   "id": "report-generator",
-  "implicitInvocation": true
+  "implicitInvocation": true,
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "report"
+        ],
+        "anyOf": [
+          "write up",
+          "generate",
+          "turn into",
+          "create a",
+          "formal"
+        ],
+        "noneOf": [
+          "bug report",
+          "report card"
+        ]
+      }
+    ]
+  }
 }

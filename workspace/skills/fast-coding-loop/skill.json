@@ -21,5 +21,41 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "fix"
+        ],
+        "anyOf": [
+          "bug",
+          "error",
+          "crash",
+          "test",
+          "function",
+          "code",
+          "exception"
+        ]
+      },
+      {
+        "allOf": [
+          "code"
+        ],
+        "anyOf": [
+          "refactor",
+          "edit",
+          "change",
+          "implement",
+          "investigate"
+        ]
+      },
+      {
+        "allOf": [
+          "refactor"
+        ]
+      }
+    ]
+  }
 }

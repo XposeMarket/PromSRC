@@ -95,5 +95,65 @@
     "browser": true,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "403"
+        ],
+        "anyOf": [
+          "fetch",
+          "page",
+          "article",
+          "site"
+        ]
+      },
+      {
+        "allOf": [
+          "cloudflare"
+        ],
+        "anyOf": [
+          "blocked",
+          "challenge",
+          "bot check",
+          "fetch"
+        ]
+      },
+      {
+        "allOf": [
+          "paywall"
+        ],
+        "anyOf": [
+          "read",
+          "get",
+          "article",
+          "around"
+        ]
+      },
+      {
+        "allOf": [
+          "captcha"
+        ],
+        "anyOf": [
+          "page",
+          "site",
+          "fetch",
+          "blocked"
+        ]
+      },
+      {
+        "allOf": [
+          "blocked"
+        ],
+        "anyOf": [
+          "page",
+          "fetch",
+          "site",
+          "article"
+        ]
+      }
+    ]
+  }
 }

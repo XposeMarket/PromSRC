@@ -25,5 +25,27 @@
       "path": "references/detailed-guide.md",
       "type": "reference"
     }
-  ]
+  ],
+  "triggerPolicy": {
+    "version": 2,
+    "rules": [
+      {
+        "allOf": [
+          "api"
+        ],
+        "anyOf": [
+          "integrate",
+          "call",
+          "connect",
+          "endpoint",
+          "rest",
+          "auth",
+          "oauth",
+          "paginate",
+          "pagination",
+          "rate limit"
+        ]
+      }
+    ]
+  }
 }
