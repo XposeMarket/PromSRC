@@ -3,6 +3,7 @@
 // Extracted from server-v2.ts (Step 12 of Phase 3 refactor).
 
 import path from 'path';
+import { buildCompactToolMenu } from './prompt-tool-menu';
 import fs from 'fs';
 import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
@@ -142,9 +143,9 @@ export function processIntradayNotes(
  * Full-text notes projection for interactive turns, excluding all legacy Brain
  * carry-forward content. Live notes retain the normal bounded renderer.
  */
-export function processIntradayNotesForPrompt(workspacePath: string, raw: string, budgetChars = 9_000): string {
+export function processIntradayNotesForPrompt(workspacePath: string, raw: string, budgetChars = 2_000): string {
   const liveNotes = stripLegacyBrainCarryForward(raw || '');
-  try { return renderNotesForPrompt(workspacePath, liveNotes, { budgetChars }); } catch { return processIntradayNotes(liveNotes); }
+  try { return renderNotesForPrompt(workspacePath, liveNotes, { budgetChars }); } catch { return processIntradayNotes(liveNotes).slice(0, Math.max(0, budgetChars)); }
 }
 // ─── Types ───────────────────────────────────────────────────────────────────────
 export interface SkillWindow {
@@ -1433,129 +1434,8 @@ const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_ops(action:"spawn",
   2) PARALLELIZE: when a piece of work is independent of what you're doing right now, spawn it to run concurrently instead of serially — gather data, scan the repo, run a web lookup, write a file, update memory, or prep one thing while you do another (e.g. browse a site while an agent builds a file). Don't do independent work one-at-a-time when it can overlap.
 prompt MUST be fully self-contained: include exact paths, URLs, context, and instructions — the spawned agent has no access to "the conversation". The finalization gate waits for and merges same-turn background_ops spawn results before your final reply. Use background_ops(action:"wait", wait_ms) to intentionally pause the foreground turn while spawned agents finish before you continue. Don't call background_ops action="join"/"status" unless explicitly needed. Legacy background_* tools remain executable compatibility aliases but are hidden from the normal schema surface. Spawned agents plan with bg_plan_declare/bg_plan_advance.`;
 
-function buildToolsContextUncached(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
-  // Build dynamic search provider summary inline (getConfig already imported at top of file)
-  let searchProviders = 'DuckDuckGo (fallback)';
-  try {
-    const cfg = getConfig();
-    const data = (cfg.getConfig() as any);
-    const s = data.search || {};
-    const preferred = String(s.preferred_provider || 'ddg').toLowerCase();
-    const tinyfishKey = cfg.resolveSecret(s.tinyfish_api_key);
-    const tavilyKey = cfg.resolveSecret(s.tavily_api_key);
-    const googleKey = cfg.resolveSecret(s.google_api_key);
-    const googleCx = cfg.resolveSecret(s.google_cx);
-    const braveKey = cfg.resolveSecret(s.brave_api_key);
-    const ps: string[] = [];
-    if (tinyfishKey) ps.push(preferred === 'tinyfish' ? 'TinyFish (primary)' : 'TinyFish');
-    if (tavilyKey) ps.push(preferred === 'tavily' ? 'Tavily (primary)' : 'Tavily');
-    if (googleKey && googleCx) ps.push(preferred === 'google' ? 'Google (primary)' : 'Google');
-    if (braveKey)  ps.push(preferred === 'brave'  ? 'Brave (primary)'  : 'Brave');
-    for (const p of EXTRA_SEARCH_PROVIDERS) {
-      if (s[p.field] && cfg.resolveSecret(s[p.field])) ps.push(preferred === p.id ? `${p.label} (primary)` : p.label);
-    }
-    ps.push(preferred === 'ddg' ? 'DuckDuckGo (primary)' : 'DuckDuckGo (fallback)');
-    searchProviders = ps.join(', ');
-  } catch { /* use default */ }
-
-  const runtimeCategoryDefs: Array<[string, string]> = TOOL_CATEGORY_MENU_ORDER.map((id) => [
-    id,
-    `${id} (${TOOL_CATEGORY_MANIFEST[id].menuLabel})`,
-  ]);
-  const allowedCategoryIds: Set<string> = new Set(getRuntimeAllowedCategories(TOOL_CATEGORY_MENU_ORDER));
-  const categoryMenu = runtimeCategoryDefs
-    .filter(([id]) => allowedCategoryIds.has(id))
-    .map(([, label]) => label)
-    .join(' | ');
-
+function buildToolsContextUncached(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents; runSurface?: import('./runtime-actor').RuntimeActorSurface }): string {
   const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
-  const fileEditRouting = workspaceToolMode === 'terminal-first'
-    ? '[FILE EDIT ROUTING] Terminal-first mode is active. For workspace file work, use terminal or run_command with the existing workspace/path boundaries, approval gates, hard-deny rules, and audit trail. Use shell commands for reads, edits, searches, and file operations. Native workspace read/edit wrappers and the regular file primitives are not available in this turn; Git, code navigation, safety, process, and source/developer tools remain separate surfaces.'
-    : '[FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.';
-
-  const legacyMenu = `[TOOLS] Core tools loaded (web_search/web_fetch, memory + write_note, skill_list/skill_read for skill discovery, background_ops/declare_plan/timer, question/approval/login cards, show_ui_card/delivery_send, tool_search/tool_call for connected apps, switch_model/set_current_model/update_heartbeat). File read/search/edit, terminal and git are NOT core: they live in workspace_write. Activate additional categories as needed:
-  ${categoryMenu}
-  Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
-  Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
-
-  ${fileEditRouting}
-${arePrometheusDevToolsVisible()
-  ? '[SOURCE ROOT SAFETY] When the request concerns Prometheus itself, inspect the live product tree with dev_source_read. Do not use workspace/repos/PromSRC*, PromSRC-compare, rescue copies, or other workspace clones as current product source unless the user explicitly asks to compare that copy.'
-  : '[PROMETHEUS REPO ROUTING] Treat the configured workspace repository as the editable project. Use workspace_read/workspace_code_nav to inspect it and workspace_edit/workspace_run/workspace_git to change and verify it. Direct Prometheus self-edit/dev-source and repo-sync tools are hidden by default.'}
-
-[RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use workspace_run(action:"run", command) for bounded commands; use workspace_run(action:"start", command) for long-running or interactive commands; manage runIds with workspace_run(action:"status"|"log"|"wait"|"kill"|"submit").
-
-[PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
-${arePrometheusDevToolsVisible()
-  ? '- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.'
-  : '- code_change: Prometheus self-edit proposals are hidden in this workspace-oriented mode. Use action for edits to the configured workspace repository.'}
-- action: approve and perform/trigger/create something exactly once. Use for team starts, scheduled runs, artifacts, and bounded workflows. Include 3-7 execution_steps and requires_build=false.
-- review: read-mostly verification/audit/report. Do not mutate unless the proposal explicitly approves that exact mutation. Include evidence/resource refs and 3-7 execution_steps.
-
-[SEARCH] Providers: ${searchProviders}.
-WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.
-SHOPPING: for products, shopping comparisons, prices, ratings, or product carousels, call shopping_search_products first. It uses the existing web search/fetch stack and emits carousel-ready product cards without requiring shopping API keys. Use browser tools only to fill missing fields, inspect a JS-heavy page, or verify a specific product visually.
-CITATIONS: after web research, cite inline next to each supported claim as a markdown link whose text is the site name, e.g. ([Reuters](https://...)). These render as favicon citation pills. Pages fetched this turn are appended automatically as source pills under the reply, so no trailing link list is needed. Use show_sources only for a curated image-card roundup.
-HOW: complex topics → ONE web_search call with 2–4 angles in queries[] (searched in parallel; never several separate web_search calls). Scan snippets → ONE web_fetch with urls[] for the 1–3 most relevant pages. Add site:domain.com to target a source.
-FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
-ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
-For broad coverage use web_search(..., provider:"multi") or web_search(..., multi_engine:true). For provider checks use web_search(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai"|"exa"|"serper"|"firecrawl"|"jina"|"linkup"|"serpapi"|"perplexity"|"searxng") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
-
-[WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
-WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
-SKIP: casual chat, greetings, simple Q&A, turns where nothing actionable happened.
-SPEED RULE: if write_note is the only action in your turn, call switch_model('low') first — it reverts automatically after.
-DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered data, intermediate results, or blockers keeps context recoverable if the task is interrupted.
-
-[MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory(action:"search", query=...) before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use mode="timeline" when chronology matters.
-
-[BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. Business entity tools are core: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
-
-[TEAMS & AGENTS] Agent/task routes — activate agents_and_teams, then pick the right one:
-  → chat_with_subagent(id,message) — normal persistent chat/check-in with a known standalone non-team agent.
-  → agent_run_ops(action:"list"|"get"|"steer"|"recover"|"resume"|"rerun",...) — existing unfinished/failed subagent/team-agent runs. Use steer for live instruction changes and recover only for paused/stalled recovery chat. Completed subagent tasks cannot be reopened.
-  → spawn_subagent('id', task, ...) and message_subagent(id,assignment) — create NEW standalone work only. These calls already create the run: the assignment must directly describe work, never ask the worker to create/start/spawn another task. Each milestone/follow-up after completion gets a new task id; reference the prior task in context rather than reopening it. agent_message_send/agent_turn_request/agent_reply_wait — lower-level mailbox/reply workflows. These require agents_and_teams/team_ops category.
-  → ask_team_coordinator(goal) — managed multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
-Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
-
-[MODEL ROUTING] Default: primary model (powerful, for complex work). Call switch_model(tier, reason) once the available evidence shows the remaining work is clearly lighter; you may inspect or read first, and there is no first-or-second-call deadline. If uncertain, stay on the primary model. Switching later in the same turn is valid.
-  → If the user asks to change the AI's current/live primary model, call set_current_model("provider/model"). Do not use set_agent_model for that; set_agent_model is only for future-agent defaults/routes.
-  → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
-  → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
-  → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
-  → Mixed intent rule: if a turn contains BOTH memory work (memory(action:"write")/write_note) and a separate actionable task, prefer background_ops(action:"spawn") for the memory sidecar so primary execution continues in parallel.
-  → If you choose not to spawn and you used switch_model for a memory side action, continue executing the user's remaining task in the same turn (do not stop after memory).
-  Auto-reverts after turn end — never switch back manually.
-
-${BG_AGENT_RUNTIME_HINT}`;
-  const fallbackIntents: Stage4InstructionIntents = {
-    file_edit_intent: true,
-    command_execution_intent: true,
-    proposal_workflow_intent: true,
-    web_research_intent: true,
-    business_context_intent: true,
-    reasons: {},
-  };
-  const stage4Intents = options?.instructionIntents || fallbackIntents;
-  const sectionBounds: Array<[Stage4MenuSegmentId, string, string]> = [
-    ['tools.file_edit_routing', '[FILE EDIT ROUTING]', '[RUN COMMAND ROUTING]'],
-    ['tools.run_command_routing', '[RUN COMMAND ROUTING]', '[PROPOSAL LANES]'],
-    ['tools.proposal_lanes', '[PROPOSAL LANES]', '[SEARCH]'],
-    ['tools.search_strategy', '[SEARCH]', '[WRITE NOTE]'],
-    ['tools.business_context', '[BUSINESS CONTEXT]', '[TEAMS & AGENTS]'],
-  ];
-  let menu = legacyMenu;
-  for (const [id, startHeading, nextHeading] of sectionBounds) {
-    if (resolveStage4MenuSegmentDecision(id, stage4Intents).included) continue;
-    // The legacy menu headings are indented, so searching for an exact
-    // unindented marker leaves disabled sections in the prompt. Locate the
-    // surrounding blank-line boundaries from the heading text instead.
-    const startHeadingIndex = menu.indexOf(startHeading);
-    const start = startHeadingIndex >= 0 ? menu.lastIndexOf('\n\n', startHeadingIndex) : -1;
-    const nextHeadingIndex = start >= 0 ? menu.indexOf(nextHeading, start + 2) : -1;
-    const end = nextHeadingIndex >= 0 ? menu.lastIndexOf('\n\n', nextHeadingIndex) : -1;
-    if (start >= 0 && end > start) menu = menu.slice(0, start) + menu.slice(end);
-  }
   const activeCategoryList = Array.from(activatedCategories)
     .map((category) => String(category || '').trim())
     .filter((category) => Boolean(category) && !isPrometheusDevToolCategoryHidden(category));
@@ -1572,7 +1452,7 @@ ${BG_AGENT_RUNTIME_HINT}`;
       toolSearchHint = `\n\n[TOOL_SEARCH] Connected apps/MCP/composites reachable without activating a category: ${summary}. Use tool_search({query}) then tool_call({name, arguments}). Loaded connector wrappers (connector_<app>, x_*, vercel_ops) can be called directly.`;
     }
   } catch { /* optional */ }
-  const baseMenu = `${menu}${activeCategoryHint}${toolSearchHint}\n\n${TOOL_BLOCKS.parallelism}\n\n${TOOL_BLOCKS.skills}`;
+  const baseMenu = `${buildCompactToolMenu(options?.runSurface)}${activeCategoryHint}${toolSearchHint}`;
 
   if (activatedCategories.size === 0) return baseMenu;
 
@@ -1617,7 +1497,7 @@ ${BG_AGENT_RUNTIME_HINT}`;
   return baseMenu + '\n\n' + activePolicies.join('\n\n');
 }
 
-export function buildToolsContext(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
+export function buildToolsContext(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents; runSurface?: import('./runtime-actor').RuntimeActorSurface }): string {
   const categories = Array.from(activatedCategories)
     .map((category) => String(category || '').trim())
     .filter(Boolean)
@@ -1640,6 +1520,7 @@ export function buildToolsContext(activatedCategories: Set<string>, options?: { 
     categories,
     workspaceToolMode,
     instructionIntents: options?.instructionIntents || null,
+    runSurface: options?.runSurface || 'interactive',
     search: searchFingerprint,
     publicDistribution: isPublicDistributionBuild(),
     instructionResolverMode: getInstructionResolverMode(),
@@ -1914,6 +1795,8 @@ export async function buildPersonalityContext(
     forcedSkillIds: options?.forcedSkillIds || [],
   };
   const snapshot = options?.serializedSnapshot;
+  const runSurface = snapshot?.runtimeActor?.surface || getRuntimeActorContext(sessionId)?.surface
+    || (executionMode === 'background_agent' || executionMode === 'team_subagent' ? 'background_dispatch' : executionMode === 'scheduled' ? 'scheduled_run' : 'interactive');
   // Capture this in the gateway snapshot so isolated prompt workers cannot
   // accidentally describe themselves instead of the host where tools run.
   const runtimeHostContext = snapshot?.runtimeHostContext || buildPromptRuntimeHostContext(workspacePath);
@@ -1982,7 +1865,7 @@ export async function buildPersonalityContext(
         runtimeHostContext,
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
-        buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [toolCategoryMatchTeach, skillCtxTeach, activeSkillCtxTeach],
     );
@@ -2089,7 +1972,7 @@ export async function buildPersonalityContext(
         soul ? `[SOUL]\n${soul}` : '',
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
-        buildToolsContext(activatedCatsSwitch, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsSwitch, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [cisContext, memoryAtomCtx, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
@@ -2116,7 +1999,7 @@ export async function buildPersonalityContext(
         runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
-        buildToolsContext(activatedCatsDirectSub, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsDirectSub, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [
         toolCategoryMatchDirectSub,
@@ -2156,7 +2039,7 @@ export async function buildPersonalityContext(
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
-        buildToolsContext(activatedCatsBackground, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsBackground, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [
         toolCategoryMatchBackground,
@@ -2192,7 +2075,7 @@ export async function buildPersonalityContext(
         runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
-        buildToolsContext(activatedCatsSub, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsSub, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [
         toolCategoryMatchSub,
@@ -2228,7 +2111,7 @@ export async function buildPersonalityContext(
         runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
-        buildToolsContext(activatedCatsManager, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsManager, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [toolCategoryMatchManager, skillCtx, activeSkillCtx],
     );
@@ -2264,7 +2147,7 @@ export async function buildPersonalityContext(
     const skipIntraday = true;
     const today = new Date().toISOString().split('T')[0];
     const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
-    const intradayNotes = !skipIntraday ? processIntradayNotes(readPromptProfileText(intradayPath)) : '';
+    const intradayNotes = !skipIntraday ? processIntradayNotesForPrompt(workspacePath, readPromptProfileText(intradayPath)) : '';
     // Fix 2: Don't inherit interactive session categories for cron/heartbeat runs.
     // task_* sessions manage their own categories explicitly (e.g. source_write for proposals).
     // Cron sessions (including sessionTarget:'main') start clean to avoid leaking 8+ interactive cats.
@@ -2278,7 +2161,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchAuto = buildToolCategoryMatchContext(messageText, activatedCatsAuto);
-    const toolsBlockAuto = buildToolsContext(activatedCatsAuto, { instructionIntents: options?.instructionIntents });
+    const toolsBlockAuto = buildToolsContext(activatedCatsAuto, { instructionIntents: options?.instructionIntents, runSurface });
     // Autonomous agents: same hint + pinned skills as interactive chat.
     const skillCtx = skillTurnContext();
     const activeSkillCtx = activeSkillsContext();
@@ -2352,7 +2235,7 @@ export async function buildPersonalityContext(
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
-        buildToolsContext(activatedCatsT1, { instructionIntents: options?.instructionIntents }),
+        buildToolsContext(activatedCatsT1, { instructionIntents: options?.instructionIntents, runSurface }),
       ],
       [
         cisContext,
@@ -2383,7 +2266,7 @@ export async function buildPersonalityContext(
     }
   }
   const toolCategoryMatch = buildToolCategoryMatchContext(messageText, activatedCats);
-  const toolsBlock = buildToolsContext(activatedCats, { instructionIntents: options?.instructionIntents });
+  const toolsBlock = buildToolsContext(activatedCats, { instructionIntents: options?.instructionIntents, runSurface });
 
   // Reference hints — Prom reads these files when actually needed rather than
   // injecting partial snippets based on keyword guesses.

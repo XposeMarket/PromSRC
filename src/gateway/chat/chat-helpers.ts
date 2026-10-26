@@ -91,6 +91,7 @@ import {
   type SkillWindow,
 } from '../prompt-context';
 import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
+import { getRuntimeActorContext } from '../runtime-actor';
 import { isBrainThoughtRunActive } from '../brain/brain-thought-runtime.js';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
 import { verifyToolCategorySurface } from '../tool-category-provisioning';
@@ -735,6 +736,7 @@ export function buildTools(
     {
       includeBrainThoughtTools: !!sessionId && isBrainThoughtRunActive(sessionId),
       allowNativeWorkspaceTools: options.allowNativeWorkspaceTools === true,
+      runSurface: sessionId ? getRuntimeActorContext(sessionId)?.surface : undefined,
     },
   );
 }

@@ -79,6 +79,7 @@
     "test:codex-oauth-realtime": "npm run build:backend && node scripts/test-codex-oauth-realtime-bridge.mjs",
     "test:hyperframes-roundtrip": "node scripts/test-hyperframes-roundtrip.mjs",
     "test:hyperframes-catalog": "npm run build:backend && node scripts/test-hyperframes-catalog-pipeline.mjs",
+    "test:prompt-diet": "tsx src/gateway/prompt-diet.regression.ts",
     "test:runtime-prompt-manifest": "tsx src/runtime/prompt-manifest.regression.ts",
     "test:context-routing-foundation": "node scripts/test-context-routing-foundation.mjs",
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",

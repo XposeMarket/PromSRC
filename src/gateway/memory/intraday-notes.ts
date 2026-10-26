@@ -226,7 +226,7 @@ function renderFull(n: ParsedNote, maxChars: number): string {
 }
 
 export interface RenderNotesOptions {
-  /** Total character budget for the entries (carry-forward is separate). */
+  /** Total character budget, including carried entries, IDs and headings. */
   budgetChars?: number;
   /** Per-entry cap for full entries. */
   maxEntryChars?: number;
@@ -235,12 +235,11 @@ export interface RenderNotesOptions {
 }
 
 /**
- * Prompt projection. Open items (today + carried from recent days) in full,
- * then info notes newest-first in full, then done items as one-liners, all
- * within one budget.
+ * Bounded prompt projection: reserve newest open IDs first, then concise open
+ * summaries and the last three nonopen notes. Disk content is never truncated.
  */
 export function renderNotesForPrompt(workspacePath: string, todayRaw: string, opts: RenderNotesOptions = {}): string {
-  const budget = opts.budgetChars ?? 9_000;
+  const budget = Math.max(0, Math.floor(opts.budgetChars ?? 2_000));
   const maxEntry = opts.maxEntryChars ?? 2_000;
   const today = parseNotes(todayRaw, 'today');
   const carried: ParsedNote[] = [];
@@ -256,42 +255,47 @@ export function renderNotesForPrompt(workspacePath: string, todayRaw: string, op
   // Newest open note per thread wins (older ones on a thread are normally
   // already superseded on disk; this also covers hand-edited files).
   const seenThreads = new Set<string>();
-  const open = [...carried, ...today.filter((n) => n.status === 'open')].reverse().filter((n) => {
+  const open = [...carried, ...today.filter((n) => n.status === 'open')].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).filter((n) => {
     const t = noteThread(n);
     if (!t) return true;
     if (seenThreads.has(t)) return false;
     seenThreads.add(t);
     return true;
   });
-  const info = today.filter((n) => n.status === 'info').reverse();
-  const done = today.filter((n) => n.status === 'done').reverse();
-
-  let used = 0;
-  const openOut: string[] = [];
-  const infoOut: string[] = [];
-  const doneOut: string[] = [];
-  let droppedOpen = 0;
-  let droppedInfo = 0;
-  for (const n of open) {
-    const s = renderFull(n, maxEntry);
-    if (used + s.length > budget) { droppedOpen += 1; continue; }
-    openOut.push(s); used += s.length + 2;
-  }
-  for (const n of info) {
-    const s = renderFull(n, maxEntry);
-    if (used + s.length > budget) { droppedInfo += 1; continue; }
-    infoOut.push(s); used += s.length + 2;
-  }
-  for (const n of done) {
-    const s = `- ${n.id ? `#${n.id} ` : ''}[${n.tag}] ${firstLine(n.body)}`;
-    if (used + s.length > budget) break;
-    doneOut.push(s); used += s.length + 1;
-  }
-
+  const recent = today.filter(n => n.status !== 'open').reverse().slice(0, 3);
   const parts: string[] = [];
-  if (openOut.length) parts.push(`OPEN ITEMS (newest first; resolve with write_note(status:"done", resolves:["#id"]) when finished):\n\n${openOut.join('\n\n')}`);
-  if (infoOut.length) parts.push(`NOTES (newest first):\n\n${infoOut.join('\n\n')}`);
-  if (doneOut.length) parts.push(`DONE TODAY:\n${doneOut.join('\n')}`);
-  if (droppedOpen || droppedInfo) parts.push(`[${droppedOpen} open + ${droppedInfo} older notes omitted for budget; use memory search to read them]`);
-  return parts.join('\n\n');
+  let used = 0;
+  const append = (line: string): boolean => {
+    const cost = line.length + (parts.length ? 1 : 0);
+    if (used + cost > budget) return false;
+    parts.push(line); used += cost; return true;
+  };
+  const ids = open.map(n => n.id ? `#${n.id}` : '[legacy open without ID]');
+  // Reserve ID capacity before spending space on body text. When even IDs do
+  // not fit, retain newest whole IDs and an explicit overflow/search pointer.
+  const prefix = 'OPEN IDs (newest first; resolve with write_note resolves): ';
+  const overflow = ' [more open IDs omitted; memory search / notes file has the full set]';
+  if (open.length) {
+    const allIds = prefix + ids.join(' ');
+    if (!append(allIds)) {
+      let kept = prefix;
+      for (const id of ids) {
+        const next = kept + (kept === prefix ? '' : ' ') + id;
+        if (next.length + overflow.length > budget) break;
+        kept = next;
+      }
+      append((kept + overflow).slice(0, budget));
+    }
+  }
+  const recentReserve = recent.reduce((sum, n) => sum + Math.min(160, `${n.status.toUpperCase()} ${n.id ? `#${n.id}` : ''}: ${firstLine(n.body)}`.length) + 1, 0);
+  for (const n of open) {
+    if (budget - used <= recentReserve + 221) break;
+    const line = `OPEN ${n.id ? `#${n.id}` : ''}: ${firstLine(n.body)}`;
+    if (!append(line.slice(0, Math.min(maxEntry, 220)))) break;
+  }
+  for (const n of recent) {
+    const line = `${n.status.toUpperCase()} ${n.id ? `#${n.id}` : ''}: ${firstLine(n.body)}`;
+    if (!append(line.slice(0, Math.min(maxEntry, 160)))) break;
+  }
+  return parts.join('\n');
 }

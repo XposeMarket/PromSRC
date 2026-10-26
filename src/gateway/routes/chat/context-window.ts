@@ -1,4 +1,5 @@
 import path from 'path';
+import { personaContextLabel } from '../../prompt-tool-menu';
 import fs from 'fs';
 import {
   getConfig,
@@ -661,8 +662,10 @@ export function buildSystemPromptChildren(totalTokens: number, sessionId: string
     addText('base_identity', 'Base identity / execution mode', 'You are Prometheus. Follow the current execution mode, response style, safety, routing, memory, and tool-use rules.', true);
     addText('model_capabilities', 'Model capabilities', `[MODEL_CAPABILITIES]\nprovider=${profileInfo.providerId}\nmodel=${profileInfo.model}`, false);
     addText('prometheus_soul', '[PROMETHEUS_SOUL]', loadSoul());
-    addText('user', '[USER]', loadWorkspaceFile(workspacePath, 'USER.md', 5000));
-    addText('soul', '[SOUL]', loadWorkspaceFile(workspacePath, 'SOUL.md', 6000));
+    const userPersona = loadFullMemoryProfile(workspacePath, 'USER.md');
+    const soulPersona = loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    addText('user', personaContextLabel('USER', userPersona), userPersona);
+    addText('soul', personaContextLabel('SOUL', soulPersona), soulPersona);
     const memoryMode = resolveContextWindowMemoryMode(sessionId);
     if (memoryMode === 'full' || memoryMode === 'compact') {
       addText(

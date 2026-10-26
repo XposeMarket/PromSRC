@@ -40,6 +40,7 @@ import {
 } from '../runtime/workspace-tool-mode';
 
 import { compactToolDefinitionsForModel } from './tools/schema-compaction';
+import type { RuntimeActorSurface } from './runtime-actor';
 
 export interface BuildToolsDeps {
   getMCPManager: () => any;
@@ -48,6 +49,8 @@ export interface BuildToolsDeps {
 }
 
 export interface BuildToolsOptions {
+  /** Actor surface, not agent identity: direct chats retain interactive tools. */
+  runSurface?: RuntimeActorSurface;
   /** Expose run-scoped Brain Thought tools only to an active Thought session. */
   includeBrainThoughtTools?: boolean;
   /** Permit an explicitly scoped Brain runtime to see native workspace tools. */
@@ -1116,6 +1119,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       `workspaceMode:${workspaceToolMode}`,
       `brainThought:${includeBrainThoughtTools ? '1' : '0'}`,
       `nativeWorkspace:${allowNativeWorkspaceTools ? '1' : '0'}`,
+      `runSurface:${options.runSurface || 'interactive'}`,
       `extensions:${extensionRevision}`,
       `mcp:${mcpToolSignature}`,
       `cats:${stableCategoryKey(normalizedActiveCategories)}`,
@@ -1697,8 +1701,11 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // (isToolHiddenInPublicBuild in subagent-executor) — not just the source-read
   // names. Otherwise the model is shown source-write / self-update / restart tool
   // defs it can never execute, wasting context and inviting failed calls.
+  const unattended = new Set<RuntimeActorSurface>(['background_dispatch', 'team_dispatch', 'scheduled_run', 'proposal_execution', 'heartbeat']).has(options.runSurface!);
+  const interactiveOnly = new Set(['ask_prometheus_questions', 'await_prometheus_question_response', 'request_browser_login']);
   const runtimeToolDefs = toolDefs.filter((t: any) => {
     const name = String(t?.function?.name || '');
+    if (unattended && interactiveOnly.has(name)) return false;
     if (isToolHiddenInPublicBuild(name)) return false;
     if (!devToolsVisible && isPrometheusDevToolHidden(name)) return false;
     return true;
