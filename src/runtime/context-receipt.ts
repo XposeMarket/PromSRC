@@ -127,10 +127,14 @@ export function captureContextReceipt(input: RuntimePromptManifestInput, manifes
   } catch { return { id: manifest.id, persisted: false, reason: 'capture_failed' }; }
 }
 
-export function readContextReceipts(query: { id?: string; sessionId?: string; gatewayTurnId?: string; days?: number; limit?: number; detail?: boolean } = {}, root = workspaceRoot()) {
+type ContextReceiptQuery = { id?: string; sessionId?: string; gatewayTurnId?: string; days?: number; limit?: number; detail?: boolean };
+
+// Outcome joins share the validated reader but may cover every retained record;
+// the public list still caps at 100. Read settings once per scan, not per file.
+function readContextReceiptRecords(query: ContextReceiptQuery, root: string, maxLimit: number) {
   if (query.id && !ID.test(query.id)) throw new Error('Invalid receipt id');
   const dir = receiptDir(root); const settings = contextReceiptSettings(root);
-  const days = boundedNumber(query.days, 7, 1, 30); const limit = boundedNumber(query.limit, 20, 1, 100);
+  const days = boundedNumber(query.days, 7, 1, 30); const limit = boundedNumber(query.limit, 20, 1, maxLimit);
   let skipped = 0; const records: any[] = [];
   const names = query.id ? [`${query.id}.json`] : fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => ID.test(n.replace(/\.json$/, ''))).sort().reverse().slice(0, MAX_FILES) : [];
   for (const name of names) {
@@ -149,6 +153,10 @@ export function readContextReceipts(query: { id?: string; sessionId?: string; ga
     } catch { skipped++; }
   }
   return { settings, records, skipped, limits: { days, limit, maxFiles: MAX_FILES, maxFileBytes: MAX_FILE }, captureCoverage: 'Only actual captureRuntimePromptManifest callers; no response-success claim' };
+}
+
+export function readContextReceipts(query: ContextReceiptQuery = {}, root = workspaceRoot()) {
+  return readContextReceiptRecords(query, root, 100);
 }
 
 // Stable convenience exports for agent audit operations; root remains internal.
@@ -177,9 +185,7 @@ export function reviewContextReceipt(id: string, review: { relevance: 'useful' |
 export function recordContextReceiptOutcome(outcome: { sessionId: string; gatewayTurnId: string; status: 'completed' | 'cancelled' | 'failed'; response?: string; reason?: string }, root = workspaceRoot()) {
   try {
     if (!contextReceiptSettings(root).enabled || !outcome.gatewayTurnId) return { joined: 0 };
-    const dir = receiptDir(root);
-    const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => ID.test(n.replace(/\.json$/, ''))).sort().reverse().slice(0, MAX_FILES) : [];
-    const records = names.map(n => readContextReceipts({ id: n.replace(/\.json$/, ''), detail: true, sessionId: outcome.sessionId, gatewayTurnId: outcome.gatewayTurnId, limit: 1 }, root).records[0]).filter(r => r?.sessionId === outcome.sessionId);
+    const records = readContextReceiptRecords({ detail: true, sessionId: outcome.sessionId, gatewayTurnId: outcome.gatewayTurnId, limit: MAX_FILES }, root, MAX_FILES).records;
     let joined = 0; let failed = 0;
     for (const r of records) if (r.gatewayTurnId === outcome.gatewayTurnId) {
       const response = scrubContextText(outcome.response || '');

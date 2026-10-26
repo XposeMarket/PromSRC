@@ -35,6 +35,17 @@ try {
   try { assert.equal(recordContextReceiptOutcome(outcome, root).joined, 1); }
   finally { RegExp.prototype[Symbol.replace] = original; }
   assert.equal(unrelatedScrubs, 0, 'outcome join must not scrub unrelated receipt text');
+  configureContextReceipts({ enabled: true }, root);
+  let settingsReads = 0;
+  const readFileSync = fs.readFileSync;
+  (fs as any).readFileSync = (...args: any[]) => {
+    if (String(args[0]) === path.join(dir, 'settings.json')) settingsReads++;
+    return (readFileSync as any)(...args);
+  };
+  try { assert.equal(recordContextReceiptOutcome(outcome, root).joined, 1); }
+  finally { fs.readFileSync = readFileSync; }
+  assert(settingsReads <= 3, `outcome join must not reload settings per file: ${settingsReads}`);
+  assert.equal(readContextReceipts({ limit: 256 }, root).records.length, 100, 'public list stays capped at 100');
   const selected = readContextReceipts({ id: id(200), sessionId: 'selected', gatewayTurnId: 'turn', detail: true } as any, root).records[0];
   assert.equal(selected.outcome.state, 'available');
   assert(!JSON.stringify(selected).includes('unsafe-secret'));
