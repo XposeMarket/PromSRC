@@ -15777,7 +15777,6 @@ function patchStreamingChatBubble(sessionId) {
   return true;
 }
 
-const streamingChatFrames = new Map();
 const streamingChatFlushHooks = new Map();
 // Visible = the active chat plus an open side/split pane. A failed patch redraws
 // only that pane (coalesced in the same frame); the active chat keeps its full fallback.
@@ -15797,13 +15796,12 @@ function redrawSideChatStreamPane(sid) {
 function renderStreamingChatUpdate(sessionId, onFlushed = null) {
   const sid = String(sessionId || '').trim();
   if (!sid || document.hidden || !isSessionVisibleInChatSurface(sid)) return;
-  // onFlushed runs after the DOM write in the rAF flush (first-visible metric, motion hook).
+  // Reuse the cost/input-aware scheduler instead of a token-driven rAF loop.
+  // Hooks still run after the DOM write (first-visible metric, motion hook).
   if (typeof onFlushed === 'function') {
     streamingChatFlushHooks.set(sid, [...(streamingChatFlushHooks.get(sid) || []), onFlushed]);
   }
-  if (streamingChatFrames.has(sid)) return;
-  streamingChatFrames.set(sid, requestAnimationFrame(() => {
-    streamingChatFrames.delete(sid);
+  desktopStreamRenderScheduler.schedule(`desktop-bubble:${sid}`, () => {
     const hooks = streamingChatFlushHooks.get(sid) || [];
     streamingChatFlushHooks.delete(sid);
     if (document.hidden || !isSessionVisibleInChatSurface(sid)) return;
@@ -15812,7 +15810,7 @@ function renderStreamingChatUpdate(sessionId, onFlushed = null) {
       if (!paneOnly) renderChatMessages();
     }
     for (const hook of hooks) { try { hook(); } catch {} }
-  }));
+  }, { minimumDelay: sid === String(window.activeChatSessionId || '') && window.chatMessagesUserScrolledUp ? 250 : 0 });
 }
 
 document.addEventListener('visibilitychange', () => {
