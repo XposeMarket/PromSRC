@@ -329,7 +329,6 @@ export async function handleSchedulingTool(ctx: handleSchedulingToolContext): Pr
               scheduleId: created.id,
               scheduleName: created.name,
               prompt: instructionPrompt,
-            precheck: args.precheck,
               model: modelOverride,
             });
           }
