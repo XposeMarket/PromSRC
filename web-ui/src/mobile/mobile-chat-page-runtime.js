@@ -1,3 +1,5 @@
+import { noteMobilePendingEvent } from './mobile-ttft-state.js';
+
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { shouldShowActivityPill } from '../features/chat/tool-wait-countdown.js';
 import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
@@ -4536,6 +4538,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
 
   function applyMobileSideStreamEvent(aiTurn, evt) {
     if (!aiTurn || !evt?.type) return '';
+    noteMobilePendingEvent(aiTurn, evt);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
     switch (String(evt.type || '')) {
       case 'final_response_start':
@@ -6297,6 +6300,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       delete aiTurn._pmAdmissionClientRequestId;
     }
     if (evt.type !== 'error') _clearRecoveredMobileChatError(aiTurn);
+    noteMobilePendingEvent(aiTurn, evt);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
     const sharedRuntime = mobileChatRuntimeAdapter.observeStreamEvent(requestedSession, aiTurn, evt);
     if (!aiTurn._pmRecoveryReplay && [
