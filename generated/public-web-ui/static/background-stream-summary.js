@@ -17,12 +17,12 @@ export function mergeBackgroundReasoningSummary(trace, text, extra, index, { del
   if (!next) return;
   const latest = trace.at(-1);
   const previous = latest
-    && String(latest?.extra?.source || '').toLowerCase() === 'agent_progress'
+    && String(latest?.extra?.source || '').toLowerCase() === 'reasoning_summary'
     ? latest
     : null;
   const visibleExtra = {
     ...extra,
-    source: 'agent_progress',
+    source: 'reasoning_summary',
     visibility: 'summary',
     reasoningKind: 'summary',
     _trailingSpace: /\s$/.test(raw),
