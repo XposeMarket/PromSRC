@@ -1,3 +1,5 @@
+import { normalizeSchedulePrecheck } from './schedule-precheck';
+
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
@@ -133,6 +135,7 @@ function summarizeJob(job: CronJob): Record<string, any> {
     lastRun: job.lastRun,
     lastRunStartedAt: (job as any).lastRunStartedAt || null,
     lastDuration: job.lastDuration,
+    precheck: job.precheck || null,
     lastQueueDurationMs: job.lastQueueDurationMs ?? null,
     lastRunnerDurationMs: job.lastRunnerDurationMs ?? job.lastDuration ?? null,
     lastOrchestrationDurationMs: job.lastOrchestrationDurationMs ?? job.lastDuration ?? null,
@@ -482,6 +485,10 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
   }
   if (args?.model_override !== undefined || args?.model !== undefined) {
     patch.model = String(args.model_override ?? args.model ?? '').trim() || undefined;
+  }
+  if (args?.precheck !== undefined) {
+    try { patch.precheck = normalizeSchedulePrecheck(args.precheck); }
+    catch (error: any) { errors.push(String(error?.message || error)); }
   }
   if (args?.skillIds !== undefined) {
     patch.skillIds = normalizeScheduleSkillIds(args.skillIds);
