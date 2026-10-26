@@ -4131,7 +4131,7 @@ function _mobileDurableReasoningEntries(entries) {
   return (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
 }
 
-function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
+function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary', source = 'agent_progress' } = {}) {
   if (!message) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -4140,7 +4140,7 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   // row after a thought/tool boundary makes the next summary rewrite history.
   const activeProgressEntry = message.liveTraceEntries.at(-1);
   const existing = activeProgressEntry
-    && String(activeProgressEntry?.extra?.source || activeProgressEntry?.source || '').toLowerCase() === 'agent_progress'
+    && String(activeProgressEntry?.extra?.source || activeProgressEntry?.source || '').toLowerCase() === source
     ? activeProgressEntry
     : null;
   if (!existing) {
@@ -4150,7 +4150,7 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
       text: incoming,
       ts: Date.now(),
       time: _nowTime(),
-      extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' },
+      extra: { visibility, source, reasoningKind: 'summary' },
     });
     return true;
   }
@@ -4170,12 +4170,12 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
-    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source };
     return visibilityChanged;
   }
   existing.text = latest;
   existing.time = _nowTime();
-  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+  existing.extra = { ...(existing.extra || {}), visibility, source };
   return true;
 }
 
@@ -4204,7 +4204,7 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
   // This event type is the authoritative, user-visible reasoning summary.
   // Complete summary packets replace the active label; delta packets append.
   // The shared renderer also retains their safe prose in each tool phase.
-  _setMobileLiveProgressNarration(message, chunk, { replace: String(evt?.type || '') === 'reasoning_summary' });
+  _setMobileLiveProgressNarration(message, chunk, { replace: String(evt?.type || '') === 'reasoning_summary', source: 'reasoning_summary' });
   return true;
 }
 
@@ -5590,7 +5590,7 @@ function _compactMobileTraceThoughtEntries(message) {
   const kept = [];
   let changed = false;
   for (const entry of entries) {
-    if (!_isMobileTraceThoughtType(entry?.type)) {
+    if (!_isMobileTraceThoughtType(entry?.type) || _mobileTraceThoughtKind(entry) === 'full_thought') {
       kept.push(entry);
       continue;
     }

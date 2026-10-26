@@ -559,7 +559,9 @@ export function createMobileChatRendererRuntime(context = {}) {
       const hasContent = String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
       if (!hasContent) return false;
       const type = String(entry?.type || '').toLowerCase();
+      if (!_isMobileTraceThoughtType(type)) thoughtTextsByKind.clear();
       if (_isMobileTraceThoughtType(type)) {
+        if (_mobileTraceThoughtKind(entry) === 'full_thought') return true;
         // Older/replayed frames could leave the same explicit summary in a
         // visible think row after the progress slot was created. The summary
         // slot is authoritative; suppress that stale duplicate so the tool
@@ -1034,7 +1036,11 @@ export function createMobileChatRendererRuntime(context = {}) {
         const summaryMarkup = progressSummary && !group.entries.some((entry) => String(entry?.text || entry?.content || '').trim())
           ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong class="t-think" data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
           : '';
-        // Safe summaries retain their paragraph text, not only the header.
+        // Provider summaries have one owner: a collapsed reasoning disclosure.
+        // Actual assistant commentary remains an ordinary timeline paragraph.
+        if (isSummaryThought) {
+          return `<details class="pm-trace-thought-group" data-pm-trace-group="${escapeHtml(group.id)}"><summary>Working for ${escapeHtml(_formatMobileWorkDuration(durationMs))}</summary><div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div></details>`;
+        }
         const bodyEntries = group.entries;
         const bodyHtml = bodyEntries.length
           ? `<div class="pm-trace-thought-body"><div class="pm-live-trace">${bodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`
@@ -3971,7 +3977,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     : '';
   const storedAnswerText = storedTerminal
     ? _mobileBackgroundText(stored?.result, stored?.finalResult, stored?.reply, stored?.output, stored?.error)
-    : _mobileBackgroundText(stored?.streamingText);
+    : (typeof stored?.streamingText === 'string' ? stored.streamingText : _mobileBackgroundText(stored?.streamingText));
   const incomingMessage = msg.message && typeof msg.message === 'object' ? msg.message : null;
   const incomingState = msg.state || msg.status || embedded.state || embedded.status;
   const incomingStreamId = msg.streamId || msg.stream?.streamId || embedded.streamId || embedded.stream?.streamId;
@@ -4029,12 +4035,8 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     lane.message.from = lane.agentName;
     if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
     lane.message.body.sender = lane.agentName;
-    if (storedAnswerText
-      && !String(lane.message.content || lane.message.body.text || '').trim()) {
-      lane.message.content = storedAnswerText;
-      lane.message.text = storedAnswerText;
-      lane.message.body.text = storedAnswerText;
-    }
+    // storedAnswerText seeds a cold lane above. Never refill a live empty body:
+    // a tool/narration boundary deliberately moved that text into the journal.
     // Merge, rather than fill only when empty. Recovery can arrive after a
     // live event and must retain both the current tool envelope and durable
     // process/trace entries from the background session checkpoint.
@@ -4185,7 +4187,10 @@ function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
   const eventType = _mobileBackgroundEventType(msg);
   if (!eventType) return null;
   const source = { ...payload, ...msg };
-  const text = _mobileBackgroundText(source.text, source.content, source.message, source.reply, source.result, source.output);
+  // Keep stream deltas byte-for-byte, including a packet containing only spaces.
+  const rawText = [source.text, source.content, source.message, source.reply, source.result, source.output]
+    .find(value => typeof value === 'string' && value.length > 0);
+  const text = rawText ?? _mobileBackgroundText(source.text, source.content, source.message, source.reply, source.result, source.output);
   return {
     ...source,
     type: eventType,
@@ -4720,8 +4725,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       beginFinalResponse(message);
       return true;
     case 'token_narration_boundary': {
-      const text = String(evt.text || evt.message || evt.narration || message.content || message.body?.text || '').trim();
-      if (!text) return false;
+      const text = String(evt.text || evt.message || evt.narration || message.content || message.body?.text || '');
+      if (!text.trim()) return false;
       _appendMobileLiveTrace(message, 'preamble', text, { extra: { source: 'agent_thought', visibility: 'user', event: 'token_narration_boundary' } });
       message.content = '';
       message.text = '';
@@ -4758,8 +4763,16 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (!chunk) return false;
       return _handleMobileReasoningSummaryDelta(message, { ...evt, text: chunk });
     }
-    case 'thinking':
     case 'agent_thought': {
+      const text = String(evt.text || evt.thinking || '');
+      if (!text.trim()) return false;
+      _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+      _appendMobileLiveTrace(message, 'preamble', text, {
+        extra: { ...evt, source: 'agent_thought', visibility: 'user', reasoningKind: undefined, event: 'agent_thought', streamId: evt.streamId, seq: evt.seq },
+      });
+      return true;
+    }
+    case 'thinking': {
       const thought = String(evt.thinking || evt.text || '').trim();
       if (!thought) return false;
       _handleMobileCleanThought(message, evt);
@@ -5003,9 +5016,9 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null, includ
 
 function _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message) {
   if (!message) return;
-  const text = String(message.content || message.text || message.body?.text || '').trim();
-  if (!text) return;
-  _appendMobileLiveTrace(message, message.toolActivityStarted ? 'think' : 'preamble', text, {
+  const text = String(message.content || message.text || message.body?.text || '');
+  if (!text.trim()) return;
+  _appendMobileLiveTrace(message, 'preamble', text, {
     extra: { visibility: 'user', source: 'agent_thought' },
   });
   message.content = '';
