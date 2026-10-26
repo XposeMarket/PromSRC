@@ -57,3 +57,12 @@
     filter: none !important;
   }
 }
+
+/* The working ring animates a gradient custom property, not a compositor-only
+   transform. Keep its status glow but stop repainting the desktop sidebar on
+   every frame, including while the reader types in an otherwise idle chat. */
+@media (min-width: 769px) {
+  .job-item.is-working::before {
+    animation-play-state: paused !important;
+  }
+}

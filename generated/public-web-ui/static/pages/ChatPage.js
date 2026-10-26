@@ -13239,8 +13239,8 @@ function renderLiveTraceCompactionBreak(entry) {
   </details>`;
 }
 
-function renderLiveTraceList(entries) {
-  const list = visibleLiveTraceEntries(entries);
+function renderLiveTraceList(entries, { presented = false } = {}) {
+  const list = presented ? entries : visibleLiveTraceEntries(entries);
   if (!list.length) return '';
   return `<div class="live-turn-trace">${list.map(renderLiveTraceEntry).join('')}</div>`;
 }
@@ -13530,8 +13530,8 @@ function liveTraceLogicalGroupText(calls) {
   return `${first.past} ${count} ${first.plural}${tail}`;
 }
 
-function liveTraceToolSummary(entries) {
-  const structured = toolActivitySummary(entries);
+function liveTraceToolSummary(entries, { coalesced = false } = {}) {
+  const structured = toolActivitySummary(entries, { coalesced });
   if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const groups = new Map();
@@ -13546,8 +13546,8 @@ function liveTraceToolSummary(entries) {
   return `Used ${count} tool${count === 1 ? '' : 's'}`;
 }
 
-function liveTraceCurrentToolLabel(entries) {
-  const structured = toolActivitySummary(entries, { live: true });
+function liveTraceCurrentToolLabel(entries, { coalesced = false } = {}) {
+  const structured = toolActivitySummary(entries, { live: true, coalesced });
   if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const call = calls[calls.length - 1];
@@ -13557,7 +13557,7 @@ function liveTraceCurrentToolLabel(entries) {
     if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
     return `${call.gerund} ${call.noun}`;
   }
-  return liveTraceToolSummary(entries);
+  return liveTraceToolSummary(entries, { coalesced });
 }
 
 function liveTraceSummaryKey(text) {
@@ -13646,9 +13646,11 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
     const progressSummary = desktopTraceProgressSummary(group.entries);
-    const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
+    // liveTraceGroups already folded and filtered this presentation list.
+    // Replaying it here (and again for the body) rebuilds every tool payload.
+    const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries, { coalesced: true }) : liveTraceToolSummary(group.entries, { coalesced: true }));
     const summaryKey = liveTraceSummaryKey(summary);
-    const visibleEntries = visibleLiveTraceEntries(group.entries);
+    const visibleEntries = group.entries;
     // The mutable progress packet is rendered in the header only. Leaving it
     // in the body creates a duplicate summary and makes the next event appear
     // to overwrite the stream instead of extending it.
@@ -13667,7 +13669,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       </summary>
       ${lazyClosedGroup && !openAttr && toolBodyEntries.length
         ? `<div class="live-turn-tool-body" data-lazy-trace="${escHtml(rememberLazyTraceBody(toolBodyEntries))}"></div>`
-        : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>`}
+        : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries, { presented: true })}</div>`}
     </details>`;
   }).join('')}</div>`;
 }
