@@ -254,6 +254,7 @@
     "bench:mobile-multithread": "node scripts/bench-mobile-multithread.mjs replay",
     "test:mobile-agent-activity": "node scripts/test-mobile-agent-activity-ui.mjs",
     "test:mobile-reasoning-summary": "node scripts/test-mobile-reasoning-summary-lifecycle.mjs",
+    "test:desktop-stream-lag": "node scripts/desktop-stream-lag.regression.mjs",
     "test:tool-activity-stream": "node scripts/test-tool-activity-stream.mjs",
     "test:tool-activity-reconnect-detail": "tsx src/gateway/tool-activity-reconnect-detail.regression.ts",
     "test:desktop-chat-recovery": "node scripts/test-desktop-chat-recovery.mjs",

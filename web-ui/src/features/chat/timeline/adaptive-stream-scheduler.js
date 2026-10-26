@@ -7,6 +7,9 @@ export function createAdaptiveStreamScheduler(options = {}) {
   const ceilingMs = Math.max(floorMs, Number(options.ceilingMs || 240));
   const hiddenMs = clamp(options.hiddenMs || 180, floorMs, ceilingMs);
   const multiplier = Math.max(1, Number(options.costMultiplier || 2.6));
+  // Opt-in (desktop chat): keep paints off the keystroke path. Off by default.
+  const inputIdleMs = Math.max(0, Number(options.inputIdleMs || 0));
+  const maxInputDeferMs = Math.max(0, Number(options.maxInputDeferMs || 0));
   const documentRef = options.documentRef === undefined ? globalThis.document : options.documentRef;
   const now = typeof options.now === 'function' ? options.now : (() => globalThis.performance?.now?.() ?? Date.now());
   const setTimer = typeof options.setTimer === 'function' ? options.setTimer : globalThis.setTimeout.bind(globalThis);
@@ -36,6 +39,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
       samples: 0,
       lastCostMs: 0,
       lastLatencyMs: 0,
+      deferStartedAt: null,
     });
     return states.get(id);
   }
@@ -47,6 +51,20 @@ export function createAdaptiveStreamScheduler(options = {}) {
     let pending = false;
     try { pending = globalThis.navigator?.scheduling?.isInputPending?.({ includeContinuous: true }) === true; } catch {}
     return pending || (now() - lastInputAt) < 120;
+  }
+
+  // A paint that would land mid-typing waits until input has been idle for inputIdleMs,
+  // capped at maxInputDeferMs so a long burst never freezes the stream.
+  function inputDeferDelay(state) {
+    if (!inputIdleMs || !maxInputDeferMs || isHidden()) return 0;
+    let pending = false;
+    try { pending = globalThis.navigator?.scheduling?.isInputPending?.() === true; } catch {}
+    const idleFor = now() - lastInputAt;
+    if (!pending && idleFor >= inputIdleMs) return 0;
+    if (state.deferStartedAt == null) state.deferStartedAt = now();
+    const budget = maxInputDeferMs - (now() - state.deferStartedAt);
+    if (budget <= 0) return 0;
+    return Math.max(4, Math.min(budget, pending ? 16 : inputIdleMs - idleFor));
   }
 
   function finishSample(state, startedAt, queuedAt) {
@@ -68,8 +86,21 @@ export function createAdaptiveStreamScheduler(options = {}) {
     if (state.pending) arm(state, 0);
   }
 
-  function run(state) {
+  // deferrable: cadence-driven paints (arm timer) may yield to input; flush and
+  // visibility paints are structural and always run now.
+  function run(state, deferrable = false) {
     if (destroyed || isSuspended() || state.running || typeof state.pending !== 'function') return;
+    if (deferrable) {
+      const deferMs = inputDeferDelay(state);
+      if (deferMs > 0) {
+        if (state.timer != null) clearTimer(state.timer);
+        diagnostics.inputDeferrals = (diagnostics.inputDeferrals || 0) + 1;
+        state.timer = setTimer(() => { state.timer = null; run(state, true); }, deferMs);
+        if (state.timer && typeof state.timer.unref === 'function') state.timer.unref();
+        return;
+      }
+    }
+    state.deferStartedAt = null;
     if (state.timer != null) { clearTimer(state.timer); state.timer = null; }
     const task = state.pending;
     const queuedAt = state.queuedAt || now();
@@ -104,7 +135,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
     const dueAt = Math.max(state.lastRunAt + interval, now() + Math.max(0, Number(minimumDelay) || 0));
     state.timer = setTimer(() => {
       state.timer = null;
-      run(state);
+      run(state, true);
     }, Math.max(0, dueAt - now()));
     if (state.timer && typeof state.timer.unref === 'function') state.timer.unref();
   }
@@ -152,6 +183,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
     state.timer = null;
     state.pending = null;
     state.queuedAt = 0;
+    state.deferStartedAt = null;
     return true;
   }
 
@@ -190,6 +222,8 @@ export function createAdaptiveStreamScheduler(options = {}) {
   };
   documentRef?.addEventListener?.('input', onInput, true);
   documentRef?.addEventListener?.('keydown', onInput, true);
+  // Opt-in schedulers also yield while the reader is wheel-scrolling the transcript.
+  if (inputIdleMs) documentRef?.addEventListener?.('wheel', onInput, { capture: true, passive: true });
   documentRef?.addEventListener?.('visibilitychange', onVisibility);
   globalThis.window?.addEventListener?.('prometheus:pane-activity', onVisibility);
 
@@ -199,6 +233,7 @@ export function createAdaptiveStreamScheduler(options = {}) {
     states.clear();
     documentRef?.removeEventListener?.('input', onInput, true);
     documentRef?.removeEventListener?.('keydown', onInput, true);
+    if (inputIdleMs) documentRef?.removeEventListener?.('wheel', onInput, true);
     documentRef?.removeEventListener?.('visibilitychange', onVisibility);
     globalThis.window?.removeEventListener?.('prometheus:pane-activity', onVisibility);
   }
