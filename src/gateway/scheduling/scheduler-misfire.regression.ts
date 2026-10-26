@@ -49,7 +49,8 @@ async function main() {
   assert.throws(() => validateScheduledExecution({ kind: 'script', command: '' }));
   assert.throws(() => validateScheduledExecution({ misfire_policy: 'bad' as any }));
   assert.throws(() => validateScheduledExecution({ timeoutMs: -1 }));
-  const { getConfig } = await import('../../config/config');
+  // Use the same CommonJS singleton as the runner (tsx dynamic import duplicates it).
+  const { getConfig } = require('../../config/config') as typeof import('../../config/config');
   // Isolated test user explicitly chooses Lite permissions, exercising the real
   // runner without manufacturing an approval token or changing production policy.
   (getConfig().getConfig() as any).tools = { permissions: { shell: { approval_mode: 'lite' } } };

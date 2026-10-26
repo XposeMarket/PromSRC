@@ -14,6 +14,8 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { SchedulerAdmission, planDueSlots, validateScheduledExecution, type ScheduledSlot } from './scheduler-admission';
+import { ScheduledRunDeadline, scheduledRunTimeoutMs } from './scheduled-run-deadline';
+import { withScheduledApprovalPolicy } from './scheduled-approval-policy';
 import { quarantineCorruptStateFile } from '../state-file-quarantine';
 import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
@@ -1390,7 +1392,7 @@ export class CronScheduler {
     // Always release the per-job guard in finally so a crashed run can never
     // wedge future runs of that schedule.
     if (this.runningJobIds.has(job.id)) return;
-    const release = this.admission.acquire(job.id, slot?.scheduledAt, job.timeoutMs || (job.kind === 'script' ? 120000 : 3600000));
+    const release = this.admission.acquire(job.id, slot?.scheduledAt, scheduledRunTimeoutMs(job));
     if (!release) {
       // A crash after admission must not wedge the persisted due cursor forever.
       if (slot && this.admission.isConsumed(job.id, slot.scheduledAt) && !this.admission.isLeased(job.id)) {
@@ -1401,19 +1403,22 @@ export class CronScheduler {
       return;
     }
     this.runningJobIds.add(job.id);
+    const deadline = new ScheduledRunDeadline(scheduledRunTimeoutMs(job));
     try {
-      await this.executeJobInner(job, slot);
+      await withScheduledApprovalPolicy({ onNeedsApproval: error => deadline.fail(error), getCancellationError: () => deadline.cancellationError },
+        () => this.executeJobInner(job, deadline, slot));
       if (slot && job.status !== 'paused') {
         job.nextRun = nextRun ?? null;
         this.saveStore();
       }
     } finally {
+      deadline.dispose();
       release();
       this.runningJobIds.delete(job.id);
     }
   }
 
-  private async executeScriptJob(job: CronJob, slot?: ScheduledSlot): Promise<void> {
+  private async executeScriptJob(job: CronJob, deadline: ScheduledRunDeadline, slot?: ScheduledSlot): Promise<void> {
     validateScheduledExecution(job);
     const start = Date.now();
     const sessionId = `cron_script_${job.id}_${start}`;
@@ -1429,10 +1434,10 @@ export class CronScheduler {
       const workspace = getConfig().getConfig().workspace.path;
       // Use exactly the interactive command path: command/path policy and approval
       // gates remain authoritative. No approval token is synthesized for cron.
-      const result = await executeTool('run_command', { command: job.command, cwd: workspace, timeoutMs: job.timeoutMs || 120000 }, workspace, {}, sessionId);
+      const result = await deadline.wait(() => executeTool('run_command', { command: job.command, cwd: workspace, timeoutMs: scheduledRunTimeoutMs(job) }, workspace, {}, sessionId));
       output = String(result.result ?? '');
       failed = !!result.error;
-    } catch (err: any) { output = String(err?.message || err); failed = true; }
+    } catch (err: any) { output = `ERROR: ${String(err?.message || err).replace(/^ERROR:\s*/i, '')}`; failed = true; }
     finally {
       const duration = Date.now() - start;
       updateRunLogEntry(job.id, runId, { status: failed ? 'failed' : 'complete', completedAt: Date.now(), output: output.slice(0, 64000), summary: output.slice(0, 2000), errorIfAny: failed ? output.slice(0, 2000) : undefined });
@@ -1451,8 +1456,8 @@ export class CronScheduler {
   }
 
 
-  private async executeJobInner(job: CronJob, slot?: ScheduledSlot): Promise<void> {
-    if (job.kind === 'script') { await this.executeScriptJob(job, slot); return; }
+  private async executeJobInner(job: CronJob, deadline: ScheduledRunDeadline, slot?: ScheduledSlot): Promise<void> {
+    if (job.kind === 'script') { await this.executeScriptJob(job, deadline, slot); return; }
     const start = Date.now();
     const queuedAt = job.queuedAt ? new Date(job.queuedAt).getTime() : start;
 
@@ -1510,6 +1515,7 @@ export class CronScheduler {
     // Collect SSE events emitted during the run
     const events: Array<{ type: string; data: any }> = [];
     const sendSSE = (type: string, data: any) => {
+      if (deadline.abortSignal.aborted) return;
       events.push({ type, data });
       // Forward tool_call/tool_result events to UI so NOW card shows live progress
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(type)) {
@@ -1663,8 +1669,8 @@ export class CronScheduler {
           });
 
           const managerPrompt = buildScheduledTeamRunPrompt(team, job, effectivePrompt);
-          const managerResult = await handleManagerConversationDetailed(
-            team.id,
+          const managerResult = await deadline.wait(() => handleManagerConversationDetailed(
+            team!.id,
             managerPrompt,
             broadcastTeamEvent,
             true,
@@ -1674,7 +1680,7 @@ export class CronScheduler {
               // Skill/memory routing sees the scheduled task, not the run-brief wrapper.
               toolCategoryDetectionText: String(effectivePrompt || '').trim().slice(0, 4000) || undefined,
             },
-          );
+          ));
           scheduledTeamRunResult = managerResult;
           const reason = String(managerResult?.reason || 'error');
           const turns = Number(managerResult?.turns || 0);
@@ -1741,13 +1747,13 @@ export class CronScheduler {
           let stepCount = 1;
 
           if (teamId) {
-            const teamResult = await runTeamAgentViaChatLazy(
+            const teamResult = await deadline.wait(() => runTeamAgentViaChatLazy(
               teamSubagentId,
               effectivePrompt,
-              teamId,
+              teamId!,
               'cron',
               previewToolFilter,
-            );
+            ));
             scheduledTeamRunResult = teamResult;
             scheduledSubagentTaskId = teamResult.taskId;
             if (scheduledSubagentTaskId) {
@@ -1820,7 +1826,7 @@ export class CronScheduler {
               message: scheduledUserMessage,
             });
 
-            const abortSignal = { aborted: false };
+            const abortSignal = deadline.abortSignal;
             const runtimeId = registerLiveRuntime({
               kind: 'cron',
               label: `Scheduled owner chat - ${job.name}`,
@@ -1836,6 +1842,7 @@ export class CronScheduler {
               },
             });
             const taskSendSSE = (event: string, data: any) => {
+              if (deadline.abortSignal.aborted) return;
               sendSSE(event, data);
               this.deps.broadcast({
                 type: 'subagent_chat_stream_event',
@@ -1902,7 +1909,7 @@ export class CronScheduler {
                 executionRoot: getConfig().getWorkspacePath(),
                 allowedWorkPaths: [getConfig().getWorkspacePath(), agentWorkspace],
               });
-              const ownerResult = await this.deps.handleChat(
+              const ownerResult = await deadline.wait(() => this.deps.handleChat(
                 effectivePrompt,
                 chatSessionId,
                 taskSendSSE,
@@ -1920,7 +1927,7 @@ export class CronScheduler {
                 modelOverride || String((agentDef as any)?.model || '').trim() || undefined,
                 'cron',
                 previewToolFilter,
-              );
+              ));
               resultText = abortSignal.aborted
                 ? 'ERROR: Run aborted by operator.'
                 : String(ownerResult?.text || '').trim();
@@ -2040,6 +2047,7 @@ export class CronScheduler {
         // Mirror sendSSE events into the task journal so the kanban panel shows live tool calls
         // Also intercepts write_note tool calls to persist schedule-scoped insights into schedule memory
         const taskSendSSE = (event: string, data: any) => {
+          if (deadline.abortSignal.aborted) return;
           sendSSE(event, data); // still feeds the cron broadcast pipeline
           mirrorChatEventToTask(cronTask.id, event, data, this.deps.broadcast, {
             scheduleId: job.id,
@@ -2085,7 +2093,7 @@ export class CronScheduler {
         const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt: slot ? Date.parse(slot.scheduledAt) : scheduledAt, reason: slot?.reason, missedCount: slot?.missedCount });
         activeRunId = runId;
         activeScheduledAt = scheduledAt;
-        const abortSignal = { aborted: false };
+        const abortSignal = deadline.abortSignal;
         const runtimeId = registerLiveRuntime({
           kind: 'cron',
           label: `Scheduled task - ${job.name}`,
@@ -2114,7 +2122,7 @@ export class CronScheduler {
             throw new Error(buildMissingSourceBlockMessage(missing));
           }
         }
-        const result = await this.deps.handleChat(
+        const result = await deadline.wait(() => this.deps.handleChat(
           effectivePrompt,
           targetSessionId,
           taskSendSSE,
@@ -2124,7 +2132,7 @@ export class CronScheduler {
           modelOverride,
           'cron',
           previewToolFilter,
-        );
+        ));
         resultText = abortSignal.aborted
           ? 'ERROR: Run aborted by operator.'
           : (result.text || '');
@@ -2140,7 +2148,7 @@ export class CronScheduler {
         if (!abortSignal.aborted && hadToolCalls && isVagueResult && !hasExpectedArtifacts) {
           console.log(`[CronScheduler] Job "${job.name}" returned vague response (${resultText.length} chars) — running synthesis round.`);
           try {
-            const synthResult = await this.deps.handleChat(
+            const synthResult = await deadline.wait(() => this.deps.handleChat(
               `Based on all the data and research you collected above, write your complete, structured final response now. ` +
               `Write the actual content — the full report, analysis, or answer — directly. ` +
               `Do not say "Done" or reference background processing. Start immediately with the content.`,
@@ -2152,7 +2160,7 @@ export class CronScheduler {
               modelOverride,
               'cron',
               previewToolFilter,
-            );
+            ));
             const synthText = String(synthResult.text || '').trim();
             if (synthText.length > resultText.trim().length + 50) {
               resultText = synthText;
@@ -2160,6 +2168,8 @@ export class CronScheduler {
           } catch (synthErr: any) {
             console.warn(`[CronScheduler] Synthesis round failed for "${job.name}":`, synthErr.message);
           }
+          // Do not swallow timeout / needs-approval as a best-effort synthesis failure.
+          await deadline.wait(async () => undefined);
         }
 
         if (containsObsoleteProductBrand(resultText)) {
@@ -2206,7 +2216,7 @@ export class CronScheduler {
       }
       duration = Date.now() - start;
     } catch (err: any) {
-      resultText = `ERROR: ${err.message}`;
+      resultText = /^ERROR:/i.test(err.message) ? err.message : `ERROR: ${err.message}`;
       duration = Date.now() - start;
       console.error(`[CronScheduler] Job "${job.name}" error:`, err.message);
       if (scheduledManagerReceipt) {
@@ -2470,7 +2480,7 @@ export class CronScheduler {
           trigger: 'cron',
         });
         console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to team chat ${teamId}`);
-        await triggerManagerReview(teamId!, broadcastTeamEvent);
+        await deadline.wait(() => triggerManagerReview(teamId!, broadcastTeamEvent));
       } catch (teamRouteErr: any) {
         console.error(`[CronScheduler] Failed to route "${job.name}" output to team chat:`, teamRouteErr?.message || teamRouteErr);
       }

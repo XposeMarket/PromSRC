@@ -1,4 +1,5 @@
 import { handleDefaultTool } from './handlers/default-tools';
+import { assertScheduledRunActive } from '../scheduling/scheduled-approval-policy';
 import { getOperationLedger, isExternalSideEffect } from '../operation-ledger';
 import { createWorkspaceHelpers } from './workspace-helpers';
 import { normalizeDevSourceWrapperTool, isWorkspacePrometheusSourceCopyPath, normalizeWorkspaceWrapperTool, normalizeBrowserWrapperTool, normalizeExternalAppWrapperTool, normalizeAgentTeamWrapperTool, isPlainObjectArg, normalizeCreativeWrapperTool, normalizeMediaGenerateWrapperTool, normalizePromRepoOpsWrapperTool, normalizeBackgroundOpsWrapperTool, normalizeSkillOpsWrapperTool } from './wrapper-normalizers';
@@ -1912,6 +1913,7 @@ export function setToolExecutionOverrideForTesting(override: ToolExecutionOverri
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  assertScheduledRunActive();
   // Trace span on the current turn (no-op outside a traced turn).
   const { withSpan } = require('../observability/turn-trace') as typeof import('../observability/turn-trace');
   return withSpan(

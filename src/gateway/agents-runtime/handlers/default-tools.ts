@@ -1,4 +1,5 @@
 import os from 'os';
+import { rejectScheduledFinalAction } from '../../scheduling/scheduled-approval-policy';
 import path from 'path';
 import { resolveGatewayRestartScope } from '../../../runtime/supervisor-restart-request';
 import { lockFreeGitReadOptions } from '../../../runtime/git-read';
@@ -2763,6 +2764,7 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
         }
 
         if (name === 'request_final_action_approval') {
+          rejectScheduledFinalAction();
           const scope = createFinalActionApprovalScope({
             actionKind: args?.action_kind || args?.actionKind,
             targetLabel: args?.target_label || args?.targetLabel || args?.button_label || args?.buttonLabel,
