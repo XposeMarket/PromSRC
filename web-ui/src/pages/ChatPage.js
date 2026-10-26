@@ -1,5 +1,6 @@
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
+import { renderAgentPet } from '../components/agent-pets.js';
 import { backgroundSpawnCollapsedDetail, mergeBackgroundReasoningSummary } from '../background-stream-summary.js';
 import { dispatchDesktopChatLifecycle } from '../features/chat/lifecycle.js';
 import { renderSourcePills } from '../cards/index.js';
@@ -14539,10 +14540,7 @@ function renderWorkflowTransitionLabelHtml(msg, label) {
 }
 
 function renderBackgroundAgentWorkflowAvatar(identity) {
-  const name = String(identity?.name || 'Agent').trim() || 'Agent';
-  const initials = name.split(/\s+/).map((part) => part[0] || '').join('').slice(0, 2).toUpperCase();
-  const color = String(identity?.color || 'var(--brand)').trim();
-  return `<span class="background-spawn-avatar" style="--background-agent-color:${escHtml(color)};width:20px;height:20px;font-size:8px">${escHtml(initials)}</span>`;
+  return renderAgentPet(identity?.agentId || identity?.name || 'agent', { size: 20, state: identity?.status === 'running' ? 'working' : 'idle' });
 }
 
 function renderVisibleChatHistoryHtml(history = [], options = {}) {

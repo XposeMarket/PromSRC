@@ -120,6 +120,8 @@ const measurements = {
 // #762 mobile terminal-row disclosure, small tappable trace thumbnails and
 // delivery/recovery thread ordering (mobile-thread-order.js) render in the thread:
 // measured 279412 (+1012 over the #750 ceiling).
-assert(measurements.gzipBytes <= 279600, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// Reviewed: agent pets (+1480). Pet avatars replace the robot/emoji avatars in the
+// mobile subagent/team pages and the voice target; measured 280892 vs #762's 279412.
+assert(measurements.gzipBytes <= 281080, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { renderAgentPet, renderAgentPetStack, rememberAgentPets } from './components/agent-pets.js';
 
 // Prom Bot is a desktop shell mode, not a second subagent runtime. It exposes
 // each existing single-thread subagent chat in the primary chat area while the
@@ -269,9 +270,7 @@ function renderPromBotTeams() {
 
     const avatar = document.createElement('span');
     avatar.className = 'prom-bot-agent-avatar prom-bot-team-avatar';
-    const emoji = String(team?.emoji || '').trim();
-    if (emoji && emoji.toLowerCase() !== 'team') avatar.textContent = emoji;
-    else avatar.innerHTML = TEAM_ICON;
+    avatar.innerHTML = renderAgentPetStack(Array.isArray(team?.subagentIds) ? team.subagentIds : [], { size: 14, max: 3 });
 
     const copy = document.createElement('span');
     copy.className = 'prom-bot-agent-copy';
@@ -345,7 +344,7 @@ function renderPromBotAgents() {
 
     const avatar = document.createElement('span');
     avatar.className = 'prom-bot-agent-avatar';
-    avatar.innerHTML = ROBOT_ICON;
+    avatar.innerHTML = renderAgentPet(agent, { size: 18 });
 
     const copy = document.createElement('span');
     copy.className = 'prom-bot-agent-copy';
@@ -375,6 +374,7 @@ async function refreshPromBotAgents({ force = false } = {}) {
       const data = await api('/api/agents', { timeoutMs: 8000 });
       // Match the Subagents page: real configured agents only; team membership
       // does not create a second identity or chat thread.
+      rememberAgentPets(Array.isArray(data?.agents) ? data.agents : []);
       promBotAgents = (Array.isArray(data?.agents) ? data.agents : [])
         .filter((agent) => agent && !agent.default && !agent.isSynthetic);
       renderPromBotAgents();

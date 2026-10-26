@@ -372,6 +372,7 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             agent_id: { type: 'string', description: 'The dynamic subagent ID to update (get IDs from agent_list first)' },
             name: { type: 'string', description: 'New display name shown in Agents and Teams UI' },
+            pet: { type: 'string', description: 'Pixel pet avatar id shown for this agent in the UI: byte, ember, hoot, wisp, beetle, kit, ribbit, noir, mallow, pip, shroom, gloop. Empty string resets to auto.' },
             description: { type: 'string', description: 'New short description / specialty summary' },
             system_instructions: { type: 'string', description: 'Full replacement instructions for AGENT.md' },
             heartbeat_instructions: { type: 'string', description: 'Full replacement content for HEARTBEAT.md. Must include the HEARTBEAT_OK silence rule for no-op heartbeats.' },
