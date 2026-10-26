@@ -4193,7 +4193,7 @@ function _handleMobileThinkingDelta(message, evt) {
     // Keep it in the single replaceable tool-stream status slot even when the
     // prose does not start with one of the action verbs in
     // `_isMobileProgressNarration`.
-    _setMobileLiveProgressNarration(message, chunk);
+    _setMobileLiveProgressNarration(message, chunk, { source: 'reasoning_summary' });
   }
   return true;
 }
@@ -4223,7 +4223,7 @@ function _handleMobileCleanThought(message, evt) {
     // Some gateways replay a safe summary through the legacy thought event.
     // Treat it exactly like the explicit summary channel: update one mutable
     // slot and never copy it into `_thinking`, live thoughts, or process rows.
-    return _setMobileLiveProgressNarration(message, text, { replace: true, visibility: 'summary' });
+    return _setMobileLiveProgressNarration(message, text, { replace: true, visibility: 'summary', source: 'reasoning_summary' });
   }
   const streamId = String(evt?.streamId || '').trim();
   const seq = Number(evt?.seq);
