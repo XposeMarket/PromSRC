@@ -44,7 +44,20 @@ try {
    await page.evaluate(()=>{window.turn.body.text='Ready.';document.querySelector('#rows').innerHTML=window.render(window.turn);});
    assert.equal(await page.locator('pm-pending-status').count(),0);
    await page.screenshot({path:path.join(out,`${name}-answer.png`)});
-   console.log(`PASS ${name}: real renderer before/after, waiting event, public token cleanup`);
+   await page.route('**/api/**',route=>route.fulfill({json:{success:true,llm:{provider:'anthropic',providers:{anthropic:{model:'claude-opus-5-5',reasoning_effort:'high'}}},reasoning:{main_chat:'low'}}}));
+   await page.evaluate(async()=>{
+    window.__pmChat={activeSessionId:'mobile_default'};
+    localStorage.setItem('pm_mobile_chat_model_route_v1',JSON.stringify({providerId:'anthropic',model:'claude-opus-5-5',reasoningEffort:'high'}));
+    document.querySelector('#rows').innerHTML='<button class="pm-model-badge pm-composer-model-badge"><span class="pm-model-badge-label"></span></button>';
+    window.badge=await import('/web-ui/src/mobile/mobile-model-badge.js');
+    window.badge.resetMobileDraftModelRoute();window.badge.initMobileModelBadge();await window.badge.refreshMobileModelBadge(true);
+   });
+   assert.match(await page.locator('.pm-composer-reasoning-name').textContent(),/Default.*Low/i);
+   await page.screenshot({path:path.join(out,`${name}-default-low.png`)});
+   await page.locator('.pm-model-badge').click();
+   await page.getByRole('button',{name:'Use default (Low)',exact:true}).waitFor();
+   await page.screenshot({path:path.join(out,`${name}-reset-default.png`)});
+   console.log(`PASS ${name}: real renderer lifecycle and actual model badge default/reset UI`);
   } finally{await browser.close();}
  }
 }finally{await new Promise(r=>server.close(r));}
