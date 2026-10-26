@@ -67,7 +67,8 @@ function _normalizeSavedChatModelRoute(route) {
   const override = {
     providerId,
     model,
-    reasoningEffort: String(candidate?.reasoningEffort || candidate?.reasoning_effort || '').trim() || undefined,
+    // Cross-chat persistence is model identity, never a per-chat effort pick.
+    reasoningEffort: undefined,
     speed: String(candidate?.speed || '').trim().toLowerCase() === 'fast' ? 'fast' : 'standard',
     accountId: String(candidate?.accountId || candidate?.account_id || '').trim() || undefined,
   };
@@ -402,11 +403,19 @@ export function attachMobileButtonHaptic(btn, activate) {
 }
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Data loaders ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+let _mainChatDefaultEffort;
+async function _loadDefaultEffort() {
+  const defaults = await mobileGatewayFetch('/api/settings/agent-model-defaults');
+  if (defaults?.success === false) throw new Error('Could not load default reasoning');
+  _mainChatDefaultEffort = defaults?.reasoning?.main_chat || '';
+  return _mainChatDefaultEffort;
+}
 async function _loadLlm(force) {
   if (_llmCache && !force) return _llmCache;
   try {
     const d = await mobileGatewayFetch('/api/settings/provider');
     _llmCache = d?.llm || { provider: 'ollama', providers: {} };
+    await _loadDefaultEffort();
   } catch {
     _llmCache = _llmCache || { provider: 'ollama', providers: {} };
   }
@@ -569,7 +578,10 @@ export function resetMobileDraftModelRoute() {
 
 export async function applyMobileDraftModelRouteToSession(sessionId) {
   const sid = String(sessionId || '').trim();
-  const route = (_mobileDraftModelRoute || _readSavedChatModelRoute())?.override;
+  const draft = (_mobileDraftModelRoute || _readSavedChatModelRoute())?.override;
+  const route = draft ? { ...draft } : null;
+  // Explicit model routes otherwise use the provider fallback, not main_chat.
+  if (route && !route.reasoningEffort) route.reasoningEffort = _normalizedReasoningEffort(route.providerId, route.model, await _loadDefaultEffort()) || undefined;
   if (!sid || sid === 'mobile_default' || !route?.providerId || !route?.model) return null;
   const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/model-route`, {
     method: 'PUT',
@@ -688,20 +700,22 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     ? { provider: route.effective.providerId, model: route.effective.model }
     : _activeModel(llm);
   const hasEffectiveRoute = Boolean(route?.effective?.providerId);
-  const rawReasoningEffort = hasEffectiveRoute
+  const usesDraftDefault = _activeChatSessionId() === 'mobile_default' && !route?.override?.reasoningEffort;
+  const rawReasoningEffort = usesDraftDefault ? _mainChatDefaultEffort : hasEffectiveRoute
     ? route.effective.reasoningEffort
-    : (llm?.providers?.[provider] || {}).reasoning_effort;
+    : _mainChatDefaultEffort;
   const cfg = {
     ...(llm?.providers?.[provider] || {}),
     model,
     reasoning_effort: _normalizedReasoningEffort(provider, model, rawReasoningEffort),
     speed: route?.effective?.speed || (llm?.providers?.[provider] || {}).speed || 'standard',
   };
-  if (route?.effective?.providerId && _llmCache) {
+  if (_llmCache) {
     _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
   }
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   _setComposerModelIdentity(provider, model, cfg.reasoning_effort);
+  if (usesDraftDefault) window.__pmModelBadgeReasoningLabel = `Default (${formatReasoningDisplayName(cfg.reasoning_effort) || 'Auto'})`;
   return _setBadgeLabel(formatModelWithReasoning(model, provider, cfg.reasoning_effort));
 }
 
@@ -954,6 +968,13 @@ async function _openReasoningSheet() {
     const { provider } = _activeModel(_llmCache);
     const cfg = (_llmCache?.providers || {})[provider] || {};
     _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
+    const body = document.getElementById('pm-msheet-body');
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'pm-msheet-row';
+    reset.textContent = `Use default (${formatReasoningDisplayName(_mainChatDefaultEffort) || 'Auto'})`;
+    reset.addEventListener('click', () => { _queueReasoningSave(provider, { reasoning_effort: '' }, true); _closeSheet(); });
+    body?.appendChild(reset);
   };
   const shownKey = warm ? _pickerStateKey() : '';
   if (warm) render();
@@ -1190,7 +1211,7 @@ function _queueReasoningSave(provider, patch, immediate = false) {
       await _saveChatModelRoute({
         providerId: provider,
         model: merged.model || effective.model,
-        reasoningEffort: merged.reasoning_effort || undefined,
+        reasoningEffort: merged.reasoning_effort || (_activeChatSessionId() === 'mobile_default' ? undefined : _normalizedReasoningEffort(provider, model, await _loadDefaultEffort()) || undefined),
         speed: supportsFastSpeed(provider, model) ? (merged.speed === 'fast' ? 'fast' : 'standard') : undefined,
         accountId: effective.accountId || undefined,
       });

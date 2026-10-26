@@ -24,7 +24,10 @@ export function startPendingStatusTimer(elapsed, queued, render, clock = globalT
 }
 let nextPendingId = 0;
 function pendingState(message) {
-  return message._pmPendingStatus ||= { id: ++nextPendingId, startedAt: Date.now(), queued: false, finished: false };
+  const state = message._pmPendingStatus ||= { startedAt: Date.now(), queued: false, finished: false };
+  // Cached messages can be restored after a module reload; renew their local ID.
+  if (!state._live) Object.defineProperties(state, { id: {value: ++nextPendingId, configurable:true}, _live: {value:true} });
+  return state;
 }
 export function noteMobilePendingEvent(message, event) {
   const state = updatePendingStatus(pendingState(message), event);

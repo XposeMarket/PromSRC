@@ -24,3 +24,12 @@ let tick, count=0, cleared=0, elapsed=0, label='';
 const stop=startPendingStatusTimer(()=>elapsed,()=>false,(v)=>{label=v;}, {setInterval(fn){tick=fn;count++;return 1;},clearInterval(){cleared++;}});
 assert.equal(count,1); assert.equal(label,''); elapsed=4200;tick();assert.equal(label,'Thinking · 4s');stop();stop();assert.equal(cleared,1);
 console.log('PASS mobile effort defaults, both polarities; pending status transitions and timer cleanup');
+
+const applySource=badge.slice(badge.indexOf('export async function applyMobileDraftModelRouteToSession('),badge.indexOf('\nfunction _modelDetail(')).replace('export ','');
+for(const [configured,explicit] of [['low',undefined],['high',undefined],['low','high']]) {
+ const writes=[];
+ const context={_mobileDraftModelRoute:explicit?{override:{providerId:'anthropic',model:'claude-opus-5-5',reasoningEffort:explicit}}:null,_readSavedChatModelRoute:()=>normalize({providerId:'anthropic',model:'claude-opus-5-5',reasoningEffort:'high'}),_loadDefaultEffort:async()=>configured,_normalizedReasoningEffort:(_p,_m,v)=>v,_writeSavedChatModelRoute:()=>{},window:{},mobileGatewayFetch:async(_url,init)=>{writes.push(JSON.parse(init.body));return {chatModelRoute:{effective:JSON.parse(init.body)}};}};
+ const apply=vm.runInNewContext(`${applySource}; applyMobileDraftModelRouteToSession`,context);
+ await apply('new-chat'); assert.equal(writes.length,1);assert.equal(writes[0].reasoningEffort,explicit||configured);
+}
+console.log('PASS actual draft submission: default low/high and explicit high preserved');
