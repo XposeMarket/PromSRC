@@ -1484,7 +1484,7 @@ export class CronScheduler {
     job.runningPid = null; job.queuedAt = null;
     if ((job.status as string) !== 'paused') job.status = job.type === 'one-shot' ? 'completed' : 'scheduled';
     if (job.type === 'one-shot') { job.enabled = false; job.nextRun = null; }
-    else if (job.status !== 'paused') job.nextRun = getNextRun(job.schedule, new Date(), job.tz).toISOString();
+    else if ((job.status as string) !== 'paused') job.nextRun = getNextRun(job.schedule, new Date(), job.tz).toISOString();
     this.saveStore();
     this.deps.broadcast({ type: 'task_done', jobId: job.id, jobName: job.name, isOk: outcome.status !== 'failed', duration, jobs: this.store.jobs, config: this.store.heartbeat });
   }
