@@ -37,6 +37,8 @@
 ### Background completion recovery (2026-10-26, pending branch)
 `fix/background-restart-resume` persists full background results in session history with stable logical IDs before delivery acknowledgement or join consumption. The shared foreground handler avoids duplicate context after a history-before-ACK crash; executor envelopes remain the retry source. Background-result queue deduplication does not alter repeated ordinary user steers. This change is **pending review/merge, not live**. See self/08 and the branch `.pr` subprocess evidence.
 
+Review S1 remediation: `background_agent_result` is server-owned model context, excluded from restart user intent, shared public-history projection/pagination and timeline matching. Ordinary user text with similar prefixes is unaffected. Client transcript sync retains internal evidence at its relative history location. Behavioral regression checks selector/projection/pagination/sync without deleting durable model context. Pending, not deployed.
+
 ## How it works
 
 ### Request to turn

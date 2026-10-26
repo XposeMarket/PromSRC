@@ -73,6 +73,33 @@ async function child() {
       assert.equal(sessions.getSession(parent).history.filter((entry: any) => entry.messageKind === 'background_agent_result').length, 1);
       const joined = await runner.backgroundJoin({ backgroundId: id, joinPolicy: 'wait_all' });
       assert.equal(joined.result, fullResult, 'notification ACK does not discard join result');
+      const original = { role: 'user', content: 'Continue the real user assignment', timestamp: 1 };
+      const ordinary = { role: 'user', content: '[BACKGROUND AGENT RESULT] typed by user, not internal', timestamp: 3 };
+      const evidence = sessions.getSession(parent).history.find((entry: any) => entry.messageKind === 'background_agent_result');
+      const history = [original, { ...evidence, timestamp: 2 }, ordinary];
+      const boot = require(path.join(source, 'src/gateway/boot.ts'));
+      assert.equal(boot.selectRestartConversationEvidence(history.slice(0, 2)).lastUserRequest, original.content,
+        'worker context cannot replace actual user intent');
+      assert.equal(boot.selectRestartConversationEvidence(history).lastUserRequest, ordinary.content,
+        'ordinary user text must not be hidden by a string-prefix heuristic');
+      const shared = require(path.join(source, 'src/gateway/routes/chat/shared.ts'));
+      const options = { historyLimit: 0, includeToolLog: true, perMessageProcessLimit: 10 };
+      assert.deepEqual(shared.sanitizeHistoryForUiResponse(history, options).map((row: any) => row.content), [original.content, ordinary.content]);
+      const routes = require(path.join(source, 'src/gateway/routes/chat/sessions.ts'));
+      assert.deepEqual(routes.timelineHistoryMessages(history).map((row: any) => row.content), [original.content, ordinary.content]);
+      const cursor = require(path.join(source, 'src/gateway/chat/history-cursor.ts'));
+      const lastPage = cursor.paginateChatHistory(parent, history, { limit: 1 });
+      assert.equal(lastPage.pageInfo.totalCount, 2);
+      assert.deepEqual(lastPage.items, [ordinary]);
+      assert.deepEqual(cursor.paginateChatHistory(parent, history, { limit: 1, before: lastPage.pageInfo.olderCursor }).items, [original]);
+      const reconcile = require(path.join(source, 'src/gateway/history-reconciliation.ts'));
+      for (const preserveAllExisting of [false, true]) {
+        const merged = reconcile.mergeHistoryWithExistingMessageMetadata(history, [original, ordinary], { preserveAllExisting });
+        assert.deepEqual(merged.map((row: any) => row.content), history.map((row: any) => row.content),
+          'client history sync cannot drop server-owned invisible worker evidence');
+      }
+      assert.equal(sessions.getSession(parent).history.find((row: any) => row.messageKind === 'background_agent_result').content, fullResult,
+        'public projection must not mutate durable model context');
     }
   }
   process.exit(0);
