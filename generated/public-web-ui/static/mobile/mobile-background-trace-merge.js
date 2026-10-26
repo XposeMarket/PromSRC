@@ -9,15 +9,8 @@ function traceIdentity(entry) {
     || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id
     || entry.callId || entry.call_id || entry.toolCallId || '',
   ).trim();
-  const streamId = String(entry.streamId || extra.streamId || activity.streamId || '').trim();
-  const seq = Number(entry.seq || extra.seq || activity.seq || 0);
   if (stableId) return `id:${type}:${stableId}`;
-  if (streamId && seq > 0) return `stream:${type}:${streamId}:${seq}`;
-  // Persistence adds an empty time field. It must not turn a live prose row
-  // into a distinct recovered row on every status/tool packet.
-  const canonical = { ...entry };
-  if (!canonical.time) delete canonical.time;
-  try { return `value:${JSON.stringify(canonical)}`; } catch { return `fallback:${type}:${String(entry.text || entry.content || '')}:${String(entry.time || entry.ts || '')}`; }
+  try { return `value:${JSON.stringify(entry)}`; } catch { return `fallback:${type}:${String(entry.text || entry.content || '')}:${String(entry.time || entry.ts || '')}`; }
 }
 
 export function mergeMobileBackgroundTraceEntries(currentEntries = [], recoveredEntries = [], limit = 500) {
@@ -29,14 +22,5 @@ export function mergeMobileBackgroundTraceEntries(currentEntries = [], recovered
     seen.add(key);
     merged.push(entry);
   }
-  // A checkpoint may restore earlier commentary after newer tool rows arrived.
-  // Insert it at its stream position, not at the tail of the live journal.
-  merged.sort((a, b) => {
-    const aStream = String(a?.streamId || a?.extra?.streamId || a?.activity?.streamId || '');
-    const bStream = String(b?.streamId || b?.extra?.streamId || b?.activity?.streamId || '');
-    const aSeq = Number(a?.seq || a?.extra?.seq || a?.activity?.seq || 0);
-    const bSeq = Number(b?.seq || b?.extra?.seq || b?.activity?.seq || 0);
-    return aStream && aStream === bStream && aSeq > 0 && bSeq > 0 ? aSeq - bSeq : 0;
-  });
   return merged.slice(-Math.max(1, Number(limit) || 500));
 }

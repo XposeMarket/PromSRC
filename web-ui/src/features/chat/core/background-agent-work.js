@@ -99,8 +99,7 @@ export function resolveBackgroundAgentIdentity(id, options = {}) {
 export function normalizeBackgroundAgentEvent(event = {}) {
   const data = event.data && typeof event.data === 'object' ? event.data : {};
   const source = { ...data, ...event };
-  // Stream chunks are not labels: leading/trailing and space-only deltas matter.
-  const content = String(source.content || source.text || source.message || source.reply || source.result || '');
+  const content = String(source.content || source.text || source.message || source.reply || source.result || '').trim();
   if (!content && !source.type && !source.eventType) return null;
   const streamId = String(source.streamId || data.streamId || '').trim();
   const seq = Math.max(0, Math.floor(Number(source.seq || data.seq || 0)) || 0);
@@ -122,7 +121,7 @@ export function normalizeBackgroundAgentEvent(event = {}) {
 
 function normalizeBackgroundAgentTrace(entry = {}) {
   if (!entry || typeof entry !== 'object') return null;
-  const text = String(entry.text || entry.content || entry.message || '');
+  const text = String(entry.text || entry.content || entry.message || '').trim();
   if (!text && !entry.activity && !entry.preview) return null;
   const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
   const streamId = String(entry.streamId || extra?.streamId || '').trim();
@@ -219,7 +218,7 @@ export function normalizeBackgroundAgentWork(record = {}) {
     completedAt,
     updatedAt,
     result: backgroundAgentText(record.result, record.finalResult, record.reply, record.output),
-    streamingText: typeof record.streamingText === 'string' ? record.streamingText : backgroundAgentText(record.streamingText),
+    streamingText: backgroundAgentText(record.streamingText),
     error: backgroundAgentText(record.error),
     fileChanges: record.fileChanges || null,
     streamId: String(record.streamId || stream.streamId || '').trim(),

@@ -782,9 +782,6 @@ function matchingOperation(entries, payload, phase) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const activity = entries[index]?.activity;
     if (!activity || activity.kind !== 'operation') continue;
-    // Explicitly different calls must never collapse via the action fallback.
-    // Background commentary often separates consecutive uses of the same tool.
-    if (callId && activity.callId && callId !== activity.callId) continue;
     if (callId && activity.callId && callId === activity.callId) return entries[index];
     if (eventKey && activity.eventKey && eventKey === activity.eventKey) return entries[index];
     // stepNum restarts at 1 on every new stream (restart resume, steer
