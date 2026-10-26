@@ -205,6 +205,7 @@
     "test:gmail-mime": "tsx src/integrations/connectors/gmail-mime.regression.ts",
     "test:plugin-tool-surface": "tsx src/connections/tool-surface.regression.ts",
     "test:x-api-request-policy": "tsx src/gateway/tools/x-api-request-policy.regression.ts",
+    "test:oauth-callback-lifecycle": "tsx src/auth/oauth-callback-lifecycle.regression.ts",
     "test:connector-oauth": "npm run build:backend && node scripts/test-connector-oauth-contract.mjs",
     "test:agents": "npm run build:backend && node scripts/test-agent-runtime-contract.mjs && node scripts/test-agent-unbounded-loop.mjs",
     "test:subagent-sources-scope": "node scripts/test-subagent-sources-scope.mjs",
