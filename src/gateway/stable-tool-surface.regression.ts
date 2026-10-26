@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 import { buildTools } from './tool-builder';
+import { autoActivateToolCategories } from './tool-category-auto-activation';
+
+for (const message of ['hello', 'edit the file and run a test in the browser', 'slack gmail connector schedule automation']) {
+  const marks: string[] = [];
+  assert.deepEqual(autoActivateToolCategories('isolated-test', message, 8, label => marks.push(label)), []);
+  assert.deepEqual(marks, ['pre_context.toolcats.hint_only']);
+}
 
 const deps = { getMCPManager: () => ({ getAllTools: () => [] }), skipDynamicExtensionTools: true };
 const surface = (categories: string[]) => buildTools(deps, new Set(categories));
