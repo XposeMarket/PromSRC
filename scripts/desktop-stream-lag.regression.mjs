@@ -59,3 +59,27 @@ assert.equal(presentations, 0, 'presented body does not replay coalescing');
 ctx.renderLiveTraceList(list);
 assert.equal(presentations, 1, 'raw callers still use visibility filtering');
 console.log('PASS desktop stream-lag: label equivalence/bounded work, raw/presented summaries, progress/results/waits, trace reuse');
+
+// Actual desktop scheduling entry: token bursts coalesce, reader gets a bounded
+// low-rate update, and hidden/switched sessions never get stale DOM writes.
+const pending = new Map(); const hooks = new Map(); let patches = 0; let notified = 0;
+const view = { activeChatSessionId: 'a', chatMessagesUserScrolledUp: true };
+const doc = { hidden: false };
+const stream = vm.createContext({ window: view, document: doc, streamingChatFlushHooks: hooks,
+  desktopStreamRenderScheduler: { schedule(key, fn, options) { pending.set(key, { fn, options }); } },
+  isSessionVisibleInChatSurface: sid => sid === view.activeChatSessionId,
+  patchStreamingChatBubble: () => { patches++; return true; },
+  redrawSideChatStreamPane: () => false, renderChatMessages: () => { throw new Error('unexpected fallback'); },
+});
+vm.runInContext(declaration(chat, 'renderStreamingChatUpdate'), stream);
+for (let i = 0; i < 20; i++) stream.renderStreamingChatUpdate('a', () => notified++);
+assert.equal(pending.size, 1, 'token burst has one pending paint');
+assert.equal(pending.get('desktop-bubble:a').options.minimumDelay, 250, 'reader paints bounded to 4Hz');
+pending.get('desktop-bubble:a').fn();
+assert.equal(patches, 1); assert.equal(notified, 20, 'first-visible hooks preserved');
+view.chatMessagesUserScrolledUp = false; stream.renderStreamingChatUpdate('a');
+assert.equal(pending.get('desktop-bubble:a').options.minimumDelay, 0, 'tail reader uses adaptive cadence');
+doc.hidden = true; pending.get('desktop-bubble:a').fn(); assert.equal(patches, 1, 'hidden callback does not paint');
+doc.hidden = false; stream.renderStreamingChatUpdate('a'); view.activeChatSessionId = 'b'; pending.get('desktop-bubble:a').fn();
+assert.equal(patches, 1, 'switched chat never gets stale callback');
+console.log('PASS desktop stream scheduling: burst coalescing, input/read-up budget, hooks, hidden/switch guards');
