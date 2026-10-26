@@ -1,3 +1,5 @@
+import { withRetainedRawRead } from './maintenance/observation-retention';
+
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -71,6 +73,7 @@ async function persistRawResult(sessionId: string, sha256: string, text: string)
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   try {
     await fs.promises.access(target, fs.constants.R_OK);
+    const now = new Date(); await fs.promises.utimes(target, now, now);
     return `${RAW_REF_PREFIX}${safeSession}/${sha256}.txt`;
   } catch {}
 
@@ -156,7 +159,7 @@ export async function readRawToolResult(rawRef: string): Promise<string> {
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error('Tool-result raw reference escaped its storage root.');
   }
-  return fs.promises.readFile(resolved, 'utf8');
+  return withRetainedRawRead(resolved, () => fs.promises.readFile(resolved, 'utf8'));
 }
 
 /**
@@ -219,6 +222,7 @@ export async function readRawToolResultRange(input: {
     }
   }
 
+  return withRetainedRawRead(resolved, async () => {
   const stat = await fs.promises.stat(resolved);
   const offsetBytes = Math.max(0, Math.min(stat.size, Math.floor(Number(input.offsetBytes) || 0)));
   const maxChars = Math.max(256, Math.min(16_000, Math.floor(Number(input.maxChars) || 8_000)));
@@ -238,4 +242,5 @@ export async function readRawToolResultRange(input: {
   const consumedBytes = Buffer.byteLength(content, 'utf8');
   const nextOffsetBytes = offsetBytes + consumedBytes < stat.size ? offsetBytes + consumedBytes : null;
   return { rawRef: value, offsetBytes, nextOffsetBytes, maxChars, totalBytes: stat.size, content };
+  });
 }

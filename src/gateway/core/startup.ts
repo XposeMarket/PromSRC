@@ -950,6 +950,9 @@ export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
     console.warn('[recall-index] could not start:', err?.message || err);
   }
 
+  // Disabled by default; opt-in maintenance starts after ready, never during boot.
+  if (!skipInPreview('observation-retention')) require('../maintenance/retention-runtime').startObservationRetention();
+
   // Personal Chrome relay (ws://127.0.0.1:9234). It used to start lazily on the
   // first browser tool call, so after every restart the paired extension had
   // nothing to reconnect to and "Use my Chrome" failed as "not paired".
