@@ -3,6 +3,12 @@
 > Last verified: 2026-10-07 against PromSRC a48712ccc · **Owner area:** `src/gateway/routes/chat.router.ts`, `src/gateway/chat/`, `src/providers/`, `src/gateway/threads/`
 > **Read this when:** following a user chat turn, changing streaming/tool execution, adding provider behavior, routing models, or debugging usage/rate limits.
 
+## Worker cold-start latency (PR782 second pass)
+
+Both child workers schedule best-effort vault derived-key prewarming only after IPC readiness, using the existing async PBKDF2 implementation (default concurrency 1). Model worker preload initializes the config singleton after provider modules load, then dynamically imports the vault; each actual call still reloads config and checks cancellation. Optional warmup failures are swallowed and never gate readiness or requests. This does not cache providers or plaintext secrets.
+
+Model-worker events flush the first model event and, independently, the first nonempty event of each token/thinking/reasoning-summary kind immediately. Thinking cannot consume the first real token fast path. Earlier model metadata or empty text cannot consume the first-content fast path. Subsequent events retain the 30ms batching and existing byte limits/order. Behavioral coverage: `npx tsx src/gateway/process/worker-latency.regression.ts` plus existing worker pool regressions. No live latency improvement claimed without a new measured cohort.
+
 ## TL;DR
 - The HTTP route is mounted by `src/gateway/server-v2.ts`; `/api/chat` and `/api/status` behavior is primarily in `src/gateway/routes/chat.router.ts`. `handleChat()` is a very large function (~22k lines in this checkout): grep symbols/read focused windows, never dump the file wholesale.
 - Chat orchestration stays in the gateway. It admits/co-ordinates a session turn, loads history and caller context, selects provider/model capabilities, constructs tool schemas and prompt, streams provider output, executes tool calls, and persists/broadcasts results.
