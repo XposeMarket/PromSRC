@@ -23,7 +23,15 @@ function spawnAgentRoute(args = {}) {
 }
 
 function compact(value, max = 120) {
-  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const source = String(value ?? '');
+  // Labels only need max + 1 normalized characters. Tool arguments/results can
+  // contain megabytes of code; do not normalize the unseen tail on every paint.
+  let end = Math.min(source.length, Math.max(32, max + 1));
+  let text = source.slice(0, end).replace(/\s+/g, ' ').trim();
+  while (text.length <= max && end < source.length) {
+    end = Math.min(source.length, end * 2);
+    text = source.slice(0, end).replace(/\s+/g, ' ').trim();
+  }
   if (!text) return '';
   return text.length > max ? `${text.slice(0, Math.max(1, max - 3))}...` : text;
 }
@@ -1057,8 +1065,10 @@ export function coalesceToolActivityEntries(entriesInput) {
     || !completedCalls.has(entry.activity.callId || entry.activity.activityId || entry.id));
 }
 
-export function toolActivitySummary(entriesInput, { live = false } = {}) {
-  const entries = coalesceToolActivityEntries(entriesInput);
+export function toolActivitySummary(entriesInput, { live = false, coalesced = false } = {}) {
+  // Only callers holding a presentation list may opt out. Raw journals retain
+  // the default fold, including mutable progress and expiring background waits.
+  const entries = coalesced ? (Array.isArray(entriesInput) ? entriesInput : []) : coalesceToolActivityEntries(entriesInput);
   const operations = entries.filter((entry) => entry?.activity?.kind === 'operation').map((entry) => entry.activity);
   const results = entries.filter((entry) => entry?.activity?.kind === 'result').map((entry) => entry.activity);
   if (!operations.length && !results.length) return '';
