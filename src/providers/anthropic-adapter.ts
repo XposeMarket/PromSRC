@@ -585,6 +585,7 @@ export class AnthropicAdapter implements LLMProvider {
   private async buildMessages(messages: ChatMessage[], omitIntradayNotes?: boolean): Promise<{ system: string; messages: any[]; turnUserIndex: number }> {
     let systemPrompt = '';
     let turnUserIndex = -1;
+    const sourceUsers = new Set(messages.filter((message) => message.role === 'user'));
     const anthropicMessages: any[] = [];
     const pendingToolUseIds: string[] = [];
     const knownToolUseIds = new Set<string>();
@@ -698,7 +699,7 @@ export class AnthropicAdapter implements LLMProvider {
         const parts = await normalizeAnthropicContent(m.content);
 
         if (parts.length === 0) continue;
-        if (m.role === 'user') turnUserIndex = anthropicMessages.length;
+        if (sourceUsers.has(m)) turnUserIndex = anthropicMessages.length;
         anthropicMessages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: parts });
         continue;
       }
@@ -707,7 +708,7 @@ export class AnthropicAdapter implements LLMProvider {
       // Plain text message - validate content is non-empty
       const textContent = typeof m.content === 'string' ? m.content.trim() : '';
       if (!textContent) continue;  // Skip empty messages
-      if (m.role === 'user') turnUserIndex = anthropicMessages.length;
+      if (sourceUsers.has(m)) turnUserIndex = anthropicMessages.length;
 
       anthropicMessages.push({
         role: m.role === 'assistant' ? 'assistant' : 'user',

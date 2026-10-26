@@ -40,6 +40,8 @@ async function main() {
   const next = await request([...first, ...toolRound('one'), { role: 'user', content: 'Next turn' }]);
   assert.ok(next.at(-1).content.at(-1).text.includes(context), 'new user turn reanchors');
   assert.ok(!JSON.stringify(next[2]).includes(context), 'old turn not annotated');
+  const orphan = await request([...first, { role: 'tool', content: 'orphan output', tool_call_id: 'missing' }]);
+  assert.ok(orphan[2].content.at(-1).text.includes(context), 'synthetic tool notes do not reanchor current turn');
   const compacted = await request([{ role: 'system', content: 'Summary' }, ...toolRound('compact')]);
   assert.equal(JSON.stringify(compacted).split(VOLATILE_TURN_CONTEXT_HEADER).length - 1, 1, 'compacted/tool-only fallback retains context');
   assert.equal(attachVolatileContextToUserTurn([], context), false);
