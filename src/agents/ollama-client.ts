@@ -16,6 +16,7 @@ import {
   getProviderRuntimeIdentity,
   resetProvider,
 } from '../providers/factory';
+import { currentTrace } from '../gateway/observability/turn-trace';
 import type { LLMProvider } from '../providers/LLMProvider';
 import type { ModelStreamEvent } from '../providers/LLMProvider';
 export type { LLMProvider };
@@ -110,9 +111,13 @@ export class OllamaClient {
       workerPriority?: 'interactive' | 'background';
       abortSignal?: AbortSignal;
       omitIntradayNotes?: boolean;
+      sessionId?: string;
+      usageContext?: { sessionId?: string };
     },
   ): Promise<any> {
+    const sessionId = options?.sessionId || options?.usageContext?.sessionId || currentTrace()?.sessionId;
     const direct = () => activeProvider.chat(messages, model, {
+      sessionId,
       temperature: options?.temperature,
       max_tokens: options?.num_predict,
       num_ctx: options?.num_ctx,
@@ -139,6 +144,7 @@ export class OllamaClient {
       model,
       messages,
       options: {
+        sessionId,
         temperature: options?.temperature,
         maxTokens: options?.num_predict,
         numCtx: options?.num_ctx,

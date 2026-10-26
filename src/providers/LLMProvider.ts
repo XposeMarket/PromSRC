@@ -67,6 +67,8 @@ export interface ChatOptions {
   temperature?: number;
   max_tokens?: number;
   num_ctx?: number;
+  /** Internal conversation identity for provider cache affinity; never a raw wire key. */
+  sessionId?: string;
   tools?: any[];
   think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   /** Provider speed tier for this chat route. */
