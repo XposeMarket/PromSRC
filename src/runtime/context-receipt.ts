@@ -127,7 +127,7 @@ export function captureContextReceipt(input: RuntimePromptManifestInput, manifes
   } catch { return { id: manifest.id, persisted: false, reason: 'capture_failed' }; }
 }
 
-export function readContextReceipts(query: { id?: string; sessionId?: string; days?: number; limit?: number; detail?: boolean } = {}, root = workspaceRoot()) {
+export function readContextReceipts(query: { id?: string; sessionId?: string; gatewayTurnId?: string; days?: number; limit?: number; detail?: boolean } = {}, root = workspaceRoot()) {
   if (query.id && !ID.test(query.id)) throw new Error('Invalid receipt id');
   const dir = receiptDir(root); const settings = contextReceiptSettings(root);
   const days = boundedNumber(query.days, 7, 1, 30); const limit = boundedNumber(query.limit, 20, 1, 100);
@@ -140,7 +140,7 @@ export function readContextReceipts(query: { id?: string; sessionId?: string; da
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE) throw new Error('invalid file');
       const r = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (r.version !== 1 || !ID.test(r.manifestId) || `${r.manifestId}.json` !== name || !Array.isArray(r.sections) || !Number.isFinite(Date.parse(r.timestamp))) throw new Error('invalid record');
-      if (Date.parse(r.timestamp) < Date.now() - Math.min(days, settings.retentionDays) * 86400000 || (query.sessionId && r.sessionId !== query.sessionId)) continue;
+      if (Date.parse(r.timestamp) < Date.now() - Math.min(days, settings.retentionDays) * 86400000 || (query.sessionId && r.sessionId !== query.sessionId) || (query.gatewayTurnId && r.gatewayTurnId !== query.gatewayTurnId)) continue;
       // Scrub again on read so corrupted/legacy externally altered records cannot bypass redaction.
       const sanitize = (v: any): any => typeof v === 'string' ? scrubContextText(v) : Array.isArray(v) ? v.map(sanitize) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, value]) => [k, /^(password|secret|token|authorization|cookie|apiKey)$/i.test(k) ? '[REDACTED]' : sanitize(value)])) : v;
       const safe = sanitize(r);
@@ -179,7 +179,7 @@ export function recordContextReceiptOutcome(outcome: { sessionId: string; gatewa
     if (!contextReceiptSettings(root).enabled || !outcome.gatewayTurnId) return { joined: 0 };
     const dir = receiptDir(root);
     const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => ID.test(n.replace(/\.json$/, ''))).sort().reverse().slice(0, MAX_FILES) : [];
-    const records = names.map(n => readContextReceipt(n.replace(/\.json$/, ''), root)).filter(r => r?.sessionId === outcome.sessionId);
+    const records = names.map(n => readContextReceipts({ id: n.replace(/\.json$/, ''), detail: true, sessionId: outcome.sessionId, gatewayTurnId: outcome.gatewayTurnId, limit: 1 }, root).records[0]).filter(r => r?.sessionId === outcome.sessionId);
     let joined = 0; let failed = 0;
     for (const r of records) if (r.gatewayTurnId === outcome.gatewayTurnId) {
       const response = scrubContextText(outcome.response || '');
