@@ -158,3 +158,9 @@ Dynamic connector/MCP definitions are built from live extension registration, cu
 - [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md) · [08 Agents & background](08-agents-tasks-background.md)
 - [12 Connectors/MCP](12-connectors-mcp-integrations.md) · [13 Browser & desktop](13-browser-desktop.md) · [21 Security/approvals](21-security-approvals-permissions.md)
 - [Tools inventory](generated/tools.md) · [Tool categories inventory](generated/tool-categories.md) · [Tests inventory](generated/tests.md)
+
+## web_fetch on X status URLs (updated 2026-10-27, branch fix/x-fetch-media-routing)
+- `include_media:true` alone no longer opens the browser. Media-only uses oEmbed once (memoized per call), then target-post media hints from the FxTwitter API (identity-checked by tweet id; quoted-post media is ignored), then the existing download_url / download_media path. yt-dlp status-URL fallback runs once only when no files were found.
+- `include_thread:true` is the only path that runs the browser thread scrape. If it yields no tweets, oEmbed is used as the exact-post fallback and `thread_status`/`thread_reason` say so (`login_gated` or `blocked_or_timeout`). Replies are not claimed as obtained.
+- Payload statuses: `thread_status` (`not_requested|complete|target_only|unavailable`) and `media_status` (`not_requested|recovered|partial|none_detected|failed`). `partial` = some media downloaded and some errors. Media-only salvage still returns success when files exist.
+- Regression: `npm run test:x-fetch-media-routing` (offline; fetch, browser and download tools stubbed).

@@ -1538,6 +1538,34 @@ async function fetchXStatusViaOEmbed(url: string): Promise<XFetchPayload | null>
   } as XFetchPayload;
 }
 
+/**
+ * Target-post media hints via the public FxTwitter API. Identity-checked: the
+ * returned tweet id must equal the requested id. Only the target post's media
+ * is read; the quoted post (tweet.quote) is intentionally ignored.
+ */
+async function fetchXStatusMediaViaFx(url: string, id: string): Promise<any[]> {
+  try {
+    const handle = String(url || '').match(/(?:x\.com|twitter\.com)\/([^/?#]+)\/status\//i)?.[1] || 'i';
+    const response = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(handle)}/status/${id}`, {
+      headers: { accept: 'application/json', 'user-agent': 'Prometheus/1.0 (+web_fetch)' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return [];
+    const data: any = await response.json();
+    const tweet = data?.tweet;
+    if (!tweet || String(tweet.id || '') !== id) return [];
+    const photos: any[] = Array.isArray(tweet?.media?.photos) ? tweet.media.photos : [];
+    const videos: any[] = Array.isArray(tweet?.media?.videos) ? tweet.media.videos : [];
+    const hints: any[] = photos
+      .map(photo => ({ type: 'image', url: String(photo?.url || '') }))
+      .filter(item => item.url);
+    if (videos.length) hints.push({ type: 'video' });
+    return hints;
+  } catch {
+    return [];
+  }
+}
+
 async function fetchXStatusViaOEmbedRaw(url: string, id: string): Promise<XFetchPayload | null> {
   try {
     const endpoint = new URL('https://publish.x.com/oembed');
@@ -1797,7 +1825,7 @@ async function getVideoTranscript(filePath: string, existingTranscript?: string)
 }
 async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAnalysis> {
   if (file.kind === 'image') {
-    const result = await executeAnalyzeImage({
+    const result = await xFetchDeps.executeAnalyzeImage({
       file_path: file.rel_path,
       prompt: 'Analyze this image downloaded from an X post. Describe what is visible and transcribe any visible text.',
     });
@@ -1818,7 +1846,7 @@ async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAn
   }
 
   if (file.kind === 'video') {
-    const result = await executeAnalyzeVideo({
+    const result = await xFetchDeps.executeAnalyzeVideo({
       file_path: file.rel_path,
       prompt: 'Analyze this video downloaded from an X post. Summarize the clip, visible text, and spoken audio if available.',
       sample_count: 4,
@@ -1872,7 +1900,7 @@ async function buildXMediaReport(
     imageJobs.slice(0, MAX_X_IMAGE_DOWNLOADS),
     MAX_X_IMAGE_DOWNLOAD_CONCURRENCY,
     async (job) => {
-      const result = await executeDownloadUrl({
+      const result = await xFetchDeps.executeDownloadUrl({
         url: job.url,
         output_dir: 'downloads/x_fetch_media/images',
       });
@@ -1898,7 +1926,7 @@ async function buildXMediaReport(
   }
 
   for (const job of videoJobs.slice(0, MAX_X_VIDEO_DOWNLOADS)) {
-    const result = await executeDownloadMedia({
+    const result = await xFetchDeps.executeDownloadMedia({
       url: job.url,
       output_dir: 'downloads/x_fetch_media',
       audio_only: false,
@@ -1929,7 +1957,7 @@ async function buildXMediaReport(
   // attempt whenever extraction found no files instead of silently returning no media.
   if (downloadedFiles.length === 0 && isXStatusUrl(fallbackUrl)) {
     fallbackPageDownloadAttempted = true;
-    const fallbackResult = await executeDownloadMedia({
+    const fallbackResult = await xFetchDeps.executeDownloadMedia({
       url: fallbackUrl,
       output_dir: 'downloads/x_fetch_media',
       audio_only: false,
@@ -2005,7 +2033,7 @@ async function buildXMediaReport(
   }
 
   return {
-    detected: hintedTweetCount > 0,
+    detected: hintedTweetCount > 0 || dedupedFiles.length > 0,
     hinted_tweet_count: hintedTweetCount,
     direct_image_candidates: imageJobs.length,
     video_tweet_candidates: videoJobs.length,
@@ -2039,6 +2067,16 @@ function summarizeXMediaReport(report?: XFetchMediaReport): string | null {
   return parts.join('; ');
 }
 
+// Injection seam so the offline regression can stub the browser and download/analysis tools.
+// Late-binding wrappers: evaluated at call time, safe under circular ESM imports.
+export const xFetchDeps: Record<string, (...args: any[]) => any> = {
+  fetchXThread: (...a: any[]) => (fetchXThread as any)(...a),
+  executeDownloadUrl: (...a: any[]) => (executeDownloadUrl as any)(...a),
+  executeDownloadMedia: (...a: any[]) => (executeDownloadMedia as any)(...a),
+  executeAnalyzeImage: (...a: any[]) => (executeAnalyzeImage as any)(...a),
+  executeAnalyzeVideo: (...a: any[]) => (executeAnalyzeVideo as any)(...a),
+};
+
 async function executeXWebFetch(
   url: string,
   maxChars: number,
@@ -2046,24 +2084,39 @@ async function executeXWebFetch(
   includeMedia = false,
   includeThread = false,
 ): Promise<ToolResult> {
-  let payload = !includeMedia && !includeThread && isXStatusUrl(url)
-    ? await fetchXStatusViaOEmbed(url)
-    : null;
-  if (!payload) {
-    const raw = await fetchXThread('web_fetch', url);
+  // oEmbed is the exact-post path and is requested at most once per call. The
+  // browser thread scrape is opt-in (include_thread) and never runs for media-only.
+  let oembedRequest: Promise<XFetchPayload | null> | null = null;
+  const oembedOnce = (): Promise<XFetchPayload | null> => {
+    oembedRequest ??= isXStatusUrl(url) ? fetchXStatusViaOEmbed(url).catch(() => null) : Promise.resolve(null);
+    return oembedRequest;
+  };
+  let payload: XFetchPayload | null = null;
+  let threadStatus = 'not_requested';
+  let threadReason: string | undefined;
+  if (!includeThread && isXStatusUrl(url)) {
+    payload = await oembedOnce();
+  } else {
+    const raw = await xFetchDeps.fetchXThread('web_fetch', url);
     payload = parseXFetchPayload(raw, url);
-    // Logged-out X often shows a login wall instead of the thread. Keep the
-    // exact post via oEmbed rather than failing the whole fetch.
-    if (isXStatusUrl(url) && !(Array.isArray(payload?.tweets) && payload.tweets.length)) {
-      const oembed = await fetchXStatusViaOEmbed(url).catch(() => null);
+    if (Array.isArray(payload?.tweets) && payload.tweets.length) {
+      threadStatus = 'complete';
+    } else {
+      // Heuristic: a login wall in the browser output marks login_gated; otherwise blocked/timeout.
+      threadStatus = 'unavailable';
+      threadReason = /log\s*-?in|login/i.test(String(raw || '')) ? 'login_gated' : 'blocked_or_timeout';
+      const oembed = await oembedOnce();
       if (oembed?.success && Array.isArray(oembed.tweets) && oembed.tweets.length) {
+        threadStatus = 'target_only';
         payload = {
           ...oembed,
-          message: `${oembed.message || 'Captured exact X status via oEmbed'}. Replies/thread were login-gated; for replies use x_search_ops or x_posts.`,
+          message: `${oembed.message || 'Captured exact X status via oEmbed'}. Thread unavailable (${threadReason}); replies were not obtained. For replies use x_search_ops or x_posts.`,
         };
       }
     }
   }
+  if (!payload) payload = { success: false, url, error: `X fetch returned no payload for ${url}.` } as XFetchPayload;
+  Object.assign(payload, { thread_status: threadStatus, thread_reason: threadReason });
   const payloadError = validateXFetchPayload(payload, url);
   if (payloadError) {
     payload.success = false;
@@ -2072,6 +2125,14 @@ async function executeXWebFetch(
 
   if (payload.success) {
     reportWebFetchProgress(progress, 'fetch_complete', 'Web fetch complete.');
+  }
+
+  // media-only path has no browser media hints; fetch target-post media once from FxTwitter.
+  const hintTweet: any = Array.isArray(payload.tweets) ? payload.tweets[0] : undefined;
+  if (includeMedia && isXStatusUrl(url) && payload.success && hintTweet
+    && !(Array.isArray(hintTweet.media) && hintTweet.media.length) && hintTweet.hasImage !== true && hintTweet.hasVideo !== true) {
+    const hints = await fetchXStatusMediaViaFx(url, String(hintTweet.id || '')).catch(() => []);
+    if (hints.length) hintTweet.media = hints;
   }
 
   // Media is independently recoverable from valid X status URLs. Do not gate it on
@@ -2094,11 +2155,22 @@ async function executeXWebFetch(
     }
   }
 
+  if (payload.x_media) {
+    const media = payload.x_media;
+    const downloaded = media.downloaded_files?.length || 0;
+    const errs = media.errors?.length || 0;
+    const mediaStatus = !includeMedia ? 'not_requested'
+      : downloaded === 0 ? (errs > 0 ? 'failed' : 'none_detected')
+      : errs > 0 ? 'partial' : 'recovered';
+    Object.assign(payload, { media_status: mediaStatus });
+  }
+
   if (!payload.success && payload.x_media?.downloaded_files?.length) {
     payload.success = true;
     payload.error = undefined;
     payload.message = 'Post text extraction was unavailable, but media was recovered from the X status URL.';
-    payload.count = Number(payload.x_media.hinted_tweet_count || 0);
+    // Count only post text actually obtained (0 when none); never fabricate from media hints.
+    payload.count = Array.isArray(payload.tweets) ? payload.tweets.length : 0;
   }
 
   const stdoutPayload = payload.x_media
