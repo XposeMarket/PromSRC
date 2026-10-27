@@ -1076,18 +1076,23 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           const action = String(args?.action || '').trim();
           const providerId = String(args?.provider || '').trim();
           const accountId = String(args?.account_id || args?.accountId || '').trim();
-          const cfgNow = getConfig().getConfig() as any;
+          type ProviderAccountRow = { label?: unknown; api_key?: unknown };
+          type ProviderCfgSlice = { accounts?: unknown; api_key?: unknown; defaultAccountId?: unknown };
+          const cfgNow = getConfig().getConfig() as unknown as {
+            gateway?: { port?: unknown; host?: unknown };
+            llm?: { provider?: string; accountId?: string; providers?: Record<string, ProviderCfgSlice | undefined> };
+          };
           if (action === 'list') {
             const { providerAccountVaultKey, providerOAuthVaultKey } = require('../../../providers/usage-awareness');
             const { getVault } = require('../../../security/vault');
             const keys = new Set<string>(getVault().keys());
-            const out: Record<string, any> = {};
+            const out: Record<string, Array<{ id: string; label: string; default: boolean; has_saved_credentials: boolean }>> = {};
             for (const pid of ['anthropic', 'openai_codex', 'openai', 'xai']) {
               const pc = cfgNow?.llm?.providers?.[pid];
               if (!pc || typeof pc !== 'object') continue;
-              const accounts = pc.accounts && typeof pc.accounts === 'object' && !Array.isArray(pc.accounts) ? pc.accounts : {};
+              const accounts = (pc.accounts && typeof pc.accounts === 'object' && !Array.isArray(pc.accounts) ? pc.accounts : {}) as Record<string, ProviderAccountRow | undefined>;
               const legacyKey = typeof pc.api_key === 'string' && !!pc.api_key.trim();
-              const rows = Object.entries(accounts).map(([id, acct]: [string, any]) => ({
+              const rows = Object.entries(accounts).map(([id, acct]) => ({
                 id,
                 label: String(acct?.label || id),
                 default: String(pc.defaultAccountId || '') === id,
@@ -1117,11 +1122,11 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
               : { providerId, accountId, makeDefault: true };
           try {
             const resp = await fetch(`${base}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            const data = await resp.json() as any;
+            const data = await resp.json() as { success?: boolean; error?: string } & Record<string, unknown>;
             if (!data?.success) return { name, args, result: `ERROR: ${data?.error || `provider_accounts ${action} failed`}`, error: true };
             return { name, args, result: JSON.stringify({ action, provider: providerId, account_id: accountId, ...data }, null, 2), error: false };
-          } catch (err: any) {
-            return { name, args, result: `provider_accounts error: ${err.message}`, error: true };
+          } catch (err: unknown) {
+            return { name, args, result: `provider_accounts error: ${err instanceof Error ? err.message : String(err)}`, error: true };
           }
         }
 
