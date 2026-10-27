@@ -203,3 +203,8 @@ The mobile saved model preference carries provider/model/speed/account, not the 
 
 ### Pending PR: feat/model-family-picker-terra61
 Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js` for provider → family → model navigation, paired with desktop; Terra metadata and exact `gpt-6.1-terra` fallback entries include mobile Settings and supported reasoning levels. This is pending PR work, not live/on-device verified.
+
+### Reasoning-only chat route updates
+- `mobile-model-badge.js::_queueReasoningSave` captures the originating session before debounce and reads that session's effective route, never a stale provider Settings model. Effort normalizes against the selected provider/model; model, account and speed remain unchanged. Use default clears only the effort override.
+- Navigation before save or during route read cancels visibly. An already submitted PUT stays bound to the original session and cannot update the later chat UI or persisted selection.
+- `node scripts/test-mobile-reasoning-route.regression.mjs` executes the actual module with VM browser/API stubs: stale settings refresh, draft/existing identity/default cases and async navigation. `--baseline` executes origin/main to demonstrate failure. Isolated component coverage is not real-phone proof.

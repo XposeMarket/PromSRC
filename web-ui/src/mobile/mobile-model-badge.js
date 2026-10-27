@@ -525,8 +525,7 @@ function _activeChatSessionId() {
   return String(window.__pmChat?.activeSessionId || '').trim();
 }
 
-async function _loadChatModelRoute() {
-  const sessionId = _activeChatSessionId();
+async function _loadChatModelRoute(sessionId = _activeChatSessionId()) {
   if (!sessionId) return null;
   if (sessionId === 'mobile_default') {
     if (!_mobileDraftModelRoute) _mobileDraftModelRoute = _readSavedChatModelRoute();
@@ -538,8 +537,8 @@ async function _loadChatModelRoute() {
   } catch { return null; }
 }
 
-async function _saveChatModelRoute(route) {
-  const sessionId = _activeChatSessionId();
+async function _saveChatModelRoute(route, sessionId = _activeChatSessionId()) {
+  if (sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
   if (!sessionId) throw new Error('No active chat.');
   if (sessionId === 'mobile_default') {
     const override = {
@@ -564,6 +563,7 @@ async function _saveChatModelRoute(route) {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
+  if (sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Reasoning saved only to the original chat.');
   _writeSavedChatModelRoute(data?.chatModelRoute || route);
   return data?.chatModelRoute || null;
 }
@@ -1189,34 +1189,47 @@ async function _openSubagentReasoningSheet() {
     })(),
   });
 }
-
 function _queueReasoningSave(provider, patch, immediate = false) {
-  const existing = (_llmCache?.providers || {})[provider] || {};
-  const merged = { ...existing, ...patch };
-  if (merged.reasoning_effort === '') delete merged.reasoning_effort;
-  const active = _activeModel(_llmCache);
-  const model = String(merged.model || active.model || '').trim();
-  if (merged.reasoning_effort) {
-    const normalized = _normalizedReasoningEffort(provider, model, merged.reasoning_effort);
-    if (normalized) merged.reasoning_effort = normalized;
-    else delete merged.reasoning_effort;
-  }
-  if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
-  _setComposerModelIdentity(provider, model, merged.reasoning_effort);
-  _setBadgeLabel(formatModelWithReasoning(model, provider, merged.reasoning_effort));
+  const sessionId = _activeChatSessionId();
+  const change = { ...patch };
   clearTimeout(_reasoningSaveTimer);
+  const assertCurrentChat = () => {
+    if (!sessionId || sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
+  };
   const commit = () => {
     _reasoningSaveChain = _reasoningSaveChain.then(async () => {
-      const route = await _loadChatModelRoute();
-      const effective = route?.effective || { providerId: provider, model: merged.model || _activeModel(_llmCache).model };
-      await _saveChatModelRoute({
-        providerId: provider,
-        model: merged.model || effective.model,
-        reasoningEffort: merged.reasoning_effort || (_activeChatSessionId() === 'mobile_default' ? undefined : _normalizedReasoningEffort(provider, model, await _loadDefaultEffort()) || undefined),
-        speed: supportsFastSpeed(provider, model) ? (merged.speed === 'fast' ? 'fast' : 'standard') : undefined,
-        accountId: effective.accountId || undefined,
-      });
-      await refreshMobileModelBadge(true);
+      assertCurrentChat();
+      const route = await _loadChatModelRoute(sessionId);
+      assertCurrentChat();
+      // The route owns chat identity; provider Settings may still name an old model.
+      // A failed existing-session route read must not silently pin those defaults.
+      if (!route?.effective && sessionId !== 'mobile_default') throw new Error('Could not load this chat model. Try again.');
+      const effective = route?.effective || (() => {
+        const active = _activeModel(_llmCache);
+        const cfg = _llmCache?.providers?.[active.provider] || {};
+        return { providerId: active.provider, model: active.model, speed: cfg.speed, accountId: cfg.accountId };
+      })();
+      const providerId = effective.providerId;
+      const model = effective.model;
+      if (!providerId || !model || providerId !== provider) throw new Error('Chat model changed. Choose reasoning again.');
+      const reasoningEffort = Object.prototype.hasOwnProperty.call(change, 'reasoning_effort')
+        ? _normalizedReasoningEffort(providerId, model, change.reasoning_effort) || undefined
+        : effective.reasoningEffort;
+      const next = { providerId, model, reasoningEffort,
+        speed: Object.prototype.hasOwnProperty.call(change, 'speed') ? change.speed : effective.speed,
+        accountId: effective.accountId,
+      };
+      const saved = await _saveChatModelRoute(next, sessionId);
+      assertCurrentChat();
+      const result = saved?.effective || next;
+      window.__pmChatModelRoute = saved;
+      if (_llmCache) _llmCache = { ..._llmCache, provider: providerId, providers: {
+        ..._llmCache.providers, [providerId]: { ..._llmCache.providers?.[providerId], model,
+          reasoning_effort: result.reasoningEffort, speed: result.speed },
+      } };
+      _setComposerModelIdentity(providerId, model, result.reasoningEffort);
+      _setBadgeLabel(formatModelWithReasoning(model, providerId, result.reasoningEffort));
+      _setBadgeFast(supportsFastSpeed(providerId, model) && result.speed === 'fast');
     }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
   };
   if (immediate) commit();
