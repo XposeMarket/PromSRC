@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { compactMobileThreadCacheFileChanges as compact } from '../web-ui/src/mobile/mobile-thread-cache-file-changes.js';
+assert.equal(compact(null), undefined);
+assert.equal(compact({ files: [null, {}] }), undefined);
+const files = Array.from({length: 15}, (_, i) => ({path: `f${i}`, insertions: i, deletions: -1, secret: 'discard'}));
+const value = compact({files, checkpoint: {id: 'cp', snapshotCount: 4}, groups: Array.from({length: 10}, (_, i) => ({id: `g${i}`, files: [{path:'a', binary:true}]}))});
+assert.equal(value.files.length, 12);
+assert.equal(value.files[0].path, 'f3');
+assert.equal(value.files[0].deletions, 0);
+assert.equal(value.files[0].secret, undefined);
+assert.equal(value.summary.fileCount, 12);
+assert.equal(value.summary.insertions, 102);
+assert.equal(value.checkpoint.id, 'cp');
+assert.equal(value.groups.length, 8);
+assert.equal(value.groups[0].id, 'g2');
+assert.equal(value.groups[0].fileChanges.files[0].binary, true);
+assert.equal(compact({files:[{displayPath:'virtual'}], checkpoint:{snapshotCount:5}}).checkpoint, undefined);
+console.log('PASS bounded mobile thread cache serializer: omit, trim, cap, totals, groups, checkpoint, privacy');

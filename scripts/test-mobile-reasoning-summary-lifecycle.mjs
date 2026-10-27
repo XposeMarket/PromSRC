@@ -67,9 +67,9 @@ handlers._handleMobileReasoningSummaryDelta(message, {
   text: 'Investigating H3 Max model licensing',
 });
 
-const progressEntries = message.liveTraceEntries.filter((entry) => entry.extra?.source === 'agent_progress');
+const progressEntries = message.liveTraceEntries.filter((entry) => entry.extra?.source === 'reasoning_summary');
 assert.equal(progressEntries.length, 1, 'summary updates must reuse one mutable progress entry');
-assert.equal(progressEntries[0].text, 'Investigating H3 Max model licensing');
+assert.equal(progressEntries[0].text, 'Investigating H3 Max model licensingInvestigating H3 Max model licensing', 'repeated raw chunks are not deduplicated');
 assert.equal(message.processEntries.length, 0, 'summary packets must never enter the durable thought journal');
 assert.equal(message._thinking, '', 'summary packets must not enter cached thinking text');
 
@@ -97,7 +97,7 @@ handlers._handleMobileReasoningSummaryDelta(boundaryMessage, {
   type: 'reasoning_summary_delta',
   text: 'Checking the next source now',
 });
-const progressAfterThought = boundaryMessage.liveTraceEntries.filter((entry) => entry.extra?.source === 'agent_progress');
+const progressAfterThought = boundaryMessage.liveTraceEntries.filter((entry) => entry.extra?.source === 'reasoning_summary');
 assert.equal(progressAfterThought.length, 2, 'a summary after a thought must get a new mutable progress slot');
 assert.equal(boundaryMessage.liveTraceEntries.filter((entry) => entry.extra?.reasoningKind === 'full_thought').length, 1,
   'full thoughts after summaries must remain durable and distinct');
@@ -107,7 +107,7 @@ const durable = transientEntry._mobileDurableReasoningEntries([
   { type: 'think', text: 'Launching parallel H3 Max queries', extra: { source: 'reasoning_summary' } },
   ...message.processEntries,
 ]);
-assert.ok(durable.some((entry) => entry.extra?.source === 'agent_progress'),
+assert.ok(durable.some((entry) => entry.extra?.source === 'reasoning_summary'),
   'cache must retain explicit public summary prose across reopening');
 assert.ok(durable.some((entry) => entry.text === message.processEntries[0].text),
   'cache must retain full thought surfaces too');
@@ -148,7 +148,7 @@ const groupTrace = new Function(
 )(
   (entries) => entries, () => false, () => '',
   (entry) => entry.type === 'think', () => 'summary',
-  (entry) => entry.extra?.source === 'agent_progress',
+  (entry) => entry.extra?.source === 'reasoning_summary',
   (group, index) => `group_${index}`,
 );
 const background = { liveTraceEntries: [], processEntries: [] };
@@ -167,7 +167,7 @@ assert.match(groups[0].entries[0].text, /Checking the current file content/);
 assert.match(groups[2].entries[0].text, /Applying the verified change/);
 assert.deepEqual(groupTrace(JSON.parse(JSON.stringify(background.liveTraceEntries))).map((group) => group.kind),
   groups.map((group) => group.kind), 'serialized/reopened traces must retain the same boundaries');
-const latestSummary = [...background.liveTraceEntries].reverse().find((entry) => entry.extra?.source === 'agent_progress').text;
+const latestSummary = [...background.liveTraceEntries].reverse().find((entry) => entry.extra?.source === 'reasoning_summary').text;
 assert.match(latestSummary, /^Updating provider/);
 assert.doesNotMatch(latestSummary, /Inspecting target/);
 const replacement = { liveTraceEntries: [], processEntries: [] };
@@ -182,8 +182,8 @@ console.log('mobile background stream parity fixture passed');
 const summaryTitle = new Function('_dedupeMobileTraceProseText',
   `${rendererFunction('_mobileTraceProgressSummary', '_renderMobileLiveTrace')}return _mobileTraceProgressSummary;`,
 )((text) => text);
-assert.equal(summaryTitle(background.liveTraceEntries), 'Updating provider', 'collapsed title must be latest heading only');
-assert.equal(summaryTitle(groups[0].entries), 'Inspecting target');
+assert.equal(summaryTitle(background.liveTraceEntries), '', 'reasoning summaries must not be promoted into public progress titles');
+assert.equal(summaryTitle(groups[0].entries), '', 'summary prose stays with its reasoning segment');
 
 const renderEntry = new Function('renderToolActivityEntry', 'escapeHtml', '_renderMobileLiveTracePreview',
   '_isMobileTraceReasoningSummaryType', '_renderMobileMarkdown', '_dedupeMobileTraceProseText',

@@ -3737,10 +3737,10 @@ Do not produce prose. Use the canonical thread tool now.` });
         : (reasoningOptions && !reasoningOptions.enabled ? false : configuredReasoning);
       const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
       const primaryThinkMode: boolean | 'ultra' | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | undefined =
-	        requestedThinkMode
+	        requestedThinkMode === 'none' ? false : (requestedThinkMode
 	          || ((multiAgentActive && !isActiveAutomationOp)
 	            ? true
-	            : (activeProviderForThinking === 'openai_codex' && !isActiveAutomationOp ? undefined : false));
+	            : (activeProviderForThinking === 'openai_codex' && !isActiveAutomationOp ? undefined : false)));
         isGrokGeneration = isGrokGenerationOverride(generationOverride);
         grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
         streamedVisibleText = '';

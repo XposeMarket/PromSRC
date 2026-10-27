@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { mergeBackgroundReasoningSummary } from '../web-ui/src/background-stream-summary.js';
 import { applyToolActivityEvent, coalesceToolActivityEntries, renderToolActivityEntry, toolActivitySummary } from '../web-ui/src/tool-activity.js';
 import { normalizeBackgroundAgentWork, resolveBackgroundAgentIdentity } from '../web-ui/src/features/chat/core/background-agent-work.js';
 
-globalThis.window = { addEventListener() {} };
+const testStorage = new Map();
+globalThis.localStorage = { getItem: key => testStorage.get(key) ?? null, setItem: (key, value) => testStorage.set(key, String(value)), removeItem: key => testStorage.delete(key) };
+globalThis.window = { addEventListener() {}, localStorage: globalThis.localStorage };
 const { createMobileChatRendererRuntime } = await import('../web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const { loadToolActivityFeature } = await import('../web-ui/src/features/chat/optional/tool-activity-runtime.js');
 await loadToolActivityFeature();
@@ -15,8 +18,11 @@ const persisted = new Map();
 const appendTrace = (message, type, text, options = {}) => {
   (message.liveTraceEntries ||= []).push({ type, text, ...options });
 };
+const mobileSummary = { _nowTime: () => '12:00', _appendMobileStreamingText: (a, b) => a + b };
+vm.createContext(mobileSummary);
+vm.runInContext(extract('web-ui/src/mobile/mobile-pages.js', ['_setMobileLiveProgressNarration', '_handleMobileReasoningSummaryDelta']), mobileSummary);
 const runtime = createMobileChatRendererRuntime({
-  ICONS: {}, _formatTimeAgo: () => '',
+  ICONS: {}, _formatTimeAgo: () => '', _formatMobileWorkDuration: value => `${value}ms`,
   _isMobileVoiceTraceTurn: () => false,
   _mobileWorkflowTraceEntriesForMessage: message => message.liveTraceEntries || [],
   _renderMobileWorkTimer: () => '<div data-expandable="trace">Working for 1s</div>',
@@ -48,7 +54,7 @@ const runtime = createMobileChatRendererRuntime({
   _appendMobileVisionTrace: (message, evt) => appendTrace(message, 'vision', evt.label, { preview: evt.preview }),
   _applyMobileToolActivity: (message, phase, evt) => applyToolActivityEvent(message.liveTraceEntries ||= [], phase, evt),
   _appendMobileProcess: (message, type, text, extra) => (message.processEntries ||= []).push({ type, text, extra }),
-  _handleMobileReasoningSummaryDelta: (message, evt) => { appendTrace(message, 'think', evt.text, { extra: { source: 'agent_progress', visibility: 'summary' } }); return true; },
+  _handleMobileReasoningSummaryDelta: mobileSummary._handleMobileReasoningSummaryDelta,
   _mergeMobileRichArtifacts: () => {},
   beginFinalResponse: message => { message.finalResponseStarted = true; },
   appendFinalResponseDelta: (text, chunk) => text + chunk,
@@ -113,17 +119,16 @@ assert.match(rendered, /Checking the next capture/);
 assert.match(rendered, /frozen\.png/);
 const flatTrace = lane.message.liveTraceEntries.filter(entry => entry.extra?.source !== 'agent_progress');
 const flatRendered = runtime._renderMobileAgentChatBubble({ ...lane.message, liveTraceEntries: flatTrace, traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'a' });
-assert.match(flatRendered, /pm-trace-tool-rows pm-trace-tool-body/);
-assert.doesNotMatch(flatRendered, /<details class="pm-trace-tool-group"/, 'work timer exposes rows without another generic disclosure');
+assert.match(flatRendered, /pm-trace-tool-body/);
+assert.match(flatRendered, /<details class="pm-trace-tool-group"/, 'public commentary keeps a separate ordered tool phase');
 // Commentary must break tool phases; image replay with another event ID must
 // not render the same preview twice in the background detail sheet.
 send(6, 'vision_injected', { source: 'media_analysis', label: 'Same image from replay', preview: { dataUrl: '/api/canvas/inline?path=frozen.png', artifactKind: 'sample_frame' } });
 send(7, 'token_narration_boundary', { text: 'Now I will verify the asset.' });
 send(8, 'tool_call', { action: 'workspace_read', toolCallId: 'read2', args: { path: 'asset.png' } });
 const phased = runtime._renderMobileAgentChatBubble({ ...lane.message, traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'a' });
-assert.equal((phased.match(/pm-trace-thought-group/g) || []).length, 2, 'each public commentary boundary owns a separate thought block');
-assert.equal((phased.match(/pm-trace-tool-rows pm-trace-tool-body/g) || []).length, 2, 'commentary splits consecutive inline tool phases');
-assert.doesNotMatch(phased, /<details class="pm-trace-tool-group"/, 'an active summary must not collapse background tools into an item-count drawer');
+assert.equal(lane.message.liveTraceEntries.filter(entry => entry.extra?.source === 'agent_thought').length, 2, 'each public commentary boundary owns a separate journal entry');
+assert.equal((phased.match(/class="pm-trace-tool-body"/g) || []).length, 2, 'commentary splits consecutive tool phases');
 assert.equal((phased.match(/<img src="\/api\/canvas\/inline\?path=frozen\.png"/g) || []).length, 1, 'a replayed preview renders once');
 assert.ok(phased.indexOf('I found the capture path.') < phased.indexOf('Now I will verify the asset.'), 'commentary remains chronological');
 
@@ -135,7 +140,7 @@ runtime._flushMobileBackgroundWorkPersistence();
 for (const [action, args, expected, detail] of [
   ['background_ops', { action: 'wait', background_ids: ['a', 'b'], wait_ms: 30000 }, /Waiting for 2 agents for up to 30 s/, /30 seconds/],
   ['background_ops', { action: 'steer', background_id: 'a', message: 'Please check **capture timing**.' }, /Messaging 1 agent/, /capture timing/],
-  ['background_ops', { action: 'spawn', prompt: 'Inspect the image.' }, /Starting background agent/, /Inspect the image/],
+  ['background_ops', { action: 'spawn', prompt: 'Inspect the image.' }, /Starting background agent|Spawning agent/, /Inspect the image/],
   ['desktop_act', { action: 'click', window: 'ChatGPT', x: 30, y: 45 }, /Clicking ChatGPT/, /30, 45/],
   ['browser_act', { action: 'click', url: 'https://x.com/home', label: 'Bookmarks' }, /Clicking “Bookmarks” on x.com/, /Bookmarks/],
   ['browser_act', { action: 'scroll', url: 'https://x.com/home', direction: 'down' }, /Scrolling on x.com/, /down/],
@@ -211,6 +216,93 @@ sandbox.window.visualViewport.offsetTop = 25;
 sandbox.syncMobileSideSheetViewport();
 assert.equal(vars['--pm-side-bottom'], '359px', 'Safari viewport panning is included');
 
+// Stream packets preserve whitespace through live delivery and durable replay.
+const chunks = ['  alpha', ' ', 'beta\n', '\n  gamma  '];
+const whitespaceLane = runtime._upsertMobileBackgroundSpawnLane({ bgId: 'whitespace' }, 'main');
+for (const [index, text] of chunks.entries()) {
+  runtime._pushMobileBackgroundSpawnEvent({ bgId: 'whitespace', spawnerSessionId: 'main', eventType: 'token', streamId: 'white', seq: index + 1, text }, 'main');
+}
+assert.equal(whitespaceLane.message.content, chunks.join(''));
+runtime._flushMobileBackgroundWorkPersistence();
+assert.equal(persisted.get('whitespace').streamingText, chunks.join(''));
+assert.deepEqual(normalizeBackgroundAgentWork({ id: 'white', sessionId: 'main', events: chunks.map(text => ({ type: 'token', text })), liveTraceEntries: chunks.map(text => ({ type: 'preamble', text })) }).events.map(entry => entry.text), chunks);
+assert.deepEqual(normalizeBackgroundAgentWork({ id: 'white', sessionId: 'main', liveTraceEntries: chunks.map(text => ({ type: 'preamble', text })) }).liveTraceEntries.map(entry => entry.text), chunks);
+runtime._pushMobileBackgroundSpawnEvent({ bgId: 'whitespace', spawnerSessionId: 'main', eventType: 'tool_call', streamId: 'white', seq: 5, action: 'workspace_read', toolCallId: 'white-read' }, 'main');
+assert.equal(whitespaceLane.message.liveTraceEntries[0].text, chunks.join(''));
+// A stale checkpoint still has pre-tool streamingText. Status/tools must not
+// restore that old answer into the body or journal it again.
+runtime._applyMobileBackgroundSpawnStatus({ id: 'whitespace', state: 'running' }, 'main');
+assert.equal(whitespaceLane.message.content, '');
+runtime._pushMobileBackgroundSpawnEvent({ bgId: 'whitespace', spawnerSessionId: 'main', eventType: 'agent_thought', streamId: 'white', seq: 6, text: 'Commentary between tools.' }, 'main');
+runtime._pushMobileBackgroundSpawnEvent({ bgId: 'whitespace', spawnerSessionId: 'main', eventType: 'tool_call', streamId: 'white', seq: 7, action: 'workspace_read', toolCallId: 'white-read-2' }, 'main');
+const whitespaceHtml = runtime._renderMobileAgentChatBubble({ ...whitespaceLane.message, traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'whitespace' });
+assert.match(whitespaceHtml, /Commentary between tools\./);
+assert.equal(whitespaceLane.message.liveTraceEntries.filter(entry => entry.text === chunks.join('')).length, 1);
+assert.equal(whitespaceLane.message.liveTraceEntries.find(entry => entry.text === 'Commentary between tools.').type, 'preamble');
+assert.ok(whitespaceLane.message.liveTraceEntries.findIndex(entry => entry.text === 'Commentary between tools.') > whitespaceLane.message.liveTraceEntries.findIndex(entry => entry.activity));
+// Durable trace recovery must merge old commentary at its original position.
+const { mergeMobileBackgroundTraceEntries } = await import('../web-ui/src/mobile/mobile-background-trace-merge.js');
+const positioned = seq => ({ type: seq === 2 ? 'preamble' : 'tool', text: String(seq), extra: { streamId: 'white', seq } });
+assert.deepEqual(mergeMobileBackgroundTraceEntries([positioned(1), positioned(3)], [positioned(2)]).map(entry => entry.text), ['1', '2', '3']);
+
+// Execute the real desktop adapters, not source-pattern assertions.
+const desktop = {
+  applyToolActivityEvent,
+  chatProgressVisibility: evt => evt.visibility || 'private',
+  mergeBackgroundReasoningSummary,
+  backgroundSpawnToolLabel: evt => evt.action || evt.eventType,
+  backgroundSpawnPreview: value => String(value || ''),
+  formatToolCallForLog: action => action,
+  formatToolResultForLog: action => action,
+};
+vm.createContext(desktop);
+vm.runInContext(extract('web-ui/src/pages/ChatPage.js', ['backgroundSpawnProcessEntryFromEvent', 'backgroundSpawnProcessEntryFromEventLegacy', 'backgroundAgentEventsToLiveTraceEntries']), desktop);
+const desktopFrames = [
+  ...chunks.map(text => ({ eventType: 'token', text })),
+  { eventType: 'tool_call', action: 'workspace_read', toolCallId: 'desktop-first' },
+  { eventType: 'agent_thought', text: 'Desktop commentary.' },
+  { eventType: 'tool_call', action: 'workspace_read', toolCallId: 'desktop-second' },
+  { eventType: 'thinking', text: 'PRIVATE THINKING' },
+  { eventType: 'thinking_delta', text: 'PRIVATE DELTA' },
+  { eventType: 'reasoning_summary_delta', text: 'SUMMARY NOT BODY' },
+].map((frame, index) => desktop.backgroundSpawnProcessEntryFromEvent({ ...frame, streamId: 'desktop', seq: index + 1 })).filter(Boolean);
+const desktopTrace = desktop.backgroundAgentEventsToLiveTraceEntries(normalizeBackgroundAgentWork({ id: 'desktop', sessionId: 'main', events: desktopFrames }).events);
+assert.equal(desktopFrames.at(-1).extra.source, 'reasoning_summary', 'desktop live mapping must not promote summaries to progress');
+const desktopSummary = desktopTrace.find(entry => entry.text === 'SUMMARY NOT BODY');
+assert.equal(desktopSummary?.type, 'think');
+assert.equal(desktopSummary?.extra.source, 'reasoning_summary', 'desktop recovery must retain reasoning classification');
+assert.equal(desktopSummary?.extra.reasoningKind, 'summary');
+const mobileSummaryMessage = { liveTraceEntries: [] };
+mobileSummary._handleMobileReasoningSummaryDelta(mobileSummaryMessage, { type: 'reasoning_summary_delta', text: 'SUMMARY NOT BODY' });
+assert.equal(mobileSummaryMessage.liveTraceEntries[0].extra.source, 'reasoning_summary');
+assert.equal(mobileSummaryMessage.content, undefined, 'mobile summary never becomes body content');
+const summaryHtml = runtime._renderMobileAgentChatBubble({ content: '', liveTraceEntries: [desktopSummary], traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'summary' });
+assert.match(summaryHtml, /<details class="pm-trace-thought-group"[^>]*><summary>/, 'summary is collapsed even when the outer trace is expanded');
+assert.equal((summaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1, 'summary has one owner, not a second body/progress copy');
+const desktopRender = {
+  liveTraceGroups: entries => [{ id: 'summary', kind: 'thought-summary', entries }],
+  desktopTraceProgressSummary: () => '',
+  isDesktopMutableProgressTraceEntry: () => false,
+  renderLiveTraceEntry: entry => `<p>${escapeHtml(entry.text)}</p>`,
+  escHtml: escapeHtml,
+};
+vm.createContext(desktopRender);
+vm.runInContext(extract('web-ui/src/pages/ChatPage.js', ['renderLiveTurnTrace']), desktopRender);
+const desktopSummaryHtml = desktopRender.renderLiveTurnTrace([desktopSummary], { streaming: true, openThoughts: true });
+assert.match(desktopSummaryHtml, /<details class="live-turn-thought-group"[^>]*>/);
+assert.doesNotMatch(desktopSummaryHtml, /<details[^>]*\sopen(?:\s|>)/, 'desktop reasoning remains collapsed during streaming');
+assert.equal((desktopSummaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1);
+
+assert.equal(desktopTrace[0].text, chunks.join(''));
+assert.equal(desktopTrace[0].type, 'preamble');
+const desktopCommentary = desktopTrace.findIndex(entry => entry.text === 'Desktop commentary.');
+assert.ok(desktopCommentary > 0 && desktopCommentary < desktopTrace.length - 1, JSON.stringify(desktopTrace));
+assert.equal(desktopTrace[desktopCommentary].type, 'preamble');
+assert.ok(!desktopTrace.some(entry => entry.type === 'preamble' && /PRIVATE|SUMMARY NOT BODY/.test(entry.text)));
+const observableTrace = entries => entries.map(entry => ({ type: entry.type, text: entry.text, callId: entry.activity?.callId || '', source: entry.extra?.source || '' }));
+assert.deepEqual(JSON.parse(JSON.stringify(observableTrace(desktop.backgroundAgentEventsToLiveTraceEntries(desktopFrames)))), JSON.parse(JSON.stringify(observableTrace(desktopTrace))), 'durable normalization preserves desktop ordering/content');
+console.log('[background commentary regression] raw deltas, whitespace-only packets, live/snapshot ordering, desktop/mobile commentary passed');
+
 if (process.argv.includes('--write-fixture')) {
   const rows = [];
   for (const [action, args] of [['background_ops', { action: 'steer', background_id: 'a', message: 'Check **capture timing**.\n\n- Read the latest frame\n- Record the elapsed time' }], ['write_note', { content: '## Capture check\n\nThe image arrived in **40 ms**.' }], ['desktop_act', { action: 'click', window: 'ChatGPT', x: 30, y: 45 }]]) {
@@ -237,3 +329,43 @@ if (process.argv.includes('--write-fixture')) {
   <script src="../web-ui/vendor/marked/marked.min.js"></script><script src="../node_modules/dompurify/dist/purify.min.js"></script><script>${markdownScript}\nwindow.renderMd=renderMd;${toolScript}\ndocument.querySelector('.pm-trace-tool-body').innerHTML=${JSON.stringify(displayRows)}.map(row=>window.renderToolActivityEntry(row)).join('');const page=document.querySelector('.pm-page'),sideSheet=document.querySelector('.pm-mobile-side-sheet'),threadEl=document.querySelector('.pm-mobile-side-thread'),sideInput=document.querySelector('.pm-composer-input'),sideComposer=document.querySelector('.pm-mobile-side-composer'),sideState={},escapeHtml=${escapeHtml.toString()},_materializeMobileCompletedTrace=()=>{},__pmChat={};${script}\n${handler}\nsyncMobileSideSheetViewport();renderMobileSideSheetPlan(${JSON.stringify(saved)});window.addEventListener('resize',syncMobileSideSheetViewport);window.visualViewport?.addEventListener('resize',syncMobileSideSheetViewport);</script></body></html>`);
 }
 console.log('[background presentation] replay cursor, commentary, model, plan, previews, readable details and keyboard geometry passed');
+
+// Mixed checkpoints must not globally reorder existing tool/other-stream rows.
+const mixedLater = { type: 'think', text: 'later', streamId: 's', seq: 5 };
+const mixedMiddle = { type: 'tool', text: 'middle' };
+const mixedEarlier = { type: 'think', text: 'earlier', streamId: 's', seq: 3 };
+assert.deepEqual(mergeMobileBackgroundTraceEntries([mixedLater, mixedMiddle], [mixedEarlier]).map(row => row.text), ['earlier', 'later', 'middle']);
+const otherStream = { type: 'think', text: 'other', streamId: 'other', seq: 1 };
+const leadingTool = { type: 'tool', text: 'leading', id: 'tool-leading' };
+const recoveredOlder = { type: 'think', text: 'oldest', extra: { streamId: 's', seq: 2 } };
+const mixedCurrent = [leadingTool, otherStream, mixedLater, mixedMiddle];
+const mixedRecovered = [mixedEarlier, recoveredOlder, { ...mixedLater, text: 'duplicate sequence' }, { ...leadingTool, text: 'duplicate id' }, mixedEarlier];
+const mixedMerged = mergeMobileBackgroundTraceEntries(mixedCurrent, mixedRecovered);
+assert.deepEqual(mixedMerged.map(row => row.text), ['leading', 'other', 'oldest', 'earlier', 'later', 'middle']);
+assert.deepEqual(mixedMerged.filter(row => mixedCurrent.includes(row)), mixedCurrent);
+assert.deepEqual(mergeMobileBackgroundTraceEntries(mixedCurrent, mixedRecovered, 3).map(row => row.text), ['earlier', 'later', 'middle']);
+assert.deepEqual(mergeMobileBackgroundTraceEntries(mixedMerged, mixedRecovered), mixedMerged);
+
+// The actual gateway mapper must retain summary visibility/kind together.
+const gatewayTrace = { exports: {} };
+vm.createContext(gatewayTrace);
+vm.runInContext(ts.transpileModule(fs.readFileSync('src/gateway/tasks/background-agent-trace.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, gatewayTrace);
+for (const event of ['thinking', 'agent_thought']) {
+  const summary = gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Tagged summary', visibility: 'summary' });
+  assert.equal(summary.extra.reasoningKind, 'summary');
+  assert.equal(summary.extra.visibility, 'summary');
+  assert.equal(gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Public thought', visibility: 'user' }).extra.reasoningKind, 'full_thought');
+  assert.equal(gatewayTrace.exports.backgroundProcessEntryFromSseEvent(event, { text: 'Private thought', visibility: 'private' }), null);
+}
+// Terminal answer tokens belong to the final body, not a second commentary row.
+for (const eventType of ['final', 'done', 'final_response_start']) {
+  const trace = desktop.backgroundAgentEventsToLiveTraceEntries([
+    { eventType: 'token', text: 'Final answer' }, { eventType },
+  ]);
+  assert.equal(trace.filter(row => row.type === 'preamble').length, 0);
+}
+const explicitBoundaryTrace = desktop.backgroundAgentEventsToLiveTraceEntries([
+  { eventType: 'token', text: 'Commentary boundary' },
+  { eventType: 'token_narration_boundary', text: 'Commentary boundary' },
+]);
+assert.equal(explicitBoundaryTrace.filter(row => row.text === 'Commentary boundary').length, 1);

@@ -33,6 +33,7 @@ export function reasoningCapability(provider, model) {
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
   if (id === 'openai_codex') {
     if (name === 'chatgpt') return { efforts: [...CHATGPT_EFFORTS], defaultEffort: 'high', modes: true };
+    if (/^gpt-6\.1-terra(?:-|$)/.test(name)) return { efforts: ['none', ...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_ULTRA], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
@@ -43,6 +44,7 @@ export function reasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (id === 'openai') {
+    if (/^gpt-6\.1-terra(?:-|$)/.test(name)) return { efforts: ['none', ...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };

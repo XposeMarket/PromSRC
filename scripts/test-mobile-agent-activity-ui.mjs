@@ -23,8 +23,8 @@ const mobileCss = [
 
 assert.match(renderer, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
 assert.doesNotMatch(pages, /function _mobileTracePresentationEntries\(/, 'chat activity presentation must stay out of the static page chunk');
-assert.match(renderer, /<div class="pm-trace-thought-group"/, 'thoughts must render as always-visible activity blocks');
-assert.doesNotMatch(renderer, /details class="pm-trace-thought-group"/, 'thoughts must not render as collapsible disclosures');
+assert.match(renderer, /<div class="pm-trace-thought-group"/, 'assistant commentary remains an ordinary visible activity block');
+assert.match(renderer, /if \(isSummaryThought\)\s*\{\s*return `<details class="pm-trace-thought-group"/, 'provider summaries use a collapsed disclosure without an open attribute');
 assert.doesNotMatch(pages, /function _renderMobileGroupedTrace\(/, 'grouped trace rendering must stay in the lazy renderer');
 assert.match(pages, /_pmLiveActivityCompleted = true/, 'the renderer must know when a live turn crossed its final frame');
 assert.match(renderer, /visibleKinds = null, openThoughts = false/, 'trace rendering must support thought and tool filtering');

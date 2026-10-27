@@ -125,6 +125,12 @@ const measurements = {
 // Merge train 2026-10-26: #774 delayed pending-status element, #780 bg-agent
 // commentary/whitespace preservation, #770 async-race guards and #765 voice picker
 // combined with pets measure 281375 (+295 over pets alone). Ceiling = measured + variance.
-assert(measurements.gzipBytes <= 281560, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #780 reviewed recovery-order and summary-slot fixes integrated with #775:
+// measured 281598 (+38 bytes / 0.014% above prior ceiling). Retain <0.1% variance.
+// #783 route identity and navigation guards combined with #780 measure 281802.
+// Retain a bounded 0.1% compression-variance allowance; no runtime code is removed.
+// #785 shared family grouping and catalog UI add 906 bytes: combined gzip282708.
+// Keep the established bounded ~0.1% compression variance above the measured total.
+assert(measurements.gzipBytes <= 283000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

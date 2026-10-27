@@ -17,6 +17,7 @@
 // threshold as best-effort. All paths degrade silently.
 
 import { mobileGatewayFetch } from './mobile-api.js';
+import { groupModelsByFamily } from '../model-family-grouping.js';
 import {
   reasoningSelectorOptions,
   formatReasoningSelectorLabel,
@@ -43,8 +44,8 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['chatgpt', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-5-5', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
@@ -524,8 +525,7 @@ function _activeChatSessionId() {
   return String(window.__pmChat?.activeSessionId || '').trim();
 }
 
-async function _loadChatModelRoute() {
-  const sessionId = _activeChatSessionId();
+async function _loadChatModelRoute(sessionId = _activeChatSessionId()) {
   if (!sessionId) return null;
   if (sessionId === 'mobile_default') {
     if (!_mobileDraftModelRoute) _mobileDraftModelRoute = _readSavedChatModelRoute();
@@ -537,8 +537,8 @@ async function _loadChatModelRoute() {
   } catch { return null; }
 }
 
-async function _saveChatModelRoute(route) {
-  const sessionId = _activeChatSessionId();
+async function _saveChatModelRoute(route, sessionId = _activeChatSessionId()) {
+  if (sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
   if (!sessionId) throw new Error('No active chat.');
   if (sessionId === 'mobile_default') {
     const override = {
@@ -563,6 +563,7 @@ async function _saveChatModelRoute(route) {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
+  if (sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Reasoning saved only to the original chat.');
   _writeSavedChatModelRoute(data?.chatModelRoute || route);
   return data?.chatModelRoute || null;
 }
@@ -1188,34 +1189,47 @@ async function _openSubagentReasoningSheet() {
     })(),
   });
 }
-
 function _queueReasoningSave(provider, patch, immediate = false) {
-  const existing = (_llmCache?.providers || {})[provider] || {};
-  const merged = { ...existing, ...patch };
-  if (merged.reasoning_effort === '') delete merged.reasoning_effort;
-  const active = _activeModel(_llmCache);
-  const model = String(merged.model || active.model || '').trim();
-  if (merged.reasoning_effort) {
-    const normalized = _normalizedReasoningEffort(provider, model, merged.reasoning_effort);
-    if (normalized) merged.reasoning_effort = normalized;
-    else delete merged.reasoning_effort;
-  }
-  if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
-  _setComposerModelIdentity(provider, model, merged.reasoning_effort);
-  _setBadgeLabel(formatModelWithReasoning(model, provider, merged.reasoning_effort));
+  const sessionId = _activeChatSessionId();
+  const change = { ...patch };
   clearTimeout(_reasoningSaveTimer);
+  const assertCurrentChat = () => {
+    if (!sessionId || sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
+  };
   const commit = () => {
     _reasoningSaveChain = _reasoningSaveChain.then(async () => {
-      const route = await _loadChatModelRoute();
-      const effective = route?.effective || { providerId: provider, model: merged.model || _activeModel(_llmCache).model };
-      await _saveChatModelRoute({
-        providerId: provider,
-        model: merged.model || effective.model,
-        reasoningEffort: merged.reasoning_effort || (_activeChatSessionId() === 'mobile_default' ? undefined : _normalizedReasoningEffort(provider, model, await _loadDefaultEffort()) || undefined),
-        speed: supportsFastSpeed(provider, model) ? (merged.speed === 'fast' ? 'fast' : 'standard') : undefined,
-        accountId: effective.accountId || undefined,
-      });
-      await refreshMobileModelBadge(true);
+      assertCurrentChat();
+      const route = await _loadChatModelRoute(sessionId);
+      assertCurrentChat();
+      // The route owns chat identity; provider Settings may still name an old model.
+      // A failed existing-session route read must not silently pin those defaults.
+      if (!route?.effective && sessionId !== 'mobile_default') throw new Error('Could not load this chat model. Try again.');
+      const effective = route?.effective || (() => {
+        const active = _activeModel(_llmCache);
+        const cfg = _llmCache?.providers?.[active.provider] || {};
+        return { providerId: active.provider, model: active.model, speed: cfg.speed, accountId: cfg.accountId };
+      })();
+      const providerId = effective.providerId;
+      const model = effective.model;
+      if (!providerId || !model || providerId !== provider) throw new Error('Chat model changed. Choose reasoning again.');
+      const reasoningEffort = Object.prototype.hasOwnProperty.call(change, 'reasoning_effort')
+        ? _normalizedReasoningEffort(providerId, model, change.reasoning_effort) || undefined
+        : effective.reasoningEffort;
+      const next = { providerId, model, reasoningEffort,
+        speed: Object.prototype.hasOwnProperty.call(change, 'speed') ? change.speed : effective.speed,
+        accountId: effective.accountId,
+      };
+      const saved = await _saveChatModelRoute(next, sessionId);
+      assertCurrentChat();
+      const result = saved?.effective || next;
+      window.__pmChatModelRoute = saved;
+      if (_llmCache) _llmCache = { ..._llmCache, provider: providerId, providers: {
+        ..._llmCache.providers, [providerId]: { ..._llmCache.providers?.[providerId], model,
+          reasoning_effort: result.reasoningEffort, speed: result.speed },
+      } };
+      _setComposerModelIdentity(providerId, model, result.reasoningEffort);
+      _setBadgeLabel(formatModelWithReasoning(model, providerId, result.reasoningEffort));
+      _setBadgeFast(supportsFastSpeed(providerId, model) && result.speed === 'fast');
     }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
   };
   if (immediate) commit();
@@ -1338,15 +1352,26 @@ function _renderProviderList() {
       const existing = (_llmCache?.providers || {})[nextProvider] || {};
       const nextModel = existing.model || _modelsForProvider(nextProvider)[0] || '';
       if (nextModel) await _switchModel(nextProvider, nextModel, { keepOpen: true, returnToAdvanced: true });
-      else _renderModelList(nextProvider);
+      _renderModelList(nextProvider);
     });
   });
 }
 
-function _renderModelList(provider) {
+function _renderModelList(provider, familyKey = '') {
   const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Model`);
-  const models = _modelsForProvider(provider);
+  const groups = groupModelsByFamily(provider, _modelsForProvider(provider), provider === activeProvider ? activeModel : '');
+  const grouped = ['openai', 'openai_codex', 'anthropic'].includes(provider);
+  const family = grouped ? groups.find((group) => group.key === familyKey) : { label: 'Model', models: _modelsForProvider(provider) };
+  if (!family) {
+    _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Model families`);
+    const rows = groups.map((group) => `<button type="button" class="pm-msheet-row" data-model-family="${_esc(group.key)}"><span class="pm-msheet-row-label">${_esc(group.label)}</span>${provider === activeProvider && group.models.includes(activeModel) ? '<span class="pm-msheet-check">&#10003;</span>' : ''}<span class="pm-msheet-chev">&rsaquo;</span></button>`).join('');
+    const body = _setSheetBody(`<div class="pm-msheet-rows" data-pm-view="families">${rows || '<div class="pm-msheet-empty">No known models. Fetch them from Settings &gt; Models.</div>'}</div>`);
+    document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+    body?.querySelectorAll('[data-model-family]').forEach((button) => button.addEventListener('click', () => _renderModelList(provider, button.getAttribute('data-model-family'))));
+    return;
+  }
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> ${_esc(family.label)}`);
+  const models = family.models;
 
   let rows = models.map((m) => {
     const isActive = provider === activeProvider && m === activeModel;
@@ -1359,7 +1384,7 @@ function _renderModelList(provider) {
     rows = '<div class="pm-msheet-empty">No known models. Fetch them from Settings > Models.</div>';
   }
   const body = _setSheetBody(`<div class="pm-msheet-rows pm-msheet-model-rows">${rows}</div>`);
-  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', grouped ? () => _renderModelList(provider) : _renderAdvancedSheet);
   if (!body) return;
   body.querySelectorAll('[data-model]').forEach((btn) => {
     btn.addEventListener('click', () => _switchModel(provider, btn.getAttribute('data-model'), { keepOpen: true, returnToAdvanced: true }));

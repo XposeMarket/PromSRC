@@ -99,8 +99,11 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {
     if (visibility === 'private' || visibility === 'internal') return null;
-    const text = backgroundTraceText(data?.thinking || data?.text || data?.message);
-    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, visibility: visibility || 'user' } } : null;
+    // These are streamed fragments, not display labels. Preserve word and
+    // paragraph boundaries, including whitespace-only packets.
+    const value = data?.thinking ?? data?.text ?? data?.message;
+    const text = typeof value === 'string' ? value.slice(0, 4_000) : backgroundTraceText(value);
+    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, visibility: visibility || 'user', reasoningKind: visibility === 'summary' ? 'summary' : 'full_thought' } } : null;
   }
   const text = backgroundTraceText(data?.message || data?.text || data?.result || data?.summary, 2_000);
   if (!text || /^(?:undefined|null|nan|\[object object\])$/i.test(text)

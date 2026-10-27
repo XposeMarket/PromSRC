@@ -38,6 +38,7 @@ const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: Kn
   // ChatGPT web backend (openai_codex/chatgpt). Without this it fell through to
   // the small default and compacted at ~30k (2026-09-25).
   { provider: /^openai_codex$/i, model: /^chatgpt$/i, profile: { contextWindowTokens: 196000, maxOutputTokens: 32000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6\.1-terra(?:-|$)/i, profile: { contextWindowTokens: 272000, maxContextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai_codex$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 872000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai_codex$/i, model: /^gpt-5\.6-(?:sol|terra|luna)(?:-|$)/i, profile: { contextWindowTokens: 872000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai$/i, model: /^gpt-6(?:\.1)?-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
@@ -244,7 +245,7 @@ export function resolveModelContextProfile(
     || ollamaCtx
     || known.contextWindowTokens
     || (/ollama|llama_cpp|lm_studio/i.test(providerId) ? 8192 : 32768);
-  const maxContextWindowTokens = Math.max(supportedContextWindowTokens, Number(metadata?.maxContextWindowTokens || metadata?.max_context_window) || 0);
+  const maxContextWindowTokens = Math.max(supportedContextWindowTokens, Number(known.maxContextWindowTokens) || 0, Number(metadata?.maxContextWindowTokens || metadata?.max_context_window) || 0);
   const standardMetadata = Number(metadata?.defaultContextWindowTokens || metadata?.contextWindowTokens || metadata?.context_window);
   const standardContextWindowTokens = Math.min(maxContextWindowTokens,
     Number.isFinite(standardMetadata) && standardMetadata > 512 ? Math.floor(standardMetadata)
