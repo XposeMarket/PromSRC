@@ -7,7 +7,8 @@
  *   - Posts its responses to team chat as 'manager'
  *   - Never writes to the main user chat session
  *   - Can message the main agent via message_main_agent for 2-way planning
- *   - Escalates errors/blockers to main agent BEFORE pausing
+ *   - Fixes small defects in member work itself (workspace_write preloaded); re-dispatches real rework
+ *   - Escalates errors/blockers it cannot resolve to main agent BEFORE pausing
  */
 
 import {
@@ -484,8 +485,55 @@ function getCoordSessionId(teamId: string): string {
   return `team_coord_${teamId}`;
 }
 
-function prepareTeamManagerToolScope(sessionId: string): void {
-  void sessionId;
+/**
+ * Tool categories preloaded (session scope) on every manager turn so a manager can fix
+ * small defects itself without first calling request_tool_category. Kept small on
+ * purpose: managers wake often, and every other category (browser, desktop, media...)
+ * is still one request_tool_category call away.
+ */
+export const TEAM_MANAGER_PRELOADED_CATEGORIES: readonly string[] = ['workspace_write'];
+
+export function prepareTeamManagerToolScope(sessionId: string): void {
+  if (!sessionId) return;
+  // Lazy require (same pattern as team-agent-executor): the session store is a
+  // module-level singleton, and a static import here can bind a second instance
+  // through the teams <-> session import cycle, silently writing to a store the
+  // chat pipeline never reads (caught by team-manager-hands-on.regression.ts).
+  const { activateToolCategory } = require('../session') as typeof import('../session');
+  for (const category of TEAM_MANAGER_PRELOADED_CATEGORIES) {
+    try {
+      activateToolCategory(sessionId, category, { scope: 'session' });
+    } catch (err: any) {
+      console.warn(`[TeamCoordinator] Could not preload ${category} for ${sessionId}: ${err?.message || err}`);
+    }
+  }
+}
+
+const TEAM_MANAGER_DISPATCH_TOOLS = new Set(['dispatch_team_agent', 'request_team_member_turn']);
+const TEAM_MANAGER_WRAPPER_DISPATCH_ACTIONS = new Set(['dispatch', 'dispatch_team_agent', 'request_member_turn', 'request_team_member_turn']);
+const TEAM_MANAGER_RUN_ACTIONS = new Set(['run', 'start', 'submit', 'test', 'lint', 'format', 'typecheck']);
+const TEAM_MANAGER_GIT_WRITE_ACTIONS = new Set(['commit', 'push', 'open_pr']);
+const TEAM_MANAGER_LEGACY_HANDS_ON_TOOLS = new Set([
+  'create_file', 'write_file', 'edit_file', 'replace_lines', 'find_replace', 'insert_after',
+  'delete_lines', 'delete_file', 'mkdir', 'apply_patch', 'run_command',
+]);
+
+/**
+ * True when a manager tool call counts as real team work for idle detection:
+ * dispatching or asking a member, or the manager itself changing files / running
+ * commands (the "fix it yourself" rung). Reads, status checks, memory and chat posts
+ * do not count, so a manager that only talks still idle-stops.
+ */
+export function isTeamManagerActivityTool(toolName: string, args?: any): boolean {
+  const name = String(toolName || '').trim();
+  if (!name) return false;
+  if (TEAM_MANAGER_DISPATCH_TOOLS.has(name)) return true;
+  const action = String(args?.action || '').trim().toLowerCase();
+  if (name === 'team_ops_wrapper') return TEAM_MANAGER_WRAPPER_DISPATCH_ACTIONS.has(action);
+  if (name === 'workspace_edit') return action !== 'preview_patch' && args?.dry_run !== true && args?.check !== true;
+  if (name === 'workspace_run') return TEAM_MANAGER_RUN_ACTIONS.has(action);
+  if (name === 'workspace_git') return TEAM_MANAGER_GIT_WRITE_ACTIONS.has(action);
+  return TEAM_MANAGER_LEGACY_HANDS_ON_TOOLS.has(name);
 }
 
 function prepareTeamManagerRuntime(team: any, sessionId: string): { modelOverride?: string; providerOverride?: string } {
@@ -611,7 +659,8 @@ function buildTeamCallerContext(teamId: string): string {
     `STEP 4 — VALIDATE RESULTS: After EACH agent completes, carefully review their output:`,
     `  - Is the result SUBSTANTIVE (actual findings, data, analysis — not just directory listings or placeholders)?`,
     `  - Did they execute their task (call tools, return meaningful content)?`,
-    `  - If result is empty, suspicious, or incomplete → RED FLAG: re-dispatch that agent with a specific fix request.`,
+    `  - If result is empty, hollow, or the agent did not actually execute → RED FLAG: re-dispatch that agent with a specific fix request.`,
+    `  - If it is real work with a small, clear defect → fix it yourself and verify (rule 4a). Re-dispatch only for real rework.`,
     `  - Do NOT accept vague/hollow completions without follow-up verification.`,
     ``,
     `STEP 5 — RECORD: Before [GOAL_COMPLETE], call manage_team_goal(action="log_completed", value="<one-line outcome + key file paths>"). Do not create or maintain memory.json, last_run.json, or pending.json: the team record is the source of truth.`,
@@ -642,14 +691,20 @@ function buildTeamCallerContext(teamId: string): string {
     `   ✓ Result length > 500 chars with substantive, specific content (not generic categories)`,
     `   ✓ No warning prefix in the result`,
     `   ✓ VALID_BLOCKER_ARTIFACT: output contains concrete blocker evidence, artifact path, no fabricated data, and clear unblock requirements. Accept it as blocker work, stop dependent lanes by default, and ask for input/auth fix once.`,
+    `4a. FIX IT YOURSELF WHEN IT IS SMALL (fix ladder). You have the full tool set: workspace_read/workspace_edit/workspace_run/workspace_git are preloaded, and any other category (browser_automation, desktop_automation, media, connectors...) is one request_tool_category call away. When a member's result is rejected or has a defect, take the lowest rung that works:`,
+    `   a) Small, clear fix (typo, wrong path or field, an obvious failing test/build error, formatting, a missed step you can do in a few tool calls): do it yourself, verify it (re-run the test/build or re-read the output), then accept the work and log it with manage_team_goal(action="log_completed", value="<outcome> (manager fix: <what you changed>)"). Post one line in the room so the member knows what changed.`,
+    `   b) Lanes with a required reviewer/QA gate (a QA agent must PASS before publish/merge/ship): your fix does NOT replace that verdict. After fixing, have the reviewer re-check just the fix (request_team_member_turn or dispatch_team_agent).`,
+    `   c) Real rework (wrong approach, large or unclear change, needs the member's specialty or a long run): re-dispatch the member with the specific findings.`,
+    `   d) Truly blocked (missing credentials/access, owner-only decision, spend, policy question, or your fix failed twice): message the main agent once.`,
+    `   Always follow the team brief's change process and owner-only rules. Never "fix" by faking output, weakening or deleting the check that failed, or rewriting a member's whole deliverable.`,
     `5. Be concise and action-oriented. Post status updates to keep the team owner informed.`,
     `6. Work continuously only while the current run state is normal_execution. If a hard upstream blocker appears, stop dependent lanes unless blocker_only_verification was explicitly requested.`,
-    `7. NEVER accept suspicious results — if you see ANY red flag above, immediately re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings." Do not re-dispatch VALID_BLOCKER_ARTIFACT results.`,
+    `7. NEVER accept suspicious results. For hollow or non-executed work (the red flags above), re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings." For real work with a fixable defect, use the fix ladder in rule 4a instead of bouncing it back. Do not re-dispatch VALID_BLOCKER_ARTIFACT results.`,
     `8. Emit only one terminal marker per manager response: [GOAL_COMPLETE], [NEEDS_INPUT], or [WAITING_MAIN_AGENT]. Do not later switch a blocked run to [GOAL_COMPLETE] unless a real unblock happened.`,
     `8a. When this run is complete (all tasks substantively done + outcome logged), end with: [GOAL_COMPLETE]`,
     `8b. If you need the team owner to make a decision or provide input, end with: [NEEDS_INPUT]`,
     `9. You are the ONLY bridge between this team and the main Prometheus agent. Use message_main_agent(team_id="${team.id}", message="...") to communicate.`,
-    `10. NEVER pause or give up before first messaging the main agent. Errors, blockers, missing credentials — all go to the main agent first.`,
+    `10. Resolve what you can yourself first (rule 4a). NEVER pause or give up before messaging the main agent: errors you could not fix, hard blockers, missing credentials and owner-only decisions go to the main agent before you pause. Do not escalate a defect you can fix in a few tool calls.`,
     `11. Do NOT create new teams. Explain to the main agent what team would help and why.`,
     `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. Send one clear message_main_agent escalation; do not repeat equivalent escalations in later turns unless new evidence appears. You will auto-resume when their reply arrives. Never use [WAITING_MAIN_AGENT] to report finished work: once every step is done and logged, end with [GOAL_COMPLETE].`,
     `13. manage_team_goal supports set_focus, log_completed, pause_agent, unpause_agent. Use set_focus/log_completed only during real execution runs, not because the owner sent a chat message. Change the team purpose with team_manage(update).`,
@@ -663,7 +718,7 @@ function buildTeamCallerContext(teamId: string): string {
     `    - Use execution_mode=review for read-mostly verification/audit/report proposals; do not mutate during review unless the proposal explicitly approves that exact mutation.`,
     `    - Do not ask for separate permission merely to create a pending proposal when the owner asked the team to find/build proposal candidates; write_proposal itself queues the work for human approval.`,
     `    - If the owner says proposal creation is disabled, controlled-test only, do not create proposals, or asks for research/plans only, write a proposal-ready summary artifact instead and clearly state that no proposal was submitted.`,
-    `    - For direct source edits, dispatch a suitably scoped subagent or write a proposal instead of assuming manager-local source_write access.`,
+    `    - Prometheus's own source (src/, web-ui/ of the running Prometheus app) changes only through a proposal or the team brief's PR process; never edit the live Prometheus checkout directly. Other project files the team owns (team workspace, allowed work paths, the team's own repos) you can fix directly per rule 4a, following the brief's change process (for example PR-only repos).`,
     `    - Workspace files (team JSON, markdown, outputs) can always be edited directly — no proposal needed.`,
     `    - NOT everything needs a proposal. Only gate actions where a human should verify before execution.`,
   ].filter(Boolean).join('\n');
@@ -737,7 +792,7 @@ export async function runCoordinatorConversation(
     const callerContext = buildTeamCallerContext(teamId);
     try { setWorkspace(sessionId, resolveManagerExecutionRoot(teamId)); } catch { /* non-fatal */ }
 
-    // Ensure team_ops + source_write tools are available in the coordinator session every turn
+    // Preload the manager's hands-on tool categories (workspace_write) in the coordinator session every turn
     // (category activation is per-session but must be re-applied after restarts)
     prepareTeamManagerToolScope(sessionId);
 
@@ -761,7 +816,7 @@ export async function runCoordinatorConversation(
 	        broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, event, data);
 	        if (event === 'tool_call') {
 	          const toolName = String(data?.action || data?.tool || data?.name || '');
-          if (toolName === 'dispatch_team_agent' || toolName === 'request_team_member_turn') {
+          if (isTeamManagerActivityTool(toolName, data?.args)) {
             hadTeamActivity = true;
           }
           // Forward to the originating chat only for foreground team-manager work.
@@ -1059,7 +1114,7 @@ export async function runCoordinatorConversationDetailed(
 	          persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
 	          if (event === 'tool_call') {
 	            const toolName = String(data?.action || data?.tool || data?.name || '');
-            if (toolName === 'dispatch_team_agent' || toolName === 'request_team_member_turn') {
+            if (isTeamManagerActivityTool(toolName, data?.args)) {
               hadTeamActivity = true;
             }
             if (!options.suppressOriginatingSessionProgress && toolName) {
@@ -1336,7 +1391,7 @@ export async function runCoordinatorReview(
   });
   try { setWorkspace(sessionId, resolveManagerExecutionRoot(teamId)); } catch { /* non-fatal */ }
 
-  // Ensure team_ops + source_write tools are available in the coordinator session
+  // Preload the manager's hands-on tool categories (workspace_write) in the coordinator session
   prepareTeamManagerToolScope(sessionId);
 
   const reviewPrompt = [
@@ -1458,7 +1513,7 @@ export async function runSubagentResultVerification(
     `The agent returned:`,
     agentResult,
     ``,
-    `Verify/analyze the work. Check files created or modified by the agent if relevant. If the output is incomplete, re-dispatch with a specific fix. If accepted, log it with manage_team_goal(action="log_completed").`,
+    `Verify/analyze the work. Check files created or modified by the agent if relevant. If it is hollow or was not actually executed, re-dispatch with a specific fix. If it has a small, clear defect, fix it yourself and verify (fix ladder, rule 4a). If it needs real rework, re-dispatch with the specific findings. If accepted, log it with manage_team_goal(action="log_completed").`,
   ].join('\n');
   await runCoordinatorConversation(teamId, prompt, broadcastFn, false);
 }
