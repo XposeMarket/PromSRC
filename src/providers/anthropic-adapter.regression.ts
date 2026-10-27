@@ -94,8 +94,8 @@ async function main() {
     assert.ok(requests.every(r => r.tools?.[0].name === 'write_file'));
     assert.equal(requests.at(-1).messages.at(-1).content[0].type, 'tool_result');
 
-    // Runtime context leaves system and is cached on the current user input;
-    // later requests reconstruct that position without mutating source history.
+    // Volatile per-turn context leaves `system` and rides after the history
+    // cache breakpoint, so history stays a cache hit across turns and rounds.
     const volMessages: ChatMessage[] = [
       { role: 'system', content: `${'Stable policy. '.repeat(400)}${PROMPT_CACHE_MARKER}TODAY_NOTES turn 1` },
       { role: 'user', content: 'yo' },
@@ -105,9 +105,9 @@ async function main() {
     const turn1 = requests.at(-1);
     assert.ok(!JSON.stringify(turn1.system).includes('TODAY_NOTES'), 'volatile tail must not stay in system');
     const t1Last = turn1.messages.at(-1).content;
-    assert.deepEqual(t1Last.at(-1).cache_control, { type: 'ephemeral' }, 'runtime context is a fixed cache breakpoint');
+    assert.equal(t1Last.at(-1).cache_control, undefined, 'volatile block stays uncached');
     assert.match(t1Last.at(-1).text, /TODAY_NOTES turn 1/);
-    assert.equal(t1Last.at(-2).cache_control, undefined, 'do not duplicate history marker on pinned user input');
+    assert.deepEqual(t1Last.at(-2).cache_control, { type: 'ephemeral' }, 'history breakpoint sits before volatile');
     volMessages[0].content = `${'Stable policy. '.repeat(400)}${PROMPT_CACHE_MARKER}TODAY_NOTES turn 2`;
     volMessages.push({ role: 'assistant', content: 'hey' }, { role: 'user', content: 'next' });
     await adapter.chat(volMessages, 'claude-fable-5-1', { onToken: () => {} });

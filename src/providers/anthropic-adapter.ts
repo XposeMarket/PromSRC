@@ -199,22 +199,28 @@ export function slimToolsForExtraUsageRetryDetailed(
 export const VOLATILE_TURN_CONTEXT_HEADER = '[PER-TURN RUNTIME CONTEXT: injected by Prometheus, not typed by the user. Same authority as the system prompt.]';
 
 /**
- * Pin runtime context to the original user input that started this turn, not
- * the synthetic user messages holding subsequent tool results. Keep a fixed
- * breakpoint here alongside the rolling history breakpoint (at most four total).
- * The source history stays unmodified; changed runtime context still takes effect.
+ * Append the system prompt's volatile tail as a trailing, UNCACHED text block on
+ * the final user message, after the rolling-history cache breakpoint. No cached
+ * prefix ever contains it, so the next request (tool round or new user turn)
+ * still reads tools + stable system + history from cache.
+ *
+ * Do not move the breakpoint onto this block or pin it to the turn's source
+ * user message: the context changes every turn, so any cache entry containing
+ * it is dead on the next turn and the whole history is re-written at 1.25x/2x
+ * (2026-10-27: #777 did exactly this, cross-turn reuse fell from 13/16 to 0/16).
  */
-export function attachVolatileContextToUserTurn(messages: any[], volatile: string, turnUserIndex = -1): boolean {
+export function attachVolatileContextToUserTurn(messages: any[], volatile: string): boolean {
   const text = String(volatile || '').trim();
-  const last = messages[turnUserIndex >= 0 ? turnUserIndex : messages.length - 1];
+  const last = messages[messages.length - 1];
   if (!text || !last || last.role !== 'user') return false;
   if (typeof last.content === 'string') {
     if (!last.content.trim()) return false;
-    last.content = [{ type: 'text', text: last.content }];
+    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
   }
   if (!Array.isArray(last.content) || last.content.length === 0) return false;
-  for (const block of last.content) delete block.cache_control;
-  last.content.push({ type: 'text', text: `${VOLATILE_TURN_CONTEXT_HEADER}\n${text}`, cache_control: { type: 'ephemeral' } });
+  const tail = last.content[last.content.length - 1];
+  if (tail && typeof tail === 'object' && !tail.cache_control) tail.cache_control = { type: 'ephemeral' };
+  last.content.push({ type: 'text', text: `${VOLATILE_TURN_CONTEXT_HEADER}\n${text}` });
   return true;
 }
 
@@ -984,7 +990,7 @@ export class AnthropicAdapter implements LLMProvider {
       let systemForBlocks = trimmed;
       if ((anthropicCfg as any).volatile_context_in_system !== true) {
         const { stable, volatile } = splitOnCacheMarker(trimmed);
-        if (volatile.trim() && stable.trim() && attachVolatileContextToUserTurn(anthropicMessages, volatile, turnUserIndex)) {
+        if (volatile.trim() && stable.trim() && attachVolatileContextToUserTurn(anthropicMessages, volatile)) {
           systemForBlocks = stable;
         }
       }
