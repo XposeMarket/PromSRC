@@ -391,6 +391,8 @@ export interface ManagedTeam {
 
   // Key of the goal whose [GOAL_COMPLETE] review already ran (see claimTeamGoalCompletionReview).
   goalCompletionReviewKey?: string;
+  // When that review was claimed. Work dispatched after it is new work, not a straggler.
+  goalCompletedAt?: number;
   // When the current goal/focus was set; the completion gate only counts work after it.
   goalSetAt?: number;
 
@@ -1415,6 +1417,7 @@ export function claimTeamGoalCompletionReview(teamId: string): string | null {
   const key = teamGoalKey(team);
   if (team.goalCompletionReviewKey === key) return null;
   team.goalCompletionReviewKey = key;
+  team.goalCompletedAt = Date.now();
   saveManagedTeam(team);
   return key;
 }
@@ -1431,6 +1434,21 @@ function teamGoalKey(team: ManagedTeam): string {
 export function isTeamGoalCompleted(teamId: string): boolean {
   const team = getManagedTeam(teamId);
   return !!team?.goalCompletionReviewKey && team.goalCompletionReviewKey === teamGoalKey(team);
+}
+
+/**
+ * True when a dispatch was created at or after the current goal's completion review.
+ * Standing teams (daily sprints) keep one goal for weeks, so those dispatches are new
+ * work whose results must reach the manager, not late duplicates of the reviewed run.
+ * Reviews claimed before goalCompletedAt existed count as time 0.
+ */
+export function isDispatchAfterGoalReview(teamId: string, dispatchId?: string): boolean {
+  const id = String(dispatchId || '').trim();
+  if (!id) return false;
+  const team = getManagedTeam(teamId);
+  const dispatch = team?.roomState?.dispatches?.find((d) => d?.id === id);
+  if (!dispatch) return false;
+  return Number(dispatch.createdAt || 0) >= Number(team?.goalCompletedAt || 0);
 }
 
 export interface TeamGoalCompletionGate {
