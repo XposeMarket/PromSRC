@@ -83,7 +83,7 @@ import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
-import { closeListeningHandle, listenWithHandoffRetry } from './runtime/handoff-replacement-bind';
+import { closeListeningHandle, listenWithHandoffRetry, setGatewayListenerReopenInProgress } from './runtime/handoff-replacement-bind';
 import { predecessorOwnsHandoffListener } from './runtime/gateway-handoff-safe-abort';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
@@ -1215,12 +1215,21 @@ setShutdownHooks({
   // ends. WebSocket clients are terminated so they reconnect to the replacement.
   hasListeningGateway: () => server.listening || !!secureBundle?.server.listening,
   closeListenersForHandoff: async () => {
-    // Release first: if it fails, do not tear down WebSocket/voice services on
-    // the predecessor that must continue serving. Existing SSE is untouched.
-    await Promise.all([
-      closeListeningHandle(server),
-      ...(secureBundle ? [closeListeningHandle(secureBundle.server)] : []),
-    ]);
+    // Release-only and honest: close each listener on its own so one timeout
+    // cannot hide the other closing. Services stay up until the handoff commits
+    // (finishListenerHandoff). Existing SSE responses are untouched.
+    const handles: Array<{ name: string; handle: Parameters<typeof closeListeningHandle>[0] }> = [{ name: 'http', handle: server }];
+    if (secureBundle) handles.push({ name: 'https', handle: secureBundle.server });
+    const results = await Promise.allSettled(handles.map(({ handle }) => closeListeningHandle(handle)));
+    const closed = handles.filter((_, i) => results[i].status === 'fulfilled').map(({ name }) => name);
+    const failed = handles.flatMap((h, i) => {
+      const result = results[i];
+      return result.status === 'rejected' ? [`${h.name}: ${(result.reason as Error)?.message || String(result.reason)}`] : [];
+    });
+    if (failed.length) throw new Error(`Listener release incomplete; closed=[${closed.join(', ') || 'none'}] failed=[${failed.join('; ')}]`);
+  },
+  // Runs only after the handoff is committed: WebSocket clients reconnect to the replacement.
+  finishListenerHandoff: async () => {
     const terminateClients = (socketServer: any): void => {
       try {
         socketServer?.clients?.forEach((client: any) => {
@@ -1239,8 +1248,35 @@ setShutdownHooks({
     void import('./user-chrome-relay').then((m) => m.stopUserChromeRelayForHandoff()).catch(() => {});
     try { (server as any).closeIdleConnections?.(); } catch {}
     try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
-    // The listening handles were already released before these service stops.
-  }
+  },
+  // Failed handoff: re-bind every listener that was released, on the startup port/host (no handoff retry).
+  reopenListenersAfterFailedHandoff: async () => {
+    draining = false;
+    const reopen = (target: any, port: number, host: string): Promise<void> => {
+      if (target.listening) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const onListening = (): void => { cleanup(); resolve(); };
+        const onError = (error: Error): void => { cleanup(); reject(error); };
+        const cleanup = (): void => {
+          target.off('listening', onListening);
+          target.off('error', onError);
+        };
+        target.once('listening', onListening);
+        target.once('error', onError);
+        try { target.listen(port, host); } catch (error) { cleanup(); reject(error); }
+      });
+    };
+    // Persistent listener error handlers exit the process on bind errors; this
+    // reopen owns those errors instead (rejection -> cold recovery).
+    setGatewayListenerReopenInProgress(true);
+    try {
+      await reopen(server, PORT, HOST);
+      if (secureBundle && httpsGateway) await reopen(secureBundle.server, httpsGateway.port, HTTPS_HOST);
+    } finally {
+      setGatewayListenerReopenInProgress(false);
+    }
+  },
+
 });
 
 // ─── Initialize Advanced Error Response Systems ────────────────────────────────

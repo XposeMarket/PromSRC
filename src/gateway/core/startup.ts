@@ -248,6 +248,29 @@ const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runn
 
 // ─── Main startup function ────────────────────────────────────────────────────
 
+/** Team managers whose turn died with the previous gateway; re-woken once the listener is up. */
+let pendingTeamManagerRewakes: LiveRuntimeSnapshot[] = [];
+
+/**
+ * Team manager turns are event-driven, so one interrupted by a crash or restart is never
+ * replayed and the team idles until its next schedule. Queue one auto-wake per team.
+ */
+function rewakeInterruptedTeamManagers(runtimes: LiveRuntimeSnapshot[], logPrefix: string): void {
+  if (!runtimes.length) return;
+  try {
+    const { scheduleTeamManagerAutoWake } = require('../teams/team-manager-autowake.js') as typeof import('../teams/team-manager-autowake');
+    const { buildTeamManagerRestartWakeReason } = require('../teams/team-coordinator.js') as typeof import('../teams/team-coordinator');
+    let woken = 0;
+    for (const runtime of runtimes) {
+      const teamId = String(runtime.teamId || '').trim();
+      if (teamId && scheduleTeamManagerAutoWake(teamId, buildTeamManagerRestartWakeReason(runtime))) woken++;
+    }
+    console.log(`${logPrefix} Re-woke ${woken}/${runtimes.length} team manager(s) interrupted by the restart.`);
+  } catch (err: any) {
+    console.warn(`${logPrefix} Team manager re-wake failed:`, err?.message || err);
+  }
+}
+
 export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot[]> {
   if (isPreviewMode()) logPreviewModeBanner();
   startupMark('runStartup entered');
@@ -415,11 +438,14 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
         isHostedElsewhere: isRuntimeHostedByLiveHandoffHost,
         notify: (message) => console.log(`[RuntimeRecovery/handoff] ${message}`),
       });
+      // The listener and team deps are already up when a previous gateway releases runtimes.
+      rewakeInterruptedTeamManagers(late.interruptedTeamManagerRuntimes, '[RuntimeRecovery/handoff]');
       if (late.inspected > 0) {
         console.log(`[RuntimeRecovery/handoff] Inspected ${late.inspected} runtime(s) released by a previous gateway; resumed ${late.resumedTasks.length} task(s), retriggered ${late.retriggeredChats.length} chat turn(s).`);
       }
     });
     deferredMainChatRecoveries = recovery.deferredMainChatRuntimes;
+    pendingTeamManagerRewakes = recovery.interruptedTeamManagerRuntimes;
     if (recovery.inspected > 0) {
       console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), retriggered ${recovery.retriggeredChats.length} chat turn(s), deferred ${deferredMainChatRecoveries.length} foreground chat retrigger(s), preserved ${recovery.interruptedChats.length - recovery.retriggeredChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
     }
@@ -941,6 +967,11 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
  * shell out to Tailscale; none of that should delay the first health response.
  */
 export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
+  // Model turns wait for the listener, like deferred main-chat recovery does.
+  const teamManagerRewakes = pendingTeamManagerRewakes;
+  pendingTeamManagerRewakes = [];
+  rewakeInterruptedTeamManagers(teamManagerRewakes, '[RuntimeRecovery]');
+
   const workspacePath = bootWorkspace || getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
   if (!workspacePath) return;
   hookBus

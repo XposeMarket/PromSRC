@@ -703,6 +703,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             prompt: instructionPrompt || undefined,
             kind: jobKind,
             command: jobKind === 'script' ? command : undefined,
+            precheck: args.precheck,
             misfire_policy: misfirePolicy,
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             type: kind,
@@ -842,6 +843,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           if (!existingJob) return { name, args, result: `Job not found: ${jobId}`, error: true };
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
           const patch: Record<string, any> = {};
+          if (args.precheck !== undefined) patch.precheck = args.precheck;
           if (args.kind !== undefined) {
             const jobKind = String(args.kind || '').trim().toLowerCase();
             if (jobKind !== 'agent' && jobKind !== 'script') {
