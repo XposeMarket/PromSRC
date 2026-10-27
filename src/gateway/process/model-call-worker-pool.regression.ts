@@ -74,7 +74,7 @@ async function main(): Promise<void> {
     'event:provider_event',
   ]);
   const afterStream = getModelCallWorkerPoolStatus();
-  assert.equal(afterStream.eventBatches - beforeStream.eventBatches, 1, 'immediate stream events should be batched');
+  assert.equal(afterStream.eventBatches - beforeStream.eventBatches, 4, 'first event of each content kind and first model event must flush immediately');
   assert.equal(afterStream.streamEvents - beforeStream.streamEvents, 4);
 
   const first = dispatchModelCallWorker(request({ __testDelayMs: 2_000 }) as any);

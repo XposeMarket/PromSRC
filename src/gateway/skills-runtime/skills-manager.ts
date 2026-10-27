@@ -479,8 +479,10 @@ function explicitSkillMentionScore(skill: Skill, rawText: string): number {
   const idText = normalizeSkillMatchTextLoose(skill.id);
   const nameText = normalizeSkillMatchTextLoose(skill.name);
   const raw = String(rawText || '');
-  const escapedId = skill.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp(`(?:^|\\s)(?:\\$${escapedId}|skill:${escapedId})(?=$|\\s|[.,;!?])`, 'i').test(raw)) return 240;
+  if (/(?:^|\s)(?:\$|skill:)/i.test(raw)) {
+    const escapedId = skill.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?:^|\\s)(?:\\$${escapedId}|skill:${escapedId})(?=$|\\s|[.,;!?])`, 'i').test(raw)) return 240;
+  }
 
   const nameWords = nameText.split(' ').filter(Boolean);
   const genericShortName = nameWords.length === 1 && nameText.length < 6;

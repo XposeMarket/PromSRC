@@ -5,13 +5,13 @@ import {
   boundedModelCallError,
   isModelCallWorkerMessage,
   modelCallMessageBytes,
-  type ModelCallStreamItem,
   type ModelCallWorkerChildMessage,
   type ModelCallWorkerParentMessage,
   type ModelCallWorkerRequest,
   type ModelCallWorkerResult,
 } from './model-call-worker-protocol.js';
 import { sampleRuntimeWorkerResources } from './runtime-worker-resources.js';
+import { EventBatcher, scheduleWorkerWarmup } from './worker-latency.js';
 
 const workerMaxMessageBytes = envInt(
   'PROMETHEUS_MODEL_WORKER_MAX_MESSAGE_BYTES',
@@ -70,52 +70,6 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortError(signal.reason);
 }
 
-class EventBatcher {
-  private sequence = 0;
-  private pending: ModelCallStreamItem[] = [];
-  private pendingBytes = 0;
-  private timer: NodeJS.Timeout | null = null;
-  private failure: Error | null = null;
-
-  constructor(private readonly requestId: string) {}
-
-  enqueue(kind: ModelCallStreamItem['kind'], value: any): void {
-    if (this.failure) throw this.failure;
-    const event = { sequence: ++this.sequence, kind, value } as ModelCallStreamItem;
-    const bytes = modelCallMessageBytes(event);
-    if (!Number.isFinite(bytes) || bytes > maxBatchBytes) {
-      this.failure = new Error(`Model stream event exceeded the bounded batch limit (${bytes} bytes).`);
-      throw this.failure;
-    }
-    if (this.pending.length && this.pendingBytes + bytes > maxBatchBytes) this.flush();
-    this.pending.push(event);
-    this.pendingBytes += bytes;
-    if (!this.timer) {
-      this.timer = setTimeout(() => this.flush(), flushIntervalMs);
-      this.timer.unref?.();
-    }
-  }
-
-  flush(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    if (!this.pending.length) return;
-    const events = this.pending;
-    this.pending = [];
-    this.pendingBytes = 0;
-    send({
-      protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
-      type: 'events',
-      requestId: this.requestId,
-      events,
-    });
-  }
-
-  finish(): void {
-    this.flush();
-    if (this.failure) throw this.failure;
-  }
-}
 
 function validateRequest(value: unknown): ModelCallWorkerRequest {
   if (!value || typeof value !== 'object') throw new TypeError('Model worker request must be an object.');
@@ -286,7 +240,7 @@ async function handleRun(message: Extract<ModelCallWorkerParentMessage, { type: 
   activeRequestId = message.requestId;
   activeController = new AbortController();
   providerStarted = false;
-  const batcher = new EventBatcher(message.requestId);
+  const batcher = new EventBatcher(message.requestId, send, maxBatchBytes, flushIntervalMs);
   send({
     protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
     type: 'started',
@@ -370,5 +324,10 @@ send({
 });
 
 if (process.env.PROMETHEUS_MODEL_WORKER_TEST_HOOKS !== '1') {
-  setImmediate(() => { loadProviderModules().catch(() => {}); });
+  scheduleWorkerWarmup(async () => {
+    const [{ getConfig }] = await loadProviderModules();
+    const config = getConfig();
+    const { getVault } = await import('../../security/vault.js');
+    await getVault(config.getConfigDir()).prewarmDerivedKeysAsync();
+  });
 }

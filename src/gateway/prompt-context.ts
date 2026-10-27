@@ -1982,9 +1982,13 @@ export async function buildPersonalityContext(
         runtimeHostContext,
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
-        buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents }),
       ],
-      [toolCategoryMatchTeach, skillCtxTeach, activeSkillCtxTeach],
+      [
+        buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents }),
+        toolCategoryMatchTeach,
+        skillCtxTeach,
+        activeSkillCtxTeach,
+      ],
     );
   }
 
@@ -2290,9 +2294,10 @@ export async function buildPersonalityContext(
         soul ? `${isProposalExecution ? '[PROMETHEUS_SOUL]' : '[SOUL]'}\n${soul}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
-        toolsBlockAuto,
       ],
       [
+        // Dynamic tool menu is volatile so the stable prefix ignores activation.
+        toolsBlockAuto,
         cisContext,
         memoryAtomCtx,
         toolCategoryMatchAuto,
@@ -2352,9 +2357,10 @@ export async function buildPersonalityContext(
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
-        buildToolsContext(activatedCatsT1, { instructionIntents: options?.instructionIntents }),
       ],
       [
+        // Dynamic tool menu is volatile so the stable prefix ignores activation.
+        buildToolsContext(activatedCatsT1, { instructionIntents: options?.instructionIntents }),
         cisContext,
         memoryAtomCtx,
         retrievedMemoryCtx,
@@ -2404,11 +2410,13 @@ export async function buildPersonalityContext(
       soul ? `[SOUL]\n${soul}` : '',
       business ? `[BUSINESS]\n${business}` : '',
       memory ? `[MEMORY]\n${memory}` : '',
-      snapshot ? snapshot.subagentsRosterBlock : buildSubagentsRosterBlock(),
       projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
-      toolsBlock,
     ],
     [
+      // Dynamic tool menu and live roster are volatile so the stable prefix
+      // stays identical across tool activation and roster changes.
+      snapshot ? snapshot.subagentsRosterBlock : buildSubagentsRosterBlock(),
+      toolsBlock,
       cisContext,
       memoryAtomCtx,
       retrievedMemoryCtx,

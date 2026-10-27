@@ -3,6 +3,10 @@
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `src/security/`, `src/gateway/policy.ts`, `src/gateway/command-permissions.ts`, `src/gateway/approval-actions.ts`, `src/gateway/dev-source-approvals.ts`, `src/runtime/distribution.ts`
 > **Read this when:** changing command/file permissions, approval cards, final browser/desktop actions, dev-source access, elevated execution, secrets, policy tiers or public-distribution gates.
 
+## Child-worker vault prewarming (PR782)
+
+Context/model child workers warm only the vault's existing bounded derived-key cache with `prewarmDerivedKeysAsync()` (default concurrency 1), deferred after IPC ready. No cryptography, PBKDF2 strength, plaintext cache, provider cache, permission policy or authorization freshness changes. Model requests still reload configuration on every actual call and retain cancellation checks. Warmup failure is best-effort and silent; readiness never waits for vault warming.
+
 ## TL;DR
 - Treat tool schemas as affordances, not authorization. Runtime approval, category activation, path policy and tool-specific checks remain authoritative even if a model can see/call a wrapper.
 - `tools.permissions.shell.approval_mode` is `default` or `lite`. Default requests approval for commands that cross external/workspace boundaries or are otherwise high-risk; Lite can auto-allow some bounded terminal operations after the blocked-command guard. **Lite never bypasses hard-denied dangerous patterns or elevated administrator approval.**
