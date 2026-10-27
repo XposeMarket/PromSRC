@@ -3,7 +3,7 @@ import { planRemoveProviderAccount, planUpdateProviderAccount } from './provider
 // @ts-ignore -- browser ES module shared by desktop + mobile Settings
 import { buildAccountGroups, roleLabel } from '../../web-ui/src/settings/provider-accounts-list.js';
 
-function sample() {
+function sample(): any {
   return {
     llm: {
       provider: 'anthropic',
@@ -33,8 +33,8 @@ function sample() {
   const plan = planRemoveProviderAccount(cfg, 'anthropic', 'a1');
   assert.equal(plan.ok, true);
   assert.equal(plan.nextDefaultAccountId, 'a2');
-  assert.equal(plan.nextConfigPatch.llm.providers.anthropic.defaultAccountId, 'a2');
-  assert.equal(plan.nextConfigPatch.llm.accountId, 'a2');
+  assert.equal(plan.nextConfigPatch?.llm.providers.anthropic.defaultAccountId, 'a2');
+  assert.equal(plan.nextConfigPatch?.llm.accountId, 'a2');
   assert.equal(plan.nextConfigPatch.llm.providers.anthropic.accounts.a1, undefined);
 }
 
@@ -99,7 +99,7 @@ function sample() {
   assert.equal(planUpdateProviderAccount(cfg, 'anthropic', 'a1', { label: 'x'.repeat(65) }).ok, false);
   const ok = planUpdateProviderAccount(cfg, 'anthropic', 'a1', { label: '  Renamed  ' });
   assert.equal(ok.ok, true);
-  assert.equal(ok.nextConfigPatch.llm.providers.anthropic.accounts.a1.label, 'Renamed');
+  assert.equal(ok.nextConfigPatch?.llm.providers.anthropic.accounts.a1.label, 'Renamed');
   assert.equal(planUpdateProviderAccount(cfg, 'anthropic', 'missing', { label: 'x' }).ok, false);
 }
 
@@ -108,12 +108,12 @@ function sample() {
   const cfg = sample();
   const plan = planUpdateProviderAccount(cfg, 'anthropic', 'a2', { makeDefault: true });
   assert.equal(plan.ok, true);
-  assert.equal(plan.nextConfigPatch.llm.providers.anthropic.defaultAccountId, 'a2');
-  assert.equal(plan.nextConfigPatch.llm.accountId, 'a2');
+  assert.equal(plan.nextConfigPatch?.llm.providers.anthropic.defaultAccountId, 'a2');
+  assert.equal(plan.nextConfigPatch?.llm.accountId, 'a2');
 
   const inactive = planUpdateProviderAccount(cfg, 'openai', 'o1', { makeDefault: true });
   assert.equal(inactive.ok, true);
-  assert.equal(inactive.nextConfigPatch.llm.accountId, 'a1');
+  assert.equal(inactive.nextConfigPatch?.llm.accountId, 'a1');
 }
 
 // Shared Settings UI view model: groups follow configured accounts, the
