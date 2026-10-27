@@ -2821,3 +2821,545 @@
     width: 100%;
   }
 }
+
+/* =========================================================================
+   Accounts list (shared desktop + mobile) and phone drill-in navigation.
+   Final-authority block: keep at the end of settings.css.
+   ========================================================================= */
+
+/* The provider-grouped list replaces the old Account select / Name / + row.
+   The select stays in the DOM because connect/test/disconnect read it. */
+#settings-modal #settings-panel-models.spa-enabled .settings-provider-account-panel {
+  display: none !important;
+}
+
+#settings-modal .spa-root {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 22px;
+}
+
+#settings-modal .spa-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#settings-modal .spa-sub {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#settings-modal .spa-group {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+
+#settings-modal .spa-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+#settings-modal .spa-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#settings-modal .spa-add {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: var(--brand);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#settings-modal .spa-prov {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+#settings-modal .spa-prov-anthropic { background: color-mix(in srgb, #d97757 28%, transparent); }
+#settings-modal .spa-prov-openai_codex,
+#settings-modal .spa-prov-openai { background: color-mix(in srgb, #10a37f 28%, transparent); }
+#settings-modal .spa-prov-xai { background: color-mix(in srgb, var(--text) 18%, transparent); }
+
+#settings-modal .spa-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 14px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#settings-modal .spa-row:last-child { border-bottom: 0; }
+#settings-modal .spa-row:hover,
+#settings-modal .spa-row:focus-visible { background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+#settings-modal .spa-row-main {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+#settings-modal .spa-row-label {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#settings-modal .spa-row-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#settings-modal .spa-pill {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#settings-modal .spa-pill-ok { background: color-mix(in srgb, var(--ok, #16a34a) 16%, transparent); color: var(--ok, #16a34a); }
+#settings-modal .spa-pill-off { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--muted); }
+
+#settings-modal .spa-chev {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+#settings-modal .spa-empty {
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Account sheet: bottom sheet on phones, centered card on desktop. */
+#settings-modal .spa-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100010;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, .42);
+}
+
+#settings-modal .spa-sheet {
+  display: grid;
+  gap: 12px;
+  width: min(440px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .35);
+  transform: translateY(12px);
+  opacity: 0;
+  transition: transform .18s ease, opacity .18s ease;
+}
+
+#settings-modal .spa-sheet.spa-sheet-open { transform: none; opacity: 1; }
+
+#settings-modal .spa-sheet-grab {
+  display: none;
+  width: 38px;
+  height: 5px;
+  margin: -6px auto 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+#settings-modal .spa-sheet-title {
+  display: grid;
+  gap: 3px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+#settings-modal .spa-sheet-title small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#settings-modal .spa-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#settings-modal .spa-field .settings-input {
+  width: 100%;
+  min-height: 42px;
+  font-size: 15px;
+}
+
+#settings-modal .spa-sheet-status:empty { display: none; }
+#settings-modal .spa-sheet-status { font-size: 12px; color: var(--muted); }
+#settings-modal .spa-sheet-status[data-tone="error"] { color: var(--err); }
+
+#settings-modal .spa-actions {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+#settings-modal .spa-btn {
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+#settings-modal .spa-btn:last-child { border-bottom: 0; }
+#settings-modal .spa-btn:disabled { opacity: .55; cursor: wait; }
+#settings-modal .spa-btn-danger { color: var(--err); }
+
+#settings-modal .spa-done {
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 12px;
+  background: var(--panel-2);
+  text-align: center;
+}
+
+/* Phone navigation: hidden on desktop. */
+#settings-modal #settings-mobile-home,
+#settings-modal .smh-back {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  /* Home list replaces the horizontal tab strip. */
+  #settings-modal:is(.smh-home, .smh-page) #settings-tabstrip,
+  body.pm-mobile-active #settings-modal:is(.smh-home, .smh-page) #settings-tabstrip {
+    display: none !important;
+  }
+
+  #settings-modal:is(.smh-home, .smh-page) .settings-page-sidebar {
+    max-height: none;
+    border-bottom: 0;
+  }
+
+  #settings-modal.smh-page .settings-sidebar-search { display: none; }
+
+  #settings-modal.smh-home #settings-mobile-home {
+    display: block;
+    padding: 4px 14px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #settings-modal.smh-home .settings-page-toolbar,
+  #settings-modal.smh-home .settings-page-main > [id^="settings-panel-"],
+  #settings-modal.smh-home .settings-page-footer {
+    display: none !important;
+  }
+
+  #settings-modal .smh-sec {
+    padding: 16px 6px 7px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  #settings-modal .smh-grp {
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+    border-radius: 14px;
+    background: var(--panel-2);
+  }
+
+  #settings-modal .smh-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 8px 14px;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  #settings-modal .smh-row[hidden],
+  #settings-modal .smh-sec[hidden] { display: none; }
+  #settings-modal .smh-row:last-child { border-bottom: 0; }
+  #settings-modal .smh-row:active { background: color-mix(in srgb, var(--text) 7%, transparent); }
+
+  #settings-modal .smh-ico {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--brand) 14%, transparent);
+    color: var(--brand);
+  }
+
+  #settings-modal .smh-ico svg { width: 16px; height: 16px; }
+  #settings-modal .smh-lb { flex: 1 1 auto; min-width: 0; }
+  #settings-modal .smh-chev { color: var(--muted); font-size: 20px; line-height: 1; }
+
+  #settings-modal.smh-page .smh-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    margin-right: auto;
+    padding: 6px 4px;
+    border: 0;
+    background: transparent;
+    color: var(--brand);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  #settings-modal.smh-page .smh-back span { font-size: 24px; line-height: 1; }
+
+  /* The toolbar sits in the scrolling flex column; without flex:none it
+     collapses under the panel and the back button becomes untappable. Keep it
+     pinned so "‹ Settings" is reachable from anywhere on a long page. */
+  #settings-modal.smh-page .settings-page-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    min-height: 0;
+    padding: 6px 16px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  #settings-modal.smh-page .settings-page-toolbar h1 {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.15;
+  }
+
+  #settings-modal.smh-page .settings-page-toolbar > div { flex: 1 0 100%; order: 2; }
+  #settings-modal.smh-page .settings-page-kicker { display: none; }
+  #settings-modal.smh-page .settings-close-btn { display: none; }
+
+  /* Save/Cancel: sticky inside the scroll area, never covering content. */
+  #settings-modal .settings-page-main > [id^="settings-panel-"] {
+    padding-bottom: 28px !important;
+  }
+
+  #settings-modal .settings-page-footer {
+    position: sticky;
+    bottom: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: var(--panel);
+    box-shadow: 0 -8px 18px rgba(0, 0, 0, .18);
+  }
+
+  #settings-modal .settings-page-footer .btn { min-height: 42px; flex: 1 1 0; }
+  #settings-modal .settings-save-status:empty { display: none; }
+
+  /* Accounts sheet becomes a real bottom sheet. */
+  #settings-modal .spa-sheet-backdrop { align-items: flex-end; padding: 0; }
+  #settings-modal .spa-sheet {
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+  #settings-modal .spa-sheet-grab { display: block; }
+
+  /* General > Updates: stack copy and buttons instead of squeezing them. */
+  #settings-modal .settings-updates-panel .settings-row,
+  #settings-modal .settings-update-status-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  #settings-modal .settings-updates-panel .settings-row-copy {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
+
+  #settings-modal .settings-update-actions {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 8px;
+  }
+
+  #settings-modal .settings-update-actions .btn {
+    flex: 1 1 auto;
+    min-height: 42px;
+  }
+
+  #settings-modal .settings-updates-panel .appearance-select {
+    width: 100%;
+  }
+
+  /* Agent model routes: role name, then provider + model full width,
+     reasoning + speed side by side. Beats surfaces-polish's 4-column grid. */
+  /* [id^=settings-panel-] raises specificity above surfaces-polish.css, which
+     loads later with the same selector and !important. */
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) > * {
+    min-width: 0;
+    margin: 0 !important;
+    grid-column: 1 / -1;
+  }
+
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) > div:has(> select[id$="-reasoning"]),
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) > .settings-model-speed-wrap {
+    grid-column: auto;
+  }
+
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) > [id$="-account-wrap"][style*="display: none"],
+  #settings-modal [id^="settings-panel-"] :is(.settings-model-row, .settings-model-slot-row) > [id$="-account-wrap"][style*="display:none"] {
+    display: none !important;
+  }
+
+  #settings-modal :is(.settings-model-row, .settings-model-slot-row) select,
+  #settings-modal [id^="settings-panel-"] select[id^="amd-"] {
+    width: 100% !important;
+    min-width: 0;
+    min-height: 42px;
+    text-overflow: ellipsis;
+  }
+
+  #settings-modal #agent-model-defaults-col [style*="grid-template-columns:1fr 1fr"],
+  #settings-modal #settings-panel-agents [style*="grid-template-columns:1fr 1fr"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* Voice: themed controls, one column, real tap targets. */
+  #settings-modal #settings-panel-voice .voice-settings-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  #settings-modal #settings-panel-voice label {
+    display: grid;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  #settings-modal #settings-panel-voice :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    width: 100%;
+    min-height: 44px;
+    padding: 9px 12px;
+    border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+  }
+
+  #settings-modal #settings-panel-voice button {
+    min-height: 44px;
+    padding: 9px 14px;
+    border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  #settings-modal #settings-panel-voice button.primary,
+  #settings-modal #settings-panel-voice .voice-settings-segmented button.active {
+    border-color: var(--brand);
+    background: var(--brand);
+    color: #fff;
+  }
+
+  #settings-modal #settings-panel-voice .voice-settings-segmented {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  #settings-modal #settings-panel-voice .voice-settings-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #settings-modal #settings-panel-voice .voice-settings-row > button { flex: 1 1 auto; }
+
+  #settings-modal #settings-panel-voice .voice-settings-delete {
+    color: var(--err);
+  }
+}
