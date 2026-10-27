@@ -24,6 +24,8 @@ import { renderProviderUsageCard } from './HubPage.js';
 import { effortOptions, validEffort, supportsFastSpeed, reasoningCapability } from '../reasoning-capabilities.js';
 import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
+import { mountProviderAccountsList } from '../settings/provider-accounts-list.js';
+import { initSettingsMobileNav, showMobileSettingsPage } from '../settings/settings-mobile-nav.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
 // does not fall through to the legacy global in Safari. Keep the existing
@@ -550,6 +552,9 @@ function setSettingsTab(tab) {
   }
   window.settingsTab = tab;
   ensureVoiceSettingsTab();
+  // A programmatic tab switch (command palette, "open Models" links) while a
+  // phone is showing the Settings home list must reveal that section.
+  if (document.getElementById('settings-modal')?.classList.contains('smh-home')) showMobileSettingsPage();
   const tabs = ['system', 'appearance', 'heartbeat', 'search', 'security', 'migration', 'models', 'voice', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
   const titles = {
     system: 'General',
@@ -1822,6 +1827,60 @@ function hydrateBuiltInProviderAccountControls() {
   }
 }
 
+// Shared provider-grouped accounts list (desktop + mobile). The list is the
+// add/rename/default/remove surface; the provider panel below it keeps the
+// connect/test/disconnect controls for the selected account.
+function ensureProviderAccountsContainer() {
+  const panel = document.getElementById('settings-panel-models');
+  if (!panel) return null;
+  panel.classList.add('spa-enabled');
+  let host = document.getElementById('settings-provider-accounts');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'settings-provider-accounts';
+    const usage = document.getElementById('settings-models-usage');
+    if (usage?.parentElement === panel) panel.insertBefore(host, usage.nextSibling);
+    else panel.insertBefore(host, panel.firstChild);
+  }
+  return host;
+}
+
+async function reloadProviderAccountSettings() {
+  _markSettingsCacheBusted('settings-models');
+  await loadModelSettings();
+}
+
+function manageProviderAccount(providerId, accountId) {
+  const providerSelect = document.getElementById('settings-llm-provider');
+  if (providerSelect) providerSelect.value = providerId;
+  onProviderChange();
+  const accountSelect = document.getElementById(getProviderAccountSelectId(providerId));
+  if (accountSelect && accountId) {
+    accountSelect.value = accountId;
+    onProviderAccountChange(providerId);
+  }
+  document.getElementById(getProviderPanelId(providerId))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderProviderAccountsList() {
+  const host = ensureProviderAccountsContainer();
+  if (!host) return;
+  mountProviderAccountsList(host, {
+    api,
+    showToast,
+    showConfirm,
+    getCache: () => window._llmSettingsCache,
+    normalizeAccounts: normalizeProviderAccountsForUI,
+    onReload: reloadProviderAccountSettings,
+    onManage: manageProviderAccount,
+    onAdd: (providerId) => {
+      addProviderAccount(providerId);
+      renderProviderAccountsList();
+      document.getElementById(getProviderPanelId(providerId))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+  });
+}
+
 async function ensureProviderCatalogUIReady() {
   if (providerCatalogCache) return providerCatalogCache;
   if (!providerCatalogPromise) {
@@ -1911,6 +1970,7 @@ async function loadModelSettings() {
       renderProviderSelectors();
       renderDynamicProviderPanels();
       hydrateBuiltInProviderAccountControls();
+      renderProviderAccountsList();
       const provSel = document.getElementById('settings-llm-provider');
       if (provSel) provSel.value = prov;
 
@@ -3287,7 +3347,12 @@ async function openSettings(tab) {
   if (importToggle) importToggle.checked = importPanelOpen;
   toggleChromeProfileImportPanel(importPanelOpen);
   const targetTab = tab || window.settingsTab || 'system';
+  // The inline shim always forwards a tab; it records whether the caller
+  // actually asked for one so phones can open on the Settings home list.
+  const explicitTab = typeof window.__promSettingsExplicitTab === 'boolean' ? window.__promSettingsExplicitTab : !!tab;
+  window.__promSettingsExplicitTab = undefined;
   setSettingsTab(targetTab);
+  try { initSettingsMobileNav({ startOnHome: !explicitTab }); } catch (error) { console.warn('[settings] mobile nav init failed', error); }
   const bootJobs = [
     api('/api/status', { timeoutMs: 5000 }).then((status) => {
       const runtimeModelEl = document.getElementById('settings-runtime-model');

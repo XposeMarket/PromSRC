@@ -5,6 +5,8 @@ import { getConfig } from '../../config/config';
 import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
+import { planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
+import { invalidateProviderStatusCache } from '../provider-status';
 import { preferConnectedAccountId } from '../../auth/provider-account-pool';
 import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
@@ -2274,6 +2276,56 @@ router.post('/api/settings/provider', (req, res) => {
   }
 });
 
+// POST /api/settings/provider-accounts/remove — remove one account (dryRun previews affected agent roles)
+router.post('/api/settings/provider-accounts/remove', (req, res) => {
+  try {
+    const providerId = String(req.body?.providerId || '').trim();
+    const accountId = String(req.body?.accountId || '').trim();
+    const configManager = getConfig();
+    const plan = planRemoveProviderAccount(configManager.getConfig(), providerId, accountId);
+    if (!plan.ok) { res.status(400).json({ success: false, error: plan.error }); return; }
+    if (req.body?.dryRun === true) {
+      res.json({ success: true, dryRun: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
+      return;
+    }
+    configManager.updateConfig({
+      llm: plan.nextConfigPatch.llm,
+      agent_model_default_accounts: plan.nextConfigPatch.agent_model_default_accounts,
+    } as any);
+    // Clear only this account's credentials. accountId is validated non-empty above.
+    try {
+      if (providerId === 'anthropic') anthropicClearTokens(CONFIG_DIR_PATH, accountId);
+      else if (providerId === 'openai_codex') clearTokens(CONFIG_DIR_PATH, accountId);
+      else if (providerId === 'xai') clearXAITokens(CONFIG_DIR_PATH, accountId);
+    } catch {}
+    try { getVault().delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove'); } catch {}
+    resetProvider();
+    invalidateProviderStatusCache();
+    res.json({ success: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/settings/provider-accounts/update — rename and/or make an account the default
+router.post('/api/settings/provider-accounts/update', (req, res) => {
+  try {
+    const providerId = String(req.body?.providerId || '').trim();
+    const accountId = String(req.body?.accountId || '').trim();
+    const patch: { label?: string; makeDefault?: boolean } = {};
+    if (req.body?.label !== undefined) patch.label = String(req.body.label);
+    if (req.body?.makeDefault === true) patch.makeDefault = true;
+    const configManager = getConfig();
+    const plan = planUpdateProviderAccount(configManager.getConfig(), providerId, accountId, patch);
+    if (!plan.ok || !plan.nextConfigPatch) { res.status(400).json({ success: false, error: plan.error || 'Update failed' }); return; }
+    configManager.updateConfig({ llm: plan.nextConfigPatch.llm } as any);
+    resetProvider();
+    invalidateProviderStatusCache();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // POST /api/settings/bulk  — save the main Settings modal in one atomic-ish
 // config update. The UI previously fired six POSTs in parallel; every route
 // rewrote config.json, so whichever response finished last could clobber parts
