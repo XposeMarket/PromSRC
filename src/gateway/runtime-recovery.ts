@@ -38,6 +38,24 @@ const TASK_RUNTIME_KINDS = new Set([
   'proposal_execution',
 ]);
 const CONTINUITY_SESSION_RUNTIME_KINDS = new Set(['subagent', 'team_manager', 'team_member']);
+/** An interrupted manager turn older than this is left to the team's next schedule/event. */
+const TEAM_MANAGER_REWAKE_MAX_AGE_MS = 24 * 60 * 60_000;
+
+/**
+ * Team managers are event-driven: a manager turn that dies with the gateway is never
+ * replayed, so the team idles until its next schedule. Re-wake it once. A turn that was
+ * itself a restart re-wake is not re-woken again, so a crashing turn cannot loop.
+ */
+function shouldRewakeTeamManager(runtime: LiveRuntimeSnapshot, now = Date.now()): boolean {
+  if (runtime.kind !== 'team_manager' || !String(runtime.teamId || '').trim()) return false;
+  if (runtime.recoveryData?.restartRecoveryWake === true) return false;
+  const lastSeenAt = Math.max(
+    Number(runtime.updatedAt || 0),
+    Number(runtime.interruptedAt || 0),
+    Number(runtime.startedAt || 0),
+  );
+  return lastSeenAt > 0 && now - lastSeenAt <= TEAM_MANAGER_REWAKE_MAX_AGE_MS;
+}
 
 export interface HotRestartMainChatRecovery {
   sessionId: string;
@@ -991,6 +1009,8 @@ export function recoverInterruptedRuntimes(opts: {
   interruptedChats: string[];
   deferredMainChatRuntimes: LiveRuntimeSnapshot[];
   crashRecoveredGoalSessionIds: string[];
+  /** Interrupted team-manager turns (one per team) to re-wake once team deps are wired. */
+  interruptedTeamManagerRuntimes: LiveRuntimeSnapshot[];
 } {
   const runtimes = listInterruptedRuntimes()
     .filter((runtime) => Number(runtime.pid || 0) !== process.pid)
@@ -1000,6 +1020,7 @@ export function recoverInterruptedRuntimes(opts: {
   const interruptedChats: string[] = [];
   const deferredMainChatRuntimes: LiveRuntimeSnapshot[] = [];
   const crashRecoveredGoalSessionIds = new Set<string>();
+  const interruptedTeamManagerRuntimes: LiveRuntimeSnapshot[] = [];
 
   for (const runtime of runtimes) {
     try {
@@ -1077,10 +1098,14 @@ export function recoverInterruptedRuntimes(opts: {
         addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart');
         mirrorSessionCheckpointToAgentChat(runtime);
         interruptedChats.push(String(runtime.sessionId || '').trim());
+        const rewakeTeamManager = shouldRewakeTeamManager(runtime)
+          && !interruptedTeamManagerRuntimes.some((other) => other.teamId === runtime.teamId);
         markDurableRuntimeRecovered(runtime.id, 'interrupted', {
           recovery: 'session_checkpointed',
           sessionId: runtime.sessionId,
+          ...(rewakeTeamManager ? { teamManagerRewake: true } : {}),
         });
+        if (rewakeTeamManager) interruptedTeamManagerRuntimes.push(runtime);
         continue;
       }
 
@@ -1179,6 +1204,7 @@ export function recoverInterruptedRuntimes(opts: {
     interruptedChats,
     deferredMainChatRuntimes,
     crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
+    interruptedTeamManagerRuntimes,
   };
 }
 

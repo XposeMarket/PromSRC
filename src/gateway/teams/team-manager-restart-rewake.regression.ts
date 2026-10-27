@@ -1,0 +1,124 @@
+/**
+ * Regression: a team-manager turn interrupted by a gateway crash/restart must be re-woken.
+ *
+ * 2026-10-27: the gateway exited (code 134) while the Roblox Studio manager was mid auto-wake
+ * for Forge's FIX loop 3 result. Startup recovery only wrote an "[Interrupted by gateway restart]
+ * ... will automatically continue" checkpoint into the coordinator session; nothing re-ran the
+ * turn, so the team sat idle for 73 minutes until main Prometheus replied to it by hand.
+ *
+ * Team managers are event-driven, so recovery must hand interrupted manager runtimes back to
+ * startup for one auto-wake per team, and must never re-wake a turn that was itself a re-wake.
+ */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Isolated data/workspace dirs so the real ledger and team store are never touched.
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-team-rewake-'));
+process.env.PROMETHEUS_DATA_DIR = root;
+process.env.PROMETHEUS_WORKSPACE_DIR = path.join(root, 'workspace');
+fs.mkdirSync(process.env.PROMETHEUS_WORKSPACE_DIR, { recursive: true });
+
+const OTHER_PID = 999_999; // the previous gateway process
+
+function managerRuntime(id: string, teamId: string, extra: Record<string, any> = {}) {
+  const now = Date.now();
+  return {
+    id,
+    kind: 'team_manager',
+    label: `Team manager - ${teamId}`,
+    sessionId: `team_coord_${teamId}`,
+    teamId,
+    source: 'system',
+    detail: '[TEAM EVENT AUTO-WAKE]\nImportant team-room events occurred while the team was working.\n\nEvents:\n1. Forge completed work. Task: FIX loop 3',
+    startedAt: now - 90_000,
+    updatedAt: now - 60_000,
+    abortable: true,
+    status: 'running',
+    pid: OTHER_PID,
+    ...extra,
+  };
+}
+
+async function main() {
+  const { getConfig } = await import('../../config/config');
+  const configDir = getConfig().getConfigDir();
+  const now = Date.now();
+
+  // Ledger left behind by the crashed gateway. Written before the registry first reads it.
+  const runtimes: Record<string, any> = {
+    rt_a1: managerRuntime('rt_a1', 'team_a'),
+    rt_a2: managerRuntime('rt_a2', 'team_a', { updatedAt: now - 30_000 }),
+    rt_loop: managerRuntime('rt_loop', 'team_loop', { recoveryData: { restartRecoveryWake: true } }),
+    rt_old: managerRuntime('rt_old', 'team_old', { startedAt: now - 3 * 86_400_000, updatedAt: now - 2 * 86_400_000 }),
+    rt_member: { ...managerRuntime('rt_member', 'team_m'), kind: 'team_member', sessionId: 'team_member_m' },
+  };
+  const ledgerPath = path.join(configDir, 'runtimes', 'active-runtimes.json');
+  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+  fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, updatedAt: now, runtimes }));
+
+  const recovery = await import('../runtime-recovery');
+  const coordinator = await import('./team-coordinator');
+
+  const result = recovery.recoverInterruptedRuntimes({ deferMainChatRetrigger: true });
+  assert.ok(result.inspected >= 5, `precondition: recovery inspects the crashed gateway's runtimes (got ${result.inspected})`);
+  assert.ok(Array.isArray(result.interruptedTeamManagerRuntimes), 'recovery must return interrupted team-manager runtimes');
+
+  const rewoken = result.interruptedTeamManagerRuntimes.map((runtime) => runtime.teamId).sort();
+  // Positive: the interrupted manager is handed back exactly once per team.
+  assert.deepEqual(rewoken, ['team_a'], `only team_a should be re-woken, got ${JSON.stringify(rewoken)}`);
+  // Negative: a re-wake turn that died again, a stale turn, and member runtimes are not re-woken.
+  assert.ok(!rewoken.includes('team_loop'), 'a turn that was itself a restart re-wake must not loop');
+  assert.ok(!rewoken.includes('team_old'), 'a manager turn older than the re-wake window is left to the schedule');
+  assert.ok(!rewoken.includes('team_m'), 'team_member runtimes keep checkpoint-only behavior');
+
+  // Every continuity session still gets its checkpoint (unchanged behavior).
+  for (const runtime of Object.values(runtimes)) {
+    assert.ok(result.interruptedChats.includes(runtime.sessionId), `${runtime.id} must still be checkpointed`);
+  }
+  // Marked handled in the ledger, so a later recovery pass (e.g. warm handoff) cannot re-wake it.
+  assert.equal(
+    recovery.recoverInterruptedRuntimes({ deferMainChatRetrigger: true }).interruptedTeamManagerRuntimes.length,
+    0,
+    'a second recovery pass must not re-wake the same manager again',
+  );
+
+  // The wake prompt carries the marker, and a manager turn started from it is flagged so a
+  // crash during the re-wake turn is checkpointed only (one automatic retry, like main chat).
+  const reason = coordinator.buildTeamManagerRestartWakeReason(result.interruptedTeamManagerRuntimes[0]);
+  assert.ok(reason.startsWith(coordinator.TEAM_MANAGER_RESTART_WAKE_MARKER), 'reason starts with the marker');
+  assert.match(reason, /Forge completed work/, 'reason says what the lost turn was handling');
+  assert.match(reason, /Do not re-dispatch/, 'reason tells the manager to reconcile instead of duplicating work');
+  assert.deepEqual(coordinator.teamManagerRuntimeRecoveryData(`[TEAM EVENT AUTO-WAKE]\n1. ${reason}`), { restartRecoveryWake: true });
+  assert.equal(coordinator.teamManagerRuntimeRecoveryData('[TEAM EVENT AUTO-WAKE]\n1. Forge completed work.'), undefined);
+
+  // The auto-wake path delivers that reason to the manager conversation.
+  const storePath = path.join(configDir, 'managed-teams.json');
+  const team = {
+    id: 'team_a', name: 'A', subagentIds: [], managerAgentId: 'team_a_manager', purpose: 'p', currentFocus: 'goal',
+    teamChat: [], runHistory: [], createdAt: now, updatedAt: now,
+    roomState: { purpose: 'p', runGoal: 'goal', roomMessages: [], managerInbox: [], memberStates: {}, sharedArtifacts: [], dispatches: [] },
+  };
+  fs.writeFileSync(storePath, JSON.stringify({ version: 1, updatedAt: now, teams: [team] }));
+  const autowake = await import('./team-manager-autowake');
+  const prompts: string[] = [];
+  autowake.setTeamManagerAutoWakeDeps({
+    handleManagerConversation: async (_teamId, userMessage) => { prompts.push(userMessage); },
+    broadcastTeamEvent: () => {},
+  });
+  assert.equal(autowake.scheduleTeamManagerAutoWake('team_a', reason), true, 'auto-wake accepts the restart reason');
+  await new Promise((resolve) => setTimeout(resolve, 2_500));
+  assert.equal(prompts.length, 1, 'exactly one manager turn runs');
+  assert.deepEqual(coordinator.teamManagerRuntimeRecoveryData(prompts[0]), { restartRecoveryWake: true }, 'that turn is flagged as the re-wake');
+
+  console.log('team-manager-restart-rewake regression: PASS');
+}
+
+main().then(() => {
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  process.exit(0);
+}).catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
