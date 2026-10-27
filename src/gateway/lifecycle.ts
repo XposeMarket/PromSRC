@@ -23,7 +23,7 @@ import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../config/gateway-p
 import { getConfig } from '../config/config.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
-import { releaseHandoffListeners, canExitAfterFailedHandoff } from './runtime/gateway-handoff-safe-abort';
+import { releaseHandoffListeners, canExitAfterFailedHandoff, runListenerReleaseHandoff } from './runtime/gateway-handoff-safe-abort';
 import { prepareActiveRuntimesForGatewayShutdown, prepareInitiatingRuntimesForGatewayHandoff } from './runtime-recovery';
 import { recordActiveMainChatGoalsInterruptedForRestart, recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
@@ -31,7 +31,9 @@ import { desktopBackgroundShutdown } from './desktop-background';
 import { flushLiveRuntimePersistence, listLocalRunningRuntimes, type LiveRuntimeSnapshot } from './live-runtime-registry';
 import { flushSession } from './session';
 import {
-  beginGatewayHandoffHost,
+  prepareGatewayHandoffHost,
+  activateGatewayHandoffHost,
+  disposePreparedGatewayHandoffHost,
   completeGatewayHandoffHost,
   waitForGatewayHandoffDrain,
 } from './runtime/gateway-handoff-bridge';
@@ -530,6 +532,10 @@ interface ShutdownHooks {
   stopSchedulersForHandoff?: () => void | Promise<void>;
   /** Warm handoff: release the listeners without destroying active SSE responses. */
   closeListenersForHandoff?: () => Promise<void>;
+  /** Warm handoff: WebSocket/voice/relay teardown, only after the handoff is committed. */
+  finishListenerHandoff?: () => void | Promise<void>;
+  /** Warm handoff failure: re-bind released listeners on their startup port/host. */
+  reopenListenersAfterFailedHandoff?: () => Promise<void>;
   hasListeningGateway?: () => boolean;
 }
 
@@ -892,16 +898,18 @@ function spawnDetachedReplacementGateway(root: string, handoffHostPid: number | 
   return { entry: launch?.entry };
 }
 
+/** Cold-recovery policy loop: retry until an idle, non-serving gateway may exit for the supervisor. */
+function startColdRecoveryLoop(): void {
+  const tick = async (): Promise<void> => {
+    if (!(await restartAfterFailedHandoff())) setTimeout(tick, 5_000).unref?.();
+  };
+  void tick();
+}
+
 async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHandoffPlan): Promise<void> {
-  // Prove release before any checkpoint, persistence freeze or scheduler stop.
-  // Missing hooks must not silently launch a replacement against our own port.
-  try {
-    await releaseHandoffListeners(_shutdownHooks);
-  } catch (error: any) {
-    console.error('[lifecycle] Warm handoff safely aborted before launch:', error?.message || error);
-    return;
-  }
-  _handoffDraining = true;
+  // Order: prepare the socket/manifest (no globals) -> release listeners ->
+  // commit (checkpoint, context, activate, drain mode, teardown). Any failure
+  // after release reopens the predecessor's listeners; if that fails, cold recovery runs.
   const trigger = (
     restartCtx.devEditContinuation
     || restartCtx.devApplyBatch
@@ -911,16 +919,60 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
     ? 'prom_apply_dev_changes'
     : 'gateway_restart';
   const label = restartCtx.summary || restartCtx.title || restartCtx.reason;
+  const carriedRuntimeIds = plan.carried.map((runtime) => runtime.id);
+  let initiating: LiveRuntimeSnapshot[] = [];
   console.log(`[lifecycle] ═══ Warm handoff: ${plan.carried.length} runtime(s) keep running here while the replacement starts (${plan.launcher}) ═══`);
 
-  // 1. The restart-owning turn(s) checkpoint exactly like a legacy restart so
-  //    BOOT on the replacement resumes them on the new code.
-  let initiating: LiveRuntimeSnapshot[] = [];
-  try {
-    initiating = prepareInitiatingRuntimesForGatewayHandoff(trigger, (runtime) => isRestartInitiatingRuntime(runtime, restartCtx));
-  } catch (e: any) {
-    console.warn('[lifecycle] Handoff initiating-runtime checkpoint error:', e.message);
+  const result = await runListenerReleaseHandoff({
+    prepare: () => prepareGatewayHandoffHost({ reason: label, restartTimestamp: restartCtx.timestamp }),
+    release: () => releaseHandoffListeners(_shutdownHooks),
+    commit: async (host) => {
+      // 1. Restart-owning turn(s) checkpoint like a legacy restart so BOOT on the
+      //    replacement resumes them on the new code.
+      try {
+        initiating = prepareInitiatingRuntimesForGatewayHandoff(trigger, (runtime) => isRestartInitiatingRuntime(runtime, restartCtx));
+      } catch (e: any) {
+        console.warn('[lifecycle] Handoff initiating-runtime checkpoint error:', e.message);
+      }
+      // 1b. The checkpoints above are written by an async drain. Freezing local
+      //     ledger writes (activation below) discards queued writes, so flush first
+      //     (2026-09-25: restart-owning turn went silent without an interrupted event).
+      try {
+        await Promise.race([
+          flushLiveRuntimePersistence(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+        ]);
+      } catch (e: any) {
+        console.warn('[lifecycle] Handoff initiating-runtime flush error:', e.message);
+      }
+      // 2. Context write can fail; do it before any global is changed.
+      writeRestartContext({
+        ...restartCtx,
+        handoff: { hostPid: process.pid, socketPath: host.socketPath, carriedRuntimeIds },
+      });
+      // 3. From here the replacement owns the ledger, status/lease files, WebSocket clients.
+      activateGatewayHandoffHost(host);
+      _handoffDraining = true;
+      try { await _shutdownHooks.finishListenerHandoff?.(); } catch (e: any) {
+        console.warn('[lifecycle] Handoff listener teardown error:', e.message);
+      }
+    },
+    dispose: (host) => disposePreparedGatewayHandoffHost(host),
+    reopen: async () => {
+      if (!_shutdownHooks.reopenListenersAfterFailedHandoff) throw new Error('Listener reopen hooks are not registered.');
+      await _shutdownHooks.reopenListenersAfterFailedHandoff();
+    },
+    coldRecover: () => startColdRecoveryLoop(),
+    log: (message) => console.error(`[lifecycle] ${message}`),
+  });
+  if (!result.ok) {
+    console.error(`[lifecycle] Warm handoff aborted at stage=${result.stage}; recovered=${result.recovered}. No replacement was launched.`);
+    return;
   }
+  const host = result.host;
+
+  // Goal interrupts only once the handoff is committed, so an aborted handoff
+  // never leaves main-chat goals in 'restarting'.
   const initiatingSessions = new Set<string>();
   for (const runtime of initiating) {
     if (runtime.sessionId) initiatingSessions.add(String(runtime.sessionId));
@@ -938,37 +990,12 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   }
   if (initiating.length) console.log(`[lifecycle] Checkpointed ${initiating.length} restart-initiating runtime(s) for the replacement.`);
 
-  // 1b. The interrupted checkpoints above are written by an async drain. Step 2
-  //     freezes local ledger writes, and a frozen drain discards whatever is
-  //     still queued, so without this flush the replacement never saw the
-  //     restart-owning turn as interrupted and nothing resumed it (2026-09-25:
-  //     mobile turn 6e13c0e3 called gateway_restart during a warm handoff, no
-  //     'interrupted' event reached runtime-events.ndjson, the chat went silent).
-  try {
-    await Promise.race([
-      flushLiveRuntimePersistence(),
-      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
-    ]);
-  } catch (e: any) {
-    console.warn('[lifecycle] Handoff initiating-runtime flush error:', e.message);
-  }
-
-  // 2. Open the handoff channel; from here on the replacement owns the
-  //    ledger, the status/lease files, and the WebSocket clients.
-  const host = await beginGatewayHandoffHost({ reason: label, restartTimestamp: restartCtx.timestamp });
-  const carriedRuntimeIds = plan.carried.map((runtime) => runtime.id);
-  writeRestartContext({
-    ...restartCtx,
-    handoff: { hostPid: process.pid, socketPath: host.socketPath, carriedRuntimeIds },
-  });
-
-  // 3. Stop everything that would start *new* work here.
+  // Stop everything that would start *new* work here.
   try { await _shutdownHooks.stopSchedulersForHandoff?.(); } catch (e: any) {
     console.warn('[lifecycle] Handoff scheduler stop error:', e.message);
   }
-  // 4. Listener release was verified before any drain mutations.
 
-  // 5. Start the replacement.
+  // Start the replacement.
   const notice: GatewayHandoffLauncherNotice = {
     type: GATEWAY_HANDOFF_IPC_MESSAGE_TYPE,
     hostPid: process.pid,
@@ -991,10 +1018,11 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
     }
   }
 
-  // 6. Drain in the background. Callers (the restart tool, /restart routes)
-  //    must return promptly; the process exits on its own when done.
+  // Drain in the background. Callers (the restart tool, /restart routes)
+  // must return promptly; the process exits on its own when done.
   void runGatewayHandoffDrain(host, carriedRuntimeIds.length);
 }
+
 
 async function restartAfterFailedHandoff(): Promise<boolean> {
   const listening = _shutdownHooks.hasListeningGateway?.() ?? true;
@@ -1148,7 +1176,12 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     } catch (error: any) {
       // The watchdog caller historically exits on rejection. A partially
       // prepared handoff is NOT permission to destroy the runtimes still here.
-      console.error('[lifecycle] Handoff preparation failed; predecessor retained:', error?.message || error);
+      // Outcome unknown: the failure may have happened after listeners were released.
+      console.error('[lifecycle] Warm handoff threw; outcome unknown:', error?.message || error);
+      if (!(_shutdownHooks.hasListeningGateway?.() ?? true)) {
+        try { await _shutdownHooks.reopenListenersAfterFailedHandoff?.(); console.error('[lifecycle] Reopened listeners after unknown handoff outcome.'); }
+        catch (reopenError: any) { console.error('[lifecycle] Reopen after unknown handoff outcome failed:', reopenError?.message || reopenError); startColdRecoveryLoop(); }
+      }
     }
     return;
   }
