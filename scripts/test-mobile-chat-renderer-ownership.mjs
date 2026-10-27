@@ -129,6 +129,8 @@ const measurements = {
 // measured 281598 (+38 bytes / 0.014% above prior ceiling). Retain <0.1% variance.
 // #783 route identity and navigation guards combined with #780 measure 281802.
 // Retain a bounded 0.1% compression-variance allowance; no runtime code is removed.
-assert(measurements.gzipBytes <= 282100, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #785 shared family grouping and catalog UI add 906 bytes: combined gzip282708.
+// Keep the established bounded ~0.1% compression variance above the measured total.
+assert(measurements.gzipBytes <= 283000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
