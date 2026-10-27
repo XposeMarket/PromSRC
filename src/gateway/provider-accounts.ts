@@ -6,6 +6,9 @@
 export const ACCOUNT_AWARE_PROVIDERS: ReadonlySet<string> = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
 
 const MAX_LABEL = 64;
+// Removed account ids are kept per provider so a stale Settings surface (phone
+// and desktop open at once) cannot write a removed account back on Save.
+const MAX_TOMBSTONES = 50;
 
 export interface AccountRemovalPlan {
   ok: boolean;
@@ -14,6 +17,8 @@ export interface AccountRemovalPlan {
   accountId: string;
   nextDefaultAccountId: string | null;
   affectedRoles: string[];
+  /** Legacy single-account credentials that only the removed "default" account used. */
+  legacyCredentials: { providerApiKey: boolean; unscopedOAuth: boolean };
   nextConfigPatch: { llm: any; agent_model_default_accounts: Record<string, string> };
 }
 
@@ -39,6 +44,7 @@ function failRemoval(providerId: string, accountId: string, error: string): Acco
     accountId,
     nextDefaultAccountId: null,
     affectedRoles: [],
+    legacyCredentials: { providerApiKey: false, unscopedOAuth: false },
     nextConfigPatch: { llm: null, agent_model_default_accounts: {} },
   };
 }
@@ -65,6 +71,19 @@ export function planRemoveProviderAccount(config: any, providerId: string, accou
   }
 
   delete accounts[aid];
+  providerCfg.removed_account_ids = [...idList(providerCfg.removed_account_ids).filter((id) => id !== aid), aid].slice(-MAX_TOMBSTONES);
+
+  // A "default" account on a legacy config is backed by the provider-level
+  // api_key (factory.ts falls back to it) and, for Codex, the unscoped OAuth
+  // token. Removing it must remove those too, or the credential stays live.
+  const legacyCredentials = { providerApiKey: false, unscopedOAuth: false };
+  if (aid === 'default') {
+    if (typeof providerCfg.api_key === 'string' && providerCfg.api_key.trim()) {
+      delete providerCfg.api_key;
+      legacyCredentials.providerApiKey = true;
+    }
+    legacyCredentials.unscopedOAuth = pid === 'openai_codex';
+  }
   const remainingIds = Object.keys(accounts);
   const nextDefaultAccountId = remainingIds[0] ?? null;
   const currentDefault = String(providerCfg.defaultAccountId || '');
@@ -96,8 +115,42 @@ export function planRemoveProviderAccount(config: any, providerId: string, accou
     accountId: aid,
     nextDefaultAccountId,
     affectedRoles,
+    legacyCredentials,
     nextConfigPatch: { llm, agent_model_default_accounts: roleAccounts },
   };
+}
+
+function idList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((id) => String(id || '').trim()).filter(Boolean) : [];
+}
+
+/**
+ * Drop accounts removed earlier from an incoming full-provider Save. A Settings
+ * surface loaded before a removal still holds the removed account and would
+ * write it back (without its credentials). Tombstones from the current config
+ * and the incoming payload are unioned. Never empties an accounts map: an empty
+ * map falls back to legacy single-account mode.
+ */
+export function dropRemovedAccounts(nextLlm: any, currentLlm: any): any {
+  if (!isPlainObject(nextLlm) || !isPlainObject(nextLlm.providers)) return nextLlm;
+  const out = clone(nextLlm);
+  for (const pid of ACCOUNT_AWARE_PROVIDERS) {
+    const next = out.providers[pid];
+    if (!isPlainObject(next)) continue;
+    const removed = new Set<string>([
+      ...idList(currentLlm?.providers?.[pid]?.removed_account_ids),
+      ...idList(next.removed_account_ids),
+    ]);
+    if (!removed.size) continue;
+    next.removed_account_ids = [...removed].slice(-MAX_TOMBSTONES);
+    if (!isPlainObject(next.accounts)) continue;
+    const kept = Object.fromEntries(Object.entries(next.accounts).filter(([id]) => !removed.has(id)));
+    if (!Object.keys(kept).length || Object.keys(kept).length === Object.keys(next.accounts).length) continue;
+    next.accounts = kept;
+    if (!kept[String(next.defaultAccountId || '')]) next.defaultAccountId = Object.keys(kept)[0];
+    if (out.provider === pid && out.accountId && !kept[String(out.accountId)]) out.accountId = next.defaultAccountId;
+  }
+  return out;
 }
 
 export function planUpdateProviderAccount(

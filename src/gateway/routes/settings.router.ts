@@ -5,7 +5,7 @@ import { getConfig } from '../../config/config';
 import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
-import { ACCOUNT_AWARE_PROVIDERS, planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
+import { ACCOUNT_AWARE_PROVIDERS, dropRemovedAccounts, planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
 import { invalidateProviderStatusCache } from '../provider-status';
 import { preferConnectedAccountId } from '../../auth/provider-account-pool';
 import { getMCPManager } from '../mcp-manager';
@@ -2242,11 +2242,11 @@ router.post('/api/settings/provider', (req, res) => {
     const configManager = getConfig();
     const current = (configManager.getConfig() as any).llm || {};
     const llm = preserveMaskedProviderSecrets(llmIncoming, current);
-    const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(configManager.getConfig(), {
+    const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(configManager.getConfig(), dropRemovedAccounts({
       ...current,
       ...llm,
       providers: mergeProviderConfigs(current.providers || {}, llm.providers || {}),
-    }));
+    }, current)));
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
     const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
     const legacyModelSync = activeModel
@@ -2288,6 +2288,15 @@ function persistedLlm(llm: any): any {
   return migrateAccountSecretsToVault(llm);
 }
 
+// updateConfig deep-merges in the canonical (desktop app) storage layout, so a
+// deleted account or role mapping would survive the merge. Removal replaces
+// whole sections on the live config object instead (both layouts return it).
+function replaceConfigSections(configManager: ReturnType<typeof getConfig>, sections: Record<string, any>): void {
+  const live = configManager.getConfig() as any;
+  for (const [key, value] of Object.entries(sections)) live[key] = value;
+  configManager.saveConfig();
+}
+
 // POST /api/settings/provider-accounts/remove — remove one account (dryRun previews affected agent roles)
 router.post('/api/settings/provider-accounts/remove', (req, res) => {
   try {
@@ -2300,10 +2309,10 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
       res.json({ success: true, dryRun: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
       return;
     }
-    configManager.updateConfig({
+    replaceConfigSections(configManager, {
       llm: persistedLlm(plan.nextConfigPatch.llm),
       agent_model_default_accounts: plan.nextConfigPatch.agent_model_default_accounts,
-    } as any);
+    });
     // Clear only this account's credentials. accountId is validated non-empty
     // above, so clearTokens never receives undefined (which targets the
     // unscoped/default token).
@@ -2321,6 +2330,23 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
     } catch (err: any) {
       credentialsCleared = false;
       console.warn(`[settings] account remove: vault key delete failed for ${providerId}/${accountId}: ${err?.message || err}`);
+    }
+    // Legacy credentials that only the removed "default" account used.
+    if (plan.legacyCredentials.providerApiKey) {
+      try {
+        getVault().delete(`llm.${providerId}.api_key`, 'settings:account-remove-legacy');
+      } catch (err: any) {
+        credentialsCleared = false;
+        console.warn(`[settings] account remove: legacy provider key delete failed for ${providerId}: ${err?.message || err}`);
+      }
+    }
+    if (plan.legacyCredentials.unscopedOAuth) {
+      try {
+        clearTokens(CONFIG_DIR_PATH);
+      } catch (err: any) {
+        credentialsCleared = false;
+        console.warn(`[settings] account remove: legacy Codex token clear failed: ${err?.message || err}`);
+      }
     }
     resetProvider();
     invalidateProviderStatusCache();

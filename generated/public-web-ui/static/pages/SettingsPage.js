@@ -2132,14 +2132,36 @@ async function renderModelsUsage() {
   wrap.style.display = '';
   grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
 
+  // A failed request (gateway restarting, timeout, flaky phone network) is not
+  // the same as "no saved credentials". Retry once, then say it failed instead
+  // of marking every provider as NO CREDS.
   const byId = {};
-  try {
-    const r = await api('/api/usage/limits', { timeoutMs: 30000 });
-    (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => {
-      if (!byId[p.provider]) byId[p.provider] = [];
-      byId[p.provider].push(p);
-    });
-  } catch { /* fall through to no-data cards */ }
+  let loaded = false;
+  for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      const r = await api('/api/usage/limits', { timeoutMs: 30000 });
+      if (r && r.success !== false && Array.isArray(r.providers)) {
+        r.providers.forEach(p => {
+          if (!byId[p.provider]) byId[p.provider] = [];
+          byId[p.provider].push(p);
+        });
+        loaded = true;
+      }
+    } catch { /* retried below, then shown as a load error */ }
+  }
+  if (!loaded) {
+    grid.innerHTML = `<div class="usage-provider-card">
+      <div class="usage-provider-head">
+        <span class="usage-provider-name">Usage unavailable</span>
+        <span class="usage-provider-badge">not loaded</span>
+      </div>
+      <div class="usage-provider-note">Couldn't load usage right now. Your connections are unaffected.</div>
+      <button type="button" class="btn-secondary usage-retry-btn" data-usage-retry>Retry</button>
+    </div>`;
+    grid.querySelector('[data-usage-retry]')?.addEventListener('click', () => renderModelsUsage());
+    return;
+  }
 
   // A connected account may be used by a per-chat model route even when it
   // is absent from the global main/agent defaults shown in this form.
