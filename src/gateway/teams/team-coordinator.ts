@@ -717,6 +717,7 @@ export async function runCoordinatorConversation(
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
+    recoveryData: teamManagerRuntimeRecoveryData(userMessage),
   });
 
   try {
@@ -1022,6 +1023,7 @@ export async function runCoordinatorConversationDetailed(
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
+    recoveryData: teamManagerRuntimeRecoveryData(userMessage),
   });
 
   try {
@@ -1493,4 +1495,36 @@ function resolveManagerExecutionRoot(teamId: string): string {
   } catch {
     return teamWs;
   }
+}
+
+// ── Restart re-wake (runtime-recovery hands interrupted manager turns back) ──
+
+/** Marks a manager wake that replays a turn lost to a gateway crash/restart (runtime-recovery). */
+export const TEAM_MANAGER_RESTART_WAKE_MARKER = '[restart-recovery]';
+
+/** Runtime recoveryData for a manager turn. A restart re-wake is flagged so recovery never re-wakes it again. */
+export function teamManagerRuntimeRecoveryData(userMessage: string): Record<string, any> | undefined {
+  return String(userMessage || '').includes(TEAM_MANAGER_RESTART_WAKE_MARKER)
+    ? { restartRecoveryWake: true }
+    : undefined;
+}
+
+/** Auto-wake reason for a manager whose previous turn died with the gateway. */
+export function buildTeamManagerRestartWakeReason(runtime: {
+  detail?: string;
+  interruptedAt?: number;
+  updatedAt?: number;
+  startedAt?: number;
+}): string {
+  const at = Number(runtime.interruptedAt || runtime.updatedAt || runtime.startedAt || 0);
+  const handling = String(runtime.detail || '')
+    .replace(/^\[TEAM EVENT AUTO-WAKE\]\s*Important team-room events occurred while the team was working\.\s*(Events:\s*)?/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
+  return [
+    `${TEAM_MANAGER_RESTART_WAKE_MARKER} Your previous manager turn was cut off by a gateway restart or crash${at > 0 ? ` at ${new Date(at).toISOString()}` : ''} and never finished.`,
+    handling ? `It was handling: ${handling}.` : '',
+    'Reconcile before acting: read the team room, dispatch records and member results since then. Do not re-dispatch work that already completed or is still running; continue from the next unfinished step.',
+  ].filter(Boolean).join(' ');
 }
