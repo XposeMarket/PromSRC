@@ -12,12 +12,17 @@ type Counts = { oembed: number; fx: number };
 type Calls = { thread: number; downloadUrl: number; downloadMedia: number; analyze: number };
 
 let fxBody: any = null; // FxTwitter response body, or null for a 404
+let oembedFails = false; // when true, oEmbed answers HTTP 500
 const oembedText = 'Post body text for the exact status.';
 
 function installFetchStub(counts: Counts): () => void {
   const original = globalThis.fetch;
   (globalThis as any).fetch = async (input: any) => {
     const href = String(input?.toString?.() || input);
+    if (href.includes('publish.x.com/oembed') && oembedFails) {
+      counts.oembed += 1;
+      return new Response('{}', { status: 500 });
+    }
     if (href.includes('publish.x.com/oembed')) {
       counts.oembed += 1;
       const html = `<blockquote><p>${oembedText}</p>&mdash; Some One (@someone) <a href="${STATUS}">May 1, 2026</a></blockquote>`;
@@ -37,7 +42,7 @@ function installDeps(calls: Calls, opts: { threadRaw?: string; failFirstImage?: 
   const original = { ...xFetchDeps };
   xFetchDeps.fetchXThread = async () => {
     calls.thread += 1;
-    return opts.threadRaw ?? '{"success":false,"error":"Log in to X to see replies"}';
+    return opts.threadRaw ?? '{"success":false,"login_wall":true,"error":"Log in to X to see replies"}';
   };
   let imageIndex = 0;
   xFetchDeps.executeDownloadUrl = async () => {
@@ -85,6 +90,12 @@ async function main(): Promise<void> {
     assert.equal(calls.downloadMedia, 0, 'no yt-dlp fallback when photo metadata is present');
     assert.equal(data.thread_status, 'not_requested');
     assert.equal(data.media_status, 'recovered');
+    assert.equal(counts.fx, 1, 'one identity-checked FxTwitter lookup per call');
+    // stdout is what the model reads: it must carry the same statuses as data.
+    const out = JSON.parse(String(result.stdout || '{}'));
+    assert.equal(out.media_status, 'recovered');
+    assert.equal(out.thread_status, 'not_requested');
+    assert.equal(out.truncated, false);
     assert.equal(data.x_media.detected, true, 'detected must reflect downloaded media');
     assert.equal(result.success, true);
   }
@@ -110,8 +121,11 @@ async function main(): Promise<void> {
   // 4. Quote-only media must NOT be attributed to the target post.
   fxBody = quoteOnlyBody;
   {
-    const { calls } = await run({ include_media: true });
+    const { calls, data } = await run({ include_media: true });
     assert.equal(calls.downloadUrl, 0, 'quoted post media must not be downloaded as target media');
+    assert.equal(calls.downloadMedia, 0, 'no yt-dlp fallback when target media is confirmed empty');
+    assert.equal(data.media_status, 'none_detected');
+    assert.equal(data.x_media.quote_media_not_analyzed, true, 'quoted media skip must be disclosed');
   }
 
   // 5. Identity mismatch in metadata is rejected.
@@ -154,6 +168,71 @@ async function main(): Promise<void> {
     assert.equal(calls.thread, 0);
     assert.equal(data.thread_status, 'not_requested');
     assert.equal(data.x_media, undefined);
+    assert.equal(data.media_status, 'not_requested');
+  }
+
+  // 10. G1: a browser thread with only the target is target_only; with replies it is captured, never complete.
+  {
+    const solo = JSON.stringify({ success: true, tweets: [{ id: ID, handle: '@someone', text: 'solo' }], count: 1 });
+    const one = await run({ include_thread: true }, { threadRaw: solo });
+    assert.equal(one.data.thread_status, 'target_only');
+    assert.equal(one.data.thread_reason, 'no_replies_captured');
+    const withReplies = JSON.stringify({ success: true, tweets: [
+      { id: ID, handle: '@someone', text: 'a' }, { id: '1', handle: '@other', text: 'reply' }, { id: '2', handle: '@someone', text: 'more' },
+    ], count: 3 });
+    const many = await run({ include_thread: true }, { threadRaw: withReplies });
+    assert.equal(many.data.thread_status, 'captured');
+    assert.equal(many.data.reply_count, 1);
+    assert.equal(many.data.author_thread_count, 2);
+    // Target missing from the browser payload: never complete/captured.
+    const missing = JSON.stringify({ success: true, tweets: [{ id: '1', handle: '@other', text: 'x' }], count: 1 });
+    const absent = await run({ include_thread: true }, { threadRaw: missing });
+    assert.notEqual(absent.data.thread_status, 'complete');
+    assert.notEqual(absent.data.thread_status, 'captured');
+  }
+
+  // 11. G2: login wall requires the explicit machine flag; the text "Log in" alone is not evidence.
+  {
+    const { data } = await run({ include_thread: true }, { threadRaw: '{"success":false,"error":"Log in to X to see replies"}' });
+    assert.equal(data.thread_reason, 'unknown');
+  }
+
+  // 12. G4: oEmbed fails on media-only -> FxTwitter still supplies photos; no browser, no yt-dlp.
+  fxBody = photoBody;
+  oembedFails = true;
+  try {
+    const { result, counts, calls } = await run({ include_media: true });
+    assert.equal(result.success, true);
+    assert.equal(calls.thread, 0);
+    assert.equal(calls.downloadUrl, 2, 'photos recovered from FxTwitter when oEmbed fails');
+    assert.equal(calls.downloadMedia, 0);
+    assert.equal(counts.oembed, 1);
+    assert.equal(counts.fx, 1);
+  } finally {
+    oembedFails = false;
+  }
+
+  // 13. G5: oEmbed fails on default text fetch -> FxTwitter full text; no browser.
+  fxBody = { tweet: { id: ID, url: STATUS, text: 'Full post body text from FxTwitter.', author: { name: 'Some One', screen_name: 'someone' } } };
+  oembedFails = true;
+  try {
+    const { result, calls, data } = await run({});
+    assert.equal(result.success, true);
+    assert.equal(calls.thread, 0);
+    assert.equal(data.tweets[0].text, 'Full post body text from FxTwitter.');
+  } finally {
+    oembedFails = false;
+  }
+
+  // 14. G9: reply thread -> media comes from the target post (not the parent at tweets[0]).
+  fxBody = photoBody;
+  {
+    const thread = JSON.stringify({ success: true, tweets: [
+      { id: '1', handle: '@other', text: 'parent' }, { id: ID, handle: '@someone', text: 'target' },
+    ], count: 2 });
+    const { calls, data } = await run({ include_thread: true, include_media: true }, { threadRaw: thread });
+    assert.equal(calls.downloadUrl, 2, 'target media hinted even when a parent post is first');
+    assert.equal(data.thread_status, 'captured');
   }
 
   console.log('x-fetch-media-routing regression: PASS');
