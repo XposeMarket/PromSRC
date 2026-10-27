@@ -220,6 +220,8 @@
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
+      } finally {
+        window.__promSettingsExplicitTab = undefined;
       }
       return undefined;
     };

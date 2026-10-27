@@ -51,7 +51,7 @@ export function roleLabel(role) {
  * A provider is listed when it has explicitly configured accounts or is the
  * active chat provider; everything else is offered under "Add a provider".
  */
-export function buildAccountGroups(llm, normalizeAccounts) {
+export function buildAccountGroups(llm, normalizeAccounts, savedAccountIds = null) {
   const cache = llm && typeof llm === 'object' ? llm : {};
   const providers = cache.providers && typeof cache.providers === 'object' ? cache.providers : {};
   const groups = [];
@@ -65,6 +65,7 @@ export function buildAccountGroups(llm, normalizeAccounts) {
     }
     const accounts = typeof normalizeAccounts === 'function' ? normalizeAccounts(providerId, cfg || {}) : [];
     const defaultId = String(cfg?.defaultAccountId || accounts[0]?.id || '');
+    const savedIds = savedAccountIds && Array.isArray(savedAccountIds[providerId]) ? savedAccountIds[providerId] : null;
     groups.push({
       providerId,
       ...providerAccountMeta(providerId),
@@ -75,6 +76,7 @@ export function buildAccountGroups(llm, normalizeAccounts) {
         authLabel: AUTH_LABELS[account.authType] || 'Account',
         connected: String(account.status || '') === 'connected',
         isDefault: String(account.id) === defaultId,
+        draft: Array.isArray(savedIds) ? !savedIds.includes(String(account.id)) : false,
       })),
     });
   }
@@ -94,7 +96,7 @@ function renderList(state) {
         <button class="spa-row" type="button" data-spa-provider="${esc(group.providerId)}" data-spa-account="${esc(account.id)}">
           <span class="spa-row-main">
             <span class="spa-row-label">${esc(account.label)}</span>
-            <span class="spa-row-meta">${esc(account.authLabel)}${account.isDefault ? ' · Default' : ''}</span>
+            <span class="spa-row-meta">${esc(account.authLabel)}${account.isDefault ? ' · Default' : ''}${account.draft ? ' · Not saved yet' : ''}</span>
           </span>
           <span class="spa-pill ${account.connected ? 'spa-pill-ok' : 'spa-pill-off'}">${account.connected ? 'Connected' : 'Not connected'}</span>
           <span class="spa-chev" aria-hidden="true">›</span>
@@ -125,6 +127,8 @@ function closeSheet() {
 }
 
 function onSheetKeydown(event) {
+  // While the remove confirmation is open, Escape belongs to it, not the sheet.
+  if (document.querySelector('#__sc-confirm-ok')) return;
   if (event.key === 'Escape') {
     event.stopPropagation();
     closeSheet();
@@ -142,11 +146,12 @@ function openSheet(group, account, deps) {
       <div class="spa-sheet-title">${esc(account.label)}<small>${esc(group.name)} · ${esc(account.authLabel)}${account.isDefault ? ' · Default' : ''}</small></div>
       <label class="spa-field"><span>Name</span><input class="settings-input" data-spa-name maxlength="64" value="${esc(account.label)}" autocomplete="off"></label>
       <div class="spa-sheet-status" data-spa-status role="status" aria-live="polite"></div>
+      ${group.accounts.length > 1 ? '' : `<div class="spa-sheet-note">This is your only ${esc(group.name)} account. To sign it out, use Disconnect under ${account.connected ? 'Manage connection' : 'Connect'}.</div>`}
       <div class="spa-actions">
         <button class="spa-btn" type="button" data-act="rename">Save name</button>
         ${account.isDefault ? '' : '<button class="spa-btn" type="button" data-act="default">Make default</button>'}
         <button class="spa-btn" type="button" data-act="connect">${account.connected ? 'Manage connection' : 'Connect'}</button>
-        <button class="spa-btn spa-btn-danger" type="button" data-act="remove">Remove account</button>
+        ${group.accounts.length > 1 ? '<button class="spa-btn spa-btn-danger" type="button" data-act="remove">Remove account</button>' : ''}
       </div>
       <button class="spa-btn spa-done" type="button" data-act="done">Done</button>
     </div>`;
@@ -170,6 +175,12 @@ function openSheet(group, account, deps) {
     if (act === 'connect') {
       closeSheet();
       deps.onManage?.(group.providerId, account.id);
+      return;
+    }
+    // Rows added with "+ Add account" exist only in the unsaved settings draft
+    // until connected/saved; the gateway doesn't know them yet.
+    if (account.draft && act !== 'connect') {
+      setStatus('Finish connecting this account (or press Save) before renaming or removing it.', 'error');
       return;
     }
     if (act === 'rename' || act === 'default') {
@@ -213,7 +224,11 @@ function openSheet(group, account, deps) {
           const res = await post('/api/settings/provider-accounts/remove', { providerId: group.providerId, accountId: account.id });
           if (res && res.success === false) throw new Error(res.error || 'Remove failed');
           closeSheet();
-          deps.showToast?.('Account removed', `${group.name}: ${account.label}`, 'success', 3000);
+          if (res && res.credentialsCleared === false) {
+            deps.showToast?.('Account removed', `${group.name}: ${account.label}. Some saved credentials could not be deleted; check the gateway log.`, 'warning', 6000);
+          } else {
+            deps.showToast?.('Account removed', `${group.name}: ${account.label}`, 'success', 3000);
+          }
           await deps.onReload?.();
         } catch (err) {
           setStatus(err?.message || 'Remove failed', 'error');
@@ -237,7 +252,7 @@ function openSheet(group, account, deps) {
  */
 export function mountProviderAccountsList(container, deps) {
   if (!container || !deps) return;
-  const state = buildAccountGroups(deps.getCache?.(), deps.normalizeAccounts);
+  const state = buildAccountGroups(deps.getCache?.(), deps.normalizeAccounts, deps.getSavedAccountIds?.() || null);
   container.innerHTML = renderList(state);
   container.__spaState = state;
   container.__spaDeps = deps;
