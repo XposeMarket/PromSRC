@@ -14,7 +14,8 @@ import crypto from 'crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isPreviewMode } from '../runtime/preview-mode';
-import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution } from './background-execution-store';
+import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution, deleteBackgroundExecution } from './background-execution-store';
+import { formatResumeEvidence, recordToolCall, recordToolResult, shouldDeleteExecutionSnapshot } from './background-tool-ledger';
 import { getSessionToolCeiling, intersectToolCeiling } from '../agents-runtime/tool-ceiling';
 import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
@@ -196,6 +197,7 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   outstandingTools: Array<{ id: string; name: string; args: any }>;
   continuationHistory?: any[];
   completedToolEvidence?: Array<{ id: string; name: string; result: any }>;
+  scopedWorkDir?: boolean;
   operatorCancelled?: boolean;
   deliveredAt?: number;
 }
@@ -272,6 +274,7 @@ function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
     record.continuationHistory = getSession(backgroundRuntimeSessionId(record)).history.slice();
   }
   saveBackgroundExecution(record);
+  if (shouldDeleteExecutionSnapshot(record, Date.now())) deleteBackgroundExecution(record.id);
   if (!record.spawnerSessionId) return;
   persistBackgroundSpawnReceipt({
     id: record.id,
@@ -763,10 +766,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         const callId = String(data?.toolCallId || data?.tool_call_id || data?.callId
           || (data?.stepNum !== undefined ? `step:${data.stepNum}:${name}` : ''));
         if (event === 'tool_call') {
-          record.outstandingTools.push({ id: callId || `unknown:${crypto.randomUUID()}`, name, args: data?.args });
-        } else if (event === 'tool_result' && callId) {
-          record.completedToolEvidence = [...(record.completedToolEvidence || []), { id: callId, name, result: data?.result }];
-          record.outstandingTools = record.outstandingTools.filter((call) => call.id !== callId);
+          record.outstandingTools = recordToolCall(record.outstandingTools, { id: callId, name, args: data?.args });
+        } else if (event === 'tool_result') {
+          const ledger = recordToolResult(record.outstandingTools, record.completedToolEvidence || [], { id: callId, name, result: data?.result });
+          record.outstandingTools = ledger.outstanding;
+          record.completedToolEvidence = ledger.evidence;
         }
         record.toolCategories = Array.from(getActivatedToolCategories(sessionId));
         record.toolCeiling = intersectToolCeiling(getSessionToolCeiling(sessionId), record.toolCeiling);
@@ -804,13 +808,16 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const workDirNotice = record.workDir
         ? ` WORKING DIRECTORY: ${record.workDir}. Relative file paths and workspace_run's default cwd resolve there (not the main Prometheus workspace). Use absolute paths only for files outside it.`
         : '';
-      const runHandleChat = (fn: () => Promise<any>): Promise<any> => record.workDir
-        ? runWithWorkspace(record.workDir, fn, record.allowedWorkPaths)
+      // Only an explicit work_dir scopes the run; legacy resumed records scope only when they carry allowedWorkPaths.
+      const scopeToWorkDir = !!record.workDir && (record.scopedWorkDir === true
+        || (record.resumed && record.scopedWorkDir === undefined && Array.isArray(record.allowedWorkPaths) && record.allowedWorkPaths.length > 0));
+      const runHandleChat = (fn: () => Promise<any>): Promise<any> => scopeToWorkDir
+        ? runWithWorkspace(record.workDir!, fn, record.allowedWorkPaths)
         : fn();
 
       try {
         const chatResult = await runHandleChat(() => handleChat(
-          record.resumed ? `Continue background task ${record.id} from its saved history/checkpoint. Original assignment:\n${prompt}\nCompleted tool evidence (do not replay): ${JSON.stringify(record.completedToolEvidence || [])}\nDo not repeat completed actions or reuse approvals; reconcile uncertain operations before acting.` : prompt,
+          record.resumed ? `Continue background task ${record.id} from its saved history/checkpoint. Original assignment:\n${prompt}\nCompleted tool evidence (do not replay; bounded summary):\n${formatResumeEvidence(record.completedToolEvidence || [])}\nDo not repeat completed actions or reuse approvals; reconcile uncertain operations before acting.` : prompt,
           sessionId,
           sendSSE,
           undefined,   // extra
@@ -938,6 +945,7 @@ export function recoverBackgroundExecutions(options: { isHostedElsewhere?: (runt
     if (options.isHostedElsewhere?.({ pid: envelope.ownerPid, status: 'running' })) continue;
     const saved = envelope.record;
     const terminal = ['completed', 'failed', 'timed_out'].includes(saved.state);
+    if (shouldDeleteExecutionSnapshot(saved, Date.now())) { deleteBackgroundExecution(envelope.id); continue; }
     if (!terminal && !claimBackgroundExecution(envelope)) continue;
     const record = { ...saved, promise: Promise.resolve(), backgroundStream: createBackgroundAgentStream(), resumed: true } as EphemeralBackgroundRecord;
     _ephemeralBackgroundRuns.set(record.id, record);
@@ -1013,7 +1021,9 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
   record.toolCeiling = getSessionToolCeiling(record.spawnerSessionId);
-  record.workDir = String(input?.workDir || '').trim() || (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
+  const explicitWorkDir = String(input?.workDir || '').trim();
+  record.scopedWorkDir = !!explicitWorkDir;
+  record.workDir = explicitWorkDir || (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
   record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
     ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
     : undefined;
