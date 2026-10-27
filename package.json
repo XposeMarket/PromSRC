@@ -18,6 +18,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:background-restart-recovery": "tsx src/gateway/tasks/background-restart-recovery.regression.ts && tsx src/gateway/tasks/background-result-delivery.regression.ts",
     "test:needs-you-view-model": "node scripts/test-needs-you-view-model.mjs",
     "test:source-panel-mini": "node scripts/test-source-panel-mini-caps.mjs",
     "test:anthropic-stream-terminated": "tsx src/providers/anthropic-stream-terminated.regression.ts",
@@ -26,6 +27,8 @@
     "test:mobile-bg-compaction-dupes": "node scripts/test-mobile-bg-compaction-dupes.cjs",
     "test:gateway-restart-churn": "tsx src/gateway/chat/main-chat-execution-owner.regression.ts && tsx src/gateway/runtime/gateway-restart-guard.regression.ts && tsx src/gateway/runtime/handoff-replacement-bind.regression.ts",
     "test:preview-mode": "tsx src/gateway/runtime/preview-mode.regression.ts",
+    "test:prompt-prefix-stability": "tsx src/gateway/prompt-prefix-stability.regression.ts && tsx src/config/config-bom.regression.ts",
+    "test:latency-hot-paths": "tsx src/runtime/context-receipt-latency.regression.ts && tsx src/gateway/skills-runtime/skills-routing-latency.regression.ts",
     "test:platform-wave5a": "tsx src/extensions/platform-wave5a.regression.ts",
     "test:memory-recall": "tsx src/gateway/memory-recall.regression.ts",
     "test:strict-skill-catalog": "tsx src/gateway/skills-runtime/skill-trigger-catalog.regression.ts",

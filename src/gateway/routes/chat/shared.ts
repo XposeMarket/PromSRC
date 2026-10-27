@@ -1,4 +1,5 @@
 import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../../chat/foreground-tool-activity';
+import { isInternalBackgroundResult } from '../../history-reconciliation';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, normalizeRuntimeVisionAttachments, type RuntimeVisionAttachment } from '../../chat/attachment-context';
 import type { MainChatStreamState } from '../../chat/main-chat-stream-store';
 import { getLiveRuntime } from '../../live-runtime-registry';
@@ -208,7 +209,7 @@ export function sanitizeHistoryForUiResponse(
     perMessageLiveTraceLimit?: number;
   },
 ): any[] {
-  const source = Array.isArray(history) ? history : [];
+  const source = (Array.isArray(history) ? history : []).filter((row) => !isInternalBackgroundResult(row));
   const limited = options.historyLimit > 0 ? source.slice(-options.historyLimit) : source;
   // Older turns render collapsed, so their full tool traces were pure transfer
   // and parse cost on every chat open (2.6MB for an 80-message chat). Keep

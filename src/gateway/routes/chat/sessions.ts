@@ -18,7 +18,7 @@ import {
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../../session';
-import { mergeHistoryWithExistingMessageMetadata } from '../../history-reconciliation';
+import { isInternalBackgroundResult, mergeHistoryWithExistingMessageMetadata } from '../../history-reconciliation';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../context/model-context';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../../chat/chat-model-route';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../../tool-observations';
@@ -162,7 +162,7 @@ export function timelineHistoryMessages(history: any[]): any[] {
     .filter((msg) => {
       const role = msg?.role === 'assistant' || msg?.role === 'ai' || msg?.role === 'user' ? msg.role : '';
       const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
-      return !!role && !!content;
+      return !!role && !!content && !isInternalBackgroundResult(msg);
     });
 }
 
@@ -681,7 +681,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       ? 500
       : boundedPositiveInt(req.query.processLimit, mobileOptimized ? 120 : 250, 20, mobileOptimized ? 160 : 500);
     const includeToolLog = full || req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
-    const sourceHistory = Array.isArray(session.history) ? session.history : [];
+    const sourceHistory = (Array.isArray(session.history) ? session.history : []).filter((row) => !isInternalBackgroundResult(row));
     const initialHistoryPage = full
       ? {
           items: sourceHistory,

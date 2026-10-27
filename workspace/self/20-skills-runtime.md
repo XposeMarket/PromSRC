@@ -197,3 +197,6 @@ Keep skill route decisions explainable: when a candidate was offered, record eno
 - Verify package resources remain readable after cache invalidation.
 - Verify no test mutates the real user skill catalog.
 - Verify generated inventory links resolve in this guide.
+
+## Pending PR782: explicit-selector routing hot path (2026-10-26)
+Not deployed. Actual gateway CPU profiling found needless per-skill RegExp compilation in `explicitSkillMentionScore` on ordinary messages. Only construct the escaped `$id`/`skill:id` selector regex when the raw request contains a possible whitespace/start-bounded selector prefix. This is a necessary-condition guard, not a new routing policy: explicit selectors (including case/punctuation), plain skill names, trigger rules, exclusions, rankings, catalog refresh and mutated metadata retain the same behavior. No prompt/skill instructions removed and no cached context introduced. `test:latency-hot-paths` exercises both selector polarities and routing equivalence.

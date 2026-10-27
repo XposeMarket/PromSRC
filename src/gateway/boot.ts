@@ -1,3 +1,5 @@
+import { isInternalBackgroundResult } from './history-reconciliation';
+
 /**
  * boot.ts - Runs BOOT.md at gateway startup.
  *
@@ -119,6 +121,7 @@ function buildDailyBootPrompt(): string {
 }
 
 function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
+  if (isInternalBackgroundResult(msg)) return true;
   const text = String(msg?.content || '').trim();
   if (!text) return true;
   if (/^SYSTEM:\s+Context is getting long/i.test(text)) return true;

@@ -174,3 +174,6 @@ Never use a broad “kill node” cleanup as a test. The gateway, build tools an
 - Gateway `lifecycle.ts` owns close hooks/cleanup ordering, while `gateway-handoff-host.ts` owns handoff socket transport/manifest/queue. `server-v2.ts` provides concrete callbacks and route/process composition. Keep the seams: transport does not decide runtime recovery policy.
 - CLI `gateway-supervisor-policy.ts` produces monitor/recovery decisions. `src/cli/index.ts` owns polling and child process actions. Electron's `supervisor.ts`/managed-child code is a separate supervisor implementation.
 - The command supervisor at `src/gateway/process/supervisor.ts` manages user shell/PTY commands; it is not the top-level gateway process manager. Use the full path to distinguish both `supervisor` names.
+
+## Pending PR: background restart continuation (not live)
+The background-restart-resume branch adds dedicated versioned background execution recovery after executor wiring, inside the preview-disabled runtime recovery boundary, and again after predecessor handoff release. Recovery checks persisted process ownership; generic formal-task recovery no longer treats background-agent IDs as formal tasks. Deployment and runtime verification remain pending.
