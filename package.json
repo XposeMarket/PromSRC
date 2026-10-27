@@ -18,6 +18,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:background-restart-recovery": "tsx src/gateway/tasks/background-restart-recovery.regression.ts && tsx src/gateway/tasks/background-result-delivery.regression.ts",
     "test:needs-you-view-model": "node scripts/test-needs-you-view-model.mjs",
     "test:source-panel-mini": "node scripts/test-source-panel-mini-caps.mjs",
     "test:anthropic-stream-terminated": "tsx src/providers/anthropic-stream-terminated.regression.ts",

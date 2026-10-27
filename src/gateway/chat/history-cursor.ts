@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { isInternalBackgroundResult } from '../history-reconciliation';
 
 const CURSOR_VERSION = 1;
 const CURSOR_NAMESPACE = 'prometheus-chat-history-cursor-v1';
@@ -107,7 +108,7 @@ export function paginateChatHistory(
   history: any[],
   options: { limit?: number; before?: string } = {},
 ): { items: any[]; pageInfo: ChatHistoryPageInfo } {
-  const source = Array.isArray(history) ? history : [];
+  const source = (Array.isArray(history) ? history : []).filter((row) => !isInternalBackgroundResult(row));
   const limit = Math.max(1, Math.min(500, Math.floor(Number(options.limit) || 50)));
   const before = String(options.before || '').trim();
   const endIndex = before
