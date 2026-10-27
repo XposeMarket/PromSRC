@@ -2,6 +2,7 @@ import { getAgentById } from '../../config/config';
 import {
   appendTeamRoomMessage,
   getManagedTeam,
+  isDispatchAfterGoalReview,
   isTeamGoalCompleted,
   queueAgentMessage,
   queueManagerMessage,
@@ -146,8 +147,11 @@ export function shouldWakeManager(event: TeamEventRouterInput, membersWoken: str
   if (event.type === 'member_failed_task' || event.type === 'member_blocked') return true;
   // After the goal's completion review ran, straggler results (a late duplicate
   // run, a shared file) only made the manager re-announce [GOAL_COMPLETE].
+  // A dispatch made after the review is new work on a standing goal, not a straggler:
+  // its result is the only way a background run reaches the manager.
   if ((event.type === 'member_completed_task' || event.type === 'member_shared_artifact')
-    && !event.warning && !event.error && isTeamGoalCompleted(event.teamId)) return false;
+    && !event.warning && !event.error && isTeamGoalCompleted(event.teamId)
+    && !isDispatchAfterGoalReview(event.teamId, event.dispatchId)) return false;
   if (event.type === 'member_shared_artifact') return true;
   if (event.warning || event.error || event.admissionCode) return true;
   if (membersWoken.length > 0) return true;

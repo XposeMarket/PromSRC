@@ -139,6 +139,23 @@ async function main() {
   assert.equal(shouldWakeManager({ type: 'member_completed_task', teamId: 'team_stall', agentId: 'x', source: 'background_dispatch' }, []), false,
     'a straggler result after the review does not wake the manager');
   assert.equal(shouldWakeManager({ type: 'member_failed_task', teamId: 'team_stall', agentId: 'x' }, []), true, 'failures still wake it');
+  // 9) Standing goals: work dispatched AFTER the review is new work. Roblox Build Sprint
+  //    background results never reached the manager for a week (2026-10-22..27).
+  assert.ok(Number(mt.getManagedTeam('team_stall')!.goalCompletedAt) > 0, 'the review claim records when it happened');
+  const postRec = mt.createTeamDispatchRecord('team_stall', { agentId: 'forge', agentName: 'Forge', taskSummary: 'sprint fix loop', taskId: 'team_bg_sprint' })!;
+  const bgDone = (dispatchId?: string) => ({ type: 'member_completed_task' as const, teamId: 'team_stall', agentId: 'forge', source: 'dispatch_team_agent_background', dispatchId });
+  assert.equal(shouldWakeManager(bgDone(postRec.id), []), true, 'a result from a dispatch made after the review wakes the manager');
+  const preRec = mt.createTeamDispatchRecord('team_stall', { agentId: 'forge', agentName: 'Forge', taskSummary: 'late duplicate', taskId: 'team_bg_old' })!;
+  const t9 = mt.getManagedTeam('team_stall')!;
+  t9.roomState!.dispatches.find((d: any) => d.id === preRec.id)!.createdAt = Number(t9.goalCompletedAt) - 60_000;
+  mt.saveManagedTeam(t9);
+  assert.equal(shouldWakeManager(bgDone(preRec.id), []), false, 'a dispatch from before the review is still a straggler');
+  assert.equal(shouldWakeManager(bgDone('dispatch_unknown'), []), false, 'an unknown dispatch is still a straggler');
+  const t9b = mt.getManagedTeam('team_stall')!;
+  delete (t9b as any).goalCompletedAt;
+  mt.saveManagedTeam(t9b);
+  assert.equal(shouldWakeManager(bgDone(postRec.id), []), true, 'a review claimed before goalCompletedAt existed still lets new dispatches wake');
+  assert.equal(mt.claimTeamGoalCompletionReview('team_stall'), null, 'and the finished goal is not reviewed a second time');
   mt.setTeamRunGoal('team_stall', 'goal E');
   assert.equal(mt.isTeamGoalCompleted('team_stall'), false, 'a new goal re-arms everything');
 
