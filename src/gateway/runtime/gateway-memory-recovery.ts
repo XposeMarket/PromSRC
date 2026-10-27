@@ -32,6 +32,24 @@ export function canAttemptRecoveryGc(lastAttemptAt: number, now: number, throttl
   return lastAttemptAt <= 0 || now - lastAttemptAt >= throttleMs;
 }
 
+/**
+ * Inside the GC throttle window, after a GC-confirmed skip, keep skipping
+ * while the current heap is still small (RSS stays high because V8 keeps pages
+ * committed). Once heapUsed crosses the ratio, a real leak recycles.
+ */
+export function shouldKeepSkippingWithinGcWindow(input: {
+  now: number;
+  lastGcAt: number;
+  lastSkipAt: number;
+  heapUsedBytes: number;
+  thresholdBytes: number;
+  throttleMs?: number;
+}): boolean {
+  if (input.lastSkipAt <= 0 || input.lastSkipAt !== input.lastGcAt) return false;
+  if (canAttemptRecoveryGc(input.lastGcAt, input.now, input.throttleMs)) return false;
+  return decideMemoryRecoveryAfterGc({ gcRan: true, postGcHeapUsedBytes: input.heapUsedBytes, thresholdBytes: input.thresholdBytes }) === 'skip_after_gc';
+}
+
 let cachedGc: (() => void) | null | undefined;
 
 /** Returns a full-GC function, enabling it at runtime when --expose-gc was not passed. */

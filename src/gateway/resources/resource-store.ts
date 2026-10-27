@@ -664,7 +664,7 @@ export class ResourceStore {
       this.dirty = true;
       throw error;
     }
-    this.live = { key: this.fileKey(), state };
+    this.live.key = this.fileKey();
     if (pruned.length) void removeFilesInBatches(pruned);
   }
 

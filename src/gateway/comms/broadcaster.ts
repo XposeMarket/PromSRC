@@ -16,7 +16,7 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 import { StallProfiler } from '../runtime/stall-profiler';
-import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, runRecoveryGc } from '../runtime/gateway-memory-recovery';
+import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -46,6 +46,7 @@ let _eventLoopStallRestartScheduled = false;
 let _memoryPressureRestartScheduled = false;
 let _memoryPressureConsecutiveSamples = 0;
 let _lastMemoryRecoveryGcAt = 0;
+let _lastMemoryRecoverySkippedAfterGcAt = 0;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
 // Warm handoff: once this gateway is draining, the replacement owns the
 // supervisor-facing status file, the auto-restart triggers, and the WebSocket
@@ -308,10 +309,27 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
   // High RSS under allocation churn is often uncollected garbage, not live
   // memory. Confirm with one full GC (throttled) before interrupting every
   // running turn and agent with a recycle.
+  // RSS often stays high after a full GC (V8 keeps the pages committed), so
+  // inside the GC throttle window a recent skip is re-validated from the
+  // current heapUsed instead of recycling on the next RSS breach. A real leak
+  // still recycles: once heapUsed crosses the ratio, this check fails.
+  if (shouldKeepSkippingWithinGcWindow({
+    now,
+    lastGcAt: _lastMemoryRecoveryGcAt,
+    lastSkipAt: _lastMemoryRecoverySkippedAfterGcAt,
+    heapUsedBytes: memory.heapUsed,
+    thresholdBytes: MEMORY_RESTART_RSS_BYTES,
+  })) {
+    _memoryPressureConsecutiveSamples = 0;
+    return;
+  }
   if (canAttemptRecoveryGc(_lastMemoryRecoveryGcAt, now)) {
     _lastMemoryRecoveryGcAt = now;
     const gcResult = runRecoveryGc();
+    // The forced GC pause is intentional; don't let it read as a heartbeat stall.
+    _lastHeartbeatAt = Date.now();
     if (decideMemoryRecoveryAfterGc({ ...gcResult, thresholdBytes: MEMORY_RESTART_RSS_BYTES }) === 'skip_after_gc') {
+      _lastMemoryRecoverySkippedAfterGcAt = now;
       _memoryPressureConsecutiveSamples = 0;
       try {
         enqueueAsyncAppend(
