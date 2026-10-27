@@ -13173,7 +13173,9 @@ function visibleLiveTraceEntries(entries) {
     if (isDesktopTransientReasoningTraceEntry(entry)) return false;
     const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
     if (!hasContent) return false;
+    if (!isDesktopTraceThoughtType(type)) thoughtTextsByKind.clear();
     if (isDesktopTraceThoughtType(type)) {
+      if (desktopTraceThoughtKind(entry) === 'full_thought') return true;
       if (replaceableProgressTexts.length
         && type === 'think'
         && String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'reasoning_summary'
@@ -13628,7 +13630,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const bodyHtml = bodyEntries.length
         ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
         : '';
-      return `<details class="live-turn-thought-group"${(openThoughts || streaming) ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      return `<details class="live-turn-thought-group"${!isSummaryThought && (openThoughts || streaming) ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
         <summary class="live-turn-tool-summary">Thinking</summary>
         ${summaryMarkup}
         ${bodyHtml}
@@ -18637,19 +18639,46 @@ function backgroundSpawnPreview(value, max = 180) {
 
 function backgroundAgentEventsToLiveTraceEntries(events = []) {
   const trace = [];
+  let narration = '';
+  let narrationEntry = null;
+  const flushNarration = () => {
+    if (narration.trim()) trace.push({
+      id: narrationEntry?.id || `background_token_${narrationEntry?.seq || trace.length}`,
+      type: 'preamble', text: narration,
+      streamId: narrationEntry?.streamId, seq: narrationEntry?.seq,
+      extra: { source: 'agent_thought', visibility: 'user', streamId: narrationEntry?.streamId, seq: narrationEntry?.seq },
+    });
+    narration = '';
+    narrationEntry = null;
+  };
   (Array.isArray(events) ? events : []).forEach((entry, index) => {
     if (!entry || typeof entry !== 'object') return;
     const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : entry;
     const eventType = String(extra.eventType || extra.event || entry.eventType || entry.type || '').trim().toLowerCase();
     const action = String(extra.action || extra.name || extra.toolName || '').trim();
+    if (eventType === 'token') {
+      narrationEntry ||= entry;
+      narration += String(extra.text || entry.content || '');
+      return;
+    }
+    if (['token_narration_boundary', 'final', 'done', 'final_response_start'].includes(eventType)) {
+      // These frames repeat/replace the pending answer; the boundary owns it.
+      narration = '';
+      narrationEntry = null;
+    } else if (['tool_call', 'tool_result', 'tool_progress', 'agent_thought', 'vision_injected'].includes(eventType)) flushNarration();
+    if (eventType === 'agent_thought') {
+      const text = String(extra.text || extra.thinking || entry.content || '');
+      if (text.trim()) trace.push({ ...entry, type: 'preamble', text, extra: { ...extra, source: 'agent_thought', visibility: 'user', reasoningKind: undefined } });
+      return;
+    }
     if (eventType === 'vision_injected' || entry.type === 'vision') {
       const preview = extra.preview || entry.preview;
       if (preview?.dataUrl) trace.push({ id: entry.id || `background_trace_${index}`, type: 'vision', text: extra.label || entry.content || 'Image preview', preview, previewTitle: extra.previewTitle || preview.title, extra });
       return;
     }
     if (eventType === 'token_narration_boundary' || entry.type === 'preamble') {
-      const text = String(extra.text || extra.narration || entry.content || '').trim();
-      if (text) trace.push({ id: entry.id || `background_trace_${index}`, type: 'preamble', text, extra: { ...extra, source: 'agent_thought', visibility: 'user' } });
+      const text = String(extra.text || extra.narration || entry.content || '');
+      if (text.trim()) trace.push({ id: entry.id || `background_trace_${index}`, type: 'preamble', text, extra: { ...extra, source: 'agent_thought', visibility: 'user' } });
       return;
     }
     const payload = {
@@ -18687,7 +18716,7 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       const text = String(extra.thinking || extra.text || extra.message || entry.content || '').trim();
       mergeBackgroundReasoningSummary(trace, text, {
         ...extra,
-        source: 'agent_progress',
+        source: 'reasoning_summary',
         visibility: 'summary',
         reasoningKind: 'summary',
       }, index, { delta: eventType.endsWith('_delta') });
@@ -18724,6 +18753,7 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
     // chronological assistant/reasoning journal (same contract as mobile).
     if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') return;
   });
+  flushNarration();
   return trace;
 }
 
@@ -18750,6 +18780,8 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
   switch (eventType) {
     case 'vision_injected':
       return msg.preview?.dataUrl ? { ts, type: 'vision', actor: 'Background Agent', content: msg.label || 'Image preview', extra } : null;
+    case 'token':
+      return msg.text ? { ts, type: 'token', actor: 'Background Agent', content: msg.text, extra } : null;
     case 'token_narration_boundary':
       return msg.text ? { ts, type: 'preamble', actor: 'Background Agent', content: msg.text, extra } : null;
     case 'tool_call': {
@@ -18772,8 +18804,11 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
       const text = String(msg.message || '').trim();
       return text ? { ts, type: 'info', actor: 'Background Agent', content: action ? formatToolProgressForLog(action, text) : `${label}: ${text}`, extra } : null;
     }
-    case 'thinking':
     case 'agent_thought': {
+      const text = String(msg.text || msg.thinking || '');
+      return text.trim() ? { ts, type: 'preamble', actor: 'Background Agent', content: text, extra: { ...extra, source: 'agent_thought', visibility: 'user' } } : null;
+    }
+    case 'thinking': {
       const text = String(msg.thinking || msg.text || '').trim();
       const visibility = chatProgressVisibility(msg);
       return text && visibility !== 'private'
@@ -18811,7 +18846,7 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
           extra: {
             ...extra,
             eventType,
-            source: 'agent_progress',
+            source: 'reasoning_summary',
             visibility: 'summary',
             reasoningKind: 'summary',
           },
