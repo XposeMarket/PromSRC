@@ -56,6 +56,14 @@ export function planRemoveProviderAccount(config: any, providerId: string, accou
     return failRemoval(pid, aid, `Unknown account ${aid} for ${pid}`);
   }
 
+  // The only account cannot be removed: an empty accounts map makes the
+  // provider fall back to legacy single-account mode (synthesized "default",
+  // provider-level key, unscoped OAuth token), so the account would reappear
+  // as connected. Signing out is the provider-level action (Disconnect).
+  if (Object.keys(accounts).length <= 1) {
+    return failRemoval(pid, aid, `This is the only ${pid} account. Sign out with Disconnect under Manage connection instead.`);
+  }
+
   delete accounts[aid];
   const remainingIds = Object.keys(accounts);
   const nextDefaultAccountId = remainingIds[0] ?? null;

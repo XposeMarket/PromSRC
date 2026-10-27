@@ -5,7 +5,7 @@ import { getConfig } from '../../config/config';
 import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
-import { planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
+import { ACCOUNT_AWARE_PROVIDERS, planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
 import { invalidateProviderStatusCache } from '../provider-status';
 import { preferConnectedAccountId } from '../../auth/provider-account-pool';
 import { getMCPManager } from '../mcp-manager';
@@ -254,7 +254,6 @@ router.get('/api/credentials/status', (_req, res) => {
   }
 });
 
-const ACCOUNT_AWARE_PROVIDERS = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
 
 function slugAccountId(providerId: string, label = ''): string {
   const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
@@ -2276,13 +2275,21 @@ router.post('/api/settings/provider', (req, res) => {
   }
 });
 
+// The Settings UI lists accounts from the normalized shape (legacy configs get
+// a synthesized "default" account). Plan against that same shape, with account
+// secrets moved to the vault exactly as POST /api/settings/provider does, so
+// rename/default/remove work on every row the user can see.
+function configWithNormalizedAccounts(config: any): any {
+  return { ...config, llm: migrateAccountSecretsToVault(normalizeLLMAccounts(config?.llm || {})) };
+}
+
 // POST /api/settings/provider-accounts/remove — remove one account (dryRun previews affected agent roles)
 router.post('/api/settings/provider-accounts/remove', (req, res) => {
   try {
     const providerId = String(req.body?.providerId || '').trim();
     const accountId = String(req.body?.accountId || '').trim();
     const configManager = getConfig();
-    const plan = planRemoveProviderAccount(configManager.getConfig(), providerId, accountId);
+    const plan = planRemoveProviderAccount(configWithNormalizedAccounts(configManager.getConfig()), providerId, accountId);
     if (!plan.ok) { res.status(400).json({ success: false, error: plan.error }); return; }
     if (req.body?.dryRun === true) {
       res.json({ success: true, dryRun: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
@@ -2292,16 +2299,27 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
       llm: plan.nextConfigPatch.llm,
       agent_model_default_accounts: plan.nextConfigPatch.agent_model_default_accounts,
     } as any);
-    // Clear only this account's credentials. accountId is validated non-empty above.
+    // Clear only this account's credentials. accountId is validated non-empty
+    // above, so clearTokens never receives undefined (which targets the
+    // unscoped/default token).
+    let credentialsCleared = true;
     try {
       if (providerId === 'anthropic') anthropicClearTokens(CONFIG_DIR_PATH, accountId);
       else if (providerId === 'openai_codex') clearTokens(CONFIG_DIR_PATH, accountId);
       else if (providerId === 'xai') clearXAITokens(CONFIG_DIR_PATH, accountId);
-    } catch {}
-    try { getVault().delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove'); } catch {}
+    } catch (err: any) {
+      credentialsCleared = false;
+      console.warn(`[settings] account remove: token clear failed for ${providerId}/${accountId}: ${err?.message || err}`);
+    }
+    try {
+      getVault().delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove');
+    } catch (err: any) {
+      credentialsCleared = false;
+      console.warn(`[settings] account remove: vault key delete failed for ${providerId}/${accountId}: ${err?.message || err}`);
+    }
     resetProvider();
     invalidateProviderStatusCache();
-    res.json({ success: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
+    res.json({ success: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId, credentialsCleared });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -2316,7 +2334,7 @@ router.post('/api/settings/provider-accounts/update', (req, res) => {
     if (req.body?.label !== undefined) patch.label = String(req.body.label);
     if (req.body?.makeDefault === true) patch.makeDefault = true;
     const configManager = getConfig();
-    const plan = planUpdateProviderAccount(configManager.getConfig(), providerId, accountId, patch);
+    const plan = planUpdateProviderAccount(configWithNormalizedAccounts(configManager.getConfig()), providerId, accountId, patch);
     if (!plan.ok || !plan.nextConfigPatch) { res.status(400).json({ success: false, error: plan.error || 'Update failed' }); return; }
     configManager.updateConfig({ llm: plan.nextConfigPatch.llm } as any);
     resetProvider();

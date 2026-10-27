@@ -1862,6 +1862,19 @@ function manageProviderAccount(providerId, accountId) {
   document.getElementById(getProviderPanelId(providerId))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// Account ids as last loaded from the gateway. Rows added locally with
+// "+ Add account" are drafts until saved, so the list can mark them and the
+// rename/remove routes are never called for ids the server doesn't know.
+let savedProviderAccountIds = null;
+function rememberSavedProviderAccountIds(llm) {
+  const ids = {};
+  for (const providerId of ACCOUNT_AWARE_PROVIDER_IDS) {
+    const cfg = llm?.providers?.[providerId];
+    ids[providerId] = normalizeProviderAccountsForUI(providerId, cfg || {}).map((account) => String(account.id));
+  }
+  savedProviderAccountIds = ids;
+}
+
 function renderProviderAccountsList() {
   const host = ensureProviderAccountsContainer();
   if (!host) return;
@@ -1870,6 +1883,7 @@ function renderProviderAccountsList() {
     showToast,
     showConfirm,
     getCache: () => window._llmSettingsCache,
+    getSavedAccountIds: () => savedProviderAccountIds,
     normalizeAccounts: normalizeProviderAccountsForUI,
     onReload: reloadProviderAccountSettings,
     onManage: manageProviderAccount,
@@ -1967,6 +1981,7 @@ async function loadModelSettings() {
       const llm = payload?.llm || { provider: 'ollama', providers: {} };
       const prov = llm.provider || 'ollama';
       window._llmSettingsCache = llm;
+      rememberSavedProviderAccountIds(llm);
       renderProviderSelectors();
       renderDynamicProviderPanels();
       hydrateBuiltInProviderAccountControls();

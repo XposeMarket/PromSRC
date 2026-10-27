@@ -47,16 +47,27 @@ function sample(): any {
   assert.equal(plan.nextDefaultAccountId, 'a1');
 }
 
-// Remove last account: no default left.
+// Removing the only account is refused: an empty accounts map falls back to
+// legacy single-account mode, which would resurrect a connected "default".
 {
   const cfg = sample();
-  delete cfg.llm.providers.openai.accounts;
-  cfg.llm.providers.openai.accounts = { o1: { id: 'o1', label: 'API' } };
+  const plan = planRemoveProviderAccount(cfg, 'openai', 'o1');
+  assert.equal(plan.ok, false);
+  assert.match(String(plan.error), /only openai account/i);
+  assert.equal(plan.nextConfigPatch.llm, null);
+}
+
+// Removing on a provider that is not the live chat provider never moves llm.accountId.
+{
+  const cfg = sample();
+  cfg.llm.providers.openai.accounts.o2 = { id: 'o2', label: 'Second', authType: 'api_key', status: 'connected' };
   const plan = planRemoveProviderAccount(cfg, 'openai', 'o1');
   assert.equal(plan.ok, true);
-  assert.equal(plan.nextDefaultAccountId, null);
-  assert.equal('defaultAccountId' in plan.nextConfigPatch.llm.providers.openai, false);
-  assert.deepEqual(plan.nextConfigPatch.llm.providers.openai.accounts, {});
+  assert.equal(plan.nextConfigPatch.llm.accountId, 'a1');
+  assert.equal(plan.nextConfigPatch.llm.providers.openai.defaultAccountId, 'o2');
+  assert.deepEqual(Object.keys(plan.nextConfigPatch.llm.providers.openai.accounts), ['o2']);
+  // An openai role pointing at o1 is cleared; an anthropic role also named o1 would not be.
+  assert.deepEqual(plan.affectedRoles, []);
 }
 
 // affectedRoles: only roles on this provider that pointed at this account.
@@ -134,6 +145,12 @@ function sample(): any {
   const empty = buildAccountGroups({ provider: 'xai', providers: {} }, normalize);
   assert.deepEqual(empty.groups.map((g: any) => g.providerId), ['xai']);
   assert.equal(empty.addable.includes('xai'), false);
+  // Locally added (unsaved) rows are flagged as drafts; saved ones are not.
+  const draftCfg = sample();
+  draftCfg.llm.providers.anthropic.accounts.anthropic_new = { id: 'anthropic_new', label: 'New Claude account', authType: 'setup_token', status: 'disconnected' };
+  const drafted = buildAccountGroups(draftCfg.llm, normalize, { anthropic: ['a1', 'a2'], openai: ['o1'] });
+  assert.deepEqual(drafted.groups[0].accounts.map((a: any) => [a.id, a.draft]), [['a1', false], ['a2', false], ['anthropic_new', true]]);
+  assert.equal(buildAccountGroups(draftCfg.llm, normalize).groups[0].accounts.some((a: any) => a.draft), false);
   assert.equal(roleLabel('subagent-planner'), 'Planner');
   assert.equal(roleLabel('main_chat'), 'Main chat');
 }
