@@ -42,6 +42,11 @@ export function saveBackgroundExecution(record: Record<string, any>): void {
     try { fs.unlinkSync(temp); } catch { /* renamed or failed creation */ }
   }
 }
+/** Removes a pruned execution snapshot; a missing file is already pruned. */
+export function deleteBackgroundExecution(id: string): void {
+  try { fs.unlinkSync(target(id)); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+}
+
 export function readBackgroundExecutions(): BackgroundExecutionEnvelope[] {
   let files: string[];
   try { files = fs.readdirSync(root()); } catch { return []; }

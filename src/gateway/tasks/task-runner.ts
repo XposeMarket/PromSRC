@@ -14,7 +14,8 @@ import crypto from 'crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isPreviewMode } from '../runtime/preview-mode';
-import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution } from './background-execution-store';
+import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution, deleteBackgroundExecution } from './background-execution-store';
+import { formatResumeEvidence, recordToolCall, recordToolResult, shouldDeleteExecutionSnapshot, shouldScopeBackgroundRun } from './background-tool-ledger';
 import { getSessionToolCeiling, intersectToolCeiling } from '../agents-runtime/tool-ceiling';
 import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
@@ -26,7 +27,7 @@ import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { addMessage, getSession, getWorkspace, getActivatedToolCategories, persistBackgroundResultMessage, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { normalizeToolCategory } from '../tool-builder';
-import { runWithWorkspace } from '../../tools/workspace-context';
+import { getActiveAllowedWorkspaces, getActiveWorkspace, hasActiveWorkspaceScope, runWithWorkspace } from '../../tools/workspace-context';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -196,6 +197,7 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   outstandingTools: Array<{ id: string; name: string; args: any }>;
   continuationHistory?: any[];
   completedToolEvidence?: Array<{ id: string; name: string; result: any }>;
+  scopedWorkDir?: boolean;
   operatorCancelled?: boolean;
   deliveredAt?: number;
 }
@@ -763,10 +765,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         const callId = String(data?.toolCallId || data?.tool_call_id || data?.callId
           || (data?.stepNum !== undefined ? `step:${data.stepNum}:${name}` : ''));
         if (event === 'tool_call') {
-          record.outstandingTools.push({ id: callId || `unknown:${crypto.randomUUID()}`, name, args: data?.args });
-        } else if (event === 'tool_result' && callId) {
-          record.completedToolEvidence = [...(record.completedToolEvidence || []), { id: callId, name, result: data?.result }];
-          record.outstandingTools = record.outstandingTools.filter((call) => call.id !== callId);
+          record.outstandingTools = recordToolCall(record.outstandingTools, { id: callId, name, args: data?.args });
+        } else if (event === 'tool_result') {
+          const ledger = recordToolResult(record.outstandingTools, record.completedToolEvidence || [], { id: callId, name, result: data?.result });
+          record.outstandingTools = ledger.outstanding;
+          record.completedToolEvidence = ledger.evidence;
         }
         record.toolCategories = Array.from(getActivatedToolCategories(sessionId));
         record.toolCeiling = intersectToolCeiling(getSessionToolCeiling(sessionId), record.toolCeiling);
@@ -804,13 +807,15 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const workDirNotice = record.workDir
         ? ` WORKING DIRECTORY: ${record.workDir}. Relative file paths and workspace_run's default cwd resolve there (not the main Prometheus workspace). Use absolute paths only for files outside it.`
         : '';
-      const runHandleChat = (fn: () => Promise<any>): Promise<any> => record.workDir
+      // Only an explicit/inherited scope scopes the run (see shouldScopeBackgroundRun).
+      const scopeToWorkDir = shouldScopeBackgroundRun(record);
+      const runHandleChat = (fn: () => Promise<any>): Promise<any> => (scopeToWorkDir && record.workDir)
         ? runWithWorkspace(record.workDir, fn, record.allowedWorkPaths)
         : fn();
 
       try {
         const chatResult = await runHandleChat(() => handleChat(
-          record.resumed ? `Continue background task ${record.id} from its saved history/checkpoint. Original assignment:\n${prompt}\nCompleted tool evidence (do not replay): ${JSON.stringify(record.completedToolEvidence || [])}\nDo not repeat completed actions or reuse approvals; reconcile uncertain operations before acting.` : prompt,
+          record.resumed ? `Continue background task ${record.id} from its saved history/checkpoint. Original assignment:\n${prompt}\nCompleted tool evidence (do not replay; bounded summary):\n${formatResumeEvidence(record.completedToolEvidence || [])}\nDo not repeat completed actions or reuse approvals; reconcile uncertain operations before acting.` : prompt,
           sessionId,
           sendSSE,
           undefined,   // extra
@@ -938,6 +943,7 @@ export function recoverBackgroundExecutions(options: { isHostedElsewhere?: (runt
     if (options.isHostedElsewhere?.({ pid: envelope.ownerPid, status: 'running' })) continue;
     const saved = envelope.record;
     const terminal = ['completed', 'failed', 'timed_out'].includes(saved.state);
+    if (shouldDeleteExecutionSnapshot(saved, Date.now())) { deleteBackgroundExecution(envelope.id); continue; }
     if (!terminal && !claimBackgroundExecution(envelope)) continue;
     const record = { ...saved, promise: Promise.resolve(), backgroundStream: createBackgroundAgentStream(), resumed: true } as EphemeralBackgroundRecord;
     _ephemeralBackgroundRuns.set(record.id, record);
@@ -1013,10 +1019,24 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
   record.toolCeiling = getSessionToolCeiling(record.spawnerSessionId);
-  record.workDir = String(input?.workDir || '').trim() || (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
+  const explicitWorkDir = String(input?.workDir || '').trim();
   record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
     ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
     : undefined;
+  if (explicitWorkDir) {
+    record.scopedWorkDir = true;
+    record.workDir = explicitWorkDir;
+  } else if (hasActiveWorkspaceScope()) {
+    // A scoped spawner (e.g. a worktree agent) must not widen its child's access
+    // after a restart, when boot recovery resumes outside any async scope.
+    const fallback = getConfig().getWorkspacePath();
+    record.scopedWorkDir = true;
+    record.workDir = getActiveWorkspace(fallback);
+    if (!record.allowedWorkPaths) record.allowedWorkPaths = getActiveAllowedWorkspaces(fallback).slice(0, 20);
+  } else {
+    record.scopedWorkDir = false;
+    record.workDir = (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
+  }
   record.resourceIds = Array.isArray(input?.resourceIds)
     ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
     : undefined;
