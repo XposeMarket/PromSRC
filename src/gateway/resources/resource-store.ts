@@ -271,7 +271,12 @@ const MAX_CONTEXT_CHARS = 32_000;
 const MAX_MANIFEST_RESOURCES = 60;
 const MAX_PROVENANCE_PER_RESOURCE = 60;
 const MAX_VERSIONS_PER_RESOURCE = 20;
-const REGISTRY_FLUSH_DELAY_MS = 400;
+// Task journal snapshots are cumulative (each one already holds the newest
+// 80 journal lines), and saveTask() re-syncs on almost every tool step, so
+// older task versions/provenance are redundant and were most of the registry.
+const MAX_TASK_VERSIONS_PER_RESOURCE = 3;
+const MAX_TASK_PROVENANCE_PER_RESOURCE = 8;
+const REGISTRY_FLUSH_DELAY_MS = 1_500;
 
 // One pending writer per registry file; a second store instance (or a reload)
 // flushes it first so nothing reads stale data. Flushed on exit too.
@@ -644,7 +649,12 @@ export class ResourceStore {
     this.dirty = false;
     this.ensureStorageDirs();
     const pruned = this.pruneState(this.live.state);
-    const state = sanitizeResourceState(this.live.state);
+    // Every mutation path redacts at write time and loadStateFromDisk()
+    // sanitizes once on read, so the live state is already safe to persist.
+    // Re-sanitizing here deep-copied and regex-scanned the whole registry on
+    // every flush (~0.5s and ~100 MB of garbage at 28 MB), which drove the
+    // gateway heap to the 4 GB memory-recycle threshold.
+    const state = this.live.state;
     const tempPath = `${this.registryPath}.${process.pid}.${Date.now()}.tmp`;
     try {
       fs.writeFileSync(tempPath, JSON.stringify(state), 'utf8');
@@ -654,7 +664,7 @@ export class ResourceStore {
       this.dirty = true;
       throw error;
     }
-    this.live = { key: this.fileKey(), state };
+    this.live.key = this.fileKey();
     if (pruned.length) void removeFilesInBatches(pruned);
   }
 
@@ -667,6 +677,10 @@ export class ResourceStore {
     const pinned = new Set<string>();
     for (const resource of state.resources) if (resource.currentVersionId) pinned.add(resource.currentVersionId);
     for (const link of state.links) if (link.versionId) pinned.add(link.versionId);
+    const taskResources = new Set<string>();
+    for (const resource of state.resources) if (resource.kind === 'task') taskResources.add(resource.id);
+    const versionCap = (resourceId: string) => taskResources.has(resourceId) ? MAX_TASK_VERSIONS_PER_RESOURCE : MAX_VERSIONS_PER_RESOURCE;
+    const provenanceCap = (resourceId: string) => taskResources.has(resourceId) ? MAX_TASK_PROVENANCE_PER_RESOURCE : MAX_PROVENANCE_PER_RESOURCE;
     const versionCounts = new Map<string, number>();
     const keptVersions: ResourceVersion[] = [];
     const removedFiles: string[] = [];
@@ -674,7 +688,7 @@ export class ResourceStore {
     for (let index = state.versions.length - 1; index >= 0; index -= 1) {
       const version = state.versions[index];
       const count = versionCounts.get(version.resourceId) || 0;
-      if (count < MAX_VERSIONS_PER_RESOURCE || pinned.has(version.id)) {
+      if (count < versionCap(version.resourceId) || pinned.has(version.id)) {
         keptVersions.push(version);
         versionCounts.set(version.resourceId, count + 1);
       } else if (version.snapshotPath) {
@@ -690,7 +704,7 @@ export class ResourceStore {
     for (let index = state.provenance.length - 1; index >= 0; index -= 1) {
       const item = state.provenance[index];
       const count = provenanceCounts.get(item.resourceId) || 0;
-      if (count < MAX_PROVENANCE_PER_RESOURCE) {
+      if (count < provenanceCap(item.resourceId)) {
         keptProvenance.push(item);
         provenanceCounts.set(item.resourceId, count + 1);
       }
@@ -791,8 +805,16 @@ export class ResourceStore {
 
   private appendProvenance(state: ResourceState, event: Omit<ResourceProvenanceEvent, 'id' | 'at'> & { at?: string }): void {
     // Trimmed per resource in pruneState() at flush time (O(n) once per
-    // write instead of once per event).
-    state.provenance.push({ id: newId('prov'), at: event.at || nowIso(), ...event });
+    // write instead of once per event). Redacted here, at write time, because
+    // flushSync() persists the live state without a whole-registry sanitize.
+    state.provenance.push({
+      id: newId('prov'),
+      at: event.at || nowIso(),
+      ...event,
+      actor: redactResourceText(event.actor),
+      source: event.source ? redactResourceText(event.source) : undefined,
+      metadata: event.metadata ? redactResourceMetadata(event.metadata) as Record<string, unknown> : undefined,
+    });
   }
 
   private getResource(state: ResourceState, resourceId: string, options: { allowDeleted?: boolean } = {}): ResourceRecord {
@@ -844,10 +866,10 @@ export class ResourceStore {
       resourceId: resource.id,
       versionId: version?.id,
       attachedAt: nowIso(),
-      attachedBy: input.actor || 'system',
+      attachedBy: redactResourceText(input.actor || 'system'),
       pinned: Boolean(input.pinned),
-      inheritedFrom: input.inheritedFrom,
-      inheritedBy: input.inheritedBy,
+      inheritedFrom: input.inheritedFrom ? redactResourceText(input.inheritedFrom) : undefined,
+      inheritedBy: input.inheritedBy ? redactResourceText(input.inheritedBy) : undefined,
     };
     state.links.push(link);
     this.appendProvenance(state, {
@@ -1485,10 +1507,10 @@ export class ResourceStore {
           resourceId: resource.id,
           versionId: sourceLink.versionId || resource.currentVersionId,
           attachedAt: nowIso(),
-          attachedBy: options.actor || 'system',
+          attachedBy: redactResourceText(options.actor || 'system'),
           pinned: sourceLink.pinned,
-          inheritedFrom: source,
-          inheritedBy: options.inheritedBy,
+          inheritedFrom: redactResourceText(source),
+          inheritedBy: options.inheritedBy ? redactResourceText(options.inheritedBy) : undefined,
         };
         state.links.push(link);
         this.appendProvenance(state, { resourceId: resource.id, eventType: 'inherited', actor: options.actor || 'system', threadId: destination, versionId: link.versionId, metadata: { inheritedFrom: source, inheritedBy: options.inheritedBy } });
