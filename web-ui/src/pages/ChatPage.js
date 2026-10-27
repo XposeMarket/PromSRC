@@ -46099,7 +46099,8 @@ function inferCurrentTurnProcessStartIndex(sess, userContent = '') {
 function appendLiveTraceToStreamState(streamState, type, text, { append = false, extra = null } = {}) {
   const content = String(text || '');
   if (!content) return;
-  if (isBareThinkingLiveTraceText(content)) return;
+  const rawSummary = extra?.source === 'reasoning_summary' && extra?.visibility === 'summary';
+  if (!rawSummary && isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
@@ -46111,7 +46112,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
     if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     return;
   }
-  const trimmed = content.trim();
+  const trimmed = rawSummary ? content : content.trim();
   if (!trimmed) return;
   if (last && last.type === normalizedType
     && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)
@@ -46183,7 +46184,7 @@ function isDesktopProgressNarration(value) {
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
 }
 
-function setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace = false, visibility = 'summary' } = {}) {
+function setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace = false, visibility = 'summary', source = 'agent_progress', delta = false } = {}) {
   if (!streamState) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -46195,11 +46196,20 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
   const latestTraceExtra = latestTraceEntry?.extra || {};
   const existing = latestTraceEntry
     && String(latestTraceEntry.type || '').toLowerCase() === 'think'
-    && String(latestTraceExtra.source || latestTraceEntry.source || '').toLowerCase() === 'agent_progress'
+    && String(latestTraceExtra.source || latestTraceEntry.source || '').toLowerCase() === source
     ? latestTraceEntry
     : null;
+  if (source === 'reasoning_summary') {
+    if (existing) {
+      existing.text = delta && !replace ? String(existing.text || '') + incoming : incoming;
+      existing.extra = { ...(existing.extra || {}), visibility: 'summary', source, reasoningKind: 'summary' };
+    } else {
+      appendTrace('think', incoming, { extra: { visibility: 'summary', source, reasoningKind: 'summary' } });
+    }
+    return true;
+  }
   if (!existing) {
-    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
+    appendTrace('think', incoming, { extra: { visibility, source, reasoningKind: 'summary' } });
     return true;
   }
   const previous = String(existing.text || '').trim();
@@ -46247,10 +46257,7 @@ function shouldAppendDesktopReasoningSummary(streamState, chunk) {
 }
 
 function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
-  appendTrace('think', chunk, {
-    append: shouldAppendDesktopReasoningSummary(streamState, chunk),
-    extra: { visibility: 'user', source: 'reasoning_summary', reasoningKind: 'summary' },
-  });
+  return setDesktopLiveProgressNarration(streamState, chunk, appendTrace, { source: 'reasoning_summary', delta: true });
 }
 
 function applyToolActivityToStreamState(streamState, phase, payload = {}) {
@@ -46914,7 +46921,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (streamState.agentExecutionMode === 'execute') movePreToolAnswerTextIntoPreamble();
     if (evt.mode) addSessionProcessEntry(sid, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`);
     renderIfViewing();
-  } else if (evt.type === 'reasoning_summary_delta') {
+  } else if (evt.type === 'reasoning_summary_delta' || evt.type === 'reasoning_summary') {
     const chunk = String(evt.text || evt.summary || '');
     if (chunk) {
       window._sessionThinking[sid] = true;
@@ -46922,7 +46929,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       // reasoning_summary is already an explicit user-safe progress channel.
       // Treat every transport delta as part of the single replaceable status slot;
       // classifying individual chunks leaks markdown/token boundaries into the UI.
-      setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+      setDesktopLiveProgressNarration(streamState, chunk, appendTrace, { source: 'reasoning_summary', delta: evt.type !== 'reasoning_summary', replace: evt.type === 'reasoning_summary' });
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking_delta') {
@@ -46937,17 +46944,17 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
         // reasoning_summary is already an explicit user-safe progress channel.
         // Treat every transport delta as part of the single replaceable status slot;
         // classifying individual chunks leaks markdown/token boundaries into the UI.
-        setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+        setDesktopLiveProgressNarration(streamState, chunk, appendTrace, { source: 'reasoning_summary', delta: evt.type !== 'reasoning_summary', replace: evt.type === 'reasoning_summary' });
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
 	} else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
-    const text = String(evt.thinking || evt.text || '').trim();
+    const text = String(evt.thinking || evt.text || '');
     const visibility = chatProgressVisibility(evt);
     if (text && visibility !== 'private') {
       const appendTrace = (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options);
       if (isDesktopSummaryThoughtEvent(evt)) {
-        setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace: true, visibility: 'summary' });
+        setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace: true, visibility: 'summary', source: 'reasoning_summary' });
       } else {
         appendDesktopDurableThought(streamState, text, appendTrace, evt);
       }
@@ -47320,7 +47327,7 @@ wsEventBus.on('session_stream_snapshot', (snapshot = {}) => {
       }
     }
     if (snapshot.summary) setDesktopLiveProgressNarration(state, String(snapshot.summary),
-      (type, text, options) => appendLiveTraceToStreamState(state, type, text, options));
+      (type, text, options) => appendLiveTraceToStreamState(state, type, text, options), { source: 'reasoning_summary', replace: true });
     const cursors = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
     cursors[sid] = { ...(cursors[sid] || {}), [streamId]: seq };
     (window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {}))[sid] = streamId;

@@ -195,6 +195,9 @@ Pending implementation groups desktop/mobile chat models through shared `web-ui/
 
 Concurrent interactive sessions can be on different providers/accounts, especially ChatGPT-web. Provider clients that hold mutable session state must be keyed/scoped by the correct connection/chat context; do not share one global browser session because the adapter is a singleton.
 
+### Exact main-chat summary transport
+Explicit reasoning_summary_delta and summary-classified thinking_delta append raw text exactly. Complete reasoning_summary and safe legacy summary snapshots replace only the active summary tail. Private thinking is excluded from public summary/commentary; provider code is unchanged. This correction is pending the main-chat summary PR, not a live deployment.
+
 ### Codex prefix caching
 `OpenAICodexAdapter.chat` splits `PROMPT_CACHE_MARKER`: stable policy stays in `instructions`, and volatile turn context is a developer input item immediately before the latest user item. Conversation/tool/image ordering and caller messages remain untouched. Missing marker, empty stable prefix or no user retains the full stripped instructions. An opaque SHA-256-derived session/account/model affinity (independent of instructions) is sent as `prompt_cache_key` and Codex's `session_id` header; it is not conversation state, contains no raw prompt/account text and needs no in-memory map. Optional session identity flows from ollama-client's usage context/current trace through ChatOptions and the model-worker protocol; anonymous calls get a per-call random key, reused only across that call's retries. ChatGPT web and API-key/OpenAI-compatible endpoints are unchanged. `usage.input_tokens_details.cached_tokens` still feeds `cacheReadTokens`; captured-wire tests cannot establish a production cache-hit or TTFT improvement. Validate repeated real calls after deployment.
 

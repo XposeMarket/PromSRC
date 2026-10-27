@@ -193,3 +193,6 @@ Use this checklist as a starting point, not a substitute for the current source/
 
 ### Pending PR: feat/model-family-picker-terra61
 Pending desktop chat picker work uses shared `web-ui/src/model-family-grouping.js` for provider → family → model navigation, paired with mobile; Terra metadata and exact `gpt-6.1-terra` fallback entries cover stale catalogs without redesigning Settings/agent pickers. This is pending PR work, not live/on-device verified.
+
+### Main-chat summary assembly
+Desktop SSE and replay use source reasoning_summary, visibility summary, exact delta append and complete snapshot replace. Tool/commentary boundaries freeze earlier summaries; agent_progress retains its separate heuristic. Collapse classification is coordinated with #780 before shipping.

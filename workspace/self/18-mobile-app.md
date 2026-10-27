@@ -208,3 +208,6 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 - `mobile-model-badge.js::_queueReasoningSave` captures the originating session before debounce and reads that session's effective route, never a stale provider Settings model. Effort normalizes against the selected provider/model; model, account and speed remain unchanged. Use default clears only the effort override.
 - Navigation before save or during route read cancels visibly. An already submitted PUT stays bound to the original session and cannot update the later chat UI or persisted selection.
 - `node scripts/test-mobile-reasoning-route.regression.mjs` executes the actual module with VM browser/API stubs: stale settings refresh, draft/existing identity/default cases and async navigation. `--baseline` executes origin/main to demonstrate failure. Isolated component coverage is not real-phone proof.
+
+### Main-chat summary assembly
+Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.

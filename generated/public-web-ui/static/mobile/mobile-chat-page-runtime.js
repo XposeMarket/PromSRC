@@ -4566,7 +4566,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         if (_handleMobileThinkingDelta(aiTurn, evt)) scheduleSideRenderSoon();
         return 'streaming';
       }
-      case 'reasoning_summary_delta': {
+      case 'reasoning_summary':
+        case 'reasoning_summary_delta': {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) scheduleSideRenderSoon();
         return 'streaming';
       }
@@ -6117,18 +6118,19 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           // Match live handling: raw thinking deltas stay private. An explicit
           // reasoning summary is reconstructed into the same replaceable
           // progress slot used by the active stream.
-          if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
+          if (chatProgressVisibility(evt) === 'summary') {
             const text = String(evt.thinking || evt.text || '');
             if (text) {
-              _setMobileLiveProgressNarration(replayState, text);
+              _handleMobileReasoningSummaryDelta(replayState, { ...evt, text, type: evt.type === 'reasoning_summary' ? 'reasoning_summary' : 'reasoning_summary_delta' });
             }
           }
           break;
         }
+        case 'reasoning_summary':
         case 'reasoning_summary_delta': {
           const text = String(evt.text || evt.summary || '');
           if (text) {
-            _setMobileLiveProgressNarration(replayState, text);
+            _handleMobileReasoningSummaryDelta(replayState, { ...evt, text, type: evt.type === 'reasoning_summary' ? 'reasoning_summary' : 'reasoning_summary_delta' });
           }
           break;
         }
@@ -6354,6 +6356,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         if (_handleMobileThinkingDelta(aiTurn, evt)) renderThreadSoon();
         return 'streaming';
       }
+      case 'reasoning_summary':
       case 'reasoning_summary_delta': {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadSoon();
         return 'streaming';

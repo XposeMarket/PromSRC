@@ -69,7 +69,7 @@ handlers._handleMobileReasoningSummaryDelta(message, {
 
 const progressEntries = message.liveTraceEntries.filter((entry) => entry.extra?.source === 'reasoning_summary');
 assert.equal(progressEntries.length, 1, 'summary updates must reuse one mutable progress entry');
-assert.equal(progressEntries[0].text, 'Investigating H3 Max model licensing');
+assert.equal(progressEntries[0].text, 'Investigating H3 Max model licensingInvestigating H3 Max model licensing', 'repeated raw chunks are not deduplicated');
 assert.equal(message.processEntries.length, 0, 'summary packets must never enter the durable thought journal');
 assert.equal(message._thinking, '', 'summary packets must not enter cached thinking text');
 
@@ -183,7 +183,7 @@ const summaryTitle = new Function('_dedupeMobileTraceProseText',
   `${rendererFunction('_mobileTraceProgressSummary', '_renderMobileLiveTrace')}return _mobileTraceProgressSummary;`,
 )((text) => text);
 assert.equal(summaryTitle(background.liveTraceEntries), '', 'reasoning summaries must not be promoted into public progress titles');
-assert.equal(summaryTitle(groups[0].entries), '');
+assert.equal(summaryTitle(groups[0].entries), '', 'summary prose stays with its reasoning segment');
 
 const renderEntry = new Function('renderToolActivityEntry', 'escapeHtml', '_renderMobileLiveTracePreview',
   '_isMobileTraceReasoningSummaryType', '_renderMobileMarkdown', '_dedupeMobileTraceProseText',
