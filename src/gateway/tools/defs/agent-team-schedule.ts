@@ -1,3 +1,5 @@
+import { schedulePrecheckSchema } from '../../scheduling/schedule-precheck';
+
 // src/gateway/tools/defs/agent-team-schedule.ts
 // Tool definitions for agent management, team collaboration, and scheduling.
 
@@ -974,6 +976,7 @@ export function getAgentTeamScheduleTools(): any[] {
             kind: { type: 'string', enum: ['agent', 'script'], description: 'Job payload kind. Defaults to agent. Script jobs require command and cannot use team_id, subagent_id, systemEvent, or preview_only.' },
             instruction_prompt: { type: 'string', description: 'Required for agent create. Self-contained instructions the future run receives; include steps, constraints, and success criteria.' },
             command: { type: 'string', description: 'Required nonempty command for script create/update when kind is script.' },
+            precheck: schedulePrecheckSchema,
             misfire_policy: { type: 'string', enum: ['skip', 'run_once', 'run_all'], description: 'How to handle missed invocations. Defaults to run_once.' },
             timeout_ms: { type: 'number', minimum: 1, maximum: 3600000, description: 'Optional script command timeout in milliseconds; positive integer no greater than 3600000.' },
             schedule: {
@@ -1177,6 +1180,7 @@ export function getAgentTeamScheduleTools(): any[] {
             delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy; use subagent_id/team_id to change ownership, or clear subagent_id to return ownership to Prometheus itself.' },
             model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
             enabled: { type: 'boolean', description: 'Enable or pause the job.' },
+            precheck: schedulePrecheckSchema,
             preview_only: { type: 'boolean', description: 'Run this schedule as a fail-closed read-only dry run. Mutations and external actions are not exposed.' },
             skillIds: {
               type: 'array',
