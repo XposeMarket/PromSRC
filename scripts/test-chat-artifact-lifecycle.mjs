@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { compactMobileThreadCacheFileChanges as compactFileChanges } from '../web-ui/src/mobile/mobile-thread-cache-file-changes.js';
 
 const read = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const desktop = [
@@ -14,18 +15,13 @@ assert.match(desktop, /saveInterruptedAssistantTurn[\s\S]{0,2600}fileChanges: me
 assert.match(desktop, /saveInterruptedAssistantTurn[\s\S]{0,2600}richArtifacts: \(Array\.isArray\(finalRichArtifacts\)/, 'aborted desktop turns must retain rich artifacts');
 assert.match(desktop, /saveInterruptedAssistantTurn[\s\S]{0,2600}canvasFiles: canvasPresentedFiles\.length/, 'aborted desktop turns must retain presented files');
 assert.match(mobile, /function _compactMobileThreadCacheFileChanges\(value\)/, 'mobile cold cache must delegate file-change serialization to the chat runtime');
-assert.match(renderer, /function _compactMobileThreadCacheFileChanges\(/, 'chat runtime must own the file-change serializer');
+assert.match(renderer, /import \{ compactMobileThreadCacheFileChanges as _compactMobileThreadCacheFileChanges \} from '\.\/mobile-thread-cache-file-changes\.js'/, 'chat runtime must import the bounded file-change serializer');
+assert.match(renderer, /compactFileChanges: _compactMobileThreadCacheFileChanges/, 'chat runtime must expose the imported serializer to cold-cache delegation');
 assert.match(mobile, /fileChanges: _compactMobileThreadCacheFileChanges\(m\?\.fileChanges\)/, 'mobile cold cache must persist file changes');
 assert.match(mobile, /for \(const key of \['generatedImages', 'generatedVideos', 'files', 'artifacts'\]\)/, 'array cache entries must use array cleanup');
 assert.match(mobile, /function _hasMobileFileChanges\(value\)/, 'file-change cleanup must inspect grouped payloads');
 assert.match(mobile, /if \(!_hasMobileFileChanges\(compact\.fileChanges\)\)/, 'empty file-change objects must be removed without deleting valid data');
 
-const helperStart = renderer.indexOf('function _compactMobileThreadCacheFileChanges(');
-const helperEnd = renderer.indexOf('\n\n// Chat rich-message', helperStart);
-assert(helperStart >= 0 && helperEnd > helperStart, 'file-change compaction helper must be extractable for behavioral coverage');
-const compactFileChanges = new Function(
-  `${renderer.slice(helperStart, helperEnd)}; return _compactMobileThreadCacheFileChanges;`,
-)();
 const compacted = compactFileChanges({
   summary: { fileCount: 1, insertions: 3, deletions: 1 },
   files: [{ path: 'src/example.js', status: 'modified', insertions: 3, deletions: 1 }],
