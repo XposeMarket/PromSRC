@@ -390,6 +390,8 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       console.error('[RuntimeRecovery] Operation ledger recovery failed; continuing runtime recovery. External side-effect dedupe may be unavailable until repaired:', err?.message || err);
     }
     if (!skipInPreview('runtime-recovery')) {
+    const { recoverBackgroundExecutions } = require('../tasks/task-runner') as typeof import('../tasks/task-runner');
+    recoverBackgroundExecutions({ isHostedElsewhere: isRuntimeHostedByLiveHandoffHost });
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,
@@ -405,6 +407,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
     });
     setHandoffRecoveryHandler(() => {
+      recoverBackgroundExecutions({ isHostedElsewhere: isRuntimeHostedByLiveHandoffHost });
       const late = recoverInterruptedRuntimes({
         launchBackgroundTaskRunner,
         completePlainGatewayRestartTask,

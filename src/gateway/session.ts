@@ -2943,6 +2943,22 @@ export function addOrMergeDeliveryMessage(id: string, msg: ChatMessage): void {
   });
 }
 
+/** Commit a full background result before acknowledging it to the executor.
+ * Stable message identity closes crash-after-insert/before-ACK without duplicating
+ * model context. The executor remains the retry outbox until this write succeeds.
+ */
+export function persistBackgroundResultMessage(id: string, backgroundId: string, content: string): { inserted: boolean } {
+  const key = `background_agent_result:${backgroundId}`;
+  const existing = getSession(id).history.find((entry) => entry.messageKind === 'background_agent_result'
+    && entry.deliveryBatchId === key);
+  if (!existing) addMessage(id, {
+    role: 'user', content, timestamp: Date.now(), messageKind: 'background_agent_result', deliveryBatchId: key,
+  }, { disableCompactionCheck: true, disableMemoryFlushCheck: true, preservePendingMaintenance: true });
+  if (!flushSession(id)) throw new Error('Background result history could not be persisted; delivery remains unacknowledged.');
+  return { inserted: !existing };
+}
+
+
 export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {
   const session = getSession(id);
   // Return last N messages (2 messages per turn = user + assistant)
@@ -3775,7 +3791,7 @@ function saveSession(id: string): void {
   sessionSaveTimers.set(id, timer);
 }
 
-export function flushSession(id: string): void {
+export function flushSession(id: string): boolean {
   const existing = sessionSaveTimers.get(id);
   if (existing) {
     clearTimeout(existing);
@@ -3785,7 +3801,7 @@ export function flushSession(id: string): void {
   const revision = Number(sessionSaveRevisions.get(id) || 0) + 1;
   sessionSaveRevisions.set(id, revision);
   const session = sessions.get(id);
-  if (!session) return;
+  if (!session) return false;
   setSessionCacheWeight(id, session);
   session.lastAssistantAt = getLastAssistantTimestamp(session.history);
   applyAutoSessionTitleOnce(session);
@@ -3793,12 +3809,14 @@ export function flushSession(id: string): void {
   try {
     // Compact JSON, matching the async snapshot path. Pretty-printing a 20 MB
     // thread roughly doubles serialize + write time on the shutdown path.
-    fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session)));
+    writeFileAtomicSync(getSessionPath(id), JSON.stringify(scrubSession(session)));
     sessionPersistedRevisions.set(id, revision);
     upsertSessionSummary(session);
     notifySessionWritten(id);
+    return true;
   } catch (err) {
     console.warn(`[session] Failed to flush session ${id}:`, err);
+    return false;
   }
 }
 

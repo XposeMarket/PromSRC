@@ -1,3 +1,8 @@
+/** Internal worker evidence belongs in model history, never user intent/UI. */
+export function isInternalBackgroundResult(message: any): boolean {
+  return message?.messageKind === 'background_agent_result';
+}
+
 /** Pure server-history reconciliation used by reconnecting/mobile clients. */
 export function historyMessageMergeKey(msg: any): string {
   const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
@@ -147,7 +152,30 @@ function pruneCrossTurnTraceCopies(history: any[]): any[] {
  * truncated, so preserve every omitted server message while accepting genuine
  * new client messages and collapsing repeated stable message identities.
  */
-export function mergeHistoryWithExistingMessageMetadata(
+export function mergeHistoryWithExistingMessageMetadata(existing: any[], incoming: any[],
+  options: { preserveAllExisting?: boolean; preferIncomingContent?: boolean; preferIncomingTrace?: boolean } = {}): any[] {
+  const spine = Array.isArray(existing) ? existing : [];
+  if (!spine.some(isInternalBackgroundResult) && !(Array.isArray(incoming) && incoming.some(isInternalBackgroundResult))) {
+    return mergeVisibleHistoryWithExistingMessageMetadata(existing, incoming, options);
+  }
+  const merged = mergeVisibleHistoryWithExistingMessageMetadata(spine.filter((row) => !isInternalBackgroundResult(row)),
+    (Array.isArray(incoming) ? incoming : []).filter((row) => !isInternalBackgroundResult(row)), options);
+  // Clients never receive internal rows, so an ordinary transcript sync cannot
+  // delete or replace server-owned worker evidence, even outside mobile mode.
+  for (let i = 0; i < spine.length; i++) {
+    if (!isInternalBackgroundResult(spine[i])) continue;
+    let insertAt = 0;
+    for (let previous = i - 1; previous >= 0; previous--) {
+      const key = historyMessageMergeKey(spine[previous]);
+      const found = merged.findIndex((row) => historyMessageMergeKey(row) === key);
+      if (found >= 0) { insertAt = found + 1; break; }
+    }
+    merged.splice(insertAt, 0, spine[i]);
+  }
+  return merged;
+}
+
+function mergeVisibleHistoryWithExistingMessageMetadata(
   existingHistory: any[],
   incomingHistory: any[],
   options: { preserveAllExisting?: boolean; preferIncomingContent?: boolean; preferIncomingTrace?: boolean } = {},

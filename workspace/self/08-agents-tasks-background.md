@@ -151,3 +151,6 @@ Persistent subagent identity/configuration is not the same store as task run sta
 - [05 Tools & categories](05-tools-and-categories.md) · [09 Teams](09-teams.md) · [10 Scheduling & automations](10-scheduling-automations-triggers.md) · [11 Memory, notes & Brain](11-memory-notes-brain.md)
 - [01 Identity & paths](01-identity-and-paths.md) · [04 Chat pipeline & providers](04-chat-pipeline-and-providers.md) · [25 Sharp edges](25-sharp-edges.md)
 - [tools inventory](generated/tools.md) · [category inventory](generated/tool-categories.md) · [test inventory](generated/tests.md) · [merged PR history](generated/changelog.md)
+
+## Pending PR: durable one-shot background execution (not live)
+The background-restart-resume branch persists original assignment, resolved route, workspace roots/resources, worker tool grants, history/checkpoints, outstanding tool-call IDs, full terminal results and join consumption before scheduling/delivery. Safe interrupted workers continue under the same ID/session; custom tool functions and unresolved tool outcomes block explicitly instead of replaying actions or approvals. timeoutMs remains a wait/join policy, not an execution deadline. Durable executable state is separate from bounded compatibility receipts. Deployment and runtime verification remain pending.
