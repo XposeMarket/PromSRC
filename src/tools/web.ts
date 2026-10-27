@@ -1470,9 +1470,75 @@ function isXStatusUrl(url: string): boolean {
   return /^https?:\/\/(www\.)?(x\.com|twitter\.com|mobile\.twitter\.com)\/[^/?#]+\/status\/\d+/i.test(String(url || '').trim());
 }
 
+/**
+ * X's oEmbed HTML clips long-form ("note") posts at ~280 chars and ends the
+ * paragraph with an ellipsis. Treat that as truncated so callers can recover
+ * the full text instead of reporting a clipped post as complete.
+ */
+export function isLikelyTruncatedXText(text: string): boolean {
+  const value = String(text || '').trim();
+  if (value.length < 240) return false;
+  return /(?:\u2026|\.\.\.)$/.test(value);
+}
+
+/**
+ * Keyless full-text fallback for long-form posts via the public FxTwitter API.
+ * Returns null on any failure so the oEmbed result is still used.
+ */
+async function fetchXStatusFullTextViaFx(url: string, id: string): Promise<XFetchPayload | null> {
+  try {
+    const handle = String(url || '').match(/(?:x\.com|twitter\.com)\/([^/?#]+)\/status\//i)?.[1] || 'i';
+    const response = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(handle)}/status/${id}`, {
+      headers: { accept: 'application/json', 'user-agent': 'Prometheus/1.0 (+web_fetch)' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    const tweet = data?.tweet;
+    const text = String(tweet?.raw_text?.text || tweet?.text || '').trim();
+    if (!tweet || String(tweet.id || '') !== id || !text) return null;
+    const screenName = String(tweet?.author?.screen_name || '').trim();
+    const metrics: Record<string, number> = {};
+    for (const key of ['replies', 'retweets', 'likes', 'bookmarks', 'quotes', 'views']) {
+      if (Number.isFinite(Number(tweet[key]))) metrics[key] = Number(tweet[key]);
+    }
+    return {
+      success: true,
+      url,
+      tweets: [{
+        id,
+        link: String(tweet.url || url),
+        author: String(tweet?.author?.name || '').trim(),
+        handle: screenName ? `@${screenName}` : '',
+        timestamp: tweet.created_at ? new Date(Number(tweet.created_timestamp) * 1000 || tweet.created_at).toISOString() : undefined,
+        text,
+        rawRef: id,
+        ...(Object.keys(metrics).length ? { metrics } : {}),
+      } as any],
+      count: 1,
+      message: 'Captured full long-form X status (oEmbed text was truncated; full text via public FxTwitter API)',
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchXStatusViaOEmbed(url: string): Promise<XFetchPayload | null> {
   const id = String(url || '').match(/\/status\/(\d+)/i)?.[1];
   if (!id) return null;
+  const result = await fetchXStatusViaOEmbedRaw(url, id);
+  const clipped = result?.tweets?.[0]?.text;
+  if (!result || !isLikelyTruncatedXText(String(clipped || ''))) return result;
+  const full = await fetchXStatusFullTextViaFx(url, id);
+  if (full && String(full.tweets?.[0]?.text || '').length > String(clipped || '').length) return full;
+  return {
+    ...result,
+    truncated: true,
+    message: `${result.message}. Text appears truncated (long-form post); full-text fallback was unavailable.`,
+  } as XFetchPayload;
+}
+
+async function fetchXStatusViaOEmbedRaw(url: string, id: string): Promise<XFetchPayload | null> {
   try {
     const endpoint = new URL('https://publish.x.com/oembed');
     endpoint.searchParams.set('url', url);
