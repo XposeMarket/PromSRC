@@ -495,10 +495,11 @@ export const TEAM_MANAGER_PRELOADED_CATEGORIES: readonly string[] = ['workspace_
 
 export function prepareTeamManagerToolScope(sessionId: string): void {
   if (!sessionId) return;
-  // Lazy require (same pattern as team-agent-executor): the session store is a
-  // module-level singleton, and a static import here can bind a second instance
-  // through the teams <-> session import cycle, silently writing to a store the
-  // chat pipeline never reads (caught by team-manager-hands-on.regression.ts).
+  // Lazy require (same pattern as team-agent-executor's activateToolCategory call).
+  // The session store is a module-level singleton. Under tsx (regression tests) a
+  // static import here resolved to a different session module instance than the
+  // caller's, so the activation landed in a store nobody read. Requiring at call
+  // time always hits the CommonJS instance the gateway and tests share.
   const { activateToolCategory } = require('../session') as typeof import('../session');
   for (const category of TEAM_MANAGER_PRELOADED_CATEGORIES) {
     try {
