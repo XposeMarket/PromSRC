@@ -13,7 +13,7 @@ type Calls = { thread: number; downloadUrl: number; downloadMedia: number; analy
 
 let fxBody: any = null; // FxTwitter response body, or null for a 404
 let oembedFails = false; // when true, oEmbed answers HTTP 500
-const oembedText = 'Post body text for the exact status.';
+let oembedText = 'Post body text for the exact status.';
 
 function installFetchStub(counts: Counts): () => void {
   const original = globalThis.fetch;
@@ -182,8 +182,8 @@ async function main(): Promise<void> {
     ], count: 3 });
     const many = await run({ include_thread: true }, { threadRaw: withReplies });
     assert.equal(many.data.thread_status, 'captured');
-    assert.equal(many.data.reply_count, 1);
-    assert.equal(many.data.author_thread_count, 2);
+    assert.equal(many.data.other_author_count, 1);
+    assert.equal(many.data.same_author_count, 2);
     // Target missing from the browser payload: never complete/captured.
     const missing = JSON.stringify({ success: true, tweets: [{ id: '1', handle: '@other', text: 'x' }], count: 1 });
     const absent = await run({ include_thread: true }, { threadRaw: missing });
@@ -233,6 +233,50 @@ async function main(): Promise<void> {
     const { calls, data } = await run({ include_thread: true, include_media: true }, { threadRaw: thread });
     assert.equal(calls.downloadUrl, 2, 'target media hinted even when a parent post is first');
     assert.equal(data.thread_status, 'captured');
+  }
+
+  // 15. N1: oEmbed-failure recovery must not claim truncation.
+  fxBody = photoBody;
+  oembedFails = true;
+  try {
+    const { data } = await run({ include_media: true });
+    assert.match(data.message, /oEmbed unavailable/);
+    assert.doesNotMatch(data.message, /truncated/);
+  } finally {
+    oembedFails = false;
+  }
+
+  // 16. N1: target synthesized from FxTwitter when browser and oEmbed both miss it.
+  fxBody = photoBody;
+  oembedFails = true;
+  try {
+    const { result, data } = await run({ include_thread: true, include_media: true });
+    assert.equal(result.success, true);
+    assert.match(data.message, /Target post synthesized/);
+    assert.doesNotMatch(data.message, /truncated|oEmbed unavailable/);
+    assert.equal(data.thread_status, 'unavailable');
+  } finally {
+    oembedFails = false;
+  }
+
+  // 17. S2: truncated oEmbed + include_media -> one FxTwitter lookup, full text kept.
+  {
+    const longFull = ('Long-form body sentence number one. '.repeat(12)).trim() + ' THE END';
+    const savedOembed = oembedText;
+    oembedText = longFull.slice(0, 260).trimEnd() + '\u2026';
+    fxBody = { tweet: { id: ID, url: STATUS, text: longFull, author: { name: 'Some One', screen_name: 'someone' }, media: { photos: [{ url: 'https://pbs.twimg.com/media/a.jpg' }, { url: 'https://pbs.twimg.com/media/b.jpg' }] } } };
+    try {
+      const { result, counts, calls, data } = await run({ include_media: true });
+      assert.equal(result.success, true);
+      assert.equal(counts.oembed, 1);
+      assert.equal(counts.fx, 1, 'truncation recovery and media share one FxTwitter lookup');
+      assert.equal(calls.thread, 0);
+      assert.equal(calls.downloadUrl, 2);
+      assert.equal(data.tweets[0].text, longFull, 'full text kept');
+      assert.match(data.message, /oEmbed text was truncated/);
+    } finally {
+      oembedText = savedOembed;
+    }
   }
 
   console.log('x-fetch-media-routing regression: PASS');

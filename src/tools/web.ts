@@ -1544,7 +1544,13 @@ function hasXMediaHints(tweet: any): boolean {
 }
 
 /** Target post from an identity-checked FxTwitter tweet. Text may be empty for media-only posts. */
-function fxTweetToPayload(tweet: any, url: string, id: string): XFetchPayload | null {
+type FxRecoveryReason = 'truncated' | 'oembed_unavailable' | 'target_synthesized';
+const FX_RECOVERY_MESSAGES: Record<FxRecoveryReason, string> = {
+  truncated: 'Captured full long-form X status (oEmbed text was truncated; full text via public FxTwitter API)',
+  oembed_unavailable: 'oEmbed unavailable; target post recovered via public FxTwitter API',
+  target_synthesized: 'Target post synthesized via public FxTwitter API; browser and oEmbed did not return it',
+};
+function fxTweetToPayload(tweet: any, url: string, id: string, reason: FxRecoveryReason): XFetchPayload | null {
   if (!tweet || String(tweet.id || '') !== id) return null;
   const text = String(tweet?.raw_text?.text || tweet?.text || '').trim();
   const screenName = String(tweet?.author?.screen_name || '').trim();
@@ -1566,7 +1572,7 @@ function fxTweetToPayload(tweet: any, url: string, id: string): XFetchPayload | 
       ...(Object.keys(metrics).length ? { metrics } : {}),
     } as any],
     count: 1,
-    message: 'Captured full long-form X status (oEmbed text was truncated; full text via public FxTwitter API)',
+    message: FX_RECOVERY_MESSAGES[reason],
   };
 }
 
@@ -1577,7 +1583,7 @@ async function fetchXStatusViaOEmbed(url: string, fxOnce?: () => Promise<FxLooku
   const clipped = result?.tweets?.[0]?.text;
   if (!result || !isLikelyTruncatedXText(String(clipped || ''))) return result;
   const lookup: FxLookup = fxOnce ? await fxOnce() : { state: 'unavailable' };
-  const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, id) : null;
+  const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, id, 'truncated') : null;
   if (full && String(full.tweets?.[0]?.text || '').length > String(clipped || '').length) return full;
   return {
     ...result,
@@ -2167,7 +2173,7 @@ async function executeXWebFetch(
     if (!payload?.success) {
       // oEmbed failure (rate limit, 5xx, sensitive post) degrades to FxTwitter text; no browser.
       const lookup = await fxOnce();
-      const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, statusId) : null;
+      const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, statusId, 'oembed_unavailable') : null;
       if (full?.tweets?.[0]?.text) payload = full;
     }
   } else {
@@ -2180,7 +2186,8 @@ async function executeXWebFetch(
       threadStatus = 'captured';
       const handle = String(target.handle || '').toLowerCase();
       const authorCount = handle ? tweets.filter(item => String(item?.handle || '').toLowerCase() === handle).length : 1;
-      threadCounts = { author_thread_count: authorCount, reply_count: tweets.length - authorCount };
+      // Same-handle count and other-author count only: no reply relationship (inReplyTo) is proven.
+      threadCounts = { same_author_count: authorCount, other_author_count: tweets.length - authorCount };
     } else if (target) {
       threadStatus = 'target_only';
       threadReason = 'no_replies_captured';
@@ -2218,7 +2225,7 @@ async function executeXWebFetch(
     if (lookup.state === 'ok') {
       if (!target) {
         // Browser/oEmbed missed the target: synthesize it from FxTwitter (text may be empty for media-only posts).
-        const synthesized = fxTweetToPayload(lookup.tweet, url, statusId);
+        const synthesized = fxTweetToPayload(lookup.tweet, url, statusId, 'target_synthesized');
         if (synthesized?.tweets?.[0]) {
           target = synthesized.tweets[0];
           tweets = [...tweets, target];
@@ -2277,10 +2284,16 @@ async function executeXWebFetch(
   }
 
   // stdout carries the same status fields as data (thread/media status, truncation), so the model sees them.
-  const base = { ...payload, status: payload.success ? 'ok' : 'error', truncated: (payload as any).truncated === true };
-  const stdoutPayload = payload.x_media
-    ? { ...base, x_media_summary: summarizeXMediaReport(payload.x_media) }
-    : base;
+  // Statuses first: stdout is clipped by maxChars from the end, and JS keeps first-insertion key order on spread overrides.
+  const statusHead = {
+    status: payload.success ? 'ok' : 'error',
+    truncated: (payload as any).truncated === true,
+    thread_status: (payload as any).thread_status,
+    thread_reason: (payload as any).thread_reason,
+    media_status: (payload as any).media_status,
+    ...(payload.x_media ? { x_media_summary: summarizeXMediaReport(payload.x_media) } : {}),
+  };
+  const stdoutPayload = { ...statusHead, ...payload, status: statusHead.status, truncated: statusHead.truncated };
 
   const stdout = clipText(JSON.stringify(stdoutPayload, null, 2), maxChars);
   if (!payload.success) {
