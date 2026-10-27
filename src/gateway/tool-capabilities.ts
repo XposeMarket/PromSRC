@@ -214,6 +214,14 @@ export function resolveToolCapabilityMetadata(
     if (action === 'delete') return DESTRUCTIVE;
     return LOCAL_WRITE;
   }
+  // Saved model-provider accounts: list reads config; remove deletes an
+  // account and its credentials, so it is destructive (approval-gated).
+  if (name === 'provider_accounts') {
+    const action = String(args?.action || '').trim().toLowerCase();
+    if (action === 'list') return READ_ONLY;
+    if (action === 'remove') return args?.dry_run === true ? READ_ONLY : DESTRUCTIVE;
+    return LOCAL_WRITE;
+  }
   // Authenticated-user lookup: reads the credential's own profile only.
   if (name === 'x_api_me') return CREDENTIAL_READ_ONLY;
   // Plugin import: reads are local scans; install/uninstall write skills, MCP

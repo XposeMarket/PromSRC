@@ -494,6 +494,29 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'provider_accounts',
+        description:
+          'Manage saved model-provider accounts (anthropic, openai_codex, openai, xai), the same list as Settings > Models > Accounts. ' +
+          'action "list" shows each provider\'s accounts, which is default, and which are connected. ' +
+          '"rename" sets an account label. "set_default" makes an account the provider default. ' +
+          '"remove" deletes one account and its saved credentials (asks for approval); use dry_run:true first to see which agent roles would switch. ' +
+          'A provider\'s only account cannot be removed; sign it out from Settings instead. Adding/connecting accounts needs a browser login and stays in Settings.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['list', 'rename', 'set_default', 'remove'], description: 'What to do.' },
+            provider: { type: 'string', enum: ['anthropic', 'openai_codex', 'openai', 'xai'], description: 'Provider id. Required except for list.' },
+            account_id: { type: 'string', description: 'Account id from action "list". Required except for list.' },
+            label: { type: 'string', description: 'New account name for rename (1-64 characters).' },
+            dry_run: { type: 'boolean', description: 'remove only: preview affected agent roles without changing anything.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'set_current_model',
         description:
           'Switch the current primary LLM provider/model for this live chat and persist it in .prometheus/config.json. ' +

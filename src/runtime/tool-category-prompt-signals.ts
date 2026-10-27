@@ -210,6 +210,7 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
     phrases: [
       'agent model', 'agent models', 'model template', 'model templates',
       'agent routing', 'executor route', 'set agent model', 'save model template',
+      'provider account', 'provider accounts', 'remove account', 'rename account', 'provider_accounts',
       'get_agent_models', 'set_agent_model', 'list_agent_model_templates',
       'save_agent_model_template', 'update_agent_model_template',
       'apply_agent_model_template', 'select_agent_model_template', 'delete_agent_model_template',

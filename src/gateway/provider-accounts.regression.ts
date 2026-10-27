@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { planRemoveProviderAccount, planUpdateProviderAccount } from './provider-accounts.js';
+import { dropRemovedAccounts, planRemoveProviderAccount, planUpdateProviderAccount } from './provider-accounts.js';
+import { resolveToolCapabilityMetadata } from './tool-capabilities.js';
+
+// provider_accounts agent tool: list is read-only, remove is approval-gated.
+const cap = (args: Record<string, any>) => resolveToolCapabilityMetadata('provider_accounts', undefined, args);
+assert.equal(cap({ action: 'list' }).readOnly, true);
+assert.equal(cap({ action: 'remove' }).destructive, true);
+assert.equal(cap({ action: 'remove', dry_run: true }).readOnly, true);
+assert.equal(cap({ action: 'rename' }).localWrite, true);
 // @ts-ignore -- browser ES module shared by desktop + mobile Settings
 import { buildAccountGroups, roleLabel } from '../../web-ui/src/settings/provider-accounts-list.js';
 
@@ -153,6 +161,51 @@ function sample(): any {
   assert.equal(buildAccountGroups(draftCfg.llm, normalize).groups[0].accounts.some((a: any) => a.draft), false);
   assert.equal(roleLabel('subagent-planner'), 'Planner');
   assert.equal(roleLabel('main_chat'), 'Main chat');
+}
+
+// Remove records a tombstone; a stale full Save cannot write the account back.
+{
+  const plan = planRemoveProviderAccount(sample(), 'anthropic', 'a2');
+  assert.deepEqual(plan.nextConfigPatch.llm.providers.anthropic.removed_account_ids, ['a2']);
+  const stale = sample().llm; // surface loaded before the removal still has a2
+  const merged = dropRemovedAccounts(stale, plan.nextConfigPatch.llm);
+  assert.deepEqual(Object.keys(merged.providers.anthropic.accounts), ['a1']);
+  assert.deepEqual(merged.providers.anthropic.removed_account_ids, ['a2']);
+  assert.deepEqual(Object.keys(stale.providers.anthropic.accounts), ['a1', 'a2'], 'input not mutated');
+  // Stale default/live account pointing at the removed id moves to a survivor.
+  const staleOnA2 = sample().llm;
+  staleOnA2.accountId = 'a2';
+  staleOnA2.providers.anthropic.defaultAccountId = 'a2';
+  const fixed = dropRemovedAccounts(staleOnA2, plan.nextConfigPatch.llm);
+  assert.equal(fixed.providers.anthropic.defaultAccountId, 'a1');
+  assert.equal(fixed.accountId, 'a1');
+  // Never empties a provider: that would resurrect legacy single-account mode.
+  const onlyRemoved = sample().llm;
+  onlyRemoved.providers.anthropic.accounts = { a2: { id: 'a2', label: 'Work' } };
+  assert.deepEqual(Object.keys(dropRemovedAccounts(onlyRemoved, plan.nextConfigPatch.llm).providers.anthropic.accounts), ['a2']);
+  // No tombstones: untouched.
+  assert.deepEqual(Object.keys(dropRemovedAccounts(sample().llm, sample().llm).providers.anthropic.accounts), ['a1', 'a2']);
+}
+
+// Removing a legacy "default" account also drops the provider-level key it was
+// backed by (factory.ts falls back to it) and, for Codex, the unscoped token.
+{
+  const cfg = sample();
+  cfg.llm.providers.openai = {
+    api_key: 'vault:llm.openai.api_key',
+    defaultAccountId: 'default',
+    accounts: { default: { id: 'default', label: 'OpenAI API account' }, o2: { id: 'o2', label: 'Second' } },
+  };
+  const plan = planRemoveProviderAccount(cfg, 'openai', 'default');
+  assert.equal(plan.ok, true);
+  assert.equal(plan.nextConfigPatch.llm.providers.openai.api_key, undefined);
+  assert.deepEqual(plan.legacyCredentials, { providerApiKey: true, unscopedOAuth: false });
+  assert.equal(cfg.llm.providers.openai.api_key, 'vault:llm.openai.api_key', 'input not mutated');
+  const codex = sample();
+  codex.llm.providers.openai_codex = { defaultAccountId: 'default', accounts: { default: { id: 'default' }, c2: { id: 'c2' } } };
+  assert.deepEqual(planRemoveProviderAccount(codex, 'openai_codex', 'default').legacyCredentials, { providerApiKey: false, unscopedOAuth: true });
+  // Named accounts never touch legacy credentials.
+  assert.deepEqual(planRemoveProviderAccount(sample(), 'anthropic', 'a2').legacyCredentials, { providerApiKey: false, unscopedOAuth: false });
 }
 
 console.log('provider-accounts regression: ok');

@@ -1380,7 +1380,7 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   creative_hyperframes: 'use creative_hyperframes_ops for HyperFrames and HTML motion clip/template tools for source-backed animated videos.',
   creative_quality: 'use creative_quality_ops for frame renders, layout checks, text fit, contrast, overlaps, timing, and clip validation.',
   skills: 'author and maintain reusable skills with skill_ops: create/create_bundle, import/export/update bundles, update_metadata, manifest_write, resource read/write/delete/list, inspect, audit_all, and repair_metadata. Core skill tools are only skill_list and skill_read.',
-  model_management: 'administer agent model routing/templates: get_agent_models, set_agent_model, list/save/update/apply/select/delete agent model templates.',
+  model_management: 'administer agent model routing/templates and saved provider accounts: get_agent_models, set_agent_model, provider_accounts (list/rename/set_default/remove), list/save/update/apply/select/delete agent model templates.',
   business: 'manage structured entity files: list_entities, read_entity, write_entity, and append_entity_event for clients, contacts, projects, vendors, and social accounts.',
 };
 
