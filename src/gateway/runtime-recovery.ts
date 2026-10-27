@@ -33,7 +33,6 @@ import { formatBackgroundSpawnContinuity } from './tasks/background-spawn-contin
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
-  'background_agent',
   'subagent',
   'team_subagent',
   'proposal_execution',

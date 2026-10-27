@@ -1183,6 +1183,13 @@ export function addPendingRuntimeSteer(
     attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
   };
   if (!Array.isArray(record.pendingSteers)) record.pendingSteers = [];
+  // Background completion retries use a stable logical identity. Ordinary user
+  // steers deliberately keep their existing repeat-message semantics.
+  if (event.kind === 'background_agent_result' && event.backgroundAgentId) {
+    const existing = record.pendingSteers.find((pending) => pending.kind === event.kind
+      && pending.backgroundAgentId === event.backgroundAgentId);
+    if (existing) return { ok: true, runtime: toSnapshot(record), event: existing };
+  }
   record.pendingSteers.push(event);
   record.updatedAt = Date.now();
   record.checkpoint = {

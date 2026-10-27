@@ -17,6 +17,10 @@ import {
   startRuntimeWorkerResourceHeartbeat,
 } from './runtime-worker-resources.js';
 
+import { getConfig } from '../../config/config.js';
+import { getVault } from '../../security/vault.js';
+import { scheduleWorkerWarmup } from './worker-latency.js';
+
 interface ContextBuildPayload {
   sessionId: string;
   workspacePath: string;
@@ -173,3 +177,5 @@ send({
 
 const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
 process.once('disconnect', () => clearInterval(resourceHeartbeat));
+
+scheduleWorkerWarmup(() => getVault(getConfig().getConfigDir()).prewarmDerivedKeysAsync());
