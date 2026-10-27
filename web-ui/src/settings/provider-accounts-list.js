@@ -137,6 +137,9 @@ function onSheetKeydown(event) {
 
 function openSheet(group, account, deps) {
   closeSheet();
+  // Unsaved drafts don't count: the gateway refuses to remove the only saved account.
+  const savedCount = group.accounts.filter((item) => !item.draft).length;
+  const canRemove = !account.draft && savedCount > 1;
   const host = document.getElementById('settings-modal') || document.body;
   const backdrop = document.createElement('div');
   backdrop.className = 'spa-sheet-backdrop';
@@ -146,12 +149,12 @@ function openSheet(group, account, deps) {
       <div class="spa-sheet-title">${esc(account.label)}<small>${esc(group.name)} · ${esc(account.authLabel)}${account.isDefault ? ' · Default' : ''}</small></div>
       <label class="spa-field"><span>Name</span><input class="settings-input" data-spa-name maxlength="64" value="${esc(account.label)}" autocomplete="off"></label>
       <div class="spa-sheet-status" data-spa-status role="status" aria-live="polite"></div>
-      ${group.accounts.length > 1 ? '' : `<div class="spa-sheet-note">This is your only ${esc(group.name)} account. To sign it out, use Disconnect under ${account.connected ? 'Manage connection' : 'Connect'}.</div>`}
+      ${canRemove || account.draft ? '' : `<div class="spa-sheet-note">This is your only ${esc(group.name)} account. To sign it out, use Disconnect under ${account.connected ? 'Manage connection' : 'Connect'}.</div>`}
       <div class="spa-actions">
         <button class="spa-btn" type="button" data-act="rename">Save name</button>
         ${account.isDefault ? '' : '<button class="spa-btn" type="button" data-act="default">Make default</button>'}
         <button class="spa-btn" type="button" data-act="connect">${account.connected ? 'Manage connection' : 'Connect'}</button>
-        ${group.accounts.length > 1 ? '<button class="spa-btn spa-btn-danger" type="button" data-act="remove">Remove account</button>' : ''}
+        ${canRemove ? '<button class="spa-btn spa-btn-danger" type="button" data-act="remove">Remove account</button>' : ''}
       </div>
       <button class="spa-btn spa-done" type="button" data-act="done">Done</button>
     </div>`;

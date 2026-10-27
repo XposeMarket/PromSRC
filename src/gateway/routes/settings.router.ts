@@ -2276,11 +2276,16 @@ router.post('/api/settings/provider', (req, res) => {
 });
 
 // The Settings UI lists accounts from the normalized shape (legacy configs get
-// a synthesized "default" account). Plan against that same shape, with account
-// secrets moved to the vault exactly as POST /api/settings/provider does, so
-// rename/default/remove work on every row the user can see.
+// a synthesized "default" account). Plan against that same shape so
+// rename/default/remove work on every row the user can see. Pure: secrets are
+// moved to the vault only when a plan is actually persisted (persistedLlm),
+// so dryRun and rejected requests have no side effects.
 function configWithNormalizedAccounts(config: any): any {
-  return { ...config, llm: migrateAccountSecretsToVault(normalizeLLMAccounts(config?.llm || {})) };
+  return { ...config, llm: normalizeLLMAccounts(config?.llm || {}) };
+}
+
+function persistedLlm(llm: any): any {
+  return migrateAccountSecretsToVault(llm);
 }
 
 // POST /api/settings/provider-accounts/remove — remove one account (dryRun previews affected agent roles)
@@ -2296,7 +2301,7 @@ router.post('/api/settings/provider-accounts/remove', (req, res) => {
       return;
     }
     configManager.updateConfig({
-      llm: plan.nextConfigPatch.llm,
+      llm: persistedLlm(plan.nextConfigPatch.llm),
       agent_model_default_accounts: plan.nextConfigPatch.agent_model_default_accounts,
     } as any);
     // Clear only this account's credentials. accountId is validated non-empty
@@ -2336,7 +2341,7 @@ router.post('/api/settings/provider-accounts/update', (req, res) => {
     const configManager = getConfig();
     const plan = planUpdateProviderAccount(configWithNormalizedAccounts(configManager.getConfig()), providerId, accountId, patch);
     if (!plan.ok || !plan.nextConfigPatch) { res.status(400).json({ success: false, error: plan.error || 'Update failed' }); return; }
-    configManager.updateConfig({ llm: plan.nextConfigPatch.llm } as any);
+    configManager.updateConfig({ llm: persistedLlm(plan.nextConfigPatch.llm) } as any);
     resetProvider();
     invalidateProviderStatusCache();
     res.json({ success: true });
