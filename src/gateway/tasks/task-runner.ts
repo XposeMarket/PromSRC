@@ -11,7 +11,11 @@
  */
 
 import crypto from 'crypto';
-import { getSessionToolCeiling } from '../agents-runtime/tool-ceiling';
+import fs from 'node:fs';
+import path from 'node:path';
+import { isPreviewMode } from '../runtime/preview-mode';
+import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution } from './background-execution-store';
+import { getSessionToolCeiling, intersectToolCeiling } from '../agents-runtime/tool-ceiling';
 import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
@@ -20,7 +24,7 @@ import { normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from '../
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
-import { addMessage, getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
+import { addMessage, getSession, getWorkspace, getActivatedToolCategories, persistBackgroundResultMessage, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { normalizeToolCategory } from '../tool-builder';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
@@ -187,6 +191,13 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   workDir?: string;
   allowedWorkPaths?: string[];
   backgroundStream: BackgroundAgentStreamState;
+  resumed?: boolean;
+  customTools?: boolean;
+  outstandingTools: Array<{ id: string; name: string; args: any }>;
+  continuationHistory?: any[];
+  completedToolEvidence?: Array<{ id: string; name: string; result: any }>;
+  operatorCancelled?: boolean;
+  deliveredAt?: number;
 }
 
 // Ceiling for an EXPLICIT background wait. Real spawns routinely run 20-30
@@ -257,6 +268,10 @@ export function registerBackgroundCompletionWake(callback: (sessionId: string) =
 }
 
 function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
+  if (record.state === 'completed' || record.state === 'failed') {
+    record.continuationHistory = getSession(backgroundRuntimeSessionId(record)).history.slice();
+  }
+  saveBackgroundExecution(record);
   if (!record.spawnerSessionId) return;
   persistBackgroundSpawnReceipt({
     id: record.id,
@@ -271,13 +286,15 @@ function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
 }
 
 function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): boolean {
+  persistBackgroundReceipt(record);
   const spawnerSessionId = String(record.spawnerSessionId || '').trim();
   if (!spawnerSessionId || (record.state !== 'completed' && record.state !== 'failed')) return false;
   const outcome = record.state === 'completed'
     ? String(record.result || 'Background task completed with no textual output.').trim()
     : String(record.error || 'Background task failed without an error message.').trim();
-  persistBackgroundReceipt(record);
+  if (record.mergedAt || record.deliveredAt || record.operatorCancelled) return false;
   const queued = addPendingRuntimeSteerForSession(spawnerSessionId, {
+    id: `background_agent_result:${record.id}`,
     message: outcome,
     source: 'background_spawn_completion',
     kind: 'background_agent_result',
@@ -296,6 +313,14 @@ function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): 
     console.warn(`[Background Agent] ${record.id} could not wake its interrupted owner:`, error);
   }
   return queued.ok;
+}
+
+/** Called only after the foreground has durably stored the complete result. */
+export function acknowledgeBackgroundResult(sessionId: string, backgroundId: string): void {
+  const record = _ephemeralBackgroundRuns.get(backgroundId);
+  if (!record || record.spawnerSessionId !== sessionId || !isBackgroundTerminal(record) || record.deliveredAt) return;
+  record.deliveredAt = Date.now();
+  persistBackgroundReceipt(record);
 }
 
 // ─── Background Agent deps (injected at startup via setBackgroundAgentDeps) ──
@@ -575,16 +600,17 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       label: 'Background agent',
       sessionId: runtimeSessionId,
       recoveryData: { ownerSessionId: record.spawnerSessionId },
-      taskId: record.id,
       source: 'background_spawn',
       detail: String(prompt || '').slice(0, 160),
       abortSignal,
       onAbort: () => {
+        record.operatorCancelled = true;
         abortController.abort();
         if (!isBackgroundTerminal(record)) {
           record.state = 'failed';
           record.error = 'Aborted by operator.';
           record.completedAt = Date.now();
+          persistBackgroundReceipt(record);
         }
       },
     });
@@ -610,7 +636,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         // handleChat runs with skipAutomaticToolCategoryActivation so the task
         // prompt text cannot keyword-provision the rest of the catalog.
         setActivatedToolCategories(sessionId, Array.isArray(record.toolCategories) ? record.toolCategories.slice() : []);
-        if (spawnerSessionId) {
+        if (record.resumed) {
+          setWorkspace(sessionId, record.workDir!);
+          if (record.continuationHistory) replaceHistory(sessionId, record.continuationHistory as any, { historyChangeSource: 'replace_history' });
+        }
+        if (spawnerSessionId && !record.resumed) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
           // An explicit work_dir (e.g. a promsrc-pr worktree) overrides the
@@ -631,6 +661,14 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           }
         }
       } catch (err: any) {
+        if (record.resumed) {
+          record.state = 'failed';
+          record.error = 'Recovery blocked: saved session/tool context could not be restored safely.';
+          record.completedAt = Date.now();
+          queueBackgroundResultForForeground(record);
+          finishLiveRuntime(runtimeId);
+          return;
+        }
         console.warn(`[Background Agent] ${record.id} could not inherit session tool context: ${err?.message || err}`);
       }
       registerBrowserSessionMetadata(sessionId, {
@@ -653,9 +691,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.modelSource = modelRouting.source;
       record.reasoningEffort = modelRouting.reasoningEffort;
       const toolCallLog: string[] = [];
-      const backgroundProcessEntries: Record<string, any>[] = [];
-      const backgroundLiveTraceEntries: Record<string, any>[] = [];
+      const savedAssistant = record.continuationHistory?.find((entry: any) => entry.backgroundAgentId === record.id);
+      const backgroundProcessEntries: Record<string, any>[] = savedAssistant?.processEntries?.slice() || [];
+      const backgroundLiveTraceEntries: Record<string, any>[] = savedAssistant?.liveTraceEntries?.slice() || [];
       let lastSessionCheckpointAt = 0;
+      let lastExecutionCheckpointAt = 0;
       const persistBackgroundSessionCheckpoint = (terminal = false, finalText = '', reasoningSummary = '') => {
         const now = Date.now();
         if (!terminal && now - lastSessionCheckpointAt < 1200) return;
@@ -719,6 +759,23 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
 
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
+        const name = String(data?.action || data?.name || data?.tool || '');
+        const callId = String(data?.toolCallId || data?.tool_call_id || data?.callId
+          || (data?.stepNum !== undefined ? `step:${data.stepNum}:${name}` : ''));
+        if (event === 'tool_call') {
+          record.outstandingTools.push({ id: callId || `unknown:${crypto.randomUUID()}`, name, args: data?.args });
+        } else if (event === 'tool_result' && callId) {
+          record.completedToolEvidence = [...(record.completedToolEvidence || []), { id: callId, name, result: data?.result }];
+          record.outstandingTools = record.outstandingTools.filter((call) => call.id !== callId);
+        }
+        record.toolCategories = Array.from(getActivatedToolCategories(sessionId));
+        record.toolCeiling = intersectToolCeiling(getSessionToolCeiling(sessionId), record.toolCeiling);
+        const forceCheckpoint = event === 'tool_call' || event === 'tool_result';
+        if (forceCheckpoint || Date.now() - lastExecutionCheckpointAt >= 1200) {
+          record.continuationHistory = getSession(sessionId).history.slice();
+          saveBackgroundExecution(record);
+          lastExecutionCheckpointAt = Date.now();
+        }
         const frame = appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
         appendBackgroundSseTrace(backgroundProcessEntries, backgroundLiveTraceEntries, event, data, frame);
         persistBackgroundSessionCheckpoint();
@@ -753,7 +810,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
 
       try {
         const chatResult = await runHandleChat(() => handleChat(
-          prompt,
+          record.resumed ? `Continue background task ${record.id} from its saved history/checkpoint. Original assignment:\n${prompt}\nCompleted tool evidence (do not replay): ${JSON.stringify(record.completedToolEvidence || [])}\nDo not repeat completed actions or reuse approvals; reconcile uncertain operations before acting.` : prompt,
           sessionId,
           sendSSE,
           undefined,   // extra
@@ -773,6 +830,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
+        if (abortSignal.aborted && (abortSignal as any).reason && !record.operatorCancelled) {
+          record.continuationHistory = getSession(sessionId).history.slice();
+          persistBackgroundReceipt(record);
+          return; // planned gateway shutdown: durable state remains resumable
+        }
         if (abortSignal.aborted) {
           record.error = 'Aborted by operator.';
           record.state = 'failed';
@@ -802,6 +864,17 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
 
         emitBackgroundAgentDone(record, 'completed', { result: record.result }, sessionId);
       } catch (err: any) {
+        if (record.operatorCancelled) {
+          persistBackgroundReceipt(record);
+          finishBackgroundAgentStream(record.backgroundStream);
+          finishLiveRuntime(runtimeId);
+          return;
+        }
+        if (abortSignal.aborted && (abortSignal as any).reason && !record.operatorCancelled) {
+          record.continuationHistory = getSession(sessionId).history.slice();
+          persistBackgroundReceipt(record);
+          return;
+        }
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
         record.completedAt = Date.now();
@@ -853,6 +926,52 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
   });
 }
 
+function safeBackgroundDirectory(directory: string): boolean {
+  try { return fs.statSync(directory).isDirectory(); } catch { return false; }
+}
+
+export function recoverBackgroundExecutions(options: { isHostedElsewhere?: (runtime: any) => boolean } = {}): string[] {
+  if (!_bgDeps?.handleChat || isPreviewMode()) return [];
+  const recovered: string[] = [];
+  for (const envelope of readBackgroundExecutions()) {
+    if (_ephemeralBackgroundRuns.has(envelope.id)) continue;
+    if (options.isHostedElsewhere?.({ pid: envelope.ownerPid, status: 'running' })) continue;
+    const saved = envelope.record;
+    const terminal = ['completed', 'failed', 'timed_out'].includes(saved.state);
+    if (!terminal && !claimBackgroundExecution(envelope)) continue;
+    const record = { ...saved, promise: Promise.resolve(), backgroundStream: createBackgroundAgentStream(), resumed: true } as EphemeralBackgroundRecord;
+    _ephemeralBackgroundRuns.set(record.id, record);
+    if (terminal) {
+      // Retry until the parent commits the full result to durable history.
+      // Queue identity dedupes pending retries; the parent's ACK survives restart.
+      if (!record.mergedAt) queueBackgroundResultForForeground(record);
+      continue;
+    }
+    if (!record.workDir || !path.isAbsolute(record.workDir) || !fs.existsSync(record.workDir)
+      || !safeBackgroundDirectory(record.workDir)) {
+      record.state = 'failed';
+      record.error = 'Recovery blocked: original working directory is unavailable; execution scope was not changed.';
+      record.completedAt = Date.now();
+      persistBackgroundReceipt(record);
+      queueBackgroundResultForForeground(record);
+      continue;
+    }
+    if (record.customTools || record.outstandingTools.length) {
+      record.state = 'failed';
+      record.error = record.customTools
+        ? 'Recovery blocked: custom tool functions cannot be restored safely.'
+        : `Recovery blocked: unknown tool outcome (${record.outstandingTools.map((call) => call.id).join(', ')}). Reconcile operation/checkpoint evidence externally before retrying; approvals are not reusable.`;
+      record.completedAt = Date.now();
+      persistBackgroundReceipt(record);
+      queueBackgroundResultForForeground(record);
+      continue;
+    }
+    record.promise = startBackgroundExecution(record, record.prompt!);
+    recovered.push(record.id);
+  }
+  return recovered;
+}
+
 export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): EphemeralBackgroundStatus {
   const prompt = String(input?.prompt || '').trim();
   if (!prompt) {
@@ -888,11 +1007,13 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     speed: resolveBackgroundSpawnSpeed(resolvedRouting.providerId, resolvedRouting.model, input?.speed),
     toolCategories: normalizeBackgroundSpawnToolCategories(input?.toolCategories),
     backgroundStream: createBackgroundAgentStream(),
+    outstandingTools: [],
+    customTools: !!input.tools?.length,
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
   record.toolCeiling = getSessionToolCeiling(record.spawnerSessionId);
-  record.workDir = String(input?.workDir || '').trim() || undefined;
+  record.workDir = String(input?.workDir || '').trim() || (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
   record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
     ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
     : undefined;
@@ -929,16 +1050,16 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
 }
 
 /**
- * Live background records are process-local. After a gateway restart the
- * worker is gone, but its durable receipt survives. Answer status/wait/join
- * from that receipt instead of "not found", and report a worker that was still
- * running at shutdown as an explicit interruption so the parent neither waits
- * forever nor assumes the worker never launched.
+ * New background runs have private executable envelopes. Older receipt-only
+ * runs cannot be rebuilt safely from a short prompt preview: retain the honest
+ * interruption fallback instead of fabricating continuation.
  */
 export const BACKGROUND_INTERRUPTED_BY_RESTART_ERROR =
   'Interrupted by a gateway restart before finishing. Its partial work is not recoverable; re-spawn it if the result is still needed.';
 
 export function backgroundStatusFromReceipt(backgroundId: string): EphemeralBackgroundStatus | null {
+  const durable = readBackgroundExecutions().find((item) => item.id === backgroundId)?.record;
+  if (durable) return backgroundPublicStatus({ ...durable, backgroundStream: createBackgroundAgentStream() } as EphemeralBackgroundRecord);
   const id = String(backgroundId || '').trim();
   if (!id) return null;
   let receipt: ReturnType<typeof readBackgroundSpawnReceipts>[number] | undefined;
@@ -966,6 +1087,10 @@ export function backgroundStatusFromReceipt(backgroundId: string): EphemeralBack
 export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatus | null {
   const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
   if (!rec) return backgroundStatusFromReceipt(backgroundId);
+  return backgroundPublicStatus(rec);
+}
+
+function backgroundPublicStatus(rec: EphemeralBackgroundRecord): EphemeralBackgroundStatus {
   return {
     id: rec.id,
     state: rec.state,
@@ -1306,7 +1431,14 @@ export async function backgroundJoin(input: {
   joinPolicy?: BackgroundJoinPolicy;
   timeoutMs?: number;
 }): Promise<EphemeralBackgroundJoinResult | null> {
-  const rec = _ephemeralBackgroundRuns.get(String(input?.backgroundId || '').trim());
+  let rec = _ephemeralBackgroundRuns.get(String(input?.backgroundId || '').trim());
+  if (!rec) {
+    const saved = readBackgroundExecutions().find((item) => item.id === String(input?.backgroundId || '').trim())?.record;
+    if (saved && ['completed', 'failed', 'timed_out'].includes(saved.state)) {
+      rec = { ...saved, promise: Promise.resolve(), backgroundStream: createBackgroundAgentStream() } as EphemeralBackgroundRecord;
+      _ephemeralBackgroundRuns.set(rec.id, rec);
+    }
+  }
   if (!rec) {
     // Restarted gateway: settle the join from the durable receipt (terminal
     // result, or an explicit interruption) instead of returning "not found".
@@ -1344,7 +1476,10 @@ export async function backgroundJoin(input: {
   const terminal = rec.state === 'completed' || rec.state === 'failed';
   const canMerge = terminal && !rec.mergedAt;
   if (canMerge) {
+    if (rec.spawnerSessionId) persistBackgroundResultMessage(rec.spawnerSessionId, rec.id,
+      `[BACKGROUND AGENT RESULT]\nAgent id: ${rec.id}\nState: ${rec.state}\nAgent final response:\n${rec.result || rec.error || '(no output)'}\n[/BACKGROUND AGENT RESULT]`);
     rec.mergedAt = Date.now();
+    persistBackgroundReceipt(rec);
   }
   console.log(`[Background Agent] join ${rec.id}: state=${rec.state} merged=${canMerge} timedOut=${timedOut}`);
 

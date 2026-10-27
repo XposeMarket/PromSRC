@@ -806,7 +806,9 @@ export class ConfigManager {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-        const loadedRaw = JSON.parse(data);
+        // Windows editors/PowerShell can prefix valid UTF-8 JSON with a BOM.
+        // Strip only that encoding marker; malformed JSON still follows the error path.
+        const loadedRaw = JSON.parse(data.replace(/^\uFEFF/, ''));
         const loaded = normalizeLegacyPathsInConfig(loadedRaw);
 
         // Deep-merge the llm.providers block so env-var defaults for

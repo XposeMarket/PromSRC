@@ -34,7 +34,7 @@ import { getOllamaClient } from '../../../../agents/ollama-client';
 import { parseProviderModelRef } from '../../../../agents/model-routing.js';
 import { captureModelUsageLogCursor, readModelUsageEventsSince, resolveProviderPromptTokens } from '../../../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../../../providers/model-pricing';
-import { getHistory, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled } from '../../../session';
+import { getHistory, persistBackgroundResultMessage, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, getWorkspace, setWorkspace, getCreativeMode, getCreativeReferences, getActivatedToolCategories, activateToolCategory, captureToolCategoryActivationState, restoreToolCategoryActivationState, isBusinessContextEnabled } from '../../../session';
 import { BrainRunBudget, type BrainRunBudgetOptions } from '../../../agents-runtime/brain-run-budget';
 import { collectRichArtifacts, extractVisualArtifactsFromMarkdown, productCarouselToArtifact } from '../../../rich-artifacts';
 import { buildTurnSourcesArtifact } from '../../../turn-sources';
@@ -45,7 +45,7 @@ import { envelopeOversizedToolResult } from '../../../tool-result-envelope';
 import { boundToolMessageContentForModelContext } from '../../../tool-result-model-context';
 import { ensurePrometheusThreadOpsForSupervision } from '../../../tools/defs/agent-team-schedule';
 import { findProjectBySessionId } from '../../../projects/project-store.js';
-import { bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../../../tasks/task-runner';
+import { bgPlanDeclare, bgPlanAdvance, backgroundJoin, acknowledgeBackgroundResult } from '../../../tasks/task-runner';
 import { getApprovalQueue } from '../../../verification-flow';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../../../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../../../brain/skill-episodes.js';
@@ -1112,7 +1112,10 @@ export async function handleChatUntraced(
   const MAX_BACKGROUND_FINALIZATION_GUARD = 1;
   let visualFinalizationGuard = 0;
   const MAX_VISUAL_FINALIZATION_GUARD = 2;
-  const backgroundResultInjectedIds = new Set<string>();
+  const backgroundResultInjectedIds = new Set<string>(getHistory(sessionId, 100_000)
+    .filter((entry) => entry.messageKind === 'background_agent_result')
+    .map((entry) => String(entry.deliveryBatchId || '').replace(/^background_agent_result:/, ''))
+    .filter(Boolean));
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
@@ -3483,7 +3486,22 @@ Do not produce prose. Use the canonical thread tool now.` });
     const steers = consumePendingRuntimeSteersForSession(sessionId, 16);
     if (!steers.length) return 0;
     for (const steer of steers) {
-      await appendSteerEventToMessages(steer);
+      if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
+        if (backgroundResultInjectedIds.has(steer.backgroundAgentId)) {
+          acknowledgeBackgroundResult(sessionId, steer.backgroundAgentId);
+          continue;
+        }
+        const content = buildChatSteerContextBlock(steer);
+        const committed = persistBackgroundResultMessage(sessionId, steer.backgroundAgentId, content);
+        acknowledgeBackgroundResult(sessionId, steer.backgroundAgentId);
+        backgroundResultInjectedIds.add(steer.backgroundAgentId);
+        // A pre-ACK crash may have committed the message already. In that case
+        // the new turn loaded it from history, so don't append a second copy.
+        if (!committed.inserted) continue;
+        messages.push({ role: 'user', content });
+      } else {
+        await appendSteerEventToMessages(steer);
+      }
       if (steer.kind === 'internal_watch_result' && steer.internalWatchId && steer.internalWatchActionPolicy) {
         activeInternalWatchContext = {
           watchId: steer.internalWatchId,
