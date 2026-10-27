@@ -14,6 +14,7 @@ const DEFAULT_PREVIEW_CHARS = 600;
 const MARKER_RESERVE_CHARS = 64;
 const TERMINAL_STATES = ['completed', 'failed', 'timed_out'];
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const CONSUMED_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** Explicit id (toolCallId / step id) or an anonymous id; never dropped. */
 export function recordToolCall(outstanding: LedgerCall[], data: { id?: string; name: string; args?: any }): LedgerCall[] {
@@ -72,15 +73,23 @@ export function formatResumeEvidence(evidence: LedgerEvidence[], maxChars = 6000
 }
 
 /**
- * Terminal snapshots are pruned once durable delivery/merge/cancel happened,
- * when no spawner can ever consume them, or after a terminal age limit.
+ * Boot-time pruning of terminal snapshots. A consumed result (merged,
+ * delivered, cancelled, or with no spawner to consume it) is kept for a grace
+ * window so a join right after a restart still returns the full result and
+ * stays non-mergeable; any terminal snapshot is dropped after the age limit.
+ * Running/queued snapshots are never pruned.
  */
 export function shouldDeleteExecutionSnapshot(
   record: Record<string, any>,
   now: number,
-  maxTerminalAgeMs = SEVEN_DAYS_MS,
+  options: { consumedGraceMs?: number; maxTerminalAgeMs?: number } = {},
 ): boolean {
   if (!TERMINAL_STATES.includes(record?.state)) return false;
-  if (record.mergedAt || record.deliveredAt || record.operatorCancelled || !record.spawnerSessionId) return true;
-  return typeof record.completedAt === 'number' && now - record.completedAt > maxTerminalAgeMs;
+  const grace = options.consumedGraceMs ?? CONSUMED_GRACE_MS;
+  const maxAge = options.maxTerminalAgeMs ?? SEVEN_DAYS_MS;
+  const finishedAt = [record.completedAt, record.startedAt].find((v) => typeof v === 'number' && Number.isFinite(v));
+  const consumedAt = [record.mergedAt, record.deliveredAt].find((v) => typeof v === 'number' && Number.isFinite(v)) ?? finishedAt;
+  const consumed = !!(record.mergedAt || record.deliveredAt || record.operatorCancelled || !record.spawnerSessionId);
+  if (consumed && typeof consumedAt === 'number' && now - consumedAt > grace) return true;
+  return typeof finishedAt === 'number' && now - finishedAt > maxAge;
 }

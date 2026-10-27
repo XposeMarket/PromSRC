@@ -71,11 +71,14 @@ import {
 {
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
-  assert.equal(shouldDeleteExecutionSnapshot({ state: 'in_progress', spawnerSessionId: 's', mergedAt: now }, now), false);
-  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now, mergedAt: now }, now), true);
-  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now }, now), false);
-  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now - 8 * day }, now), true);
-  assert.equal(shouldDeleteExecutionSnapshot({ state: 'failed', completedAt: now }, now), true);
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'in_progress', spawnerSessionId: 's', startedAt: now - 30 * day, mergedAt: now - 30 * day }, now), false, 'running work is never pruned');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now, mergedAt: now }, now), false, 'just-merged result survives a restart join');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now - 2 * day, mergedAt: now - 25 * 60 * 60 * 1000 }, now), true, 'merged result pruned after 24h grace');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'failed', spawnerSessionId: 's', completedAt: now - 2 * day, deliveredAt: now - 2 * day }, now), true, 'delivered result pruned after grace');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now - 2 * day }, now), false, 'undelivered result kept for delivery');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'completed', spawnerSessionId: 's', completedAt: now - 8 * day }, now), true, 'any terminal snapshot pruned after 7 days');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'failed', completedAt: now }, now), false, 'spawnerless result kept during grace');
+  assert.equal(shouldDeleteExecutionSnapshot({ state: 'failed', completedAt: now - 2 * day }, now), true, 'spawnerless result pruned after grace');
 }
 
 // 8. behavioral store test: delete removes the snapshot file (isolated config dir)

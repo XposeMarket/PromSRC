@@ -274,7 +274,6 @@ function persistBackgroundReceipt(record: EphemeralBackgroundRecord): void {
     record.continuationHistory = getSession(backgroundRuntimeSessionId(record)).history.slice();
   }
   saveBackgroundExecution(record);
-  if (shouldDeleteExecutionSnapshot(record, Date.now())) deleteBackgroundExecution(record.id);
   if (!record.spawnerSessionId) return;
   persistBackgroundSpawnReceipt({
     id: record.id,
