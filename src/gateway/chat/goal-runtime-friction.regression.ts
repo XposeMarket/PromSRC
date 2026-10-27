@@ -102,6 +102,7 @@ await runWithWorkspace(root, async () => {
 assert.deepEqual(resolveBackgroundWorkDirArg('', root), {}, 'no work_dir keeps today\'s behavior');
 const runner = fs.readFileSync(path.join(__dirname, '..', 'tasks', 'task-runner.ts'), 'utf8');
 assert.match(runner, /runWithWorkspace\(record\.workDir, fn, record\.allowedWorkPaths\)/, 'workers must run inside the work_dir scope');
+assert.match(runner, /shouldScopeBackgroundRun\(record\)/, 'the work_dir scope decision goes through the tested predicate');
 assert.match(runner, /if \(record\.workDir\) setWorkspace\(sessionId, record\.workDir\)/);
 
 checkWorkDirScope().then(

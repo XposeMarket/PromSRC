@@ -16,6 +16,25 @@ const TERMINAL_STATES = ['completed', 'failed', 'timed_out'];
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const CONSUMED_GRACE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Whether a background run executes inside a workspace scope. Only an explicit
+ * work_dir (or a scope inherited from a scoped spawner) sets scopedWorkDir; an
+ * unscoped run keeps the global workspace plus the user's allowed_paths. Legacy
+ * snapshots (scopedWorkDir undefined) resume scoped only when they carry
+ * allowedWorkPaths, i.e. when they were spawned with an explicit scope.
+ */
+export function shouldScopeBackgroundRun(record: {
+  workDir?: string;
+  scopedWorkDir?: boolean;
+  resumed?: boolean;
+  allowedWorkPaths?: string[];
+}): boolean {
+  if (!record?.workDir) return false;
+  if (record.scopedWorkDir === true) return true;
+  if (record.scopedWorkDir === false) return false;
+  return !!record.resumed && Array.isArray(record.allowedWorkPaths) && record.allowedWorkPaths.length > 0;
+}
+
 /** Explicit id (toolCallId / step id) or an anonymous id; never dropped. */
 export function recordToolCall(outstanding: LedgerCall[], data: { id?: string; name: string; args?: any }): LedgerCall[] {
   const id = String(data.id || '').trim() || `anon:${data.name}:${crypto.randomUUID()}`;

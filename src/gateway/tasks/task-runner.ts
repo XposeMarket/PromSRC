@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isPreviewMode } from '../runtime/preview-mode';
 import { saveBackgroundExecution, readBackgroundExecutions, claimBackgroundExecution, deleteBackgroundExecution } from './background-execution-store';
-import { formatResumeEvidence, recordToolCall, recordToolResult, shouldDeleteExecutionSnapshot } from './background-tool-ledger';
+import { formatResumeEvidence, recordToolCall, recordToolResult, shouldDeleteExecutionSnapshot, shouldScopeBackgroundRun } from './background-tool-ledger';
 import { getSessionToolCeiling, intersectToolCeiling } from '../agents-runtime/tool-ceiling';
 import { persistBackgroundSpawnReceipt, readBackgroundSpawnReceipts } from './background-spawn-continuity';
 import { getOllamaClient } from '../../agents/ollama-client';
@@ -27,7 +27,7 @@ import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { addMessage, getSession, getWorkspace, getActivatedToolCategories, persistBackgroundResultMessage, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { normalizeToolCategory } from '../tool-builder';
-import { runWithWorkspace } from '../../tools/workspace-context';
+import { getActiveAllowedWorkspaces, getActiveWorkspace, hasActiveWorkspaceScope, runWithWorkspace } from '../../tools/workspace-context';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -807,11 +807,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const workDirNotice = record.workDir
         ? ` WORKING DIRECTORY: ${record.workDir}. Relative file paths and workspace_run's default cwd resolve there (not the main Prometheus workspace). Use absolute paths only for files outside it.`
         : '';
-      // Only an explicit work_dir scopes the run; legacy resumed records scope only when they carry allowedWorkPaths.
-      const scopeToWorkDir = !!record.workDir && (record.scopedWorkDir === true
-        || (record.resumed && record.scopedWorkDir === undefined && Array.isArray(record.allowedWorkPaths) && record.allowedWorkPaths.length > 0));
-      const runHandleChat = (fn: () => Promise<any>): Promise<any> => scopeToWorkDir
-        ? runWithWorkspace(record.workDir!, fn, record.allowedWorkPaths)
+      // Only an explicit/inherited scope scopes the run (see shouldScopeBackgroundRun).
+      const scopeToWorkDir = shouldScopeBackgroundRun(record);
+      const runHandleChat = (fn: () => Promise<any>): Promise<any> => (scopeToWorkDir && record.workDir)
+        ? runWithWorkspace(record.workDir, fn, record.allowedWorkPaths)
         : fn();
 
       try {
@@ -1021,11 +1020,23 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
   record.toolCeiling = getSessionToolCeiling(record.spawnerSessionId);
   const explicitWorkDir = String(input?.workDir || '').trim();
-  record.scopedWorkDir = !!explicitWorkDir;
-  record.workDir = explicitWorkDir || (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
   record.allowedWorkPaths = Array.isArray(input?.allowedWorkPaths)
     ? input.allowedWorkPaths.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 20)
     : undefined;
+  if (explicitWorkDir) {
+    record.scopedWorkDir = true;
+    record.workDir = explicitWorkDir;
+  } else if (hasActiveWorkspaceScope()) {
+    // A scoped spawner (e.g. a worktree agent) must not widen its child's access
+    // after a restart, when boot recovery resumes outside any async scope.
+    const fallback = getConfig().getWorkspacePath();
+    record.scopedWorkDir = true;
+    record.workDir = getActiveWorkspace(fallback);
+    if (!record.allowedWorkPaths) record.allowedWorkPaths = getActiveAllowedWorkspaces(fallback).slice(0, 20);
+  } else {
+    record.scopedWorkDir = false;
+    record.workDir = (record.spawnerSessionId ? getWorkspace(record.spawnerSessionId) : '') || getConfig().getWorkspacePath();
+  }
   record.resourceIds = Array.isArray(input?.resourceIds)
     ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
     : undefined;

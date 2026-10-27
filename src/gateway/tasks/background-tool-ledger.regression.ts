@@ -7,6 +7,7 @@ import {
   recordToolCall,
   recordToolResult,
   shouldDeleteExecutionSnapshot,
+  shouldScopeBackgroundRun,
   type LedgerCall,
   type LedgerEvidence,
 } from './background-tool-ledger';
@@ -103,4 +104,13 @@ import {
   }
 }
 
-console.log('PASS background tool ledger: id-less/mismatched pairing, unmatched results, bounded evidence, resume cap, prune truth table, snapshot delete');
+// Workspace scope (#786 I3): unscoped runs keep allowed_paths; explicit/inherited scopes survive resume.
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/ws', scopedWorkDir: false }), false, 'default workDir does not scope (keeps allowed_paths)');
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/ws', scopedWorkDir: false, resumed: true, allowedWorkPaths: ['C:/x'] }), false, 'explicitly unscoped stays unscoped on resume');
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/wt', scopedWorkDir: true }), true, 'explicit or inherited scope scopes');
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/wt', scopedWorkDir: true, resumed: true }), true, 'scope survives resume');
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/wt', resumed: true, allowedWorkPaths: ['C:/wt'] }), true, 'legacy scoped snapshot resumes scoped');
+assert.equal(shouldScopeBackgroundRun({ workDir: 'C:/ws', resumed: true }), false, 'legacy default snapshot resumes unscoped');
+assert.equal(shouldScopeBackgroundRun({ scopedWorkDir: true }), false, 'no workDir never scopes');
+
+console.log('PASS background tool ledger: id-less/mismatched pairing, unmatched results, bounded evidence, resume cap, prune truth table, snapshot delete, workspace scope');
