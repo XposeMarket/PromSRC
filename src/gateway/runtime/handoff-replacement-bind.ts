@@ -6,11 +6,26 @@ export const HANDOFF_BIND_RETRY_WINDOW_MS = 40_000;
 export const HANDOFF_BIND_RETRY_INITIAL_DELAY_MS = 200;
 export const HANDOFF_LISTENER_CLOSE_TIMEOUT_MS = 5_000;
 
+// Set while a failed warm handoff re-binds its released listeners. The reopen
+// call owns every listen error in that window (it falls back to cold recovery),
+// so the persistent listener error handlers must not exit the process and kill
+// the runtimes this predecessor is still carrying.
+let listenerReopenInProgress = false;
+
+export function setGatewayListenerReopenInProgress(value: boolean): void {
+  listenerReopenInProgress = value;
+}
+
+export function isGatewayListenerReopenInProgress(): boolean {
+  return listenerReopenInProgress;
+}
+
 /** Leave pre-listen warm-handoff port conflicts to the bounded bind retry. */
 export function shouldExitOnGatewayListenerError(
   err: NodeJS.ErrnoException | null | undefined,
   opts: { hotRestart: boolean; listening: boolean },
 ): boolean {
+  if (listenerReopenInProgress) return false;
   return !(err?.code === 'EADDRINUSE' && opts.hotRestart && !opts.listening);
 }
 

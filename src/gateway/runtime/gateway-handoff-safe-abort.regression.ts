@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createServer } from 'node:http';
 import { writeGatewayHandoffManifest } from './gateway-handoff-protocol';
 import { releaseHandoffListeners, canExitAfterFailedHandoff, predecessorOwnsHandoffListener, runListenerReleaseHandoff } from './gateway-handoff-safe-abort';
-import { listenWithHandoffRetry } from './handoff-replacement-bind';
+import { listenWithHandoffRetry, setGatewayListenerReopenInProgress, shouldExitOnGatewayListenerError } from './handoff-replacement-bind';
 
 /** Behavioral fakes: `listening` models the real socket; every step is observable. */
 async function runOrchestratorScenarios(): Promise<void> {
@@ -139,6 +139,25 @@ async function main(): Promise<void> {
     assert.equal(await predecessorOwnsHandoffListener(dir, port), false, 'a different port owner must not extend retry');
   } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
   await runOrchestratorScenarios();
+  // Failed-handoff reopen owns listener errors: the persistent handlers must not exit.
+  const inUse = Object.assign(new Error('in use'), { code: 'EADDRINUSE' });
+  const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+  assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), true, 'cold-boot EADDRINUSE still exits');
+  setGatewayListenerReopenInProgress(true);
+  try {
+    assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), false, 'reopen EADDRINUSE never exits');
+    assert.equal(shouldExitOnGatewayListenerError(denied, { hotRestart: false, listening: false }), false, 'reopen EACCES never exits');
+  } finally { setGatewayListenerReopenInProgress(false); }
+  assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), true, 'flag clears after reopen');
+  // Real socket: a closed listener re-listens on the same server object.
+  const reuse = createServer((_req, res) => res.end('ok'));
+  await new Promise<void>(resolve => reuse.listen(0, '127.0.0.1', resolve));
+  const reusePort = (reuse.address() as { port: number }).port;
+  reuse.close();
+  assert.equal(reuse.listening, false, 'close() drops the handle synchronously');
+  await new Promise<void>((resolve, reject) => { reuse.once('error', reject); reuse.listen(reusePort, '127.0.0.1', () => resolve()); });
+  assert.equal(reuse.listening, true, 'released listener re-binds after a failed handoff');
+  await new Promise<void>(resolve => reuse.close(() => resolve()));
   console.log('gateway safe handoff regression: passed');
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });

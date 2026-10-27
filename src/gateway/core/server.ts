@@ -20,7 +20,7 @@ import { getConfig } from '../../config/config';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { setWss, setWsClientStreamFocus } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
-import { shouldExitOnGatewayListenerError } from '../runtime/handoff-replacement-bind';
+import { isGatewayListenerReopenInProgress, shouldExitOnGatewayListenerError } from '../runtime/handoff-replacement-bind';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import {
   browserHandleUserInput,
@@ -567,16 +567,24 @@ export function createServer(
     ? https.createServer(tlsOptions, requestHandler)
     : http.createServer(requestHandler);
   const httpSockets = new Set<any>();
-  const socketSweeper = setInterval(() => {
-    for (const socket of httpSockets) {
-      if (socket.destroyed || socket.readyState !== 'open' || socket.readableEnded || socket.writableEnded) {
-        httpSockets.delete(socket);
-        try { socket.destroy(); } catch {}
+  // Sweepers stop on 'close' and restart on 'listening', so a listener that a
+  // failed warm handoff released and re-bound keeps sweeping dead sockets.
+  let socketSweeper: ReturnType<typeof setInterval> | null = null;
+  const startSocketSweeper = (): void => {
+    if (socketSweeper) return;
+    socketSweeper = setInterval(() => {
+      for (const socket of httpSockets) {
+        if (socket.destroyed || socket.readyState !== 'open' || socket.readableEnded || socket.writableEnded) {
+          httpSockets.delete(socket);
+          try { socket.destroy(); } catch {}
+        }
       }
-    }
-  }, 2_000);
-  socketSweeper.unref?.();
-  server.on('close', () => clearInterval(socketSweeper));
+    }, 2_000);
+    socketSweeper.unref?.();
+  };
+  startSocketSweeper();
+  server.on('close', () => { if (socketSweeper) clearInterval(socketSweeper); socketSweeper = null; });
+  server.on('listening', startSocketSweeper);
   server.requestTimeout = 0;
   server.headersTimeout = 60_000;
   server.keepAliveTimeout = 65_000;
@@ -610,22 +618,28 @@ export function createServer(
     });
   });
   const wss = new WebSocketServer({ noServer: true });
-  const wsSweeper = setInterval(() => {
-    wss.clients.forEach((client: any) => {
-      const socket = client?._socket;
-      if (
-        client.readyState !== WebSocket.OPEN
-        || socket?.destroyed
-        || socket?.readyState !== 'open'
-        || socket?.readableEnded
-        || socket?.writableEnded
-      ) {
-        try { client.terminate(); } catch {}
-      }
-    });
-  }, 2_000);
-  wsSweeper.unref?.();
-  server.on('close', () => clearInterval(wsSweeper));
+  let wsSweeper: ReturnType<typeof setInterval> | null = null;
+  const startWsSweeper = (): void => {
+    if (wsSweeper) return;
+    wsSweeper = setInterval(() => {
+      wss.clients.forEach((client: any) => {
+        const socket = client?._socket;
+        if (
+          client.readyState !== WebSocket.OPEN
+          || socket?.destroyed
+          || socket?.readyState !== 'open'
+          || socket?.readableEnded
+          || socket?.writableEnded
+        ) {
+          try { client.terminate(); } catch {}
+        }
+      });
+    }, 2_000);
+    wsSweeper.unref?.();
+  };
+  startWsSweeper();
+  server.on('close', () => { if (wsSweeper) clearInterval(wsSweeper); wsSweeper = null; });
+  server.on('listening', startWsSweeper);
 
   // Register wss with the broadcaster so broadcastWS() works everywhere
   setWss(wss);
@@ -643,6 +657,10 @@ export function createServer(
   });
 
   server.on('error', (err: any) => {
+    if (isGatewayListenerReopenInProgress()) {
+      console.warn('[Gateway] Listener error during failed-handoff reopen; recovery handles it:', err?.code || err?.message || err);
+      return;
+    }
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
       if (!shouldExitOnGatewayListenerError(err, {
@@ -1234,6 +1252,10 @@ export function createServer(
   });
 
   server.on('error', (err: any) => {
+    if (isGatewayListenerReopenInProgress()) {
+      console.warn('[Gateway] Listener error during failed-handoff reopen; recovery handles it:', err?.code || err?.message || err);
+      return;
+    }
     if (err?.code === 'EADDRINUSE') {
       if (!shouldExitOnGatewayListenerError(err, {
         hotRestart: process.env.PROMETHEUS_HOT_RESTART === '1',

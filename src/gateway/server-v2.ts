@@ -83,7 +83,7 @@ import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
-import { closeListeningHandle, listenWithHandoffRetry } from './runtime/handoff-replacement-bind';
+import { closeListeningHandle, listenWithHandoffRetry, setGatewayListenerReopenInProgress } from './runtime/handoff-replacement-bind';
 import { predecessorOwnsHandoffListener } from './runtime/gateway-handoff-safe-abort';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
@@ -1266,8 +1266,15 @@ setShutdownHooks({
         try { target.listen(port, host); } catch (error) { cleanup(); reject(error); }
       });
     };
-    await reopen(server, PORT, HOST);
-    if (secureBundle && httpsGateway) await reopen(secureBundle.server, httpsGateway.port, HTTPS_HOST);
+    // Persistent listener error handlers exit the process on bind errors; this
+    // reopen owns those errors instead (rejection -> cold recovery).
+    setGatewayListenerReopenInProgress(true);
+    try {
+      await reopen(server, PORT, HOST);
+      if (secureBundle && httpsGateway) await reopen(secureBundle.server, httpsGateway.port, HTTPS_HOST);
+    } finally {
+      setGatewayListenerReopenInProgress(false);
+    }
   },
 
 });

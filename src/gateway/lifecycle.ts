@@ -927,6 +927,13 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
     prepare: () => prepareGatewayHandoffHost({ reason: label, restartTimestamp: restartCtx.timestamp }),
     release: () => releaseHandoffListeners(_shutdownHooks),
     commit: async (host) => {
+      // 0. The restart-context write is the step that can realistically throw, so
+      //    it runs before anything with side effects. A failure here aborts with
+      //    no runtime checkpointed as interrupted and no client told to hold.
+      writeRestartContext({
+        ...restartCtx,
+        handoff: { hostPid: process.pid, socketPath: host.socketPath, carriedRuntimeIds },
+      });
       // 1. Restart-owning turn(s) checkpoint like a legacy restart so BOOT on the
       //    replacement resumes them on the new code.
       try {
@@ -945,13 +952,14 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
       } catch (e: any) {
         console.warn('[lifecycle] Handoff initiating-runtime flush error:', e.message);
       }
-      // 2. Context write can fail; do it before any global is changed.
-      writeRestartContext({
-        ...restartCtx,
-        handoff: { hostPid: process.pid, socketPath: host.socketPath, carriedRuntimeIds },
-      });
-      // 3. From here the replacement owns the ledger, status/lease files, WebSocket clients.
-      activateGatewayHandoffHost(host);
+      // 2. From here the replacement owns the ledger, status/lease files, WebSocket clients.
+      try {
+        activateGatewayHandoffHost(host);
+      } catch (error) {
+        // Do not leave a handoff pointer that no replacement will ever consume.
+        try { writeRestartContext(restartCtx); } catch {}
+        throw error;
+      }
       _handoffDraining = true;
       try { await _shutdownHooks.finishListenerHandoff?.(); } catch (e: any) {
         console.warn('[lifecycle] Handoff listener teardown error:', e.message);
