@@ -4,9 +4,85 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { writeGatewayHandoffManifest } from './gateway-handoff-protocol';
-import { releaseHandoffListeners, canExitAfterFailedHandoff, predecessorOwnsHandoffListener } from './gateway-handoff-safe-abort';
-import { listenWithHandoffRetry } from './handoff-replacement-bind';
+import { releaseHandoffListeners, canExitAfterFailedHandoff, predecessorOwnsHandoffListener, runListenerReleaseHandoff } from './gateway-handoff-safe-abort';
+import { listenWithHandoffRetry, setGatewayListenerReopenInProgress, shouldExitOnGatewayListenerError } from './handoff-replacement-bind';
 
+/** Behavioral fakes: `listening` models the real socket; every step is observable. */
+async function runOrchestratorScenarios(): Promise<void> {
+  const makeFakes = (opts: { prepareFails?: boolean; releasePartial?: boolean; commitFails?: boolean; reopenFails?: boolean }) => {
+    const calls: string[] = [];
+    const state = { listening: true };
+    const logs: string[] = [];
+    const steps = {
+      prepare: async () => {
+        calls.push('prepare');
+        if (opts.prepareFails) throw new Error('socket bind failed');
+        return { id: 'host' };
+      },
+      release: async () => {
+        calls.push('release');
+        state.listening = false;
+        if (opts.releasePartial) throw new Error('https timed out');
+      },
+      commit: async () => {
+        calls.push('commit');
+        if (opts.commitFails) throw new Error('context write failed');
+      },
+      dispose: async () => { calls.push('dispose'); },
+      reopen: async () => {
+        calls.push('reopen');
+        if (opts.reopenFails) throw new Error('EADDRINUSE');
+        state.listening = true;
+      },
+      coldRecover: async () => { calls.push('coldRecover'); },
+      log: (message: string) => { logs.push(message); },
+    };
+    return { steps, calls, state, logs };
+  };
+
+  // (a) prepare throws: nothing released, still serving.
+  {
+    const f = makeFakes({ prepareFails: true });
+    const result = await runListenerReleaseHandoff(f.steps);
+    assert.deepEqual(result, { ok: false, stage: 'prepare', recovered: 'serving' });
+    assert.deepEqual(f.calls, ['prepare']);
+    assert.equal(f.state.listening, true, 'prepare failure must never darken the gateway');
+  }
+  // (b) release partially closes then throws: disposed, reopened, serving again.
+  {
+    const f = makeFakes({ releasePartial: true });
+    const result = await runListenerReleaseHandoff(f.steps);
+    assert.deepEqual(result, { ok: false, stage: 'release', recovered: 'serving' });
+    assert.deepEqual(f.calls, ['prepare', 'release', 'dispose', 'reopen']);
+    assert.equal(f.state.listening, true);
+    assert.ok(f.logs.some(line => line.includes('https timed out')), 'the abort must be logged honestly');
+  }
+  // (c) commit throws after release: disposed, reopened, serving, no commit left behind.
+  {
+    const f = makeFakes({ commitFails: true });
+    const result = await runListenerReleaseHandoff(f.steps);
+    assert.deepEqual(result, { ok: false, stage: 'commit', recovered: 'serving' });
+    assert.deepEqual(f.calls, ['prepare', 'release', 'commit', 'dispose', 'reopen']);
+    assert.equal(f.state.listening, true);
+  }
+  // (d) commit throws and reopen throws: cold recovery takes over.
+  {
+    const f = makeFakes({ commitFails: true, reopenFails: true });
+    const result = await runListenerReleaseHandoff(f.steps);
+    assert.deepEqual(result, { ok: false, stage: 'commit', recovered: 'cold' });
+    assert.deepEqual(f.calls, ['prepare', 'release', 'commit', 'dispose', 'reopen', 'coldRecover']);
+    assert.equal(f.state.listening, false, 'cold recovery, not a silent dark gateway');
+  }
+  // (e) happy path: committed host returned, no unwind.
+  {
+    const f = makeFakes({});
+    const result = await runListenerReleaseHandoff(f.steps);
+    assert.equal(result.ok, true);
+    if (result.ok) assert.deepEqual(result.host, { id: 'host' });
+    assert.deepEqual(f.calls, ['prepare', 'release', 'commit']);
+    assert.equal(f.state.listening, false, 'successful handoff keeps the listeners released for the replacement');
+  }
+}
 async function main(): Promise<void> {
   await assert.rejects(releaseHandoffListeners({}), /not registered/);
   let listening = true;
@@ -62,6 +138,26 @@ async function main(): Promise<void> {
     reportedPid = process.pid;
     assert.equal(await predecessorOwnsHandoffListener(dir, port), false, 'a different port owner must not extend retry');
   } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  await runOrchestratorScenarios();
+  // Failed-handoff reopen owns listener errors: the persistent handlers must not exit.
+  const inUse = Object.assign(new Error('in use'), { code: 'EADDRINUSE' });
+  const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+  assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), true, 'cold-boot EADDRINUSE still exits');
+  setGatewayListenerReopenInProgress(true);
+  try {
+    assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), false, 'reopen EADDRINUSE never exits');
+    assert.equal(shouldExitOnGatewayListenerError(denied, { hotRestart: false, listening: false }), false, 'reopen EACCES never exits');
+  } finally { setGatewayListenerReopenInProgress(false); }
+  assert.equal(shouldExitOnGatewayListenerError(inUse, { hotRestart: false, listening: false }), true, 'flag clears after reopen');
+  // Real socket: a closed listener re-listens on the same server object.
+  const reuse = createServer((_req, res) => res.end('ok'));
+  await new Promise<void>(resolve => reuse.listen(0, '127.0.0.1', resolve));
+  const reusePort = (reuse.address() as { port: number }).port;
+  reuse.close();
+  assert.equal(reuse.listening, false, 'close() drops the handle synchronously');
+  await new Promise<void>((resolve, reject) => { reuse.once('error', reject); reuse.listen(reusePort, '127.0.0.1', () => resolve()); });
+  assert.equal(reuse.listening, true, 'released listener re-binds after a failed handoff');
+  await new Promise<void>(resolve => reuse.close(() => resolve()));
   console.log('gateway safe handoff regression: passed');
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });

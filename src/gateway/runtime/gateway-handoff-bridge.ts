@@ -239,8 +239,8 @@ function transportSnapshot(runtime: LiveRuntimeSnapshot): GatewayHandoffRuntimeS
  * Enter drain mode: open the handoff socket, stop advertising this process as
  * the live gateway, and route ledger writes and broadcasts to the replacement.
  */
-export async function beginGatewayHandoffHost(input: { reason: string; restartTimestamp?: number }): Promise<GatewayHandoffHost> {
-  if (activeHost) return activeHost;
+/** Phase 1 of a warm handoff: open the socket and manifest. No global side effects. */
+export async function prepareGatewayHandoffHost(input: { reason: string; restartTimestamp?: number }): Promise<GatewayHandoffHost> {
   const stateDir = getConfig().getConfigDir();
   const host = new GatewayHandoffHost({
     stateDir,
@@ -250,6 +250,11 @@ export async function beginGatewayHandoffHost(input: { reason: string; restartTi
     onControl: handleHostControl,
   });
   await host.start();
+  return host;
+}
+
+/** Phase 2: route ledger writes, broadcasts, and drain mode to a prepared host. */
+export function activateGatewayHandoffHost(host: GatewayHandoffHost): void {
   activeHost = host;
   suspendRuntimeProgressLeaseWrites();
   setLiveRuntimePersistenceSink({
@@ -258,8 +263,20 @@ export async function beginGatewayHandoffHost(input: { reason: string; restartTi
   });
   setSessionWriteObserver((sessionId) => host.sessionFlushed(sessionId));
   enterGatewayDrainMode((data) => host.broadcast(data as Record<string, unknown>));
+}
+
+/** Undo a prepared host that was never activated: close its socket, remove its manifest. Touches no globals. */
+export async function disposePreparedGatewayHandoffHost(host: GatewayHandoffHost): Promise<void> {
+  host.stop();
+}
+
+export async function beginGatewayHandoffHost(input: { reason: string; restartTimestamp?: number }): Promise<GatewayHandoffHost> {
+  if (activeHost) return activeHost;
+  const host = await prepareGatewayHandoffHost(input);
+  activateGatewayHandoffHost(host);
   return host;
 }
+
 
 export interface HandoffDrainWaitResult {
   timedOut: boolean;
