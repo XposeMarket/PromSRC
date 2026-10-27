@@ -204,6 +204,9 @@
     window.closeSettings = closeSettingsShim;
 
     const openSettingsShim = async function openSettingsShim(tab) {
+      // The shim resolves a fallback tab before forwarding; remember whether the
+      // caller asked for a specific section (phones open on the home list if not).
+      window.__promSettingsExplicitTab = !!tab;
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'flex';
       document.body.classList.add('settings-page-open');
@@ -217,6 +220,8 @@
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
+      } finally {
+        window.__promSettingsExplicitTab = undefined;
       }
       return undefined;
     };

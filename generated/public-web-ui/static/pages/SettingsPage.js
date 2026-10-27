@@ -24,6 +24,8 @@ import { renderProviderUsageCard } from './HubPage.js';
 import { effortOptions, validEffort, supportsFastSpeed, reasoningCapability } from '../reasoning-capabilities.js';
 import { mountVoiceProviderSettings } from '../voice/voice-provider-settings.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
+import { mountProviderAccountsList } from '../settings/provider-accounts-list.js';
+import { initSettingsMobileNav, showMobileSettingsPage } from '../settings/settings-mobile-nav.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
 // does not fall through to the legacy global in Safari. Keep the existing
@@ -550,6 +552,9 @@ function setSettingsTab(tab) {
   }
   window.settingsTab = tab;
   ensureVoiceSettingsTab();
+  // A programmatic tab switch (command palette, "open Models" links) while a
+  // phone is showing the Settings home list must reveal that section.
+  if (document.getElementById('settings-modal')?.classList.contains('smh-home')) showMobileSettingsPage();
   const tabs = ['system', 'appearance', 'heartbeat', 'search', 'security', 'migration', 'models', 'voice', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
   const titles = {
     system: 'General',
@@ -1822,6 +1827,74 @@ function hydrateBuiltInProviderAccountControls() {
   }
 }
 
+// Shared provider-grouped accounts list (desktop + mobile). The list is the
+// add/rename/default/remove surface; the provider panel below it keeps the
+// connect/test/disconnect controls for the selected account.
+function ensureProviderAccountsContainer() {
+  const panel = document.getElementById('settings-panel-models');
+  if (!panel) return null;
+  panel.classList.add('spa-enabled');
+  let host = document.getElementById('settings-provider-accounts');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'settings-provider-accounts';
+    const usage = document.getElementById('settings-models-usage');
+    if (usage?.parentElement === panel) panel.insertBefore(host, usage.nextSibling);
+    else panel.insertBefore(host, panel.firstChild);
+  }
+  return host;
+}
+
+async function reloadProviderAccountSettings() {
+  _markSettingsCacheBusted('settings-models');
+  await loadModelSettings();
+}
+
+function manageProviderAccount(providerId, accountId) {
+  const providerSelect = document.getElementById('settings-llm-provider');
+  if (providerSelect) providerSelect.value = providerId;
+  onProviderChange();
+  const accountSelect = document.getElementById(getProviderAccountSelectId(providerId));
+  if (accountSelect && accountId) {
+    accountSelect.value = accountId;
+    onProviderAccountChange(providerId);
+  }
+  document.getElementById(getProviderPanelId(providerId))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Account ids as last loaded from the gateway. Rows added locally with
+// "+ Add account" are drafts until saved, so the list can mark them and the
+// rename/remove routes are never called for ids the server doesn't know.
+let savedProviderAccountIds = null;
+function rememberSavedProviderAccountIds(llm) {
+  const ids = {};
+  for (const providerId of ACCOUNT_AWARE_PROVIDER_IDS) {
+    const cfg = llm?.providers?.[providerId];
+    ids[providerId] = normalizeProviderAccountsForUI(providerId, cfg || {}).map((account) => String(account.id));
+  }
+  savedProviderAccountIds = ids;
+}
+
+function renderProviderAccountsList() {
+  const host = ensureProviderAccountsContainer();
+  if (!host) return;
+  mountProviderAccountsList(host, {
+    api,
+    showToast,
+    showConfirm,
+    getCache: () => window._llmSettingsCache,
+    getSavedAccountIds: () => savedProviderAccountIds,
+    normalizeAccounts: normalizeProviderAccountsForUI,
+    onReload: reloadProviderAccountSettings,
+    onManage: manageProviderAccount,
+    onAdd: (providerId) => {
+      addProviderAccount(providerId);
+      renderProviderAccountsList();
+      document.getElementById(getProviderPanelId(providerId))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+  });
+}
+
 async function ensureProviderCatalogUIReady() {
   if (providerCatalogCache) return providerCatalogCache;
   if (!providerCatalogPromise) {
@@ -1908,9 +1981,11 @@ async function loadModelSettings() {
       const llm = payload?.llm || { provider: 'ollama', providers: {} };
       const prov = llm.provider || 'ollama';
       window._llmSettingsCache = llm;
+      rememberSavedProviderAccountIds(llm);
       renderProviderSelectors();
       renderDynamicProviderPanels();
       hydrateBuiltInProviderAccountControls();
+      renderProviderAccountsList();
       const provSel = document.getElementById('settings-llm-provider');
       if (provSel) provSel.value = prov;
 
@@ -2057,14 +2132,36 @@ async function renderModelsUsage() {
   wrap.style.display = '';
   grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
 
+  // A failed request (gateway restarting, timeout, flaky phone network) is not
+  // the same as "no saved credentials". Retry once, then say it failed instead
+  // of marking every provider as NO CREDS.
   const byId = {};
-  try {
-    const r = await api('/api/usage/limits', { timeoutMs: 30000 });
-    (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => {
-      if (!byId[p.provider]) byId[p.provider] = [];
-      byId[p.provider].push(p);
-    });
-  } catch { /* fall through to no-data cards */ }
+  let loaded = false;
+  for (let attempt = 0; attempt < 2 && !loaded; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      const r = await api('/api/usage/limits', { timeoutMs: 30000 });
+      if (r && r.success !== false && Array.isArray(r.providers)) {
+        r.providers.forEach(p => {
+          if (!byId[p.provider]) byId[p.provider] = [];
+          byId[p.provider].push(p);
+        });
+        loaded = true;
+      }
+    } catch { /* retried below, then shown as a load error */ }
+  }
+  if (!loaded) {
+    grid.innerHTML = `<div class="usage-provider-card">
+      <div class="usage-provider-head">
+        <span class="usage-provider-name">Usage unavailable</span>
+        <span class="usage-provider-badge">not loaded</span>
+      </div>
+      <div class="usage-provider-note">Couldn't load usage right now. Your connections are unaffected.</div>
+      <button type="button" class="btn-secondary usage-retry-btn" data-usage-retry>Retry</button>
+    </div>`;
+    grid.querySelector('[data-usage-retry]')?.addEventListener('click', () => renderModelsUsage());
+    return;
+  }
 
   // A connected account may be used by a per-chat model route even when it
   // is absent from the global main/agent defaults shown in this form.
@@ -3287,7 +3384,12 @@ async function openSettings(tab) {
   if (importToggle) importToggle.checked = importPanelOpen;
   toggleChromeProfileImportPanel(importPanelOpen);
   const targetTab = tab || window.settingsTab || 'system';
+  // The inline shim always forwards a tab; it records whether the caller
+  // actually asked for one so phones can open on the Settings home list.
+  const explicitTab = typeof window.__promSettingsExplicitTab === 'boolean' ? window.__promSettingsExplicitTab : !!tab;
+  window.__promSettingsExplicitTab = undefined;
   setSettingsTab(targetTab);
+  try { initSettingsMobileNav({ startOnHome: !explicitTab }); } catch (error) { console.warn('[settings] mobile nav init failed', error); }
   const bootJobs = [
     api('/api/status', { timeoutMs: 5000 }).then((status) => {
       const runtimeModelEl = document.getElementById('settings-runtime-model');

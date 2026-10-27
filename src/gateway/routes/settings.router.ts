@@ -5,6 +5,8 @@ import { getConfig } from '../../config/config';
 import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
+import { ACCOUNT_AWARE_PROVIDERS, dropRemovedAccounts, planRemoveProviderAccount, planUpdateProviderAccount } from '../provider-accounts';
+import { invalidateProviderStatusCache } from '../provider-status';
 import { preferConnectedAccountId } from '../../auth/provider-account-pool';
 import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
@@ -252,7 +254,6 @@ router.get('/api/credentials/status', (_req, res) => {
   }
 });
 
-const ACCOUNT_AWARE_PROVIDERS = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
 
 function slugAccountId(providerId: string, label = ''): string {
   const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30);
@@ -2241,11 +2242,11 @@ router.post('/api/settings/provider', (req, res) => {
     const configManager = getConfig();
     const current = (configManager.getConfig() as any).llm || {};
     const llm = preserveMaskedProviderSecrets(llmIncoming, current);
-    const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(configManager.getConfig(), {
+    const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(configManager.getConfig(), dropRemovedAccounts({
       ...current,
       ...llm,
       providers: mergeProviderConfigs(current.providers || {}, llm.providers || {}),
-    }));
+    }, current)));
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
     const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
     const legacyModelSync = activeModel
@@ -2274,6 +2275,106 @@ router.post('/api/settings/provider', (req, res) => {
   }
 });
 
+// The Settings UI lists accounts from the normalized shape (legacy configs get
+// a synthesized "default" account). Plan against that same shape so
+// rename/default/remove work on every row the user can see. Pure: secrets are
+// moved to the vault only when a plan is actually persisted (persistedLlm),
+// so dryRun and rejected requests have no side effects.
+function configWithNormalizedAccounts(config: any): any {
+  return { ...config, llm: normalizeLLMAccounts(config?.llm || {}) };
+}
+
+function persistedLlm(llm: any): any {
+  return migrateAccountSecretsToVault(llm);
+}
+
+// updateConfig deep-merges in the canonical (desktop app) storage layout, so a
+// deleted account or role mapping would survive the merge. Removal replaces
+// whole sections on the live config object instead (both layouts return it).
+function replaceConfigSections(configManager: ReturnType<typeof getConfig>, sections: Record<string, any>): void {
+  const live = configManager.getConfig() as any;
+  for (const [key, value] of Object.entries(sections)) live[key] = value;
+  configManager.saveConfig();
+}
+
+// POST /api/settings/provider-accounts/remove — remove one account (dryRun previews affected agent roles)
+router.post('/api/settings/provider-accounts/remove', (req, res) => {
+  try {
+    const providerId = String(req.body?.providerId || '').trim();
+    const accountId = String(req.body?.accountId || '').trim();
+    const configManager = getConfig();
+    const plan = planRemoveProviderAccount(configWithNormalizedAccounts(configManager.getConfig()), providerId, accountId);
+    if (!plan.ok) { res.status(400).json({ success: false, error: plan.error }); return; }
+    if (req.body?.dryRun === true) {
+      res.json({ success: true, dryRun: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId });
+      return;
+    }
+    replaceConfigSections(configManager, {
+      llm: persistedLlm(plan.nextConfigPatch.llm),
+      agent_model_default_accounts: plan.nextConfigPatch.agent_model_default_accounts,
+    });
+    // Clear only this account's credentials. accountId is validated non-empty
+    // above, so clearTokens never receives undefined (which targets the
+    // unscoped/default token).
+    let credentialsCleared = true;
+    try {
+      if (providerId === 'anthropic') anthropicClearTokens(CONFIG_DIR_PATH, accountId);
+      else if (providerId === 'openai_codex') clearTokens(CONFIG_DIR_PATH, accountId);
+      else if (providerId === 'xai') clearXAITokens(CONFIG_DIR_PATH, accountId);
+    } catch (err: any) {
+      credentialsCleared = false;
+      console.warn(`[settings] account remove: token clear failed for ${providerId}/${accountId}: ${err?.message || err}`);
+    }
+    try {
+      getVault().delete(providerAccountVaultKey(providerId, accountId), 'settings:account-remove');
+    } catch (err: any) {
+      credentialsCleared = false;
+      console.warn(`[settings] account remove: vault key delete failed for ${providerId}/${accountId}: ${err?.message || err}`);
+    }
+    // Legacy credentials that only the removed "default" account used.
+    if (plan.legacyCredentials.providerApiKey) {
+      try {
+        getVault().delete(`llm.${providerId}.api_key`, 'settings:account-remove-legacy');
+      } catch (err: any) {
+        credentialsCleared = false;
+        console.warn(`[settings] account remove: legacy provider key delete failed for ${providerId}: ${err?.message || err}`);
+      }
+    }
+    if (plan.legacyCredentials.unscopedOAuth) {
+      try {
+        clearTokens(CONFIG_DIR_PATH);
+      } catch (err: any) {
+        credentialsCleared = false;
+        console.warn(`[settings] account remove: legacy Codex token clear failed: ${err?.message || err}`);
+      }
+    }
+    resetProvider();
+    invalidateProviderStatusCache();
+    res.json({ success: true, affectedRoles: plan.affectedRoles, nextDefaultAccountId: plan.nextDefaultAccountId, credentialsCleared });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/settings/provider-accounts/update — rename and/or make an account the default
+router.post('/api/settings/provider-accounts/update', (req, res) => {
+  try {
+    const providerId = String(req.body?.providerId || '').trim();
+    const accountId = String(req.body?.accountId || '').trim();
+    const patch: { label?: string; makeDefault?: boolean } = {};
+    if (req.body?.label !== undefined) patch.label = String(req.body.label);
+    if (req.body?.makeDefault === true) patch.makeDefault = true;
+    const configManager = getConfig();
+    const plan = planUpdateProviderAccount(configWithNormalizedAccounts(configManager.getConfig()), providerId, accountId, patch);
+    if (!plan.ok || !plan.nextConfigPatch) { res.status(400).json({ success: false, error: plan.error || 'Update failed' }); return; }
+    configManager.updateConfig({ llm: persistedLlm(plan.nextConfigPatch.llm) } as any);
+    resetProvider();
+    invalidateProviderStatusCache();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // POST /api/settings/bulk  — save the main Settings modal in one atomic-ish
 // config update. The UI previously fired six POSTs in parallel; every route
 // rewrote config.json, so whichever response finished last could clobber parts

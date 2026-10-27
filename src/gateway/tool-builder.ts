@@ -409,6 +409,7 @@ const RUNTIME_ADMIN_TOOL_NAMES = new Set([
 const MODEL_MANAGEMENT_TOOL_NAMES = new Set([
   'get_agent_models',
   'set_agent_model',
+  'provider_accounts',
   'list_agent_model_templates',
   'save_agent_model_template',
   'update_agent_model_template',

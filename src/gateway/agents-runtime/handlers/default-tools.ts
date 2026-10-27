@@ -1069,6 +1069,67 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
           }
         }
 
+        // ── provider_accounts: list/rename/set_default/remove saved provider accounts ─
+        // Writes go through the same Settings routes as the UI so validation,
+        // credential cleanup and stale-save protection stay in one place.
+        if (name === 'provider_accounts') {
+          const action = String(args?.action || '').trim();
+          const providerId = String(args?.provider || '').trim();
+          const accountId = String(args?.account_id || args?.accountId || '').trim();
+          type ProviderAccountRow = { label?: unknown; api_key?: unknown };
+          type ProviderCfgSlice = { accounts?: unknown; api_key?: unknown; defaultAccountId?: unknown };
+          const cfgNow = getConfig().getConfig() as unknown as {
+            gateway?: { port?: unknown; host?: unknown };
+            llm?: { provider?: string; accountId?: string; providers?: Record<string, ProviderCfgSlice | undefined> };
+          };
+          if (action === 'list') {
+            const { providerAccountVaultKey, providerOAuthVaultKey } = require('../../../providers/usage-awareness');
+            const { getVault } = require('../../../security/vault');
+            const keys = new Set<string>(getVault().keys());
+            const out: Record<string, Array<{ id: string; label: string; default: boolean; has_saved_credentials: boolean }>> = {};
+            for (const pid of ['anthropic', 'openai_codex', 'openai', 'xai']) {
+              const pc = cfgNow?.llm?.providers?.[pid];
+              if (!pc || typeof pc !== 'object') continue;
+              const accounts = (pc.accounts && typeof pc.accounts === 'object' && !Array.isArray(pc.accounts) ? pc.accounts : {}) as Record<string, ProviderAccountRow | undefined>;
+              const legacyKey = typeof pc.api_key === 'string' && !!pc.api_key.trim();
+              const rows = Object.entries(accounts).map(([id, acct]) => ({
+                id,
+                label: String(acct?.label || id),
+                default: String(pc.defaultAccountId || '') === id,
+                has_saved_credentials: keys.has(providerAccountVaultKey(pid, id)) || keys.has(providerOAuthVaultKey(pid, id))
+                  || (typeof acct?.api_key === 'string' && !!acct.api_key.trim())
+                  || (id === 'default' && (legacyKey || keys.has(providerOAuthVaultKey(pid)))),
+              }));
+              if (!rows.length && !legacyKey && !keys.has(providerOAuthVaultKey(pid))) continue;
+              out[pid] = rows.length ? rows : [{ id: 'default', label: 'Default account', default: true, has_saved_credentials: true }];
+            }
+            return { name, args, result: JSON.stringify({ providers: out, main_chat: { provider: cfgNow?.llm?.provider || null, account_id: cfgNow?.llm?.accountId || null } }, null, 2), error: false };
+          }
+          if (!['rename', 'set_default', 'remove'].includes(action)) {
+            return { name, args, result: 'ERROR: action must be list, rename, set_default, or remove.', error: true };
+          }
+          if (!providerId || !accountId) {
+            return { name, args, result: 'ERROR: provider and account_id are required. Call provider_accounts with action "list" first.', error: true };
+          }
+          const port = Number(cfgNow?.gateway?.port) || 18789;
+          const host = String(cfgNow?.gateway?.host || '127.0.0.1');
+          const base = `http://${host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host}:${port}`;
+          const endpoint = action === 'remove' ? '/api/settings/provider-accounts/remove' : '/api/settings/provider-accounts/update';
+          const body = action === 'remove'
+            ? { providerId, accountId, dryRun: args?.dry_run === true }
+            : action === 'rename'
+              ? { providerId, accountId, label: String(args?.label ?? '') }
+              : { providerId, accountId, makeDefault: true };
+          try {
+            const resp = await fetch(`${base}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const data = await resp.json() as { success?: boolean; error?: string } & Record<string, unknown>;
+            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || `provider_accounts ${action} failed`}`, error: true };
+            return { name, args, result: JSON.stringify({ action, provider: providerId, account_id: accountId, ...data }, null, 2), error: false };
+          } catch (err: unknown) {
+            return { name, args, result: `provider_accounts error: ${err instanceof Error ? err.message : String(err)}`, error: true };
+          }
+        }
+
         // ── get_agent_models: read current model config for all agent types ─────
         if (name === 'get_agent_models') {
           try {
