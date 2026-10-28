@@ -18,6 +18,7 @@
     "prom": "./bin/prometheus.js"
   },
   "scripts": {
+    "test:x-fetch-media-routing": "tsx src/tools/x-fetch-media-routing.regression.ts",
     "test:main-chat-reasoning-summary": "node scripts/test-main-chat-reasoning-summary.regression.mjs",
     "test:background-restart-recovery": "tsx src/gateway/tasks/background-restart-recovery.regression.ts && tsx src/gateway/tasks/background-result-delivery.regression.ts",
     "test:needs-you-view-model": "node scripts/test-needs-you-view-model.mjs",

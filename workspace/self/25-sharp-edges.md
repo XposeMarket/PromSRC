@@ -68,3 +68,7 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 
 ## Related
 [index](index.md) · [07 PR workflow](07-source-editing-and-pr-workflow.md) · [ISSUES.md](ISSUES.md) · [generated/tests.md](generated/tests.md)
+
+## X long-form posts and web_fetch
+
+`web_fetch` on an X status URL uses the official oEmbed endpoint first (`fetchXStatusViaOEmbed` in `src/tools/web.ts`; the FxTwitter helpers `isLikelyTruncatedXText`, `createFxLookup`, `fxTweetToPayload` and the media hints live in `src/tools/x-fx-recovery.ts`). oEmbed and the syndication CDN both clip long-form ("note") posts at about 280 chars and end them with `…`; syndication only returns a `note_tweet.id`, with no body. `isLikelyTruncatedXText()` catches that clipping (240+ chars plus a trailing ellipsis). The fetch then retries through the keyless public FxTwitter API (`api.fxtwitter.com/<handle>/status/<id>`) and uses that result when it's longer. If FxTwitter is down, the oEmbed result comes back with `truncated: true` and a message saying so, so agents never treat clipped text as the whole post. Regression: `src/tools/x-oembed-truncation.regression.ts`.

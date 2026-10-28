@@ -158,3 +158,11 @@ Dynamic connector/MCP definitions are built from live extension registration, cu
 - [07 Source editing & PR workflow](07-source-editing-and-pr-workflow.md) · [08 Agents & background](08-agents-tasks-background.md)
 - [12 Connectors/MCP](12-connectors-mcp-integrations.md) · [13 Browser & desktop](13-browser-desktop.md) · [21 Security/approvals](21-security-approvals-permissions.md)
 - [Tools inventory](generated/tools.md) · [Tool categories inventory](generated/tool-categories.md) · [Tests inventory](generated/tests.md)
+
+## web_fetch on X status URLs (updated 2026-10-27, branch fix/x-fetch-media-routing)
+- `include_media:true` alone no longer opens the browser. Metadata comes from one memoized, identity-checked FxTwitter lookup per call (tweet id must match the URL), shared by the long-text fallback and target-post media hints. oEmbed runs in parallel. Quoted-post media is never read; if the quoted post has media, `x_media.quote_media_not_analyzed` is true and stdout says so. If FxTwitter confirms the target has no media, the yt-dlp status fallback is skipped (`media_status:'none_detected'`). Otherwise the existing download_url / download_media path runs, with yt-dlp fallback only when no files were found.
+- `include_thread:true` is the only path that runs the browser thread scrape. Thread statuses: `captured` (target plus other posts, never `complete`, with `reply_count`/`author_thread_count`), `target_only`, or `unavailable`. `thread_reason` is `login_gated` only when the browser payload has an explicit `login_wall: true` flag (none exists yet, so production reports `unknown` or `blocked_or_timeout`). Login is never inferred from text or handles. Replies are not claimed unless captured.
+- Default text fetch: one oEmbed. If oEmbed fails, FxTwitter supplies the text; the browser is not used.
+- Payload statuses: `thread_status` and `media_status` as above. `x_media.download_status` and `analysis_status` are separate. `partial` = some failed and some media exists; `capped` = download or analysis caps hit. Stdout carries `status`, `truncated`, and the same statuses as data.
+- Regression: `npm run test:x-fetch-media-routing` (offline; fetch, browser and download tools stubbed).
+
