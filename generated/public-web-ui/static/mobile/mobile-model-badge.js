@@ -473,8 +473,8 @@ function _primaryUsageLeft(providerId) {
   const rows = (_usageCache || []).filter((row) => String(row?.provider || '') === providerId
     && Array.isArray(row?.windows) && row.windows.length);
   if (!rows.length) return null;
-  const cfg = (_llmCache?.providers || {})[providerId] || {};
-  const primaryId = String(cfg.defaultAccountId || cfg.accountId || '').trim();
+  const cfg = _providerCfg(providerId);
+  const primaryId = String(cfg.accountId || cfg.defaultAccountId || '').trim();
   const row = (primaryId && rows.find((r) => String(r?.account_id || '') === primaryId))
     || rows.find((r) => String(r?.account_id || '') === 'default')
     || rows[0];
@@ -549,7 +549,7 @@ function _providerCfg(provider, llm = _llmCache) {
   const cfg = {
     ...base,
     model: eff.model,
-    reasoning_effort: usesDraftDefault ? _mainChatDefaultEffort : eff.reasoningEffort,
+    reasoning_effort: _normalizedReasoningEffort(provider, eff.model, usesDraftDefault ? _mainChatDefaultEffort : eff.reasoningEffort),
     speed: eff.speed || base.speed || 'standard',
   };
   if (eff.accountId) cfg.accountId = eff.accountId;
@@ -753,9 +753,8 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     reasoning_effort: _normalizedReasoningEffort(provider, model, rawReasoningEffort),
     speed: route?.effective?.speed || (llm?.providers?.[provider] || {}).speed || 'standard',
   };
-  if (_llmCache) {
-    _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
-  }
+  // Do not write the routed chat model back into the global _llmCache: that
+  // made the "global fallback" show the previous chat's model.
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   _setComposerModelIdentity(provider, model, cfg.reasoning_effort);
   if (usesDraftDefault) window.__pmModelBadgeReasoningLabel = `Default (${formatReasoningDisplayName(cfg.reasoning_effort) || 'Auto'})`;
@@ -1236,14 +1235,21 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   const change = { ...patch };
   clearTimeout(_reasoningSaveTimer);
   // Optimistic: sheets re-render from the chat route before the save lands.
+  // A failed save rolls back, so an unsaved pick never becomes "last known".
   const cachedRoute = _cachedRouteFor(sessionId);
+  let optimisticRoute = null;
   if (cachedRoute?.effective?.providerId === provider) {
     const optimistic = { ...cachedRoute.effective };
-    if (Object.prototype.hasOwnProperty.call(change, 'reasoning_effort')) optimistic.reasoningEffort = change.reasoning_effort || undefined;
+    if (Object.prototype.hasOwnProperty.call(change, 'reasoning_effort')) {
+      optimistic.reasoningEffort = _normalizedReasoningEffort(provider, optimistic.model, change.reasoning_effort) || undefined;
+    }
     if (Object.prototype.hasOwnProperty.call(change, 'speed')) optimistic.speed = change.speed;
     const override = cachedRoute.override ? { ...cachedRoute.override, reasoningEffort: optimistic.reasoningEffort, speed: optimistic.speed } : cachedRoute.override;
-    _rememberChatRoute(sessionId, { ...cachedRoute, effective: optimistic, override });
+    optimisticRoute = _rememberChatRoute(sessionId, { ...cachedRoute, effective: optimistic, override });
   }
+  const rollback = () => {
+    if (optimisticRoute && _cachedRouteFor(sessionId) === optimisticRoute) _rememberChatRoute(sessionId, cachedRoute);
+  };
   const assertCurrentChat = () => {
     if (!sessionId || sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
   };
@@ -1273,15 +1279,16 @@ function _queueReasoningSave(provider, patch, immediate = false) {
       const saved = await _saveChatModelRoute(next, sessionId);
       assertCurrentChat();
       const result = saved?.effective || next;
+      // Chat identity lives in the route cache only. Writing it into the global
+      // _llmCache leaked this chat's model into other chats' fallback.
       _rememberChatRoute(sessionId, saved || { ...(route || {}), effective: result });
-      if (_llmCache) _llmCache = { ..._llmCache, provider: providerId, providers: {
-        ..._llmCache.providers, [providerId]: { ..._llmCache.providers?.[providerId], model,
-          reasoning_effort: result.reasoningEffort, speed: result.speed },
-      } };
       _setComposerModelIdentity(providerId, model, result.reasoningEffort);
       _setBadgeLabel(formatModelWithReasoning(model, providerId, result.reasoningEffort));
       _setBadgeFast(supportsFastSpeed(providerId, model) && result.speed === 'fast');
-    }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+    }).catch((err) => {
+      rollback();
+      _toast(err?.message || 'Could not save reasoning', 'error');
+    });
   };
   if (immediate) commit();
   else _reasoningSaveTimer = setTimeout(commit, 180);
