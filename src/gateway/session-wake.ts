@@ -92,7 +92,10 @@ async function defaultNotify(title: string, body: string, sessionId: string): Pr
   try {
     const mod: any = await import('./notifications/web-push');
     if (typeof mod?.sendWebPushToAll === 'function') {
-      await mod.sendWebPushToAll({ title, body, tag: `wake_${sessionId}`, data: { sessionId } });
+      // Without a url the service worker falls back to bare #mobile/chat, which
+      // reopens whatever chat the phone last remembered (possibly an agent room).
+      const { mobileRouteForSession } = await import('./notifications/session-route');
+      await mod.sendWebPushToAll({ title, body, url: `/?source=pwa#${mobileRouteForSession(sessionId)}`, tag: `wake_${sessionId}`, data: { sessionId } });
     }
   } catch { /* no push available: skip silently */ }
 }

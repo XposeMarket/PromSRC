@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "8bc0a717dc721b20",
-  "sourceDigest": "8bc0a717dc721b20f18b06fc58b3d79da2d4bd827707d2d19255b0805fe290a7",
+  "buildId": "940cf9959fd17da8",
+  "sourceDigest": "940cf9959fd17da854f8a4bc08a3cfd2817ecd16a7e661ed5aaf7e54e597248d",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -10,7 +10,7 @@
   "entries": {
     "desktop": {
       "html": "/index.html",
-      "js": "/build/entries/desktop-URF5ZWML.js",
+      "js": "/build/entries/desktop-JDUZTCI3.js",
       "css": "/build/styles/desktop-SH777KLB.css",
       "modulePreloads": [
         "/build/chunks/chunk-6FFPACLU.js",
@@ -24,7 +24,7 @@
     },
     "mobile": {
       "html": "/mobile.html",
-      "js": "/build/entries/mobile-JAVM57VM.js",
+      "js": "/build/entries/mobile-AKO77ZHW.js",
       "css": "/build/styles/mobile-I3H3TNYD.css",
       "modulePreloads": []
     }
@@ -45,7 +45,7 @@
     "src/components/video-project-card.js": "/build/chunks/video-project-card-XWWMWNBP.js",
     "src/context-review.js": "/build/chunks/context-review-FEXKUOBC.js",
     "src/context-window-live-tracking.js": "/build/chunks/context-window-live-tracking-IY34QJ6U.js",
-    "src/desktop-entry.js": "/build/entries/desktop-URF5ZWML.js",
+    "src/desktop-entry.js": "/build/entries/desktop-JDUZTCI3.js",
     "src/features/chat/canonical-desktop-composer.js": "/build/chunks/canonical-desktop-composer-ABD6TDHD.js",
     "src/features/chat/desktop-turn-file-diff.js": "/build/chunks/desktop-turn-file-diff-I2A35HSD.js",
     "src/features/chat/multi-chat-intent.js": "/build/chunks/multi-chat-intent-UO233JH7.js",
@@ -60,7 +60,7 @@
     "src/mobile/mobile-chat-page-runtime.js": "/build/chunks/mobile-chat-page-runtime-TJ3ZZPPV.js",
     "src/mobile/mobile-chat-renderer-runtime.js": "/build/chunks/mobile-chat-renderer-runtime-WWOCPZCB.js",
     "src/mobile/mobile-creative-pages.js": "/build/chunks/mobile-creative-pages-FLUX7Y4I.js",
-    "src/mobile/mobile-entry.js": "/build/entries/mobile-JAVM57VM.js",
+    "src/mobile/mobile-entry.js": "/build/entries/mobile-AKO77ZHW.js",
     "src/mobile/mobile-gateways-page.js": "/build/chunks/mobile-gateways-page-KTNSS2QR.js",
     "src/mobile/mobile-hub-pages.js": "/build/chunks/mobile-hub-pages-DEPAURUJ.js",
     "src/mobile/mobile-model-badge.js": "/build/chunks/mobile-model-badge-LFQDWQAV.js",
@@ -68,7 +68,7 @@
     "src/mobile/mobile-pairing-page.js": "/build/chunks/mobile-pairing-page-RE4J77DY.js",
     "src/mobile/mobile-plugins-page.js": "/build/chunks/mobile-plugins-page-2NI27JHI.js",
     "src/mobile/mobile-proposals-pages.js": "/build/chunks/mobile-proposals-pages-7KBJ22DK.js",
-    "src/mobile/mobile-router.js": "/build/chunks/mobile-router-V2OP3RND.js",
+    "src/mobile/mobile-router.js": "/build/chunks/mobile-router-LR5GGPS5.js",
     "src/mobile/mobile-schedule-pages.js": "/build/chunks/mobile-schedule-pages-OKZSC756.js",
     "src/mobile/mobile-settings.js": "/build/chunks/mobile-settings-5Y54PR27.js",
     "src/mobile/mobile-subagent-pages.js": "/build/chunks/mobile-subagent-pages-VTTDPYLC.js",
@@ -115,7 +115,7 @@
         "/build/chunks/chunk-PZSASZYM.js",
         "/build/chunks/chunk-VIPO6N7H.js",
         "/build/chunks/chunk-WXZ4L2EE.js",
-        "/build/entries/desktop-URF5ZWML.js",
+        "/build/entries/desktop-JDUZTCI3.js",
         "/build/inline/index-inline-01-213bcef90a36.js",
         "/build/inline/index-inline-02-009e8c2ccb1a.js",
         "/build/inline/index-inline-03-57964227a42d.js",
@@ -155,18 +155,18 @@
         "/build/chunks/chunk-YF7XQ7HF.js",
         "/build/chunks/chunk-YMT6MSCC.js",
         "/build/chunks/chunk-YNMSZYSC.js",
-        "/build/chunks/mobile-router-V2OP3RND.js",
-        "/build/entries/mobile-JAVM57VM.js",
+        "/build/chunks/mobile-router-LR5GGPS5.js",
+        "/build/entries/mobile-AKO77ZHW.js",
         "/build/inline/mobile-inline-01-606d0eb0eaa3.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
         "/build/styles/mobile-I3H3TNYD.css"
       ],
       "files": 21,
-      "bytes": 1050313,
-      "gzipBytes": 242944,
-      "jsBytes": 488618,
-      "jsGzipBytes": 153468,
+      "bytes": 1051281,
+      "gzipBytes": 243203,
+      "jsBytes": 489586,
+      "jsGzipBytes": 153727,
       "cssBytes": 561695,
       "cssGzipBytes": 89476
     }
@@ -2917,10 +2917,10 @@
       "imports": []
     },
     {
-      "path": "/build/chunks/mobile-router-V2OP3RND.js",
-      "bytes": 15014,
-      "gzipBytes": 5122,
-      "sha256": "2aa7191580757ad77f22f04e12a31fb15dd417ad10380f13e78abb0d8ea53a36",
+      "path": "/build/chunks/mobile-router-LR5GGPS5.js",
+      "bytes": 15982,
+      "gzipBytes": 5381,
+      "sha256": "459030bfe9cecfc4895d5945069a0bd0fc3d90881bed6547ced2d310f5c01577",
       "entryPoint": "web-ui/src/mobile/mobile-router.js",
       "imports": [
         {
@@ -3881,10 +3881,10 @@
       ]
     },
     {
-      "path": "/build/entries/desktop-URF5ZWML.js",
+      "path": "/build/entries/desktop-JDUZTCI3.js",
       "bytes": 141703,
       "gzipBytes": 39143,
-      "sha256": "a0f7048d35079a38b846c068966a073f12d47cc6ed71f86ee09b5cd3e59da3c7",
+      "sha256": "d954388163cfb36ef9921e3da8f630f27041ec90b19272ea51e118ef70b58f98",
       "entryPoint": "web-ui/src/desktop-entry.js",
       "imports": [
         {
@@ -3917,7 +3917,7 @@
         },
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-router-V2OP3RND.js"
+          "path": "/build/chunks/mobile-router-LR5GGPS5.js"
         },
         {
           "kind": "dynamic-import",
@@ -3950,15 +3950,15 @@
       ]
     },
     {
-      "path": "/build/entries/mobile-JAVM57VM.js",
+      "path": "/build/entries/mobile-AKO77ZHW.js",
       "bytes": 9519,
       "gzipBytes": 3711,
-      "sha256": "2ea7c1ebfa1794ec93dd993a8c5ff2e5298fd18d79a9acec447536277b7b9bdf",
+      "sha256": "a0b4fc5f61d74c1e7acc623f87b434185e945107e5850244702778177cd3faf1",
       "entryPoint": "web-ui/src/mobile/mobile-entry.js",
       "imports": [
         {
           "kind": "dynamic-import",
-          "path": "/build/chunks/mobile-router-V2OP3RND.js"
+          "path": "/build/chunks/mobile-router-LR5GGPS5.js"
         }
       ]
     },

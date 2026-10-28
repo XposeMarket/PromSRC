@@ -9,6 +9,7 @@ import {
   type ChannelCompletionNotificationConfig,
 } from '../comms/broadcaster';
 import { sendWebPushToAll } from './web-push';
+import { mobileRouteForSession } from './session-route';
 
 type CompletionSource = 'desktop' | 'mobile';
 type DeliveryChannel = 'telegram' | 'discord' | 'whatsapp';
@@ -70,7 +71,9 @@ function buildMobileChatLink(sessionId: string, requestOrigin?: string): string 
   ).trim();
   const origin = configuredBase || String(requestOrigin || '').trim() || `http://127.0.0.1:${getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT}`;
   const base = origin.replace(/\/+$/, '');
-  return `${base}/?source=pwa#mobile/chat/${encodeURIComponent(sessionId || 'default')}`;
+  // Agent-owned sessions (team rooms, subagent chats, background agents) open
+  // their own labelled page, never the generic main-chat page.
+  return `${base}/?source=pwa#${mobileRouteForSession(sessionId)}`;
 }
 
 function buildMessage(input: ChatCompletionNotificationInput, cfg: ChannelCompletionNotificationConfig): string {
