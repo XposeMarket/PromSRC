@@ -9,6 +9,7 @@
 import fs from 'fs';
 import { cancelMainChatGoalTimers } from './timers/timer-store';
 import { quarantineCorruptStateFile, writeFileAtomicSync } from './state-file-quarantine';
+import { getLastAssistantModel, normalizeSessionModelRef, type SessionModelRef } from './session-last-model';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
@@ -450,6 +451,8 @@ export interface SessionSummary {
   canvasProjectLink?: CanvasProjectLink | null;
   mainChatGoal?: MainChatGoalState | null;
   chatModelRoute?: ChatModelRoute;
+  /** Model that produced the latest assistant reply (sidebar logo). null = none on record. */
+  lastModel?: SessionModelRef | null;
   voiceRoom?: VoiceRoomMetadata | null;
   externalImport?: Pick<ExternalImportBinding, 'version' | 'source' | 'continuation' | 'sourceResume' | 'importedAt'>;
 }
@@ -1221,6 +1224,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
       : null,
     canvasProjectLink: normalizeCanvasProjectLink(input?.canvasProjectLink),
     chatModelRoute: normalizeChatModelRoute(input?.chatModelRoute),
+    lastModel: normalizeSessionModelRef(input?.lastModel),
     voiceRoom: input?.voiceRoom && typeof input.voiceRoom === 'object' ? input.voiceRoom as VoiceRoomMetadata : null,
     externalImport: normalizeExternalImport(input?.externalImport),
   };
@@ -1521,6 +1525,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     canvasProjectLink: normalizeCanvasProjectLink(session.canvasProjectLink),
     mainChatGoal: session.mainChatGoal || null,
     chatModelRoute: normalizeChatModelRoute(session.chatModelRoute),
+    lastModel: getLastAssistantModel(session.history),
     voiceRoom: session.voiceRoom || null,
     externalImport: session.externalImport
       ? {
@@ -1612,6 +1617,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
       chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
+      lastModel: getLastAssistantModel(history),
       voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
       externalImport: normalizeExternalImport(data?.externalImport),
     };
@@ -1658,7 +1664,7 @@ function getSortedSessionSummaries(
       index = rebuildSessionIndex();
     } else if (Object.values(index.summaries).some((summary) => (
       summary.messageCount > 0
-      && (!summary.lastMessageAt || !String(summary.preview || '').trim() || String(summary.preview || '').trim() === String(summary.title || '').trim())
+      && (summary.lastModel === undefined || !summary.lastMessageAt || !String(summary.preview || '').trim() || String(summary.preview || '').trim() === String(summary.title || '').trim())
     ))) {
       index = rebuildSessionIndex();
     }

@@ -12,6 +12,10 @@ import { getActiveWorkspace } from './workspace-context.js';
 import { getConfig } from '../config/config.js';
 import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
 import {
+  createFxLookup, fxTweetMediaHints, fxTweetQuoteHasMedia, fxTweetToPayload, hasXMediaHints,
+  isLikelyTruncatedXText, type FxLookup,
+} from './x-fx-recovery.js';
+import {
   ALL_SEARCH_PROVIDER_IDS,
   EXTRA_SEARCH_ALL_FIELDS,
   EXTRA_SEARCH_PROVIDERS,
@@ -147,8 +151,13 @@ type XFetchMediaReport = {
   analyses: XMediaAnalysis[];
   errors: string[];
   analysis_limited: boolean;
+  media_status?: string;
+  download_status?: string;
+  analysis_status?: string;
+  download_limited?: boolean;
+  quote_media_not_analyzed?: boolean;
 };
-type XFetchPayload = {
+export type XFetchPayload = {
   success: boolean;
   url: string;
   tweets?: XFetchedTweet[];
@@ -1470,9 +1479,27 @@ function isXStatusUrl(url: string): boolean {
   return /^https?:\/\/(www\.)?(x\.com|twitter\.com|mobile\.twitter\.com)\/[^/?#]+\/status\/\d+/i.test(String(url || '').trim());
 }
 
-async function fetchXStatusViaOEmbed(url: string): Promise<XFetchPayload | null> {
+// FxTwitter recovery helpers live in x-fx-recovery.ts (file-size budget split).
+export { isLikelyTruncatedXText };
+
+async function fetchXStatusViaOEmbed(url: string, fxOnce?: () => Promise<FxLookup>): Promise<XFetchPayload | null> {
   const id = String(url || '').match(/\/status\/(\d+)/i)?.[1];
   if (!id) return null;
+  const result = await fetchXStatusViaOEmbedRaw(url, id);
+  const clipped = result?.tweets?.[0]?.text;
+  if (!result || !isLikelyTruncatedXText(String(clipped || ''))) return result;
+  const lookup: FxLookup = fxOnce ? await fxOnce() : { state: 'unavailable' };
+  const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, id, 'truncated') : null;
+  if (full && String(full.tweets?.[0]?.text || '').length > String(clipped || '').length) return full;
+  return {
+    ...result,
+    truncated: true,
+    message: `${result.message}. Text appears truncated (long-form post); full-text fallback was unavailable.`,
+  } as XFetchPayload;
+}
+
+
+async function fetchXStatusViaOEmbedRaw(url: string, id: string): Promise<XFetchPayload | null> {
   try {
     const endpoint = new URL('https://publish.x.com/oembed');
     endpoint.searchParams.set('url', url);
@@ -1731,7 +1758,7 @@ async function getVideoTranscript(filePath: string, existingTranscript?: string)
 }
 async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAnalysis> {
   if (file.kind === 'image') {
-    const result = await executeAnalyzeImage({
+    const result = await xFetchDeps.executeAnalyzeImage({
       file_path: file.rel_path,
       prompt: 'Analyze this image downloaded from an X post. Describe what is visible and transcribe any visible text.',
     });
@@ -1752,7 +1779,7 @@ async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAn
   }
 
   if (file.kind === 'video') {
-    const result = await executeAnalyzeVideo({
+    const result = await xFetchDeps.executeAnalyzeVideo({
       file_path: file.rel_path,
       prompt: 'Analyze this video downloaded from an X post. Summarize the clip, visible text, and spoken audio if available.',
       sample_count: 4,
@@ -1790,11 +1817,13 @@ async function buildXMediaReport(
   payload: XFetchPayload,
   fallbackUrl: string,
   progress?: WebFetchProgressReporter,
+  options: { skipFallback?: boolean; quoteMediaSkipped?: boolean } = {},
 ): Promise<XFetchMediaReport> {
   const tweets = Array.isArray(payload.tweets) ? payload.tweets : [];
   const { imageJobs, videoJobs, hintedTweetCount } = collectXMediaCandidates(tweets, fallbackUrl);
   const downloadedFiles: XDownloadedMedia[] = [];
   const errors: string[] = [];
+  const failedSourceUrls = new Set<string>();
   let fallbackPageDownloadAttempted = false;
   const mediaLabel = classifyXMediaLabel(imageJobs.length, videoJobs.length);
 
@@ -1806,7 +1835,7 @@ async function buildXMediaReport(
     imageJobs.slice(0, MAX_X_IMAGE_DOWNLOADS),
     MAX_X_IMAGE_DOWNLOAD_CONCURRENCY,
     async (job) => {
-      const result = await executeDownloadUrl({
+      const result = await xFetchDeps.executeDownloadUrl({
         url: job.url,
         output_dir: 'downloads/x_fetch_media/images',
       });
@@ -1817,6 +1846,7 @@ async function buildXMediaReport(
   for (const { job, result } of imageDownloadResults) {
     if (!result.success) {
       errors.push(`download_url(${job.url}): ${result.error || 'failed'}`);
+      failedSourceUrls.add(job.url);
       continue;
     }
     downloadedFiles.push({
@@ -1832,13 +1862,14 @@ async function buildXMediaReport(
   }
 
   for (const job of videoJobs.slice(0, MAX_X_VIDEO_DOWNLOADS)) {
-    const result = await executeDownloadMedia({
+    const result = await xFetchDeps.executeDownloadMedia({
       url: job.url,
       output_dir: 'downloads/x_fetch_media',
       audio_only: false,
     });
     if (!result.success) {
       errors.push(`download_media(${job.url}): ${result.error || 'failed'}`);
+      failedSourceUrls.add(job.url);
       continue;
     }
     const files = Array.isArray(result.data?.files) ? result.data.files : [];
@@ -1861,15 +1892,17 @@ async function buildXMediaReport(
   // X's browser payload can expose the post text while omitting media metadata. A
   // status URL is still a safe, bounded yt-dlp target, so make one direct recovery
   // attempt whenever extraction found no files instead of silently returning no media.
-  if (downloadedFiles.length === 0 && isXStatusUrl(fallbackUrl)) {
+  // Skipped when FxTwitter confirmed the target has no media: yt-dlp would follow quoted-post media.
+  if (!options.skipFallback && downloadedFiles.length === 0 && isXStatusUrl(fallbackUrl)) {
     fallbackPageDownloadAttempted = true;
-    const fallbackResult = await executeDownloadMedia({
+    const fallbackResult = await xFetchDeps.executeDownloadMedia({
       url: fallbackUrl,
       output_dir: 'downloads/x_fetch_media',
       audio_only: false,
     });
     if (!fallbackResult.success) {
       errors.push(`download_media(${fallbackUrl}) fallback: ${fallbackResult.error || 'failed'}`);
+      failedSourceUrls.add(fallbackUrl);
     } else {
       const files = Array.isArray(fallbackResult.data?.files) ? fallbackResult.data.files : [];
       for (const file of files) {
@@ -1938,8 +1971,25 @@ async function buildXMediaReport(
     reportWebFetchProgress(progress, 'analysis_complete', analysisMessage);
   }
 
+  // Honest statuses from per-candidate outcomes. A URL that failed and later succeeded is resolved.
+  const unresolvedFailures = [...failedSourceUrls].filter(url => !dedupedFiles.some(file => file.url === url));
+  const downloadLimited = imageJobs.length > MAX_X_IMAGE_DOWNLOADS || videoJobs.length > MAX_X_VIDEO_DOWNLOADS;
+  const analyzableCount = dedupedFiles.filter(file => file.kind === 'image' || file.kind === 'video').length;
+  const analyzedCount = analyses.filter(item => item.status === 'analyzed').length;
+  const analysisFailed = analyses.filter(item => item.status === 'failed').length;
+  const downloadStatus = dedupedFiles.length === 0
+    ? (unresolvedFailures.length ? 'failed' : 'none_detected')
+    : unresolvedFailures.length ? 'partial' : downloadLimited ? 'capped' : 'complete';
+  const analysisStatus = analyzableCount === 0 ? 'not_applicable'
+    : analyzedCount === 0 ? 'failed'
+    : analysisFailed > 0 ? 'partial'
+    : analysisLimited ? 'capped' : 'complete';
+  const mediaStatus = dedupedFiles.length === 0
+    ? (unresolvedFailures.length ? 'failed' : 'none_detected')
+    : (unresolvedFailures.length || analysisStatus === 'failed' || analysisStatus === 'partial') ? 'partial'
+    : (downloadLimited || analysisLimited) ? 'capped' : 'recovered';
   return {
-    detected: hintedTweetCount > 0,
+    detected: hintedTweetCount > 0 || dedupedFiles.length > 0,
     hinted_tweet_count: hintedTweetCount,
     direct_image_candidates: imageJobs.length,
     video_tweet_candidates: videoJobs.length,
@@ -1948,6 +1998,11 @@ async function buildXMediaReport(
     analyses,
     errors,
     analysis_limited: analysisLimited,
+    media_status: mediaStatus,
+    download_status: downloadStatus,
+    analysis_status: analysisStatus,
+    download_limited: downloadLimited,
+    quote_media_not_analyzed: !!options.quoteMediaSkipped,
   };
 }
 
@@ -1970,7 +2025,30 @@ function summarizeXMediaReport(report?: XFetchMediaReport): string | null {
   if (report.analysis_limited) {
     parts.push('analysis output was capped');
   }
+  if (report.quote_media_not_analyzed) {
+    parts.push('quoted-post media not analyzed');
+  }
   return parts.join('; ');
+}
+
+// Injection seam so the offline regression can stub the browser and download/analysis tools.
+// Late-binding wrappers: evaluated at call time, safe under circular ESM imports.
+export const xFetchDeps: Record<string, (...args: any[]) => any> = {
+  fetchXThread: (...a: any[]) => (fetchXThread as any)(...a),
+  executeDownloadUrl: (...a: any[]) => (executeDownloadUrl as any)(...a),
+  executeDownloadMedia: (...a: any[]) => (executeDownloadMedia as any)(...a),
+  executeAnalyzeImage: (...a: any[]) => (executeAnalyzeImage as any)(...a),
+  executeAnalyzeVideo: (...a: any[]) => (executeAnalyzeVideo as any)(...a),
+};
+
+/** Browser thread failure reason. Only an explicit machine flag yields login_gated; otherwise unknown. */
+function xThreadFailureReason(raw: string): string {
+  if (!String(raw || '').trim()) return 'blocked_or_timeout';
+  try {
+    return JSON.parse(String(raw))?.login_wall === true ? 'login_gated' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 async function executeXWebFetch(
@@ -1980,39 +2058,109 @@ async function executeXWebFetch(
   includeMedia = false,
   includeThread = false,
 ): Promise<ToolResult> {
-  let payload = !includeMedia && !includeThread && isXStatusUrl(url)
-    ? await fetchXStatusViaOEmbed(url)
-    : null;
-  if (!payload) {
-    const raw = await fetchXThread('web_fetch', url);
+  // Exact-post metadata is requested at most once per call. oEmbed (text) and
+  // FxTwitter (text fallback + media) are memoized; with include_media both start in parallel.
+  const isStatus = isXStatusUrl(url);
+  const statusId = String(url || '').match(/\/status\/(\d+)/i)?.[1] || '';
+  const fxOnce = createFxLookup(url, statusId);
+  const fxEarly = includeMedia && isStatus ? fxOnce() : null;
+  let oembedRequest: Promise<XFetchPayload | null> | null = null;
+  const oembedOnce = (): Promise<XFetchPayload | null> => {
+    oembedRequest ??= isStatus ? fetchXStatusViaOEmbed(url, fxOnce).catch(() => null) : Promise.resolve(null);
+    return oembedRequest;
+  };
+  const oembedEarly = !includeThread && isStatus ? oembedOnce() : null;
+  let payload: XFetchPayload | null = null;
+  let threadStatus = 'not_requested';
+  let threadReason: string | undefined;
+  let threadCounts: Record<string, number> = {};
+  if (!includeThread && isStatus) {
+    payload = await (oembedEarly ?? oembedOnce());
+    if (!payload?.success) {
+      // oEmbed failure (rate limit, 5xx, sensitive post) degrades to FxTwitter text; no browser.
+      const lookup = await fxOnce();
+      const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, statusId, 'oembed_unavailable') : null;
+      if (full?.tweets?.[0]?.text) payload = full;
+    }
+  } else {
+    const raw = await xFetchDeps.fetchXThread('web_fetch', url);
     payload = parseXFetchPayload(raw, url);
-    // Logged-out X often shows a login wall instead of the thread. Keep the
-    // exact post via oEmbed rather than failing the whole fetch.
-    if (isXStatusUrl(url) && !(Array.isArray(payload?.tweets) && payload.tweets.length)) {
-      const oembed = await fetchXStatusViaOEmbed(url).catch(() => null);
+    const tweets: any[] = Array.isArray(payload?.tweets) ? payload.tweets : [];
+    const target = tweets.find(item => String(item?.id || '') === statusId);
+    if (target && tweets.length > 1) {
+      // Captured is never 'complete': the browser cannot prove the thread is exhausted.
+      threadStatus = 'captured';
+      const handle = String(target.handle || '').toLowerCase();
+      const authorCount = handle ? tweets.filter(item => String(item?.handle || '').toLowerCase() === handle).length : 1;
+      // Same-handle count and other-author count only: no reply relationship (inReplyTo) is proven.
+      threadCounts = { same_author_count: authorCount, other_author_count: tweets.length - authorCount };
+    } else if (target) {
+      threadStatus = 'target_only';
+      threadReason = 'no_replies_captured';
+    } else {
+      threadStatus = 'unavailable';
+      threadReason = xThreadFailureReason(String(raw || ''));
+      const oembed = await oembedOnce();
       if (oembed?.success && Array.isArray(oembed.tweets) && oembed.tweets.length) {
+        threadStatus = 'target_only';
         payload = {
           ...oembed,
-          message: `${oembed.message || 'Captured exact X status via oEmbed'}. Replies/thread were login-gated; for replies use x_search_ops or x_posts.`,
+          message: `${oembed.message || 'Captured exact X status via oEmbed'}. Thread unavailable (${threadReason}); replies were not obtained. For replies use x_search_ops or x_posts.`,
         };
       }
     }
   }
+  if (!payload) payload = { success: false, url, error: `X fetch returned no payload for ${url}.` } as XFetchPayload;
+  Object.assign(payload, { thread_status: threadStatus, thread_reason: threadReason, ...threadCounts });
   const payloadError = validateXFetchPayload(payload, url);
   if (payloadError) {
     payload.success = false;
     payload.error = payloadError;
   }
-
   if (payload.success) {
     reportWebFetchProgress(progress, 'fetch_complete', 'Web fetch complete.');
   }
 
+  // Target-post media only, from the memoized FxTwitter lookup (identity-checked).
+  let mediaConfirmedEmpty = false;
+  let quoteMediaSkipped = false;
+  if (includeMedia && isStatus) {
+    const lookup = await (fxEarly ?? fxOnce());
+    let tweets: any[] = Array.isArray(payload.tweets) ? payload.tweets : [];
+    let target: any = tweets.find(item => String(item?.id || '') === statusId);
+    if (lookup.state === 'ok') {
+      if (!target) {
+        // Browser/oEmbed missed the target: synthesize it from FxTwitter (text may be empty for media-only posts).
+        const synthesized = fxTweetToPayload(lookup.tweet, url, statusId, 'target_synthesized');
+        if (synthesized?.tweets?.[0]) {
+          target = synthesized.tweets[0];
+          tweets = [...tweets, target];
+          payload.tweets = tweets as any;
+          payload.count = tweets.length;
+          if (!payload.success) {
+            payload.success = true;
+            payload.error = undefined;
+            payload.message = synthesized.message;
+          }
+        }
+      }
+      if (target && !hasXMediaHints(target)) {
+        const hints = fxTweetMediaHints(lookup.tweet);
+        if (hints.length) target.media = hints;
+        else {
+          // Confirmed empty: no yt-dlp fallback (it would follow quoted-post media).
+          mediaConfirmedEmpty = true;
+          quoteMediaSkipped = fxTweetQuoteHasMedia(lookup.tweet);
+        }
+      }
+    }
+  }
+
   // Media is independently recoverable from valid X status URLs. Do not gate it on
   // post-text extraction: login/rate-limit failures previously skipped the proven media resolver entirely.
-  if (isXStatusUrl(url) && includeMedia) {
+  if (includeMedia && isStatus) {
     try {
-      payload.x_media = await buildXMediaReport(payload, url, progress);
+      payload.x_media = await buildXMediaReport(payload, url, progress, { skipFallback: mediaConfirmedEmpty, quoteMediaSkipped });
     } catch (error: any) {
       payload.x_media = {
         detected: false,
@@ -2024,30 +2172,35 @@ async function executeXWebFetch(
         analyses: [],
         errors: [String(error?.message || error || 'X media pipeline failed.')],
         analysis_limited: false,
+        media_status: 'failed',
       };
     }
   }
+  const mediaStatus = !includeMedia ? 'not_requested'
+    : !isStatus ? 'not_applicable'
+    : String(payload.x_media?.media_status || 'failed');
+  Object.assign(payload, { media_status: mediaStatus });
 
   if (!payload.success && payload.x_media?.downloaded_files?.length) {
     payload.success = true;
     payload.error = undefined;
     payload.message = 'Post text extraction was unavailable, but media was recovered from the X status URL.';
-    payload.count = Number(payload.x_media.hinted_tweet_count || 0);
+    // Count only post text actually obtained (0 when none); never fabricate from media hints.
+    payload.count = Array.isArray(payload.tweets) ? payload.tweets.length : 0;
   }
 
-  const stdoutPayload = payload.x_media
-    ? {
-        success: payload.success,
-        url: payload.url,
-        count: payload.count,
-        message: payload.message,
-        error: payload.error,
-        x_media_summary: summarizeXMediaReport(payload.x_media),
-        x_media: payload.x_media,
-        snapshot_deltas: payload.snapshot_deltas,
-        tweets: payload.tweets,
-      }
-    : payload;
+  // stdout carries the same status fields as data (thread/media status, truncation), so the model sees them.
+  // Statuses first: stdout is clipped by maxChars from the end, and JS keeps first-insertion key order on spread overrides.
+  const statusHead = {
+    status: payload.success ? 'ok' : 'error',
+    truncated: (payload as any).truncated === true,
+    thread_status: (payload as any).thread_status,
+    thread_reason: (payload as any).thread_reason,
+    media_status: (payload as any).media_status,
+    ...(payload.x_media ? { x_media_summary: summarizeXMediaReport(payload.x_media) } : {}),
+  };
+  const stdoutPayload = { ...statusHead, ...payload, status: statusHead.status, truncated: statusHead.truncated };
+
   const stdout = clipText(JSON.stringify(stdoutPayload, null, 2), maxChars);
   if (!payload.success) {
     return {

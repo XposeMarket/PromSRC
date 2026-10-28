@@ -2609,9 +2609,13 @@ function _projectSessionRows(project) {
 }
 
 function _mobileSessionModelLogo(session) {
-  const route = session?.chatModelRoute?.effective || session?.chatModelRoute?.override || {};
-  const provider = String(route.providerId || route.provider || session?.chatModelRoute?.providerId || session?.modelProvider || _drawerDefaultModel?.provider || '').toLowerCase();
-  const model = String(route.model || session?.chatModelRoute?.model || session?.model || _drawerDefaultModel?.model || '').toLowerCase();
+  // An explicit per-chat route wins; otherwise the model that actually answered
+  // last. Never the global default model: that painted every chat with the
+  // current Settings provider's logo.
+  const explicit = session?.chatModelRoute?.override || session?.chatModelRoute || {};
+  const source = explicit.providerId && explicit.model ? explicit : (session?.lastModel || {});
+  const provider = String(source.providerId || source.provider || '').toLowerCase();
+  const model = String(source.model || '').toLowerCase();
   const brand = provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
     : provider === 'openai_codex' || model.includes('codex') ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
     : provider === 'openai' || model.startsWith('gpt-') ? MOBILE_IMPORTED_SOURCE_BRANDS.chatgpt
