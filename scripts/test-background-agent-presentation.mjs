@@ -277,7 +277,8 @@ mobileSummary._handleMobileReasoningSummaryDelta(mobileSummaryMessage, { type: '
 assert.equal(mobileSummaryMessage.liveTraceEntries[0].extra.source, 'reasoning_summary');
 assert.equal(mobileSummaryMessage.content, undefined, 'mobile summary never becomes body content');
 const summaryHtml = runtime._renderMobileAgentChatBubble({ content: '', liveTraceEntries: [desktopSummary], traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'summary' });
-assert.match(summaryHtml, /<details class="pm-trace-thought-group"[^>]*><summary>/, 'summary is collapsed even when the outer trace is expanded');
+assert.doesNotMatch(summaryHtml, /<details class="pm-trace-thought-group"/, 'summary renders as visible text, not a nested collapsed disclosure');
+assert.match(summaryHtml, /<div class="pm-trace-thought-group"[\s\S]*SUMMARY NOT BODY/, 'summary text is visible inside the expanded trace');
 assert.equal((summaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1, 'summary has one owner, not a second body/progress copy');
 const desktopRender = {
   liveTraceGroups: entries => [{ id: 'summary', kind: 'thought-summary', entries }],
@@ -290,7 +291,7 @@ vm.createContext(desktopRender);
 vm.runInContext(extract('web-ui/src/pages/ChatPage.js', ['renderLiveTurnTrace']), desktopRender);
 const desktopSummaryHtml = desktopRender.renderLiveTurnTrace([desktopSummary], { streaming: true, openThoughts: true });
 assert.match(desktopSummaryHtml, /<details class="live-turn-thought-group"[^>]*>/);
-assert.doesNotMatch(desktopSummaryHtml, /<details[^>]*\sopen(?:\s|>)/, 'desktop reasoning remains collapsed during streaming');
+assert.match(desktopSummaryHtml, /<details[^>]*\sopen(?:\s|>)/, 'desktop reasoning text stays visible (open) while streaming');
 assert.equal((desktopSummaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1);
 
 assert.equal(desktopTrace[0].text, chunks.join(''));

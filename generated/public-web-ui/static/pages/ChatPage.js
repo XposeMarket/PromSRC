@@ -13599,7 +13599,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const bodyHtml = bodyEntries.length
         ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
         : '';
-      return `<details class="live-turn-thought-group"${!isSummaryThought && (openThoughts || streaming) ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      return `<details class="live-turn-thought-group"${(openThoughts || streaming) ? ' open' : ''}${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
         <summary class="live-turn-tool-summary">Thinking</summary>
         ${summaryMarkup}
         ${bodyHtml}

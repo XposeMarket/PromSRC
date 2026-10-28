@@ -985,11 +985,9 @@ export function createMobileChatRendererRuntime(context = {}) {
         const summaryMarkup = progressSummary && !group.entries.some((entry) => String(entry?.text || entry?.content || '').trim())
           ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong class="t-think" data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
           : '';
-        // Provider summaries have one owner: a collapsed reasoning disclosure.
-        // Actual assistant commentary remains an ordinary timeline paragraph.
-        if (isSummaryThought) {
-          return `<details class="pm-trace-thought-group" data-pm-trace-group="${escapeHtml(group.id)}"><summary>Working for ${escapeHtml(_formatMobileWorkDuration(durationMs))}</summary><div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div></details>`;
-        }
+        // Reasoning summaries render inline as visible text for every provider.
+        // The turn already has one "Working for" drawer; never nest a second
+        // collapsed disclosure around the summary text (Raul, 2026-10-28).
         const bodyEntries = group.entries;
         const bodyHtml = bodyEntries.length
           ? `<div class="pm-trace-thought-body"><div class="pm-live-trace">${bodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`
