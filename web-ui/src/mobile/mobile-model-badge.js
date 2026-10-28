@@ -1358,7 +1358,8 @@ function _renderSpeedList(provider) {
     const speed = btn.getAttribute('data-speed') === 'fast' ? 'fast' : 'standard';
     _queueReasoningSave(provider, { speed }, true);
     const merged = { ...cfg, speed }; delete merged.fast_mode;
-    if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+    // Routed chats re-render from the optimistic route patch; only unrouted chats read global config.
+    if (_llmCache && _activeChatRoute()?.effective?.providerId !== provider) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
     _setBadgeFast(speed === 'fast');
     _renderAdvancedSheet();
   }));
@@ -1474,7 +1475,8 @@ function _renderEffortList(provider) {
       _queueReasoningSave(provider, { reasoning_effort: value }, true);
       const merged = { ...cfg, reasoning_effort: value };
       if (!value) delete merged.reasoning_effort;
-      if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+      // Routed chats re-render from the optimistic route patch; only unrouted chats read global config.
+      if (_llmCache && _activeChatRoute()?.effective?.providerId !== provider) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
       _renderAdvancedSheet();
     });
   });
