@@ -26,6 +26,7 @@ import {
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
 import { buildMobileSettingsHandoffUrl } from '../settings-return.js';
+import { agentOwnedMobileRoute } from './mobile-session-route.js';
 
 let mobileRenderGeneration = 0;
 const mobileRouteOwnerPromises = new Map();
@@ -339,6 +340,28 @@ function render() {
 
   let { page, arg, extra } = mobileRouteFromLocation();
   arg = _repairNamespacedChatRoute(page, arg);
+  // Agent-owned sessions (team rooms, subagent chats, background agents) have
+  // their own labelled pages. Never render them in the main chat page, where a
+  // notification tap or a remembered "last chat" would let the user type into
+  // an agent's room while it looks like main chat.
+  if (page === 'chat') {
+    if (arg) {
+      let decoded = arg;
+      try { decoded = decodeURIComponent(arg); } catch {}
+      const ownedRoute = agentOwnedMobileRoute(parseTargetNamespacedId(decoded)?.targetId || decoded);
+      if (ownedRoute) {
+        try { history.replaceState(null, '', (window.location.pathname || '/') + (window.location.search || '') + '#' + ownedRoute); } catch {}
+        ({ page, arg, extra } = mobileRouteFromLocation());
+      }
+    } else {
+      try {
+        const remembered = String(localStorage.getItem('pm_mobile_last_chat_session') || '').trim();
+        if (remembered && agentOwnedMobileRoute(parseTargetNamespacedId(remembered)?.targetId || remembered)) {
+          localStorage.removeItem('pm_mobile_last_chat_session');
+        }
+      } catch {}
+    }
+  }
   const pairCode = _pairCodeFromUrl();
   const scannerPairCode = page === 'pair' && arg === 'add' ? getPendingGatewayPair() : '';
   const activePairCode = pairCode || scannerPairCode;
