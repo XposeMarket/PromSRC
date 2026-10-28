@@ -473,8 +473,8 @@ function _primaryUsageLeft(providerId) {
   const rows = (_usageCache || []).filter((row) => String(row?.provider || '') === providerId
     && Array.isArray(row?.windows) && row.windows.length);
   if (!rows.length) return null;
-  const cfg = (_llmCache?.providers || {})[providerId] || {};
-  const primaryId = String(cfg.defaultAccountId || cfg.accountId || '').trim();
+  const cfg = _providerCfg(providerId);
+  const primaryId = String(cfg.accountId || cfg.defaultAccountId || '').trim();
   const row = (primaryId && rows.find((r) => String(r?.account_id || '') === primaryId))
     || rows.find((r) => String(r?.account_id || '') === 'default')
     || rows[0];
@@ -515,10 +515,47 @@ function _modelsForProvider(provider) {
   return out;
 }
 
+// Per-chat model identity. The composer badge, the reasoning sheet and every
+// Advanced row read the ACTIVE CHAT's route. The global Settings provider is
+// only the fallback for a chat with no resolvable route. (Reading the global
+// provider here made the sheet show Opus while the badge showed Astra, and a
+// reasoning change re-saved the wrong model.)
+let _chatRouteCache = null; // { sessionId, route }
+function _rememberChatRoute(sessionId, route) {
+  _chatRouteCache = sessionId && route ? { sessionId: String(sessionId), route } : null;
+  window.__pmChatModelRoute = route || null;
+  return route || null;
+}
+function _cachedRouteFor(sessionId) {
+  return _chatRouteCache && _chatRouteCache.sessionId === String(sessionId || '') ? _chatRouteCache.route : null;
+}
+function _activeChatRoute() {
+  const route = _cachedRouteFor(_activeChatSessionId());
+  return route?.effective?.providerId && route.effective.model ? route : null;
+}
 function _activeModel(llm) {
+  const route = _activeChatRoute();
+  if (route) return { provider: String(route.effective.providerId), model: String(route.effective.model) };
   const provider = String(llm?.provider || 'ollama');
   const model = String(llm?.providers?.[provider]?.model || '');
   return { provider, model };
+}
+function _providerCfg(provider, llm = _llmCache) {
+  const base = (llm?.providers || {})[provider] || {};
+  const route = _activeChatRoute();
+  const eff = route?.effective;
+  if (!eff || eff.providerId !== provider) return base;
+  const usesDraftDefault = _activeChatSessionId() === 'mobile_default' && !route.override?.reasoningEffort;
+  const cfg = {
+    ...base,
+    model: eff.model,
+    reasoning_effort: _normalizedReasoningEffort(provider, eff.model, usesDraftDefault ? _mainChatDefaultEffort : eff.reasoningEffort),
+    speed: eff.speed || base.speed || 'standard',
+  };
+  if (eff.accountId) cfg.accountId = eff.accountId;
+  if (eff.speed) delete cfg.fast_mode;
+  if (!cfg.reasoning_effort) delete cfg.reasoning_effort;
+  return cfg;
 }
 
 function _activeChatSessionId() {
@@ -556,7 +593,7 @@ async function _saveChatModelRoute(route, sessionId = _activeChatSessionId()) {
       effective: { ...override },
     };
     _writeSavedChatModelRoute(_mobileDraftModelRoute);
-    window.__pmChatModelRoute = _mobileDraftModelRoute;
+    _rememberChatRoute('mobile_default', _mobileDraftModelRoute);
     return _mobileDraftModelRoute;
   }
   const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
@@ -572,7 +609,7 @@ export function resetMobileDraftModelRoute() {
   _mobileDraftModelRoute = null;
   _llmCache = null;
   if (_activeChatSessionId() === 'mobile_default') {
-    window.__pmChatModelRoute = null;
+    _rememberChatRoute('', null);
     refreshMobileModelBadge(true).catch(() => {});
   }
 }
@@ -591,7 +628,7 @@ export async function applyMobileDraftModelRouteToSession(sessionId) {
   if (data?.success === false) throw new Error(data.error || 'Could not apply the selected model to this chat');
   _writeSavedChatModelRoute(data?.chatModelRoute || route);
   _mobileDraftModelRoute = null;
-  window.__pmChatModelRoute = data?.chatModelRoute || null;
+  _rememberChatRoute(sid, data?.chatModelRoute || null);
   return window.__pmChatModelRoute;
 }
 
@@ -673,7 +710,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   // header label and stale reasoning level.
   if (String(modelChangeDetail?.sourceEventType || '') === 'main_model_changed') {
     _mobileDraftModelRoute = null;
-    window.__pmChatModelRoute = null;
+    _rememberChatRoute('', null);
     _llmCache = null;
     force = true;
   }
@@ -695,8 +732,13 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
       return label;
     }
   }
-  const route = await _loadChatModelRoute();
-  window.__pmChatModelRoute = route;
+  const routeSessionId = _activeChatSessionId();
+  // A failed route read keeps this chat's last known route instead of
+  // silently showing (and later re-saving) the global Settings model.
+  const loadedRoute = await _loadChatModelRoute(routeSessionId);
+  const route = loadedRoute || (routeSessionId !== 'mobile_default' ? _cachedRouteFor(routeSessionId) : null);
+  if (routeSessionId !== _activeChatSessionId()) return window.__pmModelBadgeLabel || 'Online';
+  _rememberChatRoute(routeSessionId, route);
   const { provider, model } = route?.effective?.providerId
     ? { provider: route.effective.providerId, model: route.effective.model }
     : _activeModel(llm);
@@ -711,9 +753,8 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     reasoning_effort: _normalizedReasoningEffort(provider, model, rawReasoningEffort),
     speed: route?.effective?.speed || (llm?.providers?.[provider] || {}).speed || 'standard',
   };
-  if (_llmCache) {
-    _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
-  }
+  // Do not write the routed chat model back into the global _llmCache: that
+  // made the "global fallback" show the previous chat's model.
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   _setComposerModelIdentity(provider, model, cfg.reasoning_effort);
   if (usesDraftDefault) window.__pmModelBadgeReasoningLabel = `Default (${formatReasoningDisplayName(cfg.reasoning_effort) || 'Auto'})`;
@@ -945,7 +986,7 @@ export function setMobileSubagentReasoningContext(context = null) {
 
 function _pickerStateKey() {
   const { provider } = _activeModel(_llmCache);
-  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const cfg = _providerCfg(provider);
   return `${provider}|${cfg.model || ''}|${cfg.reasoning_effort || ''}|${cfg.speed || ''}`;
 }
 
@@ -967,7 +1008,7 @@ async function _openReasoningSheet() {
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   const render = () => {
     const { provider } = _activeModel(_llmCache);
-    const cfg = (_llmCache?.providers || {})[provider] || {};
+    const cfg = _providerCfg(provider);
     _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
     const body = document.getElementById('pm-msheet-body');
     const reset = document.createElement('button');
@@ -1193,6 +1234,22 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   const sessionId = _activeChatSessionId();
   const change = { ...patch };
   clearTimeout(_reasoningSaveTimer);
+  // Optimistic: sheets re-render from the chat route before the save lands.
+  // A failed save rolls back, so an unsaved pick never becomes "last known".
+  const cachedRoute = _cachedRouteFor(sessionId);
+  let optimisticRoute = null;
+  if (cachedRoute?.effective?.providerId === provider) {
+    const optimistic = { ...cachedRoute.effective };
+    if (Object.prototype.hasOwnProperty.call(change, 'reasoning_effort')) {
+      optimistic.reasoningEffort = _normalizedReasoningEffort(provider, optimistic.model, change.reasoning_effort) || undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(change, 'speed')) optimistic.speed = change.speed;
+    const override = cachedRoute.override ? { ...cachedRoute.override, reasoningEffort: optimistic.reasoningEffort, speed: optimistic.speed } : cachedRoute.override;
+    optimisticRoute = _rememberChatRoute(sessionId, { ...cachedRoute, effective: optimistic, override });
+  }
+  const rollback = () => {
+    if (optimisticRoute && _cachedRouteFor(sessionId) === optimisticRoute) _rememberChatRoute(sessionId, cachedRoute);
+  };
   const assertCurrentChat = () => {
     if (!sessionId || sessionId !== _activeChatSessionId()) throw new Error('Chat changed. Choose reasoning again.');
   };
@@ -1222,15 +1279,16 @@ function _queueReasoningSave(provider, patch, immediate = false) {
       const saved = await _saveChatModelRoute(next, sessionId);
       assertCurrentChat();
       const result = saved?.effective || next;
-      window.__pmChatModelRoute = saved;
-      if (_llmCache) _llmCache = { ..._llmCache, provider: providerId, providers: {
-        ..._llmCache.providers, [providerId]: { ..._llmCache.providers?.[providerId], model,
-          reasoning_effort: result.reasoningEffort, speed: result.speed },
-      } };
+      // Chat identity lives in the route cache only. Writing it into the global
+      // _llmCache leaked this chat's model into other chats' fallback.
+      _rememberChatRoute(sessionId, saved || { ...(route || {}), effective: result });
       _setComposerModelIdentity(providerId, model, result.reasoningEffort);
       _setBadgeLabel(formatModelWithReasoning(model, providerId, result.reasoningEffort));
       _setBadgeFast(supportsFastSpeed(providerId, model) && result.speed === 'fast');
-    }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+    }).catch((err) => {
+      rollback();
+      _toast(err?.message || 'Could not save reasoning', 'error');
+    });
   };
   if (immediate) commit();
   else _reasoningSaveTimer = setTimeout(commit, 180);
@@ -1255,7 +1313,7 @@ async function _openSwitchSheet() {
 
 function _currentAdvancedState() {
   const { provider, model } = _activeModel(_llmCache);
-  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const cfg = _providerCfg(provider);
   const options = _effortOptions(provider, cfg);
   const effort = _normalizedReasoningEffort(provider, cfg.model || model, cfg.reasoning_effort);
   const effortValue = options && options.includes(effort) ? effort : (options ? options[0] : '');
@@ -1289,7 +1347,7 @@ function _renderAdvancedSheet() {
 }
 
 function _renderSpeedList(provider) {
-  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const cfg = _providerCfg(provider);
   if (!supportsFastSpeed(provider, cfg.model || '')) return _renderAdvancedSheet();
   const current = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
   _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Speed`);
@@ -1300,7 +1358,8 @@ function _renderSpeedList(provider) {
     const speed = btn.getAttribute('data-speed') === 'fast' ? 'fast' : 'standard';
     _queueReasoningSave(provider, { speed }, true);
     const merged = { ...cfg, speed }; delete merged.fast_mode;
-    if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+    // Routed chats re-render from the optimistic route patch; only unrouted chats read global config.
+    if (_llmCache && _activeChatRoute()?.effective?.providerId !== provider) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
     _setBadgeFast(speed === 'fast');
     _renderAdvancedSheet();
   }));
@@ -1392,7 +1451,7 @@ function _renderModelList(provider, familyKey = '') {
 }
 
 function _renderEffortList(provider) {
-  const cfg = (_llmCache?.providers || {})[provider] || {};
+  const cfg = _providerCfg(provider);
   const options = _effortOptions(provider, cfg);
   if (!options) {
     _renderAdvancedSheet();
@@ -1416,7 +1475,8 @@ function _renderEffortList(provider) {
       _queueReasoningSave(provider, { reasoning_effort: value }, true);
       const merged = { ...cfg, reasoning_effort: value };
       if (!value) delete merged.reasoning_effort;
-      if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+      // Routed chats re-render from the optimistic route patch; only unrouted chats read global config.
+      if (_llmCache && _activeChatRoute()?.effective?.providerId !== provider) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
       _renderAdvancedSheet();
     });
   });
@@ -1425,16 +1485,17 @@ function _renderEffortList(provider) {
 async function _switchModel(provider, model, { keepOpen = false, returnToAdvanced = false } = {}) {
   if (!provider || !model) return;
   try {
-    const current = await _loadChatModelRoute();
-    await _saveChatModelRoute({
+    const switchedSessionId = _activeChatSessionId();
+    const current = (await _loadChatModelRoute(switchedSessionId)) || _cachedRouteFor(switchedSessionId);
+    const savedRoute = await _saveChatModelRoute({
       providerId: provider,
       model,
       reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined,
       speed: current?.effective?.providerId === provider ? current.effective.speed || undefined : undefined,
       accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined,
     });
-    window.__pmChatModelRoute = await _loadChatModelRoute();
-    const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
+    _rememberChatRoute(switchedSessionId, (await _loadChatModelRoute(switchedSessionId)) || savedRoute);
+    const nextCfg = { ..._providerCfg(provider), model };
     _toast(`Model -> ${prettifyModelName(model, provider)}`, 'success');
     await refreshMobileModelBadge(false, { provider, model });
     try {

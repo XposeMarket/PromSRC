@@ -7,7 +7,7 @@ export function slimSessionList<T extends { sessions: Record<string, any>[] }>(p
       pinnedAt, sidebarOrder, settledAt, settled, mobileLastReadAt, mobileUnread,
       activeRun, channel, preview, messageCount, creativeMode,
       canvasProjectRoot, canvasProjectLabel, canvasProjectLink, chatModelRoute,
-      projectId, projectName, project, mainChatGoal, voiceRoom, externalImport } = session;
+      projectId, projectName, project, mainChatGoal, voiceRoom, externalImport, lastModel } = session;
     return { id, title, createdAt, lastActiveAt, lastMessageAt, lastAssistantAt,
       pinnedAt, sidebarOrder, settledAt, settled, mobileLastReadAt, mobileUnread,
       activeRun, channel, preview: String(preview || '').slice(0, 160), messageCount,
@@ -15,6 +15,7 @@ export function slimSessionList<T extends { sessions: Record<string, any>[] }>(p
       chatModelRoute: chatModelRoute ? { model: chatModelRoute.model, providerId: chatModelRoute.providerId,
         effective: chatModelRoute.effective ? { providerId: chatModelRoute.effective.providerId } : undefined } : undefined,
       projectId, projectName, project,
+      lastModel: lastModel ? { providerId: lastModel.providerId, model: lastModel.model } : undefined,
       mainChatGoal: mainChatGoal ? { status: mainChatGoal.status } : null,
       voiceRoom: voiceRoom ? { status: voiceRoom.status } : null,
       externalImport: externalImport ? { source: externalImport.source && {

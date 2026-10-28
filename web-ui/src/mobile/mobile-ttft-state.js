@@ -1,7 +1,9 @@
 // Row-local progress: never schedule a transcript render from the clock.
 export function pendingStatusLabel(elapsedMs, queued, finished = false) {
+  // The Working-for timer and thinking dots already show progress. Only the
+  // queue state, which they cannot express, gets its own row.
   if (finished || elapsedMs < 4000) return '';
-  return queued ? 'Waiting for a model slot' : `Thinking · ${Math.floor(elapsedMs / 1000)}s`;
+  return queued ? 'Waiting for a model slot' : '';
 }
 export function updatePendingStatus(state, event) {
   const type = String(event?.type || '');
