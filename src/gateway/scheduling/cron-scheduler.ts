@@ -20,7 +20,7 @@ import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSess
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
-import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, updateRunLogEntry, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
+import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, loadRunLog, updateRunLogEntry, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { archiveCompletedScheduledJob, deleteArchivedScheduledJob } from './schedule-archive';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
@@ -44,8 +44,7 @@ import {
   type ManagedTeam,
 } from '../teams/managed-teams';
 import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
-import { ScheduledRunDeadline, scheduledRunTimeoutMs } from './scheduled-run-deadline';
-
+import { ScheduledRunDeadline, isOrphanedRun, scheduledRunTimeoutMs } from './scheduled-run-deadline';
 import { broadcastTeamEvent } from '../comms/broadcaster';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
@@ -1427,6 +1426,11 @@ export class CronScheduler {
       if (job.type === 'one-shot') { job.status = 'completed'; job.enabled = false; job.nextRun = null; }
       else if (job.status !== 'paused') { job.status = 'scheduled'; if (slot) job.nextRun = nextRun ?? null; }
       this.saveStore();
+      // Close the run-log entry the timed-out run left open, as failed/timed out.
+      const openRun = loadRunLog(job.id).runs.filter(r => r.status === 'running').pop();
+      if (openRun) {
+        updateRunLogEntry(job.id, openRun.runId, { status: 'failed', completedAt: Date.now(), errorIfAny: `timed out after ${span}` });
+      }
     } finally {
       deadline.dispose();
       release();
@@ -1873,7 +1877,7 @@ export class CronScheduler {
               message: scheduledUserMessage,
             });
 
-            const abortSignal = { aborted: false };
+            const abortSignal = deadline?.abortSignal ?? { aborted: false };
             const runtimeId = registerLiveRuntime({
               kind: 'cron',
               label: `Scheduled owner chat - ${job.name}`,
@@ -2138,7 +2142,7 @@ export class CronScheduler {
         const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt: slot ? Date.parse(slot.scheduledAt) : scheduledAt, reason: slot?.reason, missedCount: slot?.missedCount });
         activeRunId = runId;
         activeScheduledAt = scheduledAt;
-        const abortSignal = { aborted: false };
+        const abortSignal = deadline?.abortSignal ?? { aborted: false };
         const runtimeId = registerLiveRuntime({
           kind: 'cron',
           label: `Scheduled task - ${job.name}`,
@@ -2349,6 +2353,11 @@ export class CronScheduler {
     const runStatus: JobRunStatus = isOk
       ? 'ok'
       : (/^\s*ERROR:/i.test(resultText) ? 'error' : 'success');
+
+    // An orphaned run (its deadline already fired) must not overwrite the timeout
+    // result or a newer run's state. Each run owns its own deadline object, so
+    // the deadline doubles as the per-run token.
+    if (isOrphanedRun(deadline)) return;
 
     job.lastRun = new Date().toISOString();
     job.runningPid = null;

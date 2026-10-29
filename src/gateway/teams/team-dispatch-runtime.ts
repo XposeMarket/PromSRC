@@ -23,7 +23,7 @@ import { setRuntimeActorContext } from '../runtime-actor.js';
 import { resolveAgentToolFilter } from '../agents-runtime/agent-tool-policy';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
 import { buildTaskContinuitySnapshot, serializeTaskSessionMessage } from '../tasks/task-continuity';
-import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
+import { TeamExecutionQueueError, teamExecutionQueue, teamReceiptOutcome } from './team-execution-queue';
 import { RuntimeAdmissionError } from '../runtime-admission';
 import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
 
@@ -363,6 +363,7 @@ async function runTeamAgentViaChatInternal(
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
   receipt?: TeamRunReceiptWriter,
   toolFilter?: string[],
+  leaseSignal?: { aborted: boolean; onAbort?: () => void },
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
     return { success: false, result: '', error: 'Dispatch deps not initialized', durationMs: 0, agentName: agentId };
@@ -839,7 +840,13 @@ async function runTeamAgentViaChatInternal(
     teamId,
     agentId,
   });
-  const abortSignal = { aborted: false };
+  // The lease signal is the member turn's abort handle: lease expiry trips it, so the hung turn stops.
+  const abortSignal = leaseSignal ?? { aborted: false };
+  if (leaseSignal) {
+    leaseSignal.onAbort = () => deps.updateTaskStatus(cronTask.id, 'failed', {
+      finalSummary: 'Team execution abandoned: the lease expired before the member turn settled.',
+    });
+  }
   runtimeId = registerLiveRuntime({
     kind: 'team_member',
     label: `Team dispatch - ${agentName}`,
@@ -883,6 +890,18 @@ async function runTeamAgentViaChatInternal(
       { toolCategoryDetectionText: extractTeamDispatchTaskText(task) },
     )));
 
+    // A late settle after the lease expired: the dispatch is already recorded as abandoned, so write nothing.
+    if (leaseSignal?.aborted) {
+      return {
+        success: false,
+        result: '',
+        error: 'Team execution abandoned at lease expiry.',
+        durationMs: Date.now() - startedAt,
+        stepCount: 0,
+        agentName,
+        admissionCode: 'TEAM_EXECUTION_ABANDONED',
+      };
+    }
     const finalTask = loadTask(cronTask.id);
     const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
     const finalStatus = abortSignal.aborted
@@ -1138,9 +1157,9 @@ export async function runTeamAgentViaChat(
   });
   const finalizeReceipt = (result: RunAgentResult): RunAgentResult => {
     const finishedAt = Date.now();
-    const capacityLimited = !!result.admissionCode;
+    const outcome = teamReceiptOutcome(result);
     receipt.update({
-      status: result.success ? 'complete' : capacityLimited ? 'capacity_limited' : 'failed',
+      status: outcome.status,
       finishedAt,
       durationMs: Math.max(0, finishedAt - receipt.queuedAt),
       taskId: result.taskId,
@@ -1148,13 +1167,13 @@ export async function runTeamAgentViaChat(
       errorCategory: result.admissionCode || (result.error ? 'TEAM_EXECUTION_FAILED' : undefined),
       error: result.error,
       resultPreview: String(result.result || '').slice(0, 1200) || undefined,
-      acceptanceState: result.success ? 'pending' : capacityLimited ? 'retryable' : 'rejected',
+      acceptanceState: outcome.acceptanceState,
     });
     return result;
   };
   if (!teamId) return finalizeReceipt(await runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter));
   try {
-    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter)));
+    return finalizeReceipt(await teamExecutionQueue.run(teamId, (signal) => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter, signal)));
   } catch (error: any) {
     const message = String(error?.message || error || 'Team execution could not be admitted.');
     const admissionCode = error instanceof TeamExecutionQueueError ? error.code : undefined;

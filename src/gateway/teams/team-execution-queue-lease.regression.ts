@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { TeamExecutionQueue, TeamExecutionQueueError } from './team-execution-queue';
+import { TeamExecutionQueue, TeamExecutionQueueError, teamReceiptOutcome } from './team-execution-queue';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,6 +35,46 @@ async function main(): Promise<void> {
   });
   assert.equal(healthy, 'healthy-result');
   assert.equal(healthyQueue.snapshot().teams.length, 0);
+
+  // The lease trips the abort signal handed to the hung work, so the member turn can stop.
+  const signalQueue = new TeamExecutionQueue(4, 50);
+  let seenSignal: { aborted: boolean } | undefined;
+  const signalHung = signalQueue.run('team-signal', (signal) => {
+    seenSignal = signal;
+    return new Promise<never>(() => {});
+  });
+  await assert.rejects(signalHung, (error: unknown) => error instanceof TeamExecutionQueueError);
+  assert.equal(seenSignal?.aborted, true, 'lease expiry aborts the hung work');
+
+  // A healthy execution's signal is never aborted.
+  const healthySignalQueue = new TeamExecutionQueue(4, 500);
+  let healthySignal: { aborted: boolean } | undefined;
+  await healthySignalQueue.run('team-signal-ok', (signal) => {
+    healthySignal = signal;
+    return 'ok';
+  });
+  assert.equal(healthySignal?.aborted, false, 'a settled execution is not aborted');
+
+  // Receipt outcome mapping: abandoned is a hard failure, capacity is retryable, success completes.
+  assert.deepEqual(
+    teamReceiptOutcome({ success: false, admissionCode: 'TEAM_EXECUTION_ABANDONED' }),
+    { status: 'failed', acceptanceState: 'rejected' },
+    'abandoned lease maps to failed, not retryable',
+  );
+  assert.deepEqual(
+    teamReceiptOutcome({ success: false, admissionCode: 'TEAM_EXECUTION_QUEUE_FULL' }),
+    { status: 'capacity_limited', acceptanceState: 'retryable' },
+    'queue-full stays a retryable capacity signal',
+  );
+  assert.deepEqual(
+    teamReceiptOutcome({ success: false }),
+    { status: 'failed', acceptanceState: 'rejected' },
+    'an ordinary failure is failed',
+  );
+  assert.deepEqual(
+    teamReceiptOutcome({ success: true }),
+    { status: 'complete', acceptanceState: 'pending' },
+  );
 
   console.log('team-execution-queue lease regression passed');
 }

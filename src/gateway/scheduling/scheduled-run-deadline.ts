@@ -28,6 +28,15 @@ export class ScheduledRunDeadline {
   dispose(): void { clearTimeout(this.timer); }
 }
 
+/**
+ * True when a run's deadline already fired. Each run owns its own deadline, so
+ * an orphaned run's late completion must skip its final writes and never
+ * overwrite the timeout result or a newer run's state.
+ */
+export function isOrphanedRun(deadline?: ScheduledRunDeadline): boolean {
+  return !!deadline?.cancellationError;
+}
+
 export const SCHEDULED_RUN_DEFAULT_TIMEOUT_MS = 90 * 60_000;
 export const SCHEDULED_RUN_MAX_TIMEOUT_MS = 4 * 60 * 60_000;
 
@@ -36,7 +45,11 @@ export const SCHEDULED_RUN_MAX_TIMEOUT_MS = 4 * 60 * 60_000;
  * Otherwise the default is 90 min (script jobs keep their short 2-min default).
  */
 export function scheduledRunTimeoutMs(job: { timeoutMs?: number; kind?: string }): number {
-  return Number.isInteger(job.timeoutMs) && job.timeoutMs! > 0 && job.timeoutMs! <= SCHEDULED_RUN_MAX_TIMEOUT_MS
-    ? job.timeoutMs!
-    : job.kind === 'script' ? 120_000 : SCHEDULED_RUN_DEFAULT_TIMEOUT_MS;
+  const requested = Number(job.timeoutMs);
+  if (Number.isFinite(requested) && requested > 0) {
+    // Over-cap values clamp to 4h (as main honored them), not back to the default.
+    return Math.min(Math.floor(requested), SCHEDULED_RUN_MAX_TIMEOUT_MS);
+  }
+  return job.kind === 'script' ? 120_000 : SCHEDULED_RUN_DEFAULT_TIMEOUT_MS;
 }
+

@@ -20,8 +20,31 @@ export class TeamExecutionQueueError extends Error {
   }
 }
 
+/** Set to aborted when the lease expires, so the hung work can stop itself. */
+export interface TeamExecutionAbortSignal {
+  aborted: boolean;
+  /** Called once when the lease expires, so the owner can fail its task row. */
+  onAbort?: () => void;
+}
+
+/**
+ * Receipt outcome for a finished team member run. An abandoned execution (lease
+ * expired on a hung turn) is a hard failure, not a capacity signal, so it must
+ * not be retried automatically.
+ */
+export function teamReceiptOutcome(result: { success: boolean; admissionCode?: string }): {
+  status: 'complete' | 'capacity_limited' | 'failed';
+  acceptanceState: 'pending' | 'retryable' | 'rejected';
+} {
+  if (result.success) return { status: 'complete', acceptanceState: 'pending' };
+  if (result.admissionCode && result.admissionCode !== 'TEAM_EXECUTION_ABANDONED') {
+    return { status: 'capacity_limited', acceptanceState: 'retryable' };
+  }
+  return { status: 'failed', acceptanceState: 'rejected' };
+}
+
 interface QueueEntry<T> {
-  work: () => Promise<T> | T;
+  work: (signal: TeamExecutionAbortSignal) => Promise<T> | T;
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (error: unknown) => void;
   onStarted?: () => void;
@@ -61,13 +84,13 @@ export class TeamExecutionQueue {
 
   run<T>(
     teamId: string,
-    work: () => Promise<T> | T,
+    work: (signal: TeamExecutionAbortSignal) => Promise<T> | T,
     options: { onStarted?: () => void } = {},
   ): Promise<T> {
     const normalizedTeamId = String(teamId || '').trim();
     if (!normalizedTeamId) {
       options.onStarted?.();
-      return Promise.resolve().then(work);
+      return Promise.resolve().then(() => work({ aborted: false }));
     }
 
     const queue = this.pending.get(normalizedTeamId) || [];
@@ -122,6 +145,7 @@ export class TeamExecutionQueue {
     direct: boolean,
   ): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const signal: TeamExecutionAbortSignal = { aborted: false };
     const lease = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new TeamExecutionQueueError(
         `Team ${teamId} execution did not settle within ${this.leaseMs}ms and was abandoned; its team slot was released.`,
@@ -129,10 +153,14 @@ export class TeamExecutionQueue {
       )), this.leaseMs);
       timer.unref?.();
     });
-    void lease.catch(() => {});
+    // On lease expiry, flag the signal so the hung work can stop itself.
+    lease.catch(() => {
+      signal.aborted = true;
+      try { signal.onAbort?.(); } catch { /* best-effort; the lease must still release the slot */ }
+    });
     try {
       // Start work synchronously, as before; a late settle after the lease is ignored.
-      const started = (async () => entry.work())();
+      const started = (async () => entry.work(signal))();
       return await Promise.race([started, lease]);
     } catch (error) {
       if (direct) throw error;
