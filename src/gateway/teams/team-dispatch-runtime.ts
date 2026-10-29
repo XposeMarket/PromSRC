@@ -1158,6 +1158,15 @@ export async function runTeamAgentViaChat(
   } catch (error: any) {
     const message = String(error?.message || error || 'Team execution could not be admitted.');
     const admissionCode = error instanceof TeamExecutionQueueError ? error.code : undefined;
+    if (admissionCode === 'TEAM_EXECUTION_ABANDONED') {
+      // The lease expired on a hung execution: record it as failed (not running) and free the member.
+      try {
+        const { updateTeamMemberState } = require('./managed-teams');
+        updateTeamMemberState(teamId, agentId, { status: 'ready', currentTask: '' });
+      } catch {
+        // Best-effort: the member status write must not mask the abandon result.
+      }
+    }
     return finalizeReceipt({
       success: false,
       result: '',

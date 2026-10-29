@@ -1395,8 +1395,10 @@ export class CronScheduler {
     // Always release the per-job guard in finally so a crashed run can never
     // wedge future runs of that schedule.
     if (this.runningJobIds.has(job.id)) return;
-    const release = this.admission.acquire(job.id, slot?.scheduledAt, job.timeoutMs || (job.kind === 'script' ? 120000 : 3600000));
+    const deadline = new ScheduledRunDeadline(scheduledRunTimeoutMs(job));
+    const release = this.admission.acquire(job.id, slot?.scheduledAt, deadline.timeoutMs);
     if (!release) {
+      deadline.dispose();
       // A crash after admission must not wedge the persisted due cursor forever.
       if (slot && this.admission.isConsumed(job.id, slot.scheduledAt) && !this.admission.isLeased(job.id)) {
         job.nextRun = nextRun ?? null;
@@ -1407,12 +1409,24 @@ export class CronScheduler {
     }
     this.runningJobIds.add(job.id);
     try {
-      await this.executeGatedJob(job, slot);
+      await deadline.wait(() => this.executeGatedJob(job, slot, deadline));
       if (slot && job.status !== 'paused') {
         job.nextRun = nextRun ?? null;
         this.saveStore();
       }
+    } catch (error: any) {
+      // Only the deadline's own timeout is settled here; ordinary errors keep their existing path.
+      if (!deadline.cancellationError) throw error;
+      const span = deadline.timeoutMs >= 60_000 ? `${Math.round(deadline.timeoutMs / 60_000)} min` : `${deadline.timeoutMs}ms`;
+      job.lastRun = new Date().toISOString();
+      job.lastResult = `ERROR: Scheduled run timed out after ${span}; it was cancelled so the schedule can run again.`;
+      job.consecutiveErrors = (job.consecutiveErrors || 0) + 1;
+      job.runningPid = null;
+      if (job.type === 'one-shot') { job.status = 'completed'; job.enabled = false; job.nextRun = null; }
+      else if (job.status !== 'paused') { job.status = 'scheduled'; if (slot) job.nextRun = nextRun ?? null; }
+      this.saveStore();
     } finally {
+      deadline.dispose();
       release();
       this.runningJobIds.delete(job.id);
     }
@@ -1457,8 +1471,8 @@ export class CronScheduler {
 
 
   /** Runs the optional precheck gate; a skipped/failed precheck never starts the model. */
-  private async executeGatedJob(job: CronJob, slot?: ScheduledSlot): Promise<void> {
-    if (!job.precheck) return this.executeJobInner(job, slot);
+  private async executeGatedJob(job: CronJob, slot?: ScheduledSlot, deadline?: ScheduledRunDeadline): Promise<void> {
+    if (!job.precheck) return this.executeJobInner(job, slot, '', deadline);
     const start = Date.now();
     const sessionId = `cron_precheck_${job.id}_${start}`;
     const runId = startRunLogEntry({ scheduleId: job.id, taskId: sessionId, scheduledAt: slot ? Date.parse(slot.scheduledAt) : start, reason: slot?.reason, missedCount: slot?.missedCount });
@@ -1473,7 +1487,7 @@ export class CronScheduler {
     const duration = Date.now() - start;
     const summary = `Precheck ${outcome.status}: ${outcome.error || outcome.stdout}`.slice(0, 4000);
     updateRunLogEntry(job.id, runId, { status: outcome.status === 'go' ? 'complete' : outcome.status, completedAt: Date.now(), summary, output: outcome.stdout, errorIfAny: outcome.error });
-    if (outcome.status === 'go') return this.executeJobInner(job, slot, outcome.stdout);
+    if (outcome.status === 'go') return this.executeJobInner(job, slot, outcome.stdout, deadline);
     job.lastRun = new Date().toISOString(); job.lastResult = summary;
     job.lastDuration = duration; job.lastRunnerDurationMs = duration; job.lastOrchestrationDurationMs = duration;
     job.consecutiveErrors = outcome.status === 'failed' ? (job.consecutiveErrors || 0) + 1 : 0;
@@ -1485,7 +1499,7 @@ export class CronScheduler {
     this.deps.broadcast({ type: 'task_done', jobId: job.id, jobName: job.name, isOk: outcome.status !== 'failed', duration, jobs: this.store.jobs, config: this.store.heartbeat });
   }
 
-  private async executeJobInner(job: CronJob, slot?: ScheduledSlot, precheckOutput = ''): Promise<void> {
+  private async executeJobInner(job: CronJob, slot?: ScheduledSlot, precheckOutput = '', deadline?: ScheduledRunDeadline): Promise<void> {
     if (job.kind === 'script') { await this.executeScriptJob(job, slot); return; }
     const start = Date.now();
     const queuedAt = job.queuedAt ? new Date(job.queuedAt).getTime() : start;
@@ -1708,6 +1722,8 @@ export class CronScheduler {
               toolFilter: previewToolFilter,
               // Skill/memory routing sees the scheduled task, not the run-brief wrapper.
               toolCategoryDetectionText: String(effectivePrompt || '').trim().slice(0, 4000) || undefined,
+              // Deadline abort stops the manager loop instead of letting it run past the timeout.
+              abortSignal: deadline?.abortSignal,
             },
           );
           scheduledTeamRunResult = managerResult;
