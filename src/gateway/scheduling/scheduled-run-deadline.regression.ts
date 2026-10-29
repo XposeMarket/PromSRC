@@ -49,7 +49,19 @@ async function main(): Promise<void> {
   console.log('scheduled-run-deadline regression passed');
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+// The deadline timer is unref'd for production shutdown, so keep the test process alive
+// while it waits. A watchdog turns a hang into a loud failure instead of a silent exit 0.
+const keepAlive = setInterval(() => {}, 1_000);
+const watchdog = setTimeout(() => {
+  console.error('scheduled-run-deadline regression hung: a pending promise never settled');
+  process.exit(1);
+}, 60_000);
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    clearInterval(keepAlive);
+    clearTimeout(watchdog);
+  });
