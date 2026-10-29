@@ -44,6 +44,8 @@ import {
   type ManagedTeam,
 } from '../teams/managed-teams';
 import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
+import { ScheduledRunDeadline, scheduledRunTimeoutMs } from './scheduled-run-deadline';
+
 import { broadcastTeamEvent } from '../comms/broadcaster';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
