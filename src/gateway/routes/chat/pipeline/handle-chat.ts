@@ -10,6 +10,7 @@ import { summarizeUnlockedToolCategories } from '../.././chat/voice/context';
 import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../../../media-analysis-preview';
 import path from 'path';
 import fs from 'fs';
+import { shouldOmitStoredHistory } from './stored-history-policy';
 import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../../../chat/worker-batch-timing';
@@ -214,7 +215,7 @@ export async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; omitStoredHistory?: boolean; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -450,7 +451,7 @@ export async function handleChatUntraced(
   htime('after buildExecuteToolDeps/finalizeBoundTaskRun closures');
   const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
   htime('before getHistoryForApiCall');
-  const rawHistory = (executionMode === 'cron' || runtimeOptions?.omitStoredHistory === true)
+  const rawHistory = shouldOmitStoredHistory(executionMode)
     ? []
     : getActiveHistoryForApiCall(sessionId);
   htime('after getHistoryForApiCall');
