@@ -1187,6 +1187,16 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     if (isImmutableCompletedAgentTask(task)) {
       return { success: false, action, code: 'completed_agent_task_immutable', task: summarizeTaskRecord(task), message: completedAgentTaskFollowUpMessage(task) };
     }
+    if (action === 'cancel') {
+      // Cancel is terminal: route through the existing structured lifecycle (status failed,
+      // no auto-retry), never a resumable paused/user_pause.
+      if (task.status === 'complete' || task.status === 'failed') {
+        return { success: false, action, code: 'already_terminal', task: summarizeTaskRecord(task), message: `Task "${task.title}" is already ${task.status}; nothing to cancel.` };
+      }
+      BackgroundTaskRunner.cancelTask(task.id, note ? `Cancelled via task_control: ${note.slice(0, 220)}` : 'Cancelled via task_control.');
+      const cancelled = loadTask(task.id) || task;
+      return { success: true, action, task: summarizeTaskRecord(cancelled), message: `Cancelled task "${cancelled.title}".` };
+    }
     if (BackgroundTaskRunner.isRunning(task.id)) {
       BackgroundTaskRunner.requestPause(task.id);
     }
@@ -1197,7 +1207,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       success: true,
       action,
       task: summarizeTaskRecord(refreshed),
-      message: `${action === 'cancel' ? 'Cancelled' : 'Paused'} task "${refreshed.title}".`,
+      message: `Paused task "${refreshed.title}".`,
     };
   }
 

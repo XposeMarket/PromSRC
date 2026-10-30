@@ -2354,6 +2354,7 @@ export class BackgroundTaskRunner {
       if (task.status === 'awaiting_user_input') return;
 
       if (pauseRequests.has(taskId)) {
+        // A terminal cancel (failed) already returned above; this exit only handles real pauses.
         const pauseReason = task.pauseReason || 'user_pause';
         const scheduleId = task.pausedByScheduleId;
         this._persistResumeContextSnapshot(
@@ -2602,6 +2603,12 @@ export class BackgroundTaskRunner {
 
       if (pauseRequests.has(taskId)) {
         const t2 = loadTask(taskId);
+        // A cancel (status failed) or completion that landed mid-round is terminal: never overwrite it with paused.
+        if (!t2 || t2.status === 'complete' || t2.status === 'failed') {
+          pauseRequests.delete(taskId);
+          flushSession(sessionId);
+          return;
+        }
         const pauseReason = t2?.pauseReason || 'user_pause';
         updateTaskStatus(taskId, 'paused', { pauseReason });
         appendJournal(taskId, { type: 'pause', content: 'Paused by user request.' });
