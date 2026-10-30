@@ -1,11 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createRequire } from 'node:module';
 import { parseMemoryAtoms, type MemoryAtom, type MemoryAtomMatch } from './memory-atoms.js';
 import { sanitizeMemoryRecallText } from './memory-recall.js';
 
-const require = createRequire(import.meta.url);
 export function normalizeMemoryTopic(value: string): string {
   const topic = String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
   return topic.length > 0 && topic.length <= 80 && /^[\p{L}\p{N}][\p{L}\p{N} ._'-]*$/u.test(topic) ? topic : '';
