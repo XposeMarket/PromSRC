@@ -50,7 +50,7 @@ type HandleChatFn = (
   reasoningOptions?: undefined,
   providerOverride?: string,
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { toolCategoryDetectionText?: string },
+  runtimeOptions?: { toolCategoryDetectionText?: string; omitStoredHistory?: boolean },
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 const TEAM_MANAGER_TOOL_FILTER: string[] | undefined = undefined;
@@ -1108,6 +1108,8 @@ export async function runCoordinatorConversationDetailed(
 
 	      let responseText = '';
 	      let hadTeamActivity = false;
+	      let hadToolCalls = false;
+
 	      const streamTracker = createTeamManagerTurnTracker(teamId, turn + 1);
 	      try {
 	        const originatingSession = (freshTeam as any)?.originatingSessionId || '';
@@ -1117,6 +1119,7 @@ export async function runCoordinatorConversationDetailed(
 	          persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
 	          if (event === 'tool_call') {
 	            const toolName = String(data?.action || data?.tool || data?.name || '');
+            hadToolCalls = true;
             if (isTeamManagerActivityTool(toolName, data?.args)) {
               hadTeamActivity = true;
             }
@@ -1148,7 +1151,7 @@ export async function runCoordinatorConversationDetailed(
 	          undefined,
 	          managerRouting.providerOverride,
 	          undefined,
-	          { toolCategoryDetectionText: options.toolCategoryDetectionText },
+          { toolCategoryDetectionText: options.toolCategoryDetectionText, omitStoredHistory: turn === 0 },
 	        ));
 
 	        responseText = String(result.text || '').trim();
@@ -1327,6 +1330,14 @@ export async function runCoordinatorConversationDetailed(
       } else {
         consecutiveIdleTurns++;
       }
+      // Structural stop: a continuation turn with no tool calls and no team activity made no progress.
+      if (!hadTeamActivity && !hadToolCalls) {
+        console.log(`[TeamCoordinator] Turn ${turn + 1} had no tool calls or team activity - stopping (no_action).`);
+        finalReason = 'no_action';
+        bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'no_action', turns: turn + 1 });
+        break;
+      }
+
 
       if (responseText.length < 80 && !hadTeamActivity) {
         console.log(`[TeamCoordinator] Short idle response - assuming done. (${turn + 1} turn(s))`);

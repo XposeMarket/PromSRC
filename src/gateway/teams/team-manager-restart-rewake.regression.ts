@@ -112,6 +112,30 @@ async function main() {
   assert.equal(prompts.length, 1, 'exactly one manager turn runs');
   assert.deepEqual(coordinator.teamManagerRuntimeRecoveryData(prompts[0]), { restartRecoveryWake: true }, 'that turn is flagged as the re-wake');
 
+  // Real coordinator path (runCoordinatorConversationDetailed) with a stub handleChat that records what the
+  // manager invocation receives. Turn 0 is a fresh invocation: stored coordinator history (which can hold the
+  // stale "[Interrupted by gateway restart]" checkpoint) must be omitted. A turn that made a tool call continues.
+  // A later no-tool continuation reply stops the run structurally as no_action.
+  const calls: Array<{ message: string; runtimeOptions: any }> = [];
+  coordinator.setCoordinatorDeps({
+    handleChat: async (message: string, _sid: string, sse: (event: string, data: any) => void, ..._rest: any[]) => {
+      const runtimeOptions = _rest[_rest.length - 1];
+      calls.push({ message, runtimeOptions });
+      if (calls.length === 1) {
+        sse('tool_call', { action: 'list_team_members', args: {} });
+        return { type: 'text', text: 'Checking the team room for Forge FIX loop 3 results before deciding the next step.' };
+      }
+      return { type: 'text', text: 'ok' };
+    },
+    broadcastTeamEvent: () => {},
+  } as any);
+  const detailed = await coordinator.runCoordinatorConversationDetailed('team_a', 'Stale probe input', () => {}, true);
+  assert.equal(calls.length, 2, `a tool-making turn continues once, then the no-tool reply stops (got ${calls.length} manager turns)`);
+  assert.equal(calls[0].runtimeOptions?.omitStoredHistory, true, 'fresh manager invocation (turn 0) omits stored coordinator history');
+  assert.ok(!calls[1].runtimeOptions?.omitStoredHistory, 'in-run continuation keeps in-run history');
+  assert.equal(detailed.reason, 'no_action', 'a no-tool continuation reply ends the run as no_action');
+  assert.equal(detailed.turns, 2, 'no_action stops at the reply that made no progress');
+
   console.log('team-manager-restart-rewake regression: PASS');
 }
 
