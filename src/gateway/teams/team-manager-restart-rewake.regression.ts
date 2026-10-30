@@ -181,6 +181,42 @@ async function main() {
   assert.equal(policy.shouldOmitStoredHistory('interactive'), false, 'interactive turns keep stored history');
   assert.equal(policy.shouldOmitStoredHistory('background_task'), false, 'background tasks keep stored history');
 
+  // Second stale path (PR802 review): the old checkpoint's toolLog reaches the prompt through
+  // getRecentToolObservationsForContext -> legacy getRecentToolLog, not through stored history.
+  const restartNotice = '[Interrupted by gateway restart] Continue from latest known progress instead of restarting completed work.';
+  sessionMod.addMessage('team_coord_team_a', {
+    role: 'assistant',
+    content: '[Interrupted by gateway restart] oldFIXloop3',
+    toolLog: restartNotice,
+  } as any);
+  assert.ok(
+    sessionMod.getRecentToolObservationsForContext('team_coord_team_a', 3, 2200, true).includes('[Interrupted by gateway restart]'),
+    'precondition: the stale restart notice is readable via the session tool-observation context',
+  );
+
+  // Production guards for all three stored-context sources, extracted from handle-chat's real ternaries
+  // and evaluated against the real helper.
+  const handleChatSrc = fs.readFileSync(path.resolve('src/gateway/routes/chat/pipeline/handle-chat.ts'), 'utf8');
+  const guardFor = (name: string) => {
+    const match = handleChatSrc.match(new RegExp(`const ${name} = ([^\\r\\n]+?)\\r?\\n\\s*\\?`));
+    assert.ok(match, `handle-chat guard for ${name} must be found`);
+    return new Function('shouldOmitStoredHistory', 'executionMode', 'isBootStartupTurn', `return (${match![1]});`) as
+      (h: typeof policy.shouldOmitStoredHistory, mode: string, boot: boolean) => boolean;
+  };
+  const omitted = (name: string, mode: string, boot = false) => Boolean(guardFor(name)(policy.shouldOmitStoredHistory, mode, boot));
+  for (const name of ['rawHistory', 'recentToolLog', 'workingContextBlock']) {
+    assert.equal(omitted(name, 'team_manager'), true, `${name}: team manager turns exclude stale session context`);
+    assert.equal(omitted(name, 'cron'), true, `${name}: cron stays excluded`);
+    assert.equal(omitted(name, 'interactive'), false, `${name}: interactive keeps session context`);
+  }
+  assert.equal(omitted('recentToolLog', 'interactive', true), true, 'boot startup turns suppress recent tool observations');
+  assert.equal(omitted('workingContextBlock', 'interactive', true), true, 'boot startup turns suppress working context');
+  assert.equal(omitted('rawHistory', 'interactive', true), false, 'rawHistory boot behavior is unchanged');
+
+  // The current explicit restart wake prompt is still delivered (not stored context).
+  assert.ok(prompts[0].includes(coordinator.TEAM_MANAGER_RESTART_WAKE_MARKER), 'current restart wake prompt is preserved');
+
+
 
   console.log('team-manager-restart-rewake regression: PASS');
 }

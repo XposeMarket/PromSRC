@@ -521,11 +521,11 @@ export async function handleChatUntraced(
   const activeContextBudget = admittedRouteSnapshot?.contextBudget || buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' || isBootStartupTurn
+  const recentToolLog = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
-  const workingContextBlock = executionMode === 'cron' || isBootStartupTurn
+  const workingContextBlock = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : [
         getWorkingContextForContext(sessionId, 9_000),
