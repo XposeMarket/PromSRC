@@ -140,6 +140,122 @@ async function main() {
   assert.equal(byId.d_cancelled.status, 'failed', 'cancelled task dispatch settles failed');
   assert.equal(byId.d_paused.status, 'running', 'paused/user_pause dispatch is not settled');
 
+  // ── Stage 1: durable stop intent ──────────────────────────────────────────
+  const { agentRunCanRecover }: typeof import('../agents-runtime/subagent-executor') = require('../agents-runtime/subagent-executor');
+  const tdr: typeof import('../teams/team-dispatch-runtime') = require('../teams/team-dispatch-runtime');
+  const lrr: typeof import('../live-runtime-registry') = require('../live-runtime-registry');
+
+  // 9) task_control cancel writes stopIntent {source:'task_control'}; reload keeps it.
+  assert.equal(idleAfter.stopIntent?.source, 'task_control', 'task_control cancel records its source');
+  assert.equal(taskStore.loadTask(idle.id)!.stopIntent?.by, 'user');
+  // Direct API callers default to source 'api' (no fabricated channel).
+  const apiTask = makeTask('api cancel');
+  BackgroundTaskRunner.cancelTask(apiTask.id, 'api reason');
+  assert.equal(taskStore.loadTask(apiTask.id)!.stopIntent?.source, 'api', 'default stop source is api');
+
+  // 10) NL cancel in the recovery conversation is terminal (not pause), source nl.
+  const nlBlocked = makeTask('nl blocked');
+  taskStore.updateTaskStatus(nlBlocked.id, 'needs_assistance');
+  const nlRes = await router.handleTaskRecoveryMessage(nlBlocked.id, 'cancel that task', { sourceSessionId: sessionId });
+  assert.equal(nlRes.handled, true, 'NL cancel handled');
+  const nlAfter = taskStore.loadTask(nlBlocked.id)!;
+  assert.equal(nlAfter.status, 'failed', 'NL cancel is failed, never paused');
+  assert.equal(nlAfter.stopIntent?.source, 'nl', 'NL cancel records source nl');
+  // A following "continue" does not resume it, and it is no longer a blocked candidate.
+  assert.notEqual(router.findBlockedTaskForSession(sessionId)?.id, nlBlocked.id, 'stopped task is not a blocked candidate');
+  const cont = await router.tryHandleBlockedTaskFollowup(sessionId, 'continue');
+  assert.ok(!/^(Resuming|Rerunning|Resumed)/.test(String(cont || '')), 'continue does not resume a stopped task');
+  assert.equal(taskStore.loadTask(nlBlocked.id)!.status, 'failed', 'stopped task stays failed after continue');
+  const recRes = await router.handleTaskRecoveryMessage(nlBlocked.id, 'go ahead', { sourceSessionId: sessionId });
+  assert.equal(recRes.handled, false, 'recovery conversation refuses a stopped task');
+
+  // 11) NL cancel while a clarification is pending is terminal too.
+  const clar = makeTask('clarification cancel');
+  taskStore.updateTaskStatus(clar.id, 'awaiting_user_input');
+  await router.tryHandleBlockedTaskFollowup(sessionId, 'cancel that task');
+  const clarAfter = taskStore.loadTask(clar.id)!;
+  assert.equal(clarAfter.status, 'failed', 'clarification NL cancel is failed');
+  assert.equal(clarAfter.stopIntent?.source, 'nl');
+
+  // 12) NL cancel with an explicit task id (Path A) is terminal.
+  const pathA = makeTask('path a cancel');
+  taskStore.updateTaskStatus(pathA.id, 'needs_assistance');
+  await router.tryHandleBlockedTaskFollowup(sessionId, `please cancel task ${pathA.id}`);
+  const pathAAfter = taskStore.loadTask(pathA.id)!;
+  assert.equal(pathAAfter.status, 'failed', 'Path A NL cancel is failed');
+  assert.equal(pathAAfter.stopIntent?.source, 'nl');
+
+  // 13) Resume / auto-recovery refuse a stopped task; late completion cannot wipe it.
+  const resumeRes: any = await router.handleTaskControlAction(sessionId, { action: 'resume', task_id: nlBlocked.id });
+  assert.equal(resumeRes.code, 'stopped_by_operator', 'resume refuses a stopped task');
+  assert.equal(agentRunCanRecover(taskStore.loadTask(nlBlocked.id)!), false, 'agent_run recover selector refuses a stopped task');
+  taskStore.updateTaskStatus(nlBlocked.id, 'complete', { finalSummary: 'late result' });
+  taskStore.updateTaskStatus(nlBlocked.id, 'paused', { pauseReason: 'error' });
+  taskStore.updateTaskStatus(nlBlocked.id, 'failed', { finalSummary: 'Team agent failed.' });
+  const lateAfter = taskStore.loadTask(nlBlocked.id)!;
+  assert.equal(lateAfter.status, 'failed', 'late completion/pause cannot rewrite a stop');
+  assert.equal(lateAfter.stopIntent?.source, 'nl', 'late writes keep stopIntent');
+  assert.equal(lateAfter.finalSummary, nlAfter.finalSummary, 'late generic failure keeps the stop summary');
+
+  // 14) Explicit rerun with task_id is the only way back: clears stopIntent, journals the stop.
+  // Isolated runner deps: the rerun launch must never reach a real model.
+  if (!router.isTaskRouterInitialized()) {
+    router.initTaskRouter({ handleChat: () => new Promise(() => {}), telegramChannel: null, makeBroadcastForTask: () => () => {}, cronScheduler: null } as any);
+  }
+  const rerunNoId: any = await router.handleTaskControlAction(sessionId, { action: 'resume' });
+  assert.notEqual(rerunNoId.success, true, 'id-less resume never picks up a stopped task');
+  const rerunRes: any = await router.handleTaskControlAction(sessionId, { action: 'rerun', task_id: nlBlocked.id });
+  assert.equal(rerunRes.success, true, 'explicit rerun accepted');
+  const rerunAfter = taskStore.loadTask(nlBlocked.id)!;
+  assert.equal(rerunAfter.stopIntent, undefined, 'rerun clears stopIntent');
+  assert.equal(rerunAfter.currentStepIndex, 0, 'rerun resets the attempt');
+  assert.ok(rerunAfter.journal.some((j: any) => String(j.content).startsWith('rerun_after_stop')), 'journal preserves the stop');
+  BackgroundTaskRunner.cancelTask(nlBlocked.id, 'test cleanup');
+
+  // 15) Negative: pause has no stopIntent and stays resumable; genuine failure stays recoverable.
+  assert.equal(taskStore.loadTask(pausable.id)!.stopIntent, undefined, 'pause sets no stopIntent');
+  const genuine = makeTask('genuine failure');
+  taskStore.updateTaskStatus(genuine.id, 'failed', { finalSummary: 'ERROR: provider crashed' });
+  const genuineAfter = taskStore.loadTask(genuine.id)!;
+  assert.equal(genuineAfter.stopIntent, undefined, 'genuine failure has no stopIntent');
+  assert.equal(agentRunCanRecover(genuineAfter), true, 'genuine failure stays recoverable');
+  assert.equal(router.findBlockedTaskForSession(sessionId)?.id, genuine.id, 'genuine failure is still a blocked candidate');
+
+  // 16) team_bg cancel resolves the real task + runtime + dispatch record.
+  const bgTask = makeTask('team bg run');
+  taskStore.updateTaskStatus(bgTask.id, 'running');
+  const abortSignal: any = { aborted: false };
+  const runtimeId = lrr.registerLiveRuntime({ kind: 'team_member', label: 'bg', sessionId: 'team_sess', taskId: bgTask.id, teamId: 'team_cancel', agentId: 'a', source: 'team_dispatch', abortSignal } as any);
+  tdr._bgAgentResults.set('team_bg_live', { status: 'running', agentId: 'a', teamId: 'team_cancel', startedAt: now, promise: new Promise(() => {}), taskId: bgTask.id, runtimeId });
+  const st = mt.loadManagedTeamStore();
+  st.teams.find((t: any) => t.id === 'team_cancel')!.roomState!.dispatches.push({ id: 'd_bg', agentId: 'a', agentName: 'A', taskSummary: 'x', status: 'running', taskId: 'team_bg_live', createdAt: now } as any);
+  mt.saveManagedTeamStore(st);
+  const noConfirm: any = await router.handleTaskControlAction(sessionId, { action: 'cancel', task_id: 'team_bg_live' });
+  assert.equal(noConfirm.code, 'needs_confirmation', 'team_bg cancel keeps the confirmation gate');
+  const bgRes: any = await router.handleTaskControlAction(sessionId, { action: 'cancel', task_id: 'team_bg_live', confirm: true });
+  assert.equal(bgRes.success, true, 'team_bg cancel succeeds');
+  const bgAfter = taskStore.loadTask(bgTask.id)!;
+  assert.equal(bgAfter.status, 'failed');
+  assert.equal(bgAfter.stopIntent?.source, 'team_bg');
+  assert.equal(abortSignal.aborted, true, 'live runtime aborted');
+  const dispatchOf = () => (mt.getManagedTeam('team_cancel')!.roomState!.dispatches as any[]).find((d) => d.id === 'd_bg');
+  assert.equal(dispatchOf().status, 'failed', 'dispatch record failed');
+  assert.equal(dispatchOf().stopIntent?.source, 'team_bg', 'dispatch record carries stopIntent');
+  mt.updateTeamDispatchRecord('team_cancel', 'd_bg', { status: 'completed', resultPreview: 'late' });
+  assert.equal(dispatchOf().status, 'failed', 'late completion cannot flip a stopped dispatch');
+  assert.equal(dispatchOf().stopIntent?.source, 'team_bg');
+  // Missing entry (restart): truthful not_found, nothing changed.
+  const gone: any = await router.handleTaskControlAction(sessionId, { action: 'cancel', task_id: 'team_bg_gone', confirm: true });
+  assert.equal(gone.code, 'not_found', 'team_bg cancel after restart is not_found');
+  // Reconcile copies stopIntent from a stopped task onto its dispatch.
+  const st2 = mt.loadManagedTeamStore();
+  st2.teams.find((t: any) => t.id === 'team_cancel')!.roomState!.dispatches.push({ id: 'd_rec', agentId: 'a', agentName: 'A', taskSummary: 'x', status: 'running', taskId: clar.id, createdAt: now } as any);
+  mt.saveManagedTeamStore(st2);
+  mt.reconcileStaleTeamDispatches(Date.now(), (id) => taskStore.loadTask(id));
+  const rec = (mt.getManagedTeam('team_cancel')!.roomState!.dispatches as any[]).find((d) => d.id === 'd_rec');
+  assert.equal(rec.status, 'failed');
+  assert.equal(rec.stopIntent?.source, 'nl', 'reconcile copies stopIntent');
+
   console.log('task-cancel-terminal regression: PASS');
 }
 

@@ -233,6 +233,20 @@ export interface TeamDispatchRecord {
   startedAt?: number;
   finishedAt?: number;
   resultPreview?: string;
+  /** Durable operator stop copied from the underlying task (stage 1: same record only). */
+  stopIntent?: { by: 'user' | 'agent'; source: string; at: number; reason?: string };
+}
+
+function normalizeDispatchStopIntent(raw: any): TeamDispatchRecord['stopIntent'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const source = String(raw.source || '').trim().slice(0, 60);
+  if (!source) return undefined;
+  return {
+    by: raw.by === 'agent' ? 'agent' : 'user',
+    source,
+    at: Number(raw.at) || Date.now(),
+    reason: String(raw.reason || '').trim().slice(0, 300) || undefined,
+  };
 }
 
 export interface TeamSharedArtifact {
@@ -900,6 +914,7 @@ function normalizeTeamDispatchRecord(raw: any): TeamDispatchRecord | null {
     startedAt: Number(raw.startedAt) || undefined,
     finishedAt: Number(raw.finishedAt) || undefined,
     resultPreview: String(raw.resultPreview || '').trim().slice(0, 1500) || undefined,
+    stopIntent: normalizeDispatchStopIntent(raw.stopIntent),
   };
 }
 
@@ -1549,7 +1564,7 @@ export function reconcileStaleTeamDispatches(
       const d = dispatches[i];
       if (d.status !== 'running' && d.status !== 'queued') continue;
       const age = now - Number(d.startedAt || d.createdAt || now);
-      let task: { status?: string } | null = null;
+      let task: { status?: string; stopIntent?: any } | null = null;
       if (d.taskId && lookupTask) {
         try { task = lookupTask(d.taskId); } catch { task = null; }
       }
@@ -1568,7 +1583,8 @@ export function reconcileStaleTeamDispatches(
         note = 'Orphaned: task record not found.';
       }
       if (!next) continue;
-      dispatches[i] = { ...d, status: next, finishedAt: now, resultPreview: d.resultPreview || note };
+      const stopIntent = d.stopIntent || (next === 'failed' ? normalizeDispatchStopIntent(task?.stopIntent) : undefined);
+      dispatches[i] = { ...d, status: next, finishedAt: now, resultPreview: d.resultPreview || note, ...(stopIntent ? { stopIntent } : {}) };
       changed = true;
       fixed++;
     }
@@ -3039,6 +3055,7 @@ export function updateTeamDispatchRecord(
     finishedAt?: number;
     resultPreview?: string;
     admissionCode?: string;
+    stopIntent?: TeamDispatchRecord['stopIntent'];
   },
 ): TeamDispatchRecord | null {
   invalidateCache();
@@ -3059,7 +3076,11 @@ export function updateTeamDispatchRecord(
     admissionCode: patch.admissionCode !== undefined
       ? (String(patch.admissionCode || '').trim() || undefined)
       : roomState.dispatches[idx].admissionCode,
+    // A stop is sticky on the record: later completion patches never clear it, and a
+    // stopped dispatch never flips back to completed.
+    stopIntent: roomState.dispatches[idx].stopIntent || normalizeDispatchStopIntent(patch.stopIntent),
   };
+  if (roomState.dispatches[idx].stopIntent) roomState.dispatches[idx].status = 'failed';
   saveManagedTeam(team);
   return roomState.dispatches[idx];
 }

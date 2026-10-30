@@ -12,7 +12,7 @@ import {
   markTeamMemberRoomEventsSeen,
 } from './managed-teams';
 import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, ensureTeamAgentIdentity } from './team-workspace';
-import { loadTask, saveTask, updateResumeContext } from '../tasks/task-store';
+import { isOperatorStopped, loadTask, saveTask, updateResumeContext } from '../tasks/task-store';
 import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
 import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { registerBrowserSessionMetadata } from '../browser-tools';
@@ -216,8 +216,29 @@ export interface BgAgentEntry {
   startedAt: number;
   promise: Promise<RunAgentResult>;
   result?: RunAgentResult;
+  /** Real task-store id of the run behind this handle (set once the run starts). */
+  taskId?: string;
+  /** Live runtime id (abortable) of the run behind this handle. */
+  runtimeId?: string;
 }
 export const _bgAgentResults = new Map<string, BgAgentEntry>();
+/** Bindings recorded before the caller registered its entry (run starts synchronously). */
+const _bgAgentBindings = new Map<string, { taskId: string; runtimeId?: string }>();
+
+function bindBgAgentHandle(handle: string | undefined, taskId: string, runtimeId?: string): void {
+  const key = String(handle || '').trim();
+  if (!key) return;
+  _bgAgentBindings.set(key, { taskId, runtimeId });
+  const entry = _bgAgentResults.get(key);
+  if (entry) { entry.taskId = taskId; entry.runtimeId = runtimeId; }
+}
+
+/** Resolve the real task/runtime behind a team_bg_* handle (entry first, then pending binding). */
+export function resolveBgAgentBinding(handle: string): { taskId?: string; runtimeId?: string } {
+  const entry = _bgAgentResults.get(handle);
+  const pending = _bgAgentBindings.get(handle);
+  return { taskId: entry?.taskId || pending?.taskId, runtimeId: entry?.runtimeId || pending?.runtimeId };
+}
 
 function normalizePathForCompare(p: string): string {
   const resolved = path.resolve(String(p || ''));
@@ -363,6 +384,7 @@ async function runTeamAgentViaChatInternal(
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
   receipt?: TeamRunReceiptWriter,
   toolFilter?: string[],
+  bgHandle?: string,
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
     return { success: false, result: '', error: 'Dispatch deps not initialized', durationMs: 0, agentName: agentId };
@@ -851,6 +873,7 @@ async function runTeamAgentViaChatInternal(
     detail: task.slice(0, 160),
     abortSignal,
   });
+  bindBgAgentHandle(bgHandle, cronTask.id, runtimeId);
   _activeAgentSessions.add(sessionId);
   _activeAgentSessions.add(dispatchRuntimeSessionId);
   // Reset activated tool categories so this dispatch matches main-chat behavior.
@@ -884,14 +907,18 @@ async function runTeamAgentViaChatInternal(
     )));
 
     const finalTask = loadTask(cronTask.id);
-    const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
-    const finalStatus = abortSignal.aborted
+    const operatorStopped = isOperatorStopped(finalTask);
+    const resultText = operatorStopped
+      ? String(finalTask?.finalSummary || 'Stopped by operator.').trim()
+      : String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
+    const finalStatus = (abortSignal.aborted || operatorStopped)
       ? 'failed'
       : (finalTask?.status && finalTask.status !== 'running' ? finalTask.status : (/^\s*ERROR:/i.test(resultText) ? 'failed' : 'complete'));
     if (finalStatus === 'complete') {
       completeNextOpenTaskStep(cronTask.id, resultText.slice(0, 200));
       deps.updateTaskStatus(cronTask.id, 'complete', { finalSummary: resultText });
-    } else if (finalStatus === 'failed') {
+    } else if (finalStatus === 'failed' && !operatorStopped) {
+      // An operator stop already wrote the terminal failed + stopIntent; never overwrite it.
       deps.updateTaskStatus(cronTask.id, 'failed', { finalSummary: resultText || 'Team agent failed.' });
     }
     const waitingForManager = finalStatus === 'awaiting_user_input' || finalStatus === 'needs_assistance' || finalStatus === 'paused';
@@ -1129,7 +1156,9 @@ export async function runTeamAgentViaChat(
   teamId: string,
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
   toolFilter?: string[],
+  opts?: { bgHandle?: string },
 ): Promise<RunAgentResult> {
+  const bgHandle = opts?.bgHandle;
   const receipt = createTeamRunReceipt({
     teamId,
     agentId,
@@ -1152,9 +1181,9 @@ export async function runTeamAgentViaChat(
     });
     return result;
   };
-  if (!teamId) return finalizeReceipt(await runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter));
+  if (!teamId) return finalizeReceipt(await runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter, bgHandle));
   try {
-    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter)));
+    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter, bgHandle)));
   } catch (error: any) {
     const message = String(error?.message || error || 'Team execution could not be admitted.');
     const admissionCode = error instanceof TeamExecutionQueueError ? error.code : undefined;

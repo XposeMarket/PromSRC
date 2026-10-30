@@ -581,9 +581,21 @@ export class BackgroundTaskRunner {
     }
   }
 
-  static cancelTask(taskId: string, reason: string = 'Cancelled by operator.'): boolean {
+  static cancelTask(
+    taskId: string,
+    reason: string = 'Cancelled by operator.',
+    intent?: { by?: 'user' | 'agent'; source?: string },
+  ): boolean {
     const task = loadTask(taskId);
     if (!task) return false;
+    // Durable operator stop, written in the same terminal `failed` write below.
+    // Default provenance is the generic API source, never a fabricated user/agent channel.
+    const stopIntent = {
+      by: intent?.by === 'agent' ? 'agent' as const : 'user' as const,
+      source: String(intent?.source || 'api').trim().slice(0, 60) || 'api',
+      at: Date.now(),
+      reason: String(reason || '').slice(0, 300) || undefined,
+    };
     const remote = !activeRunners.has(taskId) ? findRemoteLiveRuntimeForTask(taskId) : null;
     if (remote && requestRemoteRuntimeControl(remote, 'task_cancel', { taskId, reason })) {
       console.log(`[Background Task] Cancel for ${taskId} forwarded to previous gateway (pid ${remote.remoteHostPid})`);
@@ -595,7 +607,7 @@ export class BackgroundTaskRunner {
     if (signal) {
       signal.aborted = true;
     }
-    updateTaskStatus(taskId, 'failed', { finalSummary: reason });
+    updateTaskStatus(taskId, 'failed', { finalSummary: reason, stopIntent });
     appendJournal(taskId, { type: 'status_push', content: reason });
     notifyTaskWebPush(loadTask(taskId) || task, 'failed', reason);
     console.log(`[Background Task] Cancel requested for ${taskId}: ${reason}`);

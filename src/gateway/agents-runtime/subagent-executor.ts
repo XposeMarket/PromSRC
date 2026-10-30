@@ -264,7 +264,7 @@ export interface ExecuteToolDeps {
   sanitizeAgentId: (value: any) => string;
   normalizeAgentsForSave: (agents: any[]) => any[];
   buildTeamDispatchContext: (teamId: string, agentId: string, baseTask: string, extraContext?: string) => string;
-  runTeamAgentViaChat: (agentId: string, task: string, teamId: string) => Promise<any>;
+  runTeamAgentViaChat: (agentId: string, task: string, teamId: string, trigger?: 'team_dispatch' | 'cron', toolFilter?: string[], opts?: { bgHandle?: string }) => Promise<any>;
   broadcastTeamEvent: (data: any) => void;
   bindTeamNotificationTargetFromSession: (teamId: string, sessionId: string, source: string) => void;
   pauseManagedTeamInternal: (teamId: string, reason?: string) => any;
@@ -1195,6 +1195,8 @@ export function agentOwnsRunTask(agentId: string, task: TaskRecord | TaskSummary
 export function agentRunCanRecover(task: TaskRecord | TaskSummary): boolean {
   const status = String(task.status || '').trim();
   if (!['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed'].includes(status)) return false;
+  // Operator-stopped runs are terminal: only an explicit task_control rerun restarts them.
+  if ((task as any).stopIntent) return false;
   return status !== 'paused' || task.pauseReason !== 'user_pause';
 }
 

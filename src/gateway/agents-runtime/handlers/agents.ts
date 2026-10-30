@@ -949,7 +949,7 @@ export async function handleAgentsTool(ctx: handleAgentsToolContext): Promise<Aw
               startedAt: Date.now(),
             });
           }
-          const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId);
+          const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId, 'team_dispatch', undefined, { bgHandle: bgTaskId });
           if (dispatchRecord) {
             updateTeamDispatchRecord(teamId, dispatchRecord.id, {
               status: result.success ? 'completed' : result.admissionCode ? 'capacity_limited' : 'failed',

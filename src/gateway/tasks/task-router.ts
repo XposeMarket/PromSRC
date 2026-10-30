@@ -1,5 +1,5 @@
 // src/gateway/task-router.ts
-// Task intent detection, task control, blocked-task follow-up — extracted from server-v2.ts (Step 16.1).
+// Task intent detection, task control, blocked-task follow-up � extracted from server-v2.ts (Step 16.1).
 // Exports: TaskRouterDeps, latestTaskForSession, findBlockedTaskForSession, findClarificationWaitingTask,
 //          isResumeIntent, isRerunIntent, isCancelIntent, isStatusQuestion, isTaskListIntent,
 //          isAdjustmentIntent, getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
@@ -8,7 +8,7 @@
 
 import path from 'path';
 import {
-  loadTask, saveTask, updateTaskStatus, setTaskStepRunning, appendJournal,
+  isOperatorStopped, loadTask, saveTask, updateTaskStatus, setTaskStepRunning, appendJournal,
   updateResumeContext, listTasks, listTaskSummaries, deleteTask, mutatePlan, getEvidenceBusSnapshot,
   findTaskCandidatesForOwnerSession, findTaskCandidatesForReplySession,
   createTask, type TaskRecord, type TaskStatus,
@@ -54,7 +54,7 @@ function inferTaskChannelFromSession(sessionId: string): 'web' | 'telegram' {
   return String(sessionId || '').startsWith('telegram_') ? 'telegram' : 'web';
 }
 
-// ─── Dep-injection interface ───────────────────────────────────────────────────
+// --- Dep-injection interface ---------------------------------------------------
 export interface TaskRouterDeps {
   handleChat: (...args: any[]) => Promise<any>;
   telegramChannel: any;
@@ -68,7 +68,7 @@ export function isTaskRouterInitialized(): boolean { return _deps !== null; }
 
 function getDeps(): TaskRouterDeps {
   if (!_deps) {
-    const error = new Error('[task-router] Not initialized — recovery runtime is not ready');
+    const error = new Error('[task-router] Not initialized � recovery runtime is not ready');
     (error as any).code = 'task_router_not_ready';
     throw error;
   }
@@ -92,6 +92,7 @@ const SUBAGENT_CHAT_RECOVERY_STATUSES: TaskStatus[] = [
 
 function isRecoveryBlockedTask(task: TaskRecord | null | undefined): boolean {
   if (!task || !isTaskRecoveryEligible(task)) return false;
+  if (isOperatorStopped(task)) return false;
   if (!RECOVERY_BLOCKED_STATUSES.includes(task.status)) return false;
   return task.status !== 'paused' || task.pauseReason !== 'user_pause';
 }
@@ -443,6 +444,7 @@ export function findBlockedTaskForSession(sessionId: string): TaskRecord | null 
       || t.status === 'awaiting_user_input'
       || (t.status === 'paused' && t.pauseReason !== 'user_pause'),
     )
+    .filter(t => !isOperatorStopped(loadTask(t.id) || t))
     .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
   return blocked[0] || null;
 }
@@ -459,7 +461,7 @@ export function findClarificationWaitingTask(sessionId: string): TaskRecord | nu
 
 export function isResumeIntent(message: string): boolean {
   const text = message.trim();
-  // Must explicitly reference resuming/continuing a task — not just a casual "go ahead"
+  // Must explicitly reference resuming/continuing a task � not just a casual "go ahead"
   // which people often say when starting a NEW task ("go ahead and open chatgpt").
   // Require task context, or an explicit resume/rerun keyword standalone.
   if (/\b(resume|rerun|re-run|run again|retry|restart)\b/i.test(text)) return true;
@@ -632,7 +634,7 @@ export function steerTask(
 
   const source = String(opts?.source || 'task_control').trim() || 'task_control';
   const instruction = [
-    '[TASK USER STEER — HIGHEST PRIORITY]',
+    '[TASK USER STEER � HIGHEST PRIORITY]',
     message,
     '',
     'Apply this guidance to the CURRENT task and current plan. Do not create or dispatch a second task.',
@@ -780,7 +782,12 @@ export function appendScopedTaskContinuation(task: TaskRecord, followUp: string)
   return loadTask(task.id) || task;
 }
 
-export async function handleTaskControlAction(sessionId: string, args: any): Promise<TaskControlResponse> {
+export async function handleTaskControlAction(
+  sessionId: string,
+  args: any,
+  // Internal provenance only (never read from LLM tool args): which surface asked to stop.
+  internal?: { stopSource?: string },
+): Promise<TaskControlResponse> {
   const action = String(args?.action || '').trim().toLowerCase();
   const taskId = String(args?.task_id || args?.id || '').trim();
   const includeAllSessions = args?.include_all_sessions === true;
@@ -1042,6 +1049,14 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     if (isImmutableCompletedAgentTask(task)) {
       return { success: false, action, code: 'completed_agent_task_immutable', task: summarizeTaskRecord(task), message: completedAgentTaskFollowUpMessage(task) };
     }
+    if (isOperatorStopped(task)) {
+      if (action === 'resume') {
+        return { success: false, action, code: 'stopped_by_operator', task: summarizeTaskRecord(task), message: `Task "${task.title}" was stopped by the operator and cannot be resumed. Use task_control rerun with this task_id to start it again.` };
+      }
+      if (!taskId) {
+        return { success: false, action, code: 'stopped_by_operator', task: summarizeTaskRecord(task), message: `Task "${task.title}" was stopped by the operator; rerun requires an explicit task_id.` };
+      }
+    }
     if (BackgroundTaskRunner.isRunning(task.id)) {
       return {
         success: true,
@@ -1051,7 +1066,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       };
     }
 
-    // Status is 'running' but no active runner found — runner died without cleanup.
+    // Status is 'running' but no active runner found � runner died without cleanup.
     // Auto-correct the stale status so the resume proceeds normally.
 	    if (task.status === 'running') {
 	      appendJournal(task.id, { type: 'status_push', content: 'Stale running status detected (no active runner). Auto-correcting to paused for resume.' });
@@ -1121,6 +1136,12 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
 
     // rerun
     const previousFailureMessage = buildPreviousFailureResumeMessage(task, 'rerun', note);
+    const priorStop = task.stopIntent;
+    if (priorStop) {
+      // Explicit rerun is the only way back from an operator stop; the journal keeps the stop.
+      task.journal = [...(task.journal || []), { t: Date.now(), type: 'status_push', content: `rerun_after_stop: previously stopped by ${priorStop.by} via ${priorStop.source} at ${new Date(priorStop.at).toISOString()}${priorStop.reason ? ` (${priorStop.reason.slice(0, 160)})` : ''}` } as any];
+      task.stopIntent = undefined;
+    }
     task.status = 'queued';
     task.pauseReason = undefined;
     task.currentStepIndex = 0;
@@ -1165,6 +1186,13 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     };
   }
 
+  if (action === 'cancel' && taskId && /^team_bg_/i.test(taskId) && !loadTask(taskId)) {
+    if (args?.confirm !== true) {
+      return { success: false, action, code: 'needs_confirmation', message: 'cancel requires confirm=true.' };
+    }
+    return cancelTeamBackgroundDispatch(taskId, note);
+  }
+
   if (action === 'pause' || action === 'cancel') {
     const resolved = resolveCandidateForAction(action as any);
     if (!resolved.task) {
@@ -1190,10 +1218,16 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     if (action === 'cancel') {
       // Cancel is terminal: route through the existing structured lifecycle (status failed,
       // no auto-retry), never a resumable paused/user_pause.
-      if (task.status === 'complete' || task.status === 'failed') {
+      if (task.status === 'complete' || (task.status === 'failed' && isOperatorStopped(task))) {
         return { success: false, action, code: 'already_terminal', task: summarizeTaskRecord(task), message: `Task "${task.title}" is already ${task.status}; nothing to cancel.` };
       }
-      BackgroundTaskRunner.cancelTask(task.id, note ? `Cancelled via task_control: ${note.slice(0, 220)}` : 'Cancelled via task_control.');
+      // A genuine failure that the operator now cancels gets the durable stop too, so it
+      // stops surfacing as a recoverable blocked task.
+      BackgroundTaskRunner.cancelTask(
+        task.id,
+        note ? `Cancelled via task_control: ${note.slice(0, 220)}` : 'Cancelled via task_control.',
+        { by: 'user', source: internal?.stopSource || 'task_control' },
+      );
       const cancelled = loadTask(task.id) || task;
       return { success: true, action, task: summarizeTaskRecord(cancelled), message: `Cancelled task "${cancelled.title}".` };
     }
@@ -1239,11 +1273,63 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
   return { success: false, action, code: 'invalid_action', message: `Unsupported task_control action: ${action}` };
 }
 
+/**
+ * Cancel a background team dispatch handle (team_bg_*). Resolves the real underlying
+ * task/runtime recorded on the in-memory entry; never fakes success when it is gone.
+ */
+function cancelTeamBackgroundDispatch(handle: string, note?: string): TaskControlResponse {
+  const action = 'cancel';
+  let entry: any = null;
+  let binding: { taskId?: string; runtimeId?: string } = {};
+  try {
+    const tdr = require('../teams/team-dispatch-runtime');
+    entry = tdr._bgAgentResults?.get(handle) || null;
+    if (entry) binding = tdr.resolveBgAgentBinding(handle) || {};
+  } catch { entry = null; }
+  if (!entry) {
+    return { success: false, action, code: 'not_found', message: `Team background dispatch not found: ${handle}. It may have been lost in a gateway restart (team_bg results are in-memory); check team_manage(status) dispatches.` } as any;
+  }
+  if (entry.status !== 'running') {
+    return { success: false, action, code: 'already_terminal', message: `Team background dispatch ${handle} is already ${entry.status}; nothing to cancel.` } as any;
+  }
+  const underlyingTaskId = String(binding.taskId || '').trim();
+  if (!underlyingTaskId) {
+    return { success: false, action, code: 'not_started', message: `Team background dispatch ${handle} has not started its task yet (still queued); nothing was changed. Retry cancel once it is running.` } as any;
+  }
+  const reason = note ? `Cancelled via task_control: ${note.slice(0, 220)}` : 'Cancelled via task_control.';
+  const ok = BackgroundTaskRunner.cancelTask(underlyingTaskId, reason, { by: 'user', source: 'team_bg' });
+  if (!ok) {
+    return { success: false, action, code: 'not_found', message: `Underlying task ${underlyingTaskId} for ${handle} was not found; nothing was changed.` } as any;
+  }
+  let aborted = false;
+  if (binding.runtimeId) {
+    try {
+      const { abortLiveRuntime } = require('../live-runtime-registry');
+      aborted = !!abortLiveRuntime(binding.runtimeId, 'operator_cancel', { source: 'task_control' })?.ok;
+    } catch { aborted = false; }
+  }
+  const stopped = loadTask(underlyingTaskId);
+  try {
+    const mt = require('../teams/managed-teams');
+    const team = mt.getManagedTeam(entry.teamId);
+    const dispatch = (team?.roomState?.dispatches || []).find((d: any) => d.taskId === handle || d.taskId === underlyingTaskId);
+    if (dispatch) {
+      mt.updateTeamDispatchRecord(entry.teamId, dispatch.id, { status: 'failed', finishedAt: Date.now(), resultPreview: reason, stopIntent: stopped?.stopIntent });
+    }
+  } catch {}
+  return {
+    success: true,
+    action,
+    task: stopped ? summarizeTaskRecord(stopped) : undefined,
+    message: `Cancelled team background dispatch ${handle} (task ${underlyingTaskId})${aborted ? '; live run aborted' : ''}.`,
+  } as any;
+}
+
 export function renderTaskCandidatesForHuman(candidates: Array<Record<string, any>>): string {
   if (!Array.isArray(candidates) || candidates.length === 0) return 'No candidates found.';
   return candidates
     .slice(0, 3)
-    .map((c, i) => `${i + 1}. ${c.title} [${c.status}] — Task ID: ${c.task_id}`)
+    .map((c, i) => `${i + 1}. ${c.title} [${c.status}] � Task ID: ${c.task_id}`)
     .join('\n');
 }
 
@@ -1278,8 +1364,9 @@ export async function handleTaskRecoveryMessage(
   const attachmentPreviews = Array.isArray(opts?.attachmentPreviews) ? opts.attachmentPreviews.slice(0, 8) : undefined;
 
   if (isCancelIntent(message)) {
-    const ctl = await handleTaskControlAction(sourceSessionId, { action: 'pause', task_id: task.id, note: message });
-    const reply = ctl.success ? (ctl.message || `Paused task "${task.title}".`) : `Could not pause task "${task.title}".`;
+    // The natural-language cancel is itself the confirmation; same terminal cancel path.
+    const ctl = await handleTaskControlAction(sourceSessionId, { action: 'cancel', task_id: task.id, note: message, confirm: true }, { stopSource: 'nl' });
+    const reply = ctl.success ? (ctl.message || `Cancelled task "${task.title}".`) : `Could not cancel task "${task.title}".`;
     persistRecoveryConversationUpdate(task.id, [
       { role: 'user', content: visibleMessage, source, attachmentPreviews },
       { role: 'assistant', content: reply, source: 'system' },
@@ -1410,7 +1497,7 @@ export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage
     if (recovery.handled) return recovery.reply;
   }
 
-  // ── Path 0: Task awaiting clarification — user's reply is the answer ─────────
+  // -- Path 0: Task awaiting clarification � user's reply is the answer ---------
   // When the AI asked a question mid-task and paused for user input, ANY message
   // (unless it's a cancel) should be treated as the user's answer and injected
   // into the task session so it can resume with that context.
@@ -1418,7 +1505,7 @@ export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage
   if (clarificationTask) {
     // If the user wants to cancel, honour that
     if (isCancelIntent(message)) {
-      const ctl = await handleTaskControlAction(sessionId, { action: 'pause', task_id: clarificationTask.id, note: message });
+      const ctl = await handleTaskControlAction(sessionId, { action: 'cancel', task_id: clarificationTask.id, note: message, confirm: true }, { stopSource: 'nl' });
       return ctl.success ? `Cancelled task "${clarificationTask.title}".` : null;
     }
 
@@ -1437,7 +1524,7 @@ export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage
 
     // Update resume context so the answer survives into the next runner round
     updateResumeContext(clarificationTask.id, {
-      onResumeInstruction: `The user answered your clarification question. Their answer: "${message}". Use this to complete the current step now — do NOT ask again.`,
+      onResumeInstruction: `The user answered your clarification question. Their answer: "${message}". Use this to complete the current step now � do NOT ask again.`,
     });
 
     // Clear pending question and resume the task
@@ -1460,22 +1547,26 @@ export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage
     );
 
     console.log(`[ClarificationResume] User answered clarification for task ${clarificationTask.id}: "${message.slice(0, 80)}". Resuming.`);
-    return `Got it — resuming task "${clarificationTask.title}" with your answer.`;
+    return `Got it � resuming task "${clarificationTask.title}" with your answer.`;
   }
 
-  // ── Path A: Explicit task UUID in the message (original behavior) ───────────
+  // -- Path A: Explicit task UUID in the message (original behavior) -----------
   const explicitTaskId = parseTaskIdFromText(message);
   if (explicitTaskId) {
     const rerunRequested = isRerunIntent(message);
     const resumeRequested = isResumeIntent(message);
     const cancelRequested = isCancelIntent(message);
     if (!rerunRequested && !resumeRequested && !cancelRequested) return null;
-    const action = rerunRequested ? 'rerun' : cancelRequested ? 'pause' : 'resume';
-    const ctl = await handleTaskControlAction(sessionId, { action, task_id: explicitTaskId, note: message });
+    const action = rerunRequested ? 'rerun' : cancelRequested ? 'cancel' : 'resume';
+    const ctl = await handleTaskControlAction(
+      sessionId,
+      { action, task_id: explicitTaskId, note: message, ...(action === 'cancel' ? { confirm: true } : {}) },
+      action === 'cancel' ? { stopSource: 'nl' } : undefined,
+    );
     return ctl.success ? (ctl.message || null) : null;
   }
 
-  // ── Path B: No UUID — look for a blocked/escalated task on this session ─────
+  // -- Path B: No UUID � look for a blocked/escalated task on this session -----
   // Handles user messages like "proceed", "I logged in", "go ahead", "fixed it", etc.
   // where the task ID is implicit from context.
   const blockedTask = findBlockedTaskForSession(sessionId);

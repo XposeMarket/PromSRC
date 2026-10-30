@@ -260,8 +260,25 @@ export interface ProposalExecutionState {
   };
 }
 
+/**
+ * Durable operator stop. Set only by BackgroundTaskRunner.cancelTask (same write as the
+ * terminal `failed`). A stopped task is never resumed/auto-recovered; only an explicit
+ * `task_control rerun` with the task id clears it (and journals the previous stop).
+ */
+export interface TaskStopIntent {
+  by: 'user' | 'agent';
+  source: string;
+  at: number;
+  reason?: string;
+}
+
+export function isOperatorStopped(task: { stopIntent?: TaskStopIntent | null } | null | undefined): boolean {
+  return !!task?.stopIntent;
+}
+
 export interface TaskRecord {
   id: string;
+  stopIntent?: TaskStopIntent;
   title: string;
   prompt: string;                    // canonical immutable assignment envelope
   originalAssignment?: string;       // verbatim standalone/team assignment, preserved across every round
@@ -1279,10 +1296,22 @@ export function updateTaskStatus(
     pausedAt?: number | undefined;
     pausedAtStepIndex?: number | undefined;
     shouldResumeAfterSchedule?: boolean | undefined;
+    stopIntent?: TaskStopIntent | undefined;
   },
 ): TaskRecord | null {
   const task = loadTask(id);
   if (!task) return null;
+  const explicitStopWrite = !!opts && Object.prototype.hasOwnProperty.call(opts, 'stopIntent');
+  if (task.stopIntent && !explicitStopWrite) {
+    // An operator stop is terminal: a late completion/pause/round exit must not
+    // rewrite it, and a later generic failure must not replace the stop summary.
+    if (status !== 'failed') {
+      console.warn(`[TaskStore] Ignored ${status} transition for operator-stopped task ${id}.`);
+      return task;
+    }
+    opts = { ...opts, finalSummary: undefined };
+  }
+  if (explicitStopWrite) task.stopIntent = opts!.stopIntent;
   task.status = status;
   if (opts?.pauseReason !== undefined) task.pauseReason = opts.pauseReason;
   if (opts?.finalSummary !== undefined) task.finalSummary = opts.finalSummary;
