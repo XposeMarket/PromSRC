@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { buildMemoryTopicIndex, expandMemoryTopics, memoryTopicPointers, persistMemoryTopics } from './memory-topics.js';
+import { buildMemoryTopicIndex, expandMemoryTopics, memoryTopicPointers } from './memory-topics.js';
 import { sanitizeMemoryRecallText } from './memory-recall.js';
 import { boundRetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'fs';
@@ -686,7 +686,6 @@ export async function retrieveHybridMemoryAtoms(
     relation: 'direct' as const,
   }));
   const topicIndex = buildMemoryTopicIndex(snapshot.atoms);
-  persistMemoryTopics(workspacePath, topicIndex);
   const linked = expandMemoryTopics(topicIndex, direct, new Set(direct.map(m => m.atom.id)));
   const related = [...linked, ...buildRelated(snapshot, directCandidates, scored, new Set(queryTerms))]
     .filter((entry, i, all) => all.findIndex(other => other.atom.id === entry.atom.id) === i).slice(0, 2);

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { memoryTopics, normalizeMemoryTopic, loadMemoryTopicIndex, expandMemoryTopics, readRelatedMemory, tagKnownMemoryTopics, memoryTopicPointers } from '../src/gateway/memory-index/memory-topics.ts';
 import { retrieveHybridMemoryAtoms, clearHybridMemoryAtomCache } from '../src/gateway/memory-index/memory-atoms-hybrid.ts';
-import { formatMemoryAtomReferenceContext } from '../src/gateway/memory-index/memory-atoms.ts';
+import { retrieveMemoryAtoms, formatMemoryAtomReferenceContext } from '../src/gateway/memory-index/memory-atoms.ts';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-topics-'));
 const other = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-topics-other-'));
 const raw = '# Memory\n## facts\n- Quasar release calendar freezes September 12. [[Rockfall Relay]]\n- Amber badges cost seven tokens. [[rockfall relay]] [[Side Quest]]\n- Penguins eat frozen fish. [[Side Quest]]\n- Violet ribbons unlock tomorrow. [[Rockfall Relay]]\n- [superseded] OBSOLETE secret. [[Rockfall Relay]]\n- [memory-status:untrusted] EVIL secret. [[Rockfall Relay]]\n';
@@ -27,6 +27,9 @@ try {
   assert.equal(tagKnownMemoryTopics('NotRockfall Relayish', raw), 'NotRockfall Relayish');
   assert.equal(tagKnownMemoryTopics('A different game', raw), 'A different game');
   assert.equal(memoryTopics(tagKnownMemoryTopics('[[Rockfall Relay]] is ready', raw)).length, 1);
+  const fallback = retrieveMemoryAtoms(root, 'Quasar release calendar September', { maxAtoms: 6 });
+  assert(fallback.selected.some(m => m.relationReason === 'topic:rockfall relay'), 'deterministic fallback retains links if hybrid times out');
+  assert.match(formatMemoryAtomReferenceContext(retrieveMemoryAtoms(root, 'Quasar release calendar September', { maxAtoms: 1 })), /more related facts/);
   const result = await retrieveHybridMemoryAtoms(root, 'Quasar release calendar September', { disableSemantic: true });
   assert(result.selected.some(m => m.relationReason === 'topic:rockfall relay'), 'real retrieval must include linked fact');
   const capped = await retrieveHybridMemoryAtoms(root, 'Quasar release calendar September', { disableSemantic: true, maxAtoms: 1 });
