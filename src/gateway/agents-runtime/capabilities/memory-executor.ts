@@ -377,6 +377,17 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
     // and result formatting stay identical across old and new call paths.
     if (name === 'memory') {
       const action = String(args?.action || '').trim().toLowerCase();
+      if (action === 'related') {
+        try {
+          const { readRelatedMemory } = await import('../../memory-index/memory-topics.js');
+          const actor = getRuntimeActorContext(String(sessionId || ''));
+          const root = actor?.kind === 'agent' || actor?.kind === 'manager'
+            ? path.dirname(resolveMemoryPath(workspacePath, 'MEMORY.md', sessionId)) : workspacePath;
+          return { name, args, result: readRelatedMemory(root, String(args.query || ''), Number(args.limit || 20)), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory related failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
       if (action === 'search' || action === 'recall') {
         return runUnifiedRecall(ctx, action === 'recall');
       }
@@ -551,7 +562,9 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
         const today = new Date().toISOString().split('T')[0];
         const migrated = migrateMemoryContent(fs.readFileSync(memoryPath, 'utf-8'));
-        const write = writeMemoryFact(migrated.content, category, content, today);
+        const { tagKnownMemoryTopics } = await import('../../memory-index/memory-topics.js');
+        const taggedContent = filename === 'MEMORY.md' ? tagKnownMemoryTopics(content, migrated.content) : content;
+        const write = writeMemoryFact(migrated.content, category, taggedContent, today);
         const archived = [...migrated.archived];
         for (const old of write.superseded) {
           archived.push(`- ${old.id ? `[m:${old.id}] ` : ''}${old.text} [archived ${today}: superseded by m:${write.id}]`);
