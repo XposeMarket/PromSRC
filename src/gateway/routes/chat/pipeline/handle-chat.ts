@@ -10,7 +10,6 @@ import { summarizeUnlockedToolCategories } from '../.././chat/voice/context';
 import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../../../media-analysis-preview';
 import path from 'path';
 import fs from 'fs';
-import { shouldOmitStoredHistory } from './stored-history-policy';
 import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../../../chat/worker-batch-timing';
@@ -194,6 +193,8 @@ export async function handleChat(...args: Parameters<typeof handleChatUntraced>)
     }
   });
 }
+
+import { shouldOmitStoredHistory } from './stored-history-policy';
 
 export async function handleChatUntraced(
   message: string,
