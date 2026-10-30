@@ -156,6 +156,33 @@ async function main(): Promise<void> {
       && error.safeToFallback === true,
   );
 
+  // Provider error metadata survives worker IPC through the allowlist; the worker
+  // transport code and safety flags are unchanged.
+  const { recoverableEmptyCompletionResponse } = await import('../chat/model-response-recovery.js');
+  const { shouldSuppressModelCallRetry } = await import('./model-call-worker-pool.js');
+  const codexEmpty: any = await dispatchModelCallWorker(request({ __testMode: 'codex_empty_completion' }) as any).then(
+    () => assert.fail('synthetic Codex empty completion must reject'),
+    (error) => error,
+  );
+  assert.ok(codexEmpty instanceof ModelCallWorkerError);
+  assert.equal(codexEmpty.code, 'MODEL_CALL_FAILED', 'worker transport code stays distinct');
+  assert.equal(codexEmpty.providerCode, 'CODEX_INCOMPLETE_STREAM');
+  assert.deepEqual(codexEmpty.diagnostics, { failureClass: 'empty_completion', sawCompleted: true, finalTextChars: 0, toolCallCount: 0 });
+  assert.equal(codexEmpty.safeToFallback, false, 'a started provider call is never safe to fall back');
+  assert.equal(codexEmpty.providerStarted, true);
+  assert.equal(shouldSuppressModelCallRetry(codexEmpty), false, 'definite provider errors keep the established retry policy');
+  assert.ok(!JSON.stringify(codexEmpty.diagnostics).includes('secret'), 'non-allowlisted diagnostics never cross IPC');
+  assert.deepEqual(recoverableEmptyCompletionResponse(codexEmpty), { content: '', tool_calls: [] }, 'serialized empty completion is recoverable');
+  const foreign: any = await dispatchModelCallWorker(request({ __testMode: 'foreign_coded_error' }) as any).then(
+    () => assert.fail('synthetic foreign error must reject'),
+    (error) => error,
+  );
+  assert.ok(foreign instanceof ModelCallWorkerError);
+  assert.equal(foreign.code, 'MODEL_CALL_FAILED');
+  assert.equal(foreign.providerCode, undefined, 'non-allowlisted provider codes are dropped');
+  assert.equal(foreign.diagnostics, undefined);
+  assert.equal(recoverableEmptyCompletionResponse(foreign), null, 'non-Codex worker errors are not recovered');
+
   const status = getModelCallWorkerPoolStatus();
   assert.equal(status.workers, 1);
   assert.ok(status.completed >= 3);
