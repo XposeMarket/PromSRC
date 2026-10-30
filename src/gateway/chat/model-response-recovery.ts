@@ -1,3 +1,34 @@
+/**
+ * A Codex `response.completed` with no text and no tool calls (after the adapter's
+ * own single same-request retry) is a missing answer, not a transport failure.
+ * Only that strictly proven class, direct or serialized through the model-call
+ * worker (`providerCode` + allowlisted diagnostics), is normalized to an empty
+ * response so the caller's existing ModelResponseRecovery budget handles it.
+ * Aborts, partial visible text, other Codex classes, and other providers return null.
+ */
+export function recoverableEmptyCompletionResponse(
+  error: unknown,
+  options: { aborted?: boolean; visiblePartialText?: string } = {},
+): { content: string; tool_calls: [] } | null {
+  if (options.aborted || String(options.visiblePartialText || '').trim()) return null;
+  const err = error as any;
+  if (!err || typeof err !== 'object' || err.name === 'AbortError') return null;
+  const codex = err.code === 'CODEX_INCOMPLETE_STREAM' || err.providerCode === 'CODEX_INCOMPLETE_STREAM';
+  const diagnostics = err.diagnostics;
+  if (!codex || !diagnostics || typeof diagnostics !== 'object') return null;
+  if (diagnostics.failureClass !== 'empty_completion' || diagnostics.sawCompleted !== true) return null;
+  if (Number(diagnostics.toolCallCount || 0) > 0 || Number(diagnostics.finalTextChars || 0) > 0) return null;
+  return { content: '', tool_calls: [] };
+}
+
+/** Append a recovery nudge without replaying tools or inserting an empty assistant turn. */
+export function appendRecoveryTurn(messages: any[], response: { content?: unknown } | undefined, prompt: string): void {
+  // Keep partial visible text, but never insert an empty assistant turn or
+  // fabricate a tool result for a call that was not executed.
+  if (String(response?.content || '').trim()) messages.push({ role: 'assistant', content: response!.content });
+  messages.push({ role: 'user', content: prompt });
+}
+
 /** A missing answer is not evidence that the user's task is finished. */
 export class ModelResponseRecovery {
   private consecutive = 0;

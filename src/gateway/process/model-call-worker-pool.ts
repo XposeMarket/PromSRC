@@ -14,6 +14,9 @@ import {
   boundedModelCallError,
   isModelCallWorkerMessage,
   modelCallMessageBytes,
+  modelCallProviderErrorFields,
+  type ModelCallProviderErrorCode,
+  type ModelCallProviderErrorDiagnostics,
   type ModelCallStreamItem,
   type ModelCallWorkerChildMessage,
   type ModelCallWorkerParentMessage,
@@ -38,14 +41,22 @@ export interface ModelCallCallbacks {
 }
 
 export class ModelCallWorkerError extends Error {
+  /** Allowlisted provider error code (e.g. CODEX_INCOMPLETE_STREAM); `code` stays the worker transport code. */
+  readonly providerCode?: ModelCallProviderErrorCode;
+  /** Allowlisted category/count-only provider diagnostics. */
+  readonly diagnostics?: ModelCallProviderErrorDiagnostics;
+
   constructor(
     message: string,
     readonly code: string,
     readonly safeToFallback: boolean,
     readonly providerStarted: boolean,
+    provider: { providerCode?: ModelCallProviderErrorCode; providerDiagnostics?: ModelCallProviderErrorDiagnostics } = {},
   ) {
     super(message);
     this.name = 'ModelCallWorkerError';
+    if (provider.providerCode) this.providerCode = provider.providerCode;
+    if (provider.providerDiagnostics) this.diagnostics = provider.providerDiagnostics;
   }
 }
 
@@ -568,8 +579,9 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
           boundedModelCallError(message.message),
           message.code,
           !task.dispatched && !message.providerStarted,
-        Boolean(message.providerStarted || task.providerStarted),
-      );
+          Boolean(message.providerStarted || task.providerStarted),
+          modelCallProviderErrorFields(message.providerCode, message.providerDiagnostics),
+        );
     noteWorkerStage(task, 'worker_error', {
       code: message.code,
       eventCount: task.eventCount,

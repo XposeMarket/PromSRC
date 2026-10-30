@@ -800,6 +800,7 @@ export async function runCoordinatorConversation(
 
 	    let responseText = '';
 	    let hadTeamActivity = false;
+	    let hadToolCalls = false;
 	    const streamTracker = createTeamManagerTurnTracker(teamId, turn + 1);
 	    let streamClosed = false;
 	    const closeStream = (reason: string) => {
@@ -818,6 +819,7 @@ export async function runCoordinatorConversation(
 	        broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, event, data);
 	        if (event === 'tool_call') {
 	          const toolName = String(data?.action || data?.tool || data?.name || '');
+          hadToolCalls = true;
           if (isTeamManagerActivityTool(toolName, data?.args)) {
             hadTeamActivity = true;
           }
@@ -1002,16 +1004,16 @@ export async function runCoordinatorConversation(
     }
 
     // Idle detection: if coordinator hasn't engaged members or dispatched any agent, count it
-    if (hadTeamActivity) {
+    if (hadTeamActivity || hadToolCalls) {
       consecutiveIdleTurns = 0;
     } else {
       consecutiveIdleTurns++;
     }
 
     // If coordinator gave a very short response with no substance and no team activity, assume done
-    if (responseText.length < 80 && !hadTeamActivity) {
-      console.log(`[TeamCoordinator] Short idle response — assuming done. (${turn + 1} turn(s))`);
-      bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'natural_stop', turns: turn + 1 });
+    if (!hadTeamActivity && !hadToolCalls) {
+      console.log(`[TeamCoordinator] Turn ${turn + 1} had no tool calls or team activity — stopping (no_action).`);
+      bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'no_action', turns: turn + 1 });
       break;
     }
 
@@ -1108,6 +1110,8 @@ export async function runCoordinatorConversationDetailed(
 
 	      let responseText = '';
 	      let hadTeamActivity = false;
+	      let hadToolCalls = false;
+
 	      const streamTracker = createTeamManagerTurnTracker(teamId, turn + 1);
 	      try {
 	        const originatingSession = (freshTeam as any)?.originatingSessionId || '';
@@ -1117,6 +1121,7 @@ export async function runCoordinatorConversationDetailed(
 	          persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
 	          if (event === 'tool_call') {
 	            const toolName = String(data?.action || data?.tool || data?.name || '');
+            hadToolCalls = true;
             if (isTeamManagerActivityTool(toolName, data?.args)) {
               hadTeamActivity = true;
             }
@@ -1148,7 +1153,7 @@ export async function runCoordinatorConversationDetailed(
 	          undefined,
 	          managerRouting.providerOverride,
 	          undefined,
-	          { toolCategoryDetectionText: options.toolCategoryDetectionText },
+          { toolCategoryDetectionText: options.toolCategoryDetectionText },
 	        ));
 
 	        responseText = String(result.text || '').trim();
@@ -1322,18 +1327,20 @@ export async function runCoordinatorConversationDetailed(
         break;
       }
 
-      if (hadTeamActivity) {
+      if (hadTeamActivity || hadToolCalls) {
         consecutiveIdleTurns = 0;
       } else {
         consecutiveIdleTurns++;
       }
-
-      if (responseText.length < 80 && !hadTeamActivity) {
-        console.log(`[TeamCoordinator] Short idle response - assuming done. (${turn + 1} turn(s))`);
-        finalReason = 'natural_stop';
-        bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'natural_stop', turns: turn + 1 });
+      // Structural stop: a continuation turn with no tool calls and no team activity made no progress.
+      if (!hadTeamActivity && !hadToolCalls) {
+        console.log(`[TeamCoordinator] Turn ${turn + 1} had no tool calls or team activity - stopping (no_action).`);
+        finalReason = 'no_action';
+        bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'no_action', turns: turn + 1 });
         break;
       }
+
+
 
       if (consecutiveIdleTurns >= IDLE_TURNS_THRESHOLD) {
         console.log(`[TeamCoordinator] ${IDLE_TURNS_THRESHOLD} turns without team activity - idle stop. (${turn + 1} turn(s))`);

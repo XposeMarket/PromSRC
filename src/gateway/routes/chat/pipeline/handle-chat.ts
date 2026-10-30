@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../../../chat/worker-batch-timing';
 import { goalReminderForTool } from '../../../chat/goal-reminder';
-import { ModelResponseRecovery } from '../../../chat/model-response-recovery';
+import { ModelResponseRecovery, appendRecoveryTurn, recoverableEmptyCompletionResponse } from '../../../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../../../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
@@ -193,6 +193,8 @@ export async function handleChat(...args: Parameters<typeof handleChatUntraced>)
     }
   });
 }
+
+import { shouldOmitStoredHistory } from './stored-history-policy';
 
 export async function handleChatUntraced(
   message: string,
@@ -450,7 +452,7 @@ export async function handleChatUntraced(
   htime('after buildExecuteToolDeps/finalizeBoundTaskRun closures');
   const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
   htime('before getHistoryForApiCall');
-  const rawHistory = executionMode === 'cron'
+  const rawHistory = shouldOmitStoredHistory(executionMode)
     ? []
     : getActiveHistoryForApiCall(sessionId);
   htime('after getHistoryForApiCall');
@@ -519,11 +521,11 @@ export async function handleChatUntraced(
   const activeContextBudget = admittedRouteSnapshot?.contextBudget || buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' || isBootStartupTurn
+  const recentToolLog = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
-  const workingContextBlock = executionMode === 'cron' || isBootStartupTurn
+  const workingContextBlock = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : [
         getWorkingContextForContext(sessionId, 9_000),
@@ -3687,6 +3689,8 @@ Do not produce prose. Use the canonical thread tool now.` });
     let grokGreetingLikeTurn = false;
     let streamedVisibleText = '';
     let lastPartialText = '';
+    // Visible text streamed by the CURRENT provider call only (reset per round).
+    let roundVisibleText = '';
     const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
       const opts = { reason, cause, partialText, userRequest: message };
       const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
@@ -3744,6 +3748,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         isGrokGeneration = isGrokGenerationOverride(generationOverride);
         grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
         streamedVisibleText = '';
+        roundVisibleText = '';
         let suppressRunawayStream = false;
         let providerRequestStartedAt = 0;
         let providerPassFirstEventAt = 0;
@@ -3781,6 +3786,7 @@ Do not produce prose. Use the canonical thread tool now.` });
             });
           }
           lastPartialText = (lastPartialText + text).slice(-2_000);
+          roundVisibleText += text;
           if (isGrokGeneration) {
             streamedVisibleText += text;
             // Degenerate filler: Grok occasionally keeps emitting spaces/zero-width
@@ -4300,32 +4306,41 @@ Do not produce prose. Use the canonical thread tool now.` });
         response.content = explicitThink.cleaned;
       }
     } catch (err: any) {
-      console.error('[v2] Chat error:', err.message);
-      const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
-      const preservedThinking = allThinking || undefined;
-      const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
-      if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+      const recoverableEmpty = recoverableEmptyCompletionResponse(err, { aborted: abortSignal?.aborted, visiblePartialText: roundVisibleText });
+      if (recoverableEmpty) {
+        // Fall through to the shared ModelResponseRecovery below (same budget, same nudge).
+        console.warn('[v2] Codex empty completion; routing to model response recovery');
+        response = recoverableEmpty;
+        responseStopReason = undefined;
+        responseIncompleteCause = 'empty_completion';
+      } else {
+        console.error('[v2] Chat error:', err.message);
+        const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
+        const preservedThinking = allThinking || undefined;
+        const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
+        if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+          return {
+            type: 'chat',
+            text: preservedToolResults && !abortSignal?.aborted
+              ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
+              : 'No final response was generated. Please retry.',
+            thinking: preservedThinking,
+            reasoningSummary: preservedReasoningSummary,
+            toolResults: preservedToolResults,
+          };
+        }
         return {
           type: 'chat',
           text: preservedToolResults && !abortSignal?.aborted
-            ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
-            : 'No final response was generated. Please retry.',
+            ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
+              isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
+              || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
+            : presentProviderCallFailure(err),
           thinking: preservedThinking,
           reasoningSummary: preservedReasoningSummary,
           toolResults: preservedToolResults,
         };
       }
-      return {
-        type: 'chat',
-        text: preservedToolResults && !abortSignal?.aborted
-          ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
-            isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
-            || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
-          : presentProviderCallFailure(err),
-        thinking: preservedThinking,
-        reasoningSummary: preservedReasoningSummary,
-        toolResults: preservedToolResults,
-      };
     }
 
     // Provider usage is reconciled after every admitted request. The current
@@ -4361,10 +4376,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         : recovery.cause === 'invalid_tool_json'
           ? `A tool call arrived with broken arguments; retrying with a smaller call (${recovery.attempt}/2).`
           : `The model returned an incomplete response (${recovery.cause || recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
-      // Keep partial visible text, but never insert an empty assistant turn or
-      // fabricate a tool result for a call that was not executed.
-      if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
-      messages.push({ role: 'user', content: recovery.prompt });
+      appendRecoveryTurn(messages, response, recovery.prompt);
       continue;
     }
     if (recovery.action === 'exhausted') {
