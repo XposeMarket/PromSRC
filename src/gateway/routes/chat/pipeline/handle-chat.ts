@@ -194,6 +194,8 @@ export async function handleChat(...args: Parameters<typeof handleChatUntraced>)
   });
 }
 
+import { shouldOmitStoredHistory } from './stored-history-policy';
+
 export async function handleChatUntraced(
   message: string,
   sessionId: string,
@@ -450,7 +452,7 @@ export async function handleChatUntraced(
   htime('after buildExecuteToolDeps/finalizeBoundTaskRun closures');
   const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
   htime('before getHistoryForApiCall');
-  const rawHistory = executionMode === 'cron'
+  const rawHistory = shouldOmitStoredHistory(executionMode)
     ? []
     : getActiveHistoryForApiCall(sessionId);
   htime('after getHistoryForApiCall');
@@ -519,11 +521,11 @@ export async function handleChatUntraced(
   const activeContextBudget = admittedRouteSnapshot?.contextBudget || buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' || isBootStartupTurn
+  const recentToolLog = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
-  const workingContextBlock = executionMode === 'cron' || isBootStartupTurn
+  const workingContextBlock = shouldOmitStoredHistory(executionMode) || isBootStartupTurn
     ? ''
     : [
         getWorkingContextForContext(sessionId, 9_000),
