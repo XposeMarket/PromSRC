@@ -116,6 +116,35 @@ for (const [label, make] of [['direct', directEmpty], ['serialized', serializedE
   assert.deepEqual(runRound(state, messages, { response: { content: 'Here is the summary.' } }), { kind: 'final', content: 'Here is the summary.' }, `${label}: recovered round finalizes`);
 }
 {
+  // F1: handle-chat keeps a turn-wide accumulator (lastPartialText, for degraded text) and a
+  // per-provider-call accumulator (roundVisibleText, reset before each generation). Only the
+  // per-call value may block recovery.
+  const state = new ModelResponseRecovery();
+  const messages: any[] = history();
+  let turnPartialText = '';
+  // Round 1: model streams commentary, then the turn continues with tool results.
+  turnPartialText += "I'll research this now.";
+  messages.push({ role: 'assistant', content: "I'll research this now." });
+  messages.push({ role: 'tool', tool_call_id: 'call_1', content: 'ok' });
+  // Round 2: roundVisibleText reset, then empty Codex completion with no visible text this call.
+  let roundVisibleText = '';
+  assert.equal(
+    runRound(state, messages, { error: directEmpty(), partial: roundVisibleText }).kind,
+    'retry',
+    'prior-round text (turn-wide accumulator) must not block recovery',
+  );
+  assert.ok(turnPartialText.length > 0, 'turn-wide text still exists, proving it is not the gate');
+  // Round 3: current call streams visible text, then empty error. This must NOT recover.
+  roundVisibleText = 'Visible text in this round';
+  assert.equal(
+    runRound(state, messages, { error: directEmpty(), partial: roundVisibleText }).kind,
+    'ended_on_error',
+    'current-round visible text still blocks recovery',
+  );
+}
+
+
+{
   // Shared budget: two consecutive retries, then exhausted (truthful degraded finish).
   const state = new ModelResponseRecovery();
   const messages: any[] = history();

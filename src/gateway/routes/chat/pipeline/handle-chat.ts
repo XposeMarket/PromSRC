@@ -3687,6 +3687,8 @@ Do not produce prose. Use the canonical thread tool now.` });
     let grokGreetingLikeTurn = false;
     let streamedVisibleText = '';
     let lastPartialText = '';
+    // Visible text streamed by the CURRENT provider call only (reset per round).
+    let roundVisibleText = '';
     const finishDegradedTurn = async (reason: string, cause?: string, partialText?: string, skipModel = false): Promise<string> => {
       const opts = { reason, cause, partialText, userRequest: message };
       const deterministic = buildDeterministicTurnDigest(allToolResults, opts);
@@ -3744,6 +3746,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         isGrokGeneration = isGrokGenerationOverride(generationOverride);
         grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
         streamedVisibleText = '';
+        roundVisibleText = '';
         let suppressRunawayStream = false;
         let providerRequestStartedAt = 0;
         let providerPassFirstEventAt = 0;
@@ -3781,6 +3784,7 @@ Do not produce prose. Use the canonical thread tool now.` });
             });
           }
           lastPartialText = (lastPartialText + text).slice(-2_000);
+          roundVisibleText += text;
           if (isGrokGeneration) {
             streamedVisibleText += text;
             // Degenerate filler: Grok occasionally keeps emitting spaces/zero-width
@@ -4300,7 +4304,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         response.content = explicitThink.cleaned;
       }
     } catch (err: any) {
-      const recoverableEmpty = recoverableEmptyCompletionResponse(err, { aborted: abortSignal?.aborted, visiblePartialText: lastPartialText });
+      const recoverableEmpty = recoverableEmptyCompletionResponse(err, { aborted: abortSignal?.aborted, visiblePartialText: roundVisibleText });
       if (recoverableEmpty) {
         // Fall through to the shared ModelResponseRecovery below (same budget, same nudge).
         console.warn('[v2] Codex empty completion; routing to model response recovery');
@@ -4308,32 +4312,32 @@ Do not produce prose. Use the canonical thread tool now.` });
         responseStopReason = undefined;
         responseIncompleteCause = 'empty_completion';
       } else {
-      console.error('[v2] Chat error:', err.message);
-      const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
-      const preservedThinking = allThinking || undefined;
-      const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
-      if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+        console.error('[v2] Chat error:', err.message);
+        const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
+        const preservedThinking = allThinking || undefined;
+        const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
+        if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+          return {
+            type: 'chat',
+            text: preservedToolResults && !abortSignal?.aborted
+              ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
+              : 'No final response was generated. Please retry.',
+            thinking: preservedThinking,
+            reasoningSummary: preservedReasoningSummary,
+            toolResults: preservedToolResults,
+          };
+        }
         return {
           type: 'chat',
           text: preservedToolResults && !abortSignal?.aborted
-            ? await finishDegradedTurn('CODEX_INCOMPLETE_STREAM', String(err?.message || '').slice(0, 140), lastPartialText)
-            : 'No final response was generated. Please retry.',
+            ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
+              isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
+              || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
+            : presentProviderCallFailure(err),
           thinking: preservedThinking,
           reasoningSummary: preservedReasoningSummary,
           toolResults: preservedToolResults,
         };
-      }
-      return {
-        type: 'chat',
-        text: preservedToolResults && !abortSignal?.aborted
-          ? await finishDegradedTurn('provider_failure', String(err?.message || err).slice(0, 140), lastPartialText,
-            isUsageLimitError(err) || [401, 403, 429].includes(Number(err?.status || err?.statusCode || err?.response?.status))
-            || /(?:^|\D)(?:401|403|429)(?:\D|$)|auth(?:orization|entication)?|rate.limit|usage.limit|quota/i.test(String(err?.message || err)))
-          : presentProviderCallFailure(err),
-        thinking: preservedThinking,
-        reasoningSummary: preservedReasoningSummary,
-        toolResults: preservedToolResults,
-      };
       }
     }
 
