@@ -2228,13 +2228,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory',
-        description: 'Durable memory. write adds a fact and retains conflicting older facts as superseded; update replaces one exact bullet; delete removes one exact bullet and it is removed on the next index refresh; read reads USER/SOUL/MEMORY.md; search recalls across all past transcripts, notes, memory bullets and ideas (current chat excluded; hits labeled strong/partial/weak, NO STRONG MATCH when nothing fits); recall is the fast transcript/notes/ideas index only; ideas lists captured "we should build X" ideas. Instruction-like memory bullets are quarantined from recall. Manager/agent runtimes may only use file="memory" (their private MEMORY.md).',
+        description: 'Durable memory. write adds a fact and retains conflicting older facts as superseded; update replaces one exact bullet; delete removes one exact bullet and it is removed on the next index refresh; read reads USER/SOUL/MEMORY.md; search recalls across all past transcripts, notes, memory bullets and ideas (current chat excluded; hits labeled strong/partial/weak, NO STRONG MATCH when nothing fits); recall is the fast transcript/notes/ideas index only; ideas lists captured "we should build X" ideas; related lists explicit [[topic]] backlinks from scoped MEMORY.md (query: topic name, optional limit 1-50). Instruction-like memory bullets are quarantined from recall. Manager/agent runtimes may only use file="memory" (their private MEMORY.md).',
         parameters: {
           type: 'object',
           required: ['action'],
           additionalProperties: false,
           properties: {
-            action: { type: 'string', enum: ['write', 'update', 'delete', 'read', 'search', 'recall', 'ideas'], description: 'Memory operation to perform.' },
+            action: { type: 'string', enum: ['write', 'update', 'delete', 'read', 'search', 'recall', 'ideas', 'related'], description: 'Memory operation to perform.' },
             file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/update/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
             category: { type: 'string', description: 'For write/update: category section name, such as coding, communication_style, projects, or Personality.' },
             id: { type: 'string', description: 'For update/delete: the bullet id shown as [m:xxxxx] in memory read output or the prompt. Preferred over previous_content.' },

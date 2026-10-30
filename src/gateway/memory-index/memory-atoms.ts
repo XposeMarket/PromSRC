@@ -33,6 +33,7 @@ export interface MemoryAtomMatch {
 }
 
 export interface MemoryAtomRetrievalResult {
+  topicPointers?: Array<{ topic: string; remaining: number }>;
   retrieval?: RetrievalTrace;
   direct: MemoryAtomMatch[];
   related: MemoryAtomMatch[];
@@ -490,6 +491,9 @@ export function formatMemoryAtomReferenceContext(result: MemoryAtomRetrievalResu
     `atom_count=${result.selected.length} | source_atoms=${result.stats.atomCount}`,
   ];
   lines.push(formatMemoryAtomReferenceEntries(result.selected));
+  for (const pointer of result.topicPointers || []) {
+    lines.push(`${pointer.remaining} more related facts on [[${pointer.topic}]]; use memory(action:"related", query:${JSON.stringify(pointer.topic)}).`);
+  }
   return lines.join('\n');
 }
 

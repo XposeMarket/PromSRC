@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { buildMemoryTopicIndex, expandMemoryTopics, memoryTopicPointers, persistMemoryTopics } from './memory-topics.js';
+import { sanitizeMemoryRecallText } from './memory-recall.js';
 import { boundRetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'fs';
 import path from 'path';
@@ -217,7 +219,7 @@ function loadSnapshot(workspacePath: string): HybridSnapshot {
   const hash = crypto.createHash('sha1').update(raw).digest('hex');
   const existing = snapshotCache.get(resolved);
   if (existing?.hash === hash) return existing;
-  const atoms = parseMemoryAtoms(raw);
+  const atoms = parseMemoryAtoms(sanitizeMemoryRecallText(raw));
   const literalById = new Map<string, string[]>();
   const conceptsById = new Map<string, string[]>();
   const documentFrequency = new Map<string, number>();
@@ -683,14 +685,19 @@ export async function retrieveHybridMemoryAtoms(
     matchedTerms: entry.matchedTerms,
     relation: 'direct' as const,
   }));
-  const related = buildRelated(snapshot, directCandidates, scored, new Set(queryTerms));
-  const selected = capSelection([...direct, ...related], snapshot, options);
+  const topicIndex = buildMemoryTopicIndex(snapshot.atoms);
+  persistMemoryTopics(workspacePath, topicIndex);
+  const linked = expandMemoryTopics(topicIndex, direct, new Set(direct.map(m => m.atom.id)));
+  const related = [...linked, ...buildRelated(snapshot, directCandidates, scored, new Set(queryTerms))]
+    .filter((entry, i, all) => all.findIndex(other => other.atom.id === entry.atom.id) === i).slice(0, 2);
+  const selected = capSelection([...direct.slice(0, 4), ...related, ...direct.slice(4)], snapshot, options);
 
   return {
     retrieval: boundRetrievalTrace({ source: 'atomic', state: 'available', reason: semanticError || undefined, thresholds: { deterministicFloor: 0.20, semanticFloor: 0.54, combinedSemanticFloor: 0.48, combinedDeterministicFloor: 0.08, semanticMinimumTerms: 3, semanticUsed, semanticTimedOut, maxCandidates, mmrLambda: 0.82, maxAtoms: options.maxAtoms || 'source_relative', maxChars: options.maxChars || 'source_relative' }, candidateCount: scored.length, truncated: false, candidates: [...scored].sort((a,b) => b.score - a.score).map((e,index) => ({ sourceId: e.atom.id, source: e.atom.sourcePath, rank: index + 1, score: e.score, matchedTerms: e.matchedTerms, selected: selected.some(s => s.atom.id === e.atom.id), reason: selected.some(s => s.atom.id === e.atom.id) ? 'injected_hybrid' : direct.some(s => s.atom.id === e.atom.id) || related.some(s => s.atom.id === e.atom.id) ? 'atom_or_character_budget' : directCandidates.includes(e) ? 'candidate_pool_limit' : 'below_direct_and_relation_gates' })) }),
     direct,
     related,
     selected,
+    topicPointers: memoryTopicPointers(topicIndex, selected),
     stats: {
       atomCount: snapshot.atoms.length,
       directCandidates: directCandidates.length,
