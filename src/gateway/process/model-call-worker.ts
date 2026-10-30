@@ -5,6 +5,7 @@ import {
   boundedModelCallError,
   isModelCallWorkerMessage,
   modelCallMessageBytes,
+  modelCallProviderErrorFields,
   type ModelCallWorkerChildMessage,
   type ModelCallWorkerParentMessage,
   type ModelCallWorkerRequest,
@@ -111,6 +112,23 @@ async function runSyntheticTestRequest(
   });
   providerStarted = true;
   if (mode === 'crash_after_provider') process.exit(92);
+  if (mode === 'codex_empty_completion' || mode === 'foreign_coded_error') {
+    const error: any = new Error('openai_codex response.completed contained no assistant text or tool calls.');
+    error.name = mode === 'codex_empty_completion' ? 'CodexIncompleteStreamError' : 'SyntheticProviderError';
+    error.code = mode === 'codex_empty_completion' ? 'CODEX_INCOMPLETE_STREAM' : 'SYNTHETIC_OTHER';
+    error.diagnostics = {
+      failureClass: 'empty_completion',
+      sawCompleted: true,
+      eventTypes: ['response.completed'],
+      outputItemTypes: ['reasoning'],
+      outputItemCount: 1,
+      finalTextChars: 0,
+      toolCallCount: 0,
+      usage: { inputTokens: 5 },
+      leaked: 'secret-payload-must-not-cross-ipc',
+    };
+    throw error;
+  }
   const delayMs = Math.max(0, Math.min(30_000, Number(options?.__testDelayMs || 0)));
   if (delayMs) {
     if (mode === 'ignore_cancel') {
@@ -272,6 +290,9 @@ async function handleRun(message: Extract<ModelCallWorkerParentMessage, { type: 
       code: activeController.signal.aborted ? 'MODEL_CALL_CANCELLED' : 'MODEL_CALL_FAILED',
       message: boundedModelCallError(error),
       providerStarted,
+      ...(activeController.signal.aborted
+        ? {}
+        : modelCallProviderErrorFields((error as any)?.code, (error as any)?.diagnostics)),
       resourceSample,
       completedAt: Date.now(),
     });

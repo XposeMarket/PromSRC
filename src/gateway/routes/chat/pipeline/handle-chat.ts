@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../../../chat/turn-timing';
 import { shouldRecordWorkerBatchTiming } from '../../../chat/worker-batch-timing';
 import { goalReminderForTool } from '../../../chat/goal-reminder';
-import { ModelResponseRecovery } from '../../../chat/model-response-recovery';
+import { ModelResponseRecovery, appendRecoveryTurn, recoverableEmptyCompletionResponse } from '../../../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../../../chat/provider-error-presentation';
 import { attemptModelDigest, buildDeterministicTurnDigest, describeTurnCutoffCause } from '../../../chat/degraded-turn-finish';
 import { fitToolDefinitionsToBudget } from '../../../tools/schema-compaction';
@@ -4300,11 +4300,19 @@ Do not produce prose. Use the canonical thread tool now.` });
         response.content = explicitThink.cleaned;
       }
     } catch (err: any) {
+      const recoverableEmpty = recoverableEmptyCompletionResponse(err, { aborted: abortSignal?.aborted, visiblePartialText: lastPartialText });
+      if (recoverableEmpty) {
+        // Fall through to the shared ModelResponseRecovery below (same budget, same nudge).
+        console.warn('[v2] Codex empty completion; routing to model response recovery');
+        response = recoverableEmpty;
+        responseStopReason = undefined;
+        responseIncompleteCause = 'empty_completion';
+      } else {
       console.error('[v2] Chat error:', err.message);
       const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
       const preservedThinking = allThinking || undefined;
       const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
-      if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+      if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.providerCode === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
         return {
           type: 'chat',
           text: preservedToolResults && !abortSignal?.aborted
@@ -4326,6 +4334,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         reasoningSummary: preservedReasoningSummary,
         toolResults: preservedToolResults,
       };
+      }
     }
 
     // Provider usage is reconciled after every admitted request. The current
@@ -4361,10 +4370,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         : recovery.cause === 'invalid_tool_json'
           ? `A tool call arrived with broken arguments; retrying with a smaller call (${recovery.attempt}/2).`
           : `The model returned an incomplete response (${recovery.cause || recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
-      // Keep partial visible text, but never insert an empty assistant turn or
-      // fabricate a tool result for a call that was not executed.
-      if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
-      messages.push({ role: 'user', content: recovery.prompt });
+      appendRecoveryTurn(messages, response, recovery.prompt);
       continue;
     }
     if (recovery.action === 'exhausted') {
