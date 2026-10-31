@@ -19,10 +19,13 @@ export interface DiagnosticPacket {
 
 function root(workspacePath: string): string { return path.join(workspacePath, 'diagnostics', 'incidents'); }
 function safeText(value: any, max = 4000): string {
-  return String(value || '')
+  // Cap raw input BEFORE any regex runs (bounds worst-case work and memory on untrusted tool/web text).
+  return String(value || '').slice(0, max * 2)
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(/([?&](?:access_token|refresh_token|token|api[_-]?key|secret|password)=)[^&#\s]+/gi, '$1[REDACTED]')
-    .replace(/(["']?(?:authorization|password|secret|api[_-]?key|access_token|refresh_token|token|cookie)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2)[\s\S])*?\2/gi, '$1"[REDACTED]"')
+    // Quoted values: escape pairs (\\[\s\S]) and plain chars ((?!\2)[^\\]) are disjoint, so matching is linear.
+    // Unterminated values run to end-of-string (or a trailing lone backslash) and are still scrubbed.
+    .replace(/(["']?(?:authorization|password|secret|api[_-]?key|access_token|refresh_token|token|cookie)["']?\s*[:=]\s*)(["'])(?:\\[\s\S]|(?!\2)[^\\])*(?:\2|\\?$)/gi, '$1"[REDACTED]"')
     .replace(/\bBearer\s+[^\s"',;}]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(authorization|password|secret|api[_-]?key|access_token|refresh_token|token|cookie)\s*[:=]\s*[^\r\n,;}]+/gi, '$1=[REDACTED]').slice(0, max);
 }

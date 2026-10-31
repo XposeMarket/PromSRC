@@ -206,6 +206,96 @@ try {
     assert.equal(listDiagnosticPackets(packetWorkspaceA).some((p) => p.id === packet.id), true);
   });
 
+
+  test('clean isolated git fixture still records exact identity', () => {
+    const fixture = path.join(tempRoot, 'helper-clean-exact');
+    makeGitRepo(fixture);
+    const target = path.join(tempRoot, 'helper-clean-exact-output');
+    const manifest = writeBuildIdentity(fixture, target);
+    assert.match(manifest.commit, /^[a-f0-9]{40}$/);
+    assert.equal(manifest.dirty, false);
+    assert.equal(readBuildIdentity(path.join(target, 'build-identity.json')).status, 'exact');
+  });
+
+  test('dirty helper detects electron package inputs in isolated fixture', () => {
+    const fixture = path.join(tempRoot, 'helper-electron-dirty');
+    makeGitRepo(fixture);
+    fs.mkdirSync(path.join(fixture, 'electron'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'electron', 'main.js'), 'module.exports = true;\n');
+    const manifest = writeBuildIdentity(fixture, path.join(tempRoot, 'helper-electron-output'));
+    assert.equal(manifest.dirty, true);
+    assert.equal(readBuildIdentity(path.join(tempRoot, 'helper-electron-output', 'build-identity.json')).status, 'modified');
+  });
+
+  test('dirty helper detects web-ui package inputs in isolated fixture', () => {
+    const fixture = path.join(tempRoot, 'helper-web-ui-dirty');
+    makeGitRepo(fixture);
+    fs.mkdirSync(path.join(fixture, 'web-ui'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'web-ui', 'index.html'), '<main>fixture</main>\n');
+    const manifest = writeBuildIdentity(fixture, path.join(tempRoot, 'helper-web-ui-output'));
+    assert.equal(manifest.dirty, true);
+    assert.equal(readBuildIdentity(path.join(tempRoot, 'helper-web-ui-output', 'build-identity.json')).status, 'modified');
+  });
+
+  test('dirty helper detects ignored src files in isolated fixture', () => {
+    const fixture = path.join(tempRoot, 'helper-ignored-src-dirty');
+    makeGitRepo(fixture);
+    fs.appendFileSync(path.join(fixture, '.git', 'info', 'exclude'), '\n/src/ignored.ts\n');
+    fs.writeFileSync(path.join(fixture, 'src', 'ignored.ts'), 'export const ignoredButCompiled = true;\n');
+    const manifest = writeBuildIdentity(fixture, path.join(tempRoot, 'helper-ignored-src-output'));
+    assert.equal(manifest.dirty, true);
+    assert.equal(readBuildIdentity(path.join(tempRoot, 'helper-ignored-src-output', 'build-identity.json')).status, 'modified');
+  });
+
+  test('nested source under a parent repository yields unknown identity', () => {
+    const parent = path.join(tempRoot, 'helper-parent-repo');
+    makeGitRepo(parent);
+    const nested = path.join(parent, 'extracted-tree');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'package.json'), JSON.stringify({ version: '3.4.5' }));
+    const target = path.join(tempRoot, 'helper-parent-output');
+    const manifest = writeBuildIdentity(nested, target);
+    assert.equal(manifest.commit, null);
+    assert.equal(manifest.dirty, null);
+    assert.equal(readBuildIdentity(path.join(target, 'build-identity.json')).status, 'unknown');
+  });
+
+  test('5000-backslash unterminated token is redacted in bounded child process', () => {
+    const childWorkspace = path.join(tempRoot, 'redos-child-workspace');
+    const raw = 'token: "' + '\\'.repeat(5000);
+    const modulePath = path.join(repoRoot, 'src', 'gateway', 'diagnostics', 'diagnostic-packet-store.ts');
+    const scriptPath = path.join(tempRoot, 'redos-canary-child.cjs');
+    const script = [
+      `const { createDiagnosticPacket } = require(${JSON.stringify(modulePath)});`,
+      `const packet = createDiagnosticPacket(${JSON.stringify(childWorkspace)}, { observedBehavior: ${JSON.stringify(raw)}, expectedBehavior: 'expected', sanitizedSummary: ${JSON.stringify(raw)} });`,
+      `process.stdout.write(JSON.stringify([packet.observedBehavior, packet.sanitizedSummary]));`,
+    ].join('\n');
+    fs.writeFileSync(scriptPath, script);
+    const tsxRegister = require.resolve('tsx/cjs', { paths: [repoRoot] });
+    const child = childProcess.spawnSync(process.execPath, ['-r', tsxRegister, scriptPath], { cwd: repoRoot, encoding: 'utf8', timeout: 5000, windowsHide: true });
+    assert.equal(child.error, undefined, `canary child failed or timed out: ${child.error?.message || child.stderr}`);
+    assert.equal(child.status, 0, child.stderr || 'canary child exited unsuccessfully');
+    const [observed, summary] = JSON.parse(child.stdout);
+    assert.match(observed, /\[REDACTED\]/);
+    assert.match(summary, /\[REDACTED\]/);
+    assert.equal(observed.includes('\\'.repeat(5000)), false);
+    assert.equal(summary.includes('\\'.repeat(5000)), false);
+  });
+
+  test('partial, escaped, and cap-boundary quoted credential fragments do not persist', () => {
+    const workspace = path.join(tempRoot, 'redaction-edge-workspace');
+    const boundary = `${'x'.repeat(3990)} token: CAPBOUNDARY_SECRET_CANARY`;
+    const edge = createDiagnosticPacket(workspace, {
+      observedBehavior: 'password: "partialQUOTE_SECRET_CANARY',
+      expectedBehavior: 'token: "escaped\\"quoteESCAPED_SECRET_CANARY"',
+      sanitizedSummary: boundary,
+    });
+    const persisted = JSON.parse(fs.readFileSync(path.join(workspace, 'diagnostics', 'incidents', `${edge.id}.json`), 'utf8'));
+    const edgeSecrets = ['partialQUOTE_SECRET_CANARY', 'quoteESCAPED_SECRET_CANARY', 'CAPBOUNDARY_SECRET_CANARY'];
+    for (const value of walkStrings(persisted)) for (const secret of edgeSecrets) assert.equal(value.includes(secret), false, `edge secret leaked: ${secret}`);
+    assert.ok(persisted.sanitizedSummary.length <= 4000);
+  });
+
   console.log(`PASS: ${assertions} build identity regression groups`);
 } finally {
   process.chdir(oldCwd);

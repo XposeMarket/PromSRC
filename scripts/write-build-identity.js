@@ -10,10 +10,17 @@ function writeBuildIdentity(repoRoot, targetDir) {
   try {
     const git = (...args) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     const candidate = git('rev-parse', 'HEAD');
-    if (/^[a-f0-9]{40,64}$/.test(candidate)) {
+    // Repo-root check: if this tree sits inside a parent repo, HEAD/status describe the wrong repo. Treat as unknown.
+    // Native realpath gives canonical Windows casing/separators; git prints forward slashes there.
+    const top = fs.realpathSync.native(git('rev-parse', '--show-toplevel'));
+    if (/^[a-f0-9]{40,64}$/.test(candidate) && top === fs.realpathSync.native(repoRoot)) {
       commit = candidate;
-      // Include untracked sources too: they can enter tsc output without belonging to HEAD.
-      dirty = Boolean(git('status', '--porcelain', '--untracked-files=all', '--', 'src', 'scripts', 'package.json', 'package-lock.json', 'tsconfig.json'));
+      // Conservative dirty scope: whole tree (tracked + untracked) except build outputs.
+      // Covers src, electron, web-ui, scripts, builder configs, tsconfig*, manifests. False "modified" is acceptable; false "exact" is not.
+      const statusOut = git('status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)dist', ':(exclude)generated', ':(exclude)release', ':(exclude)release-public');
+      // Gitignored files under compiled/packaged inputs are invisible to status; check them explicitly (node_modules excluded).
+      const ignoredOut = git('ls-files', '--others', '--ignored', '--exclude-standard', '--', 'src', 'electron', 'web-ui', 'scripts', ':(exclude)**/node_modules/**');
+      dirty = Boolean(statusOut || ignoredOut);
     }
   } catch { commit = null; dirty = null; }
   const manifest = { schemaVersion: 1, version, commit, dirty, builtAt: new Date().toISOString(), playbookVersion: 1 };
