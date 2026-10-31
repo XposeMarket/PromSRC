@@ -177,3 +177,8 @@ Never use a broad “kill node” cleanup as a test. The gateway, build tools an
 
 ## Pending PR: background restart continuation (not live)
 The background-restart-resume branch adds dedicated versioned background execution recovery after executor wiring, inside the preview-disabled runtime recovery boundary, and again after predecessor handoff release. Recovery checks persisted process ownership; generic formal-task recovery no longer treats background-agent IDs as formal tasks. Deployment and runtime verification remain pending.
+
+## Stored-thread diagnostic allocation bound (Oct31)
+`src/gateway/routes/chat/context-window.ts::estimateJsonTokensForModel` uses `context/json-footprint.ts::countJsonContainerChars` for plain JSON containers. It counts serialized UTF-16 characters, including escape expansion, without constructing full transcript strings. JSON containers still use the existing code/log heuristic divisor3.1, so context estimates and response shape stay unchanged. Accessors/custom serializers/exotic containers/cycles retain the existing native fallback. This is allocation control, not a cache or restart-policy change.
+
+Evidence: 2026-10-31 ten-second live allocation sample attributed184304208 bytes to whole-session JSON estimation and44911752 to its caller. Earlier memory watchdog exit42 interrupted active work; a later exit134 remains unattributed. Removing this measured churn does not establish that all crash causes are resolved. Regression covers Unicode/escapes/omissions/shared references/native fallback boundaries and a multi-megabyte transcript without JSON serialization. No live restart is required to validate the isolated regression; deployment remains approval-gated.
