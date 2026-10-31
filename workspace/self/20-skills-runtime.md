@@ -200,3 +200,6 @@ Keep skill route decisions explainable: when a candidate was offered, record eno
 
 ## Pending PR782: explicit-selector routing hot path (2026-10-26)
 Not deployed. Actual gateway CPU profiling found needless per-skill RegExp compilation in `explicitSkillMentionScore` on ordinary messages. Only construct the escaped `$id`/`skill:id` selector regex when the raw request contains a possible whitespace/start-bounded selector prefix. This is a necessary-condition guard, not a new routing policy: explicit selectors (including case/punctuation), plain skill names, trigger rules, exclusions, rankings, catalog refresh and mutated metadata retain the same behavior. No prompt/skill instructions removed and no cached context introduced. `test:latency-hot-paths` exercises both selector polarities and routing equivalence.
+
+## Windows script resources
+`readSkillResourceText` / `skill_ops(resource_read)` treats `.ps1`, `.psm1`, `.psd1`, `.cmd` and `.bat` as text, case-insensitively, alongside `.sh`/`.py`. This reads the script for inspection; it never executes it or authorizes its actions. Binary extensions remain excluded; existing skill-relative path containment and requested text truncation still apply. Regression: `src/gateway/skills-runtime/skill-script-resource.regression.ts`.
