@@ -650,6 +650,12 @@ const TEXT_RESOURCE_EXTENSIONS = new Set([
   '.tsx',
   '.py',
   '.sh',
+  // Windows skill scripts are text resources too; reading never executes them.
+  '.ps1',
+  '.psm1',
+  '.psd1',
+  '.cmd',
+  '.bat',
 ]);
 
 export function sanitizeSkillId(raw: string): string {
