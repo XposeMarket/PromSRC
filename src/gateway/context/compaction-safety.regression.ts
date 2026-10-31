@@ -14,7 +14,8 @@ import { readChatRouterSource } from '../../testing/chat-router-source';
 const routerSource = readChatRouterSource();
 assert.match(routerSource, /const shouldCompact = projectedTokens >= budget\.compactionTriggerTokens;/, 'tool-log growth alone must not compact the whole transcript');
 assert.match(routerSource, /No fixed word or character cap/, 'legacy word guidance must not be a validation ceiling');
-assert.match(routerSource, /abortSignal: input\.abortSignal\?\.signal/, 'provider request must honor cancellation');
+assert.match(routerSource, /abortSignal: signal/, 'provider request must honor the combined cancellation/deadline signal');
+assert.match(routerSource, /isAborted: \(\) => signal\.aborted/, 'late provider completion must not commit after timeout');
 
 const headings = [
   'Primary Request and Intent',

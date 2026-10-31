@@ -15,6 +15,8 @@ export interface ContextWindowPressureInput {
   latestContextSummary?: unknown;
   contextStartIndex?: unknown;
   contextTokenEstimate?: unknown;
+  /** Calibrated full request estimate captured at the mid-workflow gate. */
+  assembledRequestTokens?: unknown;
   calibrationFactor?: unknown;
   contextWindowTokens?: unknown;
   compactionThreshold?: unknown;
@@ -101,7 +103,10 @@ export function buildContextWindowPressure(input: ContextWindowPressureInput): C
   const calibrationFactor = Number.isFinite(calibrationRaw) && calibrationRaw > 0 ? calibrationRaw : 1;
   const inputBudgetTokens = Math.min(contextWindowTokens, Math.floor(nonNegativeFinite(input.inputBudgetTokens ?? contextWindowTokens)));
   const raw = estimateRawActiveSessionTokens(input);
-  const pressureTokens = Math.max(0, Math.round(raw.tokens * calibrationFactor));
+  // Either pre-turn transcript pressure or an assembled in-flight request can
+  // trigger compaction. Show the larger gate, without calibrating twice.
+  const pressureTokens = Math.max(0, Math.round(raw.tokens * calibrationFactor),
+    Math.round(nonNegativeFinite(input.assembledRequestTokens)));
   const compactionTriggerTokens = contextWindowTokens > 0
     ? resolveCompactionTriggerTokens(contextWindowTokens, inputBudgetTokens, input.compactionThreshold, input.compactionThresholdMode)
     : 0;
