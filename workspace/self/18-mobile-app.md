@@ -211,3 +211,6 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+### Shared thread detail metadata
+`mobile-context-window.js` mounts the shared `features/chat/thread-detail-summary.js` in the existing context sheet. The expandable section shows the matching session snapshot's route provider/model, context measurement source and snapshot freshness, explicitly separating context/thread usage from account allowance. It preserves the ring, metrics, plan usage and reset controls. No extra polling, persistent session-content storage or new overlay is introduced. Missing data remains Unknown; cached timestamps are not refreshed by rendering. Snapshot observation time is not provider-call time. Desktop uses the same text-node renderer.

@@ -7,6 +7,7 @@
 // for the mobile shell.
 
 import { mobileGatewayFetch } from './mobile-api.js';
+import { renderThreadDetailSummary } from '../features/chat/thread-detail-summary.js';
 import { setBankedResetFetcher } from '../features/usage/banked-reset.js';
 
 setBankedResetFetcher(mobileGatewayFetch);
@@ -308,6 +309,7 @@ function _renderRows(rows, windowTokens, depth = 0) {
 }
 
 function _renderContext(data) {
+  renderThreadDetailSummary(document.getElementById('pm-ctx-popover'), data?.sessionId === _lastSessionId ? data : null);
   data = _applyLiveOverlay(data);
   const ring = document.getElementById('pm-ctx-chip-ring');
   const chip = document.getElementById('pm-ctx-chip');

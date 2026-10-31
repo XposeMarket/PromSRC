@@ -196,3 +196,6 @@ Pending desktop chat picker work uses shared `web-ui/src/model-family-grouping.j
 
 ### Main-chat summary assembly
 Desktop SSE and replay use source reasoning_summary, visibility summary, exact delta append and complete snapshot replace. Tool/commentary boundaries freeze earlier summaries; agent_progress retains its separate heuristic. Collapse classification is coordinated with #780 before shipping.
+
+### Thread detail metadata in context controls
+The existing context popover mounts the shared `features/chat/thread-detail-summary.js` renderer. Its native expandable Thread details section shows snapshot provider/model, last-call versus composition measurement provenance, and server observation freshness. It does not add a second token gauge or equate thread usage with account allowance. Rendering uses text nodes; missing/failed or wrong-session snapshots show Unknown. Cached observation timestamps are retained, and snapshots older than 60 seconds are labeled stale when rendered. `observedAt` is the endpoint snapshot time, not the time of a provider call. The section is shared with mobile; it does not yet aggregate workers/approvals/artifacts or persist layout preferences.
