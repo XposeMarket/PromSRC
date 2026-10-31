@@ -149,6 +149,23 @@ export function isBlockingWaitInFlight(waits: BlockingWait[], now = Date.now()):
   return waits.some((wait) => effectiveBlockingWaitDeadline(wait) > now);
 }
 
+/** Durable human input is not a stalled machine wait. Check the real card, not heartbeats. */
+export function isQuestionWaitInFlight(
+  waits: BlockingWait[], sessionId: string,
+  loadPending: () => Array<{ id: string; sessionId?: string; status: string; expiresAt?: number; createdAt: string }>,
+  now = Date.now(),
+): boolean {
+  const questionWaits = waits.filter((wait) => ['ask_prometheus_questions',
+    'await_prometheus_question_response', 'request_browser_login'].includes(wait.name));
+  if (!questionWaits.length) return false;
+  return loadPending().some((question) => question.sessionId === sessionId
+    && question.status === 'pending' && Number.isFinite(question.expiresAt) && Number(question.expiresAt) > now
+    && questionWaits.some((wait) => wait.name === 'await_prometheus_question_response'
+      ? question.id === wait.args?.question_id
+      : Date.parse(question.createdAt) >= wait.startedAt && Date.parse(question.createdAt) <= now));
+}
+
+
 /** Track all parallel calls by id, falling back to the runtime's name/step envelope. */
 export function updateBlockingWaits(waits: BlockingWait[], event: string, data: any, at: number): BlockingWait[] {
   const name = String(data?.action || data?.name || data?.toolName || '');

@@ -120,6 +120,7 @@ import {
   retrieveMemoryAtoms,
 } from '../../memory-index/memory-atoms.js';
 import type { SkillsManager } from '../../skills-runtime/skills-manager';
+import { countJsonContainerChars } from '../../context/json-footprint';
 
 let _skillsManager: SkillsManager;
 export function configureContextWindowDependencies(deps: { skillsManager: SkillsManager }): void {
@@ -128,6 +129,9 @@ export function configureContextWindowDependencies(deps: { skillsManager: Skills
 
 export function estimateJsonTokensForModel(value: unknown, profile: { tokenizer: any }): number {
   try {
+    const chars = countJsonContainerChars(value);
+    // JSON containers always contain {} or [], selecting the existing 3.1 divisor.
+    if (chars !== undefined) return Math.max(1, Math.ceil(chars / 3.1));
     return estimateTextTokensForModel(JSON.stringify(value || null), profile.tokenizer);
   } catch {
     return estimateTextTokensForModel(String(value || ''), profile.tokenizer);
