@@ -30,6 +30,8 @@ const custom = { toJSON() { calls++; return { replacement: true }; } };
 for (const value of [getter, custom, [new Date()], [new Number(3)], { n: 1n }, new Map(), new Set(), Object.create({ x: 1 })]) {
   assert.equal(countJsonContainerChars(value), undefined);
 }
+const serializableFunction = Object.assign(() => 1, { toJSON() { calls++; return 'serialized'; } });
+assert.equal(countJsonContainerChars({ serializableFunction }), undefined);
 const proxy = new Proxy({}, { getPrototypeOf() { calls++; return Object.prototype; } });
 assert.equal(countJsonContainerChars(proxy), undefined);
 assert.equal(calls, 0, 'probe never invokes getters, proxies or toJSON before native fallback');

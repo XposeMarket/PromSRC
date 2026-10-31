@@ -51,6 +51,7 @@ export function countJsonContainerChars(value: unknown): number | undefined {
         if (!array || key in item) return undefined;
       }
       const child = descriptor?.value;
+      if (typeof child === 'function' && (types.isProxy(child) || 'toJSON' in child)) return undefined;
       const omitted = child === undefined || typeof child === 'function' || typeof child === 'symbol';
       if (omitted && !array) continue;
       const size = omitted ? 4 : count(child, depth + 1);
