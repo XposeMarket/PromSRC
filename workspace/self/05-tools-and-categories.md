@@ -167,7 +167,7 @@ Dynamic connector/MCP definitions are built from live extension registration, cu
 - Regression: `npm run test:x-fetch-media-routing` (offline; fetch, browser and download tools stubbed).
 
 
-## Behavioral evaluation harness (pending PR, 2026-10-31)
+## Behavioral evaluation harness (2026-10-31)
 
 `scripts/lib/agent-behavior-evals.mjs` runs bounded multi-step **fixture-only** trials. It never imports the production executor. Tool schemas use a documented closed subset of JSON Schema; unsupported keywords fail instead of silently weakening checks. Unauthorized/repeated effects, false success claims, malformed arguments, missing responses and call-sequence mismatch fail the trial. The model callback receives prompt/schemas/history, not expected outcomes. It receives an AbortSignal and must honor it; an arbitrary in-process callback is trusted adapter code, not sandboxed code.
 

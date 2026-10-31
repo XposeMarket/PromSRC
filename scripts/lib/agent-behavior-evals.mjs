@@ -22,7 +22,7 @@ export function validateSchema(schema, depth = 0) {
   } else if (schema.type === 'array') validateSchema(schema.items, depth + 1);
 }
 export function matches(schema, value) {
-  if (schema.enum && !schema.enum.some(v => JSON.stringify(v) === JSON.stringify(value))) return false;
+  if (schema.enum && !schema.enum.some(v => JSON.stringify(canonical(v)) === JSON.stringify(canonical(value)))) return false;
   switch (schema.type) {
     case 'object': return object(value) && schema.required.every(k => own(value, k)) && Object.keys(value).every(k => own(schema.properties, k) && matches(schema.properties[k], value[k]));
     case 'array': return Array.isArray(value) && value.length <= 100 && value.every(v => matches(schema.items, v));
@@ -102,6 +102,13 @@ export async function runTrial(c, respond, { timeoutMs = 30_000, maxSteps = 12 }
     })()]);
   } catch (e) { errors.push(e?.message === 'trial_timeout' ? 'trial_timeout' : 'invalid_response_or_adapter_error'); }
   finally { clearTimeout(timer); controller.abort(); }
+  // M2: replay callbacks may expose unconsumed() so trailing responses after `final` fail the trial. Plain callbacks are unaffected.
+  if (typeof respond.unconsumed === 'function') {
+    // Fail closed: a malformed accounting result (NaN, non-integer, negative, non-number) must not be treated as zero.
+    const unconsumed = respond.unconsumed();
+    if (!Number.isSafeInteger(unconsumed) || unconsumed < 0) throw new Error('Invalid replay accounting result: unconsumed must be a non-negative safe integer');
+    if (unconsumed > 0) errors.push('unconsumed_replay_responses');
+  }
   const sequenceMatches = JSON.stringify(calls) === JSON.stringify(c.expected.calls);
   const falsePositive = Boolean(final?.claims.some(claim => c.expected.forbiddenClaims.includes(claim)));
   if (falsePositive) safety.push('false_success_claim');

@@ -188,6 +188,49 @@ await test('argument object key ordering is equivalent for digest, schema match 
   assert.equal(result.pass, true);
 });
 
+await test('enum object values match regardless of property insertion order', () => {
+  const schema = {
+    type: 'object', properties: { alpha: { type: 'integer' }, beta: { type: 'integer' } },
+    required: ['alpha', 'beta'], additionalProperties: false, enum: [{ alpha: 1, beta: 2 }],
+  };
+  assert.equal(matches(schema, { beta: 2, alpha: 1 }), true);
+});
+
+await test('ordinary callbacks without replay hooks retain standard pass behavior', async () => {
+  const c = corpus.cases.find(x => x.expected.calls.length === 0);
+  assert.ok(c, 'corpus includes a no-tool case');
+  const result = await runTrial(c, async () => ({ type: 'final', outcome: c.expected.outcome, claims: [] }));
+  assert.equal(result.pass, true);
+  assert.deepEqual(result.errors, []);
+});
+
+await test('a throwing replay accounting hook is never converted into a passing trial', async () => {
+  const c = corpus.cases.find(x => x.expected.calls.length === 0);
+  const respond = async () => ({ type: 'final', outcome: c.expected.outcome, claims: [] });
+  respond.unconsumed = () => { throw new Error('replay accounting hook fault'); };
+  await assert.rejects(() => runTrial(c, respond), /replay accounting hook fault/);
+});
+
+await test('replay trailing responses are rejected when the accounting hook reports them', async () => {
+  const c = corpus.cases.find(x => x.expected.calls.length === 0);
+  let next = 0;
+  const responses = [...validResponses(c), { type: 'tool', name: 'after-final', arguments: {} }];
+  const respond = async () => responses[next++];
+  respond.unconsumed = () => responses.length - next;
+  const result = await runTrial(c, respond);
+  assert.equal(result.pass, false);
+  assert.ok(result.errors.includes('unconsumed_replay_responses'));
+});
+
+
+await test('malformed replay accounting results are surfaced instead of interpreted as zero', async () => {
+  const c = corpus.cases.find(x => x.expected.calls.length === 0);
+  const respond = async () => ({ type: 'final', outcome: c.expected.outcome, claims: [] });
+  respond.unconsumed = () => Number.NaN;
+  await assert.rejects(() => runTrial(c, respond), /replay accounting/i);
+});
+
+
 await test('evaluation reports train and held-out scores separately; an empty split is unknown', async () => {
   const report = await runEvaluation(corpus, evalResponderFactory(corpus.cases), metadata);
   const heldoutCount = corpus.cases.filter(c => c.split === 'heldout').length;
@@ -229,14 +272,54 @@ await test('replay CLI requires matching corpus provenance and a response list f
     assert.equal(report.metadata.mode, 'replay');
     assert.equal(report.metadata.provider, 'test-provider');
     assert.equal(report.metadata.model, 'captured-test-model');
+    assert.equal(report.metadata.providerDeclared, 'test-provider');
+    assert.equal(report.metadata.modelDeclared, 'captured-test-model');
+    assert.match(report.metadata.provenanceNote, /declared.*not verified/i);
+    assert.match(report.metadata.replayHash, /^[a-f0-9]{64}$/);
+    const firstReplayHash = report.metadata.replayHash;
     assert.equal(report.summary.trials, corpus.cases.length);
     assert.match(report.limitations.join(' '), /fixture tool execution only/i);
+
+    // Change only the captured responses; provenance and corpus remain byte-for-byte equivalent.
+    const responseCase = corpus.cases.find(c => replay.responses[c.id].length > 0);
+    replay.responses[responseCase.id][replay.responses[responseCase.id].length - 1].usage = { inputTokens: 1, outputTokens: 2 };
+    fs.writeFileSync(replayPath, JSON.stringify(replay));
+    const responseOnlyChange = runCli('--replay', replayPath);
+    assert.equal(responseOnlyChange.status, 0, responseOnlyChange.stderr);
+    const changedReport = JSON.parse(responseOnlyChange.stdout);
+    assert.notEqual(changedReport.metadata.replayHash, firstReplayHash, 'response-only capture differences must change replayHash');
+    assert.equal(changedReport.metadata.providerDeclared, 'test-provider');
+    assert.equal(changedReport.metadata.modelDeclared, 'captured-test-model');
+    assert.match(changedReport.metadata.provenanceNote, /declared.*not verified/i);
+
+    const trailingCase = corpus.cases.find(c => c.expected.calls.length === 0);
+    assert.ok(trailingCase, 'corpus includes a no-tool case for isolated trailing-response scoring');
+    const trailingCapture = structuredClone(replay);
+    trailingCapture.responses[trailingCase.id] = [...validResponses(trailingCase), { type: 'tool', name: 'after-final', arguments: {} }];
+    fs.writeFileSync(replayPath, JSON.stringify(trailingCapture));
+    const trailingResult = runCli('--replay', replayPath);
+    assert.equal(trailingResult.status, 1, trailingResult.stderr);
+    const trailingReport = JSON.parse(trailingResult.stdout);
+    const trailingTrial = trailingReport.trials.find(trial => trial.caseId === trailingCase.id);
+    assert.equal(trailingTrial.pass, false);
+    assert.ok(trailingTrial.errors.includes('unconsumed_replay_responses'));
+    assert.equal(trailingReport.summary.passed, corpus.cases.length - 1);
+    assert.equal(trailingReport.summary.passRate, (corpus.cases.length - 1) / corpus.cases.length);
+
 
     const missingCase = structuredClone(replay);
     delete missingCase.responses[corpus.cases[0].id];
     fs.writeFileSync(replayPath, JSON.stringify(missingCase));
     const incomplete = runCli('--replay', replayPath);
     assert.equal(incomplete.status, 2);
+
+    const fakeSecret = 'sk-TEST_FAKE_SECRET_4a71';
+    fs.writeFileSync(replayPath, `{"capture":"${fakeSecret}`);
+    const malformedJson = runCli('--replay', replayPath);
+    assert.equal(malformedJson.status, 2);
+    assert.match(malformedJson.stderr, /Invalid JSON in replay\.json/);
+    assert.doesNotMatch(malformedJson.stderr, new RegExp(fakeSecret));
+
     assert.match(incomplete.stderr, /exact corpus and include every case/i);
 
     const wrongCorpus = structuredClone(replay);
