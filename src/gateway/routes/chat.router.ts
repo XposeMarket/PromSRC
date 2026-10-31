@@ -201,6 +201,7 @@ import {
   isMainChatExecutionAgeExceeded,
   isLiveBackgroundJoin,
   isBlockingWaitInFlight,
+  isQuestionWaitInFlight,
   resolveMainChatAbortSettlement,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1017,7 +1018,11 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       activeBackgroundCount: activeBackgroundIds.length,
     });
-    if (ageExceeded && !waitingOnBackground) {
+    const waitingOnQuestion = isQuestionWaitInFlight(stream.blockingWaits || [], stream.sessionId, () => {
+      const queue = getPrometheusQuestionQueue();
+      return queue.listPending().filter((question) => queue.hasResolveCallback(question.id));
+    }, now);
+    if (ageExceeded && !waitingOnBackground && !waitingOnQuestion) {
       const memory = process.memoryUsage();
       const diagnostic = {
         reason: 'max_age_exceeded',
@@ -1036,7 +1041,7 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
       continue;
     }
 
-    if (!isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
+    if (!waitingOnQuestion && !isBlockingWaitInFlight(stream.blockingWaits || [], now) && isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
       streamActive: stream.active,

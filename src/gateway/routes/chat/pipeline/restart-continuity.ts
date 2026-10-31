@@ -43,6 +43,9 @@ export function describeRestartProvenance(runtime: any): string {
   const interruptedAt = Number(runtime?.interruptedAt || runtime?.recoveryData?.restartEpoch || 0);
   const downSec = interruptedAt > 0 ? Math.max(0, Math.round((Date.now() - interruptedAt) / 1000)) : 0;
   const downtime = downSec > 0 ? ` The gateway was down for about ${downSec}s.` : '';
+  if (/^(semantic_progress_stall|max_age_exceeded)$/.test(reason)) {
+    return `Interruption provenance: TURN WATCHDOG. The foreground execution watchdog interrupted this turn (${reason}); this is not evidence of a gateway process restart or downtime. Neither you nor the user requested this interruption. Re-check the pending tool or question before continuing; do not repeat completed work.`;
+  }
   if (/^(gateway_restart|prom_apply_dev_changes)$/i.test(toolName)) {
     return `Restart provenance: PLANNED. You (Prometheus, in this chat) started this restart yourself by calling ${toolName}; it was not a crash and the user did not cancel anything.${downtime} Treat the restart as a completed step of your own plan.`;
   }
