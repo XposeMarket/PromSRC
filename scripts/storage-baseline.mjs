@@ -5,13 +5,23 @@ import { scanStorage, compareStorage } from './lib/storage-baseline.mjs';
 async function readReport(filename) {
   let handle;
   try {
+    // Pre-stat before open: reject links, FIFOs, devices and other non-regular paths.
+    const pre = await fs.lstat(filename);
+    if (!pre.isFile() || pre.isSymbolicLink()) throw new Error();
     handle = await fs.open(filename, 'r');
+    // Retained fstat on the open handle is the authoritative check.
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > 65536) throw new Error();
+    // Bounded read loop: reads until EOF or 65537 bytes; anything above 65536 is rejected.
     const buffer = Buffer.alloc(65537);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > 65536) throw new Error();
-    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > 65536) throw new Error();
+    return JSON.parse(buffer.subarray(0, total).toString('utf8'));
   } catch { throw new Error('Invalid or oversized report file'); }
   finally { await handle?.close(); }
 }

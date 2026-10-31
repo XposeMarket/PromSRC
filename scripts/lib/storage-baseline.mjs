@@ -5,7 +5,10 @@ import { createHash } from 'node:crypto';
 const BUCKETS = new Set(['audit', 'memory', 'sessions', 'cache', 'logs', 'diagnostics', 'artifacts', 'downloads', 'projects', 'skills', 'runtime', 'workspace', '.prometheus']);
 const count = () => ({ files: 0, bytes: 0 });
 function bounded(value, fallback, max, name) {
-  const n = value === undefined ? fallback : Number(value);
+  // Plain positive decimal digit strings only (no exponent, hex, or whitespace); numbers pass through.
+  const n = value === undefined ? fallback
+    : typeof value === 'string' ? (/^[1-9]\d*$/.test(value) ? Number(value) : NaN)
+    : value;
   if (!Number.isSafeInteger(n) || n < 1 || n > max) throw new Error(`Invalid ${name}`);
   return n;
 }
@@ -87,7 +90,12 @@ function validReport(r) {
     && Number.isSafeInteger(r.files) && r.files >= 0
     && validTotals(r.buckets, r, new Set([...BUCKETS, 'other']))
     && validTotals(r.age, r, new Set(['under7Days', 'days7To30', 'over30Days', 'unknown']))
-    && typeof r.observedAt === 'string' && Number.isFinite(Date.parse(r.observedAt));
+    && typeof r.observedAt === 'string' && Number.isFinite(Date.parse(r.observedAt))
+    && [r.entries, r.skippedLinks, r.skippedSpecial, r.errors, r.depthLimited].every((v) => Number.isSafeInteger(v) && v >= 0)
+    && typeof r.entryLimited === 'boolean'
+    && Number.isSafeInteger(r.maxEntries) && r.maxEntries >= 1 && r.maxEntries <= 1000000
+    && Number.isSafeInteger(r.maxDepth) && r.maxDepth >= 1 && r.maxDepth <= 64
+    && r.complete === (r.errors === 0 && r.depthLimited === 0 && r.entryLimited === false);
 }
 export function compareStorage(before, after) {
   if (!validReport(before) || !validReport(after)) throw new Error('Invalid storage report');

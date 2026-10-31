@@ -172,10 +172,10 @@ try {
     const fileRoot = path.join(temp, 'not-a-directory');
     await fs.writeFile(fileRoot, 'x');
     await expectRejected(scanStorage(fileRoot, { now }), /Root must be an accessible non-link directory/);
-    for (const maxEntries of [0, -1, 1.2, NaN, Infinity, 1000001, 'invalid']) {
+    for (const maxEntries of [0, -1, 1.2, NaN, Infinity, 1000001, 'invalid', '1e3', '0x10', true, null, {}]) {
       await expectRejected(scanStorage(root, { maxEntries, now }), /Invalid maxEntries/);
     }
-    for (const maxDepth of [0, -1, 1.2, NaN, Infinity, 65, 'invalid']) {
+    for (const maxDepth of [0, -1, 1.2, NaN, Infinity, 65, 'invalid', '1e3', '0x10', true, null, {}]) {
       await expectRejected(scanStorage(root, { maxDepth, now }), /Invalid maxDepth/);
     }
     for (const badNow of [-1, NaN, Infinity, '2025-05-20']) {
@@ -200,6 +200,9 @@ try {
       { ...baseline, rootId: 'not-a-hash' },
       { ...baseline, observedAt: 'not a date' },
       { ...baseline, complete: 'true' },
+      { ...baseline, errors: 1 },
+      { ...baseline, depthLimited: 1 },
+      { ...baseline, entryLimited: true },
       { ...baseline, bytes: -1 },
       { ...baseline, bytes: 1.5 },
       { ...baseline, files: -1 },
@@ -207,6 +210,18 @@ try {
       { ...baseline, buckets: { ...baseline.buckets, audit: { files: 1, bytes: baseline.buckets.audit.bytes + 1 } } },
       { ...baseline, age: { ...baseline.age, unknown: { files: 9, bytes: baseline.age.unknown.bytes } } },
     ];
+    for (const counter of ['entries', 'skippedLinks', 'skippedSpecial', 'errors', 'depthLimited']) {
+      for (const value of [null, '1', -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        invalid.push({ ...baseline, [counter]: value });
+      }
+    }
+    invalid.push(
+      { ...baseline, entryLimited: 1 },
+      { ...baseline, maxEntries: '100000' },
+      { ...baseline, maxDepth: '16' },
+      { ...baseline, maxEntries: true },
+      { ...baseline, maxDepth: null },
+    );
     const acceptedMalformed = [];
     for (let i = 0; i < invalid.length; i++) {
       try { compareStorage(baseline, invalid[i]); }
@@ -221,6 +236,8 @@ try {
     assert.throws(() => compareStorage(baseline, otherRoot), /Storage roots do not match/);
     const laterThenEarlier = { ...baseline, observedAt: new Date(now - 1000).toISOString() };
     assert.throws(() => compareStorage(baseline, laterThenEarlier), /chronological order/);
+    const consistentIncomplete = { ...baseline, complete: false, depthLimited: 1 };
+    assert.equal(compareStorage(baseline, consistentIncomplete).provisional, true);
   });
 
   await test('CLI help documents apparent rather than allocated size', () => {
@@ -235,7 +252,9 @@ try {
       [], ['--root'], ['--root', root, '--mystery', '1'],
       ['--root', root, '--root', root], ['--root', root, '--max-entries', '0'],
       ['--root', root, '--max-entries', '1.5'], ['--root', root, '--max-entries', '1000001'],
+      ['--root', root, '--max-entries', '1e3'], ['--root', root, '--max-entries', '0x10'],
       ['--root', root, '--max-depth', '65'], ['--root', root, '--max-depth', 'nope'],
+      ['--root', root, '--max-depth', '1e3'], ['--root', root, '--max-depth', '0x10'],
       ['--root', root, '--max-depth'], ['--help', 'extra'],
     ];
     for (const args of badArgs) {
@@ -276,6 +295,31 @@ try {
     const tooLarge = cli(['--before', oversized, '--after', afterPath]);
     assertCliFailure(tooLarge);
     assert.ok(!tooLarge.stderr.includes(oversized));
+
+    const exactLimit = path.join(temp, 'exact-limit-report.json');
+    const reportJson = Buffer.from(JSON.stringify(baseline));
+    assert.ok(reportJson.length < 65536);
+    await fs.writeFile(exactLimit, Buffer.concat([reportJson, Buffer.alloc(65536 - reportJson.length, 0x20)]));
+    assert.equal((await fs.stat(exactLimit)).size, 65536);
+    const atLimit = cli(['--before', exactLimit, '--after', afterPath]);
+    assert.equal(atLimit.status, 0, atLimit.stderr);
+
+    const directoryReport = cli(['--before', temp, '--after', afterPath]);
+    assertCliFailure(directoryReport);
+    assert.ok(!directoryReport.stderr.includes(temp));
+
+    if (process.platform === 'win32') {
+      console.log('SKIP POSIX report symlink/FIFO rejection checks (Windows host)');
+    } else {
+      const symlinkReport = path.join(temp, 'symlink-report.json');
+      await fs.symlink(beforePath, symlinkReport);
+      assertCliFailure(cli(['--before', symlinkReport, '--after', afterPath]));
+
+      const fifoReport = path.join(temp, 'fifo-report.json');
+      const fifo = spawnSync('mkfifo', [fifoReport], { encoding: 'utf8' });
+      if (fifo.status === 0) assertCliFailure(cli(['--before', fifoReport, '--after', afterPath]));
+      else console.log('SKIP POSIX report FIFO rejection check (mkfifo unavailable)');
+    }
   });
 } finally {
   await fs.rm(temp, { recursive: true, force: true });
