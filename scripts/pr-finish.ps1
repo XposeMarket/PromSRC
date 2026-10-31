@@ -2,13 +2,16 @@
 .SYNOPSIS
   Hard gates before a PromSRC PR branch may be pushed. Refuses to push on any FAIL.
 .EXAMPLE
-  powershell -File pr-finish.ps1 -Worktree C:\Users\rafel\promsrc-pr\my-slug -OpenPrBranches "perf/a,fix/b"
+  powershell -File pr-finish.ps1 -Worktree C:\dev\promsrc-pr\my-slug -OpenPrBranches "perf/a,fix/b"
   powershell -File pr-finish.ps1 -NoPush        # dry run: gates only
 .NOTES
   Run with workspace_run action:"start" + "wait" (tsc takes minutes). Never pass -SkipTsc
-  except when Raul explicitly waives it; the waiver is printed into the PR body.
+  except when the repository owner explicitly waives it; the waiver is printed into the PR body.
   Gates: location, spec, clean tree, rebased, forbidden paths, spec scope, size, test exists+passes,
   tsc, check:web-ui, parity, open-PR conflicts, PR body. Writes .pr\PR_BODY.md and .pr\GATES.md.
+.PARAMETER Live
+  Windows local developer convention: defaults to PromSRC under the current user's home.
+  Override -Live with the actual live checkout path. The live-checkout exclusion always applies.
 #>
 param(
   [string]$Worktree = (Get-Location).Path,
@@ -17,7 +20,7 @@ param(
   [int]$MaxFiles = 8,
   [switch]$NoPush,
   [switch]$SkipTsc,
-  [string]$Live = 'C:\Users\rafel\PromSRC'
+  [string]$Live = (Join-Path $HOME 'PromSRC')
 )
 $ErrorActionPreference = 'Continue'
 $script:results = New-Object System.Collections.ArrayList
@@ -53,8 +56,8 @@ New-Item -ItemType Directory -Force -Path $prDir | Out-Null
 
 # ---------- 1. location ----------
 $branch = (git branch --show-current).Trim()
-if ($wt -ieq $Live.TrimEnd('\')) { Gate 'location' 'FAIL' 'running in the LIVE checkout. PR work only in C:\Users\rafel\promsrc-pr\<slug>.' }
-elseif ($wt -notmatch '\\promsrc-pr\\') { Gate 'location' 'FAIL' "not under C:\Users\rafel\promsrc-pr: $wt" }
+if ($wt -ieq $Live.TrimEnd('\')) { Gate 'location' 'FAIL' 'running in the LIVE checkout. PR work only in a configured \promsrc-pr\ directory\<slug>.' }
+elseif ($wt -notmatch '\\promsrc-pr\\') { Gate 'location' 'FAIL' "not under a configured \promsrc-pr\ directory: $wt" }
 elseif (-not $branch -or $branch -eq 'main') { Gate 'location' 'FAIL' "bad branch '$branch'" }
 else { Gate 'location' 'PASS' "$wt on $branch" }
 if (-not (Test-Path "$wt\node_modules\typescript")) { Gate 'node_modules' 'FAIL' "missing. Fix: cmd /c mklink /J node_modules $Live\node_modules" }
@@ -62,7 +65,7 @@ if (-not (Test-Path "$wt\node_modules\typescript")) { Gate 'node_modules' 'FAIL'
 # ---------- 2. spec ----------
 $specPath = Join-Path $prDir 'SPEC.md'
 $spec = @()
-if (-not (Test-Path $specPath)) { Gate 'spec' 'FAIL' '.pr\SPEC.md missing (pr-start.ps1 creates it; Luna or Prom fills it before code).' }
+if (-not (Test-Path $specPath)) { Gate 'spec' 'FAIL' '.pr\SPEC.md missing (pr-start.ps1 creates it; the task owner fills it before code).' }
 else {
   $spec = Get-Content $specPath
   $missing = @('Problem', 'Chosen approach', 'Acceptance', 'Files') | ? { -not ((Section $spec $_) -join '').Trim() }
@@ -146,7 +149,7 @@ if (-not $testCmd -or $testCmd -match '^none') {
 }
 
 # ---------- 9. typecheck ----------
-if ($SkipTsc) { Gate 'tsc' 'WARN' 'SKIPPED by -SkipTsc (only valid with Raul''s explicit waiver)' }
+if ($SkipTsc) { Gate 'tsc' 'WARN' 'SKIPPED by -SkipTsc (only valid with the repository owner''s explicit waiver)' }
 elseif ($tsTouched) {
   $r = Run 'tsc' 'npx tsc --noEmit -p tsconfig.json' (Join-Path $prDir 'tsc.log')
   if ($r.Code -eq 0) { Gate 'tsc' 'PASS' 'npx tsc --noEmit clean' } else { Gate 'tsc' 'FAIL' ("errors (see .pr\tsc.log): " + $r.Tail) }
@@ -239,5 +242,5 @@ if ($NoPush) { Write-Output 'ALL GATES PASS (dry run, -NoPush). PR body: .pr\PR_
 # If a branch was already rebased locally: `git merge -s ours --no-edit origin/<branch>` makes it fast-forward without changing the tree.
 git push -u origin $branch 2>&1 | Select -Last 3
 if ($LASTEXITCODE) { Write-Output 'PUSH FAILED'; exit 1 }
-Write-Output "PUSHED $branch. Next: connector_github_create_pr {owner:'XposeMarket', repo:'PromSRC', head:'$branch', base:'main', title:<imperative>, body:<contents of .pr\PR_BODY.md>} then hand to review (pr-pipeline stage 4)."
+Write-Output "PUSHED $branch. Next: connector_github_create_pr {owner:'<repo-owner>', repo:'PromSRC', head:'$branch', base:'main', title:<imperative>, body:<contents of .pr\PR_BODY.md>} then hand to review (pr-pipeline stage 4)."
 exit 0
