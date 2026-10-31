@@ -601,6 +601,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       kind: 'background_agent',
       label: 'Background agent',
       sessionId: runtimeSessionId,
+      // Public background_ops IDs are the registry lookup key for live steering.
+      taskId: record.id,
       recoveryData: { ownerSessionId: record.spawnerSessionId },
       source: 'background_spawn',
       detail: String(prompt || '').slice(0, 160),
