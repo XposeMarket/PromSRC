@@ -166,3 +166,16 @@ Dynamic connector/MCP definitions are built from live extension registration, cu
 - Payload statuses: `thread_status` and `media_status` as above. `x_media.download_status` and `analysis_status` are separate. `partial` = some failed and some media exists; `capped` = download or analysis caps hit. Stdout carries `status`, `truncated`, and the same statuses as data.
 - Regression: `npm run test:x-fetch-media-routing` (offline; fetch, browser and download tools stubbed).
 
+
+## Behavioral evaluation harness (2026-10-31)
+
+`scripts/lib/agent-behavior-evals.mjs` runs bounded multi-step **fixture-only** trials. It never imports the production executor. Tool schemas use a documented closed subset of JSON Schema; unsupported keywords fail instead of silently weakening checks. Unauthorized/repeated effects, false success claims, malformed arguments, missing responses and call-sequence mismatch fail the trial. The model callback receives prompt/schemas/history, not expected outcomes. It receives an AbortSignal and must honor it; an arbitrary in-process callback is trusted adapter code, not sandboxed code.
+
+Initial sanitized corpus: `scripts/fixtures/agent-behavior-cases.json`. Observed incidents and constructed transfer scenarios are explicitly labeled with provenance; train and heldout scores are separate. These are behavioral contract cases, not a claim of broad production model quality. Exact synthetic fixture arguments are intentional. The initial fixture surface is not automatically the full live tool schema.
+
+- `node scripts/agent-behavior-evals.mjs --fixture`: oracle self-check only, **not model measurement**.
+- `node scripts/agent-behavior-evals.mjs --replay <capture.json> --output <new-report.json>`: scores recorded model responses only; never calls providers. Capture requires version1, exact corpusHash, provider/model, and every case's response sequence. Use `--help` for the format. Outputs refuse overwrite.
+- `runEvaluation(corpus, respondForCase, metadata)`: programmatic live adapter seam. `respondForCase(caseId)` returns async `(visibleContext, {signal}) => response`; return `{type:'tool',name,arguments}` or `{type:'final',outcome,claims}` with optional provider-reported `{usage:{inputTokens,outputTokens}}`. No production tools are executed even for live model callbacks. Callers must explicitly choose/authenticate providers; this PR does not include a live-provider CLI or claim live baselines.
+- `node scripts/test-agent-behavior-evals.mjs`: adversarial harness regression tests.
+
+Reports bind HEAD/base, corpus hash, mode, provider/model and trial counts. Schema tokens are explicitly estimated; unavailable provider usage is null. Fixture/replay/live-adapter are distinct. Retain sanitized captures privately, never credentials; only score/provenance output is intended for commits. No automatic prompt trimming, provider switching, routing change, retention cleanup or production control change occurs. The 19 release-regression scenarios require separate runtime coverage; this harness does not substitute for them.
