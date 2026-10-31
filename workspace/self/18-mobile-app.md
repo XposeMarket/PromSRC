@@ -214,3 +214,11 @@ Mobile live/replay use exact raw delta append and complete snapshot replace in t
 
 ### Shared thread detail metadata
 `mobile-context-window.js` mounts the shared `features/chat/thread-detail-summary.js` in the existing context sheet. The expandable section shows the matching session snapshot's route provider/model, context measurement source and snapshot freshness, explicitly separating context/thread usage from account allowance. It preserves the ring, metrics, plan usage and reset controls. No extra polling, persistent session-content storage or new overlay is introduced. Missing data remains Unknown; cached timestamps are not refreshed by rendering. Snapshot observation time is not provider-call time. Desktop uses the same text-node renderer.
+
+
+## Thread details freshness (HAIKU-FIXES)
+
+- Freshness is evaluated at render time against the `now` passed to `threadDetailRows`, not by a ticking clock. The "Snapshot" / "Stale snapshot" label (stale after 60s) is only as current as the last render; reopening the popover refreshes it.
+- Snapshots whose `observedAt` is up to 120s ahead of the device clock are accepted (clock skew tolerance); age is clamped at 0. Timestamps further in the future render as "Unknown observation time".
+- Row labels are "Route provider" and "Route model" (the route of the current snapshot, not the provider that produced past answers).
+- The section divider uses `var(--prom-border,currentColor)`.

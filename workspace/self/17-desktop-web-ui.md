@@ -199,3 +199,11 @@ Desktop SSE and replay use source reasoning_summary, visibility summary, exact d
 
 ### Thread detail metadata in context controls
 The existing context popover mounts the shared `features/chat/thread-detail-summary.js` renderer. Its native expandable Thread details section shows snapshot provider/model, last-call versus composition measurement provenance, and server observation freshness. It does not add a second token gauge or equate thread usage with account allowance. Rendering uses text nodes; missing/failed or wrong-session snapshots show Unknown. Cached observation timestamps are retained, and snapshots older than 60 seconds are labeled stale when rendered. `observedAt` is the endpoint snapshot time, not the time of a provider call. The section is shared with mobile; it does not yet aggregate workers/approvals/artifacts or persist layout preferences.
+
+
+## Thread details freshness (HAIKU-FIXES)
+
+- Freshness is evaluated at render time against the `now` passed to `threadDetailRows`, not by a ticking clock. The "Snapshot" / "Stale snapshot" label (stale after 60s) is therefore only as current as the last render. Reopening or re-rendering the popover refreshes it.
+- Snapshots whose `observedAt` is up to 120s ahead of the client clock are accepted (clock skew tolerance); age is clamped at 0. Timestamps further in the future render as "Unknown observation time".
+- Row labels are "Route provider" and "Route model" (the route of the current snapshot, not the provider that produced past answers).
+- The section divider uses `var(--prom-border,currentColor)`.

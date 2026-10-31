@@ -3,7 +3,9 @@ export function threadDetailRows(data, now = Date.now()) {
   const valid = data && data.success !== false;
   const profile = valid ? data.profile || {} : {};
   const stamp = valid && typeof data.observedAt === 'string' ? Date.parse(data.observedAt) : NaN;
-  const age = Number.isFinite(stamp) && stamp <= now ? now - stamp : NaN;
+  // Tolerate up to 120s of client/gateway clock skew; clamp age at 0. Larger future stamps are Unknown.
+  const age = Number.isFinite(stamp) && stamp <= now + 120_000 ? Math.max(0, now - stamp) : NaN;
+  // Freshness is evaluated once per render against `now` (no ticking clock). Re-render to refresh the label.
   const freshness = !Number.isFinite(age) ? 'Unknown observation time'
     : `${age > 60_000 ? 'Stale snapshot' : 'Snapshot'} · ${new Date(stamp).toLocaleTimeString()}`;
   const measurement = valid ? data.contextMeasurement : null;
@@ -11,8 +13,8 @@ export function threadDetailRows(data, now = Date.now()) {
     : measurement === 'request_estimate' ? 'Estimated last-call input'
       : measurement === 'composition_estimate' ? 'Estimated current composition' : 'Unknown';
   return [
-    ['Provider', typeof profile.providerId === 'string' && profile.providerId ? profile.providerId : 'Unknown'],
-    ['Model', typeof profile.model === 'string' && profile.model ? profile.model : 'Unknown'],
+    ['Route provider', typeof profile.providerId === 'string' && profile.providerId ? profile.providerId : 'Unknown'],
+    ['Route model', typeof profile.model === 'string' && profile.model ? profile.model : 'Unknown'],
     ['Last-call / composition basis', source],
     ['Freshness', freshness],
     ['Scope', 'Context is not account allowance. Thread totals in the breakdown are recorded usage, not remaining quota.'],
@@ -25,7 +27,7 @@ export function renderThreadDetailSummary(root, data) {
   if (!details) {
     details = root.ownerDocument.createElement('details');
     details.dataset.threadDetailSummary = '';
-    details.style.cssText = 'margin:10px 0 0;padding-top:8px;border-top:1px solid currentColor;font-size:12px;line-height:1.5;overflow-wrap:anywhere';
+    details.style.cssText = 'margin:10px 0 0;padding-top:8px;border-top:1px solid var(--prom-border,currentColor);font-size:12px;line-height:1.5;overflow-wrap:anywhere';
     const summary = root.ownerDocument.createElement('summary');
     summary.textContent = 'Thread details';
     summary.style.cursor = 'pointer';

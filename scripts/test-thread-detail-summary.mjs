@@ -82,14 +82,18 @@ try {
     };
     const resultFor = (data) => threadDetailRows(data, now);
     const row = (rows, label) => rows.find(([key]) => key === label)?.[1];
+    const futureAccepted = [5_000, 120_000].map((offset) => row(resultFor({ ...base, observedAt: new Date(now + offset).toISOString() }), 'Freshness'));
     const freshness = {
       current: row(resultFor(base), 'Freshness'),
       stale: row(resultFor({ ...base, observedAt: '2026-10-31T07:58:00.000Z' }), 'Freshness'),
+      staleBoundary: row(resultFor({ ...base, observedAt: new Date(now - 60_000).toISOString() }), 'Freshness'),
+      justStale: row(resultFor({ ...base, observedAt: new Date(now - 60_001).toISOString() }), 'Freshness'),
       missing: row(resultFor({ ...base, observedAt: undefined }), 'Freshness'),
       invalid: row(resultFor({ ...base, observedAt: 'not-a-date' }), 'Freshness'),
-      future: row(resultFor({ ...base, observedAt: '2026-10-31T08:01:00.000Z' }), 'Freshness'),
+      futureBeyondLimit: row(resultFor({ ...base, observedAt: new Date(now + 120_001).toISOString() }), 'Freshness'),
       failed: row(resultFor({ ...base, success: false }), 'Freshness'),
     };
+    const routeLabels = resultFor(base).map(([label]) => label);
     const sources = ['provider_reported', 'request_estimate', 'composition_estimate', 'unrecognized']
       .map((contextMeasurement) => row(resultFor({ ...base, contextMeasurement }), 'Last-call / composition basis'));
     const unknowns = resultFor(null);
@@ -110,6 +114,7 @@ try {
     const afterFirst = {
       detailsCount: desktopTarget.querySelectorAll('[data-thread-detail-summary]').length,
       summaryText: details?.querySelector('summary')?.textContent,
+      borderTop: details?.style.borderTop,
       hostileText: details?.textContent.includes(hostile),
       injectedElements: details?.querySelectorAll('#injected, #script-injected').length,
       scriptElements: details?.querySelectorAll('script').length,
@@ -130,6 +135,19 @@ try {
     renderThreadDetailSummary(desktopTarget, { ...base, profile: { providerId: 'provider-b', model: 'model-b' } });
     afterUpdate.detailsCountAfterSameSnapshot = desktopTarget.querySelectorAll('[data-thread-detail-summary]').length;
 
+    const renderRoot = document.createElement('div');
+    document.body.append(renderRoot);
+    const renderSnapshot = { ...base, observedAt: new Date(now).toISOString() };
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    renderThreadDetailSummary(renderRoot, renderSnapshot);
+    const beforeRerender = renderRoot.textContent;
+    Date.now = () => now + 60_001;
+    const withoutRerender = renderRoot.textContent;
+    renderThreadDetailSummary(renderRoot, renderSnapshot);
+    const afterRerender = renderRoot.textContent;
+    Date.now = originalDateNow;
+
     // Exercise the same session gate used by the mobile mount with matching and non-matching snapshots.
     const mobileRoot = document.querySelector('#pm-ctx-popover');
     const activeSessionId = 'mobile-session';
@@ -140,28 +158,34 @@ try {
     const otherSnapshot = { ...mobileSnapshot, sessionId: 'different-session' };
     renderThreadDetailSummary(mobileRoot, otherSnapshot.sessionId === activeSessionId ? otherSnapshot : null);
     const mobileMismatchUnknown = mobileRoot.textContent.includes('Unknown') && !mobileRoot.textContent.includes('mobile-provider');
-    return { freshness, sources, unknowns, afterFirst, afterUpdate, mobileMatch, mobileMismatchUnknown };
+    return { freshness, futureAccepted, routeLabels, sources, unknowns, afterFirst, afterUpdate, beforeRerender, withoutRerender, afterRerender, mobileMatch, mobileMismatchUnknown };
   });
 
   const includes = (value, text) => assert.ok(value.includes(text), `${JSON.stringify(value)} includes ${text}`);
   includes(behavior.freshness.current, 'Snapshot');
   assert.ok(!behavior.freshness.current.includes('Stale'), 'recent timestamp is current');
   includes(behavior.freshness.stale, 'Stale snapshot');
-  for (const kind of ['missing', 'invalid', 'future', 'failed']) includes(behavior.freshness[kind], 'Unknown observation time');
+  assert.ok(behavior.futureAccepted.every((value) => value.startsWith('Snapshot ·')), '5s and 120s future skew are accepted and clamped to current');
+  includes(behavior.freshness.staleBoundary, 'Snapshot ·');
+  includes(behavior.freshness.justStale, 'Stale snapshot ·');
+  for (const kind of ['missing', 'invalid', 'futureBeyondLimit', 'failed']) includes(behavior.freshness[kind], 'Unknown observation time');
+  assert.ok(behavior.routeLabels.includes('Route provider') && behavior.routeLabels.includes('Route model'));
+  assert.ok(!behavior.routeLabels.includes('Provider') && !behavior.routeLabels.includes('Model'), 'route labels are explicit');
   assert.deepEqual(behavior.sources.slice(0, 3), [
     'Provider-reported last-call input',
     'Estimated last-call input',
     'Estimated current composition',
   ]);
   assert.equal(behavior.sources[3], 'Unknown');
-  assert.deepEqual(Object.fromEntries(behavior.unknowns.filter(([label]) => ['Provider', 'Model', 'Last-call / composition basis', 'Freshness'].includes(label))), {
-    Provider: 'Unknown',
-    Model: 'Unknown',
+  assert.deepEqual(Object.fromEntries(behavior.unknowns.filter(([label]) => ['Route provider', 'Route model', 'Last-call / composition basis', 'Freshness'].includes(label))), {
+    'Route provider': 'Unknown',
+    'Route model': 'Unknown',
     'Last-call / composition basis': 'Unknown',
     Freshness: 'Unknown observation time',
   }, 'missing data remains unknown rather than zero');
   assert.equal(behavior.afterFirst.detailsCount, 1);
   assert.equal(behavior.afterFirst.summaryText, 'Thread details');
+  assert.ok(behavior.afterFirst.borderTop.includes('var(--prom-border,currentColor)'), 'details divider uses the theme border token with a currentColor fallback');
   assert.equal(behavior.afterFirst.hostileText, true, 'hostile profile strings are displayed literally');
   assert.equal(behavior.afterFirst.injectedElements, 0, 'hostile strings create no injected elements');
   assert.equal(behavior.afterFirst.scriptElements, 0, 'hostile strings create no scripts');
@@ -175,6 +199,9 @@ try {
   assert.equal(behavior.afterUpdate.expanded, true, 'expanded state survives data updates');
   assert.equal(behavior.afterUpdate.updatedText, true, 'changed snapshot values update in place');
   assert.equal(behavior.afterUpdate.metricsPreserved, true);
+  includes(behavior.beforeRerender, 'Snapshot ·');
+  assert.equal(behavior.withoutRerender, behavior.beforeRerender, 'freshness does not tick without a render');
+  includes(behavior.afterRerender, 'Stale snapshot ·');
   assert.equal(behavior.mobileMatch, true, 'mobile renders the matching session snapshot');
   assert.equal(behavior.mobileMismatchUnknown, true, 'mobile rejects a different session snapshot');
   console.log('PASS timestamps, provenance labels, safe text-only DOM, single section, disclosure state, metrics preservation, desktop target and mobile session match');
