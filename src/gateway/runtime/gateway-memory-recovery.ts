@@ -80,3 +80,36 @@ export function runRecoveryGc(): { gcRan: boolean; postGcHeapUsedBytes?: number;
   const memory = process.memoryUsage();
   return { gcRan: true, postGcHeapUsedBytes: memory.heapUsed, postGcRssBytes: memory.rss, gcMs: Date.now() - started };
 }
+
+export type ActiveWorkMemoryDecision = 'defer_active_work' | 'restart_idle' | 'restart_emergency';
+
+/** Routine maintenance must not kill unrelated work. True exhaustion still wins. */
+export function decideActiveWorkMemoryRecovery(input: {
+  activeWork: boolean;
+  rssBytes: number;
+  heapUsedBytes: number;
+  heapLimitBytes: number;
+  freeMemoryBytes: number;
+  thresholdBytes: number;
+}): ActiveWorkMemoryDecision {
+  const valid = [input.rssBytes, input.heapUsedBytes, input.heapLimitBytes, input.freeMemoryBytes, input.thresholdBytes]
+    .every((n) => Number.isFinite(n) && n >= 0);
+  const emergency = !valid || input.heapLimitBytes <= 0 || input.thresholdBytes <= 0
+    || input.heapUsedBytes >= input.heapLimitBytes * 0.9
+    || input.rssBytes >= input.thresholdBytes * 1.5
+    || input.freeMemoryBytes < 256 * 1024 * 1024;
+  if (emergency) return 'restart_emergency';
+  return input.activeWork ? 'defer_active_work' : 'restart_idle';
+}
+
+/** Recheck after loading lifecycle code: work may start while that await yields. */
+export async function runMemoryRecoveryRestart(
+  readDecision: () => ActiveWorkMemoryDecision,
+  loadRestart: () => Promise<(policy: 'prefer' | 'never') => Promise<void>>,
+): Promise<ActiveWorkMemoryDecision> {
+  if (readDecision() === 'defer_active_work') return 'defer_active_work';
+  const restart = await loadRestart();
+  const decision = readDecision();
+  if (decision !== 'defer_active_work') await restart(decision === 'restart_emergency' ? 'never' : 'prefer');
+  return decision;
+}
