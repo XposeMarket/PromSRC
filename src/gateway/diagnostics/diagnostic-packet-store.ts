@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { readBuildIdentity, diagnosticTriage, type BuildIdentity } from './build-identity';
 
 export type DiagnosticClassification = 'agent'|'task'|'team'|'schedule'|'provider'|'configuration'|'dependency'|'workspace'|'application_defect'|'unknown';
 export interface DiagnosticPacket {
@@ -11,12 +12,19 @@ export interface DiagnosticPacket {
   attemptedRecoveries: Array<{ action: string; at: string; outcome: string }>;
   operationalRecoveryExhausted: boolean; unresolvedUncertainty: string[]; sanitizedSummary: string;
   proposalId?: string;
+  buildIdentity?: BuildIdentity;
+  triage?: ReturnType<typeof diagnosticTriage>;
+  redaction?: { mode: 'best-effort'; reviewBeforeSharing: true };
 }
 
 function root(workspacePath: string): string { return path.join(workspacePath, 'diagnostics', 'incidents'); }
 function safeText(value: any, max = 4000): string {
-  return String(value || '').replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
-    .replace(/\b(password|secret|api[_-]?key|token|cookie)\s*[:=]\s*\S+/gi, '$1=[REDACTED]').slice(0, max);
+  return String(value || '')
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:access_token|refresh_token|token|api[_-]?key|secret|password)=)[^&#\s]+/gi, '$1[REDACTED]')
+    .replace(/(["']?(?:authorization|password|secret|api[_-]?key|access_token|refresh_token|token|cookie)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2)[\s\S])*?\2/gi, '$1"[REDACTED]"')
+    .replace(/\bBearer\s+[^\s"',;}]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(authorization|password|secret|api[_-]?key|access_token|refresh_token|token|cookie)\s*[:=]\s*[^\r\n,;}]+/gi, '$1=[REDACTED]').slice(0, max);
 }
 function packetPath(workspacePath: string, id: string): string | null {
   if (!/^diag_[a-z0-9_-]+$/i.test(id)) return null;
@@ -24,7 +32,9 @@ function packetPath(workspacePath: string, id: string): string | null {
 }
 export function createDiagnosticPacket(workspacePath: string, input: any): DiagnosticPacket {
   const now = new Date().toISOString();
+  const buildIdentity = readBuildIdentity();
   const packet: DiagnosticPacket = {
+    buildIdentity, triage: diagnosticTriage(buildIdentity), redaction: { mode: 'best-effort', reviewBeforeSharing: true },
     schemaVersion: 1, id: `diag_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`, status: 'open', createdAt: now, updatedAt: now,
     classification: (['agent','task','team','schedule','provider','configuration','dependency','workspace','application_defect'].includes(String(input.classification)) ? input.classification : 'unknown'),
     severity: (['low','medium','high','critical'].includes(String(input.severity)) ? input.severity : 'medium'),
