@@ -801,6 +801,9 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, async (r
       profile,
       budget,
       metricKind: 'current_context_state',
+      observedAt: new Date().toISOString(),
+      contextMeasurement: currentState.latestProviderReportedInputTokens > 0 ? 'provider_reported'
+        : currentState.latestProviderInputTokens > 0 ? 'request_estimate' : 'composition_estimate',
       currentState,
       currentStateTokens: currentState.currentStateTokens,
       contextUsage,

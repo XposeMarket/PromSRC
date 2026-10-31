@@ -42,6 +42,7 @@ import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
 import { readContextWindowCache, resolveActiveContextTokens, writeContextWindowCache } from '../context-window-value.js';
+import { renderThreadDetailSummary } from '../features/chat/thread-detail-summary.js';
 import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
@@ -1501,6 +1502,7 @@ function renderChatContextWindow(data, target = null) {
     && Number.isFinite(Number(pressure.pressureTokens))
     && Number(pressure.contextWindowTokens) > 0;
   const elements = getChatContextWindowElements(target);
+  renderThreadDetailSummary(elements.popover, data?.sessionId === sessionId ? data : null);
   const btn = elements.button;
   const fill = elements.fill;
   const total = elements.total;
