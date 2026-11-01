@@ -164,7 +164,8 @@ export abstract class OAuthConnector {
   probeExpiredGrant(): void {
     const tokens = this.loadTokens();
     if (!tokens?.refresh_token || tokens.reauth_required_at) return;
-    if (Date.now() <= tokens.expires_at - 5 * 60 * 1000) return;
+    // Only probe a token that has actually expired; never refresh a valid one early.
+    if (Date.now() < tokens.expires_at) return;
     if (Date.now() - this.lastGrantProbeAt < 10 * 60 * 1000) return;
     if (!this.hasCredentials()) return;
     this.lastGrantProbeAt = Date.now();
@@ -214,7 +215,33 @@ export abstract class OAuthConnector {
     return tokens.access_token;
   }
 
+  private refreshInFlight: { refreshToken: string; promise: Promise<ConnectorTokens> } | null = null;
+
+  /** True while `existing` is still the stored grant (not reconnected, not disconnected). */
+  private isCurrentGrant(existing: ConnectorTokens): boolean {
+    const current = this.loadTokens();
+    return !!current && current.refresh_token === existing.refresh_token;
+  }
+
+  /**
+   * Single-flight per grant: a background probe and a foreground tool call
+   * share one token request. Results are only persisted if the grant is still
+   * the stored one, so a late response can never overwrite a fresh reconnect
+   * or resurrect a disconnected connector.
+   */
   async refreshTokens(existing: ConnectorTokens): Promise<ConnectorTokens> {
+    const key = String(existing.refresh_token || '');
+    if (this.refreshInFlight && this.refreshInFlight.refreshToken === key) return this.refreshInFlight.promise;
+    const promise = this.refreshTokensOnce(existing);
+    this.refreshInFlight = { refreshToken: key, promise };
+    try {
+      return await promise;
+    } finally {
+      if (this.refreshInFlight?.promise === promise) this.refreshInFlight = null;
+    }
+  }
+
+  private async refreshTokensOnce(existing: ConnectorTokens): Promise<ConnectorTokens> {
     assertTokenRefreshAllowed('connector-oauth');
     this.loadCredentialsFromVault();
     if (!existing.refresh_token) throw new Error(`No refresh token for ${this.cfg.name}.`);
@@ -242,7 +269,9 @@ export abstract class OAuthConnector {
       // Retrying cannot fix it, so persist the state and say what to do.
       if (res.status === 400 || res.status === 401 || /invalid_grant|invalid_client|unauthorized_client/.test(code)) {
         const reason = `${code || `HTTP ${res.status}`}: authorization expired or was revoked`;
-        try { getVault(this.configDir).set(this.vaultKey(), JSON.stringify({ ...existing, reauth_required_at: Date.now(), reauth_reason: reason }), `oauth:reauth:${this.cfg.id}`); } catch { /* best effort */ }
+        if (this.isCurrentGrant(existing)) {
+          try { getVault(this.configDir).set(this.vaultKey(), JSON.stringify({ ...existing, reauth_required_at: Date.now(), reauth_reason: reason }), `oauth:reauth:${this.cfg.id}`); } catch { /* best effort */ }
+        }
         throw new Error(`${this.cfg.name} needs to be reconnected: the saved login was rejected (${reason}). Reconnect ${this.cfg.name} in the Connections panel.`);
       }
       throw new Error(`${this.cfg.name} token refresh failed (HTTP ${res.status}${code ? `, ${code}` : ''}). This may be temporary; retry shortly.`);
@@ -254,6 +283,12 @@ export abstract class OAuthConnector {
       refresh_token: data.refresh_token || existing.refresh_token,
       expires_at: Date.now() + (data.expires_in || 3600) * 1000,
     };
+    if (!this.isCurrentGrant(existing)) {
+      // Reconnected or disconnected while the request was in flight: keep what is stored now.
+      const current = this.loadTokens();
+      if (!current) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
+      return current;
+    }
     this.saveTokens(tokens);
     return tokens;
   }
