@@ -137,6 +137,12 @@ export interface RestartContext {
     carriedRuntimeIds: string[];
   };
   suppressStandaloneRestartMessage?: boolean;
+  /** Set when this restart was queued by gateway_restart and fired once the gateway went quiet. */
+  queuedRestart?: {
+    id: string;
+    requestedAt: number;
+    requesters: Array<{ sessionId: string; reason: string; continuation?: string; requestedAt: number }>;
+  };
   originChannel?: 'web' | 'mobile' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
   respondToTelegram?: boolean;
   previousTelegramChatId?: string;

@@ -1808,11 +1808,26 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
 
         if (name === 'gateway_restart') {
           const { listLiveRuntimes } = require('../../live-runtime-registry') as typeof import('../../live-runtime-registry');
-          const { otherActiveRestartRuntimes, restartDeferredMessage } = require('../../runtime/gateway-restart-guard') as typeof import('../../runtime/gateway-restart-guard');
-          const otherTurns = otherActiveRestartRuntimes(listLiveRuntimes(), sessionId);
-          if (args.force !== true && otherTurns.length) {
-            return { name, args, result: restartDeferredMessage(otherTurns), error: false };
+          const { otherActiveRestartRuntimes } = require('../../runtime/gateway-restart-guard') as typeof import('../../runtime/gateway-restart-guard');
+          const restartQueue = require('../../runtime/gateway-restart-queue') as typeof import('../../runtime/gateway-restart-queue');
+          const restartAction = String(args.action || 'restart').trim().toLowerCase();
+          if (restartAction === 'status') {
+            return { name, args, result: restartQueue.describePendingGatewayRestart(listLiveRuntimes()), error: false };
           }
+          if (restartAction === 'cancel') {
+            const cancelled = restartQueue.clearPendingGatewayRestart();
+            return {
+              name, args,
+              result: cancelled
+                ? `Cancelled queued gateway restart ${cancelled.id}. Held scheduled, heartbeat, brain and timer runs resume on their next tick.`
+                : 'No gateway restart was queued.',
+              error: false,
+            };
+          }
+          if (restartAction !== 'restart') {
+            return { name, args, result: `gateway_restart: unknown action "${restartAction}". Use restart, status or cancel.`, error: true };
+          }
+          const otherTurns = otherActiveRestartRuntimes(listLiveRuntimes(), sessionId);
           const reason = String(args.reason || 'manual restart').trim();
           try {
             const { gracefulRestart } = require('../../lifecycle');
@@ -1859,9 +1874,30 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
               previousTelegramChatId: Number.isFinite(resolvedTelegramChatId as number) ? String(resolvedTelegramChatId) : undefined,
               previousTelegramUserId: Number.isFinite(resolvedTelegramUserId as number) ? Number(resolvedTelegramUserId) : undefined,
             };
+            // Busy gateway: queue instead of deferring. The queue runner fires the
+            // restart once the gateway is quiet and wakes this chat after boot.
+            if (args.force !== true && otherTurns.length) {
+              const { pending, merged } = restartQueue.queueGatewayRestart({
+                ctx,
+                requester: {
+                  sessionId,
+                  reason,
+                  continuation: String(args.continuation || '').trim().slice(0, 2000) || undefined,
+                  requestedAt: Date.now(),
+                },
+              });
+              return { name, args, result: restartQueue.queuedRestartMessage(pending, otherTurns, merged), error: false };
+            }
+            // An immediate restart also satisfies any queued one: carry its
+            // requesters so they still get their post-boot follow-up.
+            const priorQueued = restartQueue.readPendingGatewayRestart();
+            if (priorQueued && restartQueue.isPendingRestartOwnedByThisProcess(priorQueued)) {
+              ctx.queuedRestart = { id: priorQueued.id, requestedAt: priorQueued.createdAt, requesters: priorQueued.requesters };
+            }
             // Same quick restart path used by Telegram/mobile/terminal /restart.
             // This is async and will kill the process, so it should remain a final action.
             await gracefulRestart(ctx);
+            if (ctx.queuedRestart) restartQueue.clearPendingGatewayRestart();
             return {
               name, args,
               result: ctx.forwardedToPid !== undefined

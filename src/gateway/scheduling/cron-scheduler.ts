@@ -1320,6 +1320,12 @@ export class CronScheduler {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       if (require('../lifecycle').isGatewayHandoffDraining?.()) { this.stop(); return; }
     } catch { /* lifecycle unavailable in isolated tests */ }
+    // A queued gateway restart is draining: hold new runs (they stay overdue and
+    // run on the replacement gateway) so the gateway can actually go quiet.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (require('../runtime/gateway-restart-queue').isGatewayRestartDrainActive?.()) return;
+    } catch { /* queue unavailable in isolated tests */ }
     this.refreshStoreFromDiskIfChanged();
     // CRITICAL: Check if ANY cron jobs are enabled, not just heartbeat!
     // Heartbeat is a separate feature — regular cron jobs should execute independent of it.

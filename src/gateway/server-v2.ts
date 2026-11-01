@@ -70,6 +70,7 @@ import {
 import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
 import { MainChatTimerRunner } from './timers/timer-runner';
+import { startGatewayRestartQueueRunner } from './runtime/gateway-restart-queue';
 import { initSessionWake } from './session-wake';
 import { listLiveRuntimes as listLiveRuntimesForWake } from './live-runtime-registry';
 import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
@@ -770,6 +771,15 @@ const mainChatTimerRunner = new MainChatTimerRunner({
   telegramChannel,
 });
 if (!skipInPreview('main-chat-timers')) mainChatTimerRunner.start();
+if (!skipInPreview('gateway-restart-queue')) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const lifecycleForRestartQueue = require('./lifecycle') as typeof import('./lifecycle');
+  startGatewayRestartQueueRunner({
+    listRuntimes: () => listLiveRuntimesForWake(),
+    restart: (ctx) => lifecycleForRestartQueue.gracefulRestart(ctx),
+    isHandoffDraining: () => lifecycleForRestartQueue.isGatewayHandoffDraining(),
+  });
+}
 initSessionWake({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),

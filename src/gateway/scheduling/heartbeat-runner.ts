@@ -448,6 +448,14 @@ export class SubagentHeartbeatManager {
       this._scheduleNext(entry);
       return;
     }
+    // Hold heartbeats while a queued gateway restart drains the gateway.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (require('../runtime/gateway-restart-queue').isGatewayRestartDrainActive?.()) {
+        this._scheduleNext(entry);
+        return;
+      }
+    } catch { /* queue unavailable in isolated tests */ }
     if (!this._isWithinActiveHours()) {
       this._scheduleNext(entry);
       return;
