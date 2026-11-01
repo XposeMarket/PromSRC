@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { buildMemoryTopicIndex, expandMemoryTopics, memoryTopicPointers } from './memory-topics.js';
 import { boundRetrievalTrace, type RetrievalTrace } from '../../runtime/retrieval-provenance';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,6 +34,7 @@ export interface MemoryAtomMatch {
 }
 
 export interface MemoryAtomRetrievalResult {
+  topicPointers?: Array<{ topic: string; remaining: number }>;
   retrieval?: RetrievalTrace;
   direct: MemoryAtomMatch[];
   related: MemoryAtomMatch[];
@@ -402,7 +404,7 @@ export function retrieveMemoryAtoms(
   // wrong tradeoff for the main chat path.
   const anchorTerms = new Set(direct.flatMap((entry) => entry.matchedTerms));
   const anchorEntities = new Set(direct.flatMap((entry) => entry.atom.entities));
-  const related = scored
+  const related: MemoryAtomMatch[] = scored
     .filter((entry) => !directIds.has(entry.atom.id))
     .map((entry) => {
       const sharedTerms = entry.atom.terms.filter((term) => anchorTerms.has(term));
@@ -424,6 +426,10 @@ export function retrieveMemoryAtoms(
     })
     .filter((entry) => entry.relationReason && entry.score >= 0.18)
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
+
+  const topicIndex = buildMemoryTopicIndex(snapshot.atoms);
+  const linked = expandMemoryTopics(topicIndex, direct, directIds);
+  related.unshift(...linked);
 
   const requestedMaxAtoms = Number(options.maxAtoms);
   const maxAtoms = Number.isFinite(requestedMaxAtoms) && requestedMaxAtoms > 0
@@ -457,6 +463,7 @@ export function retrieveMemoryAtoms(
     direct,
     related,
     selected,
+    topicPointers: memoryTopicPointers(topicIndex, selected),
     stats: {
       atomCount: snapshot.atoms.length,
       directCandidates: scored.length,
@@ -490,6 +497,9 @@ export function formatMemoryAtomReferenceContext(result: MemoryAtomRetrievalResu
     `atom_count=${result.selected.length} | source_atoms=${result.stats.atomCount}`,
   ];
   lines.push(formatMemoryAtomReferenceEntries(result.selected));
+  for (const pointer of result.topicPointers || []) {
+    lines.push(`${pointer.remaining} more related facts on [[${pointer.topic}]]; use memory(action:"related", query:${JSON.stringify(pointer.topic)}).`);
+  }
   return lines.join('\n');
 }
 
