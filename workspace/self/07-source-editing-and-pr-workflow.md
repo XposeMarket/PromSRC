@@ -149,3 +149,6 @@ The following repository workflow is the owner's standing local process. Tool im
 - State whether changes are only in a task worktree, pushed/open in PR, merged, or applied live; never collapse those statuses into “done.”
 - Note any CI/review findings still pending, known limitations, and rollback/recovery point.
 - Mention any unverified owner-workflow assumption explicitly instead of presenting it as repository-enforced behavior.
+
+## Baseline-only open-PR conflicts (pending correction, 2026-10-31)
+A blocked branch can already conflict with origin/main even when an unrelated repair touches none of its files. The checked-in `scripts/pr-finish.ps1` retains the hard gates and delegates open-branch comparisons to `scripts/pr-open-conflicts.ps1`: only unchanged baseline conflict inputs on paths untouched by the task are classified WARN, explicitly leaving the other PR BLOCKED pending its rebase. Task-introduced, changed or overlapping conflicts remain FAIL, as do invalid refs/git errors. `scripts/pr-open-conflicts.regression.ps1` verifies classification with disposable repositories. This does not authorize merging either branch or exclude pending PRs from collision checks. The installed skill script is not silently replaced; use the versioned gate for this repair and offer the evidence-backed skill correction separately.

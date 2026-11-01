@@ -133,3 +133,19 @@ joined = updateBlockingWaits(joined, 'background_wait', { pending: 2, waitedMs: 
 assert.equal(isBlockingWaitInFlight(joined, waitStart + 1_020_001), false, 'join keepalives cannot renew the deadline');
 assert.equal(updateBlockingWaits(joined, 'background_wait', { pending: 0, finished: true }, waitStart + 1).length, 0);
 console.log('blocking-wait watchdog regressions passed');
+
+import { isQuestionWaitInFlight } from './main-chat-execution-owner';
+const questionWait = [{ name: 'ask_prometheus_questions', startedAt: waitStart }];
+const pendingCard = { id: 'q1', sessionId: 'session', status: 'pending', createdAt: new Date(waitStart + 10).toISOString(), expiresAt: waitStart + 24 * 60 * 60_000 };
+const afterSevenHours = waitStart + 7 * 60 * 60_000;
+assert.equal(isQuestionWaitInFlight(questionWait, 'session', () => [pendingCard], afterSevenHours), true, 'real 24h card survives both 17min and 6h watchdog limits');
+for (const changed of [{ status: 'answered' }, { status: 'cancelled' }, { expiresAt: afterSevenHours }, { expiresAt: NaN }, { sessionId: 'other' }, { createdAt: new Date(waitStart - 1).toISOString() }]) {
+  assert.equal(isQuestionWaitInFlight(questionWait, 'session', () => [{ ...pendingCard, ...changed }], afterSevenHours), false, JSON.stringify(changed));
+}
+assert.equal(isQuestionWaitInFlight(questionWait, 'session', () => [], afterSevenHours), false, 'missing or detached card cannot suppress watchdog');
+const resumeWait = [{ name: 'await_prometheus_question_response', startedAt: afterSevenHours, args: { question_id: 'q1' } }];
+assert.equal(isQuestionWaitInFlight(resumeWait, 'session', () => [pendingCard], afterSevenHours), true, 'resume matches exact prior card');
+assert.equal(isQuestionWaitInFlight(resumeWait, 'session', () => [{ ...pendingCard, id: 'other' }], afterSevenHours), false, 'unrelated card cannot suppress watchdog');
+assert.equal(isQuestionWaitInFlight([], 'session', () => { throw new Error('unexpected queue read'); }), false, 'no disk reads for normal work');
+assert.equal(isQuestionWaitInFlight(updateBlockingWaits(questionWait, 'done', {}, afterSevenHours), 'session', () => [pendingCard], afterSevenHours), false);
+console.log('durable question watchdog regressions passed');

@@ -16,7 +16,10 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 import { StallProfiler } from '../runtime/stall-profiler';
-import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
+import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
+import { countLocalRunningRuntimes } from '../live-runtime-registry';
+import { getHeapStatistics } from 'node:v8';
+import { freemem } from 'node:os';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -45,6 +48,7 @@ let _lastRestartableHeartbeatDriftMs = 0;
 let _eventLoopStallRestartScheduled = false;
 let _memoryPressureRestartScheduled = false;
 let _memoryPressureConsecutiveSamples = 0;
+let _memoryPressureDeferredForActiveWork = false;
 let _lastMemoryRecoveryGcAt = 0;
 let _lastMemoryRecoverySkippedAfterGcAt = 0;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
@@ -295,8 +299,22 @@ export function shouldScheduleGatewayMemoryRecovery(
     && consecutiveSamples >= Math.max(1, requiredSamples);
 }
 
+function readMemoryRecoveryDecision() {
+  const memory = process.memoryUsage();
+  return decideActiveWorkMemoryRecovery({
+    activeWork: _modelBusyCount > 0 || countLocalRunningRuntimes() > 0,
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    heapLimitBytes: getHeapStatistics().heap_size_limit,
+    freeMemoryBytes: freemem(),
+    thresholdBytes: MEMORY_RESTART_RSS_BYTES,
+  });
+}
+
 function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: number): void {
   if (_gatewayDraining) return;
+  const previouslyDeferred = _memoryPressureDeferredForActiveWork;
+  _memoryPressureDeferredForActiveWork = false;
   if (MEMORY_RESTART_RSS_BYTES <= 0 || memory.rss < MEMORY_RESTART_RSS_BYTES) {
     _memoryPressureConsecutiveSamples = 0;
     return;
@@ -319,7 +337,7 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
     lastSkipAt: _lastMemoryRecoverySkippedAfterGcAt,
     heapUsedBytes: memory.heapUsed,
     thresholdBytes: MEMORY_RESTART_RSS_BYTES,
-  })) {
+  }) && readMemoryRecoveryDecision() !== 'restart_emergency') {
     _memoryPressureConsecutiveSamples = 0;
     return;
   }
@@ -328,7 +346,8 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
     const gcResult = runRecoveryGc();
     // The forced GC pause is intentional; don't let it read as a heartbeat stall.
     _lastHeartbeatAt = Date.now();
-    if (decideMemoryRecoveryAfterGc({ ...gcResult, thresholdBytes: MEMORY_RESTART_RSS_BYTES }) === 'skip_after_gc') {
+    if (decideMemoryRecoveryAfterGc({ ...gcResult, thresholdBytes: MEMORY_RESTART_RSS_BYTES }) === 'skip_after_gc'
+      && readMemoryRecoveryDecision() !== 'restart_emergency') {
       _lastMemoryRecoverySkippedAfterGcAt = now;
       _memoryPressureConsecutiveSamples = 0;
       try {
@@ -350,6 +369,12 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
       return;
     }
   }
+  const decision = readMemoryRecoveryDecision();
+  if (decision === 'defer_active_work') {
+    _memoryPressureDeferredForActiveWork = true;
+    if (!previouslyDeferred) console.warn('[GatewayRuntime] Deferring routine memory recovery until active work finishes. Emergency limits remain enforced.');
+    return;
+  }
   _memoryPressureRestartScheduled = true;
 
   const rssGb = Math.round((memory.rss / (1024 * 1024 * 1024)) * 100) / 100;
@@ -360,6 +385,7 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
         timestamp: new Date(now).toISOString(),
         event: 'memory_pressure_recovery_scheduled',
         action: 'graceful_restart',
+        decision,
         pid: process.pid,
         nodeRuntime: _nodeRuntime,
         memory,
@@ -372,23 +398,38 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
     );
   } catch {}
 
-  console.error(`[GatewayRuntime] RSS remained at ${rssGb} GB. Scheduling checkpointed memory-pressure recovery...`);
+  console.warn(`[GatewayRuntime] RSS remained at ${rssGb} GB. Scheduling ${decision} memory recovery...`);
   const timer = setTimeout(async () => {
     try {
-      const { gracefulRestart } = await import('../lifecycle.js');
-      await gracefulRestart({
-        reason: 'repair',
-        timestamp: now,
-        previousSessionId: _lastMainSessionId,
-        originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
-        title: 'Gateway memory-pressure recovery',
-        summary: `Gateway RSS remained above the safe ${Math.round(MEMORY_RESTART_RSS_BYTES / (1024 * 1024 * 1024) * 100) / 100} GB boundary, so Prometheus checkpointed active work and recycled the gateway before paging could stall it.`,
-        // The whole point is to release this process's memory; keeping it
-        // alive to drain would double the footprint instead.
-        handoffPolicy: 'never',
+      if (_gatewayDraining) { _memoryPressureRestartScheduled = false; return; }
+      const result = await runMemoryRecoveryRestart(readMemoryRecoveryDecision, async () => {
+        const { gracefulRestart } = await import('../lifecycle.js');
+        return async (handoffPolicy) => {
+          if (_gatewayDraining) return;
+          await gracefulRestart({
+            reason: 'repair',
+            timestamp: Date.now(),
+            previousSessionId: _lastMainSessionId,
+            originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
+            title: 'Gateway memory-pressure recovery',
+            summary: handoffPolicy === 'never'
+              ? 'Emergency memory exhaustion required checkpointing active work and recycling the gateway.'
+              : 'Routine memory recovery waited for active work to finish before restarting.',
+            handoffPolicy,
+          });
+        };
       });
+      if (result === 'defer_active_work') {
+        _memoryPressureRestartScheduled = false;
+        _memoryPressureDeferredForActiveWork = true;
+      }
     } catch (err: any) {
       console.error('[GatewayRuntime] Memory-pressure recovery restart failed:', err?.message || err);
+      if (_gatewayDraining || readMemoryRecoveryDecision() !== 'restart_emergency'
+        || String(err?.message || '').startsWith('Gateway restart deferred because')) {
+        _memoryPressureRestartScheduled = false;
+        return;
+      }
       process.exit(1);
     }
   }, 250);
@@ -449,6 +490,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       memoryPressureConsecutiveSamples: _memoryPressureConsecutiveSamples,
       memoryAutoRestartEnabled: MEMORY_AUTORESTART_ENABLED,
       memoryPressureRestartScheduled: _memoryPressureRestartScheduled,
+      memoryPressureDeferredForActiveWork: _memoryPressureDeferredForActiveWork,
       eventLoop,
       memoryPressure: {
         rssBytes: memory.rss,
