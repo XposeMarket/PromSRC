@@ -21,3 +21,6 @@ for (const filename of promptFiles) {
 }
 
 console.log(`[build] Copied runtime prompt assets: ${promptFiles.join(', ')}`);
+
+// Bind diagnostics to this build, not to whichever checkout happens to exist at runtime.
+require('./write-build-identity.js').writeBuildIdentity(repoRoot, targetDir);
