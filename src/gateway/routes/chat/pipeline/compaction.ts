@@ -6,6 +6,8 @@ import { getSession, getWorkingContextForContext, recordSessionCompaction } from
 import { appendDurableCommentaryContext } from '../../../context/commentary-context';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
 import { runCompactionTransaction } from '../../../context/compaction-safety';
+import { withCompactionDeadline } from '../../../context/compaction-deadline';
+import { recordCompactionRequestPressure } from '../../../context/compaction-pressure';
 import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext } from '../../../tool-observations';
 import { type ToolResult } from '../../../tool-builder';
@@ -174,7 +176,7 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
   input = { ...input, numCtx: Math.min(input.numCtx, compactorProfile.contextWindowTokens), numPredict: Math.max(1, Math.floor(Math.min(compactorProfile.maxOutputTokens, Math.min(input.numCtx, compactorProfile.contextWindowTokens) * 0.2))) };
   const baseMessageCount = getSession(input.sessionId).history.length;
   try {
-    const result = await runCompactionTransaction({
+    const result = await withCompactionDeadline(async (signal) => runCompactionTransaction({
       messages: input.recentWindow,
       previousSummary: input.previousSummary,
       maxWords: input.maxWords,
@@ -182,7 +184,7 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
       numPredict: input.numPredict,
       tokenizer: compactorProfile.tokenizer,
       onInvalidSummary: (details) => console.warn(`[v2] Compaction summary rejected (${input.strategy}):`, JSON.stringify(details)),
-      isAborted: () => input.abortSignal?.aborted === true,
+      isAborted: () => signal.aborted || input.abortSignal?.aborted === true,
       renderSource: (messages, includeMetadata) => [formatCompactionMessages(messages), ...(includeMetadata ? [input.recentToolLogsBlock, input.reasoningTrailBlock, input.artifactPathsBlock] : [])].join('\n'),
       renderPrompt: (messages, previousSummary, includeMetadata) => buildContextCompactionPrompt({
         ...input,
@@ -204,7 +206,8 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
           'manager',
           {
             temperature: 0.1,
-            abortSignal: input.abortSignal?.signal,
+            abortSignal: signal,
+            think: 'low',
             num_ctx: input.numCtx,
             num_predict: input.numPredict,
             ...(input.model ? { model: input.model } : {}),
@@ -222,7 +225,7 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
         mode: 'llm',
         pass_count: passCount,
       }),
-    });
+    }), input.abortSignal?.signal);
     if (!result.compacted) {
       if (result.reason !== 'aborted') console.warn(`[v2] Context compaction skipped (${input.strategy}): ${result.reason}.`);
       return { compacted: false };
@@ -252,6 +255,13 @@ export async function maybeRunMidWorkflowCompaction(input: {
   const calibrationFactor = getUsageCalibration(profile.providerId, profile.model).factor || 1;
   const projectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
   const projectedTokens = Math.round(projectedBreakdown.totalTokens * calibrationFactor);
+  const pressureRoute = {
+    providerId: profile.providerId, model: profile.model,
+    contextWindowTokens: profile.contextWindowTokens,
+    inputBudgetTokens: budget.inputBudgetTokens,
+    compactionTriggerTokens: budget.compactionTriggerTokens,
+  };
+  recordCompactionRequestPressure(input.sessionId, getSession(input.sessionId), pressureRoute, projectedTokens);
   const policy = resolveRollingCompactionPolicy();
   const recentToolText = formatCompactionToolResults(input.sessionId, input.toolResults, policy.toolTurns);
   const reasoningTrailText = [
@@ -366,7 +376,8 @@ export async function maybeRunMidWorkflowCompaction(input: {
     });
 
     const newProjectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
-    const newProjectedTokens = newProjectedBreakdown.totalTokens;
+    const newProjectedTokens = Math.round(newProjectedBreakdown.totalTokens * calibrationFactor);
+    recordCompactionRequestPressure(input.sessionId, getSession(input.sessionId), pressureRoute, newProjectedTokens);
     input.sendSSE('tool_result', {
       action: CONTEXT_COMPACTION_TOOL_NAME,
       result: `Thread compacted mid-workflow. Continuing with ${newProjectedTokens}/${budget.inputBudgetTokens} estimated input tokens.`,
