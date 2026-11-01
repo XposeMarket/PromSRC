@@ -27,6 +27,14 @@ export interface PendingGatewayRestart {
   ctx: RestartContext;
   requesters: QueuedRestartRequester[];
   lastError?: string;
+  /** Set on a record kept only to retry post-boot wake-ups for a restart that already ran. */
+  ranAsQueued?: boolean;
+}
+
+export interface ContinuationDeps {
+  createTimer: (input: { sessionId: string; instruction: string; dueAt: Date; label?: string; origin?: Record<string, any> }) => unknown;
+  /** Idempotency: true when a wake-up timer with this key already exists. */
+  hasTimer?: (key: string, sessionId: string) => boolean;
 }
 
 export interface QueuedRestartRecord {
@@ -43,6 +51,7 @@ type RestartRuntime = {
   label?: string;
   kind?: string;
   recoveryData?: Record<string, any> | null;
+  checkpoint?: Record<string, any> | null;
 };
 
 const FILE_NAME = 'pending-gateway-restart.json';
@@ -170,8 +179,21 @@ export function queueGatewayRestart(input: {
   return { pending, merged: false };
 }
 
+/**
+ * A hidden thread supervisor parked in supervision_wait is idle (it can block
+ * for up to 30 min and repeat). Its durable supervision record re-launches a
+ * review on the next observed event after restart, so it must not hold the
+ * quiet window open. An executing supervisor still blocks.
+ */
+export function isParkedSupervisorRuntime(runtime: RestartRuntime): boolean {
+  return !!runtime.recoveryData?.supervisionId
+    && runtime.checkpoint?.event === 'tool_call'
+    && runtime.checkpoint?.toolAction === 'supervision_wait';
+}
+
 export function activeRestartBlockers(runtimes: RestartRuntime[]): RestartRuntime[] {
-  return runtimes.filter((runtime) => runtime.status === 'running' && !runtime.abortRequestedAt && !runtime.completedAt);
+  return runtimes.filter((runtime) => runtime.status === 'running' && !runtime.abortRequestedAt && !runtime.completedAt
+    && !isParkedSupervisorRuntime(runtime));
 }
 
 const describeRuntime = (runtime: RestartRuntime): string =>
@@ -266,62 +288,116 @@ export function buildQueuedRestartContinuation(input: {
  * Boot pass: wake every chat that queued a restart. Handles both a queued
  * restart that actually ran (restartCtx.queuedRestart) and a stale pending
  * record left by a previous process that restarted or crashed some other way.
+ *
+ * Delivery is durable and idempotent: each wake-up timer carries a
+ * `restartQueueKey` (queue id + session) so retries never duplicate, and any
+ * requester whose timer could not be created stays persisted (as a record no
+ * process owns, so it never drains) for the runner to retry.
  */
 export function scheduleQueuedRestartContinuations(
   restartCtx: RestartContext | null,
-  createTimer: (input: { sessionId: string; instruction: string; dueAt: Date; label?: string }) => unknown,
+  deps: ContinuationDeps,
   now: number = Date.now(),
 ): number {
-  const jobs: Array<{ sessionId: string; instruction: string }> = [];
+  type Job = { key: string; queueId: string; sessionId: string; instruction: string; requester: QueuedRestartRequester; ranAsQueued: boolean; reason: string; requestedAt: number };
+  const jobs: Job[] = [];
+  const add = (queueId: string, requesters: QueuedRestartRequester[], reason: string, requestedAt: number, ranAt: number, ranAsQueued: boolean): void => {
+    for (const built of buildQueuedRestartContinuation({ requesters, reason, requestedAt, ranAt, ranAsQueued })) {
+      const requester = requesters.find((entry) => entry.sessionId === built.sessionId)!;
+      jobs.push({ key: `${queueId}:${built.sessionId}`, queueId, sessionId: built.sessionId, instruction: built.instruction, requester, ranAsQueued, reason, requestedAt });
+    }
+  };
   const ran = restartCtx?.queuedRestart;
   if (ran?.requesters?.length) {
-    jobs.push(...buildQueuedRestartContinuation({
-      requesters: ran.requesters,
-      reason: restartCtx?.summary || restartCtx?.title || String(restartCtx?.reason || 'gateway restart'),
-      requestedAt: ran.requestedAt,
-      ranAt: restartCtx?.timestamp || now,
-      ranAsQueued: true,
-    }));
+    add(ran.id, ran.requesters, restartCtx?.summary || restartCtx?.title || String(restartCtx?.reason || 'gateway restart'),
+      ran.requestedAt, restartCtx?.timestamp || now, true);
   }
   const stale = readPendingGatewayRestart();
   if (stale && !isPendingRestartOwnedByThisProcess(stale)) {
     const covered = new Set(jobs.map((job) => job.sessionId));
-    jobs.push(...buildQueuedRestartContinuation({
-      requesters: stale.requesters.filter((entry) => !covered.has(entry.sessionId)),
-      reason: stale.ctx.summary || stale.ctx.title || String(stale.ctx.reason),
-      requestedAt: stale.createdAt,
-      ranAt: now,
-      ranAsQueued: false,
-    }));
-    clearPendingGatewayRestart();
+    add(stale.id, stale.requesters.filter((entry) => !covered.has(entry.sessionId)),
+      stale.ctx.summary || stale.ctx.title || String(stale.ctx.reason), stale.createdAt, now, !!stale.ranAsQueued);
   }
+  if (!jobs.length) return 0;
   let created = 0;
+  const failed: Job[] = [];
   for (const job of jobs) {
     try {
-      createTimer({ sessionId: job.sessionId, instruction: job.instruction, dueAt: new Date(now + 5_000), label: 'Queued gateway restart finished' });
+      if (deps.hasTimer?.(job.key, job.sessionId)) continue;
+      deps.createTimer({
+        sessionId: job.sessionId,
+        instruction: job.instruction,
+        dueAt: new Date(now + 5_000),
+        label: 'Queued gateway restart finished',
+        origin: { restartQueueKey: job.key },
+      });
       created += 1;
     } catch (error: any) {
       console.warn(`[restart-queue] Could not schedule continuation for ${job.sessionId}: ${error?.message || error}`);
+      failed.push(job);
     }
+  }
+  if (!failed.length) {
+    if (stale && !isPendingRestartOwnedByThisProcess(stale)) clearPendingGatewayRestart();
+    return created;
+  }
+  // Keep only undelivered requesters. gatewayPid 0 is never owned, so this
+  // record cannot drain the new gateway; the runner retries delivery.
+  const first = failed[0];
+  try {
+    persist({
+      id: first.queueId,
+      createdAt: first.requestedAt,
+      gatewayPid: 0,
+      ctx: { ...(stale?.ctx || restartCtx || { reason: 'manual', timestamp: now }), summary: first.reason },
+      requesters: failed.map((job) => job.requester),
+      ranAsQueued: failed.every((job) => job.ranAsQueued),
+      lastError: 'wake-up delivery pending retry',
+    });
+  } catch (error: any) {
+    console.warn(`[restart-queue] Could not persist undelivered wake-ups: ${error?.message || error}`);
   }
   return created;
 }
+
 
 export function startGatewayRestartQueueRunner(deps: {
   listRuntimes: () => RestartRuntime[];
   restart: (ctx: RestartContext) => Promise<void>;
   isHandoffDraining?: () => boolean;
+  /** Retries wake-up delivery for a stale/undelivered record (throttled to every 30s). */
+  deliverContinuations?: () => void;
   tickMs?: number;
   quietMs?: number;
+  /** How long after restart() resolves the process may still be alive before the attempt counts as failed. */
+  acceptanceMs?: number;
 }): { stop(): void } {
   const tickMs = Math.max(500, deps.tickMs ?? 3_000);
   const quietMs = Math.max(0, deps.quietMs ?? 10_000);
+  const acceptanceMs = Math.max(100, deps.acceptanceMs ?? 120_000);
   let quietSince: number | null = null;
   let firing = false;
+  let lastDeliveryAttempt = 0;
+  const restoreFailed = (pending: PendingGatewayRestart, message: string): void => {
+    const lastError = message.slice(0, 400);
+    console.warn(`[restart-queue] Queued restart ${pending.id} failed; keeping it queued: ${lastError}`);
+    // Never clobber a newer request queued meanwhile; just annotate it.
+    const current = readPendingGatewayRestart();
+    persist(current && current.id !== pending.id ? { ...current, lastError } : { ...pending, lastError });
+    quietSince = null;
+    firing = false;
+  };
   const tick = async (): Promise<void> => {
     if (firing) return;
     const pending = readPendingGatewayRestart();
-    if (!isPendingRestartOwnedByThisProcess(pending)) { quietSince = null; return; }
+    if (!isPendingRestartOwnedByThisProcess(pending)) {
+      quietSince = null;
+      if (pending && deps.deliverContinuations && Date.now() - lastDeliveryAttempt >= 30_000) {
+        lastDeliveryAttempt = Date.now();
+        try { deps.deliverContinuations(); } catch (error: any) { console.warn(`[restart-queue] Wake-up retry failed: ${error?.message || error}`); }
+      }
+      return;
+    }
     if (deps.isHandoffDraining?.()) return;
     const now = Date.now();
     const decision = evaluateQueuedRestart({ runtimes: deps.listRuntimes(), quietSince, now, quietMs });
@@ -339,12 +415,16 @@ export function startGatewayRestartQueueRunner(deps: {
     console.log(`[restart-queue] Gateway quiet for ${Math.round(quietMs / 1000)}s; running queued restart ${pending.id}.`);
     try {
       await deps.restart(ctx);
+      // gracefulRestart can return normally without restarting (replacement
+      // spawn failure, failed warm handoff). Only a process exit or an active
+      // handoff proves acceptance; otherwise restore the request.
+      const check = setTimeout(() => {
+        if (deps.isHandoffDraining?.()) return;
+        restoreFailed(pending, 'restart returned but this gateway is still running (launch or handoff failed)');
+      }, acceptanceMs);
+      (check as any).unref?.();
     } catch (error: any) {
-      const message = String(error?.message || error).slice(0, 400);
-      console.warn(`[restart-queue] Queued restart ${pending.id} failed; keeping it queued: ${message}`);
-      persist({ ...pending, lastError: message });
-      quietSince = null;
-      firing = false;
+      restoreFailed(pending, String(error?.message || error));
     }
   };
   const timer = setInterval(() => { void tick(); }, tickMs);

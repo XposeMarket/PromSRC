@@ -778,6 +778,13 @@ if (!skipInPreview('gateway-restart-queue')) {
     listRuntimes: () => listLiveRuntimesForWake(),
     restart: (ctx) => lifecycleForRestartQueue.gracefulRestart(ctx),
     isHandoffDraining: () => lifecycleForRestartQueue.isGatewayHandoffDraining(),
+    deliverContinuations: () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const queue = require('./runtime/gateway-restart-queue') as typeof import('./runtime/gateway-restart-queue');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const boot = require('./boot') as typeof import('./boot');
+      queue.scheduleQueuedRestartContinuations(null, boot.queuedRestartContinuationDeps());
+    },
   });
 }
 initSessionWake({

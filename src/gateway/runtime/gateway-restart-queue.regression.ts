@@ -71,7 +71,11 @@ fs.writeFileSync(file, JSON.stringify(stale));
 setGatewayRestartQueueStateDir(() => dir);
 assert.equal(isGatewayRestartDrainActive(), false);
 const timers: any[] = [];
-const created = scheduleQueuedRestartContinuations(null, (t) => timers.push(t), 1_000_000);
+const timerDeps = {
+  createTimer: (t: any) => timers.push(t),
+  hasTimer: (key: string) => timers.some((t) => t.origin?.restartQueueKey === key),
+};
+const created = scheduleQueuedRestartContinuations(null, timerDeps, 1_000_000);
 assert.equal(created, 2);
 const wakeA = timers.find((t) => t.sessionId === 'chat_a');
 const wakeB = timers.find((t) => t.sessionId === 'chat_b');
@@ -84,12 +88,39 @@ assert.ok(!fs.existsSync(file), 'stale record cleared');
 timers.length = 0;
 scheduleQueuedRestartContinuations(
   { ...baseCtx, timestamp: 600_000, queuedRestart: { id: 'q1', requestedAt: 0, requesters: [{ sessionId: 'chat_a', reason: 'r', requestedAt: 0, continuation: 'report to Raul' }] } } as any,
-  (t) => timers.push(t),
+  timerDeps,
   700_000,
 );
 assert.equal(timers.length, 1);
 assert.match(timers[0].instruction, /queued has now run .*about 10 min/);
 assert.match(timers[0].instruction, /Do not call gateway_restart again/);
+
+// 6b. Partial delivery failure: undelivered requester persisted (never drains), retry is idempotent.
+timers.length = 0;
+let failSession = 'chat_y';
+const flakyDeps = {
+  createTimer: (t: any) => { if (t.sessionId === failSession) throw new Error('disk full'); timers.push(t); },
+  hasTimer: (key: string) => timers.some((t) => t.origin?.restartQueueKey === key),
+};
+const ranCtx = { ...baseCtx, timestamp: 600_000, queuedRestart: { id: 'q2', requestedAt: 0, requesters: [
+  { sessionId: 'chat_x', reason: 'r', requestedAt: 0 }, { sessionId: 'chat_y', reason: 'r', requestedAt: 0 },
+] } } as any;
+assert.equal(scheduleQueuedRestartContinuations(ranCtx, flakyDeps, 700_000), 1);
+const kept = readPendingGatewayRestart();
+assert.deepEqual(kept?.requesters.map((r) => r.sessionId), ['chat_y']);
+assert.equal(isGatewayRestartDrainActive(), false, 'undelivered record never drains');
+failSession = '';
+assert.equal(scheduleQueuedRestartContinuations(null, flakyDeps, 800_000), 1);
+assert.deepEqual(timers.map((t) => t.sessionId).sort(), ['chat_x', 'chat_y']);
+assert.match(timers.find((t) => t.sessionId === 'chat_y').instruction, /queued has now run/);
+assert.equal(readPendingGatewayRestart(), null, 'cleared after full delivery');
+assert.equal(scheduleQueuedRestartContinuations(ranCtx, flakyDeps, 900_000), 0, 'idempotent: no duplicate wake-ups');
+
+// 6c. Parked supervisor does not block; executing supervisor does.
+const sup = (toolAction: string) => ({ ...running('sup', 'Prometheus active supervision'), recoveryData: { supervisionId: 's1' }, checkpoint: { event: 'tool_call', toolAction } });
+assert.equal(evaluateQueuedRestart({ runtimes: [sup('supervision_wait')], quietSince: 0, now: 20, quietMs: 10 }).fire, true);
+assert.equal(evaluateQueuedRestart({ runtimes: [sup('send')], quietSince: 0, now: 20, quietMs: 10 }).fire, false);
+assert.equal(evaluateQueuedRestart({ runtimes: [{ ...sup('supervision_wait'), checkpoint: { event: 'tool_result', toolAction: 'supervision_wait' } }], quietSince: 0, now: 20, quietMs: 10 }).fire, false);
 
 // 7. Cancel clears the drain.
 queueGatewayRestart({ ctx: baseCtx as any, requester: { sessionId: 'chat_c', reason: 'c', requestedAt: 4 } });
@@ -122,6 +153,24 @@ async function runnerScenario(): Promise<void> {
   assert.equal(count(), 2, 'failed attempt stays queued and retries');
   assert.equal(readPendingGatewayRestart(), null, 'successful fire removes the record');
   runner.stop();
+
+  // Restart that resolves without the process exiting (spawn/handoff failure) is restored.
+  queueGatewayRestart({ ctx: baseCtx as any, requester: { sessionId: 'chat_s', reason: 's', requestedAt: 6 } });
+  let resolvedCalls = 0;
+  const runner2 = startGatewayRestartQueueRunner({
+    listRuntimes: () => [],
+    restart: async () => { resolvedCalls += 1; },
+    tickMs: 500,
+    quietMs: 0,
+    acceptanceMs: 300,
+  });
+  await sleep(900);
+  assert.ok(resolvedCalls >= 1);
+  const restored = readPendingGatewayRestart();
+  assert.ok(restored, 'silent launch failure keeps the restart queued');
+  assert.match(String(restored?.lastError), /still running/);
+  runner2.stop();
+  clearPendingGatewayRestart();
 }
 
 runnerScenario().then(() => {
