@@ -15,6 +15,7 @@ import {
   scheduleQueuedRestartContinuations,
   startGatewayRestartQueueRunner,
   toQueuedRestartContext,
+  readPendingWakeups,
 } from './gateway-restart-queue';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-queue-'));
@@ -106,15 +107,18 @@ const ranCtx = { ...baseCtx, timestamp: 600_000, queuedRestart: { id: 'q2', requ
   { sessionId: 'chat_x', reason: 'r', requestedAt: 0 }, { sessionId: 'chat_y', reason: 'r', requestedAt: 0 },
 ] } } as any;
 assert.equal(scheduleQueuedRestartContinuations(ranCtx, flakyDeps, 700_000), 1);
-const kept = readPendingGatewayRestart();
-assert.deepEqual(kept?.requesters.map((r) => r.sessionId), ['chat_y']);
-assert.equal(isGatewayRestartDrainActive(), false, 'undelivered record never drains');
+assert.deepEqual(readPendingWakeups().map((w) => w.sessionId), ['chat_y'], 'undelivered wake-up persisted separately');
+assert.equal(readPendingGatewayRestart(), null, 'restart queue untouched by wake-up retries');
+// A new restart queued meanwhile must not erase the undelivered wake-up.
+queueGatewayRestart({ ctx: baseCtx as any, requester: { sessionId: 'chat_new', reason: 'n', requestedAt: 7 } });
 failSession = '';
 assert.equal(scheduleQueuedRestartContinuations(null, flakyDeps, 800_000), 1);
 assert.deepEqual(timers.map((t) => t.sessionId).sort(), ['chat_x', 'chat_y']);
 assert.match(timers.find((t) => t.sessionId === 'chat_y').instruction, /queued has now run/);
-assert.equal(readPendingGatewayRestart(), null, 'cleared after full delivery');
+assert.deepEqual(readPendingWakeups(), [], 'wake-ups cleared after delivery');
+assert.deepEqual(readPendingGatewayRestart()?.requesters.map((r) => r.sessionId), ['chat_new'], 'new restart still queued');
 assert.equal(scheduleQueuedRestartContinuations(ranCtx, flakyDeps, 900_000), 0, 'idempotent: no duplicate wake-ups');
+clearPendingGatewayRestart();
 
 // 6c. Parked supervisor does not block; executing supervisor does.
 const sup = (toolAction: string) => ({ ...running('sup', 'Prometheus active supervision'), recoveryData: { supervisionId: 's1' }, checkpoint: { event: 'tool_call', toolAction } });

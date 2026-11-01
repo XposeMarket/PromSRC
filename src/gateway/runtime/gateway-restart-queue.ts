@@ -318,46 +318,71 @@ export function scheduleQueuedRestartContinuations(
     add(stale.id, stale.requesters.filter((entry) => !covered.has(entry.sessionId)),
       stale.ctx.summary || stale.ctx.title || String(stale.ctx.reason), stale.createdAt, now, !!stale.ranAsQueued);
   }
-  if (!jobs.length) return 0;
-  let created = 0;
-  const failed: Job[] = [];
+  // Undelivered wake-ups from earlier attempts live in their own file, so a
+  // newly queued restart can never overwrite them.
+  const queued = new Map<string, PendingWakeup>();
+  for (const wake of readPendingWakeups()) queued.set(wake.key, wake);
   for (const job of jobs) {
+    if (!queued.has(job.key)) queued.set(job.key, { key: job.key, sessionId: job.sessionId, instruction: job.instruction, createdAt: now, attempts: 0 });
+  }
+  if (!queued.size) return 0;
+  let created = 0;
+  const failed: PendingWakeup[] = [];
+  for (const wake of queued.values()) {
     try {
-      if (deps.hasTimer?.(job.key, job.sessionId)) continue;
+      if (deps.hasTimer?.(wake.key, wake.sessionId)) continue;
       deps.createTimer({
-        sessionId: job.sessionId,
-        instruction: job.instruction,
+        sessionId: wake.sessionId,
+        instruction: wake.instruction,
         dueAt: new Date(now + 5_000),
         label: 'Queued gateway restart finished',
-        origin: { restartQueueKey: job.key },
+        origin: { restartQueueKey: wake.key },
       });
       created += 1;
     } catch (error: any) {
-      console.warn(`[restart-queue] Could not schedule continuation for ${job.sessionId}: ${error?.message || error}`);
-      failed.push(job);
+      const attempts = (wake.attempts || 0) + 1;
+      if (attempts === 1 || attempts % 20 === 0) {
+        console.warn(`[restart-queue] Could not schedule continuation for ${wake.sessionId} (attempt ${attempts}): ${error?.message || error}`);
+      }
+      failed.push({ ...wake, attempts });
     }
   }
-  if (!failed.length) {
-    if (stale && !isPendingRestartOwnedByThisProcess(stale)) clearPendingGatewayRestart();
-    return created;
-  }
-  // Keep only undelivered requesters. gatewayPid 0 is never owned, so this
-  // record cannot drain the new gateway; the runner retries delivery.
-  const first = failed[0];
-  try {
-    persist({
-      id: first.queueId,
-      createdAt: first.requestedAt,
-      gatewayPid: 0,
-      ctx: { ...(stale?.ctx || restartCtx || { reason: 'manual', timestamp: now }), summary: first.reason },
-      requesters: failed.map((job) => job.requester),
-      ranAsQueued: failed.every((job) => job.ranAsQueued),
-      lastError: 'wake-up delivery pending retry',
-    });
-  } catch (error: any) {
-    console.warn(`[restart-queue] Could not persist undelivered wake-ups: ${error?.message || error}`);
-  }
+  // Persist undelivered wake-ups BEFORE dropping the stale queue record, so a
+  // failed write leaves the stale record in place for the next boot to retry.
+  writePendingWakeups(failed);
+  if (stale && !isPendingRestartOwnedByThisProcess(stale)) clearPendingGatewayRestart();
   return created;
+}
+
+export interface PendingWakeup {
+  key: string;
+  sessionId: string;
+  instruction: string;
+  createdAt: number;
+  attempts?: number;
+}
+
+const WAKE_FILE_NAME = 'pending-restart-wakeups.json';
+
+export function readPendingWakeups(): PendingWakeup[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(stateDirResolver(), WAKE_FILE_NAME), 'utf8'));
+    return Array.isArray(raw) ? raw.filter((wake) => wake && wake.key && wake.sessionId && wake.instruction) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingWakeups(list: PendingWakeup[]): void {
+  const target = path.join(stateDirResolver(), WAKE_FILE_NAME);
+  if (!list.length) {
+    try { fs.rmSync(target, { force: true }); } catch { /* best effort */ }
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(list, null, 2), 'utf8');
+  fs.renameSync(tmp, target);
 }
 
 
@@ -390,14 +415,13 @@ export function startGatewayRestartQueueRunner(deps: {
   const tick = async (): Promise<void> => {
     if (firing) return;
     const pending = readPendingGatewayRestart();
-    if (!isPendingRestartOwnedByThisProcess(pending)) {
-      quietSince = null;
-      if (pending && deps.deliverContinuations && Date.now() - lastDeliveryAttempt >= 30_000) {
-        lastDeliveryAttempt = Date.now();
-        try { deps.deliverContinuations(); } catch (error: any) { console.warn(`[restart-queue] Wake-up retry failed: ${error?.message || error}`); }
-      }
-      return;
+    const owned = isPendingRestartOwnedByThisProcess(pending);
+    if (deps.deliverContinuations && Date.now() - lastDeliveryAttempt >= 30_000
+      && ((pending && !owned) || readPendingWakeups().length)) {
+      lastDeliveryAttempt = Date.now();
+      try { deps.deliverContinuations(); } catch (error: any) { console.warn(`[restart-queue] Wake-up retry failed: ${error?.message || error}`); }
     }
+    if (!owned) { quietSince = null; return; }
     if (deps.isHandoffDraining?.()) return;
     const now = Date.now();
     const decision = evaluateQueuedRestart({ runtimes: deps.listRuntimes(), quietSince, now, quietMs });
