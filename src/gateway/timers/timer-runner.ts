@@ -59,6 +59,11 @@ export class MainChatTimerRunner {
 
   private async tick(): Promise<void> {
     if (this.runningTimerId) return;
+    // Due timers stay pending through a queued restart and fire on the replacement.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (require('../runtime/gateway-restart-queue').isGatewayRestartDrainActive?.()) return;
+    } catch { /* queue unavailable in isolated tests */ }
     const next = getDueMainChatTimers()[0];
     if (!next) return;
     await this.fireTimer(next);

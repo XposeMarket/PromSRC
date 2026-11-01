@@ -14,6 +14,17 @@ import { addMessage, getHistoryForApiCall, getMainChatGoal, getRecentToolObserva
 import { readRestartContext, clearRestartContext, queueStartupNotification, type RestartContext } from './lifecycle';
 import { markDevSourceEditContinuationComplete, type DevSourceEditContinuation } from './dev-source-approvals';
 import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
+import { scheduleQueuedRestartContinuations, type ContinuationDeps } from './runtime/gateway-restart-queue';
+import { createMainChatTimer, listMainChatTimers } from './timers/timer-store';
+
+/** Timer-store adapter for queued-restart wake-ups (idempotent by restartQueueKey). */
+export function queuedRestartContinuationDeps(): ContinuationDeps {
+  return {
+    createTimer: (input) => createMainChatTimer(input),
+    hasTimer: (key, sessionId) => listMainChatTimers({ sessionId, includeDone: true })
+      .some((timer) => timer.origin?.restartQueueKey === key),
+  };
+}
 import { finalizeMainChatGoalRestartRecovery } from './main-chat-goals';
 import {
   acknowledgePlannedRestartMainChats,
@@ -508,6 +519,14 @@ export async function runBootMd(
   handleChat: HandleChatFn,
 ): Promise<BootResult> {
   const restartCtx = readRestartContext();
+  // Wake chats that queued a gateway restart (or whose queued restart was
+  // superseded by another restart/crash) with one follow-up turn each.
+  try {
+    const woken = scheduleQueuedRestartContinuations(restartCtx, queuedRestartContinuationDeps());
+    if (woken) console.log(`[boot-md] Scheduled ${woken} queued-restart follow-up turn(s).`);
+  } catch (err: any) {
+    console.warn(`[boot-md] Queued-restart follow-ups failed: ${String(err?.message || err)}`);
+  }
   if (restartCtx) {
     console.log(`[boot-md] Hot restart detected: ${restartCtx.reason} (${restartCtx.title || 'no title'})`);
     clearRestartContext();

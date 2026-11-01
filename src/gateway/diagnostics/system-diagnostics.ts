@@ -6,6 +6,7 @@ import { getErrorWatchdogSummary, loadWatchdogState } from '../errors/error-watc
 import { readProviderStatusEvidence } from '../provider-status';
 import { getBuildStatus } from '../../runtime/build-status';
 import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
+import { getGatewayRestartQueueDiagnostics } from '../runtime/gateway-restart-queue';
 import { getConfig } from '../../config/config';
 import { liveSourceIssues, readLiveSourceState } from './live-source-state';
 
@@ -139,6 +140,7 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
     createdAt: restartContext?.timestamp || null,
     ageMs: age(now, restartContext?.timestamp),
     pendingNotifications: notifications.length,
+    queued: getGatewayRestartQueueDiagnostics(now),
   };
   if (notifications.length) issues.push({ code: 'restart_notification_pending', severity: 'warning', subsystem: 'restart', summary: `${notifications.length} startup notification(s) remain pending.` });
 

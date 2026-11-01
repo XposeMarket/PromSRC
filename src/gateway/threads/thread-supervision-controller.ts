@@ -578,6 +578,8 @@ export class ActiveThreadSupervisionController {
         at: Date.now(),
         ...(data?.message ? { message: String(data.message).slice(0, 1200) } : {}),
         ...(data?.action || data?.name ? { toolName: String(data.action || data.name) } : {}),
+        // Lets the restart queue tell a parked supervisor (supervision_wait) from executing work.
+        toolAction: event === 'tool_call' && data?.args?.action ? String(data.args.action) : undefined,
         ...(data?.result ? { result: String(data.result).slice(0, 1800) } : {}),
       };
       updateLiveRuntimeCheckpoint(runtimeId, checkpoint);

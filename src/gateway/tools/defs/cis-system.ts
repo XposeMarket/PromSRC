@@ -1075,12 +1075,16 @@ export function getCisSystemTools(): any[] {
           'matching the quick restart flow offered by Telegram, mobile, and the /restart menu. ' +
           'For source code changes that require build/sync, use prom_apply_dev_changes instead. ' +
           'The new process boots with a hot-restart context so it knows what changed. ' +
-          'WARNING: This kills the current process. Only call this as your LAST action.',
+          'If other turns are active, the restart is QUEUED instead: it runs automatically once the gateway is quiet (new scheduled/heartbeat/brain/timer runs are held meanwhile) and this chat gets one automatic follow-up turn after the new gateway boots. ' +
+          'Never set timers or poll to retry a restart; end your turn after queuing. action:"status" shows the queued restart, action:"cancel" cancels it. ' +
+          'WARNING: An immediate restart kills the current process. Only call this as your LAST action.',
         parameters: {
-          type: 'object', required: ['reason'],
+          type: 'object', required: [],
           properties: {
-            reason: { type: 'string', description: 'Why the restart is needed (e.g. "Applied proposal #abc123")' },
-            force: { type: 'boolean', description: 'Override the busy-chat guard; only when the user explicitly asks.' },
+            action: { type: 'string', enum: ['restart', 'status', 'cancel'], description: 'Default restart. status = show any queued restart; cancel = cancel it.' },
+            reason: { type: 'string', description: 'Why the restart is needed (e.g. "Applied proposal #abc123"). Required for action restart.' },
+            continuation: { type: 'string', description: 'If the restart gets queued: what this chat should do in its automatic follow-up turn after the restart (e.g. "verify HEAD a65ac5283 is live and report to the user").' },
+            force: { type: 'boolean', description: 'Restart immediately even if other turns are active (interrupts them). Only when the user explicitly asks.' },
             proposal_id: { type: 'string', description: 'Proposal ID if this is a proposal execution' },
             repair_id: { type: 'string', description: 'Repair ID if this is a self-repair' },
             title: { type: 'string', description: 'Human-readable title of the change' },

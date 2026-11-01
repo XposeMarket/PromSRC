@@ -880,6 +880,10 @@ export class BrainRunner {
 
   private async _tick(): Promise<void> {
     if (this.shuttingDown) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      if (require('../runtime/gateway-restart-queue').isGatewayRestartDrainActive?.()) return;
+    } catch { /* queue unavailable in isolated tests */ }
     const enabled = loadLatestState();
     if (!enabled.thoughtEnabled && !enabled.dreamEnabled && !enabled.cleanupEnabled) return;
     if (this._hasCarriedBrainRun()) return;
