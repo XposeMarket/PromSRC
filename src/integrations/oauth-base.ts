@@ -153,6 +153,24 @@ export abstract class OAuthConnector {
     return this.isConnected() ? { state: 'connected' } : { state: 'not_connected' };
   }
 
+  private lastGrantProbeAt = 0;
+
+  /**
+   * Fire-and-forget: when the access token has expired, try one refresh so a
+   * revoked/expired grant is detected (and flagged reauth_required) while the
+   * user is looking at status, not later when a tool call needs it.
+   * Rate-limited per connector; refresh failures are recorded by refreshTokens.
+   */
+  probeExpiredGrant(): void {
+    const tokens = this.loadTokens();
+    if (!tokens?.refresh_token || tokens.reauth_required_at) return;
+    if (Date.now() <= tokens.expires_at - 5 * 60 * 1000) return;
+    if (Date.now() - this.lastGrantProbeAt < 10 * 60 * 1000) return;
+    if (!this.hasCredentials()) return;
+    this.lastGrantProbeAt = Date.now();
+    this.refreshTokens(tokens).catch(() => { /* state persisted by refreshTokens */ });
+  }
+
   isConnected(): boolean {
     const tokens = this.loadTokens();
     if (!tokens?.access_token || typeof tokens.expires_at !== 'number') return false;
@@ -185,6 +203,10 @@ export abstract class OAuthConnector {
   async getValidAccessToken(): Promise<string> {
     let tokens = this.loadTokens();
     if (!tokens) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
+    // A rejected grant never recovers by retrying; don't hammer the token endpoint.
+    if (tokens.reauth_required_at) {
+      throw new Error(`${this.cfg.name} needs to be reconnected: the saved login was rejected (${tokens.reauth_reason || 'authorization expired or was revoked'}). Reconnect ${this.cfg.name} in the Connections panel.`);
+    }
     if (Date.now() > tokens.expires_at - 5 * 60 * 1000) {
       this.loadCredentialsFromVault();
       tokens = await this.refreshTokens(tokens);

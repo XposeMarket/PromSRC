@@ -439,12 +439,17 @@ export class SecretVault {
    */
   set(key: string, value: string, caller = 'unknown', ttlMs = 0): void {
     const { enc, iv, tag } = this.encrypt(value);
+    // Re-read right before writing and change ONLY this key. Overlaying the
+    // whole in-memory snapshot on disk let a process holding a stale copy
+    // (another gateway process, or one mid-decrypt) silently revert newer
+    // entries, e.g. a connector's "reconnect required" flag.
+    this.refreshFromDisk();
     this.data.entries[key] = {
       enc, iv, tag,
       createdAt: Date.now(),
       expiresAt: ttlMs > 0 ? Date.now() + ttlMs : 0,
     };
-    this.persist();
+    this.persist({ mergeExisting: false });
     this.audit('SET', key, caller);
   }
 
