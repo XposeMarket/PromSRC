@@ -139,6 +139,8 @@ export function consumeCrashRecoveredMainChatGoalSessionIds(): string[] {
 }
 
 function isTaskRuntime(runtime: LiveRuntimeSnapshot): boolean {
+  // background_agent runtimes carry a bg_* taskId for steering identity only; they are not formal tasks.
+  if (String(runtime.kind || '') === 'background_agent') return false;
   return !!runtime.taskId || TASK_RUNTIME_KINDS.has(String(runtime.kind || ''));
 }
 
@@ -815,7 +817,7 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
     const label = String(runtime.label || runtime.kind || 'runtime').trim();
     const kind = String(runtime.kind || 'runtime');
     const last = formatRuntimeLastProgress(runtime, 140);
-    if (runtime.taskId) {
+    if (runtime.taskId && kind !== 'background_agent') {
       const task = loadTask(runtime.taskId);
       const status = task ? `${task.status}${task.pauseReason ? `/${task.pauseReason}` : ''}` : 'missing_task';
       const team = task?.teamSubagent ? ` team=${task.teamSubagent.teamId} agent=${task.teamSubagent.agentId}` : '';
