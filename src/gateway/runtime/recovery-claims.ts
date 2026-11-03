@@ -18,6 +18,8 @@ import { getConfig } from '../../config/config';
 
 const CLAIM_DIR_NAME = 'runtime-recovery-claims';
 const CLAIM_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** An unreadable claim younger than this may still be mid-write by its winner. */
+const UNREADABLE_CLAIM_GRACE_MS = 30_000;
 
 let claimDirOverride: string | null = null;
 
@@ -48,8 +50,9 @@ function pruneOldClaims(dir: string): void {
 
 /**
  * Returns true only for the first process (and only the first call) that
- * claims recovery of `runtimeId`. Fails open (returns true) if the claim
- * directory is unusable, so recovery is never silently lost.
+ * claims recovery of `runtimeId`, or for a single takeover of a claim whose
+ * owner process has died. Fails open (returns true) if the claim directory is
+ * unusable, so recovery is never silently lost.
  */
 export function claimRuntimeRecovery(runtimeId: string, kind = 'recovery'): boolean {
   const id = safeId(runtimeId);
@@ -71,9 +74,63 @@ export function claimRuntimeRecovery(runtimeId: string, kind = 'recovery'): bool
     if (Math.random() < 0.05) pruneOldClaims(dir);
     return true;
   } catch (err: any) {
-    if (err?.code === 'EEXIST') return false;
+    if (err?.code === 'EEXIST') return takeOverAbandonedClaim(file, runtimeId, kind);
     return true;
   }
+}
+
+/** True for this process and for any other process that still exists. */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // EPERM: the process exists but belongs to another user.
+    return err?.code === 'EPERM';
+  }
+}
+
+/**
+ * A claim outlives the process that wrote it. Incident 2026-11-03: the claimer
+ * froze right after starting the replayed turn, the supervisor killed it, and
+ * its ledger update was never persisted. Every later gateway then skipped the
+ * turn for 24h as "claimed by another gateway process", so the chat never
+ * resumed and the deferred drain retried it every few seconds forever.
+ *
+ * Take over a dead owner's claim ONCE per runtime. The exclusive `wx` takeover
+ * marker keeps concurrent adopters to a single winner, and the one-shot limit
+ * stops a replay that keeps killing its gateway from becoming a crash loop.
+ */
+function takeOverAbandonedClaim(file: string, runtimeId: string, kind: string): boolean {
+  let ownerPid = 0;
+  try {
+    ownerPid = Number(JSON.parse(fs.readFileSync(file, 'utf8'))?.pid) || 0;
+  } catch {
+    try {
+      if (Date.now() - fs.statSync(file).mtimeMs < UNREADABLE_CLAIM_GRACE_MS) return false;
+    } catch {
+      return false;
+    }
+  }
+  if (isPidAlive(ownerPid)) return false;
+  const at = new Date().toISOString();
+  try {
+    const fd = fs.openSync(`${file}.takeover`, 'wx');
+    try {
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, runtimeId, kind, previousPid: ownerPid || null, at }));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  try {
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, runtimeId, kind, takeoverFrom: ownerPid || null, at }));
+  } catch {}
+  console.warn(`[RuntimeRecovery] Took over recovery claim for ${runtimeId} (${kind}) from dead process ${ownerPid || 'unknown'}.`);
+  return true;
 }
 
 /**
