@@ -3,6 +3,8 @@
 
 ## Tasks planned-chat tracking and original interactions (pending feat/planned-chat-tasks)
 Mobile Tasks uses shared planned_chat projections and history. Needs You embeds original _renderMobileQuestionCard and _renderMobileApprovalCard via prepareMobileTaskInteractions, loaded only when Needs You contains an interaction, with source-chat fallback on renderer-load failure. Questions use the shared controller and original source session; approvals keep their original handlers/endpoints. Refresh preserves matching request DOM nodes/drafts; manual refresh no longer clears forms to a skeleton. Cards fit narrow widths. Not deployed yet.
+The Tasks-only interaction host lives in features/tasks/mobile-interactions.js and is dynamically imported by prepareMobileTaskInteractions; chat's normal lazy bundle does not absorb the Tasks wiring. The adapter injects original controller/render/approval helpers, rather than copying controls or response authority.
+
 
 
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `web-ui/src/mobile/`, `web-ui/mobile.html`, `src/gateway/pairing/`
@@ -216,5 +218,3 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
-
-The Tasks-only interaction host lives in features/tasks/mobile-interactions.js and is dynamically imported by prepareMobileTaskInteractions; chat's normal lazy bundle does not absorb the Tasks wiring. The adapter injects original controller/render/approval helpers, rather than copying controls or response authority.
