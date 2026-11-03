@@ -17135,6 +17135,12 @@ function saveDesktopQuestionDraftFromCard(question) {
 
 function syncDesktopQuestionCardAfterStep(question, payload, nextIndex, sessionId) {
   const state = rememberDesktopQuestionPayload(question, payload, nextIndex);
+  const taskCard = document.querySelector(`.bgt-ny-entry .chat-question-card[data-question-id="${cssEscapeValue(question.id)}"]`);
+  if (taskCard) {
+    taskCard.outerHTML = renderInlinePrometheusQuestion({ ...question, currentIndex: nextIndex });
+    restoreQuestionDraftState(state ? { [question.id]: state } : {});
+    return;
+  }
   syncDesktopQuestionComposerPopover(sessionId || question?.sessionId || window.activeChatSessionId);
   restoreQuestionDraftState(state ? { [question.id]: state } : {});
 }
@@ -44709,8 +44715,8 @@ function renderInlinePrometheusQuestion(item, options = {}) {
       : ''}
     ${pending
       ? `<div class="pq-actions">
-          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
-          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
+          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg}, {sessionId:${encodeInlineJsString(question.sessionId || '')}})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
+          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg}, {sessionId:${encodeInlineJsString(question.sessionId || '')}})">Cancel</button>
         </div>`
       : ''}
   </div>`;
@@ -44779,7 +44785,8 @@ function desktopQuestionAnswerFromDraft(state, questionId) {
 }
 
 function collectPrometheusQuestionAnswers(question) {
-  const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
+  const card = document.querySelector(`.bgt-ny-entry .chat-question-card[data-question-id="${cssEscapeValue(question.id)}"]`)
+    || document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
   if (!card) return { answers: [], generalOther: '' };
   // The card intentionally contains only the active step. Start with the
   // external draft for earlier steps, then overlay the active DOM controls.
@@ -48666,4 +48673,16 @@ if (isCreativeRenderWorkerMode()) {
       console.error('[creative render worker]', err);
     });
   }, 250);
+}
+
+// The Tasks route can be the first page opened, before any chat history hydrates.
+export function prepareTaskQuestionCards(items) {
+  for (const item of items || []) {
+    if (!['question', 'browser_login'].includes(item.kind)) continue;
+    upsertInlinePrometheusQuestion({ ...item.payload, sessionId: item.sessionId }, { create: true });
+  }
+}
+
+export function renderTaskOriginalApprovalCard(approval) {
+  return renderInlineApprovalRequest(approval);
 }

@@ -1,3 +1,5 @@
+import { listPlannedChatRuns } from '../tasks/planned-chat-runs';
+
 // src/gateway/routes/tasks.router.ts
 // Tasks, Background Tasks, Schedules, Error Response routes
 import { Router } from 'express';
@@ -437,7 +439,9 @@ router.get('/api/bg-tasks', (req, res) => {
     managerEnabled: task.managerEnabled,
     executorProvider: task.executorProvider,
   }));
-  res.json({ success: true, tasks });
+  const plannedRuns = listPlannedChatRuns(collectNeedsYouItems());
+  const combined = [...tasks, ...plannedRuns].sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
+  res.json({ success: true, tasks: limit ? combined.slice(0, limit) : combined });
 });
 
 router.get('/api/bg-tasks/:id', (req, res) => {

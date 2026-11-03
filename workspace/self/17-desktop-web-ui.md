@@ -196,3 +196,6 @@ Pending desktop chat picker work uses shared `web-ui/src/model-family-grouping.j
 
 ### Main-chat summary assembly
 Desktop SSE and replay use source reasoning_summary, visibility summary, exact delta append and complete snapshot replace. Tool/commentary boundaries freeze earlier summaries; agent_progress retains its separate heuristic. Collapse classification is coordinated with #780 before shipping.
+
+## Planned runs and inline Needs You (pending feat/planned-chat-tasks)
+TasksPage renders planned_chat records as passive cards with authoritative steps and Open chat, no runner drag/pause/resume. Questions hydrate the original ChatPage controller on direct Tasks loads, bind source session, and advance in-place. Approvals use the original renderInlineApprovalRequest through renderTaskOriginalApprovalCard. Unchanged requests retain actual DOM nodes across refresh, preserving typed values, focus and handlers; resolved requests disappear. Not deployed yet.

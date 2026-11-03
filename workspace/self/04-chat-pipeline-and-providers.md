@@ -214,3 +214,6 @@ Provider authority caveat: Codex carries the volatile tail as a developer item. 
 
 ## Pending PR782 third pass: measured routing/receipt overhead
 Not deployed. A real preview-gateway CPU profile of full-context Luna HIGH turns identifies explicit skill-selector regex construction and re-sanitization of unrelated persisted receipts. The third pass adds a necessary-condition selector-prefix guard and filters validated receipt metadata by session/turn before text sanitization. All selected-record redaction, file validation, durable outcome persistence, memory retrieval and full provider-bound context remain. No effort/speed/provider transport changes. See self/20 and self/03 for the unchanged contracts; evidence/limits are in workspace reviews/latency-2026-10-26/PASS3.md.
+
+## Passive planned-run tracking (pending feat/planned-chat-tasks)
+Validated manual declared plans include taskSummary on progress_state. Main chat and restart-continuity sendSSE paths persist snapshots through tasks/planned-chat-runs.ts; terminal cleanup records outcomes separately from checklist completion. Non-throwing exits without final response receipts count as failures. Restart continuations copy/link the prior persisted plan by runtime ID. This is display/persistence only, not a new executor. Not deployed yet.

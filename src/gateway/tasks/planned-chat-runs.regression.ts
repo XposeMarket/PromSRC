@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { PlannedChatRunStore } from './planned-chat-runs';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'planned-chat-test-'));
+try {
+  const filename = path.join(dir, 'runs.json');
+  let store = new PlannedChatRunStore(filename);
+  const progress = { source: 'declared', taskSummary: 'Build feature', activeIndex: 0, items: [{ text: 'Build', status: 'in_progress' }, { text: 'Test', status: 'pending' }] };
+  const live = new Set(['a','b','c','d']);
+  store.progress('invalid', 's', { ...progress, items: [] }, '');
+  store.progress('preflight', 's', { ...progress, source: 'preflight' }, '');
+  assert.equal(store.list(live).length, 0);
+  for (const id of live) store.progress(id, `s-${id}`, progress, '');
+  assert.equal(store.list(live).length, 4);
+  store.progress('a', 's-a', { ...progress, taskSummary: 'Replacement', activeIndex: 2, items: progress.items.map(item => ({...item, status: 'done'})) }, '');
+  assert.equal(store.list(live).length, 4);
+  assert.equal(store.list(live).find(r => r.runtimeId === 'a')?.status, 'running', 'completed steps do not finish execution');
+  assert.equal(store.list(live, [{ sessionId: 's-a', createdAt: new Date().toISOString() }]).find(r => r.runtimeId === 'a')?.status, 'awaiting_user_input');
+  assert.equal(store.list(live, [{ sessionId: 's-a', createdAt: 1 }]).find(r => r.runtimeId === 'a')?.status, 'running', 'old requests do not hijack new runs');
+  store.finish('a', 'completed'); store.finish('b', 'failed'); store.finish('c', 'cancelled');
+  store.progress('a', 's-a', progress, 'stale');
+  store = new PlannedChatRunStore(filename);
+  const rows = store.list(new Set());
+  assert.equal(rows.find(r => r.runtimeId === 'a')?.status, 'completed');
+  assert.equal(rows.find(r => r.runtimeId === 'a')?.title, 'Replacement');
+  assert.equal(rows.find(r => r.runtimeId === 'b')?.status, 'failed');
+  assert.equal(rows.find(r => r.runtimeId === 'c')?.status, 'cancelled');
+  assert.equal(rows.find(r => r.runtimeId === 'd')?.status, 'interrupted');
+  store.progress('e', 's-d', progress, '', 'd');
+  assert.equal(store.list(new Set(['e'])).find(r => r.runtimeId === 'e')?.resumedFromRuntimeId, 'd');
+  assert.equal(store.list(new Set(['e'])).length, 5);
+  assert.deepEqual(rows[0].supportedActions, ['open_chat']);
+  console.log('PASS planned chat validation, four runs, replacement, waiting, persistence, terminal outcomes, recovery linkage');
+} finally { fs.rmSync(dir, { recursive: true, force: true }); }

@@ -170,6 +170,7 @@ export function needsYouCount(tasks, items) {
   // Count unique task ids: one task can appear as both a needs_assistance row and a paused_agent_run item.
   const taskIds = new Set();
   for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (t.sourceKind === 'planned_chat' && (items || []).some(item => item.sessionId === t.sessionId) && t.status === 'awaiting_user_input') continue;
     if (isNeedsYouTask(t, ids)) taskIds.add(String(t.id));
   }
   return needsYouEntries(items).length + taskIds.size;
