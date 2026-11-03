@@ -260,7 +260,7 @@ try {
     { route: '/mobile/creative', expectedOwner: mobileOutput('mobile-creative-pages.js'), allowed: [mobileOutput('mobile-creative-pages.js')], selector: '#pm-creative-body' },
     { route: '/mobile/teams', expectedOwner: mobileOutput('mobile-teams-pages.js'), allowed: [mobileOutput('mobile-teams-pages.js')], selector: '#pm-teams-body' },
     { route: '/mobile/tasks', expectedOwner: mobileOutput('mobile-tasks-pages.js'), allowed: [mobileOutput('mobile-tasks-pages.js'), mobileOutput('mobile-teams-pages.js')], selector: '#pm-tasks-body' },
-    { route: '/mobile/hub', expectedOwner: mobileOutput('mobile-hub-pages.js'), allowed: [mobileOutput('mobile-hub-pages.js')], selector: '#pm-hub-body' },
+    { route: '/mobile/hub', expectedOwner: mobileOutput('mobile-hub-pages.js'), allowed: [mobileOutput('mobile-hub-pages.js')], selector: '.pm-hub-limits' },
     { route: '/mobile/proposals', expectedOwner: mobileOutput('mobile-proposals-pages.js'), allowed: [mobileOutput('mobile-proposals-pages.js'), mobileOutput('mobile-hub-pages.js')], selector: '#pm-proposals-body' },
     { route: '/mobile/subagents', expectedOwner: mobileOutput('mobile-subagent-pages.js'), allowed: [mobileOutput('mobile-subagent-pages.js'), mobileOutput('mobile-teams-pages.js'), mobileOutput('mobile-tasks-pages.js')], selector: '#pm-subagents-body' },
   ];

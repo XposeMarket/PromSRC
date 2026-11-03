@@ -820,98 +820,10 @@ function renderStatsTiles() {
   if (footnoteEl) footnoteEl.textContent = data.summary || '';
 }
 
-// ─── Connected providers / usage limits ───────────────────────────────────────
-function gaugeClass(pct) {
-  const p = Number(pct) || 0;
-  if (p >= 90) return 'crit';
-  if (p >= 75) return 'warn';
-  return 'ok';
-}
+// Shared with Settings and mobile Hub without importing this page's runtime.
+import { renderProviderUsageCard } from '../components/provider-usage-card.js';
+export { renderProviderUsageCard };
 
-// Short relative hint, e.g. "in 3h", "in 12m", "in 6d".
-function fmtRelative(diffMs) {
-  if (diffMs <= 0) return 'soon';
-  const mins = Math.round(diffMs / 60000);
-  if (mins < 60) return `in ${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 48) {
-    const rem = mins % 60;
-    return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`;
-  }
-  return `in ${Math.round(hrs / 24)}d`;
-}
-
-// Builds an exact reset string. Short windows (e.g. 5-hour) show a clock time;
-// multi-day windows (Weekly / Opus weekly) show date AND time. A relative hint
-// is appended so "Resets at 11:08 AM (in 3h)" reads at a glance.
-function fmtReset(iso, label) {
-  if (!iso) return '';
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return '';
-  const diff = t - Date.now();
-  if (diff <= 0) return 'resets now';
-  const d = new Date(t);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const rel = fmtRelative(diff);
-
-  // Weekly/multi-day windows or anything more than ~24h out gets a date too.
-  const isLong = /week|day|opus/i.test(String(label || '')) || diff >= 24 * 3600 * 1000;
-  if (isLong) {
-    const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    return `resets ${date}, ${time} (${rel})`;
-  }
-  return `resets at ${time} (${rel})`;
-}
-
-function renderUsageGauge(label, pct, resetIso) {
-  const p = Math.max(0, Math.min(100, Number(pct) || 0));
-  const reset = fmtReset(resetIso, label);
-  return `
-    <div class="usage-gauge">
-      <div class="usage-gauge-head">
-        <span class="usage-gauge-label">${escHtml(label)}</span>
-        <span class="usage-gauge-pct">${p}%</span>
-      </div>
-      <div class="usage-gauge-track"><div class="usage-gauge-fill ${gaugeClass(p)}" style="width:${p}%"></div></div>
-      ${reset ? `<div class="usage-gauge-reset">${escHtml(reset)}</div>` : ''}
-    </div>
-  `;
-}
-
-// Renders one provider card. Shared shape: { provider, label, source, windows[], budget, tokens, error }.
-export function renderProviderUsageCard(p) {
-  const windows = Array.isArray(p.windows) ? p.windows : [];
-  const tokens = p.tokens || {};
-  let body = '';
-  if (windows.length) {
-    body += windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)
-      + (w.detail ? `<div class="usage-gauge-reset">${escHtml(w.detail)}</div>` : '')).join('');
-  } else if (p.usage_scope === 'model') {
-    body = `<div class="usage-provider-note">Codex Spark limit data is currently unavailable.</div>`;
-  } else if (p.budget && p.budget.limit_tokens > 0) {
-    body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
-      + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;
-  } else if (p.error) {
-    body = `<div class="usage-provider-note">Live limits unavailable</div>`;
-  } else {
-    body = `<div class="usage-provider-note">No limit data — tracking tokens only</div>`;
-  }
-  const badge = p.source === 'live'
-    ? `<span class="usage-provider-badge live">live</span>`
-    : `<span class="usage-provider-badge">tracked</span>`;
-  const err = p.error ? `<div class="usage-provider-err">${escHtml(p.error)}</div>` : '';
-  return `
-    <div class="usage-provider-card" data-provider="${escHtml(p.provider)}"${p.account_id ? ` data-account="${escHtml(p.account_id)}"` : ''}>
-      <div class="usage-provider-head">
-        <span class="usage-provider-name">${escHtml(p.account_label ? `${p.label || p.provider} · ${p.account_label}` : (p.label || p.provider))}</span>
-        ${badge}
-      </div>
-      ${body}
-      ${err}
-      <div class="usage-provider-foot">${p.plan_label ? `${escHtml(p.plan_label)} · ` : ''}${compactNumber(tokens.total || 0)} tokens · ${compactNumber(tokens.calls || 0)} calls</div>
-    </div>
-  `;
-}
 
 function renderProviders() {
   const grid = document.getElementById('hub-providers-grid');

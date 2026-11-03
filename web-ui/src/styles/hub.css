@@ -1736,3 +1736,45 @@
 
 #hu-content{display:flex;flex-direction:column;gap:16px}
 @media(max-width:600px){#hu-chart svg{min-width:0;min-height:160px}#hu-content{gap:12px}.hu-panel-head>span{white-space:nowrap}.hu-legend{max-height:none}}
+
+/* Shared responsive model lines and mobile Settings-style account limits. */
+.pm-hub-limits { margin:0 0 24px; --bg-soft:var(--pm-surface-2,var(--pm-surface)); --brand:var(--pm-accent); }
+.pm-hub-limits .settings-models-usage-title { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
+.pm-hub-limits .hub-providers-grid { grid-template-columns:minmax(0,1fr); }
+.pm-hub-limits .usage-provider-name { overflow-wrap:anywhere;min-width:0; }
+.pm-hub-limits [data-limits-status] { color:var(--muted);font-size:12px;line-height:1.5; }
+.hu-line-stage { position:relative;min-width:0; }
+#hu-chart .hu-line-stage svg { width:100%;height:250px;min-height:0;overflow:visible;cursor:crosshair;touch-action:pan-y; }
+#hu-chart .hu-line-stage svg text { font-size:10px; }
+.hu-model-line { vector-effect:non-scaling-stroke; }
+.hu-crosshair { stroke:var(--muted);stroke-width:1;stroke-dasharray:3 4; }
+.hu-selection { pointer-events:none; }
+.hu-selection[hidden],.hu-point-popover[hidden] { display:none; }
+.hu-selection circle { stroke:var(--panel);stroke-width:2; }
+.hu-chart-help { display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin:6px 0 12px; }
+.hu-chart-help button { color:var(--text);background:transparent;border:0;text-decoration:underline;min-height:36px;cursor:pointer;font:inherit; }
+.hu-model-legend { display:flex;flex-wrap:wrap;gap:8px; }
+.hu-model-control { display:flex;align-items:stretch;border:1px solid var(--line);border-radius:9px;max-width:100%;overflow:hidden; }
+.hu-model-control button { display:flex;align-items:center;gap:8px;border:0;background:transparent;color:var(--text);padding:8px 10px;min-height:44px;font:inherit;font-size:11px;text-align:left;cursor:pointer;min-width:0; }
+.hu-model-control button[data-toggle] { flex:1; }
+.hu-model-control button[data-only] { color:var(--muted);border-left:1px solid var(--line);font-size:10px; }
+.hu-model-control button[aria-pressed=false] { opacity:.45; }
+.hu-model-control button[aria-pressed=false] i { background:transparent; }
+.hu-model-control span { overflow-wrap:anywhere;min-width:0; }
+.hu-model-control small { display:block;font-size:9px;color:var(--muted);margin-top:3px; }
+.hu-model-control i,.hu-point-model i { width:8px;height:8px;flex:none;border-radius:50%;background:var(--model-color);border:1px solid var(--model-color); }
+.hu-point-popover { position:absolute;z-index:4;top:4px;right:0;width:270px;max-width:100%;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:0 10px 36px #0003;font-size:11px;animation:hu-point-in .14s ease-out; }
+.hu-point-popover [data-close] { float:right;border:0;background:transparent;color:var(--muted);font-size:20px;line-height:28px;min-width:36px;min-height:36px;cursor:pointer;margin:-8px -8px 0 4px; }
+.hu-point-model { display:flex;gap:7px;align-items:center;font-size:12px;overflow-wrap:anywhere; }
+.hu-point-meta { color:var(--muted);font-size:10px;line-height:1.5;margin-top:6px; }
+.hu-point-value { font-weight:700;font-size:22px;letter-spacing:-.5px;margin:12px 0; }
+.hu-point-value small { display:block;color:var(--muted);font-size:10px;font-weight:400;letter-spacing:0;margin-top:2px; }
+.hu-point-period { font-size:10px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px; }
+.hu-point-popover dl { margin:6px 0 0; }
+.hu-point-popover dl>div { display:flex;justify-content:space-between;gap:12px;padding:3px 0; }
+.hu-point-popover dt { color:var(--muted); }
+.hu-point-popover dd { margin:0;text-align:right;font-variant-numeric:tabular-nums; }
+.hu-model-control button:focus-visible,.hu-chart-help button:focus-visible,.hu-point-popover button:focus-visible,#hu-chart svg:focus-visible { outline:2px solid var(--brand,var(--text));outline-offset:-2px; }
+@keyframes hu-point-in { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+@media(prefers-reduced-motion:reduce) { .hu-point-popover { animation:none; } }
+@media(max-width:600px) { .hu-panel-head { align-items:flex-start;flex-wrap:wrap;gap:0; } .hu-model-control { flex:1 1 180px; } .hu-point-popover { width:260px; } }
