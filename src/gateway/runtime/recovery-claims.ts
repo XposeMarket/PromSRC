@@ -128,7 +128,12 @@ function takeOverAbandonedClaim(file: string, runtimeId: string, kind: string): 
   }
   try {
     fs.writeFileSync(file, JSON.stringify({ pid: process.pid, runtimeId, kind, takeoverFrom: ownerPid || null, at }));
-  } catch {}
+  } catch {
+    // Without our pid on disk a lease-busy release could never give the claim
+    // back, and the marker would refuse every later takeover. Undo it instead.
+    try { fs.unlinkSync(`${file}.takeover`); } catch {}
+    return false;
+  }
   console.warn(`[RuntimeRecovery] Took over recovery claim for ${runtimeId} (${kind}) from dead process ${ownerPid || 'unknown'}.`);
   return true;
 }

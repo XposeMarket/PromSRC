@@ -1500,12 +1500,12 @@ async function startGatewayListeners(): Promise<void> {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
       };
-      const deferredDrainAttempts = new Map<string, number>();
+      const deferredDrainFirstFailureAt = new Map<string, number>();
       const drainRecoveryQueue = (): void => {
         if (shuttingDown || draining || recoveryQueue.length === 0) return;
         const runtime = recoveryQueue.shift();
         if (!runtime) return;
-        if (stepDeferredMainChatRecovery(runtime, retriggerInterruptedMainChat, deferredDrainAttempts) === 'retry') {
+        if (stepDeferredMainChatRecovery(runtime, retriggerInterruptedMainChat, deferredDrainFirstFailureAt) === 'retry') {
           recoveryQueue.push(runtime);
         }
         scheduleRecoveryDrain(recoveryQueue[0] && isPlannedMainChatRestartRuntime(recoveryQueue[0])
