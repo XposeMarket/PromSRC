@@ -87,7 +87,7 @@ import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } f
 import { closeListeningHandle, listenWithHandoffRetry, setGatewayListenerReopenInProgress } from './runtime/handoff-replacement-bind';
 import { predecessorOwnsHandoffListener } from './runtime/gateway-handoff-safe-abort';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
-import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
+import { prepareActiveRuntimesForGatewayShutdown, stepDeferredMainChatRecovery, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
 import { resumeDurableDetachedTurns } from './threads/thread-ops';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import { assertSupportedNodeRuntime } from './runtime/node-runtime';
@@ -1500,11 +1500,12 @@ async function startGatewayListeners(): Promise<void> {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
       };
+      const deferredDrainFirstFailureAt = new Map<string, number>();
       const drainRecoveryQueue = (): void => {
         if (shuttingDown || draining || recoveryQueue.length === 0) return;
         const runtime = recoveryQueue.shift();
         if (!runtime) return;
-        if (!retriggerDeferredMainChatRuntime(runtime, retriggerInterruptedMainChat)) {
+        if (stepDeferredMainChatRecovery(runtime, retriggerInterruptedMainChat, deferredDrainFirstFailureAt) === 'retry') {
           recoveryQueue.push(runtime);
         }
         scheduleRecoveryDrain(recoveryQueue[0] && isPlannedMainChatRestartRuntime(recoveryQueue[0])

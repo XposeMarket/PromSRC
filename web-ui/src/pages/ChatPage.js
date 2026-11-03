@@ -15047,11 +15047,10 @@ function restoreProcessPanelScroll(map) {
 // Preserve in-progress answers in pending Prometheus question cards across the
 // full innerHTML rebuild — otherwise a streaming re-render wipes the user's
 // selections/typed text a few seconds after they tap an option.
-function captureQuestionDraftState() {
+function captureQuestionDraftState(root) {
   const out = {};
   try {
-    document.querySelectorAll('[data-question-id]').forEach((card) => {
-      // Only the card root carries data-question-id with a child input structure.
+    (root ? [root] : document.querySelectorAll('[data-question-id]')).forEach((card) => {
       const qid = card.getAttribute('data-question-id');
       if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
       const previous = desktopQuestionDrafts.get(qid) || {};
@@ -15076,8 +15075,6 @@ function captureQuestionDraftState() {
       card.querySelectorAll('[data-question-other]').forEach((el) => { state.others[el.getAttribute('data-question-other')] = { value: el.value || '', hidden: el.hasAttribute('hidden') }; });
       const gen = card.querySelector('[data-question-general-other="1"]');
       if (gen) state.general = gen.value || '';
-      // Preserve which textbox is focused + caret position, so streaming
-      // re-renders don't steal focus / interrupt typing.
       try {
         const active = document.activeElement;
         if (active && card.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
@@ -17128,13 +17125,20 @@ function rememberDesktopQuestionPayload(question, payload, index) {
   return state;
 }
 
-function saveDesktopQuestionDraftFromCard(question) {
-  const captured = captureQuestionDraftState();
+function saveDesktopQuestionDraftFromCard(question, root) {
+  const captured = captureQuestionDraftState(root);
   return captured[String(question?.id || '').trim()] || desktopQuestionDrafts.get(String(question?.id || '').trim()) || null;
 }
 
-function syncDesktopQuestionCardAfterStep(question, payload, nextIndex, sessionId) {
+function syncDesktopQuestionCardAfterStep(question, payload, nextIndex, sessionId, root) {
   const state = rememberDesktopQuestionPayload(question, payload, nextIndex);
+  const taskCard = root?.closest?.('.bgt-ny-entry') ? root : null;
+  if (taskCard) {
+    taskCard.outerHTML = renderInlinePrometheusQuestion({ ...question, currentIndex: nextIndex });
+    syncDesktopQuestionComposerPopover(sessionId || question?.sessionId || window.activeChatSessionId);
+    restoreQuestionDraftState(state ? { [question.id]: state } : {});
+    return;
+  }
   syncDesktopQuestionComposerPopover(sessionId || question?.sessionId || window.activeChatSessionId);
   restoreQuestionDraftState(state ? { [question.id]: state } : {});
 }
@@ -44709,8 +44713,8 @@ function renderInlinePrometheusQuestion(item, options = {}) {
       : ''}
     ${pending
       ? `<div class="pq-actions">
-          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
-          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
+          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg}, {sessionId:${encodeInlineJsString(question.sessionId || '')},cardRoot:this.closest('.chat-question-card')})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
+          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg}, {sessionId:${encodeInlineJsString(question.sessionId || '')}})">Cancel</button>
         </div>`
       : ''}
   </div>`;
@@ -44778,12 +44782,11 @@ function desktopQuestionAnswerFromDraft(state, questionId) {
   };
 }
 
-function collectPrometheusQuestionAnswers(question) {
-  const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
+function collectPrometheusQuestionAnswers(question, cardRoot) {
+  const card = cardRoot || document.querySelector(`#chat-question-popover .chat-question-card[data-question-id="${cssEscapeValue(question.id)}"]`)
+    || document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
   if (!card) return { answers: [], generalOther: '' };
-  // The card intentionally contains only the active step. Start with the
-  // external draft for earlier steps, then overlay the active DOM controls.
-  const state = saveDesktopQuestionDraftFromCard(question) || {};
+  const state = saveDesktopQuestionDraftFromCard(question, card) || {};
   const answers = question.questions.map((q) => {
     const block = card.querySelector(`[data-question-compose-id="${cssEscapeValue(q.id)}"]`);
     const draft = desktopQuestionAnswerFromDraft(state, q.id);
@@ -44804,8 +44807,6 @@ function collectPrometheusQuestionAnswers(question) {
 
 async function handleDesktopQuestionOptionChange(questionId, itemId, mode) {
   if (String(mode || '').trim().toLowerCase() !== 'single_select') return;
-  // Let the native radio state settle before reading the card. This also
-  // allows the radio deselection helper to finish its deferred update.
   await new Promise((resolve) => setTimeout(resolve, 0));
   const question = findPendingPrometheusQuestionForSession(window.activeChatSessionId);
   if (!question || String(question.id || '') !== String(questionId || '')) return;
@@ -44838,28 +44839,25 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
 }
 
 async function submitInlinePrometheusQuestion(id, options = {}) {
+  const cardRoot = options.cardRoot || null;
   const local = desktopQuestionController.findQuestion(id, options.sessionId);
   const localQuestion = local?.record ? normalizeQuestionRecord(local.record) : null;
   const currentIndex = localQuestion ? desktopQuestionStepIndex(localQuestion) : 0;
   const submitOptions = {
     ...options,
     stepIndex: options.stepIndex === undefined ? currentIndex : options.stepIndex,
-    // The desktop card only renders the active question. Intermediate steps
-    // therefore advance locally; only the final step calls the backend.
     advanceStep: options.advanceStep !== false,
     onStepAdvance: options.onStepAdvance || ((details) => {
-      syncDesktopQuestionCardAfterStep(details.question, details.payload, details.nextIndex, details.sessionId);
+      syncDesktopQuestionCardAfterStep(details.question, details.payload, details.nextIndex, details.sessionId, cardRoot);
     }),
   };
   const result = await desktopQuestionController.submit(id, {
     ...submitOptions,
-    readAnswers: (question) => collectPrometheusQuestionAnswers(question),
+    readAnswers: (question) => collectPrometheusQuestionAnswers(question, cardRoot),
     getComposerTarget: (question) => {
       const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
       return String(card?.getAttribute('data-question-compose-target') || '').trim();
     },
-    // Desktop keeps the existing actionable card visible while the request is
-    // in flight; the runtime still records the submitting transition.
     projectSubmitting: false,
   });
   if (result.reason === 'missing' || result.reason === 'missing_id') {
@@ -44869,8 +44867,8 @@ async function submitInlinePrometheusQuestion(id, options = {}) {
   return result.ok === true;
 }
 
-async function cancelInlinePrometheusQuestion(id) {
-  const result = await desktopQuestionController.cancel(id);
+async function cancelInlinePrometheusQuestion(id, options) {
+  const result = await desktopQuestionController.cancel(id, options);
   return result.ok === true;
 }
 
@@ -48666,4 +48664,16 @@ if (isCreativeRenderWorkerMode()) {
       console.error('[creative render worker]', err);
     });
   }, 250);
+}
+
+// The Tasks route can be the first page opened, before any chat history hydrates.
+export function prepareTaskQuestionCards(items) {
+  for (const item of items || []) {
+    if (!['question', 'browser_login'].includes(item.kind)) continue;
+    upsertInlinePrometheusQuestion({ ...item.payload, sessionId: item.sessionId }, { create: true });
+  }
+}
+
+export function renderTaskOriginalApprovalCard(approval) {
+  return renderInlineApprovalRequest(approval);
 }

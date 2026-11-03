@@ -1,3 +1,4 @@
+
 import { inferReferenceImageMimeType } from './context-preparation';
 import { recordSessionToolCeiling } from '../../../agents-runtime/tool-ceiling';
 import { shouldUseLeanWriteNoteSwitchTools, providerToolLimit, parseSupervisionControlPayload, supervisionTerminalStatus } from './tool-loop';
@@ -1132,8 +1133,10 @@ export async function handleChatUntraced(
     manualStepAdvance: false,
   };
 
+  let declaredPlanSummary = '';
   const emitProgressState = (reason: string) => {
     const payload = {
+      taskSummary: declaredPlanSummary,
       source: progressState.source,
       reason,
       activeIndex: progressState.activeIndex,
@@ -5627,6 +5630,7 @@ Do not produce prose. Use the canonical thread tool now.` });
         const steps = rawSteps.map((s: any) => String(s || '').trim()).filter(Boolean);
         const plannedSteps = steps.slice(0, 6);
         if (plannedSteps.length >= 2) {
+          declaredPlanSummary = String(toolArgs.task_summary || '').trim().slice(0, 240);
           seedProgressFromLines(plannedSteps, 'declared', { manualStepAdvance: true });
           stepCursor = 0; // reset cursor whenever a fresh plan is declared
           consecutiveStepFailures = 0;

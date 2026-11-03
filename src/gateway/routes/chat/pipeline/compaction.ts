@@ -5,8 +5,8 @@ import { getUsageCalibration } from '../../../../providers/model-usage';
 import { getSession, getWorkingContextForContext, recordSessionCompaction } from '../../../session';
 import { appendDurableCommentaryContext } from '../../../context/commentary-context';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../../../context/model-context';
-import { runCompactionTransaction } from '../../../context/compaction-safety';
-import { withCompactionDeadline } from '../../../context/compaction-deadline';
+import { adaptiveCompactionTargetTokens, compactionInputBudgetTokens, runCompactionTransaction } from '../../../context/compaction-safety';
+import { compactionDeadlineMs, midWorkflowCompactionRetryAllowed, recordMidWorkflowCompactionOutcome, withCompactionDeadline } from '../../../context/compaction-deadline';
 import { recordCompactionRequestPressure } from '../../../context/compaction-pressure';
 import { type TurnRouteSnapshot } from '../../../chat/turn-route-snapshot';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext } from '../../../tool-observations';
@@ -175,6 +175,17 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
   // Provider-safe reserve: leave most of the window for source ingestion.
   input = { ...input, numCtx: Math.min(input.numCtx, compactorProfile.contextWindowTokens), numPredict: Math.max(1, Math.floor(Math.min(compactorProfile.maxOutputTokens, Math.min(input.numCtx, compactorProfile.contextWindowTokens) * 0.2))) };
   const baseMessageCount = getSession(input.sessionId).history.length;
+  // Deadline scales with the requested work: large-window summaries need
+  // minutes of prefill/decode, small ones keep the 120s floor.
+  const sourceTokens = estimateTextTokensForModel([
+    formatCompactionMessages(input.recentWindow), input.recentToolLogsBlock, input.reasoningTrailBlock, input.previousSummary,
+  ].join('\n'), compactorProfile.tokenizer);
+  const deadlineMs = compactionDeadlineMs({
+    sourceTokens,
+    targetOutputTokens: adaptiveCompactionTargetTokens(sourceTokens, 0, input.numPredict),
+    passes: Math.max(1, Math.ceil(sourceTokens / Math.max(1, compactionInputBudgetTokens(input.numCtx, input.numPredict)))),
+  });
+  console.log(`[v2] Context compaction started (${input.strategy}): ~${sourceTokens} source tokens, deadline ${Math.round(deadlineMs / 1000)}s.`);
   try {
     const result = await withCompactionDeadline(async (signal) => runCompactionTransaction({
       messages: input.recentWindow,
@@ -225,7 +236,7 @@ export async function runContextCompactor(input: ContextCompactorRunInput): Prom
         mode: 'llm',
         pass_count: passCount,
       }),
-    }), input.abortSignal?.signal);
+    }), input.abortSignal?.signal, deadlineMs);
     if (!result.compacted) {
       if (result.reason !== 'aborted') console.warn(`[v2] Context compaction skipped (${input.strategy}): ${result.reason}.`);
       return { compacted: false };
@@ -274,6 +285,11 @@ export async function maybeRunMidWorkflowCompaction(input: {
   // transcript while the active model request still fits its context budget.
   const shouldCompact = projectedTokens >= budget.compactionTriggerTokens;
   if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+  // A failed attempt must not be repeated on every tool round: each retry
+  // re-sends the full oversized request and blocks the turn for the deadline.
+  if (!midWorkflowCompactionRetryAllowed(input.sessionId, projectedTokens, budget.compactionTriggerTokens, Date.now(), profile.contextWindowTokens)) {
+    return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+  }
 
   const reason = 'projected_context_over_budget';
   input.sendSSE('tool_call', {
@@ -346,9 +362,10 @@ export async function maybeRunMidWorkflowCompaction(input: {
     });
     if (!compactorResult.compacted || !compactorResult.summaryText) {
       if (input.abortSignal?.aborted) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+      recordMidWorkflowCompactionOutcome(input.sessionId, projectedTokens, false);
       input.sendSSE('tool_result', {
         action: CONTEXT_COMPACTION_TOOL_NAME,
-        result: 'Context compaction was not applied. The active transcript remains available for a later attempt.',
+        result: 'Context compaction was not applied. The active transcript remains available; compaction retries after the conversation grows further.',
         error: false,
         synthetic: true,
         actor: 'system',
@@ -363,6 +380,7 @@ export async function maybeRunMidWorkflowCompaction(input: {
       return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
     }
     const boundedSummary = compactorResult.summaryText;
+    recordMidWorkflowCompactionOutcome(input.sessionId, projectedTokens, true);
 
     input.messages.splice(0, input.messages.length);
     if (systemMessage) input.messages.push(systemMessage);
@@ -404,6 +422,7 @@ export async function maybeRunMidWorkflowCompaction(input: {
     return { compacted: true, summaryText: boundedSummary, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
   } catch (err: any) {
     console.warn('[v2] Mid-workflow compaction failed:', err?.message || err);
+    if (!input.abortSignal?.aborted) recordMidWorkflowCompactionOutcome(input.sessionId, projectedTokens, false);
     input.sendSSE('tool_result', {
       action: CONTEXT_COMPACTION_TOOL_NAME,
       result: `Thread compaction failed; the active transcript remains available. ${String(err?.message || err || '').slice(0, 300)}`,

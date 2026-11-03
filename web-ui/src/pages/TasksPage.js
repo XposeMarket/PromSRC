@@ -1,3 +1,5 @@
+import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
+
 /**
  * TasksPage.js — F3d Extract
  *
@@ -81,6 +83,7 @@ window.normalizeProgressStatus = normalizeProgressStatus;
 let bgtTasks = [];           // all task records from server
 let bgtManagedThreads = [];  // Prometheus peer-session supervision records
 let bgtNeedsYouItems = [];
+let bgtOriginalApprovalRenderer = null;
 let bgtNeedsYouAction = '';
 let bgtOpenTaskId = null;    // currently open panel task id
 window.bgtOpenTaskId = null;
@@ -228,6 +231,8 @@ const STATUS_ICON = {
 
 function bgtNormalizeStatus(rawStatus) {
   const status = String(rawStatus || '').trim().toLowerCase();
+  if (status === 'interrupted') return 'stalled';
+  if (status === 'cancelled') return 'failed';
   if (status === 'awaiting_user_input') return 'needs_assistance';
   if (status === 'waiting_subagent' || status === 'in_progress') return 'running';
   if (status === 'completed' || status === 'done') return 'complete';
@@ -250,7 +255,7 @@ function bgtGetTask(taskId) {
 }
 
 function bgtActionForDrop(task, targetStatus) {
-  if (!task || !targetStatus) return null;
+  if (!task || !targetStatus || task.sourceKind === 'planned_chat') return null;
   if (bgtIsBrainTask(task)) return null;
   const rawStatus = String(task.status || '').trim().toLowerCase();
   const displayStatus = bgtNormalizeStatus(rawStatus);
@@ -497,6 +502,11 @@ async function refreshBgTasks() {
   } else if (needsYouResult.status === 'rejected') {
     console.error('[BGT] needs-you refresh error:', needsYouResult.reason);
   }
+  if (bgtNeedsYouItems.some(item => ['question', 'browser_login', 'tool_approval', 'final_action_approval'].includes(item.kind))) {
+    const { prepareTaskQuestionCards, renderTaskOriginalApprovalCard } = await import('./ChatPage.js');
+    bgtOriginalApprovalRenderer = renderTaskOriginalApprovalCard;
+    prepareTaskQuestionCards(bgtNeedsYouItems);
+  }
   if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
   renderBgTasks();
 }
@@ -574,6 +584,7 @@ function normalizeTaskApproval(input = {}) {
 }
 
 function renderTaskApprovalCard(input = {}) {
+  if (bgtOriginalApprovalRenderer) return bgtOriginalApprovalRenderer(input);
   const approval = normalizeTaskApproval(input);
   if (!approval.id) return '';
   const riskLevel = bgtApprovalRiskLevel(approval.riskScore);
@@ -624,7 +635,8 @@ function renderBgTasks() {
   const hidden = bgtGetHidden();
   const searchQuery = bgtSearchQuery.trim().toLowerCase();
   const visibleTasks = bgtTasks.filter(t => !hidden.has(t.id) && bgtTaskMatchesSearch(t, searchQuery));
-  const visibleManagedThreads = bgtManagedThreads.filter(record => bgtManagedThreadMatchesSearch(record, searchQuery));
+  const plannedSessions = new Set(visibleTasks.filter(t => t.sourceKind === 'planned_chat' && t.status === 'running').map(t => t.sessionId));
+  const visibleManagedThreads = bgtManagedThreads.filter(record => !plannedSessions.has(record.targetSessionId) && bgtManagedThreadMatchesSearch(record, searchQuery));
 
   // Update count badge
   const countEl = document.getElementById('bgt-count');
@@ -647,6 +659,7 @@ function renderBgTasks() {
   for (const col of BGT_COLUMNS) byStatus[col.key] = [];
   for (const entry of needsYouEntries(bgtNeedsYouItems)) byStatus.needs_assistance.push({ type: 'ny_entry', entry });
   for (const t of visibleTasks) {
+    if (t.sourceKind === 'planned_chat' && bgtNeedsYouItems.some(item => item.sessionId === t.sessionId) && t.status === 'awaiting_user_input') continue;
     const normalizedStatus = isNeedsYouTask(t, nyTaskIds) ? 'needs_assistance' : bgtNormalizeStatus(t.status);
     if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push({ type: 'task', task: t });
     else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'task', task: t });
@@ -657,6 +670,7 @@ function renderBgTasks() {
     else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'managed_thread', record });
   }
 
+  const restoreRequestCards = preserveRequestCards(board, needsYouEntries(bgtNeedsYouItems));
   board.innerHTML = '';
   // Needs You is the leftmost column whenever something is waiting on the user.
   const nyCol = BGT_COLUMNS.find((c) => c.key === 'needs_assistance');
@@ -688,7 +702,11 @@ function renderBgTasks() {
   }
 
   // If no tasks at all
-  const visibleItemCount = visibleTasks.length + visibleManagedThreads.length;
+  restoreRequestCards();
+  board.querySelectorAll('[data-planned-chat-session]').forEach(button => {
+    button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
+  });
+  const visibleItemCount = visibleTasks.length + visibleManagedThreads.length + needsYouEntries(bgtNeedsYouItems).length;
   if (visibleItemCount === 0) {
     if (searchQuery) {
       board.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--muted);font-size:13px;flex:1">
@@ -770,6 +788,7 @@ function bgtNeedsYouEntryHTML(entry) {
 }
 
 function bgtCardHTML(t, col) {
+  if (t.sourceKind === 'planned_chat') return `<article class="bgt-planned-chat" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;overflow-wrap:anywhere" data-bgt-id="${escHtml(t.id)}"><strong>${escHtml(t.title)}</strong><div style="font-size:11px;color:var(--muted);margin:6px 0">Chat · ${escHtml(t.status)}</div><ol style="padding-left:20px;font-size:12px">${getTaskProgressItems(t).map(step => `<li style="margin:6px 0">${['done','completed'].includes(step.status) ? '✓ ' : step.status === 'in_progress' ? '› ' : ''}${escHtml(step.text || step.description || '')}</li>`).join('')}</ol><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId)}">Open chat</button></article>`;
   const displayStatus = bgtNormalizeStatus(t.status);
   const brainLabel = bgtBrainTaskLabel(t);
   const isBrainTask = bgtIsBrainTask(t);
@@ -819,6 +838,8 @@ function bgtCardHTML(t, col) {
 
 // --- Side Panel --------------------------------------------------------------
 async function openBgtPanel(taskId) {
+  const planned = bgtGetTask(taskId);
+  if (planned?.sourceKind === 'planned_chat') { bgtOpenOriginChat(null, planned.sessionId); return; }
   bgtOpenTaskId = taskId;
   window.bgtOpenTaskId = taskId;
   const panel = document.getElementById('bgt-panel');
@@ -1709,7 +1730,7 @@ window.handleErrorResponseWsEvent = handleErrorResponseWsEvent;
 // bgtToast already on window via utils.js import
 
 // ─── WS Event Handlers (F5) ────────────────────────────────────
-const _taskEvents = ['task_running','task_complete','task_paused','task_failed',
+const _taskEvents = ['planned_chat_updated','task_running','task_complete','task_paused','task_failed',
   'task_needs_assistance','task_step_done','task_tool_call','task_heartbeat_resumed'];
 
 _taskEvents.forEach(evt => {

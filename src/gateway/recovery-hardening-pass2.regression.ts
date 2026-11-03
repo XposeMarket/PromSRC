@@ -59,9 +59,11 @@ async function main(): Promise<void> {
     assert.equal(claims.releaseRuntimeRecoveryClaim(runtimeId, 'main_chat_retrigger'), true);
     assert.equal(claims.claimRuntimeRecovery(runtimeId, 'main_chat_retrigger'), true);
   });
-  check('a claim owned by another process is never released', () => {
+  check('a claim owned by another live process is never released', () => {
     const foreign = `rt_${randomUUID()}`;
-    fs.writeFileSync(path.join(claimDir, `${foreign}.main_chat_retrigger.claim`), JSON.stringify({ pid: process.pid + 99999 }));
+    // The parent (npx/tsx) is a different process that is alive for the whole
+    // test. A dead pid would now be taken over (recovery-claims.regression.ts).
+    fs.writeFileSync(path.join(claimDir, `${foreign}.main_chat_retrigger.claim`), JSON.stringify({ pid: process.ppid }));
     assert.equal(claims.releaseRuntimeRecoveryClaim(foreign, 'main_chat_retrigger'), false);
     assert.equal(claims.claimRuntimeRecovery(foreign, 'main_chat_retrigger'), false);
   });

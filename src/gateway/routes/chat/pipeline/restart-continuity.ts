@@ -1,3 +1,5 @@
+import { recordPlannedChatProgress, finishPlannedChatRun, resumePlannedChatRun } from '../../../tasks/planned-chat-runs';
+
 import { claimRuntimeRecovery, releaseRuntimeRecoveryClaim } from '../../../runtime/recovery-claims';
 import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
 import { addMessage, getHistory } from '../../../session';
@@ -238,10 +240,13 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
       ...(runtimeFileTouches.length ? { fileTouches: [...runtimeFileTouches] } : {}),
     });
   }
+  resumePlannedChatRun(runtime.id, runtimeId, sessionId);
+  let plannedRunFailed = false;
   let runtimeThinkingTail = '';
   let runtimeNarrationTail = '';
   let lastRuntimeNarrationCheckpointAt = 0;
   const sendSSE = (event: string, data: any) => {
+    if (event === 'progress_state') recordPlannedChatProgress(runtimeId, sessionId, data, message, runtime.id);
     if (event === 'thinking_delta') {
       const delta = String(data?.thinking || data?.text || '').trim();
       if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);
@@ -330,6 +335,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     origin,
     { clientRequestId: runtime.clientRequestId },
   ).catch((err: any) => {
+    plannedRunFailed = true;
     console.error(`[RuntimeRecovery] Retriggered main-chat turn failed for ${sessionId}:`, err?.message || err);
     addMessage(sessionId, {
       role: 'assistant',
@@ -339,6 +345,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
       channelLabel: 'restart recovery',
     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
   }).finally(() => {
+    finishPlannedChatRun(runtimeId, abortSignal.aborted ? 'interrupted' : plannedRunFailed ? 'failed' : 'completed');
     finishLiveRuntime(runtimeId);
     mainChatTurnCoordinator.release(admissionLease);
     setModelBusy(false);
