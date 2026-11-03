@@ -12,7 +12,7 @@ const pages = read('web-ui/src/mobile/mobile-pages.js');
 const runtime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const teams = read('web-ui/src/mobile/mobile-teams-pages.js');
-const css = read('web-ui/src/styles/mobile.css');
+const css = read('web-ui/src/styles/mobile.css') + '\n' + read('web-ui/src/styles/mobile-composer-stack.css');
 function fn(source, name) {
   let found;
   function walk(node) {
