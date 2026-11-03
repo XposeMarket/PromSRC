@@ -66,3 +66,11 @@ const mobile=fs.readFileSync('web-ui/src/mobile/mobile-tasks-pages.js','utf8');
 assert.match(desktop,/sourceKind === 'planned_chat'/); assert.match(mobile,/sourceKind === 'planned_chat'/);
 assert.match(desktop,/prepareTaskQuestionCards/); assert.match(mobile,/prepareMobileTaskInteractions/);
 console.log('PASS Tasks dedup, live form node/draft/focus preservation, handler identity, resolved removal, route lifecycle wiring');
+
+const {createTaskInteractions}=await import('../web-ui/src/features/tasks/mobile-interactions.js');
+const calls=[];
+const interactions=createTaskInteractions({upsert:p=>calls.push(p.id),question:p=>`question:${p.currentIndex}`,index:()=>1,approval:p=>`approval:${p.id}`});
+assert.equal(interactions.question({id:'q'}),'question:1');
+assert.equal(interactions.approval({id:'a'}),'approval:a');
+assert.deepEqual(calls,['q']);
+console.log('PASS lazy Tasks interaction adapter reuses original renderers');

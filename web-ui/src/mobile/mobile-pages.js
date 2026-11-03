@@ -12497,56 +12497,13 @@ export {
 };
 
 export async function prepareMobileTaskInteractions() {
-  await Promise.all([loadMobileChatRendererRuntime(), _ensureMobileQuestionController()]);
-  return {
-    question(payload) {
-      _upsertMobileQuestion(payload);
-      return _renderMobileQuestionCard({ ...payload, currentIndex: _mobileQuestionStepIndex(payload) });
-    },
-    approval: (payload) => _renderMobileApprovalCard(payload),
-    wire(root, entries, refresh) {
-      root.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
-      _wireMobileProcessRunActions(root);
-      _ensureMobileApprovalExpiryTicker();
-      for (const entry of entries) {
-        const q = entry.item?.payload;
-        if (!q?.id || !['question', 'browser_login'].includes(entry.kind)) continue;
-        const host = [...root.querySelectorAll('[data-ny-entry]')].find(el => el.dataset.nyEntry === entry.id);
-        if (!host) continue;
-        const card = host.querySelector('[data-pm-q-card]');
-        if (!card || card.dataset.tasksWired) continue;
-        card.dataset.tasksWired = 'true';
-        _restoreMobileQuestionDraftState(host, { [q.id]: _mobileQuestionDrafts.get(q.id) });
-        card.addEventListener('input', event => _mobileQuestionRememberDraft(event.target));
-        const cancel = card.querySelector('[data-pm-q-cancel]');
-        if (cancel) cancel.onclick = async event => {
-          event.stopPropagation();
-          if (cancel.disabled) return;
-          cancel.disabled = true;
-          const result = await mobileQuestionController.cancel(q.id, { sessionId: entry.sessionId });
-          if (result.ok) refresh(); else cancel.disabled = false;
-        };
-        const submit = card.querySelector('[data-pm-q-submit]');
-        if (submit) submit.onclick = async event => {
-          event.stopPropagation();
-          if (submit.disabled) return;
-          submit.disabled = true;
-          const normalized = _normalizeMobileQuestion(q);
-          const result = await mobileQuestionController.submit(q.id, {
-            sessionId: entry.sessionId,
-            readAnswers: () => _collectMobileQuestionAnswers(normalized),
-            readDraftAnswers: () => _mobileQuestionPayloadFromDraft(normalized, _mobileQuestionDrafts.get(q.id)),
-            stepIndex: Number(card.dataset.pmQIndex || 0), advanceStep: true,
-            onStepAdvance: ({ payload, nextIndex }) => {
-              _rememberMobileQuestionPayload(normalized, payload, nextIndex);
-              card.outerHTML = _renderMobileQuestionCard({ ...q, currentIndex: nextIndex });
-              this.wire(root, entries, refresh);
-            },
-          });
-          if (!result.ok) submit.disabled = false;
-          else if (!result.advanced) refresh();
-        };
-      }
-    },
-  };
+  const [host] = await Promise.all([import('../features/tasks/mobile-interactions.js'), loadMobileChatRendererRuntime(), _ensureMobileQuestionController()]);
+  return host.createTaskInteractions({
+    upsert:_upsertMobileQuestion, question:_renderMobileQuestionCard, index:_mobileQuestionStepIndex,
+    approval:_renderMobileApprovalCard, wireApproval:_wireMobileApprovalActionButton,
+    wireProcess:_wireMobileProcessRunActions, expiry:_ensureMobileApprovalExpiryTicker,
+    restore:_restoreMobileQuestionDraftState, drafts:_mobileQuestionDrafts, remember:_mobileQuestionRememberDraft,
+    controller:mobileQuestionController, normalize:_normalizeMobileQuestion, collect:_collectMobileQuestionAnswers,
+    fromDraft:_mobileQuestionPayloadFromDraft, payload:_rememberMobileQuestionPayload,
+  });
 }

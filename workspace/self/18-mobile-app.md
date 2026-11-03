@@ -216,3 +216,5 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+The Tasks-only interaction host lives in features/tasks/mobile-interactions.js and is dynamically imported by prepareMobileTaskInteractions; chat's normal lazy bundle does not absorb the Tasks wiring. The adapter injects original controller/render/approval helpers, rather than copying controls or response authority.
