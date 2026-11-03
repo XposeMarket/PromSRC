@@ -698,7 +698,7 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="${id}-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
         <div class="pm-composer-input-wrap" id="${id}-input-wrap">
-          <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+          <textarea class="pm-composer-input" id="${id}-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="${id}-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="${id}-send-btn" aria-label="Send">${ICONS.send}</button>
@@ -1229,7 +1229,9 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     }
   }, { passive: true });
   input?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // Match main mobile chat: Return inserts a newline; the send button submits.
+    // Keep explicit hardware-keyboard Ctrl/Cmd+Enter as a send shortcut.
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
       event.preventDefault();
       form?.requestSubmit?.();
     }

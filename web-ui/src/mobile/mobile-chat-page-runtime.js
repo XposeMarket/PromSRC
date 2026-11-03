@@ -4875,6 +4875,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     _pmKbComposerNodes().forEach((node) => node.style.removeProperty(_pmKbComposerShiftProperty));
   }
   function _pmKbClearComposerViewportStyles() {
+    form?.style.removeProperty('--pm-question-available-height');
     _pmKbComposerNodes().forEach((node) => {
       _pmKbComposerViewportProperties.forEach((property) => node.style.removeProperty(property));
     });
@@ -4898,6 +4899,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     // composer an explicit top and make bottom auto so that static-position
     // recalculation cannot move it to the top edge. The height observer below
     // reapplies this when the multiline composer grows.
+    if (composer === form && form.classList.contains('has-pending-question')) {
+      const available = Math.max(80, Math.floor(Number(vv?.height || layoutHeight) - 24));
+      form.style.setProperty('--pm-question-available-height', `${available}px`);
+    }
     const composerHeight = Math.max(0, Number(composer.getBoundingClientRect?.().height || 0));
     const top = resolveMobileKeyboardComposerTop({
       layoutHeight,
@@ -5027,6 +5032,19 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       try { console.info('[pm-kb] composer placement corrected', { mode: _pmKbViewportMode, delta: Math.round(delta), correction: Math.round(_pmKbTopCorrection) }); } catch {}
     });
   }
+  function _isQuestionKeyboardTarget(target) {
+    return !!(target?.matches?.('[data-pm-q-text], [data-pm-q-other], [data-pm-q-general]')
+      && questionHost?.contains(target));
+  }
+  function _revealQuestionInput(field) {
+    if (!_isQuestionKeyboardTarget(field) || !questionHost) return;
+    const hostRect = questionHost.getBoundingClientRect();
+    const fieldRect = field.getBoundingClientRect();
+    // Scroll only the card, never the page or transcript. Preserve the same
+    // textarea/caret through viewport resizes and streamed message updates.
+    if (fieldRect.bottom > hostRect.bottom - 12) questionHost.scrollTop += fieldRect.bottom - hostRect.bottom + 12;
+    else if (fieldRect.top < hostRect.top + 12) questionHost.scrollTop -= hostRect.top + 12 - fieldRect.top;
+  }
   function _pmKbActiveComposer() {
     const sideFocused = sideSheet?.classList?.contains('open');
     return sideFocused ? (sideInput?.closest?.('.pm-composer') || form) : form;
@@ -5064,6 +5082,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       : 0;
     const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - (vv ? visualHeight : layoutHeight)));
     const composerFocused = document.activeElement === input
+      || _isQuestionKeyboardTarget(document.activeElement)
       || document.activeElement?.matches?.('#pm-new-project-name')
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
     const keyboardViewportSettled = keyboardHeightOffset > 90 || baselineOffset > 90;
@@ -5122,6 +5141,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     // centered; switch to keyboard anchoring only after the viewport has
     // actually contracted.
     syncNewProjectPopoverToKeyboard(open && keyboardViewportSettled, visualBottom, layoutHeight);
+    if (open) _revealQuestionInput(document.activeElement);
     // Do this on the actual nav node instead of depending on ancestor CSS.
     // Installed iOS PWAs may retain an older mobile stylesheet for one launch,
     // while this controller still has the authoritative keyboard state.
@@ -5270,9 +5290,13 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   };
   const _isKeyboardComposerTarget = (target) => target === input
     || target === sideInput
+    || _isQuestionKeyboardTarget(target)
     || target?.matches?.('#pm-composer-input, #pm-mobile-side-input, #pm-new-project-name');
   const _onComposerFocusInKb = (event) => {
-    if (_isKeyboardComposerTarget(event.target)) _onComposerFocusKb();
+    if (_isKeyboardComposerTarget(event.target)) {
+      _onComposerFocusKb();
+      if (_isQuestionKeyboardTarget(event.target)) requestAnimationFrame(() => _revealQuestionInput(event.target));
+    }
   };
   const _onComposerFocusOutKb = (event) => {
     if (_isKeyboardComposerTarget(event.target)) _onComposerBlurKb();
@@ -8560,8 +8584,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   questionHost?.addEventListener('input', (event) => {
     const field = event.target?.closest?.('[data-pm-q-text], [data-pm-q-other], [data-pm-q-general]');
     if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight}px`;
     _mobileQuestionRememberDraft(field);
     updateChatComposerSpace();
+    _scheduleKeyboardOffset();
   });
   questionHost?.addEventListener('change', (event) => {
     const field = event.target?.closest?.('[data-pm-q-text], [data-pm-q-other], [data-pm-q-general]');

@@ -9071,7 +9071,12 @@ function _getPendingQuestionForSession(sessionId) {
 }
 
 function _paintMobileQuestionComposerPopover(host, composer, question, currentIndex, draftMap, sessionId) {
-  host.innerHTML = _renderMobileQuestionCard({ ...question, currentIndex });
+  const markup = _renderMobileQuestionCard({ ...question, currentIndex });
+  // Streaming/recovery refreshes must not replace an unchanged interactive
+  // card: that restarts check transitions, loses the caret and blurs iOS inputs.
+  if (!host.hidden && host.__pmQuestionMarkup === markup && host.firstElementChild) return;
+  host.__pmQuestionMarkup = markup;
+  host.innerHTML = markup;
   host.hidden = false;
   host.setAttribute('data-question-id', String(question.id || ''));
   composer?.classList.add('has-pending-question');
