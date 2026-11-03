@@ -70,7 +70,8 @@ export function midWorkflowCompactionRetryAllowed(
   if (now - last.at >= MID_WORKFLOW_RETRY_COOLDOWN_MS) return true;
   // Near the real provider window the next request may fail outright, so retry
   // sooner there, but still at most once a minute rather than every round.
-  if (contextWindowTokens > 0 && projectedTokens >= Math.floor(contextWindowTokens * 0.95) && now - last.at >= 60_000) return true;
+  // Growth must not bypass this: near the window every round grows.
+  if (contextWindowTokens > 0 && projectedTokens >= Math.floor(contextWindowTokens * 0.95)) return now - last.at >= 60_000;
   const growth = Math.max(8_000, Math.floor(Math.max(0, triggerTokens) * 0.05)) * Math.min(2, last.failures);
   return projectedTokens >= last.projectedTokens + growth;
 }

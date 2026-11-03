@@ -102,6 +102,8 @@ async function main(): Promise<void> {
   assert.equal(midWorkflowCompactionRetryAllowed('backoff', 260_000 + 23_614, 236_144, t0 + 3_000), true);
   assert.equal(midWorkflowCompactionRetryAllowed('backoff', 260_500, 236_144, t0 + 3_000, 272_000), false);
   assert.equal(midWorkflowCompactionRetryAllowed('backoff', 258_400, 236_144, t0 + 3_000, 272_000), false, 'near-window retries are still rate limited');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 272_000, 236_144, t0 + 3_000, 272_000), false, 'growth does not bypass the near-window rate limit');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 272_000, 236_144, t0 + 62_000, 272_000), true, 'near-window retry allowed after a minute');
   assert.equal(midWorkflowCompactionRetryAllowed('backoff', 258_400, 236_144, t0 + 62_000, 272_000), true, 'near the provider window a retry comes sooner');
   recordMidWorkflowCompactionOutcome('backoff', 262_000, true, t0 + 4_000);
   assert.equal(midWorkflowCompactionRetryAllowed('backoff', 100, 236_144, t0 + 5_000), true, 'success clears backoff');
