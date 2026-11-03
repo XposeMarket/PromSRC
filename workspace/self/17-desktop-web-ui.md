@@ -1,5 +1,10 @@
 # 17 — Desktop Web UI
 
+
+## Planned runs and inline Needs You (pending feat/planned-chat-tasks)
+TasksPage renders planned_chat records as passive cards with authoritative steps and Open chat, no runner drag/pause/resume. Questions hydrate the original ChatPage controller on direct Tasks loads, bind source session, and advance in-place. Approvals use the original renderInlineApprovalRequest through renderTaskOriginalApprovalCard. Unchanged requests retain actual DOM nodes across refresh, preserving typed values, focus and handlers; resolved requests disappear. Not deployed yet.
+
+
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `web-ui/src/`, `web-ui/`, `src/gateway/`, `scripts/`
 > **Read this when:** Changing desktop pages, shared browser UI, styles/themes, chat tool activity, or the generated public-web bundle. This is desktop-focused; see [18 Mobile app](18-mobile-app.md).
 

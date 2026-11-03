@@ -1,3 +1,5 @@
+import { recordPlannedChatProgress, finishPlannedChatRun } from '../tasks/planned-chat-runs';
+
 import { isCompactionSummaryMessage, extractLastCompactionSummary, formatCompactionMessageBody, formatCompactionMessages, formatCompactionToolResults, formatCompactionArtifactPaths, ContextCompactorRunInput, buildContextCompactionPrompt, runContextCompactor, maybeRunMidWorkflowCompaction, configureCompactionDependencies } from './chat/pipeline/compaction';
 export { isCompactionSummaryMessage, extractLastCompactionSummary, formatCompactionMessageBody, formatCompactionMessages, formatCompactionToolResults, formatCompactionArtifactPaths, ContextCompactorRunInput, buildContextCompactionPrompt, runContextCompactor, maybeRunMidWorkflowCompaction } from './chat/pipeline/compaction';
 import { handleChat, handleChatUntraced, editRerunAbortResetSessions, configureHandleChatDependencies } from './chat/pipeline/handle-chat';
@@ -2412,6 +2414,7 @@ router.post('/api/chat', async (req, res) => {
     abortSignal.abort?.(reason);
   };
   let requestCompleted = false;
+  let plannedRunFailed = false;
   let mainChatAbortSettled = false;
   const settleMainChatAbort = (reason: string) => {
     if (mainChatAbortSettled) return;
@@ -2486,6 +2489,7 @@ router.post('/api/chat', async (req, res) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
     foregroundActivity.record(event, data);
     rawSendSSE(event, data);
+    if (event === 'progress_state') recordPlannedChatProgress(runtimeId, resolvedSessionId, data, String(message || 'Planned chat'));
     // Skip per-token checkpointing â€” token/thinking_delta are high-frequency streaming
     // events that don't need durable persistence. 3 sync fs ops per token was killing
     // streaming throughput by blocking the Node.js event loop on every chunk.
@@ -2705,6 +2709,7 @@ router.post('/api/chat', async (req, res) => {
         });
     }
 		  } catch (err: any) {
+        plannedRunFailed = true;
 		    if (!abortSignal.aborted && isTerminalProviderCapacityFailure(err)) {
           // A quota/credit terminal error cannot make progress in this turn.
           // Treat it like a user abort for unfinished dev edits, while keeping
@@ -2725,6 +2730,9 @@ router.post('/api/chat', async (req, res) => {
       sendSSE('error', { message: err.message || 'Unknown error' });
     }
   } finally {
+    finishPlannedChatRun(runtimeId, abortSignal.aborted
+      ? (/watchdog|restart|shutdown/i.test(String(abortSignal.reason || '')) ? 'interrupted' : 'cancelled')
+      : plannedRunFailed ? 'failed' : 'completed');
     requestCompleted = true;
     editRerunAbortResetSessions.delete(resolvedSessionId);
     if (clientRequestId) {

@@ -12495,3 +12495,15 @@ export {
   wireMobileContextWindow,
   wsEventBus,
 };
+
+export async function prepareMobileTaskInteractions() {
+  const [host] = await Promise.all([import('../features/tasks/mobile-interactions.js'), loadMobileChatRendererRuntime(), _ensureMobileQuestionController()]);
+  return host.createTaskInteractions({
+    upsert:_upsertMobileQuestion, question:_renderMobileQuestionCard, index:_mobileQuestionStepIndex,
+    approval:_renderMobileApprovalCard, wireApproval:_wireMobileApprovalActionButton,
+    wireProcess:_wireMobileProcessRunActions, expiry:_ensureMobileApprovalExpiryTicker,
+    restore:_restoreMobileQuestionDraftState, drafts:_mobileQuestionDrafts, remember:_mobileQuestionRememberDraft,
+    controller:mobileQuestionController, normalize:_normalizeMobileQuestion, collect:_collectMobileQuestionAnswers,
+    fromDraft:_mobileQuestionPayloadFromDraft, payload:_rememberMobileQuestionPayload,
+  });
+}

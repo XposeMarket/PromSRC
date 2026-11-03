@@ -1,3 +1,6 @@
+import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
+
+
 // Tasks route owner. Loaded only when its route or a shared dependent feature is requested.
 import {
   ICONS,
@@ -154,6 +157,7 @@ function _pmTaskStatus(status) {
   if (s === 'awaiting_user_input') return 'needs_assistance';
   if (s === 'waiting_subagent' || s === 'in_progress') return 'running';
   if (s === 'cancelled') return 'failed';
+  if (s === 'interrupted') return 'stalled';
   return s || 'queued';
 }
 
@@ -315,6 +319,7 @@ function _pmTaskAction(task) {
 }
 
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
+  let taskInteractions = null;
   const taskPageSize = 40;
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
@@ -355,7 +360,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }
 
     const nyEntries = currentFilter === 'needs_you' ? needsYouEntries(needsYouItems) : [];
-    const tasks = allTasks.filter(t => filterOf(t) === currentFilter);
+    const tasks = allTasks.filter(t => filterOf(t) === currentFilter && !(t.sourceKind === 'planned_chat' && t.status === 'awaiting_user_input' && needsYouItems.some(item => item.sessionId === t.sessionId)));
     if (!tasks.length && !nyEntries.length) {
       lastPaintSignature = '';
       listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p></div>`;
@@ -391,7 +396,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       nearBottom: (journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight) < 48,
     } : null;
 
+    const restoreRequestCards = preserveRequestCards(listEl, nyEntries);
     listEl.innerHTML = visibleTasks.map(t => {
+      if (t.sourceKind === 'planned_chat') return `<article class="pm-card pm-planned-chat" style="padding:14px;overflow-wrap:anywhere"><strong>${escapeHtml(t.title)}</strong><div class="pm-card-body">Chat · ${escapeHtml(t.status)}</div><ol style="padding-left:20px;font-size:13px">${_pmTaskProgressItems(t).map(step => `<li style="margin:6px 0">${['done','completed'].includes(step.status) ? '✓ ' : step.status === 'in_progress' ? '› ' : ''}${escapeHtml(step.text || '')}</li>`).join('')}</ol><button class="pm-btn" data-ny-open="${escapeHtml(t.sessionId)}">Open chat</button></article>`;
       const id = String(t.id || '');
       const pill = _pmTaskPill(String(t.status || ''));
       const brainLabel = _pmBrainTaskLabel(t);
@@ -447,8 +454,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       : '');
     if (nyEntries.length) {
       listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
-      wireNyEntries();
     }
+    restoreRequestCards();
+    wireNyEntries();
     wireTaskCards();
     const nextJournal = listEl.querySelector('[data-pm-task-journal]');
     if (nextJournal && journalSnapshot) {
@@ -547,6 +555,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   });
 
   function nyEntryHtml(entry) {
+    const payload = { ...entry.item?.payload, sessionId: entry.sessionId };
+    const original = ['question', 'browser_login'].includes(entry.kind) ? taskInteractions?.question(payload)
+      : ['tool_approval', 'final_action_approval'].includes(entry.kind) ? taskInteractions?.approval(payload) : '';
+    if (original) return `<article class="pm-card pm-ny-entry" data-ny-entry="${escapeHtml(entry.id)}" style="padding:12px;min-width:0;overflow-wrap:anywhere">${original}<button class="pm-btn ghost" data-ny-open="${escapeHtml(entry.sessionId)}">Open chat</button></article>`;
     const id = escapeHtml(entry.id);
     const origin = escapeHtml(entry.sessionId);
     const isApproval = entry.kind === 'tool_approval' || entry.kind === 'final_action_approval';
@@ -574,6 +586,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   // Every action shows a busy state and surfaces failures; a failure re-enables the buttons.
   function wireNyEntries() {
+    taskInteractions?.wire(listEl, needsYouEntries(needsYouItems), () => load({ force: true }));
     const busy = (el, run, okMessage) => el.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -595,17 +608,17 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     listEl.querySelectorAll('[data-ny-approve]').forEach((el) => busy(el, (b) => approveMobileApproval(b.dataset.nyApprove, '', { source: 'mobile' }), 'Approved'));
     listEl.querySelectorAll('[data-ny-deny]').forEach((el) => busy(el, (b) => denyMobileApproval(b.dataset.nyDeny, { source: 'mobile' }), 'Rejected'));
     listEl.querySelectorAll('[data-ny-skip]').forEach((el) => busy(el, (b) => cancelMobileQuestion(b.dataset.nySkip), 'Cancelled'));
-    listEl.querySelectorAll('[data-ny-open]').forEach((el) => el.addEventListener('click', (e) => {
+    listEl.querySelectorAll('[data-ny-open]').forEach((el) => { el.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
       nyOpenThread(el.dataset.nyOpen);
-    }));
-    listEl.querySelectorAll('.pm-ny-entry').forEach((card) => card.addEventListener('click', (e) => {
+    }; });
+    listEl.querySelectorAll('.pm-ny-entry:not(:has([data-pm-q-card])):not(:has([data-pm-approval-id]))').forEach((card) => { card.onclick = (e) => {
       if (e.target.closest('button, a, input, textarea')) return;
       const id = card.getAttribute('data-ny-entry') || '';
       nyExpandedId = nyExpandedId === id ? '' : id;
       paint();
-    }));
+    }; });
   }
 
   function applyTaskList(nextTasks) {
@@ -636,6 +649,12 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     try {
       const [tasksRes, nyRes] = await Promise.allSettled([loadBgTasks({ force }), loadMobileNeedsYou()]);
       if (nyRes.status === 'fulfilled' && Array.isArray(nyRes.value)) needsYouItems = nyRes.value;
+      if (!taskInteractions && needsYouItems.some(item => ['question', 'browser_login', 'tool_approval', 'final_action_approval'].includes(item.kind))) {
+        try {
+          const { prepareMobileTaskInteractions } = await import('./mobile-pages.js');
+          taskInteractions = await prepareMobileTaskInteractions();
+        } catch (error) { console.warn('[Tasks] Inline interactions unavailable; using source-chat fallback.', error); }
+      }
       if (tasksRes.status === 'rejected') throw tasksRes.reason;
       applyTaskList(tasksRes.value);
       if (!nyAutoOpened) {
@@ -661,9 +680,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   // updates. Keep the five-second poll as a recovery path for sleeping mobile
   // tabs and reconnects, but do not make the user wait for it to see a tool,
   // reasoning, or completion event.
-  const taskEventNames = ['task_running', 'task_panel_update', 'task_complete', 'task_failed'];
+  const taskEventNames = ['planned_chat_updated', 'task_running', 'task_panel_update', 'task_complete', 'task_failed'];
   const onTaskEvent = (event = {}) => {
-    if (!page.isConnected || !event.taskId) return;
+    if (!page.isConnected || (!event.taskId && !event.runtimeId)) return;
     if (eventRefreshTimer) clearTimeout(eventRefreshTimer);
     eventRefreshTimer = setTimeout(() => {
       eventRefreshTimer = null;
@@ -675,7 +694,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   const needsYouEventNames = ['needs_you_changed', 'question_created', 'question_answered', 'question_cancelled', 'question_expired', 'approval_created', 'approval_resolved', 'proposal_created'];
   needsYouEventNames.forEach((eventName) => wsEventBus.on(eventName, onNeedsYouChange));
 
-  page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true, force: true }); });
+  page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { load({ resetExpandedDetail: true, force: true }); });
   const cachedTasks = getCachedMobilePageData('tasks', 21_600_000);
   if (Array.isArray(cachedTasks)) {
     applyTaskList(cachedTasks);
