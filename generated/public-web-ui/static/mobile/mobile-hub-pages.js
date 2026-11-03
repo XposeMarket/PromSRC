@@ -7,7 +7,6 @@ import {
   escapeHtml,
   getAccount,
   loadMobileAuditRuns,
-  loadMobileHubGoals,
   loadMobileHubOverview,
   loadMobileMoreSummary,
   pmToast,
@@ -687,31 +686,42 @@ function _pmTokenActivityGrid(activity = {}) {
   `;
 }
 
-// Read-only Goals list (finding: existing goals were unreachable after the goals UI was removed).
-function _pmHubGoalsMarkup(goals, { loading = false, error = '' } = {}) {
-  if (loading) return `<div class="hub-goals-state" role="status">Loading goals…</div>`;
-  if (error) return `<div class="hub-goals-state error" role="alert">Unable to load goals. ${escapeHtml(error)}</div>`;
-  if (!goals.length) return `<div class="hub-goals-state" role="status">No main-chat goals yet.</div>`;
-  return `<div class="hub-achievements-grid" aria-label="Goals, ${goals.length} total">${goals.slice(0, 20).map((goal) => {
-    const body = _pmGoalBody(goal);
-    return `<article class="hub-goal-card"><div class="hub-goal-title">${escapeHtml(_pmGoalTitle(goal))}</div>${body ? `<div class="hub-goal-body">${escapeHtml(body.slice(0, 240))}</div>` : ''}<div class="hub-goal-meta">${_pmStatusPill(goal?.status)} ${escapeHtml(_pmDateTime(goal?.updatedAt || goal?.createdAt))}</div></article>`;
-  }).join('')}</div>`;
-}
-
 export async function renderHubPage(page, { navigate } = {}) {
-  page.innerHTML = `${renderMobileHeader({ title: 'Hub', online: true })}<div class="pm-body pm-hub-analytics"><section id="hub-goals" class="hub-section" aria-label="Goals"><div class="hub-goals-header"><div class="hub-section-title">Goals</div></div><div id="hub-goals-body">${_pmHubGoalsMarkup([], { loading: true })}</div></section><section id="hub-usage" class="hub-usage" aria-label="Usage analytics"></section></div>`;
+  page.innerHTML = `${renderMobileHeader({ title: 'Hub', online: true })}<div class="pm-body pm-hub-analytics"><section class="settings-models-usage pm-hub-limits" aria-label="Usage & Limits"><div class="settings-models-usage-title">Usage & Limits<button type="button" class="hub-providers-refresh" data-limits-refresh aria-label="Refresh account limits">↻</button></div><div data-limits-status role="status"></div><div class="hub-providers-grid" data-limits-grid><div class="hub-empty">Loading account limits…</div></div></section><section id="hub-usage" class="hub-usage" aria-label="Usage analytics"></section></div>`;
   wireHeaderActions(page, {});
   if (!document.querySelector('link[data-hub-analytics]')) {
     const link = document.createElement('link');
     link.rel = 'stylesheet'; link.href = '/src/styles/hub.css'; link.dataset.hubAnalytics = 'true';
     document.head.appendChild(link);
   }
-  const goalsBody = page.querySelector('#hub-goals-body');
-  loadMobileHubGoals()
-    .then((goals) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup(goals); })
-    .catch((err) => { if (goalsBody?.isConnected) goalsBody.innerHTML = _pmHubGoalsMarkup([], { error: err?.message || String(err) }); });
-  const { activateHubUsage } = await import('../pages/HubUsage.js');
-  if (page.isConnected) activateHubUsage();
+  const [{ activateHubUsage }, { renderProviderUsageCard }, { api }] = await Promise.all([
+    import('../pages/HubUsage.js'), import('../components/provider-usage-card.js'), import('../api.js'),
+  ]);
+  if (!page.isConnected) return;
+  const grid = page.querySelector('[data-limits-grid]'), status = page.querySelector('[data-limits-status]');
+  let busy = false, loaded = false;
+  const refresh = async () => {
+    if (busy || !grid.isConnected) return;
+    busy = true;
+    try {
+      const result = await api('/api/usage/limits', { timeoutMs: 30000 });
+      if (result?.success === false || !Array.isArray(result?.providers)) throw new Error('Usage unavailable');
+      if (!grid.isConnected) return;
+      grid.innerHTML = result.providers.map(renderProviderUsageCard).join('') || '<div class="hub-empty">No connected account usage yet. Connect an account in Settings → Models.</div>';
+      loaded = true; status.textContent = '';
+    } catch {
+      if (!grid.isConnected) return;
+      if (!loaded) grid.innerHTML = '';
+      status.textContent = `Couldn't refresh account limits. ${loaded ? 'Showing previous limits. ' : ''}Your connections are unaffected. Tap refresh to retry.`;
+    } finally { busy = false; }
+  };
+  page.querySelector('[data-limits-refresh]').onclick = refresh;
+  refresh();
+  const poll = setInterval(() => {
+    if (!grid.isConnected) { clearInterval(poll); return; }
+    if (!document.hidden) refresh();
+  }, 30000);
+  activateHubUsage();
 }
 
 async function _renderMoreAudit(page, { navigate }) {

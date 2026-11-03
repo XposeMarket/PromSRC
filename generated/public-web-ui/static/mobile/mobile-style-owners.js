@@ -33,7 +33,7 @@ const STYLE_DEFINITIONS = Object.freeze({
       id: 'pm-mobile-composer-stack-style',
       file: 'mobile-composer-stack.css',
       layer: 'components',
-      version: 'pm-v309-2026-10-04-popover-route-override',
+      version: 'pm-v310-2026-11-02-question-card-keyboard',
       attribute: 'data-prom-mobile-composer-stack-style',
     }),
   ]),
