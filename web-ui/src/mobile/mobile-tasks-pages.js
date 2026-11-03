@@ -1,5 +1,5 @@
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
-import { prepareMobileTaskInteractions } from './mobile-pages.js';
+
 
 // Tasks route owner. Loaded only when its route or a shared dependent feature is requested.
 import {
@@ -319,7 +319,7 @@ function _pmTaskAction(task) {
 }
 
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
-  const taskInteractions = await prepareMobileTaskInteractions();
+  let taskInteractions = null;
   const taskPageSize = 40;
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
@@ -556,8 +556,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   function nyEntryHtml(entry) {
     const payload = { ...entry.item?.payload, sessionId: entry.sessionId };
-    const original = ['question', 'browser_login'].includes(entry.kind) ? taskInteractions.question(payload)
-      : ['tool_approval', 'final_action_approval'].includes(entry.kind) ? taskInteractions.approval(payload) : '';
+    const original = ['question', 'browser_login'].includes(entry.kind) ? taskInteractions?.question(payload)
+      : ['tool_approval', 'final_action_approval'].includes(entry.kind) ? taskInteractions?.approval(payload) : '';
     if (original) return `<article class="pm-card pm-ny-entry" data-ny-entry="${escapeHtml(entry.id)}" style="padding:12px;min-width:0;overflow-wrap:anywhere">${original}<button class="pm-btn ghost" data-ny-open="${escapeHtml(entry.sessionId)}">Open chat</button></article>`;
     const id = escapeHtml(entry.id);
     const origin = escapeHtml(entry.sessionId);
@@ -586,7 +586,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
   // Every action shows a busy state and surfaces failures; a failure re-enables the buttons.
   function wireNyEntries() {
-    taskInteractions.wire(listEl, needsYouEntries(needsYouItems), () => load({ force: true }));
+    taskInteractions?.wire(listEl, needsYouEntries(needsYouItems), () => load({ force: true }));
     const busy = (el, run, okMessage) => el.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -649,6 +649,12 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     try {
       const [tasksRes, nyRes] = await Promise.allSettled([loadBgTasks({ force }), loadMobileNeedsYou()]);
       if (nyRes.status === 'fulfilled' && Array.isArray(nyRes.value)) needsYouItems = nyRes.value;
+      if (!taskInteractions && needsYouItems.some(item => ['question', 'browser_login', 'tool_approval', 'final_action_approval'].includes(item.kind))) {
+        try {
+          const { prepareMobileTaskInteractions } = await import('./mobile-pages.js');
+          taskInteractions = await prepareMobileTaskInteractions();
+        } catch (error) { console.warn('[Tasks] Inline interactions unavailable; using source-chat fallback.', error); }
+      }
       if (tasksRes.status === 'rejected') throw tasksRes.reason;
       applyTaskList(tasksRes.value);
       if (!nyAutoOpened) {

@@ -1236,3 +1236,12 @@ body.pm-model-badge-pressing * {
 body.pm-mobile-active.pm-mobile-drawer-open .pm-tabbar-haptic-gesture-surface {
   display: none !important;
 }
+
+/* Tasks embeds original chat interactions inside the existing narrow cards. */
+.pm-ny-entry .pm-question-card,
+.pm-ny-entry .pm-chat-approval { width:100%; max-width:100%; min-width:0; margin:0; box-sizing:border-box; }
+.pm-ny-entry .pm-q-input { box-sizing:border-box; width:100%; min-width:0; }
+.pm-ny-entry .pm-q-opt-label,
+.pm-ny-entry .pm-approval-title { overflow-wrap:anywhere; }
+.pm-ny-entry .pm-q-actions,
+.pm-ny-entry .pm-approval-actions { flex-wrap:wrap; }

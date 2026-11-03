@@ -2,7 +2,7 @@
 
 
 ## Tasks planned-chat tracking and original interactions (pending feat/planned-chat-tasks)
-Mobile Tasks uses shared planned_chat projections and history. Needs You embeds original _renderMobileQuestionCard and _renderMobileApprovalCard via prepareMobileTaskInteractions, initialized on direct Tasks loads. Questions use the shared controller and original source session; approvals keep their original handlers/endpoints. Refresh preserves matching request DOM nodes/drafts; manual refresh no longer clears forms to a skeleton. Cards fit narrow widths. Not deployed yet.
+Mobile Tasks uses shared planned_chat projections and history. Needs You embeds original _renderMobileQuestionCard and _renderMobileApprovalCard via prepareMobileTaskInteractions, loaded only when Needs You contains an interaction, with source-chat fallback on renderer-load failure. Questions use the shared controller and original source session; approvals keep their original handlers/endpoints. Refresh preserves matching request DOM nodes/drafts; manual refresh no longer clears forms to a skeleton. Cards fit narrow widths. Not deployed yet.
 
 
 > **Last verified:** 2026-10-07 against PromSRC `a48712ccc` · **Owner area:** `web-ui/src/mobile/`, `web-ui/mobile.html`, `src/gateway/pairing/`

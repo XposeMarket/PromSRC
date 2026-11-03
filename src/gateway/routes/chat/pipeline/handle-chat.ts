@@ -1,4 +1,3 @@
-import { finishPlannedChatRun } from '../../../tasks/planned-chat-runs';
 
 import { inferReferenceImageMimeType } from './context-preparation';
 import { recordSessionToolCeiling } from '../../../agents-runtime/tool-ceiling';
@@ -6276,8 +6275,6 @@ Do not produce prose. Use the canonical thread tool now.` });
   }
 
   } finally {
-    // A non-throwing termination without a final receipt is not a completed task.
-    if (!receiptCompleted && !abortSignal?.aborted && runtimeOptions?.runtimeId) finishPlannedChatRun(runtimeOptions.runtimeId, 'failed');
     // Capture offers for failed/cancelled turns too. Usage is never relevance.
     // Normal finalization already captured successful turns; avoid duplicate records.
     captureUnfinishedLearningTurn?.();

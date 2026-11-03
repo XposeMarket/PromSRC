@@ -32,5 +32,30 @@ try {
   assert.equal(store.list(new Set(['e'])).find(r => r.runtimeId === 'e')?.resumedFromRuntimeId, 'd');
   assert.equal(store.list(new Set(['e'])).length, 5);
   assert.deepEqual(rows[0].supportedActions, ['open_chat']);
+  const multi = path.join(dir, 'multi');
+  const alive = (pid: number) => pid === 111 || pid === 222;
+  const oldOwner = new PlannedChatRunStore(multi, 111, alive);
+  const newOwner = new PlannedChatRunStore(multi, 222, alive);
+  oldOwner.progress('old', 'same', progress, '');
+  const before = fs.readdirSync(multi).map(name => fs.readFileSync(path.join(multi, name), 'utf8')).join('');
+  assert.equal(newOwner.list(new Set())[0].status, 'running', 'foreign owner still live');
+  assert.equal(fs.readdirSync(multi).map(name => fs.readFileSync(path.join(multi, name), 'utf8')).join(''), before, 'polling does not write');
+  oldOwner.finish('old', 'completed');
+  newOwner.progress('new', 'same', progress, '');
+  assert.equal(newOwner.list(new Set(['new'])).find(r => r.runtimeId === 'old')?.status, 'completed', 'late terminal visible across stores');
+  newOwner.finish('old', 'failed');
+  assert.equal(oldOwner.list(new Set()).find(r => r.runtimeId === 'old')?.status, 'completed', 'foreign writer cannot replace outcome');
+  assert.equal(oldOwner.list(new Set()).length, 2, 'concurrent owners preserve different records');
+  const now = Date.now;
+  try {
+    Date.now = () => 1000; oldOwner.progress('older', 'shared', progress, '');
+    Date.now = () => 2000; oldOwner.progress('newer', 'shared', progress, '');
+    const pending = oldOwner.list(new Set(['older','newer']), [{sessionId:'shared',createdAt:2500}]);
+    assert.equal(pending.find(r => r.runtimeId === 'older')?.status, 'running');
+    assert.equal(pending.find(r => r.runtimeId === 'newer')?.status, 'awaiting_user_input');
+  } finally { Date.now = now; }
+  newOwner.resume('older', 'recovered', 'shared');
+  assert.equal(oldOwner.list(new Set(['older','newer'])).find(r => r.runtimeId === 'older')?.status, 'running', 'recovery never rewrites prior owner');
+  console.log('PASS per-runtime multi-owner persistence, read-only polls, newest waiting scope');
   console.log('PASS planned chat validation, four runs, replacement, waiting, persistence, terminal outcomes, recovery linkage');
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

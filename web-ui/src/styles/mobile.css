@@ -19054,12 +19054,3 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
 /* First-output status stays local to the pending assistant row. */
 pm-pending-status { display: block; margin: 6px 0; font-size: 12px; line-height: 1.5; color: var(--pm-text-muted, #9aa0ad); }
 pm-pending-status[hidden] { display: none; }
-
-/* Original chat interactions embedded in Tasks, without composer sizing/positioning. */
-.pm-ny-entry .pm-question-card,
-.pm-ny-entry .pm-chat-approval { width:100%; max-width:100%; min-width:0; margin:0; box-sizing:border-box; }
-.pm-ny-entry .pm-q-input { box-sizing:border-box; width:100%; min-width:0; }
-.pm-ny-entry .pm-q-opt-label,
-.pm-ny-entry .pm-approval-title { overflow-wrap:anywhere; }
-.pm-ny-entry .pm-q-actions,
-.pm-ny-entry .pm-approval-actions { flex-wrap:wrap; }

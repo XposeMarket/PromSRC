@@ -12496,7 +12496,6 @@ export {
   wsEventBus,
 };
 
-// Tasks embeds the actual chat cards, not a second question/approval implementation.
 export async function prepareMobileTaskInteractions() {
   await Promise.all([loadMobileChatRendererRuntime(), _ensureMobileQuestionController()]);
   return {
