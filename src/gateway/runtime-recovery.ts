@@ -995,6 +995,40 @@ function retriggerDeferredMainChatRuntimeImpl(
   return true;
 }
 
+/** Time-based so the 400ms planned cadence and the 4-10s crash cadence get the same window. */
+export const MAX_DEFERRED_MAIN_CHAT_DRAIN_MS = 5 * 60_000;
+
+function deferredMainChatRecoveryPending(runtimeId: string): boolean {
+  return listInterruptedRuntimes().some((runtime) => runtime.id === runtimeId);
+}
+
+/**
+ * One step of the post-listener deferred main-chat recovery drain.
+ *
+ * The drain used to re-queue every failed attempt forever. A stale recovery
+ * claim (or a record already retired by a newer user message or the
+ * background wake) then produced a skip every few seconds for the life of the
+ * gateway. The queue also holds the same object the ledger mutates, so a
+ * retired record could even pass the replay guard again. Only retry while the
+ * durable record still awaits recovery, and stop after MAX_DEFERRED_MAIN_CHAT_DRAIN_MS
+ * of failed admissions; the checkpoint stays in the chat either way.
+ */
+export function stepDeferredMainChatRecovery(
+  runtime: LiveRuntimeSnapshot,
+  retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
+  firstFailureAt: Map<string, number>,
+  isPending: (runtimeId: string) => boolean = deferredMainChatRecoveryPending,
+  now: number = Date.now(),
+): 'started' | 'retry' | 'dropped' {
+  if (!isPending(runtime.id)) return 'dropped';
+  if (retriggerDeferredMainChatRuntimeImpl(runtime, retrigger)) return 'started';
+  const since = firstFailureAt.get(runtime.id) ?? now;
+  firstFailureAt.set(runtime.id, since);
+  if (now - since < MAX_DEFERRED_MAIN_CHAT_DRAIN_MS && isPending(runtime.id)) return 'retry';
+  console.warn(`[RuntimeRecovery] Stopped deferred recovery of ${runtime.sessionId || runtime.id} (old=${runtime.id}) after ${Math.round((now - since) / 1000)}s of failed admissions; the checkpoint stays in the chat.`);
+  return 'dropped';
+}
+
 export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
   completePlainGatewayRestartTask?: (taskId: string) => boolean;
