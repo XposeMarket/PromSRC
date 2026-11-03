@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildContextWindowPressure } from './context-window-pressure';
 import { getCompactionRequestPressure, recordCompactionRequestPressure } from './compaction-pressure';
-import { withCompactionDeadline } from './compaction-deadline';
-import { runCompactionTransaction } from './compaction-safety';
+import {
+  COMPACTION_DEADLINE_CEILING_MS, COMPACTION_DEADLINE_FLOOR_MS, compactionDeadlineMs,
+  midWorkflowCompactionRetryAllowed, recordMidWorkflowCompactionOutcome, withCompactionDeadline,
+} from './compaction-deadline';
+import { adaptiveCompactionTargetTokens, runCompactionTransaction } from './compaction-safety';
 
 async function main(): Promise<void> {
   const route = { providerId: 'openai_codex', model: 'gpt-6-astra', contextWindowTokens: 272000, inputBudgetTokens: 236144, compactionTriggerTokens: 236144 };
@@ -78,6 +81,34 @@ async function main(): Promise<void> {
   assert.match(pipeline, /isAborted: \(\) => signal\.aborted/);
   assert.match(pipeline, /recordCompactionRequestPressure\(input.sessionId/);
   assert.match(fs.readFileSync(path.join(__dirname, '../routes/context-window-pressure.router.ts'), 'utf8'), /assembledRequestTokens,/);
-  console.log('PASS compaction pressure: incident, auto/manual, calibration, isolation/revisions, eviction, cancellation/deadline and integration wiring');
+  // Incident 2026-11-03: a 272k Astra thread failed every mid-workflow
+  // compaction at a fixed 120s deadline and retried on every tool round.
+  assert.equal(compactionDeadlineMs({ sourceTokens: 2_000, targetOutputTokens: 900 }), COMPACTION_DEADLINE_FLOOR_MS);
+  assert.equal(adaptiveCompactionTargetTokens(4_000, 0, 54_400), 1_800, 'small sources keep the linear target');
+  const incidentTarget = adaptiveCompactionTargetTokens(230_000, 0, 54_400);
+  assert.ok(incidentTarget >= 8_000 && incidentTarget <= 16_000, `large target stays adaptive but bounded: ${incidentTarget}`);
+  const incidentDeadline = compactionDeadlineMs({ sourceTokens: 230_000, targetOutputTokens: incidentTarget });
+  assert.ok(incidentDeadline > 300_000 && incidentDeadline <= COMPACTION_DEADLINE_CEILING_MS, `large summaries get time to finish: ${incidentDeadline}`);
+  assert.equal(compactionDeadlineMs({ sourceTokens: 5_000_000, targetOutputTokens: 100_000, passes: 20 }), COMPACTION_DEADLINE_CEILING_MS);
+  const t0 = 1_000_000;
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 236_553, 236_144, t0), true);
+  recordMidWorkflowCompactionOutcome('backoff', 236_553, false, t0);
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 240_000, 236_144, t0 + 1_000), false, 'a failed compaction is not retried every tool round');
+  assert.equal(midWorkflowCompactionRetryAllowed('other-backoff', 240_000, 236_144, t0 + 1_000), true, 'backoff is per session');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 236_553 + 11_807, 236_144, t0 + 1_000), true, 'meaningful growth allows a retry');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 240_000, 236_144, t0 + 5 * 60_000), true, 'cooldown allows a retry');
+  recordMidWorkflowCompactionOutcome('backoff', 260_000, false, t0 + 2_000);
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 260_000 + 15_000, 236_144, t0 + 3_000), false, 'consecutive failures widen the gap');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 260_000 + 23_614, 236_144, t0 + 3_000), true);
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 260_500, 236_144, t0 + 3_000, 272_000), false);
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 258_400, 236_144, t0 + 3_000, 272_000), false, 'near-window retries are still rate limited');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 272_000, 236_144, t0 + 3_000, 272_000), false, 'growth does not bypass the near-window rate limit');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 272_000, 236_144, t0 + 62_000, 272_000), true, 'near-window retry allowed after a minute');
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 258_400, 236_144, t0 + 62_000, 272_000), true, 'near the provider window a retry comes sooner');
+  recordMidWorkflowCompactionOutcome('backoff', 262_000, true, t0 + 4_000);
+  assert.equal(midWorkflowCompactionRetryAllowed('backoff', 100, 236_144, t0 + 5_000), true, 'success clears backoff');
+  assert.match(pipeline, /midWorkflowCompactionRetryAllowed\(input\.sessionId/);
+  assert.match(pipeline, /input\.abortSignal\?\.signal, deadlineMs\)/);
+  console.log('PASS compaction pressure: incident, auto/manual, calibration, isolation/revisions, eviction, cancellation/deadline, scaled deadline, retry backoff and integration wiring');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

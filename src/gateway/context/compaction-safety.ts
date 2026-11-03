@@ -11,7 +11,12 @@ export interface CompactionSummaryBudget {
 
 /** Guidance scales with the material retained; it is not a validation ceiling. */
 export function adaptiveCompactionTargetTokens(sourceTokens: number, previousSummaryTokens: number, outputCapacity: number): number {
-  return Math.max(1, Math.floor(Math.min(outputCapacity * 0.85, Math.max(256, (sourceTokens + previousSummaryTokens) * 0.45))));
+  const retained = Math.max(0, sourceTokens + previousSummaryTokens);
+  // Linear for small sources, sublinear for large ones: a ~230k-token thread
+  // asks for ~12k tokens instead of ~46k, which is both a real compaction and
+  // fast enough to finish. Still adaptive, never a fixed word ceiling.
+  const adaptive = Math.max(256, Math.min(retained * 0.45, 3_000 + retained * 0.04));
+  return Math.max(1, Math.floor(Math.min(outputCapacity * 0.85, adaptive)));
 }
 
 function summaryBudgetRejection(text: string, budget: CompactionSummaryBudget): string {
