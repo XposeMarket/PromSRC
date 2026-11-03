@@ -71,7 +71,9 @@ export function buildPluginRows({ connectors = [], mcpServers = [], imported = [
   for (const item of Array.isArray(connectors) ? connectors : []) {
     if (!item?.id) continue;
     const state = item.state || {};
-    const connected = state.connected === true || state.authenticated === true;
+    // A rejected/expired grant: the account is still linked but its tools are off.
+    const reauthRequired = state.authState === 'reauth_required';
+    const connected = !reauthRequired && (state.connected === true || state.authenticated === true);
     rows.push({
       key: `connector:${item.id}`,
       kind: 'connector',
@@ -81,7 +83,8 @@ export function buildPluginRows({ connectors = [], mcpServers = [], imported = [
       category: String(item.category || ''),
       color: safeColor(item?.ui?.color),
       connected,
-      needsAttention: !connected && (state.hasCredentials === true || state.configured === true),
+      reauthRequired,
+      needsAttention: reauthRequired || (!connected && (state.hasCredentials === true || state.configured === true)),
       account: String(state.account?.email || state.account?.displayName || ''),
       connectionId: String(state.connectionId || ''),
       authType: String(state.authType || item?.setup?.authType || ''),
@@ -151,10 +154,12 @@ export function letterBucket(name) {
 
 /** Split sorted rows into { installed, available } and bucket the available ones. Exported for tests. */
 export function groupPluginRows(rows = []) {
-  const installed = rows.filter((row) => row.connected);
+  // A plugin whose login expired stays with the installed ones so it is easy to spot and reconnect.
+  const isInstalled = (row) => row.connected || row.reauthRequired === true;
+  const installed = rows.filter(isInstalled);
   const groups = [];
   for (const row of rows) {
-    if (row.connected) continue;
+    if (isInstalled(row)) continue;
     const label = letterBucket(row.name);
     let group = groups[groups.length - 1];
     if (!group || group.label !== label) { group = { label, rows: [] }; groups.push(group); }
@@ -214,6 +219,7 @@ function connectMessage(row) {
       : `Check the imported ${row.name} plugin and make sure everything in it is working.`;
   }
   if (row.kind === 'mcp') return `Connect the ${row.name} MCP server and verify its tools work.`;
+  if (row.reauthRequired) return `Reconnect my ${row.name} plugin: its saved login expired or was revoked. Handle the sign-in on the PC and verify it works.`;
   if (row.connected) return `Verify my ${row.name} connection and show me what it can do.`;
   return `Connect my ${row.name} plugin. Handle the sign-in on the PC and verify it works.`;
 }
@@ -295,7 +301,9 @@ export async function disconnectPlugin(row) {
 
 function openSheet(page, row, navigate, onChanged) {
   document.querySelectorAll('.pm-plugin-sheet-backdrop').forEach((el) => el.remove());
-  const status = row.needsAttention
+  const status = row.reauthRequired
+    ? 'Reconnect needed'
+    : row.needsAttention
     ? (row.kind === 'imported' ? 'Needs setup' : 'Needs attention')
     : row.connected ? (row.kind === 'imported' ? 'Installed' : 'Connected') : 'Not connected';
   const details = [
@@ -311,6 +319,7 @@ function openSheet(page, row, navigate, onChanged) {
   // Connected plugins get a real Disconnect instead of a chat hand-off.
   const primary = isOn
     ? (row.kind === 'imported' ? 'Uninstall' : 'Disconnect')
+    : row.reauthRequired ? `Reconnect ${row.name}`
     : (row.kind === 'imported' ? 'Finish setup' : (row.oneTap ? `Connect ${row.name}` : `Ask Prom to connect ${row.name}`));
   const primaryIsDisconnect = isOn;
   const wrap = document.createElement('div');
@@ -330,6 +339,8 @@ function openSheet(page, row, navigate, onChanged) {
       ${!primaryIsDisconnect && canDisconnect ? `<button class="pm-plugin-sheet-danger" type="button" data-plugin-disconnect>${row.kind === 'imported' ? 'Uninstall' : 'Disconnect'}</button>` : ''}
       <p class="pm-plugin-sheet-note">${isOn
         ? (row.kind === 'imported' ? 'Removes the imported skills, MCP servers and hooks.' : `Removes Prometheus's access to ${escapeHtml(row.name)}. You can connect again any time.`)
+        : row.reauthRequired
+          ? `${escapeHtml(row.name)}'s saved login expired or was revoked, so its tools are off until you sign in again. Prom handles the sign-in on your PC.`
         : row.oneTap
           ? `Opens ${escapeHtml(row.name)}'s sign-in page. Tap Allow and you're done. No tokens to paste.`
           : 'Prom handles this sign-in on your PC and asks before anything that writes or posts.'}</p>

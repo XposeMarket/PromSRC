@@ -217,6 +217,7 @@ export function getConnectorStatuses(): Record<string, {
     redirectUri?: string;
   }> = {};
   for (const [id, c] of connectors.entries()) {
+    try { c.probeExpiredGrant(); } catch { /* status must never fail on a probe */ }
     const metadata = c.getOAuthMetadata();
     result[id] = {
       connected: c.isConnected(),

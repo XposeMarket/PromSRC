@@ -72,3 +72,16 @@ assert.match(hub, /section === 'audit'/, 'Audit sub-route still reachable');
 assert.match(read('web-ui/src/mobile/mobile-router.js'), /plugins: 'more'/, '#mobile/plugins aliases to the more route');
 assert.equal(read('web-ui/src/pages/ConnectionsPage.js').includes('mobile-plugins-page'), false, 'desktop plugins page is untouched');
 console.log('test-mobile-plugins-page: ok');
+
+// A connector whose refresh grant was rejected must not read as Connected.
+const reauthRows = buildPluginRows({
+  connectors: [{ id: 'gmail', name: 'Gmail', state: { connected: false, authenticated: false, hasCredentials: true, authState: 'reauth_required', account: { email: 'a@b.c' } } }],
+});
+assert.equal(reauthRows[0].connected, false, 'reauth_required connector is not connected');
+assert.equal(reauthRows[0].reauthRequired, true);
+assert.equal(reauthRows[0].needsAttention, true);
+assert.deepEqual(groupPluginRows(reauthRows).installed.map((r) => r.name), ['Gmail'], 'expired login stays in the installed list for reconnect');
+// Even a stale connected:true must lose to an explicit reauth_required authState.
+const staleRows = buildPluginRows({ connectors: [{ id: 'gmail', name: 'Gmail', state: { connected: true, authState: 'reauth_required' } }] });
+assert.equal(staleRows[0].connected, false);
+console.log('mobile plugins reauth rows passed');
