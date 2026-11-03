@@ -1072,12 +1072,12 @@ export function createMobileChatRendererRuntime(context = {}) {
       }
       const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" aria-pressed="false" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')"><span class="pm-q-check" aria-hidden="true"></span><span class="pm-q-opt-label">${escapeHtml(opt)}</span></button>`).join('');
       const textArea = qq.mode === 'text'
-        ? `<textarea class="pm-q-input" data-pm-q-text="1" rows="3" placeholder="Type your answer" aria-label="${escapeHtml(qq.label)}"></textarea>`
+        ? `<textarea class="pm-q-input" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" data-pm-q-text="1" rows="3" placeholder="Type your answer" aria-label="${escapeHtml(qq.label)}"></textarea>`
         : '';
       const otherArea = qq.allowOther && qq.mode !== 'text'
         ? `<div class="pm-q-other-row">
             <button type="button" class="pm-q-other-toggle" aria-expanded="false" aria-pressed="false" onclick="_mobileQuestionToggleOther(this)"><span class="pm-q-check" aria-hidden="true"></span><span>Other…</span></button>
-            <textarea class="pm-q-input" data-pm-q-other="1" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escapeHtml(qq.label)}" hidden></textarea>
+            <textarea class="pm-q-input" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" data-pm-q-other="1" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escapeHtml(qq.label)}" hidden></textarea>
           </div>`
         : '';
       return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
