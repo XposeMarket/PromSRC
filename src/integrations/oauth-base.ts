@@ -19,6 +19,13 @@ export interface OAuthConnectorConfig {
   clientId: string;
   clientSecret?: string;
   scopes: string[];
+  /**
+   * Scopes the connector cannot work without. When the token response reports
+   * granted scopes and any of these are missing (e.g. the user left Google's
+   * granular consent checkboxes unticked), the callback fails instead of
+   * saving a connection that looks connected but 403s on every call.
+   */
+  requiredScopes?: string[];
   usePkce: boolean;
   callbackPort: number;
   callbackPath: string;
@@ -36,6 +43,16 @@ export interface OAuthConnectorConfig {
    * public URL is configured.
    */
   gatewayCallback?: boolean;
+}
+
+/**
+ * Required scopes absent from a token response's space/comma separated `scope`.
+ * If the provider does not report scopes, nothing can be verified: return [].
+ */
+export function missingRequiredScopes(required: string[] | undefined, grantedRaw: unknown): string[] {
+  if (!required?.length || typeof grantedRaw !== 'string' || !grantedRaw.trim()) return [];
+  const granted = new Set(grantedRaw.split(/[\s,]+/).filter(Boolean));
+  return required.filter((s) => !granted.has(s));
 }
 
 export interface ConnectorTokens {
@@ -484,6 +501,14 @@ export abstract class OAuthConnector {
       if (idTokenNonce !== flow.nonce) {
         return { success: false, error: 'Nonce validation failed — restart authorization.' };
       }
+    }
+
+    const missingScopes = missingRequiredScopes(this.cfg.requiredScopes, data.scope);
+    if (missingScopes.length) {
+      return {
+        success: false,
+        error: `${this.cfg.name} was not granted the permissions it needs (${missingScopes.join(', ')}). Click Connect again and tick every permission box on the consent screen.`,
+      };
     }
 
     const tokens = await this.buildTokens(data);
