@@ -274,6 +274,7 @@
     "test:web-ui-production": "node scripts/test-web-ui-production-build.mjs && node scripts/test-mobile-pairing-qr-decoder.mjs && node scripts/test-web-ui-production-smoke.mjs",
     "test:background-agent-steering": "tsx src/gateway/tasks/background-agent-stream.regression.ts && node scripts/test-background-agent-side-chat-contract.mjs && node scripts/test-background-agent-presentation.mjs",
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
+    "test:mobile-file-viewer-auth": "node scripts/test-mobile-file-viewer-auth.mjs",
     "test:chat-composer-drafts": "node scripts/test-chat-composer-drafts.mjs",
     "test:funnel-routing": "tsx src/gateway/routes/funnel-routing.regression.ts",
     "test:gateway-instance-mode": "tsx src/cli/gateway-instance-mode.regression.ts",

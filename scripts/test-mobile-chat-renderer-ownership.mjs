@@ -133,6 +133,9 @@ const measurements = {
 // Keep the established bounded ~0.1% compression variance above the measured total.
 // #798 per-chat route cache in mobile-model-badge + lastModel drawer logos (net of the
 // reverted <details> summary branch) measure 283060 (+352 over #785). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 283350, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// fix/mobile-file-viewer-auth: workspace-file link marking in renderMd
+// (workspace-file-links.js) plus authenticated canvas-sheet reads measure 283896
+// (+589 over main's 283307). Same ~0.1% allowance.
+assert(measurements.gzipBytes <= 284180, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
