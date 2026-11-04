@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { automaticReferenceCaptureReady, getReferenceService } from '../resources/reference-service';
 import {
   readMemoryRecord,
   getRelatedMemory,
@@ -290,6 +291,14 @@ router.post('/api/memory/create', async (req: Request, res: Response) => {
       });
     }
 
+    // Stage A keeps automatic capture off until find/open + owner controls are released.
+    if (automaticReferenceCaptureReady()) {
+      const library = getReferenceService(workspacePath);
+      for (const attachment of attachments) library.saveAttachment({
+        operationId: `memory:${noteId}:${attachment.path}`, filePath: attachment.path,
+        title: attachment.name, mimeType: attachment.mimeType, userQuote: description || content,
+      });
+    }
     fs.mkdirSync(path.dirname(noteAbsPath), { recursive: true });
     fs.writeFileSync(noteAbsPath, buildMemoryNoteDocument({
       id: noteId,

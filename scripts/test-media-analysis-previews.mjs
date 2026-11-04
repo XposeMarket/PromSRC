@@ -8,9 +8,10 @@ import { createRequire } from 'node:module';
 import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
+require('tsx/cjs');
 const root = path.resolve(import.meta.dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
-function load(file, resolve = require) {
+function load(file, resolve = createRequire(path.join(root, file))) {
   const exports = {};
   const source = ts.transpileModule(read(file), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
@@ -84,17 +85,36 @@ try {
   let visionMessages;
   let visionCallCount = 0;
   let analyzerFixture;
+  let mutateVideo = false;
+  let failHash = false;
+  let failExtractedManifest = false;
+  let captureReady = false;
+  let captureFail = false;
   const { executeAnalyzeImage, executeAnalyzeVideo } = load('src/tools/media-analysis.ts', name => {
     if (name === 'child_process') return {
       execFile: (...args) => args.at(-1)(null, 'Python 3', ''),
-      spawn: () => {
+      spawn: (_binary, args) => {
+        // Real extraction writes only into the newly allocated run directory.
+        const outputDir = args[args.indexOf('--output-dir') + 1];
+        function remap(value) {
+          if (typeof value === 'string' && fs.existsSync(value) && fs.statSync(value).isFile()) {
+            const target = path.join(outputDir, path.basename(value));
+            fs.copyFileSync(value, target);
+            return target;
+          }
+          if (Array.isArray(value)) return value.map(remap);
+          if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, remap(entry)]));
+          return value;
+        }
+        const extracted = remap(analyzerFixture);
         const child = new EventEmitter();
         child.stdout = new EventEmitter();
         child.stderr = new EventEmitter();
-        queueMicrotask(() => { child.stdout.emit('data', JSON.stringify(analyzerFixture)); child.emit('close', 0); });
+        queueMicrotask(() => { child.stdout.emit('data', JSON.stringify(extracted)); child.emit('close', 0); });
         return child;
       },
     };
+    if (name === '../gateway/chat/vision-image-normalize.js') return require('../src/gateway/chat/vision-image-normalize.ts');
     if (name === '../runtime/dependencies.js') return { resolveRuntimeBinary: name => name };
     if (name === './media-analysis-visuals.js') return { snapshotAnalysisVisual };
     if (name === './workspace-context.js') return { getActiveWorkspace: value => value };
@@ -110,8 +130,20 @@ try {
         visionCallCount++;
         visionMessages = messages;
         fs.writeFileSync(file, 'overwritten while vision runs');
+        if (mutateVideo) fs.writeFileSync(video, 'changed video during paid analysis');
         return { message: { content: 'test analysis' } };
       } }),
+    };
+    if (name === '../gateway/resources/analysis-artifacts') {
+      const real = require('../src/gateway/resources/analysis-artifacts.ts');
+      return { ...real,
+        hashFile: async file => { if (failHash) throw new Error('fixture fingerprint unavailable'); return real.hashFile(file); },
+        preserveAnalysisArtifacts: async input => { if (failExtractedManifest && input.status === 'extracted') throw new Error('fixture manifest disk failure'); return real.preserveAnalysisArtifacts(input); },
+      };
+    }
+    if (name === '../gateway/resources/reference-service') return {
+      automaticReferenceCaptureReady: () => captureReady,
+      getReferenceService: () => ({ saveAnalysis: () => { if (captureFail) throw new Error('fixture capture quota'); return { id: 'ref_fixture' }; } }),
     };
     if (name.startsWith('.')) return {};
     return require(name);
@@ -169,6 +201,14 @@ try {
   const fallback = await executeAnalyzeVideo(videoArgs);
   assert.equal(fallback.success, true, fallback.error);
   assert.equal(fallback.data.visual_inputs.length, 12);
+  assert.notEqual(fallback.data.output_dir, videoResult.data.output_dir);
+  assert.equal(fs.existsSync(path.join(directory, videoResult.data.analysis_manifest)), true);
+  assert.equal(fs.existsSync(path.join(directory, fallback.data.analysis_manifest)), true);
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, fallback.data.analysis_manifest), 'utf8'));
+  assert.equal(manifest.observationMode, 'direct');
+  assert.equal(manifest.transcript.available, false);
+  assert.equal(manifest.analysis, undefined);
+  assert.equal(manifest.files.filter(file => file.role === 'frame').length, 12);
   assert.equal(previews('analyze_video', { data: fallback.data }).length, 12);
   const repeated = previews('analyze_video', { data: { visual_inputs: [
     { path: 'same.png', artifactKind: 'sample_frame', source_name: 'frame_0001_0.5s.png' },
@@ -179,6 +219,42 @@ try {
   const videoReport = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
   assert.equal(videoReport.success, true, videoReport.error);
   assert.equal(visionCallCount, 3);
+  mutateVideo = true;
+  const changedVideo = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
+  mutateVideo = false;
+  assert.equal(changedVideo.success, true, changedVideo.error);
+  assert.equal(changedVideo.data.analysis, 'test analysis');
+  assert.equal(changedVideo.data.analysis_manifest, null);
+  assert.match(changedVideo.data.analysis_manifest_error, /Source changed/);
+  failHash = true;
+  const unhashable = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
+  failHash = false;
+  assert.equal(unhashable.success, true, unhashable.error);
+  assert.equal(unhashable.data.analysis, 'test analysis');
+  assert.equal(unhashable.data.analysis_manifest, null);
+  assert.match(unhashable.data.analysis_manifest_error, /fingerprinted/);
+  failExtractedManifest = true;
+  const diskFailure = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
+  failExtractedManifest = false;
+  assert.equal(diskFailure.success, true, diskFailure.error);
+  assert.equal(diskFailure.data.analysis, 'test analysis');
+  assert.match(diskFailure.data.analysis_manifest_error, /fixture manifest disk failure/);
+  captureReady = true;
+  const captureSuccess = await executeAnalyzeVideo(videoArgs);
+  assert.equal(captureSuccess.data.reference_capture.status, 'saved');
+  assert.equal(captureSuccess.data.reference_capture.referenceId, 'ref_fixture');
+  captureFail = true;
+  const captureFailure = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
+  captureFail = false;
+  assert.equal(captureFailure.success, true, captureFailure.error);
+  assert.equal(captureFailure.data.analysis, 'test analysis');
+  assert.equal(captureFailure.data.reference_capture.status, 'failed');
+  assert.match(captureFailure.data.reference_capture.error, /fixture capture quota/);
+  failHash = true;
+  const skippedCapture = await executeAnalyzeVideo(videoArgs);
+  failHash = false; captureReady = false;
+  assert.equal(skippedCapture.success, true, skippedCapture.error);
+  assert.equal(skippedCapture.data.reference_capture.status, 'skipped');
 } finally {
   assert.ok(directory.startsWith(path.join(os.tmpdir(), 'prom-analysis-preview-')));
   fs.rmSync(directory, { recursive: true, force: true });
