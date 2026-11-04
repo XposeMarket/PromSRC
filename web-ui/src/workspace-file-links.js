@@ -59,6 +59,9 @@ export function resolveWorkspaceFileLinks(html, toUrl) {
     if (!path) return match;
     let url = '';
     try { url = typeof toUrl === 'function' ? String(toUrl(path) || '') : ''; } catch { url = ''; }
+    // Never put the device pairing token (?pt=) in a copy/shareable link href.
+    // A normal tap opens the authenticated viewer; the href is only a fallback.
+    url = url.replace(/([?&])pt=[^&#]*&?/g, '$1').replace(/[?&](?=#|$)/, '');
     return `<a${before} href="${attr(url || href.replace(/&amp;/g, '&'))}" data-workspace-file="${attr(path)}"${after}>`;
   });
 }

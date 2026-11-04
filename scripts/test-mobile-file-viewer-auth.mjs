@@ -54,7 +54,9 @@ const html = [
   '<p><a href="docs/a&amp;b.md">amp</a></p>',
 ].join('');
 const out = resolveWorkspaceFileLinks(html, toUrl);
-assert.match(out, /<a href="https:\/\/gw\.example\/api\/canvas\/inline\?path=plans%2Fconnected-memory%2FPLAN\.md&amp;pt=tok" data-workspace-file="plans\/connected-memory\/PLAN\.md">Locked plan<\/a>/);
+assert.match(out, /<a href="https:\/\/gw\.example\/api\/canvas\/inline\?path=plans%2Fconnected-memory%2FPLAN\.md" data-workspace-file="plans\/connected-memory\/PLAN\.md">Locked plan<\/a>/);
+assert.doesNotMatch(out, /pt=tok/, 'link hrefs must never carry the device pairing token');
+assert.match(resolveWorkspaceFileLinks('<a href="a/b.md">x</a>', () => 'https://gw/api/canvas/inline?pt=tok&path=a%2Fb.md'), /href="https:\/\/gw\/api\/canvas\/inline\?path=a%2Fb\.md"/, 'leading pt param is stripped too');
 assert.match(out, /<a href="https:\/\/example\.com\/doc\.md">web<\/a>/, 'web links untouched');
 assert.match(out, /<a href="#top">top<\/a>/, 'anchors untouched');
 assert.match(out, /data-workspace-file="docs\/a&amp;b\.md"/, 'attribute values are escaped');
