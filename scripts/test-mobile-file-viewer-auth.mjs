@@ -33,6 +33,19 @@ const files = {
   'docs/a%23b.md': 'docs/a#b.md',
   'notes/what%3F.txt': 'notes/what?.txt',
   'my.project/notes.md': 'my.project/notes.md',
+  // Less common extensions and explicit local paths (review recheck, PR #820).
+  'notes.rst': 'notes.rst',
+  'main.rs': 'main.rs',
+  'main.go': 'main.go',
+  'src/main.cpp': 'src/main.cpp',
+  'report.odt': 'report.odt',
+  'data.parquet': 'data.parquet',
+  './main.rs': 'main.rs',
+  './build.sh/output.log': 'build.sh/output.log',
+  'file:///build.sh/output.log': 'build.sh/output.log',
+  'team@home/notes.md': 'team@home/notes.md',
+  'logs/app.log.1': 'logs/app.log.1',
+  'reports/2026-11-04.md': 'reports/2026-11-04.md',
   'C:\\Users\\me\\workspace\\out.json': 'C:\\Users\\me\\workspace\\out.json',
   'file:///C:/Users/me/report.pdf': 'C:/Users/me/report.pdf',
 };
@@ -46,7 +59,7 @@ const notFiles = [
   '#section', '/api/canvas/inline?path=a.md', '//cdn.example.com/a.js', 'javascript:alert(1)',
   'data:text/plain,hi', 'plans/connected-memory', 'README', 'example.com', 'www.site.org/page.html', '',
   // Version strings, bare domains and emails (review finding, PR #820).
-  'v1.2', 'docs/v2.0', 'example.dev', 'user@example.dev', 'app.dev', 'example.com/page.html', 'report.final',
+  'v1.2', 'docs/v2.0', 'example.dev', 'user@example.dev', 'app.dev', 'example.com/page.html', '1.2.3',
 ];
 for (const href of notFiles) {
   assert.equal(workspaceFilePathFromHref(href), '', `must not treat ${JSON.stringify(href)} as a workspace file`);

@@ -9,18 +9,19 @@
 //
 // renderMd marks these anchors with data-workspace-file so one delegated click
 // handler (utils.js) can open the host's file viewer instead: the mobile canvas
-// sheet or the desktop Canvas. The fallback href points at the authenticated
-// inline media route so a non-JS open still works.
+// sheet or the desktop Canvas. The fallback href points at the inline media
+// route (pairing token stripped) so a non-JS open still resolves the file.
 //
 // Pure string helpers only (no DOM) so node tests can import this module.
 
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABS_RE = /^[a-z]:[\\/]/i;
 const FILE_EXT_RE = /\.[a-z0-9_-]{1,12}$/i;
-const DOMAIN_LIKE_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|ai|co|dev|app|gov|edu|us|uk|ca|de|me|tv|xyz|so|sh|gg|ly)$/i;
-// A bare `[x](name.ext)` with no folder is only a file when the extension is
-// a real file type; this keeps `v1.2`, `example.dev` and emails out.
-const KNOWN_FILE_EXTS = new Set('md txt json jsonl csv log yaml yml toml xml html htm css js mjs jsx ts tsx py sh ps1 sql pdf docx xlsx png jpg jpeg gif webp svg mp4 webm mov mp3 wav zip'.split(' '));
+// Web TLDs that are rarely file extensions. `.md`, `.sh`, `.py` and `.rs` are
+// TLDs too, so this is a short denylist rather than an allowlist of file types.
+const WEB_TLD_RE = /\.(?:com|org|net|io|ai|co|dev|app|gov|edu|xyz|us|uk|ca|de|me|tv|gg)$/i;
+const VERSION_RE = /^v?\d+(?:\.\d+)+$/i;
+const EMAIL_RE = /^[^@\s\\/]+@[^@\s\\/]+\.[a-z]{2,}$/i;
 
 function decodeHref(value) {
   try { return decodeURIComponent(value); } catch { return value; }
@@ -35,8 +36,11 @@ export function workspaceFilePathFromHref(rawHref) {
   // stays part of the filename instead of truncating it.
   href = decodeHref(href.split(/[?#]/)[0]).trim();
   if (!href) return '';
+  // Explicit local intent (./x, ../x, file://, C:\x) skips the web heuristics.
+  let local = /^\.{1,2}[\\/]/.test(href) || WINDOWS_ABS_RE.test(href);
   if (/^file:\/\//i.test(href)) {
     href = href.replace(/^file:\/\/\/?/i, '');
+    local = true;
   } else if (!WINDOWS_ABS_RE.test(href)) {
     if (SCHEME_RE.test(href)) return ''; // http:, https:, mailto:, tel:, data:, ...
     if (href.startsWith('/') || href.startsWith('\\')) return ''; // app/server route or //host
@@ -46,15 +50,11 @@ export function workspaceFilePathFromHref(rawHref) {
   if (!path || /[\u0000-\u001f<>"]/.test(path)) return '';
   const segments = path.split(/[\\/]/);
   const last = segments[segments.length - 1] || '';
-  const extMatch = last.match(FILE_EXT_RE);
-  if (!extMatch) return '';
-  const ext = extMatch[0].slice(1).toLowerCase();
-  if (/^\d+$/.test(ext)) return ''; // version strings: v1.2, docs/2.0
-  if (segments[0].includes('@')) return ''; // emails: user@example.dev
-  if (segments.length === 1) {
-    if (!KNOWN_FILE_EXTS.has(ext)) return ''; // example.dev, name.final
-  } else if (DOMAIN_LIKE_RE.test(segments[0]) && !WINDOWS_ABS_RE.test(path)) {
-    return ''; // example.com/page.html is a web link written without a scheme
+  if (!FILE_EXT_RE.test(last)) return '';
+  if (!local) {
+    if (VERSION_RE.test(last)) return ''; // v1.2, docs/2.0
+    if (EMAIL_RE.test(segments[0])) return ''; // user@example.dev
+    if (WEB_TLD_RE.test(segments[0])) return ''; // example.dev, example.com/page.html
   }
   return path;
 }
@@ -64,7 +64,7 @@ function attr(value) {
 }
 
 // Rewrites sanitized anchors that point at workspace files. toUrl(path) builds
-// the authenticated fallback URL (workspaceMediaUrl in utils.js).
+// the fallback URL (workspaceMediaUrl in utils.js).
 export function resolveWorkspaceFileLinks(html, toUrl) {
   const source = String(html || '');
   if (!source.includes('<a')) return source;

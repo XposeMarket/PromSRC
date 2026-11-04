@@ -135,8 +135,8 @@ const measurements = {
 // reverted <details> summary branch) measure 283060 (+352 over #785). Same ~0.1% allowance.
 // fix/mobile-file-viewer-auth: workspace-file link marking in renderMd
 // (workspace-file-links.js: token strip, encoded-delimiter handling, version/
-// email/domain rejection) plus authenticated canvas-sheet reads measure 284155
-// (+848 over main's 283307). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 284440, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// email/domain rejection) plus authenticated canvas-sheet reads measure 284020
+// (+713 over main's 283307). Same ~0.1% allowance.
+assert(measurements.gzipBytes <= 284300, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
