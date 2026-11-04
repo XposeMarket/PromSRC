@@ -17,7 +17,10 @@
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABS_RE = /^[a-z]:[\\/]/i;
 const FILE_EXT_RE = /\.[a-z0-9_-]{1,12}$/i;
-const BARE_DOMAIN_RE = /\.(?:com|org|net|io|ai|co|gov|edu|us|uk|ca|de|me|tv|xyz)$/i;
+const DOMAIN_LIKE_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|ai|co|dev|app|gov|edu|us|uk|ca|de|me|tv|xyz|so|sh|gg|ly)$/i;
+// A bare `[x](name.ext)` with no folder is only a file when the extension is
+// a real file type; this keeps `v1.2`, `example.dev` and emails out.
+const KNOWN_FILE_EXTS = new Set('md txt json jsonl csv log yaml yml toml xml html htm css js mjs jsx ts tsx py sh ps1 sql pdf docx xlsx png jpg jpeg gif webp svg mp4 webm mov mp3 wav zip'.split(' '));
 
 function decodeHref(value) {
   try { return decodeURIComponent(value); } catch { return value; }
@@ -26,8 +29,12 @@ function decodeHref(value) {
 // Returns the workspace path a markdown link points at, or '' when the link is
 // a web URL, an app route, an in-page anchor, or not a file.
 export function workspaceFilePathFromHref(rawHref) {
-  let href = decodeHref(String(rawHref || '').trim().replace(/&amp;/g, '&')).trim();
+  let href = String(rawHref || '').trim().replace(/&amp;/g, '&').trim();
   if (!href || href.startsWith('#')) return '';
+  // Drop the literal query/fragment BEFORE decoding so an encoded %23 / %3F
+  // stays part of the filename instead of truncating it.
+  href = decodeHref(href.split(/[?#]/)[0]).trim();
+  if (!href) return '';
   if (/^file:\/\//i.test(href)) {
     href = href.replace(/^file:\/\/\/?/i, '');
   } else if (!WINDOWS_ABS_RE.test(href)) {
@@ -35,12 +42,20 @@ export function workspaceFilePathFromHref(rawHref) {
     if (href.startsWith('/') || href.startsWith('\\')) return ''; // app/server route or //host
     if (/^www\./i.test(href)) return '';
   }
-  const path = href.split(/[?#]/)[0].replace(/^\.\//, '').trim();
+  const path = href.replace(/^\.\//, '').trim();
   if (!path || /[\u0000-\u001f<>"]/.test(path)) return '';
-  const last = path.split(/[\\/]/).pop() || '';
-  if (!FILE_EXT_RE.test(last)) return '';
-  // `[site](example.com)` is a bare domain, not a workspace file.
-  if (!/[\\/]/.test(path) && BARE_DOMAIN_RE.test(last)) return '';
+  const segments = path.split(/[\\/]/);
+  const last = segments[segments.length - 1] || '';
+  const extMatch = last.match(FILE_EXT_RE);
+  if (!extMatch) return '';
+  const ext = extMatch[0].slice(1).toLowerCase();
+  if (/^\d+$/.test(ext)) return ''; // version strings: v1.2, docs/2.0
+  if (segments[0].includes('@')) return ''; // emails: user@example.dev
+  if (segments.length === 1) {
+    if (!KNOWN_FILE_EXTS.has(ext)) return ''; // example.dev, name.final
+  } else if (DOMAIN_LIKE_RE.test(segments[0]) && !WINDOWS_ABS_RE.test(path)) {
+    return ''; // example.com/page.html is a web link written without a scheme
+  }
   return path;
 }
 

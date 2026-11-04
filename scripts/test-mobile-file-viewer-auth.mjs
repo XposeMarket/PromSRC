@@ -28,6 +28,11 @@ const files = {
   'docs/my%20file.md': 'docs/my file.md',
   'FACTS.md': 'FACTS.md',
   'src/app.ts#L20': 'src/app.ts',
+  'plans/x.md?raw=1': 'plans/x.md',
+  // Encoded delimiters belong to the filename (review finding, PR #820).
+  'docs/a%23b.md': 'docs/a#b.md',
+  'notes/what%3F.txt': 'notes/what?.txt',
+  'my.project/notes.md': 'my.project/notes.md',
   'C:\\Users\\me\\workspace\\out.json': 'C:\\Users\\me\\workspace\\out.json',
   'file:///C:/Users/me/report.pdf': 'C:/Users/me/report.pdf',
 };
@@ -40,6 +45,8 @@ const notFiles = [
   'https://example.com/a.md', 'http://localhost:18789/x.js', 'mailto:a@b.co', 'tel:+15551234',
   '#section', '/api/canvas/inline?path=a.md', '//cdn.example.com/a.js', 'javascript:alert(1)',
   'data:text/plain,hi', 'plans/connected-memory', 'README', 'example.com', 'www.site.org/page.html', '',
+  // Version strings, bare domains and emails (review finding, PR #820).
+  'v1.2', 'docs/v2.0', 'example.dev', 'user@example.dev', 'app.dev', 'example.com/page.html', 'report.final',
 ];
 for (const href of notFiles) {
   assert.equal(workspaceFilePathFromHref(href), '', `must not treat ${JSON.stringify(href)} as a workspace file`);
