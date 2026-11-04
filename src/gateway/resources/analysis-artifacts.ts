@@ -34,13 +34,14 @@ export function createAnalysisRun(workspace: string, parent: string): { id: stri
 /** Preserve only actual outputs under this run. Do not trust analyzer-returned paths. */
 export async function preserveAnalysisArtifacts(input: {
   workspace: string; directory: string; runId: string; sourcePath: string; sourceHash: string;
-  frames: Array<{ path: string; timestampSeconds?: number }>; contactSheets: string[]; audioPath?: string;
+  frames: Array<{ path: string; timestampSeconds?: number }>; contactSheets: string[]; audioPath?: string; sourceSnapshot?: { size: number; mtimeMs: number };
   transcript?: string; transcriptionProvider?: string | null; analysisPrompt?: string; analysis?: string;
   observationMode: 'direct' | 'report'; status: 'extracted' | 'complete';
 }): Promise<{ path: string; manifest: AnalysisManifest }> {
   const sourceRelative = path.isAbsolute(input.sourcePath) ? path.relative(input.workspace, input.sourcePath) : input.sourcePath;
   const sourcePath = resolveConfinedStoragePath(input.workspace, sourceRelative, { label: 'analysis source' });
-  if (await hashFile(sourcePath) !== input.sourceHash) throw new Error('Source changed during analysis; evidence cannot be bound to the original version');
+  // Metadata check only (size+mtime recorded at the single hash); the strict full rehash stays in ReferenceService.saveAnalysis.
+  if (input.sourceSnapshot) { const now = fs.statSync(sourcePath); if (now.size !== input.sourceSnapshot.size || now.mtimeMs !== input.sourceSnapshot.mtimeMs) throw new Error('Source changed during analysis; evidence cannot be bound to the original version'); }
   const sourceStat = fs.statSync(sourcePath);
   const files: ArtifactFile[] = []; const missing: string[] = [];
   const requested = [

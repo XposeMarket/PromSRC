@@ -124,6 +124,7 @@ export function getReferenceService(workspace: string): ReferenceService {
     let owner = metadataWriters.get(resources.rootDir);
     if (!owner) {
       owner = new ReferenceStore(resources.rootDir, resources.workspaceScope);
+      const writer = owner; process.once('exit', () => writer.close()); // release the lock on normal shutdown
       metadataWriters.set(resources.rootDir, owner);
     }
     const metadata = owner.workspace === resources.workspaceScope ? owner

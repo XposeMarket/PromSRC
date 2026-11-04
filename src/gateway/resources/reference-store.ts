@@ -82,10 +82,10 @@ export class ReferenceStore {
         if (version > 1) throw new Error('Reference database needs a newer Prometheus version');
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS saved_references (
-            id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, workspace TEXT NOT NULL,
-            resource_id TEXT NOT NULL, version_id TEXT NOT NULL, data TEXT NOT NULL);
+            id TEXT NOT NULL, operation_id TEXT NOT NULL, workspace TEXT NOT NULL,
+            resource_id TEXT NOT NULL, version_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(workspace,id), UNIQUE(workspace,operation_id));
           CREATE TABLE IF NOT EXISTS capture_operations (
-            id TEXT PRIMARY KEY, workspace TEXT NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL);
+            id TEXT NOT NULL, workspace TEXT NOT NULL, state TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(workspace,id));
           CREATE TABLE IF NOT EXISTS version_pins (
             version_id TEXT NOT NULL, holder_kind TEXT NOT NULL, holder_id TEXT NOT NULL,
             PRIMARY KEY(version_id, holder_kind, holder_id));
@@ -155,12 +155,14 @@ export class ReferenceStore {
     for (const binding of bindings) { validateKey(binding.resourceId); validateKey(binding.versionId); }
     const data = JSON.stringify({ reference, bindings } satisfies CaptureOperation);
     this.db.transaction(() => {
-      const previous = this.db.prepare('SELECT data FROM capture_operations WHERE id=?').get(reference.operationId);
+      const previous = this.db.prepare('SELECT data FROM capture_operations WHERE id=? AND workspace=?').get(reference.operationId, this.workspace);
       if (previous && previous.data !== data) throw new Error('Capture operation already has different content');
       this.db.prepare('INSERT OR IGNORE INTO capture_operations VALUES (?, ?, ?, ?)').run(reference.operationId, this.workspace, 'pending', data);
-      for (const binding of bindings) this.db.prepare('INSERT OR IGNORE INTO version_pins VALUES (?, ?, ?)').run(binding.versionId, 'pending', reference.operationId);
+      for (const binding of bindings) this.db.prepare('INSERT OR IGNORE INTO version_pins VALUES (?, ?, ?)').run(binding.versionId, 'pending', this.pendingHolder(reference.operationId));
     })();
   }
+  /** Workspace-namespaced holder so one workspace's completion cannot release another's pending roots. */
+  private pendingHolder(operationId: string): string { return crypto.createHash('sha256').update(this.workspace + '|' + operationId).digest('hex'); }
   complete(operationId: string): SavedReference {
     this.assertWriter();
     return this.db.transaction(() => {
@@ -169,8 +171,8 @@ export class ReferenceStore {
       const { reference, bindings } = JSON.parse(row.data) as CaptureOperation;
       this.db.prepare('INSERT OR IGNORE INTO saved_references VALUES (?, ?, ?, ?, ?, ?)').run(reference.id, operationId, this.workspace, reference.resourceId, reference.versionId, JSON.stringify(reference));
       for (const binding of bindings) this.db.prepare('INSERT OR IGNORE INTO version_pins VALUES (?, ?, ?)').run(binding.versionId, 'reference', reference.id);
-      this.db.prepare('DELETE FROM version_pins WHERE holder_kind=? AND holder_id=?').run('pending', operationId);
-      this.db.prepare('UPDATE capture_operations SET state=? WHERE id=?').run('complete', operationId);
+      this.db.prepare('DELETE FROM version_pins WHERE holder_kind=? AND holder_id=?').run('pending', this.pendingHolder(operationId));
+      this.db.prepare('UPDATE capture_operations SET state=? WHERE id=? AND workspace=?').run('complete', operationId, this.workspace);
       return reference;
     })();
   }

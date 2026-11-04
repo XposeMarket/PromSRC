@@ -77,7 +77,7 @@ try {
   const b = createAnalysisRun(workspace, 'downloads/video_analysis/clip');
   assert.notEqual(a.directory, b.directory);
   const frame = path.join(a.directory, 'frame.jpg'); fs.writeFileSync(frame, 'synthetic-frame');
-  const input = { workspace, directory: a.directory, runId: a.id, sourcePath, sourceHash: await hashFile(sourcePath), frames: [{ path: frame, timestampSeconds: 1.25 }], contactSheets: [], transcript: 'existing speech', transcriptionProvider: 'fixture', analysisPrompt: 'Look at menu movement', observationMode: 'report' };
+  const input = { workspace, directory: a.directory, runId: a.id, sourcePath, sourceHash: await hashFile(sourcePath), sourceSnapshot: { size: fs.statSync(sourcePath).size, mtimeMs: fs.statSync(sourcePath).mtimeMs }, frames: [{ path: frame, timestampSeconds: 1.25 }], contactSheets: [], transcript: 'existing speech', transcriptionProvider: 'fixture', analysisPrompt: 'Look at menu movement', observationMode: 'report' };
   await preserveAnalysisArtifacts({ ...input, status: 'extracted' });
   const result = await preserveAnalysisArtifacts({ ...input, status: 'complete', analysis: 'A sampled frame, not continuous motion.' });
   assert.equal(result.manifest.files[0].timestampSeconds, 1.25);
@@ -96,7 +96,17 @@ try {
   assert.equal(fs.readFileSync(path.join(rootDir, archivedManifest.files[0].path), 'utf8'), 'synthetic-frame');
   assert.ok(metadata.pins().has(archivedManifest.sourceBinding.versionId));
   assert.equal(service2.saveAnalysis({ operationId: 'analysis-fixture', manifestPath: 'no-longer-needed' }).id, analysisRef.id);
-  console.log('PASS immutable manifests, timestamps, traversal rejection, real artifact archive and original retention');
+  fs.appendFileSync(sourcePath, 'changed');
+  await assert.rejects(preserveAnalysisArtifacts({ ...input, directory: a.directory, runId: a.id, status: 'complete' }), /Source changed/, 'source change is caught at the manifest write');
+  const twinWorkspace = new ReferenceStore(rootDir, path.join(temp, 'workspace-two'), { owner: metadata });
+  const twin = { ...saved, id: 'ref_twin', operationId: 'fixture-save', workspace: twinWorkspace.workspace, title: 'Twin evidence' };
+  twinWorkspace.prepare(twin, [binding]);
+  assert.equal(twinWorkspace.complete('fixture-save').id, 'ref_twin');
+  assert.equal(metadata.findByOperation('fixture-save').id, saved.id, 'same operationId keeps each workspace evidence');
+  assert.equal(twinWorkspace.findByOperation('fixture-save').id, 'ref_twin');
+  assert.ok(metadata.pins().has(binding.versionId), 'pins retained across workspace views');
+  twinWorkspace.close();
+  console.log('PASS immutable manifests, timestamps, traversal rejection, source-change detection, workspace-scoped operation ids');
 
   metadata.close(); metadata = undefined;
   fs.renameSync(path.join(rootDir, 'references.sqlite'), path.join(rootDir, 'references.sqlite.backup'));
