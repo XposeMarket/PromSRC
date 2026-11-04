@@ -97,7 +97,7 @@ export function getConnectionRuntime() {
   adapters.register(new ApiKeyConnectionAdapter({
     createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
     verifyCredential: async (reference) => ({ ok: String(reference).startsWith('vault:'), message: 'Credential is stored as an opaque vault reference.' }),
-    clearCredential: async (reference) => secureInput.clearReference(reference),
+    clearCredential: async (reference, context) => secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id),
   }));
 
   adapters.register(new OpenAiCompatibleModelConnectionAdapter({
@@ -155,7 +155,7 @@ export function getConnectionRuntime() {
     if (!adapters.get(adapter.id)) adapters.register(adapter);
   }
   const plans = new PluginConnectionPlanResolver(() => mcp.getConfigs());
-  const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, broadcast: broadcastWS });
+  const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, validateCredentialReference: (reference, serviceId, attemptId) => secureInput.ownsReference(reference, serviceId, attemptId), broadcast: broadcastWS });
   singleton = { orchestrator, secureInput, adapters };
   return singleton;
 }

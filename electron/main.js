@@ -1356,7 +1356,7 @@ function requestPrometheusBrowserNavigation(rawUrl) {
 // or null if protection is unavailable (child then falls back to its key file).
 function resolveVaultMasterKey() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text')) {
       writeGatewayLog('[main] safeStorage unavailable — vault key will use file fallback\n');
       return null;
     }
@@ -1774,6 +1774,7 @@ function buildGatewayEnvironment() {
     PROMETHEUS_SUPERVISOR_RESTART:  '1',
     PROMETHEUS_DISABLE_UPDATE_CHECK: '1',
     PROMETHEUS_ELECTRON_MANAGED:    '1',
+    PROMETHEUS_VAULT_OS_PROTECTED: safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') ? '1' : '0',
     PROMETHEUS_ELECTRON_PID:        String(process.pid),
     // Lets the gateway know exit 43 (full app relaunch) is understood here.
     PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
@@ -3265,7 +3266,7 @@ function buildNativeSnapshotScript() {
       const style = getComputedStyle(el);
       return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
     };
-    const textOf = (el) => String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.innerText || el.value || el.href || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
+    const textOf = (el) => String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.innerText || ((el.type === 'password' || /password|one-time-code/i.test(el.autocomplete || '') || el.hasAttribute('data-prom-secret')) ? '' : el.value) || el.href || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
     const roleOf = (el) => String(el.getAttribute('role') || el.tagName || '').toLowerCase();
     const inputish = (el) => {
       const tag = String(el.tagName || '').toLowerCase();
@@ -3379,7 +3380,7 @@ async function locateNativeElement(payload = {}, sessionId = '') {
     const cx = Math.round(Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)));
     const cy = Math.round(Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2)));
     const tag = String(el.tagName || '').toLowerCase();
-    const name = String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.value || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+    const name = String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || ((el.type === 'password' || /password|one-time-code/i.test(el.autocomplete || '') || el.hasAttribute('data-prom-secret')) ? '' : el.value) || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
     const role = String(el.getAttribute('role') || el.tagName || '').toLowerCase();
     const editable = tag === 'input' || tag === 'textarea' || el.isContentEditable === true;
     return { ok: true, x: cx, y: cy, tag, role, name, editable,
@@ -3918,6 +3919,17 @@ async function inspectNativeBrowserPoint(payload = {}) {
   })(${JSON.stringify(point)})`, sessionId);
 }
 
+const protectedAccess = require('./protected-access').createProtectedAccess({ BrowserWindow, session, app,
+  transferCookies: async (sessionId, origin, cookies) => {
+    await openNativeBrowserSurface({ sessionId, url: origin });
+    const { wc } = requireNativeViewForSession(sessionId);
+    for (const cookie of cookies) {
+      await wc.session.cookies.set({ url: origin, name: cookie.name, value: cookie.value, path: cookie.path || '/', secure: true, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, ...(cookie.expirationDate ? { expirationDate: cookie.expirationDate } : {}) });
+    }
+    await wc.loadURL(origin);
+  }
+});
+
 async function startNativeBrowserRpcServer() {
   if (nativeBrowserRpcServer) return nativeBrowserRpcPort;
   nativeBrowserRpcServer = http.createServer((req, res) => {
@@ -3937,7 +3949,11 @@ async function startNativeBrowserRpcServer() {
       try {
         const pathName = new URL(req.url || '/', 'http://127.0.0.1').pathname;
         let result;
-        if (pathName === '/state') result = stateNativeBrowserSurface(payload);
+        if (pathName === '/protected-status') result = { supported: protectedAccess.supported() };
+        else if (pathName === '/protected-prepare') result = await protectedAccess.prepare(payload);
+        else if (pathName === '/protected-submit') result = await protectedAccess.submit(payload);
+        else if (pathName === '/protected-cancel') result = protectedAccess.cancel(payload);
+        else if (pathName === '/state') result = stateNativeBrowserSurface(payload);
         else if (pathName === '/metrics') result = await getNativeBrowserResourceMetrics(payload);
         else if (pathName === '/tabs') result = listNativeBrowserTabs(payload);
         else if (pathName === '/select-tab') result = selectNativeBrowserTab(payload);

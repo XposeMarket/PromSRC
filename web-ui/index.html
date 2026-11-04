@@ -160,7 +160,12 @@
     // Keep the settings shell interactive while the full controller is loading.
     // This is also a graceful fallback if one of the controller's dependencies
     // fails to load: users can still switch panels and close the modal.
-    const applySettingsTabFallback = function applySettingsTabFallback(tab) {
+    // Section aliases (deep links such as #mobile/settings/saved-access) must be
+    // resolved here: unknown tabs fall back to General before the real controller
+    // ever sees them, because this shim forwards its resolved tab.
+    const SETTINGS_TAB_ALIASES = { 'saved-access': 'security', 'secure-access': 'security' };
+    const applySettingsTabFallback = function applySettingsTabFallback(rawTab) {
+      const tab = SETTINGS_TAB_ALIASES[String(rawTab || '').trim()] || rawTab;
       const activeTab = SETTINGS_TABS.includes(tab) ? (tab === 'migration' ? 'system' : tab) : 'system';
       if (tab === 'migration') window.settingsLegacyMigrationNotice = true;
       window.settingsTab = activeTab;
@@ -4160,6 +4165,7 @@
     </div>
 
     <div id="settings-panel-security" style="display:none;padding:14px 16px">
+      <div id="settings-secure-access-host" style="margin-bottom:14px"></div>
       <div style="border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
           <div>

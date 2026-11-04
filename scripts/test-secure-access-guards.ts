@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { secureInputTransportAllowed } from '../src/gateway/routes/secure-access.router';
+import { evaluateHardToolDeny } from '../src/gateway/tool-deny-policy';
+const request = (origin: string, host: string, peer='127.0.0.1',json=true) => ({headers:{origin,host},socket:{remoteAddress:peer},is:()=>json}) as any;
+assert(secureInputTransportAllowed(request('http://127.0.0.1:8080','127.0.0.1:8080')));
+assert(secureInputTransportAllowed(request('https://example.test','example.test','192.0.2.1')));
+assert(!secureInputTransportAllowed(request('http://example.test','example.test')));
+assert(!secureInputTransportAllowed(request('https://evil.test','example.test')));
+assert(!secureInputTransportAllowed(request('null','example.test')));
+assert(!secureInputTransportAllowed(request('https://example.test','example.test','127.0.0.1',false)));
+assert(evaluateHardToolDeny({toolName:'read_file',args:{path:'C:/app/vault/vault.key'},executionPolicy:{mode:'normal'}} as any).denied);
+assert(evaluateHardToolDeny({toolName:'run_command',args:{command:'cat /app/vault/vault.enc'},executionPolicy:{mode:'normal'}} as any).denied);
+assert(!evaluateHardToolDeny({toolName:'read_file',args:{path:'src/security/vault.ts'},executionPolicy:{mode:'normal'}} as any).denied);
+console.log('PASS secure transport guards, CSRF origin, HTTPS, direct vault file denial.');

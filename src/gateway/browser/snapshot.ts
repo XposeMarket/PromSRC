@@ -126,7 +126,8 @@ export async function takeSnapshot(page: PwPage, maxElements: number = 100): Pro
         const inputType = el.getAttribute('type') || '';
         const testId = el.getAttribute('data-testid') || '';
         const text = (el.innerText || '').trim().slice(0, 80);
-        const val = el.value ? String(el.value).slice(0, 60) : '';
+        const secretField = inputType.toLowerCase() === 'password' || /password|one-time-code/i.test(el.getAttribute('autocomplete') || '') || el.hasAttribute('data-prom-secret');
+        const val = !secretField && el.value ? String(el.value).slice(0, 60) : '';
         const isContentEditable = el.getAttribute('contenteditable') === 'true';
         const inputLikeTag = ['input', 'textarea', 'select'].includes(tag) || isContentEditable;
 

@@ -164,6 +164,7 @@ import { router as proposalsRouter, setProposalsBroadcast, broadcastProposalCrea
 import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
 import { router as connectionsV2Router } from './routes/connections-v2.router';
+import { router as secureAccessRouter } from './routes/secure-access.router';
 import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as resourcesRouter } from './routes/resources.router';
@@ -1061,6 +1062,7 @@ app.use('/', requireGatewayAuth, requireAccountAccess, proposalsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, auditLogRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsV2Router);
+app.use('/', requireGatewayAuth, requireAccountAccess, secureAccessRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, canvasRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, resourcesRouter);
@@ -1077,6 +1079,11 @@ app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
 
 app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (/^\/api\/(secure-access|connection-secure-input)(\/|$)/.test(_req.path)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(400).json({ error: 'SECURE_INPUT_INVALID' });
+    return;
+  }
   if (!isStorageBoundaryError(err)) {
     next(err);
     return;

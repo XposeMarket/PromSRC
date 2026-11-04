@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getConnectionRuntime } from '../../connections/runtime';
+import { secureInputTransportAllowed } from './secure-access.router';
 
 export const router = Router();
 
@@ -68,6 +69,8 @@ router.get('/api/connection-secure-input/:sessionId', (req, res) => {
 });
 
 router.post('/api/connection-secure-input/:sessionId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
   try {
     const result = getConnectionRuntime().secureInput.submit(req.params.sessionId, req.body?.values || {});
     // Deliberately return only an opaque reference; submitted values never enter
