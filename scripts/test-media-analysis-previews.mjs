@@ -8,9 +8,10 @@ import { createRequire } from 'node:module';
 import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
+require('tsx/cjs');
 const root = path.resolve(import.meta.dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
-function load(file, resolve = require) {
+function load(file, resolve = createRequire(path.join(root, file))) {
   const exports = {};
   const source = ts.transpileModule(read(file), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
@@ -87,14 +88,28 @@ try {
   const { executeAnalyzeImage, executeAnalyzeVideo } = load('src/tools/media-analysis.ts', name => {
     if (name === 'child_process') return {
       execFile: (...args) => args.at(-1)(null, 'Python 3', ''),
-      spawn: () => {
+      spawn: (_binary, args) => {
+        // Real extraction writes only into the newly allocated run directory.
+        const outputDir = args[args.indexOf('--output-dir') + 1];
+        function remap(value) {
+          if (typeof value === 'string' && fs.existsSync(value) && fs.statSync(value).isFile()) {
+            const target = path.join(outputDir, path.basename(value));
+            fs.copyFileSync(value, target);
+            return target;
+          }
+          if (Array.isArray(value)) return value.map(remap);
+          if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, remap(entry)]));
+          return value;
+        }
+        const extracted = remap(analyzerFixture);
         const child = new EventEmitter();
         child.stdout = new EventEmitter();
         child.stderr = new EventEmitter();
-        queueMicrotask(() => { child.stdout.emit('data', JSON.stringify(analyzerFixture)); child.emit('close', 0); });
+        queueMicrotask(() => { child.stdout.emit('data', JSON.stringify(extracted)); child.emit('close', 0); });
         return child;
       },
     };
+    if (name === '../gateway/chat/vision-image-normalize.js') return require('../src/gateway/chat/vision-image-normalize.ts');
     if (name === '../runtime/dependencies.js') return { resolveRuntimeBinary: name => name };
     if (name === './media-analysis-visuals.js') return { snapshotAnalysisVisual };
     if (name === './workspace-context.js') return { getActiveWorkspace: value => value };
@@ -113,6 +128,8 @@ try {
         return { message: { content: 'test analysis' } };
       } }),
     };
+    if (name === '../gateway/resources/analysis-artifacts') return require('../src/gateway/resources/analysis-artifacts.ts');
+    if (name === '../gateway/resources/reference-service') return require('../src/gateway/resources/reference-service.ts');
     if (name.startsWith('.')) return {};
     return require(name);
   });
@@ -169,6 +186,14 @@ try {
   const fallback = await executeAnalyzeVideo(videoArgs);
   assert.equal(fallback.success, true, fallback.error);
   assert.equal(fallback.data.visual_inputs.length, 12);
+  assert.notEqual(fallback.data.output_dir, videoResult.data.output_dir);
+  assert.equal(fs.existsSync(path.join(directory, videoResult.data.analysis_manifest)), true);
+  assert.equal(fs.existsSync(path.join(directory, fallback.data.analysis_manifest)), true);
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, fallback.data.analysis_manifest), 'utf8'));
+  assert.equal(manifest.observationMode, 'direct');
+  assert.equal(manifest.transcript.available, false);
+  assert.equal(manifest.analysis, undefined);
+  assert.equal(manifest.files.filter(file => file.role === 'frame').length, 12);
   assert.equal(previews('analyze_video', { data: fallback.data }).length, 12);
   const repeated = previews('analyze_video', { data: { visual_inputs: [
     { path: 'same.png', artifactKind: 'sample_frame', source_name: 'frame_0001_0.5s.png' },

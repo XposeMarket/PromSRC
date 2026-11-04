@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { getConfig } from '../../config/config';
+import { readReferencePins, AUTOMATIC_REFERENCE_CAPTURE_READY } from './reference-store';
 import { resolveConfinedStoragePath, assertSafeStorageId } from '../storage/storage-paths';
 
 /**
@@ -674,7 +675,12 @@ export class ResourceStore {
    * provenance events per resource. Returns snapshot files to delete.
    */
   private pruneState(state: ResourceState): string[] {
-    const pinned = new Set<string>();
+    let pinned: Set<string>;
+    try { pinned = readReferencePins(this.rootDir); }
+    catch (error) {
+      console.warn('[Resources] Reference retention unavailable; skipping version pruning.');
+      return []; // Fail closed: an unreadable metadata store is not an empty set of roots.
+    }
     for (const resource of state.resources) if (resource.currentVersionId) pinned.add(resource.currentVersionId);
     for (const link of state.links) if (link.versionId) pinned.add(link.versionId);
     const taskResources = new Set<string>();
@@ -997,6 +1003,18 @@ export class ResourceStore {
     this.writeState(state);
     this.emitTelemetry('attach', { resourceId: resource.id, versionId: version?.id, result: created ? 'created' : 'updated', status: resource.status });
     return { resource: safeJsonClone(resource), version: version ? safeJsonClone(version) : undefined, link: link ? safeJsonClone(link) : undefined, created, versionCreated };
+  }
+
+  /** Internal library seam; not an authorization bypass for public resource routes. */
+  referenceVersion(resourceId: string, versionId: string, durableOnly = false): ResourceVersion | undefined {
+    const state = durableOnly ? this.loadStateFromDisk() : this.readStateForRead();
+    const resource = state.resources.find(item => item.id === resourceId && item.workspaceScope === this.workspaceScope);
+    if (!resource || resource.sensitive || resource.status === 'deleted') return undefined;
+    const version = state.versions.find(item => item.id === versionId && item.resourceId === resourceId);
+    if (!version?.snapshotPath) return undefined;
+    const snapshot = resolveConfinedStoragePath(this.rootDir, version.snapshotPath, { label: 'reference snapshot' });
+    if (!fs.existsSync(snapshot)) return undefined;
+    return { ...version };
   }
 
   attachFile(input: { threadId?: string; filePath: string; title?: string; mimeType?: string; actor?: string; metadata?: Record<string, unknown>; pinned?: boolean }): AttachResourceResult {
@@ -1793,6 +1811,15 @@ export async function autoAttachChatInputResources(options: ChatInputResourceOpt
             actor,
             metadata: { source: 'chat-input' },
           });
+      // Stage A adoption seam: disabled until discovery and owner controls exist.
+      if (AUTOMATIC_REFERENCE_CAPTURE_READY && result.version) {
+        const { getReferenceService } = await import('./reference-service');
+        getReferenceService(store.workspaceScope).saveExisting({
+        operationId: `upload:${options.threadId}:${result.version.id}`,
+        binding: { resourceId: result.resource.id, versionId: result.version.id },
+        title: result.resource.title, sourceSession: options.threadId, userQuote: options.message,
+        });
+      }
       const summary = store.listThreadResources(options.threadId, { limit: 100 }).find((item) => item.id === result.resource.id);
       if (summary) attached.push(summary);
     } catch (error: any) {

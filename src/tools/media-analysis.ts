@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { createAnalysisRun, hashFile, preserveAnalysisArtifacts } from '../gateway/resources/analysis-artifacts';
+import { automaticReferenceCaptureReady, getReferenceService } from '../gateway/resources/reference-service';
 import fsp from 'fs/promises';
 import path from 'path';
 import { execFile, spawn, type ChildProcess } from 'child_process';
@@ -548,9 +550,10 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       : 0;
     const maxDetailFrames = boundedNumber(args?.max_detail_frames ?? args?.detail_frame_budget, 42, 2, 72);
     const defaultOutputDir = path.join('downloads', 'video_analysis', sanitizeStem(path.basename(absPath, path.extname(absPath))));
-    const outputDirRel = String(args?.output_dir || defaultOutputDir).trim();
-    const outputDirAbs = ensureWorkspacePath(workspaceRoot, outputDirRel);
-    await fsp.mkdir(outputDirAbs, { recursive: true });
+    const outputParent = ensureWorkspacePath(workspaceRoot, String(args?.output_dir || defaultOutputDir).trim());
+    const run = createAnalysisRun(workspaceRoot, outputParent);
+    const outputDirAbs = run.directory;
+    const sourceHash = await hashFile(absPath);
 
     const analyzerArgs = [
       absPath,
@@ -706,6 +709,17 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       });
     }
 
+    const frameMetadata = [...(quick?.frames || []), ...(detail?.frames || [])];
+    const preservationInput = {
+      workspace: workspaceRoot, directory: outputDirAbs, runId: run.id, sourcePath: absPath, sourceHash,
+      frames: framePaths.map((framePath: string) => ({ path: framePath, timestampSeconds: frameMetadata.find((frame: any) => frame.path === framePath)?.at_seconds })),
+      contactSheets: contactSheets.map((sheet: any) => String(sheet.path)),
+      audioPath: analyzerResult?.audio?.available ? analyzerResult.audio.path : undefined,
+      transcript, transcriptionProvider, analysisPrompt: prompt,
+      observationMode: (args.direct_observation === true && args.response_mode !== 'report' ? 'direct' : 'report') as 'direct' | 'report',
+    };
+    // Save produced evidence before the optional model call can fail or be interrupted.
+    await preserveAnalysisArtifacts({ ...preservationInput, status: 'extracted' });
     args.onProgress?.({ phase: 'analyzing', message: 'Analyzing the sampled frames and transcript…' });
     const direct = args.direct_observation === true && args.response_mode !== 'report';
     const analysis = direct ? undefined : await analyzeWithPrimaryVision([
@@ -740,6 +754,10 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     };
     if (args?.include_raw_probe === true) compactExtraction.raw_probe = probeJson;
 
+    const preserved = await preserveAnalysisArtifacts({ ...preservationInput, analysis, status: 'complete' });
+    if (automaticReferenceCaptureReady()) getReferenceService(workspaceRoot).saveAnalysis({
+      operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path),
+    });
     args.onProgress?.({ phase: 'complete', message: 'Video analysis complete.' });
     return {
       success: true,
@@ -748,6 +766,9 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         file_path: absPath,
         rel_path: path.relative(workspaceRoot, absPath).replace(/\\/g, '/'),
         output_dir: outputDirAbs,
+        analysis_manifest: relPath(workspaceRoot, preserved.path),
+        analysis_run_id: run.id,
+        reference_capture: 'disabled_until_library_controls_ready',
         output_dir_rel: relPath(workspaceRoot, outputDirAbs),
         analysis_mode: analysisMode,
         sample_count: framePaths.length,
