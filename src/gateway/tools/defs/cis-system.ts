@@ -62,6 +62,20 @@ export function getCisSystemTools(): any[] {
   void categoryDocs;
 
   const tools = [
+    {
+      type: 'function', function: {
+      name: 'secure_access',
+      description: 'Protected saved access. Request an owner-only secure input card; list metadata; prepare protected sign-in using cred_ID. NEVER pass passwords, keys, raw vault paths, or OTP values. Fill does not submit: the owner approves sign-in in Saved access. No posting/sending/spending authority. Teams/jobs unsupported in this release; use browser login takeover when unsupported.',
+      parameters: { type: 'object', properties: {
+        action: { type: 'string', enum: ['status', 'request', 'list', 'fill', 'revoke'] },
+        credential_id: { type: 'string', description: 'Opaque cred_ ID, never a vault path.' },
+        origin: { type: 'string', description: 'Exact HTTPS origin only, no path. Example https://example.com' },
+        url: { type: 'string', description: 'Exact same-origin login page URL for fill.' },
+        label: { type: 'string' }, purpose: { type: 'string' }, identifier: { type: 'string', description: 'Email/username only, not secret.' },
+        mode: { type: 'string', enum: ['new', 'existing', 'api_key', 'otp'] }
+      }, required: ['action'], additionalProperties: false }
+      }
+    },
     // ── ask_team_coordinator: delegate team creation/queries to the meta-coordinator ──
     {
       type: 'function',

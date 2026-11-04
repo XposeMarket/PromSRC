@@ -5,8 +5,34 @@ import {
   installMobileSettingsReturnBridge,
   mobileSettingsReturnRoute,
   normalizeMobileSettingsReturnRoute,
+  normalizeRequestedSettingsTab,
   resolveMobileSettingsReturnUrl,
 } from '../web-ui/src/settings-return.js';
+
+// Regression: #mobile/settings/saved-access must land on Security (which hosts
+// #settings-secure-access-host), not fall back to General in the inline shim.
+assert.equal(normalizeRequestedSettingsTab('saved-access'), 'security');
+assert.equal(normalizeRequestedSettingsTab(' models '), 'models');
+assert.equal(normalizeRequestedSettingsTab(''), '');
+{
+  const savedAccessRoute = new URL('http://prometheus.local/mobile#mobile/settings/saved-access');
+  const savedAccessHandoff = new URL(buildMobileSettingsHandoffUrl(savedAccessRoute, 'saved-access'), savedAccessRoute);
+  assert.equal(savedAccessHandoff.searchParams.get('settingsTab'), 'security');
+  assert.equal(savedAccessHandoff.searchParams.get('settingsReturn'), '#mobile/more');
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../web-ui/index.html', import.meta.url), 'utf8');
+  assert.match(html, /SETTINGS_TAB_ALIASES = \{ 'saved-access': 'security'/, 'inline settings shim must alias saved-access before its unknown-tab fallback');
+  const entry = readFileSync(new URL('../web-ui/src/desktop-entry.js', import.meta.url), 'utf8');
+  assert.match(entry, /normalizeRequestedSettingsTab\(settingsParams\.get\('settingsTab'\)\)/, 'desktop handoff entry must normalize settingsTab aliases');
+  // Execute the shim's fallback logic against the real source to prove the tab survives.
+  const shimSrc = html.match(/const SETTINGS_TABS = \[[^\]]+\];[\s\S]*?const applySettingsTabFallback = function applySettingsTabFallback[\s\S]*?\n    \};/)[0];
+  const fakeWin = {};
+  const fakeDoc = { getElementById: () => null };
+  const apply = new Function('window', 'document', `${shimSrc}; return applySettingsTabFallback;`)(fakeWin, fakeDoc);
+  assert.equal(apply('saved-access'), 'security');
+  assert.equal(apply('security'), 'security');
+  assert.equal(apply('bogus'), 'system');
+}
 
 const pwaChat = new URL('http://prometheus.local/?source=pwa#mobile/chat/mobile_123');
 const handoff = new URL(buildMobileSettingsHandoffUrl(pwaChat, 'models'), pwaChat);

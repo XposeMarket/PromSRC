@@ -12,6 +12,7 @@ const PLATFORM_TOOL_NAMES = new Set([
   'plugin_ops',
   'mcp_server_manage',
   'connection_ops',
+  'secure_access',
   'connector_list',
   'webhook_manage',
   'integration_quick_setup',
@@ -47,6 +48,25 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
 
   async execute(ctx: CapabilityExecutionContext): Promise<ToolResult> {
     const { name, args, workspacePath, deps, sessionId } = ctx;
+
+    if (name === 'secure_access') {
+      // Identity comes from the runtime context, never model arguments. Unknown actors fail closed.
+      if (!/^(mobile_|web_|telegram_|discord_|whatsapp_|terminal_|main$)/.test(sessionId) || deps.internalWatchContext || deps.threadOpsSupervisionId || deps.executionPolicy?.mode === 'goal_autonomous') {
+        return { name, args, result: 'Saved access currently supports owner main chats only. Teams, jobs and supervised turns require separate grants in a later release.', error: true };
+      }
+      try {
+        const runtime = await import('../../../security/secure-access-runtime');
+        const broker = runtime.getSecureAccess();
+        let result: unknown;
+        if (args.action === 'status') result = await runtime.secureAccessStatus();
+        else if (args.action === 'list') result = { credentials: runtime.secureAccessCredentials() };
+        else if (args.action === 'request') result = { request: broker.create({ sessionId, label: args.label, purpose: args.purpose, origin: args.origin, mode: args.mode || 'existing', identifier: args.identifier }), next: 'Owner enters credentials in the protected chat card. Never ask for passwords in a chat message.' };
+        else if (args.action === 'fill') result = await runtime.prepareProtectedLogin(String(args.credential_id || ''), String(args.url || ''), sessionId, 'main');
+        else if (args.action === 'revoke') { result = { credential: broker.revoke(String(args.credential_id || '')) }; await runtime.cancelProtectedLogin(String(args.credential_id || '')); }
+        else return { name, args, result: 'Unknown secure_access action.', error: true };
+        return { name, args, result: JSON.stringify(result), error: false };
+      } catch { return { name, args, result: 'Secure access refused or unavailable. Check Saved access status; use login takeover if unsupported. No secret is returned.', error: true }; }
+    }
 
     if (name.startsWith('mcp__')) {
       const parts = name.split('__');

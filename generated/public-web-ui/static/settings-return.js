@@ -33,10 +33,18 @@ export function buildMobileSettingsHandoffUrl(locationLike = globalThis.location
     settings: '1',
     [MOBILE_SETTINGS_RETURN_PARAM]: mobileSettingsReturnRoute(url),
   });
-  const requestedTab = String(tab || '').trim();
+  const requestedTab = normalizeRequestedSettingsTab(tab);
   if (requestedTab) query.set('settingsTab', requestedTab);
   if (url.searchParams.get('source') === 'pwa') query.set(MOBILE_SETTINGS_SOURCE_PARAM, 'pwa');
   return `/?${query.toString()}`;
+}
+
+// Mobile deep-link section names that live inside a canonical Settings tab.
+const SETTINGS_TAB_ALIASES = Object.freeze({ 'saved-access': 'security', 'secure-access': 'security' });
+
+export function normalizeRequestedSettingsTab(tab) {
+  const requested = String(tab || '').trim();
+  return SETTINGS_TAB_ALIASES[requested] || requested;
 }
 
 const RETURN_STORAGE_KEY = 'pm_mobile_settings_return_url';

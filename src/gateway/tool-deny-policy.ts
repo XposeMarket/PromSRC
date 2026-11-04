@@ -256,6 +256,12 @@ export function evaluateHardToolDeny(input: HardToolDenyInput): HardToolDenyDeci
   const argsText = toolArgsText(input.args);
   const isAutonomousGoal = input.executionPolicy?.mode === 'goal_autonomous';
 
+  // Defense in depth, not isolation from a malicious same-OS-user process.
+  const directCredentialPath = /(?:^|[\\/\s"'])vault[\\/](?:vault\.key(?:\.enc)?|vault\.enc)|vault\.key(?:\.enc)?\b|secure-access-metadata\.json/i;
+  if (/^(?:terminal|run_command|start_process|run_command_supervised|process_submit|read_file|read_files_batch|workspace_read|workspace_run|file_read|search_files)$/.test(toolName) && directCredentialPath.test(argsText)) {
+    return deny('protected_credential_file', 'Direct credential-store access is not available to model tools.', 'Use secure_access and the owner-only Saved access UI, not vault files or key extraction.', 'Ask the owner to use Settings for credential recovery.');
+  }
+
   if (['terminal', 'run_command', 'start_process', 'run_command_supervised'].includes(toolName)) {
     const decision = evaluateCommandDeny(commandFromArgs(input.args));
     if (decision.denied) return decision;

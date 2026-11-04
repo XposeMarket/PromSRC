@@ -21,6 +21,7 @@ export interface ConnectionOrchestratorOptions {
   adapters: ConnectionAdapterRegistry;
   activity: ConnectionActivityStore;
   plans: ConnectionPlanResolver;
+  validateCredentialReference?: (reference: string, serviceId: string, attemptId: string) => boolean;
   broadcast?: (event: Record<string, unknown>) => void;
 }
 
@@ -191,6 +192,9 @@ export class ConnectionOrchestrator {
   }
 
   private context(attempt: ConnectionAttempt, input?: Record<string, unknown>) {
+    if (input?.credentialRef !== undefined && (typeof input.credentialRef !== 'string' || this.options.validateCredentialReference?.(input.credentialRef, attempt.serviceId, attempt.id) !== true)) {
+      throw new Error('Credential reference was not issued for this connection attempt. Enter credentials through its secure card.');
+    }
     return { attempt, credentialRef: typeof input?.credentialRef === 'string' ? input.credentialRef : undefined, configuration: input, emitProgress: (message: string, details?: Record<string, unknown>) => { this.options.attempts.addProgress(attempt.id, { state: this.requireAttempt(attempt.id).state, message, details }); this.emitAttempt(attempt.id); } };
   }
 

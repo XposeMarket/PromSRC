@@ -185,6 +185,8 @@ export function createApp(): express.Application {
   // Trigger webhook endpoints verify HMAC over the exact raw bytes, so they
   // also bypass the JSON parser (2 MiB cap enforced by the raw parser).
   app.use('/triggers/hook', triggerHookRawBodyMiddleware());
+  // Credential bodies are deliberately small and never reflected by parser errors.
+  app.use(['/api/secure-access', '/api/connection-secure-input'], express.json({ limit: '32kb' }));
   app.use(express.json({ limit: '50mb' }));
   // Large JSON API responses (chat history pages reach several MB, mostly
   // repetitive trace JSON) were sent uncompressed. Over LAN/Tailscale that is
