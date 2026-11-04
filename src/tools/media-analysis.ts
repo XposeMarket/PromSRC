@@ -759,9 +759,11 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     let preserved: { path: string } | undefined;
     if (!preservationError) { try { preserved = await preserveAnalysisArtifacts({ ...preservationInput, analysis, status: 'complete' }); } catch (error: any) { preservationError = `Analysis manifest was not saved: ${String(error?.message || error).slice(0, 300)}`; } }
     let referenceCapture: any = 'disabled_until_library_controls_ready';
-    if (preserved && automaticReferenceCaptureReady()) {
-      try {
-        getReferenceService(workspaceRoot).saveAnalysis({ operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path) });
+    if (automaticReferenceCaptureReady()) {
+      if (!preserved) referenceCapture = { status: 'skipped', reason: preservationError || 'Analysis manifest not saved' };
+      else try {
+        const saved = getReferenceService(workspaceRoot).saveAnalysis({ operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path) });
+        referenceCapture = { status: 'saved', referenceId: saved.id };
       } catch (error: any) {
         // Capture failure never discards the completed analysis.
         referenceCapture = { status: 'failed', error: String(error?.message || error).slice(0, 300) };
@@ -839,7 +841,7 @@ export const analyzeVideoTool = {
     quick_sample_count: 'How many frames to include in the quick contact sheet (default 16, max 24)',
     detail_frame_budget: 'Optional number of detail frames to extract across the full duration. Leave unset to let the Python analyzer choose from duration.',
     max_detail_frames: 'Hard cap for auto detail extraction (default 42, max 72)',
-    output_dir: 'Optional workspace-relative output directory for extracted artifacts',
+    output_dir: 'Optional workspace-relative parent directory; each run is saved in a new UUID child folder (retained, not overwritten).',
     extract_audio: 'If true, extract audio when ffmpeg is available (default true)',
     transcribe: 'If true, use the configured speech-to-text provider when audio is available (default true)',
     include_raw_probe: 'If true, include full ffprobe JSON; default false keeps output compact',
