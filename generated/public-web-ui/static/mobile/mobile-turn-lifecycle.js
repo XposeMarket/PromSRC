@@ -76,6 +76,48 @@ export function claimMobileFinalize(aiTurn) {
   return true;
 }
 
+// Row fields that carry user-visible content (rendered in mobile-chat-message-renderer.js
+// and merged in mobile-pages.js _mergeMobileSessionMessage). A live row holding any of
+// these is never an empty placeholder, even when it has no text.
+const MOBILE_LIVE_CONTENT_FIELDS = Object.freeze([
+  'attachments', 'files', 'generatedImages', 'generatedVideos', 'artifacts', 'media', 'images',
+  'richArtifacts', 'productCarousel', 'fileChanges', 'approvalRequest', 'questionRequest',
+  'goalCompletionReport', 'steps', 'commandRuns',
+]);
+
+function hasMobileContentValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (value && typeof value === 'object') return true;
+  return value === true;
+}
+
+/**
+ * True ONLY for a proven-empty live placeholder: a streaming AI row with no text,
+ * no trace, and no content field of any kind. Everything else (including rows the
+ * text-only predicate calls empty) must be finalized, never removed.
+ */
+export function isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer = () => false } = {}) {
+  if (!row || typeof row !== 'object' || row.role !== 'ai' || row.streaming !== true) return false;
+  if (row._pmFinalReceived === true || row._pmServerAuthoredFinal === true || row._pmAbortAcknowledged === true) return false;
+  if (hasVisibleAnswer(row)) return false;
+  if (hasMobileContentValue(row.body?.text) || hasMobileContentValue(row.content) || hasMobileContentValue(row.text)) return false;
+  if (row.body && typeof row.body === 'object') {
+    for (const [key, value] of Object.entries(row.body)) {
+      if (key !== 'text' && hasMobileContentValue(value)) return false;
+    }
+  }
+  if (hasMobileContentValue(row.liveTraceEntries) || hasMobileContentValue(row.processEntries)) return false;
+  // A dropped-stream notice is transient recovery state, not content (same rule as isEmptyLiveRow).
+  if (row.errorPresentation && row.errorPresentation.key !== 'chat-connection-dropped') return false;
+  if (String(row.workflowPart || '') === 'before_interruption') return false;
+  for (const field of MOBILE_LIVE_CONTENT_FIELDS) {
+    if (hasMobileContentValue(row[field])) return false;
+  }
+  return true;
+}
+
+
 /**
  * Rows of the latest turn (after the last user row) that must be closed after
  * a recovery merge that proved the answer is complete.
@@ -100,7 +142,7 @@ export function selectMobileTurnRowsToFinalize(thread, { hasVisibleAnswer = () =
       || (row._pmFinalized !== true && row._pmLiveActivityCompleted !== true
         && Array.isArray(row.liveTraceEntries) && row.liveTraceEntries.length > 0);
     if (!open) continue;
-    if (row.streaming === true && !hasVisibleAnswer(row) && !hasTrace) drop.push(row);
+    if (isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer }) && !hasTrace) drop.push(row);
     else finalize.push(row);
   }
   return { finalize, drop };

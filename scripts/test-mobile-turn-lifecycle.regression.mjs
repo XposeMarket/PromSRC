@@ -7,6 +7,7 @@ import {
   classifyMobileStreamFailure,
   claimMobileFinalize,
   selectMobileTurnRowsToFinalize,
+  isDroppableMobileLivePlaceholder,
   reconcileMobileStaleRuns,
   resolveDrawerActiveRun,
   createMobileSilenceBackstop,
@@ -199,6 +200,56 @@ async function runLoop(reader, timers, { idleMs = MOBILE_STREAM_IDLE_TIMEOUT_MS,
   assert.match(branch, /finalizeMobileLiveAiTurn\(row, \{ commit: false, planFinalize: false \}\)/);
   assert.ok(branch.indexOf('_mergeMobileSessionThreadWithLocal') < branch.indexOf('selectMobileTurnRowsToFinalize'), 'finalize after the merge');
 }
+
+
+// --- Must-not: a live row carrying any content kind is never dropped during recovery finalize ---
+{
+  const noText = () => false; // _mobileAssistantHasVisibleAnswer is text-only; content must still protect the row
+  const contentRows = {
+    media_attachments: { body: { text: '', attachments: [{ id: 'a1', name: 'x.png' }] } },
+    generated_images: { body: { text: '' }, generatedImages: [{ url: 'https://x/y.png' }] },
+    files: { body: { text: '' }, files: [{ name: 'report.pdf' }] },
+    rich_artifacts: { body: { text: '' }, richArtifacts: [{ type: 'products' }] },
+    product_carousel: { body: { text: '' }, productCarousel: { items: [{ title: 'Lamp' }] } },
+    question_request: { body: { text: '' }, questionRequest: { id: 'q1', status: 'pending' } },
+    approval_request: { body: { text: '' }, approvalRequest: { id: 'ap1' } },
+    file_changes: { body: { text: '' }, fileChanges: { files: [] } },
+    error_presentation: { body: { text: '' }, errorPresentation: { key: 'some-other-error' } },
+    before_interruption: { body: { text: '' }, workflowPart: 'before_interruption' },
+    text_in_content: { body: { text: '' }, content: 'answer kept in content' },
+  };
+  for (const [name, extra] of Object.entries(contentRows)) {
+    const row = { role: 'ai', streaming: true, liveTraceEntries: [], ...extra };
+    const thread = [{ role: 'user', content: 'q' }, row];
+    const { finalize, drop } = selectMobileTurnRowsToFinalize(thread, { hasVisibleAnswer: noText });
+    assert.deepEqual(drop, [], `${name}: content-bearing live row is never dropped`);
+    assert.deepEqual(finalize, [row], `${name}: content-bearing live row lands in finalize`);
+    assert.equal(isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer: noText }), false, `${name}: helper refuses to drop`);
+  }
+}
+
+// --- Must: a truly empty streaming placeholder is still dropped (incl. connection-drop notice only) ---
+{
+  const noText = () => false;
+  const empty = { role: 'ai', streaming: true, body: { text: '' }, liveTraceEntries: [] };
+  const dropped = { role: 'ai', streaming: true, body: { text: '' }, errorPresentation: { key: 'chat-connection-dropped' } };
+  assert.equal(isDroppableMobileLivePlaceholder(empty, { hasVisibleAnswer: noText }), true, 'empty placeholder is droppable');
+  assert.equal(isDroppableMobileLivePlaceholder(dropped, { hasVisibleAnswer: noText }), true, 'connection-drop-only placeholder is droppable');
+  const { drop, finalize } = selectMobileTurnRowsToFinalize([{ role: 'user' }, empty, dropped], { hasVisibleAnswer: noText });
+  assert.deepEqual(drop, [empty, dropped], 'both empty placeholders are dropped');
+  assert.deepEqual(finalize, [], 'nothing finalized for empty placeholders');
+  // Finalized / server-authored / aborted rows are never droppable.
+  for (const flag of ['_pmFinalReceived', '_pmServerAuthoredFinal', '_pmAbortAcknowledged']) {
+    assert.equal(isDroppableMobileLivePlaceholder({ ...empty, [flag]: true }, { hasVisibleAnswer: noText }), false, `${flag} protects the row`);
+  }
+}
+
+// --- Must-not: an answer visible to the predicate is never dropped ---
+{
+  const answered = { role: 'ai', streaming: true, body: { text: 'hi' } };
+  assert.equal(isDroppableMobileLivePlaceholder(answered, { hasVisibleAnswer: (r) => !!r.body?.text }), false, 'text answer is not droppable');
+}
+
 
 // --- Must: drawer Working disappears after 2 polls; Unread shows ---
 {
