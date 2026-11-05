@@ -8,9 +8,18 @@ import type { XFetchPayload } from './web.js';
  * the full text instead of reporting a clipped post as complete.
  */
 export function isLikelyTruncatedXText(text: string): boolean {
-  const value = String(text || '').trim();
+  const value = stripTrailingXLinks(text);
   if (value.length < 240) return false;
   return /(?:\u2026|\.\.\.)$/.test(value);
+}
+
+/**
+ * oEmbed appends media/quote links after the clipped body ("...->\u2026 pic.twitter.com/abc"),
+ * so the ellipsis is not at the very end. Strip trailing t.co / pic links before checking.
+ */
+const TRAILING_X_LINKS_RE = /(?:\s*(?:https?:\/\/)?(?:t\.co\/\w+|pic\.(?:twitter|x)\.com\/\w+)\s*)+$/i;
+export function stripTrailingXLinks(text: string): string {
+  return String(text || '').trim().replace(TRAILING_X_LINKS_RE, '').trim();
 }
 
 /** FxTwitter lookup result. 'unavailable' = HTTP/network/identity failure (degrade); 'ok' = identity-checked tweet. */
@@ -95,6 +104,9 @@ export function fxTweetToPayload(tweet: any, url: string, id: string, reason: Fx
       timestamp: tweet.created_at ? new Date(Number(tweet.created_timestamp) * 1000 || tweet.created_at).toISOString() : undefined,
       text,
       rawRef: id,
+      text_source: 'fxtwitter',
+      text_complete: true,
+      long_post: tweet?.is_note_tweet === true,
       ...(Object.keys(metrics).length ? { metrics } : {}),
     } as any],
     count: 1,

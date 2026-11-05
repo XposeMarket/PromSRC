@@ -13,7 +13,7 @@ import { getConfig } from '../config/config.js';
 import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
 import {
   createFxLookup, fxTweetMediaHints, fxTweetQuoteHasMedia, fxTweetToPayload, hasXMediaHints,
-  isLikelyTruncatedXText, type FxLookup,
+  isLikelyTruncatedXText, stripTrailingXLinks, type FxLookup,
 } from './x-fx-recovery.js';
 import {
   ALL_SEARCH_PROVIDER_IDS,
@@ -1490,11 +1490,24 @@ async function fetchXStatusViaOEmbed(url: string, fxOnce?: () => Promise<FxLooku
   if (!result || !isLikelyTruncatedXText(String(clipped || ''))) return result;
   const lookup: FxLookup = fxOnce ? await fxOnce() : { state: 'unavailable' };
   const full = lookup.state === 'ok' ? fxTweetToPayload(lookup.tweet, url, id, 'truncated') : null;
-  if (full && String(full.tweets?.[0]?.text || '').length > String(clipped || '').length) return full;
+  if (full && stripTrailingXLinks(String(full.tweets?.[0]?.text || '')).length > stripTrailingXLinks(String(clipped || '')).length) {
+    const tweet: any = full.tweets?.[0];
+    if (tweet) tweet.long_post = true;
+    return full;
+  }
+  // Never pass a preview off as the whole post: flag it on the payload AND on the tweet.
+  const tweets = (result.tweets || []).map((tweet, index) => index === 0
+    ? { ...tweet, text_complete: false, long_post: true, text_source: 'oembed_preview' } as any
+    : tweet);
   return {
     ...result,
+    tweets,
     truncated: true,
-    message: `${result.message}. Text appears truncated (long-form post); full-text fallback was unavailable.`,
+    text_complete: false,
+    long_post: true,
+    message: 'INCOMPLETE: this is an X long post; only the ~280-char oEmbed preview was captured (text ends with "\u2026"). '
+      + 'The full-text fallback (public FxTwitter API) was unavailable. Do not summarize the preview as the whole post. '
+      + 'To read the rest, open the URL in the browser or retry web_fetch with include_thread:true.',
   } as XFetchPayload;
 }
 
@@ -2194,6 +2207,7 @@ async function executeXWebFetch(
   const statusHead = {
     status: payload.success ? 'ok' : 'error',
     truncated: (payload as any).truncated === true,
+    ...((payload as any).text_complete === false ? { text_complete: false, long_post: true } : {}),
     thread_status: (payload as any).thread_status,
     thread_reason: (payload as any).thread_reason,
     media_status: (payload as any).media_status,
