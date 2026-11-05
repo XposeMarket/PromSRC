@@ -1,5 +1,21 @@
 import { pendingStatusMarkup } from './mobile-ttft-state.js';
 import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
+import { isMobileQuestionOnlyRow, isPendingMobileQuestion } from './mobile-question-rows.js';
+
+// True while the row is blocked on its own pending question: no answer text
+// streams and no other tool has started since. Resolving the question or a
+// new running tool clears it. Lives here (lazy renderer chunk), not in the
+// eagerly loaded question-row helpers.
+function mobileRowAwaitsQuestionAnswer(row) {
+  if (!row || row.role !== 'ai' || !isPendingMobileQuestion(row.questionRequest)) return false;
+  if (row._pmFinalReceived === true || row._done === true || row.finalResponseStarted) return false;
+  if (String(row.body?.text || row.content || '').trim()) return false;
+  return !(row.liveTraceEntries || []).some((entry) => {
+    const a = entry?.activity;
+    return a?.kind === 'operation' && ['preparing', 'running'].includes(String(a.status || ''))
+      && !/question/i.test(String(a.action || ''));
+  });
+}
 
 /**
  * Owns the mobile rich-message renderer's presentation boundary.
@@ -94,12 +110,12 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
     }
     if (m.questionRequest) {
-      // Pending questions are owned by the composer popover. Keep the history
-      // stream free of a second copy; preserve any real assistant text/approval
-      // that accompanied the question.
-      const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
-      if (qPending) {
-        if (!String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
+      // Pending questions are owned by the composer popover: never render the
+      // card inline too. Only a question-only placeholder row is hidden; a row
+      // carrying the tool stream / pre-tool preamble stays visible so the user
+      // can see what the question is about.
+      if (isPendingMobileQuestion(m.questionRequest)) {
+        if (isMobileQuestionOnlyRow(m)) return '';
       } else {
         inner += _renderMobileQuestionCard(m.questionRequest);
       }
@@ -137,7 +153,13 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // timer is its only disclosure control, including for turns recovered
       // from cache after the transport has already finished.
       inner += `<div class="pm-trace-drawer" data-trace-completed="1"${renderCompletedTraceNow ? '' : ' data-pm-trace-lazy="1"'}>${completedTraceHtml}</div>`;
-    } else if (messageIsLive && !answerStarted && !hasPendingImageGeneration) {
+    }
+    const awaitingQuestionAnswer = mobileRowAwaitsQuestionAnswer(m) && !hasPendingImageGeneration;
+    if (awaitingQuestionAnswer && (messageIsLive || hasLiveTraceEntries || hasCompletedTrace)) {
+      // Blocked on the composer question: say so instead of working dots.
+      inner += '<div class="pm-question-waiting-status" role="status" style="margin-top:4px;font-size:13px;opacity:.7">Waiting for your answer</div>';
+    } else if (!hasLiveTrace && !(traceFrozenForSteer && hasCompletedTrace) && !hasCompletedTrace
+      && messageIsLive && !answerStarted && !hasPendingImageGeneration) {
       inner += pendingStatusMarkup(m);
       inner += `<div class="pm-thinking-dots"><span></span><span></span><span></span>${window.PROM_THEME_ENGINE?.loadingWordHtml(String(m?.id || m?.timestamp || ''), 'prom-loading-word', 'em') || ''}</div>`;
     }

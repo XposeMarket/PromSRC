@@ -8,6 +8,7 @@ import { pinRuntimeChrome as pinChrome, restorableBackgroundStatuses as restorab
 import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
 import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
 import { createReconnectStatusController as mkReconnect, createRestartContinuityHandler as mkRestart, isRestartSuspendedRun as isRestartSuspended, resolveRestartRecoveryMerge as resolveRestartMerge, shouldHoldStreamingTurn as holdStreamingTurn, revivableTurn as revivable, reviveIfFrozen as reviveFz, findLiveSteerContinuation as liveSteer, dropOrphanLiveRows as dropOrphans, reuseEmptyLiveRow as reuseEmptyLive, collapseEmptyLiveRows as collapseEmpty, mobileReplayFrameAfterSteer } from './mobile-restart-continuity.js';
+import { isMobileQuestionOnlyRow as isQuestionOnly } from './mobile-question-rows.js';
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
@@ -2690,7 +2691,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       }
 
       const activeThread = _activeMobileThread();
-      const latestAssistantTurn = _findLatestAssistantTurn(activeThread);
+      // A hidden question-only row is never the live turn; prefer the run's row.
+      const latestAssistantTurn = [...activeThread].reverse().find((turn) => turn?.role === 'ai' && !isQuestionOnly(turn))
+        || _findLatestAssistantTurn(activeThread);
       const latestUserTurn = [...activeThread].reverse().find((turn) => turn?.role === 'user') || null;
       const latestServerUserTurn = [...recoveredSessionHistory].reverse().find((turn) => {
         const role = String(turn?.role || '').toLowerCase();
