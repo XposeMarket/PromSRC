@@ -70,6 +70,7 @@ async function main() {
     binding: { resourceId: attached.resource.id, versionId: attached.version.id } });
 
   const sid = 'chat-vision-test';
+  setRuntimeActorContext(sid,{kind:'main',surface:'interactive'});
   const allowedMessage = (await buildReferenceObservationMessage(workspace, sid, { id: photo.id }));
 
   await check('image attachment resolves via getReferenceService(workspace) with no path in result', async () => {

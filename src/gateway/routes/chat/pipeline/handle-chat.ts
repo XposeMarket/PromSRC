@@ -172,8 +172,8 @@ export function configureHandleChatDependencies(deps: HandleChatDependencies): v
  * result and readable at GET /api/traces/:traceId.
  */
 export async function handleChat(...args: Parameters<typeof handleChatUntraced>): ReturnType<typeof handleChatUntraced> {
-  const [message, sessionId, , , abortSignal, , , executionMode] = args;
-  return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive') }, async () => {
+  const [message, sessionId, , , abortSignal, , , executionMode, , , , , , runtimeOptions] = args;
+  return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive'), personalReferenceAccess: runtimeOptions?.personalReferenceAccess }, async () => {
     const startedAt = Date.now();
     const trace = currentTrace();
     try {
@@ -217,7 +217,7 @@ export async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -2724,11 +2724,6 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     sendSSE('info', { message: 'Creative reference frame vision injected for this turn.' });
   }
   if (attachments && attachments.length > 0) {
-    try {
-      const { captureSharedAttachments } = require('../../../resources/reference-library');
-      const refs = captureSharedAttachments(workspacePath, sessionId, message, attachments);
-      if (refs.length) sendSSE('info', { message: `${refs.length} attachment(s) saved as personal references. Manage them in Memory → References.` });
-    } catch { sendSSE('info', { message: 'The attachment was sent, but saving it as a reference failed. You can retry in Memory → References.' }); }
     attachments = await normalizeRuntimeVisionAttachments(attachments);
   }
   const shouldUseXaiVisionSidecar =
@@ -2829,8 +2824,8 @@ Do not produce prose. Use the canonical thread tool now.` });
           id: String(toolInput.reference_id || ''), versionId: toolInput.version_id, offset: Number(toolInput.offset || 0), limit: Number(toolInput.limit || 6),
         });
         if (observation) messages.push(observation);
-      } catch (error: any) {
-        messages.push({ role: 'user', content: `[REFERENCE_OBSERVATION_UNAVAILABLE] ${String(error?.message || error)}. Do not claim to have viewed the original. You may use labelled stored text.` });
+      } catch (error: unknown) {
+        messages.push({ role: 'user', content: `[REFERENCE_OBSERVATION_UNAVAILABLE] ${error instanceof Error ? error.message : String(error)}. Do not claim to have viewed the original. You may use labelled stored text.` });
       }
       return;
     }

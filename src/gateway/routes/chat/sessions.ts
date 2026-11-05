@@ -880,10 +880,24 @@ router.delete('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       return;
     }
     if (library) {
-      let refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 });
-      while (refs.length) { for (const ref of refs) library.metadata.remove(ref.id); refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 }); }
+      let removed = 0;
+      try {
+        let refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 });
+        while (refs.length) {
+          for (const ref of refs) { library.metadata.remove(ref.id); removed += 1; }
+          refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 });
+        }
+      } catch (refError: unknown) {
+        // The chat is already deleted: report the partial cleanup instead of a generic 500 so the client can warn.
+        const message = refError instanceof Error ? refError.message : String(refError);
+        console.error('[/api/sessions/:id DELETE] Reference cleanup failed after chat deletion:', refError);
+        res.json({ success: true, projectId: project?.id, references: 'partial', referencesRemoved: removed, warning: `Chat deleted, but reference cleanup stopped after removing ${removed} reference(s). Some references may remain in Memory → References.`, error: message });
+        return;
+      }
+      res.json({ success: true, projectId: project?.id, references: 'deleted', referencesRemoved: removed });
+      return;
     }
-    res.json({ success: true, projectId: project?.id, references: deleteReferences ? 'deleted' : 'retained' });
+    res.json({ success: true, projectId: project?.id, references: 'retained' });
   } catch (e: any) {
     console.error('[/api/sessions/:id DELETE] Error:', e);
     res.status(storageAwareStatus(e)).json({ error: e.message });

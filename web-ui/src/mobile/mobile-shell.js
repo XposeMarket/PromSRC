@@ -3166,9 +3166,12 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
     var lbl = confirmBtn.querySelector('.pm-msheet-row-label');
     if (lbl) lbl.textContent = 'Deleting\u2026';
     try {
-      await (itemType === 'project'
+      var deleteResult = await (itemType === 'project'
          ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId) + (deleteChatsToo ? '?deleteSessions=true' : ''), { method: 'DELETE' })
          : _mobileSessionRequest(sessionId, sheet.querySelector('#pm-delete-references-too')?.checked ? '?deleteReferences=true' : '', { method: 'DELETE' }));
+      if (deleteResult && deleteResult.references === 'partial') {
+        try { if (window.pmToast) window.pmToast(deleteResult.warning || 'Chat deleted, but some references could not be removed. Check Memory → References.', 'warning'); } catch(e) {}
+      }
       pmHaptic(14);
       // Remove from pin list
       _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));

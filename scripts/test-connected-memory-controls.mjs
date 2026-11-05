@@ -31,6 +31,7 @@ async function main() {
   const { ReferenceStore } = require('../src/gateway/resources/reference-store.ts');
   const lib = require('../src/gateway/resources/reference-library.ts');
   const { setRuntimeActorContext } = require('../src/gateway/runtime-actor.ts');
+  for (const sid of ['chat-recall','chat-auth']) setRuntimeActorContext(sid,{kind:'main',surface:'interactive'});
 
   const service = getReferenceService(workspace);
   const metadata = service.metadata;
@@ -161,6 +162,25 @@ async function main() {
     // ---- Router / tool caller auth (no HTTP boot) ----
     const photoPath = path.join(workspace, 'auth.png'); fs.writeFileSync(photoPath, png);
     const photo = service.saveAttachment({ operationId: 'ctl-auth-photo', filePath: photoPath, mimeType: 'image/png', title: 'Auth photo', sourceSession: 'chat-auth' });
+    await check('untrusted runs cannot spoof an owner session key or inherit owner actor', async () => {
+      const { runInTrace } = require('../src/gateway/observability/turn-trace.ts');
+      assert.throws(() => lib.assertPersonalReferenceCaller('unregistered'), /trusted/);
+      for (const mode of ['background_task','cron','heartbeat','background_agent','team_manager']) {
+        runInTrace({sessionId:'chat-auth',executionMode:mode},()=> {
+          assert.throws(()=>lib.referenceOpenPayload(workspace,'chat-auth',photo.id),/interactive owner/);
+          assert.equal(lib.referenceRecallBlock(workspace,'chat-auth',RECALL_MSG),'');
+        });
+      }
+      runInTrace({sessionId:'chat-auth',executionMode:'interactive',personalReferenceAccess:true},()=> {
+        runInTrace({sessionId:'chat-auth',executionMode:'background_task'},()=>assert.throws(()=>lib.referenceOpenPayload(workspace,'chat-auth',photo.id),/interactive owner/));
+        runInTrace({sessionId:'chat-auth',executionMode:'interactive',personalReferenceAccess:false},()=>assert.throws(()=>lib.referenceOpenPayload(workspace,'chat-auth',photo.id),/interactive owner/));
+        runInTrace({sessionId:'chat-auth',executionMode:'interactive'},()=>assert.throws(()=>lib.referenceOpenPayload(workspace,'chat-auth',photo.id),/interactive owner/));
+        assert.doesNotThrow(()=>lib.referenceOpenPayload(workspace,'chat-auth',photo.id));
+      });
+      for(const sid of ['webhook_key','telegram_1','discord_1','cron_1','auto_job']) runInTrace({sessionId:sid,executionMode:'interactive',personalReferenceAccess:true},()=>assert.throws(()=>lib.assertPersonalReferenceCaller(sid),/not granted/));
+      runInTrace({sessionId:'fresh-owner',executionMode:'interactive',personalReferenceAccess:true},()=>assert.doesNotThrow(()=>lib.referenceOpenPayload(workspace,'fresh-owner',photo.id)));
+    });
+
     fs.unlinkSync(photoPath);
 
     await check('background, team and subagent session ids are denied personal references', async () => {

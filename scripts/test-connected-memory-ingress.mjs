@@ -5,11 +5,16 @@ const require=createRequire(import.meta.url);require('tsx/cjs');const {autoAttac
 const service=getReferenceService(workspace);
 try{
  const file=path.join(workspace,'design.txt');fs.writeFileSync(file,'Warm lamps and deliberate whitespace.');
- const input={workspacePath:workspace,threadId:'chat-ingress',message:'Keep the atmosphere, not this exact furniture.',attachments:[{path:file,name:'design.txt',mimeType:'text/plain'}]};
+ const input={workspacePath:workspace,personalReferenceOwnerPreflight:true,threadId:'chat-ingress',message:'Keep the atmosphere, not this exact furniture.',attachments:[{path:file,name:'design.txt',mimeType:'text/plain'}]};
  await autoAttachChatInputResources(input);assert.equal(service.metadata.list().length,0);
  service.metadata.setSettings({capture:true});await autoAttachChatInputResources(input);let refs=service.metadata.list();assert.equal(refs.length,1);assert.equal(refs[0].userQuote,input.message);assert.match(refs[0].searchText,/Warm lamps/);
  await autoAttachChatInputResources(input);assert.equal(service.metadata.list().length,1);
  service.metadata.update(refs[0].id,{excluded:true});await autoAttachChatInputResources(input);assert.equal(service.metadata.list().length,0);assert.equal(service.resources.listThreadResources(input.threadId).length,1);
  await autoAttachChatInputResources({...input,threadId:'team_hidden',attachments:[{name:'other.txt',mimeType:'text/plain',base64:Buffer.from('private team document').toString('base64')}]});assert.equal(service.metadata.list({includeExcluded:true}).length,1);
+ const deniedCount=service.metadata.list({includeExcluded:true}).length;
+ await autoAttachChatInputResources({...input,personalReferenceOwnerPreflight:false,attachments:[{filename:'webhook.txt',type:'text/plain',base64:Buffer.from('denied webhook').toString('base64')}]});assert.equal(service.metadata.list({includeExcluded:true}).length,deniedCount);
+ const pdf={filename:'spec.pdf',type:'application/pdf',base64:Buffer.from('%PDF-1.4 sample').toString('base64')};
+ await autoAttachChatInputResources({...input,attachments:[input.attachments[0],pdf],attachmentPreviews:[pdf]});const documents=service.metadata.list();assert.equal(documents.length,1,'blocked item does not stop valid later item; previews dedup');assert.equal(service.resources.referenceContent(documents[0].resourceId,documents[0].versionId).resource.mimeType,'application/pdf');
+ await autoAttachChatInputResources({...input,attachments:[pdf],attachmentPreviews:[pdf]});assert.equal(service.metadata.list().length,1,'filename/type-only capture idempotent');
  console.log('CONNECTED_MEMORY_INGRESS_PASS: off/opt-in/document-purpose/idempotency/exclusion/team-denial; original registration survives capture refusal');
 }finally{service.resources.flushSync();service.metadata.close();fs.rmSync(root,{recursive:true,force:true});}

@@ -44,6 +44,7 @@ export interface TraceContext {
   parentTraceId?: string;
   sessionId: string;
   executionMode?: string;
+  personalReferenceAccess?: boolean;
 }
 
 const storage = new AsyncLocalStorage<TraceContext>();
@@ -76,14 +77,15 @@ export function currentTrace(): TraceContext | undefined {
  * already traced (nested handleChat for the same turn); otherwise starts a new
  * trace whose parent is the enclosing one (a child agent).
  */
-export function runInTrace<T>(input: { sessionId: string; executionMode?: string; traceId?: string }, fn: () => T): T {
+export function runInTrace<T>(input: { sessionId: string; executionMode?: string; traceId?: string; personalReferenceAccess?: boolean }, fn: () => T): T {
   const outer = storage.getStore();
-  if (outer && outer.sessionId === input.sessionId && !input.traceId) return fn();
+  if (outer && outer.sessionId === input.sessionId && outer.executionMode === input.executionMode && outer.personalReferenceAccess === input.personalReferenceAccess && !input.traceId) return fn();
   const ctx: TraceContext = {
     traceId: input.traceId || newTraceId(),
     parentTraceId: outer?.traceId,
     sessionId: input.sessionId,
     executionMode: input.executionMode,
+    personalReferenceAccess: input.personalReferenceAccess,
   };
   return storage.run(ctx, fn);
 }

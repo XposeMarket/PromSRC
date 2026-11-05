@@ -6,15 +6,21 @@ import { ReferenceService, getReferenceService } from './reference-service';
 import { ReferenceStore } from './reference-store';
 import { resolveConfinedStoragePath } from '../storage/storage-paths';
 import { getRuntimeActorContext } from '../runtime-actor';
+import { currentTrace } from '../observability/turn-trace';
 
 export const MAX_OPEN_BYTES = 24 * 1024 * 1024;
 const imageMimes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 export interface ReferenceAsset { index: number; title: string; mimeType: string; size: number; timestampSeconds?: number; bytes: Buffer }
 
 /** No arbitrary paths and no network IO. Identity is supplied by server context, never model args. */
-export function assertPersonalReferenceCaller(sessionId?: string): void {
-  const actor = getRuntimeActorContext(String(sessionId || ''));
-  if (actor?.kind === 'agent' || actor?.kind === 'manager' || actor?.kind === 'ephemeral_worker' || /^(background_|team_|subagent_)/i.test(String(sessionId || ''))) throw new Error('Personal reference access is not granted to teams or agents. Explicit team sharing ships separately.');
+export function assertPersonalReferenceCaller(sessionId?: string, trustedOwnerPreflight = false): void {
+  const id = String(sessionId || '');
+  const actor = getRuntimeActorContext(id);
+  if ((actor && (actor.kind !== 'main' && actor.kind !== 'voice' || actor.surface !== 'interactive')) || /^(background_|team_|subagent_|webhook_|telegram_|discord_|whatsapp_|slack_|cron_|auto_)/i.test(id)) throw new Error('Personal reference access is not granted to teams, agents, webhooks, schedules or channels.');
+  const trace = currentTrace();
+  // Per-turn server execution mode overrides caller-selected keys and stale actor state.
+  if (trace && (trace.sessionId !== id || trace.executionMode !== 'interactive' || trace.personalReferenceAccess !== true)) throw new Error('Personal reference access requires an interactive owner turn.');
+  if (!trace && !trustedOwnerPreflight && !actor) throw new Error('Personal reference access requires trusted interactive owner context.');
 }
 export function publicReference(ref: any) {
   const { workspace, operationId, searchText, ...safe } = ref;
@@ -77,21 +83,7 @@ export function referenceOpenPayload(workspace: string, sessionId: string | unde
     reference_open: { id, versionId: opened.reference.versionId, offset: options.offset || 0, limit: options.limit || 6 } };
 }
 
-/** Opt-in only, forward-looking capture; never import an existing history wholesale. */
-export function captureSharedAttachments(workspace: string, sessionId: string, message: string, attachments: Array<{ base64?: string; name?: string; mimeType?: string }> = []): string[] {
-  assertPersonalReferenceCaller(sessionId);
-  if (!fs.existsSync(path.join(getResourceStore(workspace).rootDir, 'references.sqlite'))) return [];
-  const s = getReferenceService(workspace); if (!s.metadata.settings().capture) return [];
-  const saved: string[] = [];
-  for (const item of attachments.slice(0, 10)) {
-    if (!item.base64 || item.base64.length > 28 * 1024 * 1024) continue;
-    const attached = s.resources.attachUploadedAttachment({ threadId: sessionId, name: item.name || 'Shared image', mimeType: item.mimeType || 'image/png', base64: item.base64 });
-    if (!attached.version) continue;
-    const ref = s.saveExisting({ operationId: `chat:${sessionId}:${attached.resource.id}:${attached.version.id}`, binding: { resourceId: attached.resource.id, versionId: attached.version.id }, title: attached.resource.title, sourceSession: sessionId, userQuote: message });
-    if (!ref.deleted && !ref.excluded) saved.push(ref.id);
-  }
-  return saved;
-}
+/** Optional bounded pointers; original images still need explicit opening. */
 export function referenceRecallBlock(workspace: string, sessionId: string, message: string): string {
   try {
     assertPersonalReferenceCaller(sessionId);

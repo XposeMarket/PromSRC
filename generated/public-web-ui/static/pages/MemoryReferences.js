@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escHtml as esc } from '../utils.js';
+import { escHtml as esc, showToast } from '../utils.js';
 const ROOT = '/api/memory/references';
 const css = `.memory-reference-library{display:flex;flex-direction:column;min-height:0;flex:1;overflow:auto;color:var(--text-primary,#eee);padding:16px;gap:16px}.mref-bar,.mref-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mref-tabs{display:flex;gap:8px;padding:8px 16px;flex-shrink:0}.mref-tabs button,.memory-reference-library button{border:1px solid var(--border,#444);border-radius:9px;background:var(--bg-secondary,#202020);color:inherit;padding:9px 12px;cursor:pointer}.mref-tabs button[aria-selected=true]{border-color:var(--accent,#d6b35b);color:var(--accent,#d6b35b)}.memory-reference-library input:not([type=checkbox]),.memory-reference-library textarea,.memory-reference-library select{box-sizing:border-box;width:100%;padding:10px;border:1px solid var(--border,#444);border-radius:8px;background:var(--bg-primary,#151515);color:inherit;font:inherit}.memory-reference-library label{display:grid;gap:6px;font-size:13px}.mref-layout{display:grid;grid-template-columns:minmax(210px,1fr) minmax(260px,1.7fr);gap:20px;min-height:0}.mref-list{display:flex;flex-direction:column;gap:8px}.mref-list button{text-align:left;display:grid;gap:5px}.mref-list small,.mref-muted{color:var(--text-secondary,#aaa);font-size:12px;line-height:1.5}.mref-detail{display:grid;align-content:start;gap:14px;min-width:0}.mref-detail h3{margin:0}.mref-detail textarea{min-height:75px;resize:vertical}.mref-previews{display:flex;gap:10px;overflow:auto;max-width:100%}.mref-previews figure{margin:0;flex:0 0 min(100%,280px)}.mref-previews img{width:100%;max-height:260px;object-fit:contain;background:#111;border-radius:8px}.mref-previews figcaption{font-size:12px;padding-top:5px}.mref-status{font-size:13px;min-height:20px}.mref-error{color:var(--error,#ef8e8e)}.mref-detail pre{white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto;font-size:12px}.mref-new[hidden]{display:none}.mref-new{display:grid;gap:12px;border:1px solid var(--border,#444);padding:14px;border-radius:12px}.mref-switch{display:flex!important;align-items:center;gap:8px!important}.mref-danger{color:var(--error,#ef8e8e)!important}.mref-related{display:flex;gap:8px;flex-wrap:wrap}@media(max-width:700px){.memory-reference-library{padding:12px}.mref-layout{grid-template-columns:1fr}.mref-list{max-height:230px;overflow:auto}.mref-detail{border-top:1px solid var(--border,#444);padding-top:16px}.mref-tabs{padding:8px 12px}}`;
 
@@ -74,10 +74,66 @@ export function mountMemoryReferences() {
   $('.mref-new').onsubmit = async e => { e.preventDefault(); const f = new FormData(e.target); const file = f.get('file'); const body = { title: f.get('title'), userQuote: f.get('userQuote'), content: f.get('content') }; try { if (file?.size) { if (file.size > 20 * 1048576) throw new Error('File exceeds 20 MiB'); body.base64 = await new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file); }); body.name = file.name; body.mimeType = file.type; } const r = await mutate(ROOT, 'POST', body); e.target.reset(); e.target.hidden = true; await load(); await detail(r.reference.id); } catch (err) { status(err.message, true); } };
 }
 
+const DIALOG_BUTTON = 'display:block;width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--prom-border,#444);background:var(--prom-surface-secondary,#202020);color:inherit;cursor:pointer;text-align:left;font:inherit';
+
+// Accessible three-way choice: resolves 'cancel' | 'keep' | 'delete'. Escape and backdrop click cancel.
+function askReferenceDeletion(count) {
+  return new Promise(resolve => {
+    const previous = document.activeElement;
+    const host = document.createElement('div');
+    host.className = 'mref-delete-host';
+    host.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.55)';
+    const noun = count === 1 ? 'reference' : 'references';
+    host.innerHTML = `<div role="alertdialog" aria-modal="true" aria-labelledby="mref-delete-title" aria-describedby="mref-delete-desc" style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:12px;border:1px solid var(--prom-border,#444);background:var(--prom-surface,#1b1b1b);color:var(--prom-text,#eee)"><h2 id="mref-delete-title" style="margin:0;font-size:17px">Delete this chat?</h2><p id="mref-delete-desc" style="margin:0;font-size:14px;line-height:1.45">This chat has ${count} saved memory ${noun}. Choose what happens to ${count === 1 ? 'it' : 'them'}.</p><div style="display:flex;flex-direction:column;gap:8px"><button type="button" data-choice="cancel" style="${DIALOG_BUTTON}">Cancel, delete nothing</button><button type="button" data-choice="keep" style="${DIALOG_BUTTON}">Delete chat, keep references (default)</button><button type="button" data-choice="delete" style="${DIALOG_BUTTON}">Delete chat and references</button></div></div>`;
+    const finish = choice => {
+      document.removeEventListener('keydown', onKey, true);
+      host.remove();
+      if (previous?.focus) previous.focus();
+      resolve(choice);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.preventDefault(); finish('cancel'); return; }
+      if (e.key !== 'Tab') return;
+      const buttons = [...host.querySelectorAll('button')];
+      const i = buttons.indexOf(document.activeElement);
+      const next = e.shiftKey ? (i <= 0 ? buttons.length - 1 : i - 1) : (i < 0 || i === buttons.length - 1 ? 0 : i + 1);
+      e.preventDefault();
+      buttons[next].focus();
+    };
+    host.addEventListener('click', e => {
+      const button = e.target.closest?.('[data-choice]');
+      if (button) finish(button.dataset.choice);
+      else if (e.target === host) finish('cancel');
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(host);
+    host.querySelector('[data-choice="keep"]').focus();
+  });
+}
+
 export async function chooseReferenceDeletion(sessionId) {
+  let count = 0;
   try {
     const r = await api(`${ROOT}?sourceSession=${encodeURIComponent(sessionId)}`);
-    if (!r.items?.length) return false;
-    return window.confirm('This chat has saved references. Also delete those library entries?\n\nOK: delete references too. Cancel: keep saved references and delete only the chat.');
-  } catch { return false; } // Retention is the safe default if the library is unavailable.
+    count = r.items?.length || 0;
+  } catch { return 'keep'; } // Retention is the safe default if the library is unavailable.
+  if (!count) return 'keep';
+  return askReferenceDeletion(count);
+}
+
+// Resolves { cancelled: true } without any request when the user cancels; callers must not remove the local chat then.
+export async function deleteReferenceSession(id) {
+  const choice = await chooseReferenceDeletion(id);
+  if (choice === 'cancel') return { cancelled: true };
+  const deleteReferences = choice === 'delete';
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}${deleteReferences ? '?deleteReferences=true' : ''}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) {
+    const body = await res.text().catch(() => '');
+    throw new Error(body || `Delete failed (${res.status})`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (body.references === 'partial') {
+    showToast('Chat deleted, reference cleanup incomplete', body.warning || `${body.referencesRemoved ?? 0} reference(s) removed before cleanup failed. Check Memory → References.`, 'warning', 8000);
+  }
+  return { cancelled: false, ...body };
 }

@@ -235,6 +235,8 @@ export interface UploadedAttachmentInput {
 }
 
 export interface ChatInputResourceOptions {
+  /** Server-only owner ingress decision, never accepted from a model or request body. */
+  personalReferenceOwnerPreflight?: boolean;
   threadId: string;
   message: string;
   workspacePath?: string;
@@ -1827,9 +1829,10 @@ export async function autoAttachChatInputResources(options: ChatInputResourceOpt
       // A capture failure must not discard the successfully registered chat attachment.
       try {
         const { getReferenceService, automaticReferenceCaptureReady } = require('./reference-service') as typeof import('./reference-service');
-        if (result.version && automaticReferenceCaptureReady(store.workspaceScope)) {
-          require('./reference-library').assertPersonalReferenceCaller(options.threadId);
-          getReferenceService(store.workspaceScope).saveExisting({
+        if (result.version && options.personalReferenceOwnerPreflight === true && automaticReferenceCaptureReady(store.workspaceScope)) {
+          require('./reference-library').assertPersonalReferenceCaller(options.threadId, true);
+          const library = getReferenceService(store.workspaceScope);
+          if (!library.metadata.blocksResource(result.resource.id)) library.saveExisting({
             operationId: `chat:${options.threadId}:${result.resource.id}:${result.version.id}`,
             binding: { resourceId: result.resource.id, versionId: result.version.id },
             title: result.resource.title, sourceSession: options.threadId, userQuote: options.message,

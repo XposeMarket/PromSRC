@@ -192,6 +192,7 @@ export async function runInteractiveTurn(
     origin: turnOrigin,
   } : {};
   persistTurnOriginChannelHint(sessionId, turnOrigin);
+  const personalReferenceOwnerTurn = !isTimerTurn && !isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch && ['web', 'mobile', 'terminal', 'voice_room'].includes(turnOrigin.channel);
   turnTiming.mark('turn_origin_persisted');
   const existingMainChatStream = getMainChatStream(sessionId);
   const streamSetupStartedAt = Date.now();
@@ -313,6 +314,7 @@ export async function runInteractiveTurn(
         attachments: Array.isArray(attachments) ? attachments as any[] : [],
         attachmentPreviews: Array.isArray(attachmentPreviews) ? attachmentPreviews as any[] : [],
         actor: 'user',
+        personalReferenceOwnerPreflight: personalReferenceOwnerTurn,
         fetchUrl: async (url) => executeWebFetch({ url, max_chars: 12_000 }),
       });
       const attachedCount = resourceResult.attached.length + resourceResult.fetched.length;
@@ -635,6 +637,7 @@ export async function runInteractiveTurn(
 	    undefined, // providerOverride
 	    callerOnToken,
       {
+        personalReferenceAccess: personalReferenceOwnerTurn,
         directSubagentChat: isDirectSubagentChatTurn,
         syntheticThreadSupervisionReview: isSyntheticThreadSupervisionReview,
         supervisionLoop: isSupervisionLoop,
