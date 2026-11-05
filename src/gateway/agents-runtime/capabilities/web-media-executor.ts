@@ -500,6 +500,7 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
       case 'analyze_video':
       case 'video_analyze_imported_video': {
         const toolResult = await executeAnalyzeVideo({
+          referenceSessionId: sessionId,
           file_path: String(args.file_path || ''),
           prompt: args.prompt != null ? String(args.prompt) : undefined,
           response_mode: args.response_mode === 'report' ? 'report' : 'view',

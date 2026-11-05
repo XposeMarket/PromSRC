@@ -534,7 +534,7 @@ export function searchRecall(workspacePath: string, params: RecallSearchParams):
   let hits: RecallHit[];
   try {
     const retrieval: RetrievalTrace = { source: 'recall', state: 'available', thresholds: {}, candidates: [], candidateCount: 0, truncated: false };
-    hits = searchRecallCore(db, { ...params, terms, retrieval });
+    hits = searchRecallCore(db, { ...params, terms, retrieval }, workspacePath);
     empty.retrieval = boundRetrievalTrace(retrieval);
   } catch (err: any) {
     return { ...empty, stats: { ...stats, error: String(err?.message || err) } };
@@ -544,7 +544,7 @@ export function searchRecall(workspacePath: string, params: RecallSearchParams):
 }
 
 /** Ranked search over an open index. No warm-up, no stats: callers own that. */
-function searchRecallCore(db: any, params: RecallSearchParams & { terms: string[] }): RecallHit[] {
+function searchRecallCore(db: any, params: RecallSearchParams & { terms: string[] }, workspacePath: string): RecallHit[] {
   const terms = params.terms;
   const limit = Math.max(1, Math.min(30, Number(params.limit || 8)));
   const sources = (params.sources || []).filter(Boolean);
@@ -578,7 +578,10 @@ function searchRecallCore(db: any, params: RecallSearchParams & { terms: string[
     const reason = exclude && r.session_id === exclude ? 'excluded_session' : sources.length && !sources.includes(r.source) ? 'source_filter' : (from !== null && Number(r.ts) < from) || (to !== null && Number(r.ts) > to) ? 'date_filter' : 'rank_limit';
     decisions.set(identity(r), { sourceId: identity(r), source: r.source, selected: false, reason });
   }
+  const { referenceSourceAllowed, forgottenReferenceSessions } = require('../resources/reference-library');
+  const hiddenReferenceSessions = forgottenReferenceSessions(workspacePath);
   const scored = rows
+    .filter((r) => referenceSourceAllowed(workspacePath, { sessionId: r.session_id, path: r.path }, hiddenReferenceSessions))
     .filter((r) => !exclude || r.session_id !== exclude)
     .filter((r) => !sources.length || sources.includes(r.source))
     .filter((r) => (from === null || Number(r.ts) >= from) && (to === null || Number(r.ts) <= to))
@@ -656,10 +659,13 @@ export async function searchRecallSemantic(
   const out: RecallHit[] = [];
   // nomic-embed-text similarities: ~0.55+ is on-topic, ~0.65+ is a close match.
   const FLOOR = 0.55;
+  const { referenceSourceAllowed, forgottenReferenceSessions } = require('../resources/reference-library');
+  const hiddenReferenceSessions = forgottenReferenceSessions(workspacePath);
   for (const h of sem.hits) {
     if (h.similarity < FLOOR) break;
     const r = get.get(h.rowid) as any;
     if (!r) continue;
+    if (!referenceSourceAllowed(workspacePath, { sessionId: r.session_id, path: r.path }, hiddenReferenceSessions)) continue;
     if (exclude && r.session_id === exclude) continue;
     if (sources.length && !sources.includes(r.source)) continue;
     if ((from !== null && Number(r.ts) < from) || (to !== null && Number(r.ts) > to)) continue;
@@ -826,7 +832,7 @@ export function buildAutoRecallContext(workspacePath: string, message: string, o
     terms,
     limit: 12,
     excludeSessionId: options.excludeSessionId,
-  });
+  }, workspacePath);
   // Single rare term: require it to be really rare, otherwise one shared word
   // (e.g. "card") would pull unrelated history in on every mention.
   const singleRareOk = terms.length === 1 && withDf[0].df <= 40;

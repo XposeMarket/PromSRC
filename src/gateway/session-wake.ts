@@ -8,9 +8,11 @@
  * wired from server-v2.ts with the same deps. Wakes are serialized per session
  * and deferred while that session already has a live main-chat turn.
  */
-import type { MainChatTimerRunnerDeps } from './timers/timer-runner';
+import type { runInteractiveTurn as ChatRunInteractiveTurn } from './routes/chat/pipeline/interactive-turn';
 
-export type SessionWakeRunTurn = MainChatTimerRunnerDeps['runInteractiveTurn'];
+// Exact real signature of the chat turn runner. The server adapter in server-v2.ts must forward all 12 positional args (turnOriginInput is the 12th).
+export type SessionWakeRunTurn = typeof ChatRunInteractiveTurn;
+
 
 export interface SessionWakeDeps {
   runInteractiveTurn: SessionWakeRunTurn;
@@ -119,9 +121,16 @@ async function runWake(d: SessionWakeDeps, sessionId: string, message: string, m
       message,
       sessionId,
       sendSSE,
-      undefined,
+      undefined, // pinnedMessages
       { aborted: false, signal: controller.signal },
       `[Session wake: ${meta.source}] Background work started earlier in this chat has settled. Treat this as a user turn in this same session and continue the plan.`,
+      undefined, // reasoningOptions
+      undefined, // attachments
+      undefined, // attachmentPreviews
+      undefined, // modelOverride
+      undefined, // flags
+      // Trusted automation origin: async wakes are never owner UI turns, so no personal reference capture/search/open/recall.
+      { channel: 'system', surface: 'automation', device: 'server' },
     );
   } catch (err: any) {
     console.warn(`[SessionWake] wake failed for ${sessionId}:`, err?.message || err);

@@ -141,6 +141,7 @@ try {
         preserveAnalysisArtifacts: async input => { if (failExtractedManifest && input.status === 'extracted') throw new Error('fixture manifest disk failure'); return real.preserveAnalysisArtifacts(input); },
       };
     }
+    if (name === '../gateway/resources/reference-library') return { assertPersonalReferenceCaller: () => {} };
     if (name === '../gateway/resources/reference-service') return {
       automaticReferenceCaptureReady: () => captureReady,
       getReferenceService: () => ({ saveAnalysis: () => { if (captureFail) throw new Error('fixture capture quota'); return { id: 'ref_fixture' }; } }),
@@ -240,11 +241,11 @@ try {
   assert.equal(diskFailure.data.analysis, 'test analysis');
   assert.match(diskFailure.data.analysis_manifest_error, /fixture manifest disk failure/);
   captureReady = true;
-  const captureSuccess = await executeAnalyzeVideo(videoArgs);
+  const captureSuccess = await executeAnalyzeVideo({ ...videoArgs, referenceSessionId: 'fixture-personal' });
   assert.equal(captureSuccess.data.reference_capture.status, 'saved');
   assert.equal(captureSuccess.data.reference_capture.referenceId, 'ref_fixture');
   captureFail = true;
-  const captureFailure = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report' });
+  const captureFailure = await executeAnalyzeVideo({ ...videoArgs, response_mode: 'report', referenceSessionId: 'fixture-personal' });
   captureFail = false;
   assert.equal(captureFailure.success, true, captureFailure.error);
   assert.equal(captureFailure.data.analysis, 'test analysis');

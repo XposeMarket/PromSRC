@@ -7034,14 +7034,6 @@ function saveChatSessions() {
   }
 }
 
-async function deleteSessionFromServer(id) {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok && res.status !== 404) {
-    const body = await res.text().catch(() => '');
-    throw new Error(body || `Delete failed (${res.status})`);
-  }
-}
-
 function isSessionTitleCommandMessage(msg) {
   if (!msg || msg.role !== 'user') return false;
   const text = String(msg.content || '').trim();
@@ -8836,7 +8828,8 @@ function toggleSessionsEditMode() {
 async function deleteChatSession(id, ev) {
   if (ev) ev.stopPropagation();
   try {
-    await deleteSessionFromServer(id);
+    const { deleteReferenceSession } = await import('./MemoryReferences.js');
+    if ((await deleteReferenceSession(id)).cancelled) return;
   } catch (err) {
     showToast(`Delete failed: ${err.message}`, 'error');
     return;

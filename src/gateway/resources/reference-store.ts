@@ -13,7 +13,11 @@ export interface SavedReference extends ReferenceBinding {
   sourceSession?: string; sourceMessage?: string; userQuote?: string;
   interpretation?: string; status: 'saved' | 'suggested' | 'confirmed';
   createdAt: string;
+  updatedAt?: string; excluded?: boolean; deleted?: boolean; searchText?: string;
+  notes?: string; relatedIds?: string[]; forgottenSource?: boolean;
 }
+export interface ReferenceSettings { capture: boolean; recall: boolean }
+
 
 // Implementation below keeps pins durable before ResourceStore can flush/prune.
 interface WriterIdentity { token: string; pid: number; host: string; startedAt: string }
@@ -79,7 +83,7 @@ export class ReferenceStore {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = FULL');
         const version = this.db.pragma('user_version', { simple: true });
-        if (version > 1) throw new Error('Reference database needs a newer Prometheus version');
+        if (version > 2) throw new Error('Reference database needs a newer Prometheus version');
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS saved_references (
             id TEXT NOT NULL, operation_id TEXT NOT NULL, workspace TEXT NOT NULL,
@@ -89,7 +93,8 @@ export class ReferenceStore {
           CREATE TABLE IF NOT EXISTS version_pins (
             version_id TEXT NOT NULL, holder_kind TEXT NOT NULL, holder_id TEXT NOT NULL,
             PRIMARY KEY(version_id, holder_kind, holder_id));
-          PRAGMA user_version = 1;
+          CREATE TABLE IF NOT EXISTS reference_settings (workspace TEXT PRIMARY KEY, data TEXT NOT NULL);
+          PRAGMA user_version = 2;
         `);
       }
     } catch (error) { this.db?.close(); this.releaseWriter(); throw error; }
@@ -192,6 +197,85 @@ export class ReferenceStore {
     if (fs.existsSync(destination)) throw new Error('Reference backup destination already exists');
     await this.db.backup(destination);
   }
+
+  blocksResource(resourceId: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM saved_references WHERE workspace=? AND resource_id=? AND (json_extract(data,'$.excluded')=1 OR json_extract(data,'$.deleted')=1) LIMIT 1`).get(this.workspace, resourceId);
+  }
+  forgetSource(id: string): void {
+    this.assertWriter(); const ref = this.get(id); if (!ref || ref.deleted) throw new Error('Reference unavailable');
+    ref.forgottenSource = true; ref.excluded = true;
+    this.db.prepare('UPDATE saved_references SET data=? WHERE workspace=? AND id=?').run(JSON.stringify(ref), this.workspace, id);
+  }
+  forgottenSessions(): Set<string> {
+    return new Set(this.db.prepare(`SELECT DISTINCT json_extract(data,'$.sourceSession') AS session FROM saved_references WHERE workspace=? AND json_extract(data,'$.forgottenSource')=1`).all(this.workspace).map((row: any) => row.session).filter(Boolean));
+  }
+  private usageCache?: { at: number; bytes: number };
+  storageUsage(): number {
+    // Installation-managed resource bytes, not just this workspace's reference pins.
+    // Cache the bounded walk so typing/search never scans the disk per request.
+    if (this.usageCache && Date.now() - this.usageCache.at < 60000) return this.usageCache.bytes;
+    let bytes = 0; let visited = 0;
+    const walk = (dir: string, depth: number) => { if (depth > 4 || visited >= 100000) return; for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (++visited > 100000) return;
+      if (entry.isSymbolicLink()) continue;
+      const file = path.join(dir, entry.name);
+      try { if (entry.isDirectory()) walk(file, depth + 1); else if (entry.isFile()) bytes += fs.statSync(file).size; } catch { /* Concurrent cleanup: approximate usage. */ }
+    } };
+    walk(this.rootDir, 0); this.usageCache = { at: Date.now(), bytes }; return bytes;
+  }
+  backlinks(id: string): SavedReference[] {
+    return this.db.prepare(`SELECT data FROM saved_references WHERE workspace=? AND COALESCE(json_extract(data,'$.deleted'),0)=0 AND EXISTS(SELECT 1 FROM json_each(saved_references.data,'$.relatedIds') WHERE value=?) LIMIT 100`).all(this.workspace, id).map((r: any) => JSON.parse(r.data));
+  }
+  stats(): { total: number; excluded: number } {
+    const row = this.db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN json_extract(data,'$.excluded')=1 THEN 1 ELSE 0 END),0) AS excluded FROM saved_references WHERE workspace=? AND COALESCE(json_extract(data,'$.deleted'),0)=0`).get(this.workspace);
+    return { total: row.total, excluded: row.excluded };
+  }
+  settings(): ReferenceSettings {
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_settings'").get()) return { capture: false, recall: false };
+    const row = this.db.prepare('SELECT data FROM reference_settings WHERE workspace=?').get(this.workspace);
+    return row ? { capture: false, recall: false, ...JSON.parse(row.data) } : { capture: false, recall: false };
+  }
+  setSettings(patch: Partial<ReferenceSettings>): ReferenceSettings {
+    this.assertWriter(); const next = this.settings();
+    for (const key of ['capture', 'recall'] as const) if (typeof patch[key] === 'boolean') next[key] = patch[key]!;
+    this.db.prepare('INSERT OR REPLACE INTO reference_settings VALUES (?, ?)').run(this.workspace, JSON.stringify(next));
+    return next;
+  }
+  list(options: { query?: string; limit?: number; offset?: number; includeExcluded?: boolean; sourceSession?: string } = {}): SavedReference[] {
+    const words = String(options.query || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 12);
+    // Filter inside SQLite: no full-library materialization and no stale projection resurrection.
+    const predicates = ['workspace=?', `COALESCE(json_extract(data,'$.deleted'),0)=0`]; const args: any[] = [this.workspace];
+    if (!options.includeExcluded) predicates.push(`COALESCE(json_extract(data,'$.excluded'),0)=0`);
+    if (options.sourceSession) { predicates.push(`json_extract(data,'$.sourceSession')=?`); args.push(options.sourceSession); }
+    const searchable = ['title','userQuote','interpretation','notes','searchText'].map(key => `COALESCE(json_extract(data,'$.${key}'),'')`).join(`||' '||`);
+    for (const word of words) { predicates.push(`instr(lower(${searchable}),?)>0`); args.push(word); }
+    args.push(Math.max(1, Math.min(100, Math.floor(options.limit || 30))), Math.max(0, Math.min(1000000, Math.floor(options.offset || 0))));
+    return this.db.prepare(`SELECT data FROM saved_references WHERE ${predicates.join(' AND ')} ORDER BY rowid DESC LIMIT ? OFFSET ?`).all(...args).map((r: any) => JSON.parse(r.data));
+  }
+  update(id: string, patch: Partial<Pick<SavedReference, 'title' | 'userQuote' | 'interpretation' | 'status' | 'notes' | 'relatedIds' | 'excluded' | 'searchText'>>): SavedReference {
+    this.assertWriter(); const ref = this.get(id); if (!ref || ref.deleted) throw new Error('Reference unavailable');
+    for (const key of ['title', 'userQuote', 'interpretation', 'notes', 'searchText'] as const) {
+      if (typeof patch[key] === 'string') ref[key] = patch[key]!.slice(0, key === 'searchText' ? 24000 : key === 'title' ? 500 : 16000);
+    }
+    if (patch.status && ['saved', 'suggested', 'confirmed'].includes(patch.status)) ref.status = patch.status;
+    if (typeof patch.excluded === 'boolean') { ref.excluded = patch.excluded; if (!patch.excluded) ref.forgottenSource = false; }
+    if (Array.isArray(patch.relatedIds)) ref.relatedIds = [...new Set(patch.relatedIds)].slice(0, 30).filter(target => target !== id && !!this.get(target) && !this.get(target)!.deleted);
+    ref.updatedAt = new Date().toISOString();
+    this.db.prepare('UPDATE saved_references SET data=? WHERE workspace=? AND id=?').run(JSON.stringify(ref), this.workspace, id);
+    return ref;
+  }
+  remove(id: string): void {
+    this.assertWriter(); const ref = this.get(id); if (!ref || ref.deleted) return;
+    // Keep a source/operation tombstone: deleting does not silently re-capture it.
+    ref.deleted = true; ref.excluded = true; ref.updatedAt = new Date().toISOString();
+    ref.title = 'Deleted reference'; ref.userQuote = undefined; ref.interpretation = undefined; ref.searchText = undefined; ref.notes = undefined; ref.relatedIds = [];
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE saved_references SET data=? WHERE workspace=? AND id=?').run(JSON.stringify(ref), this.workspace, id);
+      this.db.prepare('DELETE FROM version_pins WHERE holder_kind=? AND holder_id=?').run('reference', id);
+      this.db.prepare('DELETE FROM capture_operations WHERE workspace=? AND id=? AND state=?').run(this.workspace, ref.operationId, 'complete');
+    })();
+  }
+
   pins(): Set<string> { return new Set(this.db.prepare('SELECT DISTINCT version_id FROM version_pins').all().map((row: any) => row.version_id)); }
 }
 
