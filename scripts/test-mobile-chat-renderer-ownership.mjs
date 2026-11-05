@@ -138,6 +138,9 @@ const measurements = {
 // #826 mobile turn lifecycle (stream idle watchdog, single finalize path, drawer
 // stale-run reconcile, mobile-turn-lifecycle.js placeholder allowlist) renders on the
 // live chat path: 285860 gzip (+2366 vs #823's 283494). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 286150, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #828 question-host rows (_mobileQuestionHostRow eager copy, "Waiting for your answer"
+// label, callId tool-name lookup) merged on #826+#827: 286166 gzip (+251 vs #826's
+// 285915 measured). Same ~0.1% allowance.
+assert(measurements.gzipBytes <= 286450, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

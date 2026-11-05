@@ -357,7 +357,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
       return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
     }
-    const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+    // Name the tool when the entry knows it; never a bare "Tool" label.
+    const toolName = String(entry?.extra?.toolName || entry?.extra?.action || entry?.toolName || entry?.action || '')
+      .replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, (char) => char.toUpperCase());
+    const label = type === 'vision' ? 'Vision'
+      : type === 'result' ? (toolName ? `${toolName} result` : 'Step result')
+        : type === 'error' ? (toolName ? `${toolName} error` : 'Step error')
+          : (toolName || 'Step');
     const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
     return `<div class="pm-live-segment ${escapeHtml(type)}"${attr}><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
   }

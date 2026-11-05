@@ -4915,7 +4915,9 @@ function _applyMobileToolActivity(message, phase, payload = {}) {
   if (!message) return null;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   _closeMobileTraceThoughts(message);
-  return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
+  // A result whose call was missed (replay gap) still names its tool when the
+  // turn's cached/checkpoint process entries know the call id.
+  return applyToolActivityEvent(message.liveTraceEntries, phase, payload, message.processEntries);
 }
 
 function _mobileCommandActivityCollections(sessionId) {
@@ -8799,6 +8801,30 @@ function _mergeMobileFileChangeSummaries(current, incoming) {
 // the only question-specific write path back into the legacy mobile thread;
 // history hydration can seed a runtime record once, but it cannot compete with
 // controller transitions after that seed.
+// Same-request live row after the last real user row (mirrors
+// findMobileQuestionHostRow in mobile-question-rows.js, which stays in the
+// lazy chunks; this eager copy keeps the initial Chat slice small).
+function _mobileQuestionHostRow(thread, q) {
+  // Mirrors findMobileQuestionHostRow in mobile-question-rows.js (same order of
+  // checks, same normalization); the parity matrix in the regression test pins it.
+  const qid = String(q?.id || q?.questionId || '').trim();
+  const qcid = String(q?.clientRequestId || '').trim();
+  const hasEntries = (value) => Array.isArray(value) && value.length > 0;
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const t = thread[i];
+    if (t?.role === 'user') { if (/^chat_steer_/i.test(String(t.workflowGroupId || '')) && String(t.workflowPart || '') === 'interruption') continue; return null; }
+    if (t?.role !== 'ai') continue;
+    if (t._pmFinalReceived === true || t._pmServerAuthoredFinal === true || t._pmAbortAcknowledged === true) return null;
+    if (t._steerFrozenTrace === true || String(t.workflowPart || '') === 'before_interruption') continue;
+    const otherQ = String(t.questionRequest?.id || '').trim();
+    if (otherQ && otherQ !== qid) continue;
+    const own = String(t._clientRequestId || '').trim();
+    if (qcid && own && qcid !== own) continue;
+    if (t.streaming === true || hasEntries(t.liveTraceEntries) || hasEntries(t.processEntries)) return t;
+  }
+  return null;
+}
+
 function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = {}) {
   const sid = String(sessionId || question?.sessionId || question?.sourceSessionId || '').trim();
   const qid = String(question?.id || question?.questionId || '').trim();
@@ -8858,14 +8884,22 @@ function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = 
       changed = true;
     });
   } else if (options.create !== false) {
-    thread.push({
-      role: 'ai',
-      timestamp: Date.now(),
-      time: _nowTime(),
-      body: { sender: 'Prometheus', text: '' },
-      content: '',
-      questionRequest: question,
-    });
+    // Attach to the live row of the run that asked (same request, after the
+    // last real user row) so its tool stream and preamble stay with the
+    // question. A separate question-only row is the fallback only.
+    const host = _mobileQuestionHostRow(thread, question);
+    if (host) {
+      host.questionRequest = question;
+    } else {
+      thread.push({
+        role: 'ai',
+        timestamp: Date.now(),
+        time: _nowTime(),
+        body: { sender: 'Prometheus', text: '' },
+        content: '',
+        questionRequest: question,
+      });
+    }
     changed = true;
   }
   if (changed) _scheduleMobileThreadCacheSave(sid, 80);

@@ -11,6 +11,10 @@
  */
 
 import { renderConnectorLogo } from './features/connectors/connector-logo-runtime.js';
+import {
+  createToolCallActionIndex, indexToolCallActions, lookupToolCallAction, toolPayloadCallId, toolPayloadStreamId,
+  withResolvedToolAction,
+} from './tool-call-action-lookup.js';
 import { agentModelLabel, providerLogoKey, renderProviderLogo } from './components/provider-logo.js';
 
 // "Opus 5.5 · Medium: prompt" for a spawn row; model/provider come from the call args.
@@ -659,7 +663,12 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (/^(?:generate_image|image_gen|imagegen)$/.test(action)) return make('media.image', 'image generation', 'Preparing image generation…', 'Generating image', 'Generated image', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'image generation' });
   if (/^(?:generate_video|video_gen)$/.test(action)) return make('media.video', 'video generation', 'Preparing video generation…', 'Generating video', 'Generated video', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'video generation' });
 
-  const friendly = titleCase(action || 'tool');
+  if (!action) {
+    // A result whose call (and tool name) was lost to a replay gap. Never show
+    // a bare "Tool" / "Tool completed"; say something neutral and readable.
+    return make('tool.unknown', 'step', 'Preparing a step…', target ? `Running a step · ${target}` : 'Running a step', 'Finished a step', { target, countNoun: 'step' });
+  }
+  const friendly = titleCase(action);
   return make(`tool.${action || 'unknown'}`, friendly.toLowerCase(), `Preparing ${friendly.toLowerCase()}…`, target ? `${friendly} · ${target}` : friendly, `${friendly} completed`, { target, countNoun: friendly.toLowerCase() });
 }
 
@@ -807,7 +816,9 @@ function matchingOperation(entries, payload, phase) {
   return null;
 }
 
-export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
+// `knownEntries`: other entries of the same turn (cached/checkpoint process
+// entries) used only to name a result whose call frame was missed.
+export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}, knownEntries = null) {
   const entries = Array.isArray(entriesInput) ? entriesInput : [];
   const phase = String(phaseRaw || '').toLowerCase();
   if (!['prepare', 'prepared', 'call', 'progress', 'result'].includes(phase)) return null;
@@ -840,6 +851,12 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
     return operationEntry;
   }
 
+  if (!operationEntry && !actionFromPayload(payload)) {
+    // Result-only frame (its call was missed): recover the tool name by call
+    // id from whatever the turn already holds before building the operation.
+    const resolved = withResolvedToolAction(payload, entries, knownEntries);
+    if (resolved !== payload) payload = resolved;
+  }
   if (!operationEntry) {
     const operation = makeActivity(payload, 'call');
     operationEntry = {
@@ -973,6 +990,9 @@ function legacyPayload(entry = {}) {
 export function coalesceToolActivityEntries(entriesInput) {
   const source = Array.isArray(entriesInput) ? entriesInput : [];
   const out = [];
+  // One pass-wide call-id index (O(1) per result); `out` entries are indexed as they are added.
+  const actionIndex = indexToolCallActions(createToolCallActionIndex(), source);
+  let indexedOut = 0;
   for (const original of source) {
     if (!original || typeof original !== 'object') continue;
     if (original.activity) {
@@ -1009,6 +1029,26 @@ export function coalesceToolActivityEntries(entriesInput) {
     if ((type === 'result' || type === 'error') && action) {
       applyToolActivityEvent(out, 'result', payload);
       continue;
+    }
+    if ((type === 'result' || type === 'error') && toolPayloadCallId(payload)) {
+      // Reduced checkpoint/cache rows can keep the call id but drop the name.
+      // Scoped to the result's stream; ambiguous candidates give no name.
+      if (out.length > indexedOut) {
+        indexToolCallActions(actionIndex, out.slice(indexedOut));
+        indexedOut = out.length;
+      }
+      const scope = toolPayloadStreamId(payload)
+        || String(original.streamId || original.stream_id || original.extra?.streamId || original.extra?.stream_id || '').trim();
+      const found = lookupToolCallAction(actionIndex, toolPayloadCallId(payload), scope);
+      if (found.action) {
+        applyToolActivityEvent(out, 'result', { ...payload, action: found.action });
+        continue;
+      }
+      if (found.ambiguous) {
+        // Candidates disagree and scope cannot tell them apart: neutral label, never a guessed name.
+        applyToolActivityEvent(out, 'result', payload);
+        continue;
+      }
     }
     if (type === 'result' || type === 'error') {
       // Older persisted traces sometimes contain a result body without the
