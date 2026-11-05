@@ -280,9 +280,15 @@ async function runLoop(reader, timers, { idleMs = MOBILE_STREAM_IDLE_TIMEOUT_MS,
   // or an (empty) content holder, so a new constructor field forces a conscious decision here.
   const contentHolders = new Set(['body', 'sender', 'text', 'content', 'processEntries', 'liveTraceEntries']);
   const literals = runtime.match(/\{\s*role: 'ai',\s*streaming: true,[\s\S]*?\};/g) || [];
-  assert.ok(literals.length >= 4, `found the live placeholder constructors (got ${literals.length})`);
+  // send, recovery, WS, WS adoption and side chat: losing one silently would weaken the guard.
+  assert.ok(literals.length >= 5, `found every live placeholder constructor (got ${literals.length})`);
   for (const literal of literals) {
-    for (const [, key] of literal.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*:/gm)) {
+    // Explicit `key:` pairs plus shorthand properties (`activeRunKind,`).
+    const keys = [
+      ...[...literal.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*:/gm)].map((match) => match[1]),
+      ...[...literal.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*(?=,|\n\s*\})/gm)].map((match) => match[1]),
+    ];
+    for (const key of keys) {
       assert.ok(MOBILE_PLACEHOLDER_INERT_KEYS.has(key) || contentHolders.has(key),
         `placeholder constructor key "${key}" must be classified in MOBILE_PLACEHOLDER_INERT_KEYS`);
     }
