@@ -37,6 +37,7 @@ import {
   mutatePlan,
   type TaskPlanStep,
 } from '../tasks/task-store';
+import { buildScheduledTaskPlan, finalizeScheduledPlanSteps } from './scheduled-task-plan';
 import {
   getAgentTeamId,
   appendTeamChat,
@@ -341,38 +342,18 @@ function buildInterRunContext(job: CronJob): string {
   }
 }
 
-function buildScheduledTaskPlan(job: CronJob): TaskPlanStep[] {
-  const prompt = String(job.prompt || '');
-  const lower = prompt.toLowerCase();
-  const descriptions: string[] = ['Prepare scheduled run context and activate required tools'];
-
-  if (lower.includes('source-preferences.md') || lower.includes('read first')) {
-    descriptions.push('Read or seed required workspace source files');
+/** Apply the final plan state for a scheduled run (success: all open steps done; failure: current step failed). */
+function finalizeScheduledTaskPlan(taskId: string, success: boolean, notes: string): void {
+  try {
+    const task = loadTask(taskId);
+    if (!task || !Array.isArray(task.plan) || !task.plan.length) return;
+    task.plan = finalizeScheduledPlanSteps(task.plan, success, notes);
+    saveTask(task);
+  } catch (error: any) {
+    console.warn('[CronScheduler] Could not finalize scheduled plan:', error?.message || error);
   }
-  if (lower.includes('x.com/home') || lower.includes('browser') || lower.includes('collect')) {
-    descriptions.push('Collect the bounded browser/source sample without side effects');
-  }
-  if (lower.includes('search') || lower.includes('targeted')) {
-    descriptions.push('Run targeted searches and extract concrete signals');
-  }
-  if (lower.includes('output files') || lower.includes('write workspace') || lower.includes('save both')) {
-    descriptions.push('Write the required workspace output files');
-  }
-  if (lower.includes('verify') || lower.includes('read_file') || lower.includes('completion')) {
-    descriptions.push('Verify outputs and record completion or blockers');
-  }
-
-  if (descriptions.length < 3) {
-    descriptions.push('Execute the scheduled prompt');
-    descriptions.push('Deliver the final scheduled-task result');
-  }
-
-  return Array.from(new Set(descriptions)).slice(0, 8).map((description, index) => ({
-    index,
-    description,
-    status: 'pending',
-  }));
 }
+
 
 type JobRunStatus = 'ok' | 'success' | 'error';
 
@@ -1634,6 +1615,7 @@ export class CronScheduler {
           const cronTask = createTask({
             title: job.name,
             prompt: effectivePrompt,
+            originalAssignment: String(job.prompt || '').trim() || undefined,
             sessionId: managerSessionId,
             channel: 'web',
             scheduleId: job.id,
@@ -1735,11 +1717,7 @@ export class CronScheduler {
             });
             this.deps.broadcast({ type: 'task_queued', taskId: cronTask.id, jobId: job.id, summary: resultText });
           } else {
-            mutatePlan(cronTask.id, [{
-              op: 'complete',
-              step_index: 0,
-              notes: resultText.slice(0, 200),
-            }]);
+            finalizeScheduledTaskPlan(cronTask.id, taskSuccess, resultText);
             updateTaskStatus(cronTask.id, taskSuccess ? 'complete' : 'failed', {
             finalSummary: resultText,
             });
@@ -1813,6 +1791,7 @@ export class CronScheduler {
             const cronTask = createTask({
               title: job.name,
               prompt: effectivePrompt,
+              originalAssignment: String(job.prompt || '').trim() || undefined,
               sessionId: chatSessionId,
               channel: 'web',
               scheduleId: job.id,
@@ -1974,15 +1953,7 @@ export class CronScheduler {
               resultText = `ERROR: ${buildObsoleteBrandBlockMessage('Cron final output')}`;
             }
             const finalStatus = /^\s*ERROR:/i.test(resultText) ? 'failed' : 'complete';
-            const finalTask = loadTask(cronTask.id);
-            const lastOpenStep = finalTask?.plan?.findIndex((step) => step.status === 'running' || step.status === 'pending') ?? -1;
-            if (lastOpenStep >= 0 && finalStatus === 'complete') {
-              mutatePlan(cronTask.id, [{
-                op: 'complete',
-                step_index: lastOpenStep,
-                notes: resultText.slice(0, 200),
-              }]);
-            }
+            finalizeScheduledTaskPlan(cronTask.id, finalStatus === 'complete', resultText);
             updateTaskStatus(cronTask.id, finalStatus, { finalSummary: resultText });
             appendJournal(cronTask.id, {
               type: finalStatus === 'complete' ? 'status_push' : 'error',
@@ -2067,6 +2038,7 @@ export class CronScheduler {
         const cronTask = createTask({
           title: job.name,
           prompt: job.prompt,
+          originalAssignment: String(job.prompt || '').trim() || undefined,
           sessionId: targetSessionId,
           channel: 'web',
           scheduleId: job.id,
@@ -2209,11 +2181,7 @@ export class CronScheduler {
 
         // Mark the single plan step as done so progress bar fills to 100%
         const taskSuccess = !resultText.startsWith('ERROR:');
-        mutatePlan(cronTask.id, [{
-          op: 'complete',
-          step_index: 0,
-          notes: resultText.slice(0, 200),
-        }]);
+        finalizeScheduledTaskPlan(cronTask.id, taskSuccess, resultText);
 
         // Mark task complete and write final result to journal
         updateTaskStatus(cronTask.id, taskSuccess ? 'complete' : 'failed', {

@@ -25,6 +25,7 @@ import {
 } from './mobile-teams-pages.js';
 
 import { wsEventBus } from '../ws.js';
+import { buildTaskCard, detailSections, formatDuration as formatTaskDuration, dispatchedMessage } from '../features/tasks/task-card-view-model.js';
 import { isNeedsYouTask, needsYouCount, needsYouEntries, needsYouTaskIds, nyRelTime } from '../needs-you-view-model.js';
 import {
   approveMobileApproval,
@@ -143,10 +144,10 @@ async function _renderTasksPageOld(page, { navigate }) {
 }
 
 const PM_TASK_FILTERS = [
+  { key: 'needs_you', label: 'Needs You' },
   { key: 'running', label: 'In Progress' },
   { key: 'complete', label: 'Completed' },
   { key: 'paused', label: 'Paused' },
-  { key: 'needs_you', label: 'Needs You' },
   { key: 'failed', label: 'Failed' },
   { key: 'queued', label: 'Queued' },
 ];
@@ -279,17 +280,9 @@ function _pmRenderTaskEvidence(entries) {
 // is useful to the runtime, but it is not the message a person dispatched. New
 // task records preserve that message in originalAssignment; extract it from the
 // older envelope format only when that field is unavailable.
+// Moved to the shared view-model; kept as an alias for existing callers.
 function _pmTaskDispatchedMessage(task) {
-  const original = String(task?.originalAssignment || '').trim();
-  if (original) return original;
-
-  const prompt = String(task?.prompt || task?.title || '').trim();
-  if (!prompt) return '';
-  const messageMatch = prompt.match(/(?:^|\n)Message:\s*\n([\s\S]*?)(?=\n\n(?:CONTEXT DATA|CONSTRAINTS|SUCCESS CRITERIA|EVIDENCE BUS|PROCESS LOG):|$)/i);
-  if (messageMatch?.[1]?.trim()) return messageMatch[1].trim();
-  const taskMatch = prompt.match(/(?:^|\n)(?:YOUR TASK|TASK):\s*\n?([\s\S]*?)(?=\n\n(?:ADDITIONAL CONTEXT|CONTEXT DATA|CONSTRAINTS|SUCCESS CRITERIA|TOOL RULES|EVIDENCE BUS|PROCESS LOG):|$)/i);
-  if (taskMatch?.[1]?.trim()) return taskMatch[1].trim();
-  return prompt;
+  return dispatchedMessage(task);
 }
 
 function _pmRenderTaskPromptDisclosure(task) {
@@ -318,6 +311,92 @@ function _pmTaskAction(task) {
   return null;
 }
 
+// ── Option B live run cards (shared view-model: features/tasks/task-card-view-model.js) ──
+function _pmLrSegments(progress) {
+  if (!progress.total) return '';
+  return `<div class="pm-lr-bar" role="img" aria-label="${progress.done} of ${progress.total} steps done">${progress.items.map((item) => `<span class="pm-lr-seg is-${item.state}"></span>`).join('')}</div>`;
+}
+
+function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
+  const card = buildTaskCard(t);
+  const id = escapeHtml(card.id);
+  const brainLabel = _pmBrainTaskLabel(t);
+  const compactDone = card.status === 'complete' && !isOpen;
+  const progressLine = card.progress.total
+    ? `<div class="pm-lr-progress">${_pmLrSegments(card.progress)}<span class="pm-lr-count">${card.progress.done}/${card.progress.total}</span></div>` : '';
+  const stepLine = !card.terminal && card.progress.currentText
+    ? `<div class="pm-lr-step"><span class="pm-lr-step-mark">›</span> ${escapeHtml(card.progress.currentText.slice(0, 160))}</div>` : '';
+  return `<article class="pm-card pm-task-card pm-lr-card tone-${card.tone}${compactDone ? ' is-compact' : ''}${isOpen ? ' is-open' : ''}${card.planned ? ' pm-planned-chat' : ''}" data-task-id="${id}" data-task-kind="${escapeHtml(card.kind)}">
+    <div class="pm-lr-head">
+      <span class="pm-lr-avatar kind-${escapeHtml(card.kind)}" aria-hidden="true">${escapeHtml(card.initials)}</span>
+      <div class="pm-lr-who">
+        <div class="pm-lr-actor">${escapeHtml(brainLabel || card.actor)}${brainLabel && t.brainDate ? ` · ${escapeHtml(String(t.brainDate))}` : ''}</div>
+        <div class="pm-lr-sub">${escapeHtml(card.sub)}</div>
+      </div>
+      <span class="pm-lr-pill tone-${card.tone}">${escapeHtml(card.statusLabel)}</span>
+    </div>
+    <div class="pm-lr-title">${escapeHtml(card.title)}</div>
+    ${compactDone ? '' : `${progressLine}${stepLine}
+    ${card.tool ? `<div class="pm-lr-now">now: <code>${escapeHtml(card.tool)}</code></div>` : ''}
+    ${card.stalledFor ? `<div class="pm-lr-stall">No progress for ${escapeHtml(card.stalledFor)}. Probably stuck.</div>` : ''}
+    ${card.attention ? `<div class="pm-lr-attn tone-${card.tone}"><strong>Prometheus:</strong> ${escapeHtml(card.attention)}</div>` : ''}`}
+    ${body}
+  </article>`;
+}
+
+function _pmRenderActivity(rows) {
+  if (!rows.length) return '<div class="pm-card-body">No activity recorded yet.</div>';
+  return `<div class="pm-lr-activity" data-pm-task-journal>${rows.map((row, idx) => {
+    const time = row.t ? `<span class="pm-lr-act-time">${escapeHtml(_formatTimeAgo(row.t))}</span>` : '';
+    if (row.type === 'hidden') {
+      return `<details class="pm-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="pm-lr-act is-status">${escapeHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
+    }
+    if (row.type === 'tool') {
+      return `<div class="pm-lr-act is-tool${row.error ? ' is-error' : ''}" data-act="${idx}"><div class="pm-lr-act-line"><code>${escapeHtml(row.name || 'tool')}</code>${row.pending ? '<span class="pm-lr-act-run">running…</span>' : ''}${time}</div>${row.call ? `<div class="pm-lr-act-call">${escapeHtml(String(row.call).slice(0, 200))}</div>` : ''}${row.result ? `<div class="pm-lr-act-result">→ ${escapeHtml(String(row.result).slice(0, 240))}</div>` : ''}</div>`;
+    }
+    if (row.type === 'error') return `<div class="pm-lr-act is-error"><div class="pm-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escapeHtml(row.name)}</code>` : ''}${time}</div><div>${escapeHtml(String(row.text || '').slice(0, 400))}</div></div>`;
+    return `<div class="pm-lr-act is-status"><div class="pm-lr-act-line">${escapeHtml(String(row.text || '').slice(0, 300))}${time}</div></div>`;
+  }).join('')}</div>`;
+}
+
+function _pmRenderProgressList(progress) {
+  if (!progress.total) return '<div class="pm-card-body">No plan steps recorded yet.</div>';
+  return `<ol class="pm-lr-steps">${progress.items.map((item, idx) => `<li class="is-${item.state}"><span class="pm-lr-step-dot">${item.state === 'done' ? '✓' : item.state === 'failed' ? '!' : idx + 1}</span><span class="pm-lr-step-text">${escapeHtml(item.text.slice(0, 260))}</span>${item.durationMs != null ? `<span class="pm-lr-step-time">${escapeHtml(formatTaskDuration(item.durationMs))}</span>` : ''}</li>`).join('')}</ol>`;
+}
+
+function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
+  const merged = { ...listTask, ...detail };
+  const id = escapeHtml(String(listTask.id || ''));
+  const view = detailSections(merged, { evidence: detailEvidence });
+  const brainLabel = _pmBrainTaskLabel(merged);
+  const action = view.openChat ? null : _pmTaskAction(merged);
+  const tabs = ['overview', 'activity', 'evidence'].map(key => `<button type="button" class="${tab === key ? 'active' : ''}" data-task-tab="${key}" data-task-id="${id}">${key[0].toUpperCase()}${key.slice(1)}</button>`).join('');
+  let content = '';
+  if (tab === 'activity') {
+    content = `<section>${_pmRenderActivity(view.activity)}</section>`;
+  } else if (tab === 'evidence') {
+    const artifacts = view.artifacts.length ? `<section><div class="pm-card-head">Artifacts</div><ul class="pm-lr-artifacts">${view.artifacts.map(a => `<li>${escapeHtml(String(a?.path || a?.name || a || '').slice(0, 240))}</li>`).join('')}</ul></section>` : '';
+    content = `<section><div class="pm-card-head">Evidence</div>${_pmRenderTaskEvidence(view.evidence)}</section>${artifacts}`;
+  } else {
+    const recovery = ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(String(merged.status || '').toLowerCase()) && !view.openChat;
+    content = `
+      ${view.attention ? `<section class="pm-lr-attn-box tone-${view.card.tone}"><div class="pm-card-head">What Prometheus needs</div><div class="pm-card-body">${escapeHtml(view.attention)}</div></section>` : ''}
+      ${recovery ? `<section class="pm-task-recovery-panel"><div class="pm-card-head pm-task-recovery-head">Recovery conversation</div>${_pmRenderTaskRecovery(merged)}</section>` : ''}
+      ${brainLabel ? `<div class="pm-lr-brain"><strong>${escapeHtml(brainLabel)}</strong>${merged.brainDate ? ` · ${escapeHtml(String(merged.brainDate))}` : ''}${merged.brainRunId ? `<br><span>Run ${escapeHtml(String(merged.brainRunId))}</span>` : ''}${merged.brainArtifact ? `<br><span>Primary artifact: ${escapeHtml(String(merged.brainArtifact))}</span>` : ''}</div>` : ''}
+      ${view.result ? `<section><div class="pm-card-head">Result</div><div class="pm-card-body pm-task-final-response markdown-body pm-task-markdown">${_renderMobileMarkdown(view.result)}</div></section>` : ''}
+      ${view.startedFrom ? `<section class="pm-task-prompt-section"><div class="pm-card-head">Started from</div><div class="pm-card-body pm-lr-origin">${escapeHtml(view.startedFrom.slice(0, 4000))}</div>${view.rawInstructions ? `<details class="pm-task-prompt-disclosure"><summary>Show full agent instructions</summary><div class="pm-card-body pm-task-prompt-body">${escapeHtml(view.rawInstructions)}</div></details>` : ''}</section>` : ''}
+      <section><div class="pm-card-head">Progress</div>${_pmRenderProgressList(view.progress)}</section>`;
+  }
+  const composer = view.openChat
+    ? `<div class="pm-lr-actions"><button class="pm-btn pm-btn-primary" data-ny-open="${escapeHtml(String(merged.sessionId || ''))}">Open chat</button></div>`
+    : `<div class="pm-lr-actions">
+        ${action ? `<button class="pm-btn ghost" data-task-action="${action.action}" data-task-id="${id}">${escapeHtml(action.label)}</button>` : ''}
+        ${['failed', 'complete'].includes(_pmTaskFilter(merged.status)) ? `<button class="pm-btn ghost danger" data-task-action="delete" data-task-id="${id}">${ICONS.trash} Remove</button>` : ''}
+      </div>
+      ${view.canMessage ? `<div class="pm-lr-composer"><textarea class="pm-textarea" data-task-reply="${id}" rows="2" placeholder="Message this task..."></textarea><button class="pm-btn primary" data-task-send="${id}">Send</button></div>` : ''}`;
+  return `<div class="pm-tabs pm-lr-tabs">${tabs}</div><div class="pm-lr-tab-body">${content}</div>${composer}`;
+}
+
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let taskInteractions = null;
   const taskPageSize = 40;
@@ -326,7 +405,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
     <div class="pm-body" id="pm-tasks-body">
       <div class="pm-tabs" id="pm-tasks-filter" style="margin-top:4px;overflow-x:auto;justify-content:flex-start;">
-        ${PM_TASK_FILTERS.map((f, i) => `<button class="${i === 0 ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
+        ${PM_TASK_FILTERS.map((f) => `<button class="${f.key === 'running' ? 'active' : ''}" data-filter="${f.key}">${escapeHtml(f.label)} <span data-count="${f.key}"></span></button>`).join('')}
       </div>
       <div id="pm-tasks-list">${_tasksSkeleton()}</div>
     </div>
@@ -347,6 +426,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let lastPaintSignature = '';
   let details = {};
   let evidence = {};
+  const detailTab = {};
   let refreshTimer = null;
   let eventRefreshTimer = null;
 
@@ -378,6 +458,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       expandedId,
       tasks: visibleTasks,
       detail: expandedId ? details[expandedId] : null,
+      tab: expandedId ? detailTab[expandedId] || 'overview' : '',
       evidence: expandedId ? evidence[expandedId] : null,
       liveMinute: visibleTasks.some(t => ['running', 'pending'].includes(_pmTaskFilter(t.status)))
         ? Math.floor(Date.now() / 60_000) : 0,
@@ -398,57 +479,14 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
 
     const restoreRequestCards = preserveRequestCards(listEl, nyEntries);
     listEl.innerHTML = visibleTasks.map(t => {
-      if (t.sourceKind === 'planned_chat') return `<article class="pm-card pm-planned-chat" style="padding:14px;overflow-wrap:anywhere"><strong>${escapeHtml(t.title)}</strong><div class="pm-card-body">Chat · ${escapeHtml(t.status)}</div><ol style="padding-left:20px;font-size:13px">${_pmTaskProgressItems(t).map(step => `<li style="margin:6px 0">${['done','completed'].includes(step.status) ? '✓ ' : step.status === 'in_progress' ? '› ' : ''}${escapeHtml(step.text || '')}</li>`).join('')}</ol><button class="pm-btn" data-ny-open="${escapeHtml(t.sessionId)}">Open chat</button></article>`;
       const id = String(t.id || '');
-      const pill = _pmTaskPill(String(t.status || ''));
-      const brainLabel = _pmBrainTaskLabel(t);
-      const sourceLabel = brainLabel || String(t.channel || t.source || t.actor || 'Background task');
-      const started = t.startedAt || t.createdAt;
-      const finishedAt = t.completedAt || t.finishedAt;
-      const dur = finishedAt && t.startedAt ? _formatDuration(finishedAt - t.startedAt) : (t.startedAt ? _formatDuration(Date.now() - t.startedAt) : '');
-      const summary = t.title || t.prompt || t.summary || t.detail || '';
-      const progressItems = _pmTaskProgressItems(t);
-      const currentStep = progressItems.find(it => String(it?.status) === 'in_progress')?.text || '';
       const isOpen = id === expandedId;
       const detail = details[id]?.task;
       const detailEvidence = evidence[id] || details[id]?.evidenceBus?.entries || [];
-      const action = _pmTaskAction(detail || t);
-      return `
-        <article class="pm-card pm-task-card" style="padding:12px 14px;cursor:pointer;" data-task-id="${escapeHtml(id)}">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <strong style="flex:1;font-size:13px;line-height:1.3;">${escapeHtml(String(summary).slice(0, 140))}${String(summary).length > 140 ? '...' : ''}</strong>
-            <span class="pm-pill ${pill.cls}">${escapeHtml(pill.label)}</span>
-          </div>
-          ${brainLabel ? `<div style="font-size:10px;color:#6d2d9e;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin:-1px 0 5px;">${escapeHtml(brainLabel)}${t.brainDate ? ` · ${escapeHtml(String(t.brainDate))}` : ''}</div>` : ''}
-          ${currentStep ? `<div class="pm-card-body" style="font-size:12px;color:var(--pm-text-soft);margin-bottom:4px;"><span style="color:var(--pm-orange);font-weight:700;">&gt;</span> ${escapeHtml(String(currentStep).slice(0, 160))}</div>` : ''}
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--pm-muted);gap:10px;">
-            <span>${escapeHtml(sourceLabel)} - ${progressItems.length} step${progressItems.length === 1 ? '' : 's'}</span>
-            <span>${started ? _formatTimeAgo(started) : ''}${dur ? ' - ' + dur : ''}</span>
-          </div>
-          ${isOpen ? `<div class="pm-task-expanded" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--pm-border);display:flex;flex-direction:column;gap:12px;cursor:default;">
-            ${!detail ? `<div class="pm-card-body">Loading task details...</div>` : `
-              <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                ${action ? `<button class="pm-btn ghost" data-task-action="${action.action}" data-task-id="${escapeHtml(id)}">${escapeHtml(action.label)}</button>` : ''}
-                ${['failed','complete'].includes(_pmTaskFilter(detail.status)) ? `<button class="pm-btn ghost danger" data-task-action="delete" data-task-id="${escapeHtml(id)}">${ICONS.trash} Remove</button>` : ''}
-              </div>
-              ${brainLabel ? `<div style="background:#f8f5ff;border:1px solid #e9d8ff;border-radius:10px;padding:9px 11px;font-size:11px;color:#6d2d9e;line-height:1.5;"><strong>${escapeHtml(brainLabel)}</strong>${detail.brainDate ? ` · ${escapeHtml(String(detail.brainDate))}` : ''}${detail.brainRunId ? `<br><span style="opacity:.78">Run ${escapeHtml(String(detail.brainRunId))}</span>` : ''}${detail.brainArtifact ? `<br><span style="opacity:.78">Primary artifact: ${escapeHtml(String(detail.brainArtifact))}</span>` : ''}</div>` : ''}
-              ${detail.finalSummary ? `<section><div class="pm-card-head">Final Response</div><div class="pm-card-body pm-task-final-response markdown-body pm-task-markdown">${_renderMobileMarkdown(detail.finalSummary)}</div></section>` : ''}
-              ${['needs_assistance','awaiting_user_input','paused','stalled','failed'].includes(String(detail.status || '').toLowerCase()) ? `<section class="pm-task-recovery-panel">
-                <div class="pm-card-head pm-task-recovery-head">Needs You / Recovery</div>
-                ${_pmRenderTaskRecovery(detail)}
-                <div style="display:flex;gap:8px;margin-top:10px;">
-                  <textarea class="pm-textarea" data-task-reply="${escapeHtml(id)}" rows="2" placeholder="Reply to this task..." style="min-height:58px;"></textarea>
-                  <button class="pm-btn primary" data-task-send="${escapeHtml(id)}" style="align-self:flex-end;">Send</button>
-                </div>
-              </section>` : ''}
-              <section><div class="pm-card-head">Progress</div>${_pmRenderTaskProgress(_pmTaskProgressItems(detail))}</section>
-              ${_pmRenderTaskPromptDisclosure(detail)}
-              <section><div class="pm-card-head">Evidence Bus</div>${_pmRenderTaskEvidence(detailEvidence)}</section>
-              <section><div class="pm-card-head">Process Log</div>${_pmRenderTaskJournal(detail.journal)}</section>
-            `}
-          </div>` : ''}
-        </article>
-      `;
+      const body = isOpen ? `<div class="pm-task-expanded pm-lr-detail">
+            ${!detail ? `<div class="pm-card-body">${details[id]?.error ? escapeHtml(details[id].error) : 'Loading task details...'}</div>` : _pmRenderTaskDetail(t, detail, detailEvidence, detailTab[id] || 'overview')}
+          </div>` : '';
+      return _pmRenderLiveCard(t, { isOpen, body });
     }).join('') + (tasks.length > visibleLimit
       ? `<button type="button" class="pm-btn ghost" data-pm-task-load-more style="display:block;margin:16px auto 24px;">Show more tasks (${Math.min(taskPageSize, tasks.length - visibleLimit)} of ${tasks.length - visibleLimit} remaining)</button>`
       : '');
@@ -486,6 +524,13 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
         expandedId = expandedId === id ? '' : id;
         paint();
         if (expandedId && !details[expandedId]) await loadDetail(expandedId);
+      });
+    });
+    listEl.querySelectorAll('[data-task-tab]').forEach(btn => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        detailTab[btn.getAttribute('data-task-id')] = btn.getAttribute('data-task-tab');
+        paint();
       });
     });
     listEl.querySelectorAll('[data-task-action]').forEach(btn => {
@@ -558,7 +603,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     const payload = { ...entry.item?.payload, sessionId: entry.sessionId };
     const original = ['question', 'browser_login'].includes(entry.kind) ? taskInteractions?.question(payload)
       : ['tool_approval', 'final_action_approval'].includes(entry.kind) ? taskInteractions?.approval(payload) : '';
-    if (original) return `<article class="pm-card pm-ny-entry" data-ny-entry="${escapeHtml(entry.id)}" style="padding:12px;min-width:0;overflow-wrap:anywhere">${original}<button class="pm-btn ghost" data-ny-open="${escapeHtml(entry.sessionId)}">Open chat</button></article>`;
+    if (original) return `<article class="pm-card pm-ny-entry" data-ny-entry="${escapeHtml(entry.id)}" style="padding:12px;min-width:0;overflow-wrap:anywhere"><div class="pm-ny-original">${original}</div><div class="pm-ny-footer"><button class="pm-btn ghost" data-ny-open="${escapeHtml(entry.sessionId)}">Open chat</button></div></article>`;
     const id = escapeHtml(entry.id);
     const origin = escapeHtml(entry.sessionId);
     const isApproval = entry.kind === 'tool_approval' || entry.kind === 'final_action_approval';

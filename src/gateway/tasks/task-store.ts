@@ -418,6 +418,9 @@ export interface TaskSummary {
   executorReasoningEffort?: string;
   /** Compact routing fields used to avoid deserializing historical tasks on chat admission. */
   replyLookupVersion?: 1;
+  /** Compact Tasks-card attention fields (capped). Old index rows simply lack them. */
+  pauseAnalysisMessage?: string;
+  recoveryAssistantTail?: string;
   originatingSessionId?: string;
   parentTaskId?: string;
   subagentProfile?: string;
@@ -639,6 +642,15 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
       ? input.executorReasoningEffort.slice(0, 32)
       : undefined,
     replyLookupVersion: input?.replyLookupVersion === 1 ? 1 : undefined,
+    originalAssignment: typeof input?.originalAssignment === 'string' && input.originalAssignment.trim()
+      ? input.originalAssignment.slice(0, 280)
+      : undefined,
+    pauseAnalysisMessage: typeof input?.pauseAnalysisMessage === 'string' && input.pauseAnalysisMessage.trim()
+      ? input.pauseAnalysisMessage.slice(0, 320)
+      : undefined,
+    recoveryAssistantTail: typeof input?.recoveryAssistantTail === 'string' && input.recoveryAssistantTail.trim()
+      ? input.recoveryAssistantTail.slice(0, 320)
+      : undefined,
     originatingSessionId: typeof input?.originatingSessionId === 'string' && input.originatingSessionId.trim()
       ? input.originatingSessionId.trim()
       : undefined,
@@ -835,6 +847,20 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
       ? task.executorReasoningEffort.slice(0, 32)
       : undefined,
     replyLookupVersion: 1,
+    originalAssignment: typeof task.originalAssignment === 'string' && task.originalAssignment.trim()
+      ? task.originalAssignment.trim().slice(0, 280)
+      : undefined,
+    pauseAnalysisMessage: typeof task.pauseAnalysis?.message === 'string' && task.pauseAnalysis.message.trim()
+      ? task.pauseAnalysis.message.trim().slice(0, 320)
+      : undefined,
+    recoveryAssistantTail: (() => {
+      const turns = Array.isArray(task.recoveryConversation) ? task.recoveryConversation : [];
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const turn = turns[i];
+        if (turn?.role === 'assistant' && typeof turn.content === 'string' && turn.content.trim()) return turn.content.trim().slice(0, 320);
+      }
+      return undefined;
+    })(),
     originatingSessionId: typeof task.originatingSessionId === 'string' && task.originatingSessionId.trim()
       ? task.originatingSessionId.trim()
       : undefined,
