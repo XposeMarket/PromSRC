@@ -11,7 +11,10 @@
  */
 
 import { renderConnectorLogo } from './features/connectors/connector-logo-runtime.js';
-import { toolPayloadCallId, withResolvedToolAction } from './tool-call-action-lookup.js';
+import {
+  createToolCallActionIndex, indexToolCallActions, lookupToolCallAction, toolPayloadCallId, toolPayloadStreamId,
+  withResolvedToolAction,
+} from './tool-call-action-lookup.js';
 import { agentModelLabel, providerLogoKey, renderProviderLogo } from './components/provider-logo.js';
 
 // "Opus 5.5 · Medium: prompt" for a spawn row; model/provider come from the call args.
@@ -987,6 +990,9 @@ function legacyPayload(entry = {}) {
 export function coalesceToolActivityEntries(entriesInput) {
   const source = Array.isArray(entriesInput) ? entriesInput : [];
   const out = [];
+  // One pass-wide call-id index (O(1) per result); `out` entries are indexed as they are added.
+  const actionIndex = indexToolCallActions(createToolCallActionIndex(), source);
+  let indexedOut = 0;
   for (const original of source) {
     if (!original || typeof original !== 'object') continue;
     if (original.activity) {
@@ -1026,9 +1032,21 @@ export function coalesceToolActivityEntries(entriesInput) {
     }
     if ((type === 'result' || type === 'error') && toolPayloadCallId(payload)) {
       // Reduced checkpoint/cache rows can keep the call id but drop the name.
-      const named = withResolvedToolAction(payload, out, source);
-      if (actionFromPayload(named)) {
-        applyToolActivityEvent(out, 'result', named);
+      // Scoped to the result's stream; ambiguous candidates give no name.
+      if (out.length > indexedOut) {
+        indexToolCallActions(actionIndex, out.slice(indexedOut));
+        indexedOut = out.length;
+      }
+      const scope = toolPayloadStreamId(payload)
+        || String(original.streamId || original.stream_id || original.extra?.streamId || original.extra?.stream_id || '').trim();
+      const found = lookupToolCallAction(actionIndex, toolPayloadCallId(payload), scope);
+      if (found.action) {
+        applyToolActivityEvent(out, 'result', { ...payload, action: found.action });
+        continue;
+      }
+      if (found.ambiguous) {
+        // Candidates disagree and scope cannot tell them apart: neutral label, never a guessed name.
+        applyToolActivityEvent(out, 'result', payload);
         continue;
       }
     }

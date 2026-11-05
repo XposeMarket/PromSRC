@@ -68,8 +68,8 @@ export function foldMobileQuestionOnlyRows(thread, host = null) {
     if (row?.role === 'user' && !isChatSteerUser(row)) break;
     if (!isMobileQuestionOnlyRow(row) || !isPendingMobileQuestion(row.questionRequest)) continue;
     if (row.fileChanges || hasEntries(row.richArtifacts)) continue;
-    const target = host && host !== row && !(host.questionRequest && host.questionRequest.id !== row.questionRequest.id)
-      ? host
+    const target = host
+      ? (questionHostEligible(thread, host, row) ? host : null)
       : findMobileQuestionHostRow(thread, row.questionRequest, { exclude: row });
     if (!target || target === row) continue;
     target.questionRequest = { ...(target.questionRequest || {}), ...row.questionRequest };
@@ -77,4 +77,19 @@ export function foldMobileQuestionOnlyRows(thread, host = null) {
     folded += 1;
   }
   return folded;
+}
+
+/**
+ * An explicit host (recovery passes its live row) gets the same eligibility as
+ * findMobileQuestionHostRow: it must be the finder's result for this question
+ * over the rows up to it, and no real user row or finalized assistant row may
+ * follow it. Otherwise the question placeholder stays where it is.
+ */
+function questionHostEligible(thread, host, row) {
+  const index = thread.indexOf(host);
+  if (index < 0 || host === row) return false;
+  if (findMobileQuestionHostRow(thread.slice(0, index + 1), row.questionRequest, { exclude: row }) !== host) return false;
+  return !thread.slice(index + 1).some((item) => (item?.role === 'user' && !isChatSteerUser(item))
+    || (item?.role === 'ai' && (item._pmFinalReceived === true || item._pmServerAuthoredFinal === true
+      || item._pmAbortAcknowledged === true)));
 }

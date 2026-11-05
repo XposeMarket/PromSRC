@@ -217,18 +217,98 @@ assert.match(pages, /applyToolActivityEvent\(message\.liveTraceEntries, phase, p
   const start = pages.indexOf('function _mobileQuestionHostRow(');
   const end = pages.indexOf('\nfunction _projectMobileQuestionToLegacy', start);
   const eager = new Function(`${pages.slice(start, end)}; return _mobileQuestionHostRow;`)();
-  const older = { role: 'ai', content: 'old', processEntries: [{}], _pmFinalReceived: true };
-  const live = liveRow();
-  const cases = [
-    [{ role: 'user' }, older, user, live],
-    [{ role: 'user' }, older, user],
-    [user, liveRow({ _clientRequestId: 'other' })],
-    [user, live, { role: 'user', workflowPart: 'interruption', workflowGroupId: 'chat_steer_1' }],
-    [user, liveRow({ questionRequest: { id: 'other-q' } })],
-  ];
-  for (const thread of cases) assert.equal(eager(thread, question), rows.findMobileQuestionHostRow(thread, question));
+  // Table-driven matrix: every combination of request, turn, finalization,
+  // steer capture, streaming and trace must give identical results.
+  const finals = [{}, { _pmFinalReceived: true }, { _pmServerAuthoredFinal: true }, { _pmAbortAcknowledged: true }];
+  const steers = [{}, { workflowPart: 'before_interruption' }, { _steerFrozenTrace: true }];
+  let matrixCases = 0;
+  for (const sameRequest of [true, false]) for (const currentTurn of [true, false])
+    for (const fin of finals) for (const steer of steers)
+      for (const streaming of [true, false]) for (const hasTrace of [true, false]) {
+        const host = {
+          role: 'ai', timestamp: 1000, _clientRequestId: sameRequest ? cid : 'other', streaming, content: '',
+          body: { sender: '', text: '' }, processEntries: [],
+          liveTraceEntries: hasTrace ? [{ type: 'preamble', text: 'x' }] : [], ...fin, ...steer,
+        };
+        const thread = currentTurn ? [user, host] : [host, { role: 'user', content: 'later', _clientRequestId: cid }];
+        const label = JSON.stringify({ sameRequest, currentTurn, fin, steer, streaming, hasTrace });
+        assert.equal(eager(thread, question), rows.findMobileQuestionHostRow(thread, question), label);
+        matrixCases += 1;
+      }
+  assert.equal(matrixCases, 192);
 }
 assert.match(runtime, /find\(\(turn\) => turn\?\.role === 'ai' && !isQuestionOnly\(turn\)\)/, 'recovery latest turn skips question-only rows');
 assert.doesNotMatch(rendererRuntime, /: type === 'error' \? 'Tool error' : 'Tool';/, 'no plain Tool label');
+
+// Must: collapseEmptyLiveRows folds only into an eligible explicit host; an ineligible host keeps the placeholder.
+{
+  const placeholderFor = () => questionOnly();
+  for (const [name, host] of [
+    ['different request', liveRow({ _clientRequestId: 'other' })],
+    ['finalized host', liveRow({ _pmFinalReceived: true })],
+    ['steer-captured host (before_interruption)', liveRow({ workflowPart: 'before_interruption' })],
+    ['steer-captured host (_steerFrozenTrace)', liveRow({ _steerFrozenTrace: true })],
+  ]) {
+    const placeholder = placeholderFor();
+    const thread = [user, placeholder, host];
+    continuity.collapseEmptyLiveRows(thread, host);
+    assert.ok(thread.includes(placeholder), `${name}: placeholder kept`);
+    assert.equal(host.questionRequest, undefined, `${name}: question not moved onto the host`);
+  }
+  // Earlier-turn host: a real user row after the host closes its turn.
+  {
+    const host = liveRow();
+    const placeholder = placeholderFor();
+    const thread = [host, { role: 'user', content: 'next', _clientRequestId: cid }, placeholder];
+    continuity.collapseEmptyLiveRows(thread, host);
+    assert.ok(thread.includes(placeholder), 'earlier-turn host: placeholder kept');
+    assert.equal(host.questionRequest, undefined, 'earlier-turn host: question not moved');
+  }
+  // Happy path: same request, current turn -> folded and placeholder removed.
+  {
+    const host = liveRow();
+    const placeholder = placeholderFor();
+    const thread = [user, placeholder, host];
+    const removed = continuity.collapseEmptyLiveRows(thread, host);
+    assert.equal(removed, 1, 'happy path folds one placeholder');
+    assert.ok(!thread.includes(placeholder), 'happy path removes the placeholder');
+    assert.equal(host.questionRequest.id, 'q1', 'happy path attaches the question to the host');
+  }
+}
+
+// Must: a reused call id resolves within its own stream; ambiguous ids with no scope give no name.
+{
+  const entries = [
+    { type: 'tool', streamId: 's1', extra: { toolName: 'read_file', toolCallId: 'same', args: { path: 'a.js' } } },
+    { type: 'tool', streamId: 's2', extra: { toolName: 'web_search', toolCallId: 'same', args: { query: 'x' } } },
+  ];
+  assert.equal(lookup.withResolvedToolAction({ toolCallId: 'same', streamId: 's1', result: 'ok' }, entries).action, 'read_file');
+  assert.equal(lookup.withResolvedToolAction({ toolCallId: 'same', streamId: 's2', result: 'ok' }, entries).action, 'web_search');
+  assert.equal(lookup.withResolvedToolAction({ toolCallId: 'same', result: 'ok' }, entries).action, undefined, 'ambiguous without scope: no name');
+  // Unscoped ambiguous result: no stream tool name is borrowed; neutral label instead.
+  const standalone = [];
+  activity.applyToolActivityEvent(standalone, 'result', { toolCallId: 'same', result: 'ok' });
+  assert.match(standalone.map((e) => e.text).join(' | '), /Finished a step/, 'neutral fallback label');
+  // Absent call id: payload untouched.
+  const plain = { result: 'ok' };
+  assert.equal(lookup.withResolvedToolAction(plain, entries), plain, 'absent id unchanged');
+}
+
+// Must: coalescing stays near-linear for unnamed results (one index per pass, O(1) lookups).
+{
+  const readsAt = (n) => {
+    let reads = 0;
+    const source = Array.from({ length: n }, (_, i) => {
+      const entry = { type: 'result', content: 'body', streamId: 's1' };
+      Object.defineProperty(entry, 'extra', { enumerable: true, get() { reads += 1; return { callId: `u${i}` }; } });
+      return entry;
+    });
+    activity.coalesceToolActivityEntries(source);
+    return reads;
+  };
+  const small = readsAt(100);
+  const large = readsAt(1600);
+  assert.ok(large / small < 40, `unnamed-result reads scale near-linearly (${small} -> ${large})`);
+}
 
 console.log('mobile question thread rows regression passed');

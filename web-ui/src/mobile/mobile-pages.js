@@ -8758,14 +8758,22 @@ function _mergeMobileFileChangeSummaries(current, incoming) {
 // findMobileQuestionHostRow in mobile-question-rows.js, which stays in the
 // lazy chunks; this eager copy keeps the initial Chat slice small).
 function _mobileQuestionHostRow(thread, q) {
-  const cid = String(q?.clientRequestId || '');
+  // Mirrors findMobileQuestionHostRow in mobile-question-rows.js (same order of
+  // checks, same normalization); the parity matrix in the regression test pins it.
+  const qid = String(q?.id || q?.questionId || '').trim();
+  const qcid = String(q?.clientRequestId || '').trim();
+  const hasEntries = (value) => Array.isArray(value) && value.length > 0;
   for (let i = thread.length - 1; i >= 0; i -= 1) {
     const t = thread[i];
-    if (t?.role === 'user') { if (/^chat_steer_/i.test(String(t.workflowGroupId || '')) && t.workflowPart === 'interruption') continue; return null; }
-    if (t?.role !== 'ai' || t._steerFrozenTrace || t.workflowPart === 'before_interruption') continue;
-    if (t._pmFinalReceived || t._pmServerAuthoredFinal || t._pmAbortAcknowledged) return null;
-    if ((t.questionRequest?.id && t.questionRequest.id !== q?.id) || (cid && t._clientRequestId && t._clientRequestId !== cid)) continue;
-    if (t.streaming === true || t.liveTraceEntries?.length || t.processEntries?.length) return t;
+    if (t?.role === 'user') { if (/^chat_steer_/i.test(String(t.workflowGroupId || '')) && String(t.workflowPart || '') === 'interruption') continue; return null; }
+    if (t?.role !== 'ai') continue;
+    if (t._pmFinalReceived === true || t._pmServerAuthoredFinal === true || t._pmAbortAcknowledged === true) return null;
+    if (t._steerFrozenTrace === true || String(t.workflowPart || '') === 'before_interruption') continue;
+    const otherQ = String(t.questionRequest?.id || '').trim();
+    if (otherQ && otherQ !== qid) continue;
+    const own = String(t._clientRequestId || '').trim();
+    if (qcid && own && qcid !== own) continue;
+    if (t.streaming === true || hasEntries(t.liveTraceEntries) || hasEntries(t.processEntries)) return t;
   }
   return null;
 }
