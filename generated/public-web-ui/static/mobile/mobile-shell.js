@@ -9,6 +9,7 @@ const loadShareModule = () => shareModulePromise ||= import('../share-file-cache
   ({ shareFileCache, shareOrDownloadFile } = m);
 });
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
+import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
 import {
@@ -1466,6 +1467,16 @@ function _drawerLiveActiveRun(sessionIds = []) {
   return false;
 }
 
+// Last applied stream event of a foreground session (0 when not foreground).
+function _drawerForegroundLiveEventAt(sessionIds = []) {
+  const chat = window.__pmChat;
+  const active = String(chat?.activeSessionId || '').trim();
+  if (!active) return 0;
+  const ids = (Array.isArray(sessionIds) ? sessionIds : [sessionIds]).map((id) => String(id || '').trim());
+  if (!ids.includes(active)) return 0;
+  return Number(chat?.activeRuns?.[active]?.lastEventAt || 0) || 0;
+}
+
 function _drawerSessionStateView(session) {
   const id = String(session?.id || '').trim();
   const cached = id ? (_readDrawerSessionStateCache()[id] || {}) : {};
@@ -1476,12 +1487,20 @@ function _drawerSessionStateView(session) {
   const has = (key) => Object.prototype.hasOwnProperty.call(session || {}, key);
   const activeRunKnown = session?.activeRunKnown === true
     || (has('activeRun') && session?.activeRunKnown !== false);
-  const activeRun = session?.activeRun === true
-    || _drawerLiveActiveRun(sessionIds)
-    // A remembered run record only counts while the server state is unknown;
-    // otherwise a turn that ended while backgrounded showed Working for 2h.
-    || (!activeRunKnown && localRunFresh)
-    || (!activeRunKnown && cachedRunFresh && cached.activeRun === true);
+  // A remembered run record only counts while the server state is unknown;
+  // otherwise a turn that ended while backgrounded showed Working for 2h.
+  // When the server says activeRun:false, a local live run only wins for the
+  // foreground session that applied a stream event in the last ~15s.
+  const liveEventAt = _drawerForegroundLiveEventAt(sessionIds);
+  const activeRun = resolveDrawerActiveRun({
+    serverActiveRun: session?.activeRun === true,
+    activeRunKnown,
+    liveActiveRun: _drawerLiveActiveRun(sessionIds),
+    liveEventAt,
+    foreground: liveEventAt > 0,
+    localRunFresh,
+    cachedRunFresh: cachedRunFresh && cached.activeRun === true,
+  });
   const mobileUnreadKnown = session?.mobileUnreadKnown === true
     || (has('mobileUnread') && session?.mobileUnreadKnown !== false);
   const mobileUnread = session?.mobileUnread === true

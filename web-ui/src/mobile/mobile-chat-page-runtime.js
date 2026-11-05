@@ -12,6 +12,7 @@ import { isMobileQuestionOnlyRow as isQuestionOnly } from './mobile-question-row
 import { resolveKeyboardBandTop, settleLoop } from './mobile-keyboard-band.js';
 import { createMobileChatCamera } from './mobile-chat-camera.js';
 import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
+import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
@@ -2465,6 +2466,27 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     && isCurrentMobilePage()
     && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
 
+  // Silence backstop: a busy foreground run whose POST/WS streams applied no
+  // event for 45s is recovered once per silence window (leave-and-return path).
+  // A run blocked on a pending question card is legitimately silent.
+  const mobileSilenceBackstop = createMobileSilenceBackstop({
+    isBusy: () => !mobileRecoveryDisposed
+      && !document.hidden
+      && String(__pmChat.activeSessionId || '').trim() === requestedSession
+      && !!__pmChat.activeRuns?.[requestedSession]?.busy,
+    hasPendingQuestion: () => !!_getPendingQuestionForSession(requestedSession),
+    onSilence: () => {
+      if (!isMobileRecoveryOwner()) return;
+      scheduleMobileRunRecovery(0, { force: true });
+    },
+  });
+  const noteMobileLiveStreamActivity = (sessionId = requestedSession) => {
+    mobileSilenceBackstop.noteEvent();
+    const run = __pmChat.activeRuns?.[String(sessionId || '').trim()];
+    if (run && typeof run === 'object') run.lastEventAt = Date.now();
+  };
+  mobileSilenceBackstop.start();
+
   let initialSessionLoadPending = false;
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     initialSessionLoadPending = true;
@@ -2898,6 +2920,17 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
             localThread,
             { preserveLocalHistory: recoveredSessionHistoryPartial },
           );
+        }
+        {
+          // The answer is complete: close every live row of that turn so the
+          // "Working for" trace cannot stay open until the chat is reopened.
+          const mergedThread = __pmChat.threads[requestedSession] || [];
+          const { finalize, drop } = selectMobileTurnRowsToFinalize(mergedThread, { hasVisibleAnswer: _mobileAssistantHasVisibleAnswer });
+          if (drop.length) __pmChat.threads[requestedSession] = mergedThread.filter((row) => !drop.includes(row));
+          finalize.forEach((row) => {
+            row._pmFinalReceived = true;
+            finalizeMobileLiveAiTurn(row, { commit: false, planFinalize: false });
+          });
         }
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
@@ -3380,6 +3413,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       __pmChat.activeRuns[sid] = {
         ...(__pmChat.activeRuns[sid] || {}),
         busy: true,
+        busySince: (wasBusy && Number(__pmChat.activeRuns[sid]?.busySince || 0)) || Date.now(),
       };
     } else {
       delete __pmChat.activeRuns[sid];
@@ -6624,9 +6658,20 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     return finalizeMobileMainPlan(__pmChat, sid, loadMobileChatStreamReplay, _applyMobileMainPlanProgress, _renderMobileMainPlanDock);
   }
 
-  function finalizeMobileLiveAiTurn(aiTurn) {
+  // Canonical turn close for every finish path (POST final, WS terminal frame,
+  // recovery merge). Idempotent: the first claim runs the side effects (plan
+  // dock finalize, completeStream, run clear); later calls are no-ops unless
+  // the row was revived. commit:false leaves render/persist to the caller.
+  function finalizeMobileLiveAiTurn(aiTurn, options = {}) {
+    const {
+      sessionId = requestedSession,
+      commit = true,
+      planFinalize = true,
+      markRead = true,
+    } = options || {};
+    const finalizeSid = String(sessionId || requestedSession || '').trim() || requestedSession;
     aiTurn = _mobileStreamTargetTurn(aiTurn);
-    if (!aiTurn || (aiTurn._pmFinalized === true && aiTurn.streaming !== true)) return;
+    if (!claimMobileFinalize(aiTurn)) return false;
     _closeMobileTraceThoughts(aiTurn);
     aiTurn._pmLiveActivityCompleted = true;
     _flushMobilePendingThinkingBurst(aiTurn);
@@ -6639,17 +6684,18 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn.timestamp = Number(aiTurn.timestamp || Date.now()) || Date.now();
     aiTurn.content = String(aiTurn.body?.text || '');
     _mergeMobileLiveTraceIntoProcess(aiTurn);
-    _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
-    _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
-    mobileChatRuntimeAdapter.completeStream(requestedSession, aiTurn.body?.text || aiTurn.content, aiTurn);
-    if (__pmChat.activeRuns?.[requestedSession]) __pmChat.activeRuns[requestedSession].abort = null;
+    _settleMobileChatSteerWorkflow(__pmChat.threads?.[finalizeSid], aiTurn);
+    _rememberMobileCompletedAssistantTurn(finalizeSid, aiTurn);
+    mobileChatRuntimeAdapter.completeStream(finalizeSid, aiTurn.body?.text || aiTurn.content, aiTurn);
+    if (__pmChat.activeRuns?.[finalizeSid]) __pmChat.activeRuns[finalizeSid].abort = null;
     __pmChat.abort = null;
-    _clearMobileActiveRun(requestedSession);
-    _markMobileSessionRunning(requestedSession, false);
-    _finalizeMobileMainPlanForTurn(requestedSession);
-    if (_isMobileChatSessionVisibleToUser(requestedSession)) {
-      markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
+    _clearMobileActiveRun(finalizeSid);
+    _markMobileSessionRunning(finalizeSid, false);
+    if (planFinalize) _finalizeMobileMainPlanForTurn(finalizeSid);
+    if (markRead && _isMobileChatSessionVisibleToUser(finalizeSid)) {
+      markMobileChatSessionRead(finalizeSid, Date.now()).catch(() => {});
     }
+    if (!commit) return true;
     const timerKey = String(requestedSession || 'chat');
     mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
     mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
@@ -6685,6 +6731,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       console.warn('[mobile chat] failed to persist recovered turn:', err);
     });
     setBusy(false);
+    return true;
   }
 
   function addCommandTurn(command, response) {
@@ -7439,13 +7486,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         targetAiTurn._pmAbortRequested = false;
         targetAiTurn._pmAbortAcknowledged = true;
       }
+      // Canonical close (thoughts, live activity, steer settle, completeStream,
+      // plan dock). Idempotent, so a WS terminal frame that already finalized
+      // this row does not run those side effects again. Render/persist below.
+      finalizeMobileLiveAiTurn(targetAiTurn, { sessionId: actualSessionId, commit: false, markRead: !stoppedByUser });
       targetAiTurn.streaming = false;
-      targetAiTurn.workEndedAt = Number(targetAiTurn.workEndedAt || Date.now()) || Date.now();
-      targetAiTurn.workDurationMs = Math.max(0, targetAiTurn.workEndedAt - _mobileAssistantWorkStartedAt(targetAiTurn));
-      targetAiTurn.time = _nowTime();
-      targetAiTurn.timestamp = Number(targetAiTurn.timestamp || Date.now()) || Date.now();
       targetAiTurn.content = String(targetAiTurn.body?.text || '');
-      _mergeMobileLiveTraceIntoProcess(targetAiTurn);
       const mergedFileChanges = _mergeMobileFileChangesWithBackground(targetAiTurn.fileChanges || null, actualSessionId);
       if (mergedFileChanges) targetAiTurn.fileChanges = mergedFileChanges;
       if (Number.isFinite(Number(options.reuseExistingUserIndex)) && !stoppedByUser) {
@@ -7574,6 +7620,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       onAccepted: () => { requestAccepted = true; },
       onEvent: (evt) => {
         hideReconnectingStatus();
+        noteMobileLiveStreamActivity(actualSessionId);
         window.__pmMobileContextStreamEvent?.(evt, { sessionId: actualSessionId });
         const applied = applyMobileChatStreamEvent(aiTurn, evt);
         if (applied === 'final' || applied === 'done' || applied === 'error') finishAiTurn();
@@ -7607,7 +7654,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
             setChatConnectionStatus(true, 'Reconnecting to Prometheus');
           }
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
-          scheduleMobileRunRecovery(plannedRestart ? 250 : 2500, { force: true });
+          // A watchdog stall already waited 45s of silence: recover now.
+          scheduleMobileRunRecovery(plannedRestart ? 250 : (err?.mobileStreamStalled ? 0 : 2500), { force: true });
         } else {
           const sourcePresentation = err?.chatPresentation || presentChatError(err);
           if (sourcePresentation?.key === 'session-turn-active') {
@@ -7690,17 +7738,24 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     scheduleMobileRunRecovery(0, { force: true, fullRefresh: true });
   };
   const runRecoveryOnVisibility = () => {
-    if (!document.hidden) runRecoveryOnReturn();
+    if (document.hidden) return;
+    mobileSilenceBackstop.noteEvent();
+    window.reconcileMobileStaleRunsFromServer?.();
+    runRecoveryOnReturn();
   };
   // A socket reopen means the gateway is (back) up. After a restart the
   // foreground/pageshow recovery usually fired while the gateway was still
   // down, and the 5s cooldown then skipped this one, so the resumed turn's
   // events were never replayed until the thread was reopened.
-  const runRecoveryOnWsOpen = () => runRecoveryOnReturn({ bypassCooldown: true });
+  const runRecoveryOnWsOpen = () => {
+    window.reconcileMobileStaleRunsFromServer?.();
+    runRecoveryOnReturn({ bypassCooldown: true });
+  };
   const applyMainChatStreamPayload = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return '';
     if (__pmChat.activeSessionId !== requestedSession) return '';
     hideReconnectingStatus();
+    noteMobileLiveStreamActivity(requestedSession);
     const activeThread = _activeMobileThread();
     const data = msg.data && typeof msg.data === 'object' ? msg.data : msg;
     const activeRunKind = String(msg.activeRunKind || data?.activeRunKind || data?.runKind || '').trim();
@@ -8176,6 +8231,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     previousCleanup?.();
     releaseActiveChatRuntime();
     mobilePageDisposed = true;
+    mobileSilenceBackstop.stop();
     if (__pmChat.mobilePageInstanceToken === mobilePageInstanceToken) {
       __pmChat.mobilePageInstanceToken = '';
     }
