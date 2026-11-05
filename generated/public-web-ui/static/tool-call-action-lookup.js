@@ -32,8 +32,8 @@ function entryAction(entry) {
 function entryScope(entry) {
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const nested = extra.extra && typeof extra.extra === 'object' ? extra.extra : {};
-  return String(entry?.streamId || entry?.stream_id || entry?.activity?.streamId
-    || extra.streamId || extra.stream_id || nested.streamId || '').trim();
+  return String(entry?.streamId || entry?.stream_id || entry?.activity?.streamId || entry?.activity?.stream_id
+    || extra.streamId || extra.stream_id || nested.streamId || nested.stream_id || '').trim();
 }
 
 function mergeAction(previous, action) {
@@ -50,7 +50,7 @@ export function toolPayloadCallId(payload = {}) {
 /** Stream id carried by a tool event payload, '' when it has none. */
 export function toolPayloadStreamId(payload = {}) {
   const extra = payload?.extra && typeof payload.extra === 'object' ? payload.extra : {};
-  return String(payload?.streamId || payload?.stream_id || payload?.activity?.streamId
+  return String(payload?.streamId || payload?.stream_id || payload?.activity?.streamId || payload?.activity?.stream_id
     || extra.streamId || extra.stream_id || '').trim();
 }
 

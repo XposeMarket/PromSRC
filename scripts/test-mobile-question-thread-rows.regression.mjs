@@ -276,6 +276,30 @@ assert.doesNotMatch(rendererRuntime, /: type === 'error' \? 'Tool error' : 'Tool
   }
 }
 
+// Must (review round 2): explicit-host validation is linear. Many rejected
+// placeholders (wrong-request host) must not rescan the thread per placeholder.
+{
+  const readsFor = (n) => {
+    let reads = 0;
+    const base = [user, ...Array.from({ length: n }, () => questionOnly()), liveRow({ _clientRequestId: 'other' })];
+    const host = base[base.length - 1];
+    const thread = new Proxy(base, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const folded = rows.foldMobileQuestionOnlyRows(thread, host);
+    assert.equal(folded, 0, 'wrong-request host folds nothing');
+    assert.equal(base.length, n + 2, 'every rejected placeholder is kept');
+    return reads;
+  };
+  const small = readsFor(100);
+  const large = readsFor(800);
+  assert.ok(large / small < 16, `explicit-host validation scales linearly (${small} -> ${large} reads)`);
+}
+
+
 // Must: a reused call id resolves within its own stream; ambiguous ids with no scope give no name.
 {
   const entries = [
