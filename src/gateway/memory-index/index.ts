@@ -1341,7 +1341,11 @@ export function searchMemoryIndex(
     const sqliteStartedAt = Date.now();
     const sqliteResult = searchSqliteMemoryIndex(workspacePath, params);
     markPhase('sqlite_sync_attempt_ms', sqliteStartedAt);
-    if (sqliteResult) return sqliteResult;
+    if (sqliteResult) {
+      sqliteResult.hits = require('../resources/reference-library').filterReferenceSources(workspacePath, sqliteResult.hits);
+      sqliteResult.citations = sqliteResult.hits.map(hit => hit.citation).filter(Boolean) as any;
+      return sqliteResult;
+    }
   } catch { /* non-fatal: fall back to JSON index */ }
   const storeStartedAt = Date.now();
   const store = readStoreSnapshot(workspacePath);
@@ -1430,7 +1434,7 @@ export function searchMemoryIndex(
   hits.sort((a, b) => b.score - a.score);
   if (mode === 'timeline') { hits.sort((a,b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)); }
   hits.slice(0, limit).forEach((h, i) => { h.rank = i + 1; });
-  const finalHits = hits.slice(0, limit);
+  const finalHits = (require('../resources/reference-library').filterReferenceSources(workspacePath, hits) as typeof hits).slice(0, limit);
 
   return {
     query: q,
@@ -1476,6 +1480,8 @@ export async function searchMemoryIndexAsync(
     const sqliteResult = sqliteStateBefore.disabled ? null : await searchSqliteMemoryIndexAsync(workspacePath, params);
     markPhase('sqlite_attempt_ms', sqliteStartedAt);
     if (sqliteResult) {
+      sqliteResult.hits = require('../resources/reference-library').filterReferenceSources(workspacePath, sqliteResult.hits);
+      sqliteResult.citations = sqliteResult.hits.map(hit => hit.citation).filter(Boolean) as any;
       const stats: any = sqliteResult.stats || {};
       const innerTelemetry = stats.telemetry || {};
       return {

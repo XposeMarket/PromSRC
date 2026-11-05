@@ -8,7 +8,7 @@ import { getOrchestrationConfig } from '../.././chat/shared';
 import { compactVoiceDispatchTitle } from '../.././chat/voice/dispatch';
 import { createVoiceNarrator, buildChatSteerContextBlock } from '../.././chat/voice/narrator';
 import { summarizeUnlockedToolCategories } from '../.././chat/voice/context';
-import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../../../media-analysis-preview';
+import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads, buildReferenceObservationMessage } from '../../../media-analysis-preview';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -2424,7 +2424,8 @@ export async function handleChatUntraced(
   } catch (error: any) {
     console.warn('[Resources] Context retrieval skipped:', redactResourceText(error?.message || error));
   }
-  const resourceContextBlock = resourceContext.block;
+  const { referenceRecallBlock } = require('../../../resources/reference-library');
+  const resourceContextBlock = resourceContext.block + '\n' + referenceRecallBlock(workspacePath, sessionId, message);
   turnTiming.mark('resource_context_built', {
     chars: resourceContext.chars,
     selectedCount: resourceContext.resourceIds.length,
@@ -2723,6 +2724,11 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     sendSSE('info', { message: 'Creative reference frame vision injected for this turn.' });
   }
   if (attachments && attachments.length > 0) {
+    try {
+      const { captureSharedAttachments } = require('../../../resources/reference-library');
+      const refs = captureSharedAttachments(workspacePath, sessionId, message, attachments);
+      if (refs.length) sendSSE('info', { message: `${refs.length} attachment(s) saved as personal references. Manage them in Memory → References.` });
+    } catch { sendSSE('info', { message: 'The attachment was sent, but saving it as a reference failed. You can retry in Memory → References.' }); }
     attachments = await normalizeRuntimeVisionAttachments(attachments);
   }
   const shouldUseXaiVisionSidecar =
@@ -2815,6 +2821,19 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult?: { error?: boolean; data?: any; name?: string; args?: Record<string, any> },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
+    if (toolName === 'memory' && toolInput?.action === 'open') {
+      if (toolResult?.error || toolResult?.data?.observation_mode !== 'direct') return;
+      try {
+        if (!currentModelCapabilities.hasVision) throw new Error('The current model does not support vision. Stored text only; images not viewed.');
+        const observation = await buildReferenceObservationMessage(workspacePath, sessionId, {
+          id: String(toolInput.reference_id || ''), versionId: toolInput.version_id, offset: Number(toolInput.offset || 0), limit: Number(toolInput.limit || 6),
+        });
+        if (observation) messages.push(observation);
+      } catch (error: any) {
+        messages.push({ role: 'user', content: `[REFERENCE_OBSERVATION_UNAVAILABLE] ${String(error?.message || error)}. Do not claim to have viewed the original. You may use labelled stored text.` });
+      }
+      return;
+    }
     if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
       let injected = toolResult?.data?.observation_mode !== 'direct';
       if (!toolResult?.error && toolResult?.data?.observation_mode === 'direct') {
@@ -3112,7 +3131,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult: ToolResult,
     decision: PostActionObservationDecision,
   ): Promise<void> => {
-    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+    if ((toolName === 'memory' && toolArgs.action === 'open') || ['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
     }

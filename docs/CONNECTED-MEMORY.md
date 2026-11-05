@@ -1,6 +1,6 @@
 # Connected memory implementation
 
-## Stage A: retention foundation (PR, not deployed)
+## Stage A: retention foundation (PR822, deployed)
 
 This is the first independently reviewable stage of the locked connected-memory plan, not a usable connected library yet. There are **no UI changes** and automatic library capture is compile-time OFF (`AUTOMATIC_REFERENCE_CAPTURE_READY`). Do not enable it before search/open, access rules, exclusion/deletion controls and the desktop/mobile Memory controls ship together. No user material is bulk imported; no extra model or paid analysis calls are introduced.
 
@@ -27,3 +27,16 @@ Dormant adapters cover common chat attachment registration and Memory-note attac
 
 ### Remaining approved work
 B+C: typed memory search/open, actual provider image delivery, exclusions/correction/permissions, desktop/mobile Memory controls, owner switches, storage/export/delete and backup UX. D: explicitly shared collections and exact-version durable team/verifier handoffs. E: project fresh-chat continuity and supported channel ingress. A alone must never be reported as the finished feature.
+
+## Stages B+C: personal library (successor PR; not deployed)
+
+The existing desktop and mobile Memory page gains a References tab, not a separate application. Owners can save pictures/documents/notes/links with a purpose, search, inspect original images or sampled saved video frames, correct title/interpretation/purpose/notes, mark guidance as saved/suggested/confirmed, link references and inspect backlinks, exclude/restore, delete, and download a portable ZIP containing original bytes plus context. The storage indicator is an approximate installation-managed ResourceStore total (cached 60 seconds), not a claim that every byte belongs to this library. Deleted references unpin managed evidence; external originals, source chats, analysis run folders, and previously delivered copies are unchanged.
+
+`memory(action:"search"|"recall")` adds bounded reference matches. `memory(action:"open", reference_id, version_id?, offset?, limit?)` returns saved content and stable provenance. Actual vision observation is separately resolved from trusted storage into the next model request. Images are not accepted from paths/base64 supplied in tool results. Saved video analyses reopen up to 6 frames by default (maximum 12, with offsets/timestamps and sampled-coverage labels); no redownload, provider analysis, or transcription is triggered. Nonvision routes are explicitly told the images were not viewed. Authenticated owner preview/export routes share the gateway/account guards. Cross-workspace and version mismatches, corrupt/missing bytes, background/team/agent callers and model opens of excluded references are refused. This is an application retrieval boundary, not a filesystem sandbox.
+
+Capture and relevant-reference suggestions are independent, default-off owner switches. Enabling capture is forward-looking: ordinary registered chat attachments and notes/attachments saved through Memory, plus completed video analysis with a trusted personal session, can be saved. Existing history is not bulk imported. Pointer recall is bounded to three relevant text pointers; images still require explicit opening. Channels and project/assignment-specific adoption remain Stage E work.
+
+“Don’t use as reference” excludes the entry from model discovery/open. “Forget source chat from memory” additionally suppresses its ENTIRE source session from memory-index/recall retrieval, including future rebuilds; it does not erase raw transcript files, independently written memory facts, or copies already sent to a model. Restoring reference use reverses that entry’s suppression. Deleting a source chat retains references by default; the desktop/mobile confirmation offers an explicit also-delete choice. If the library is read-only, that chosen mutation fails before deleting the chat. Teams have no implicit access: sharing controls are intentionally unavailable until Stage D.
+
+### B+C evidence and boundaries
+Regression suites: `test-connected-memory-foundation.mjs`, `test-media-analysis-previews.mjs`, `test-connected-memory-library.mjs`, `test-connected-memory-vision.mjs`, `test-connected-memory-controls.mjs`, `test-connected-memory-retrieval.mjs`. Vision fixtures inspect both Anthropic and OpenAI serialized request bodies. The real isolated Haiku fresh-chat probe searched and reopened a saved image and accurately described its geometric shapes/colors and owner purpose. This is not a live OpenAI-provider or physical-phone claim. Retrieval fixtures exercise real lexical search/auto-recall, forget, rebuild and undo; semantic provider search is not exercised. Stage A PR822 is deployed; B+C remains pending review/merge. D explicit team grants/exact-version handoffs and E project/channel continuity remain approved but unimplemented.

@@ -2,6 +2,8 @@ import type { Router, RequestHandler } from 'express';
 import express from 'express';
 import { slimSessionList, responseEtag } from '.././perf-projections';
 import crypto from 'crypto';
+import { getConfig } from '../../../config/config';
+import { getReferenceService } from '../../resources/reference-service';
 import {
   ChatHistoryCursorError,
   historyMessageCursorKey,
@@ -865,6 +867,10 @@ router.delete('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       res.status(400).json({ error: 'Session id is required' });
       return;
     }
+    const deleteReferences = req.query.deleteReferences === 'true';
+    // Resolve before deleting the chat, so a metadata failure cannot silently drop the chosen action.
+    const library = deleteReferences ? getReferenceService(getConfig().getWorkspacePath()) : undefined;
+    if (library) library.metadata.assertWriter();
     const project = findProjectBySessionId(sessionId);
     const deleted = project
       ? !!deleteSessionFromProject(project.id, sessionId)
@@ -873,7 +879,11 @@ router.delete('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
-    res.json({ success: true, projectId: project?.id });
+    if (library) {
+      let refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 });
+      while (refs.length) { for (const ref of refs) library.metadata.remove(ref.id); refs = library.metadata.list({ sourceSession: sessionId, includeExcluded: true, limit: 100 }); }
+    }
+    res.json({ success: true, projectId: project?.id, references: deleteReferences ? 'deleted' : 'retained' });
   } catch (e: any) {
     console.error('[/api/sessions/:id DELETE] Error:', e);
     res.status(storageAwareStatus(e)).json({ error: e.message });

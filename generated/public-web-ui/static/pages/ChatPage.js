@@ -7035,7 +7035,9 @@ function saveChatSessions() {
 }
 
 async function deleteSessionFromServer(id) {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const { chooseReferenceDeletion } = await import('./MemoryReferences.js');
+  const deleteReferences = await chooseReferenceDeletion(id);
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}${deleteReferences ? '?deleteReferences=true' : ''}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) {
     const body = await res.text().catch(() => '');
     throw new Error(body || `Delete failed (${res.status})`);

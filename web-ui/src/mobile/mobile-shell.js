@@ -3124,6 +3124,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
     '</div>' +
     '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
       '<p class="pm-sess-delete-msg">\u201C<strong>' + titleSafe + '</strong>\u201D ' + (isProjectDelete ? 'will be deleted along with its files (instructions, knowledge, and workspace folder). Its chats are kept and move back to Chats.' : 'will be permanently deleted and cannot be undone.') + '</p>' +
+      (!isProjectDelete ? '<label class="pm-sess-delete-msg" style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="pm-delete-references-too"> Also delete saved references from this chat</label><p class="pm-sess-delete-msg">Saved references are kept unless checked.</p>' : '') +
       '<div class="pm-msheet-rows pm-sess-confirm-rows">' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" id="pm-sess-confirm-delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
@@ -3167,7 +3168,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
     try {
       await (itemType === 'project'
          ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId) + (deleteChatsToo ? '?deleteSessions=true' : ''), { method: 'DELETE' })
-         : _mobileSessionRequest(sessionId, '', { method: 'DELETE' }));
+         : _mobileSessionRequest(sessionId, sheet.querySelector('#pm-delete-references-too')?.checked ? '?deleteReferences=true' : '', { method: 'DELETE' }));
       pmHaptic(14);
       // Remove from pin list
       _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));

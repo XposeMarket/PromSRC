@@ -1017,6 +1017,18 @@ export class ResourceStore {
     return { ...version };
   }
 
+  /** Internal library resolver; caller must enforce reference visibility first. */
+  referenceContent(resourceId: string, versionId: string): { resource: ResourceSummary; version: ResourceVersion; bytes: Buffer } {
+    const version = this.referenceVersion(resourceId, versionId);
+    if (!version) throw new Error('Saved evidence unavailable');
+    const state = this.readStateForRead(); const resource = this.getResource(state, resourceId);
+    const file = resolveConfinedStoragePath(this.rootDir, version.snapshotPath!, { label: 'reference snapshot' });
+    if (fs.statSync(file).size > MAX_BINARY_SNAPSHOT_BYTES) throw new Error('Saved evidence exceeds byte limit');
+    const bytes = fs.readFileSync(file);
+    if (sha256(bytes) !== version.contentHash) throw new Error('Saved evidence integrity check failed');
+    return { resource: this.toSummary(resource, version, undefined, state), version, bytes };
+  }
+
   attachFile(input: { threadId?: string; filePath: string; title?: string; mimeType?: string; actor?: string; metadata?: Record<string, unknown>; pinned?: boolean }): AttachResourceResult {
     const filePath = assertWorkspaceFile(this.workspaceScope, input.filePath);
     const stat = fs.statSync(filePath);
@@ -1811,15 +1823,19 @@ export async function autoAttachChatInputResources(options: ChatInputResourceOpt
             actor,
             metadata: { source: 'chat-input' },
           });
-      // Stage A adoption seam: disabled until discovery and owner controls exist.
-      if (AUTOMATIC_REFERENCE_CAPTURE_READY && result.version) {
-        const { getReferenceService } = await import('./reference-service');
-        getReferenceService(store.workspaceScope).saveExisting({
-        operationId: `upload:${options.threadId}:${result.version.id}`,
-        binding: { resourceId: result.resource.id, versionId: result.version.id },
-        title: result.resource.title, sourceSession: options.threadId, userQuote: options.message,
-        });
-      }
+      // Forward-looking, explicitly opted-in capture of ordinary files as well as images.
+      // A capture failure must not discard the successfully registered chat attachment.
+      try {
+        const { getReferenceService, automaticReferenceCaptureReady } = require('./reference-service') as typeof import('./reference-service');
+        if (result.version && automaticReferenceCaptureReady(store.workspaceScope)) {
+          require('./reference-library').assertPersonalReferenceCaller(options.threadId);
+          getReferenceService(store.workspaceScope).saveExisting({
+            operationId: `chat:${options.threadId}:${result.resource.id}:${result.version.id}`,
+            binding: { resourceId: result.resource.id, versionId: result.version.id },
+            title: result.resource.title, sourceSession: options.threadId, userQuote: options.message,
+          });
+        }
+      } catch (error: any) { console.warn('[References] Chat attachment retained, library capture failed:', redactResourceText(error?.message || error)); }
       const summary = store.listThreadResources(options.threadId, { limit: 100 }).find((item) => item.id === result.resource.id);
       if (summary) attached.push(summary);
     } catch (error: any) {
