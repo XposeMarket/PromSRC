@@ -339,7 +339,8 @@ export function detailSections(task, extra = {}) {
     activity: collapseActivity(task),
     evidence: Array.isArray(extra.evidence) ? extra.evidence : Array.isArray(task?.evidenceBus?.entries) ? task.evidenceBus.entries : [],
     artifacts: Array.isArray(task?.artifacts) ? task.artifacts : [],
-    canMessage: !card.planned && !card.terminal,
+    // Failed/paused/stalled/needs-you/running tasks stay messageable (recovery chat); complete/cancelled and planned chats do not.
+    canMessage: !card.planned && !['complete', 'cancelled'].includes(status),
     openChat: card.planned,
   };
 }

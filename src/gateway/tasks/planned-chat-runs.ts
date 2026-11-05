@@ -1,4 +1,5 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { getConfig } from '../../config/config';
@@ -77,6 +78,7 @@ function processAlive(pid: number) {
 export class PlannedChatRunStore {
   constructor(private directory: string, private ownerPid = process.pid, private alive = processAlive) {}
   private filename(id: string) { return path.join(this.directory, `${createHash('sha256').update(id).digest('hex')}.json`); }
+  // ── Sync read model (get/list only; never called from the chat/SSE hot path) ──
   private read(id: string): PlannedChatRun | undefined {
     try {
       const row = JSON.parse(fs.readFileSync(this.filename(id), 'utf8'));
@@ -93,55 +95,56 @@ export class PlannedChatRunStore {
       });
     } catch (error: any) { if (error?.code === 'ENOENT') return []; throw error; }
   }
-  private write(row: PlannedChatRun) {
-    fs.mkdirSync(this.directory, { recursive: true });
-    const target = this.filename(row.runtimeId);
-    const tmp = `${target}.${this.ownerPid}.${randomUUID()}.tmp`;
-    try { fs.writeFileSync(tmp, JSON.stringify(row)); fs.renameSync(tmp, target); }
-    finally { try { fs.unlinkSync(tmp); } catch {} }
-    // Only mutations prune history; polling is read-only. Never prune a live owner.
-    const terminal = this.rows().filter(r => r.status !== 'running' || !this.alive(r.ownerPid)).sort((a, b) => b.updatedAt - a.updatedAt);
-    for (const old of terminal.slice(500)) {
-      const latest = this.read(old.runtimeId);
-      if (latest && (latest.status !== 'running' || !this.alive(latest.ownerPid))) {
-        try { fs.unlinkSync(this.filename(old.runtimeId)); } catch {}
-      }
-    }
-  }
-  progress(runtimeId: string, sessionId: string, payload: any, fallbackTitle: string, resumedFromRuntimeId?: string, originPrompt?: string, carry?: Pick<PlannedChatRun, 'originPrompt' | 'activity'> & { items?: PlannedRunItem[] }) {
-    if (payload?.source !== 'declared' || !Array.isArray(payload.items) || payload.items.length < 2 || payload.items.length > 6) return;
-    const items = payload.items.map((item: any) => ({ text: String(item?.text || '').trim().slice(0, 500), status: ['pending', 'in_progress', 'completed', 'done', 'skipped', 'failed'].includes(item?.status) ? item.status : 'pending' }));
-    if (items.some((item: any) => !item.text)) return;
-    const prior = this.read(runtimeId);
-    if (prior && (prior.status !== 'running' || prior.ownerPid !== this.ownerPid)) return;
-    const now = Date.now();
-    // originPrompt is set exactly once: prior record wins, then carried (resume), then the new turn message.
-    const origin = prior?.originPrompt || carry?.originPrompt || String(originPrompt || '').trim().slice(0, PLANNED_ORIGIN_PROMPT_MAX) || undefined;
-    const pendingActivity = this.takePendingActivity(runtimeId);
-    const activity = [...(prior?.activity || carry?.activity || []), ...pendingActivity].slice(-PLANNED_ACTIVITY_MAX);
-    this.write({
-      id: `chat-plan:${runtimeId}`, sourceKind: 'planned_chat', runtimeId, ownerPid: this.ownerPid, sessionId,
-      title: String(payload.taskSummary || prior?.title || fallbackTitle || 'Planned chat').slice(0, 240),
-      status: 'running', createdAt: prior?.createdAt || now, updatedAt: now,
-      ...((resumedFromRuntimeId || prior?.resumedFromRuntimeId) ? { resumedFromRuntimeId: resumedFromRuntimeId || prior?.resumedFromRuntimeId } : {}),
-      ...(origin ? { originPrompt: origin } : {}),
-      ...(activity.length ? { activity } : {}),
-      runtimeProgress: { source: 'declared', activeIndex: Math.max(-1, Math.min(items.length, Number(payload.activeIndex) || 0)), updatedAt: now, items: applyPlannedItemTiming(items, prior?.runtimeProgress?.items || carry?.items, now) },
-    });
-    this.known.add(runtimeId);
-    this.lastActivityWrite.set(runtimeId, now);
-  }
-  resume(priorRuntimeId: string, runtimeId: string, sessionId: string) {
-    const prior = this.read(priorRuntimeId);
-    if (prior) this.progress(runtimeId, sessionId, { ...prior.runtimeProgress, taskSummary: prior.title }, prior.title, priorRuntimeId, undefined, { originPrompt: prior.originPrompt, activity: prior.activity, items: prior.runtimeProgress.items });
-  }
-  // ── Activity ring (throttled; never blocks the chat path) ──
+  // ── Async persistence. One promise chain per runtimeId serializes every read-merge-write for that run,
+  // so queued activity can never overwrite newer progress/finish state.
+  private chains = new Map<string, Promise<void>>();
   private known = new Set<string>();
   private pending = new Map<string, PlannedRunActivity[]>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastActivityWrite = new Map<string, number>();
   private activityFlushMs = 1500;
   setActivityFlushMs(ms: number) { this.activityFlushMs = Math.max(0, ms); }
+  private enqueue(runtimeId: string, job: () => Promise<void>): Promise<void> {
+    const prev = this.chains.get(runtimeId) || Promise.resolve();
+    const next: Promise<void> = prev.then(job).catch(error => { console.warn('[planned-chat] Could not persist run:', error); });
+    this.chains.set(runtimeId, next);
+    void next.then(() => { if (this.chains.get(runtimeId) === next) this.chains.delete(runtimeId); });
+    return next;
+  }
+  private async readAsync(id: string): Promise<PlannedChatRun | undefined> {
+    try {
+      const row = JSON.parse(await fsp.readFile(this.filename(id), 'utf8'));
+      if (row?.runtimeId === id && row.sourceKind === 'planned_chat' && row.sessionId && Array.isArray(row.runtimeProgress?.items)) return row;
+    } catch { /* Missing/torn records cannot affect original chat execution. */ }
+    return undefined;
+  }
+  private async writeAsync(row: PlannedChatRun) {
+    await fsp.mkdir(this.directory, { recursive: true });
+    const target = this.filename(row.runtimeId);
+    const tmp = `${target}.${this.ownerPid}.${randomUUID()}.tmp`;
+    try { await fsp.writeFile(tmp, JSON.stringify(row)); await fsp.rename(tmp, target); }
+    finally { try { await fsp.unlink(tmp); } catch {} }
+    // Only mutations prune history; polling is read-only. Never prune a live owner.
+    await this.pruneAsync();
+  }
+  private async pruneAsync() {
+    let names: string[];
+    try { names = (await fsp.readdir(this.directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name)); } catch { return; }
+    const rows: PlannedChatRun[] = [];
+    for (const name of names) {
+      try {
+        const row = JSON.parse(await fsp.readFile(path.join(this.directory, name), 'utf8'));
+        if (row?.sourceKind === 'planned_chat' && row.runtimeId) rows.push(row);
+      } catch { /* skip torn */ }
+    }
+    const terminal = rows.filter(r => r.status !== 'running' || !this.alive(r.ownerPid)).sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const old of terminal.slice(500)) {
+      const latest = await this.readAsync(old.runtimeId);
+      if (latest && (latest.status !== 'running' || !this.alive(latest.ownerPid))) {
+        try { await fsp.unlink(this.filename(old.runtimeId)); } catch {}
+      }
+    }
+  }
   private takePendingActivity(runtimeId: string) {
     const entries = this.pending.get(runtimeId) || [];
     this.pending.delete(runtimeId);
@@ -149,41 +152,75 @@ export class PlannedChatRunStore {
     if (timer) { clearTimeout(timer); this.timers.delete(runtimeId); }
     return entries;
   }
-  /** Buffer one activity entry. Only runs this process has written are tracked, so ordinary chats cost no disk IO. */
-  activity(runtimeId: string, entry: PlannedRunActivity) {
+  progress(runtimeId: string, sessionId: string, payload: any, fallbackTitle: string, resumedFromRuntimeId?: string, originPrompt?: string, carry?: Pick<PlannedChatRun, 'originPrompt' | 'activity'> & { items?: PlannedRunItem[] }): Promise<void> {
+    if (payload?.source !== 'declared' || !Array.isArray(payload.items) || payload.items.length < 2 || payload.items.length > 6) return Promise.resolve();
+    const items = payload.items.map((item: any) => ({ text: String(item?.text || '').trim().slice(0, 500), status: ['pending', 'in_progress', 'completed', 'done', 'skipped', 'failed'].includes(item?.status) ? item.status : 'pending' }));
+    if (items.some((item: any) => !item.text)) return Promise.resolve();
+    this.known.add(runtimeId);
+    return this.enqueue(runtimeId, async () => {
+      const prior = await this.readAsync(runtimeId);
+      if (prior && (prior.status !== 'running' || prior.ownerPid !== this.ownerPid)) return;
+      const now = Date.now();
+      // originPrompt is set exactly once: prior record wins, then carried (resume), then the new turn message.
+      const origin = prior?.originPrompt || carry?.originPrompt || String(originPrompt || '').trim().slice(0, PLANNED_ORIGIN_PROMPT_MAX) || undefined;
+      const pendingActivity = this.takePendingActivity(runtimeId);
+      const activity = [...(prior?.activity || carry?.activity || []), ...pendingActivity].slice(-PLANNED_ACTIVITY_MAX);
+      await this.writeAsync({
+        id: `chat-plan:${runtimeId}`, sourceKind: 'planned_chat', runtimeId, ownerPid: this.ownerPid, sessionId,
+        title: String(payload.taskSummary || prior?.title || fallbackTitle || 'Planned chat').slice(0, 240),
+        status: 'running', createdAt: prior?.createdAt || now, updatedAt: now,
+        ...((resumedFromRuntimeId || prior?.resumedFromRuntimeId) ? { resumedFromRuntimeId: resumedFromRuntimeId || prior?.resumedFromRuntimeId } : {}),
+        ...(origin ? { originPrompt: origin } : {}),
+        ...(activity.length ? { activity } : {}),
+        runtimeProgress: { source: 'declared', activeIndex: Math.max(-1, Math.min(items.length, Number(payload.activeIndex) || 0)), updatedAt: now, items: applyPlannedItemTiming(items, prior?.runtimeProgress?.items || carry?.items, now) },
+      });
+      this.lastActivityWrite.set(runtimeId, now);
+    });
+  }
+  async resume(priorRuntimeId: string, runtimeId: string, sessionId: string): Promise<void> {
+    const prior = await this.readAsync(priorRuntimeId);
+    if (prior) await this.progress(runtimeId, sessionId, { ...prior.runtimeProgress, taskSummary: prior.title }, prior.title, priorRuntimeId, undefined, { originPrompt: prior.originPrompt, activity: prior.activity, items: prior.runtimeProgress.items });
+  }
+  /** SSE hook: bounded in-memory enqueue only (ring capped at PLANNED_ACTIVITY_MAX). Never touches the filesystem. */
+  activity(runtimeId: string, entry: PlannedRunActivity): void {
     if (!this.known.has(runtimeId)) return;
     const buffer = this.pending.get(runtimeId) || [];
     buffer.push(entry);
     this.pending.set(runtimeId, buffer.slice(-PLANNED_ACTIVITY_MAX));
-    const wait = this.activityFlushMs - (Date.now() - (this.lastActivityWrite.get(runtimeId) || 0));
-    if (wait <= 0) { this.flushActivity(runtimeId); return; }
-    if (!this.timers.has(runtimeId)) {
-      const timer = setTimeout(() => { this.timers.delete(runtimeId); try { this.flushActivity(runtimeId); } catch (error) { console.warn('[planned-chat] Could not save activity:', error); } }, wait);
-      (timer as any).unref?.();
-      this.timers.set(runtimeId, timer);
-    }
+    if (this.timers.has(runtimeId)) return;
+    const wait = Math.max(0, this.activityFlushMs - (Date.now() - (this.lastActivityWrite.get(runtimeId) || 0)));
+    const timer = setTimeout(() => { this.timers.delete(runtimeId); void this.flushActivity(runtimeId); }, wait);
+    (timer as any).unref?.();
+    this.timers.set(runtimeId, timer);
   }
-  flushActivity(runtimeId: string) {
-    const entries = this.takePendingActivity(runtimeId);
-    if (!entries.length) return;
-    const row = this.read(runtimeId);
-    if (!row || row.status !== 'running' || row.ownerPid !== this.ownerPid) return;
-    row.activity = [...(row.activity || []), ...entries].slice(-PLANNED_ACTIVITY_MAX);
-    row.updatedAt = Date.now();
-    this.lastActivityWrite.set(runtimeId, row.updatedAt);
-    this.write(row);
+  flushActivity(runtimeId: string): Promise<void> {
+    if (!this.pending.get(runtimeId)?.length) return this.chains.get(runtimeId) || Promise.resolve();
+    return this.enqueue(runtimeId, async () => {
+      const entries = this.takePendingActivity(runtimeId);
+      if (!entries.length) return;
+      const row = await this.readAsync(runtimeId);
+      if (!row || row.status !== 'running' || row.ownerPid !== this.ownerPid) return;
+      row.activity = [...(row.activity || []), ...entries].slice(-PLANNED_ACTIVITY_MAX);
+      row.updatedAt = Date.now();
+      this.lastActivityWrite.set(runtimeId, row.updatedAt);
+      await this.writeAsync(row);
+    });
   }
-  finish(runtimeId: string, status: Exclude<PlannedRunStatus, 'running'>) {
-    try { this.flushActivity(runtimeId); } catch { /* best effort */ }
+  finish(runtimeId: string, status: Exclude<PlannedRunStatus, 'running'>): Promise<void> {
     this.known.delete(runtimeId); this.lastActivityWrite.delete(runtimeId);
-    const row = this.read(runtimeId);
-    if (!row || row.status !== 'running' || row.ownerPid !== this.ownerPid) return;
-    row.status = status;
-    row.completedAt = row.updatedAt = Date.now();
-    if (status === 'completed') {
-      row.runtimeProgress.items = row.runtimeProgress.items.map(item => (item.status === 'in_progress' || item.status === 'running') ? { ...item, completedAt: item.completedAt || row.completedAt } : item);
-    }
-    this.write(row);
+    return this.enqueue(runtimeId, async () => {
+      // Drain queued activity as part of the terminal write, in the same serialized chain.
+      const entries = this.takePendingActivity(runtimeId);
+      const row = await this.readAsync(runtimeId);
+      if (!row || row.status !== 'running' || row.ownerPid !== this.ownerPid) return;
+      if (entries.length) row.activity = [...(row.activity || []), ...entries].slice(-PLANNED_ACTIVITY_MAX);
+      row.status = status;
+      row.completedAt = row.updatedAt = Date.now();
+      if (status === 'completed') {
+        row.runtimeProgress.items = row.runtimeProgress.items.map(item => (item.status === 'in_progress' || item.status === 'running') ? { ...item, completedAt: item.completedAt || row.completedAt } : item);
+      }
+      await this.writeAsync(row);
+    });
   }
   get(runtimeId: string) { return this.read(runtimeId); }
   list(liveRuntimeIds: Set<string>, pending: PendingRequest[] = []) {
@@ -209,6 +246,8 @@ export class PlannedChatRunStore {
   }
 }
 
+
+
 let cached: { directory: string; store: PlannedChatRunStore } | undefined;
 function store() {
   const directory = path.join(getConfig().getConfigDir(), 'planned-chat-runs');
@@ -217,8 +256,10 @@ function store() {
 }
 export function recordPlannedChatProgress(runtimeId: string, sessionId: string, payload: any, title: string, resumedFromRuntimeId?: string, originPrompt?: string) {
   try {
-    store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId, originPrompt);
-    if (payload?.source === 'declared') broadcastWS({ type: 'planned_chat_updated', runtimeId, sessionId });
+    // Serialized async write; broadcast only after it lands.
+    void store().progress(runtimeId, sessionId, payload, title, resumedFromRuntimeId, originPrompt).then(() => {
+      if (payload?.source === 'declared') broadcastWS({ type: 'planned_chat_updated', runtimeId, sessionId });
+    }).catch(error => console.warn('[planned-chat] Could not save progress:', error));
   } catch (error) { console.warn('[planned-chat] Could not save progress:', error); }
 }
 /** Feed chat SSE events into the planned-run activity ring. Never throws, never blocks on IO for unplanned chats. */
@@ -230,11 +271,11 @@ export function recordPlannedChatActivity(runtimeId: string, event: string, data
   } catch (error) { console.warn('[planned-chat] Could not record activity:', error); }
 }
 export function resumePlannedChatRun(priorRuntimeId: string, runtimeId: string, sessionId: string) {
-  try { store().resume(priorRuntimeId, runtimeId, sessionId); }
+  try { void store().resume(priorRuntimeId, runtimeId, sessionId).catch(error => console.warn('[planned-chat] Could not link recovery:', error)); }
   catch (error) { console.warn('[planned-chat] Could not link recovery:', error); }
 }
 export function finishPlannedChatRun(runtimeId: string, status: Exclude<PlannedRunStatus, 'running'>) {
-  try { store().finish(runtimeId, status); broadcastWS({ type: 'planned_chat_updated', runtimeId }); }
+  try { void store().finish(runtimeId, status).then(() => broadcastWS({ type: 'planned_chat_updated', runtimeId })).catch(error => console.warn('[planned-chat] Could not save outcome:', error)); }
   catch (error) { console.warn('[planned-chat] Could not save outcome:', error); }
 }
 export function listPlannedChatRuns(pending: PendingRequest[] = []) {

@@ -916,7 +916,7 @@ async function bgtRefreshOpenPanel() {
   // Composer is available for every non-terminal task (running included); planned chats route to their chat.
   const isPlannedTask = task.sourceKind === 'planned_chat' || String(task.id || '').startsWith('chat-plan:');
   const chatRow = document.getElementById('bgt-chat-input')?.parentElement;
-  if (chatRow) chatRow.style.display = isPlannedTask || isTerminalStatus(task.status) ? 'none' : '';
+  if (chatRow) chatRow.style.display = isPlannedTask || ['complete', 'completed', 'done', 'cancelled'].includes(String(task.status || '').trim().toLowerCase()) ? 'none' : '';
   if (isPlannedTask) {
     const listed = bgtTasks.find(t => t.id === task.id) || {};
     const merged = { ...listed, ...task, sourceKind: 'planned_chat' };

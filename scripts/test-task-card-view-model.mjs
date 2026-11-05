@@ -117,5 +117,13 @@ assert.equal(detailSections({ id: 'c', status: 'complete', finalSummary: 'Result
 const plan = detailSections({ id: 'chat-plan:x', sourceKind: 'planned_chat', status: 'running', title: 'P', originalAssignment: 'user msg', lastToolCall: { name: 'web_fetch' } });
 assert.equal(plan.openChat, true); assert.equal(plan.canMessage, false); assert.equal(plan.startedFrom, 'user msg');
 assert.equal(plan.card.tool, 'web_fetch');
+// ── Failed-task recovery composer ──
+assert.equal(detailSections({ id: 'f', status: 'failed', title: 'F', finalSummary: 'Boom' }).canMessage, true, 'failed task is messageable for recovery');
+assert.equal(detailSections({ id: 'c2', status: 'complete', title: 'C' }).canMessage, false, 'complete task has no composer');
+assert.equal(detailSections({ id: 'x', status: 'cancelled', title: 'X' }).canMessage, false, 'cancelled task has no composer');
+assert.equal(detailSections({ id: 'chat-plan:f', sourceKind: 'planned_chat', status: 'failed', title: 'PF' }).canMessage, false, 'planned chat failed -> Open chat, no composer');
+assert.equal(detailSections({ id: 'p', status: 'paused', title: 'P' }).canMessage, true, 'paused task is messageable');
+console.log('PASS failed-task recovery composer');
+
 console.log('PASS detail sections + old record compatibility');
 console.log('All task-card view-model tests passed');
