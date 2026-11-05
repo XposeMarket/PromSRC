@@ -6,6 +6,7 @@ import { renderAgentPet, rememberAgentPets } from '../components/agent-pets.js';
 import { API } from '../state.js';
 import { presentChatError } from '../chat-error-presentation.js';
 import { createChatHistoryClient } from '../features/chat/runtime/history-client.js';
+import { MOBILE_STREAM_IDLE_TIMEOUT_MS, readChunkWithIdleTimeout, isMobileStreamStallError, classifyMobileStreamFailure } from './mobile-turn-lifecycle.js';
 
 /* ---------------- pairing / device token ---------------- */
 // All mobile fetches go through `mfetch()` below which automatically attaches
@@ -2504,13 +2505,21 @@ export async function requestMobileUpdate({ action = 'check', confirm = false, s
  *
  * Returns an { abort } controller.
  */
-export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds }, handlers = {}) {
+export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attachments, attachmentPreviews, signal, callerContext, clientRequestId, excludedSkillIds, selectedSkillIds, idleTimeoutMs = MOBILE_STREAM_IDLE_TIMEOUT_MS }, handlers = {}) {
   const ctrl = new AbortController();
-  if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  // A caller/Stop abort is a stop. The idle watchdog's internal abort is a
+  // transport stall and must reach onError as a recoverable disconnect.
+  let userAborted = false;
+  let stalled = false;
+  if (signal) signal.addEventListener('abort', () => { userAborted = true; ctrl.abort(); }, { once: true });
 
   const url = _buildUrl('/api/chat');
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[mobile chat handler]', name, e); } };
   const toChatStreamError = (err) => {
+    if (isMobileStreamStallError(err)) {
+      err.chatPresentation = presentChatError({ message: err.message, mobileStreamDisconnected: true, rawBody: 'stream stalled' });
+      return err;
+    }
     if (err?.name === 'AbortError') return err;
     const raw = String(err?.message || err || '').trim();
     const disconnected = /terminated|load failed|failed to fetch|networkerror|stream ended before completion/i.test(raw);
@@ -2610,7 +2619,8 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
 
     try {
       while (true) {
-        const { value, done } = await reader.read();
+        // Any received bytes (data, `: ping`, heartbeat) re-arm the watchdog.
+        const { value, done } = await readChunkWithIdleTimeout(reader, { idleMs: idleTimeoutMs });
         if (done) break;
         buf += decoder.decode(value, { stream: true });
 
@@ -2661,7 +2671,17 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
         cb('onError', toChatStreamError(new Error('stream ended before completion')));
       }
     } catch (err) {
-      if (err.name === 'AbortError') { cb('onDone'); return; }
+      const failure = classifyMobileStreamFailure(err, { userAborted });
+      if (failure === 'stalled') {
+        // Silent Funnel stall: tear the request down, then hand the existing
+        // disconnect recovery a flagged error (never the AbortError branch).
+        stalled = true;
+        try { reader.cancel?.().catch?.(() => {}); } catch {}
+        try { ctrl.abort(); } catch {}
+        if (!gotFinal) cb('onError', toChatStreamError(err));
+        return;
+      }
+      if (failure === 'user_abort' && !stalled) { cb('onDone'); return; }
       // A final frame is the durable answer. Some mobile browsers report a
       // transport error while the server is closing an otherwise-complete SSE
       // response; surfacing that late error would replace the answer with the
@@ -2672,5 +2692,5 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
     }
   })();
 
-  return { abort: () => ctrl.abort() };
+  return { abort: () => { userAborted = true; ctrl.abort(); } };
 }

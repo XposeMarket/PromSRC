@@ -57,7 +57,9 @@ assert.match(mobilePageRuntime, /function refreshMobileQuestionRecovery\([\s\S]*
   'question recovery must run independently of main-chat run status');
 assert.match(mobilePageRuntime, /const runRecoveryOnReturn = \(\{ bypassCooldown = false \} = \{\}\) => \{\s*void refreshMobileQuestionRecovery\(\);\s*const now = Date\.now\(\);/,
   'foreground reconnect must recheck durable question state before run-recovery cooldown');
-assert.match(mobilePageRuntime, /const runRecoveryOnWsOpen = \(\) => runRecoveryOnReturn\(\{ bypassCooldown: true \}\)/,
+// #826: the WS-reopen handler also reconciles stale drawer runs first; the
+// contract is still that it reaches runRecoveryOnReturn with bypassCooldown.
+assert.match(mobilePageRuntime, /const runRecoveryOnWsOpen = \(\) => \{?[^}]{0,160}?runRecoveryOnReturn\(\{ bypassCooldown: true \}\)/,
   'socket reopen must bypass run-recovery cooldown without bypassing question recovery');
 
 assert.match(mobileCss, /\.pm-composer\.has-pending-question \.pm-composer-row[\s\S]*?display: none !important/, 'pending questions must hide the normal mobile composer row');
