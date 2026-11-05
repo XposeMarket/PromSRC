@@ -41,17 +41,37 @@ await test('A8 deletes only the requested identity after concurrent insertion', 
     const gate = deferred();
     const window = { chatSessions: [{ id: 'A' }, { id: 'B' }], activeChatSessionId: 'A' };
     const context = vm.createContext({ window, deleteSessionFromServer: () => gate.promise, showToast() {}, saveChatSessions() {}, syncActiveChat() {}, saveComposerDraft() {}, composerDraftKey() {}, dispatchDesktopChatLifecycle() {}, setAgentSessionId() {}, generateSessionId: () => 'new' });
-    vm.runInContext(declaration(source, 'deleteChatSession'), context);
+    // Stub only the lazy module boundary; execute the real caller and its post-await identity checks.
+    const deletion = declaration(source, 'deleteChatSession');
+    const importCall = "await import('./MemoryReferences.js')";
+    if (!baseline) assert.ok(deletion.includes(importCall), 'reference deletion module boundary');
+    context.referenceDeletionModule = Promise.resolve({ deleteReferenceSession: () => gate.promise });
+    vm.runInContext(baseline ? deletion : deletion.replace(importCall, 'await referenceDeletionModule'), context);
     const pending = context.deleteChatSession('B');
     if (mutation === 'insert') window.chatSessions.unshift({ id: 'C' });
     if (mutation === 'reorder') window.chatSessions.reverse();
     if (mutation === 'already-removed') window.chatSessions = [{ id: 'C' }, { id: 'A' }];
-    gate.resolve(); await pending;
+    gate.resolve({ cancelled: false }); await pending;
     wrong += Number(!window.chatSessions.some((s) => s.id === 'A'));
     retained += Number(window.chatSessions.some((s) => s.id === 'B'));
   }
   metrics.A8 = { wrongSessionsRemoved: wrong, deletedSessionsRetained: retained, scenarios: 3 };
   assert.equal(wrong, 0); assert.equal(retained, 0);
+});
+
+if (!baseline) await test('A8 reference Cancel keeps local chat; partial cleanup removes only deleted chat', async () => {
+  const deletion = declaration(read('web-ui/src/pages/ChatPage.js'), 'deleteChatSession');
+  for (const result of [{ cancelled: true }, { cancelled: false, success: true, references: 'partial' }]) {
+    const window = { chatSessions: [{ id: 'A' }, { id: 'B' }], activeChatSessionId: 'A' };
+    const context = vm.createContext({ window,
+      referenceDeletionModule: Promise.resolve({ deleteReferenceSession: async () => result }),
+      showToast() { throw new Error('Unexpected failure toast'); }, saveChatSessions() {}, syncActiveChat() {}, saveComposerDraft() {},
+      composerDraftKey() {}, dispatchDesktopChatLifecycle() {}, setAgentSessionId() {}, generateSessionId: () => 'new' });
+    vm.runInContext(deletion.replace("await import('./MemoryReferences.js')", 'await referenceDeletionModule'), context);
+    await context.deleteChatSession('B');
+    assert.equal(window.chatSessions.some(s => s.id === 'B'), result.cancelled);
+    assert.ok(window.chatSessions.some(s => s.id === 'A'));
+  }
 });
 
 function subagentFixture() {

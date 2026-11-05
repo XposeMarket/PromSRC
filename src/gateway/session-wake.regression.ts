@@ -9,12 +9,43 @@ import {
   watchVideoJobs, initVideoProjectWake, resetVideoProjectWakeForTests, listVideoWatches, checkAllVideoWatches, VIDEO_WAKE_TIMEOUT_MS, setVideoAutoQaForTests,
 } from './video-project-wake';
 import { createProject, mutateProject } from '../media-engine/project.js';
+import ts from 'typescript';
 
-const calls: Array<{ sessionId: string; message: string }> = [];
+const SERVER_WAKE_ARGS = ['message', 'sessionId', 'sendSSE', 'pinnedMessages', 'abortSignal', 'callerContext', 'reasoningOptions', 'attachments', 'attachmentPreviews', 'modelOverride', 'flags', 'turnOriginInput'];
+
+// Source-level check of the real server-v2 adapter: parses the initSessionWake({ runInteractiveTurn }) arrow and verifies it
+// accepts and forwards every wake arg in order, so turnOriginInput (the 12th) cannot be dropped again.
+function assertServerWakeAdapterForwardsOrigin(): void {
+  const file = path.resolve(__dirname, 'server-v2.ts');
+  const sf = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  const adapters: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'initSessionWake') {
+      const cfg = node.arguments[0];
+      if (cfg && ts.isObjectLiteralExpression(cfg)) {
+        for (const prop of cfg.properties) {
+          if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === 'runInteractiveTurn') adapters.push(prop.initializer);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  assert.equal(adapters.length, 1, 'server-v2 must wire exactly one initSessionWake runInteractiveTurn adapter');
+  const adapter = adapters[0];
+  if (!ts.isArrowFunction(adapter)) throw new Error('initSessionWake adapter must be an arrow function');
+  assert.deepEqual(adapter.parameters.map((p) => p.name.getText(sf)), SERVER_WAKE_ARGS, 'adapter must accept all 12 wake args');
+  const body = adapter.body;
+  if (!ts.isCallExpression(body)) throw new Error('initSessionWake adapter body must be a direct call');
+  assert.equal(body.expression.getText(sf), 'runInteractiveTurn');
+  assert.deepEqual(body.arguments.map((a) => a.getText(sf)), SERVER_WAKE_ARGS, 'adapter must forward every wake arg in order (turnOriginInput included)');
+}
+
+const calls: Array<{ sessionId: string; message: string; origin?: any }> = [];
 const flush = () => new Promise((r) => setTimeout(r, 30));
 function init(busy?: () => boolean) {
   initSessionWake({
-    runInteractiveTurn: async (message: string, sessionId: string) => { calls.push({ sessionId, message }); return { type: 'done', text: 'ok' }; },
+    runInteractiveTurn: async (message: string, sessionId: string, _sendSSE: unknown, _pinned: unknown, _abort: unknown, _ctx: unknown, _reasoning: unknown, _attachments: unknown, _previews: unknown, _model: unknown, _flags: unknown, turnOriginInput: unknown): Promise<any> => { calls.push({ sessionId, message, origin: turnOriginInput }); return { type: 'done', text: 'ok' }; },
     notify: () => undefined,
     isSessionBusy: busy,
     busyPollMs: 10,
@@ -116,9 +147,14 @@ async function main() {
   await flush();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].sessionId, 'origin');
+  assert.deepEqual(calls[0].origin, { channel: 'system', surface: 'automation', device: 'server' }, 'async wake must carry trusted system origin (no owner personal-reference access)');
   assert.ok(calls[0].message.startsWith('[thread reply] Research finished: '));
   assert.ok(calls[0].message.length < 660);
   console.log('ok thread-callback');
+
+  // 6. real server adapter forwards the wake origin
+  assertServerWakeAdapterForwardsOrigin();
+  console.log('ok server-adapter-forwarding');
   console.log('ALL PASS');
 }
 

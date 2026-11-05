@@ -133,6 +133,8 @@ const measurements = {
 // Keep the established bounded ~0.1% compression variance above the measured total.
 // #798 per-chat route cache in mobile-model-badge + lastModel drawer logos (net of the
 // reverted <details> summary branch) measure 283060 (+352 over #785). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 283350, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #823 adds default-off reference retention choice + partial-cleanup warning to the
+// existing delete sheet: 283494 gzip (+187 vs base283307); retain ~0.1% variance.
+assert(measurements.gzipBytes <= 283780, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

@@ -788,8 +788,9 @@ if (!skipInPreview('gateway-restart-queue')) {
   });
 }
 initSessionWake({
-  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
+  // Forwards all 12 positional args so the wake origin (turnOriginInput) reaches the chat router.
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
   broadcast: broadcastWS,
   isSessionBusy: (sid) => listLiveRuntimesForWake().some((r: any) => r.kind === 'main_chat' && String(r.sessionId || '') === sid),
 });
