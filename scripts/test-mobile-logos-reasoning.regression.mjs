@@ -74,6 +74,30 @@ const logoFor = new Function('MOBILE_IMPORTED_SOURCE_BRANDS',
 }
 console.log('A: drawer provider logos survive normalized refreshes');
 
+// A2. The paired-device gateway catalog (/api/mobile/gateway/catalog) is the drawer's primary
+// source (namespaced gw_...::id rows, spread raw by mobile-gateway-catalog.js). Its cross-origin
+// projection must carry the compact lastModel too, and nothing else model-related.
+{
+  const pairing = read('src/gateway/routes/pairing.router.ts');
+  const body = slice(pairing, 'function _safeCatalogSession(', 'function _safeCatalogAgent(')
+    .replace('(session: any): Record<string, unknown>', '(session)');
+  const safe = new Function(`${body}return _safeCatalogSession;`)();
+  const row = safe({
+    id: 's1', title: 'T',
+    lastModel: { providerId: 'anthropic', model: 'claude-opus-5-5', apiKey: 'never' },
+    chatModelRoute: { override: { providerId: 'openai_codex', model: 'gpt-6-astra' } },
+    workspacePath: 'C:/secret',
+  });
+  assert.deepEqual(row.lastModel, { providerId: 'anthropic', model: 'claude-opus-5-5' }, 'catalog keeps compact lastModel');
+  assert.equal('chatModelRoute' in row, false, 'catalog never exposes model routes');
+  assert.equal('workspacePath' in row, false, 'catalog never exposes paths');
+  assert.match(logoFor(row), /pm-session-model-logo--claude/, 'catalog-backed drawer row renders the provider logo');
+  assert.equal('lastModel' in safe({ id: 's2', lastModel: { model: 'gpt-6-astra' } }), false, 'no providerId means no lastModel');
+  assert.equal('lastModel' in safe({ id: 's3', lastModel: 'openai' }), false, 'garbage lastModel is dropped');
+  assert.equal(safe({ id: 's4', lastModel: { providerId: 'x'.repeat(200), model: 'm'.repeat(300) } }).lastModel.model.length, 120, 'bounded');
+}
+console.log('A2: gateway catalog rows keep the provider logo source');
+
 // ---------- G. reasoning summaries fold into one live label ----------
 // Use the REAL renderer grouping so the fold is tested against actual groups.
 const groupTrace = new Function(
