@@ -1756,6 +1756,11 @@ function _normalizeSessionSummary(s) {
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
     chatModelRoute: s?.chatModelRoute && typeof s.chatModelRoute === 'object' ? s.chatModelRoute : null,
+    // Drawer provider logo source (the model that answered last). Dropping it
+    // made logos vanish on every paged drawer refresh after the first paint.
+    lastModel: s?.lastModel && typeof s.lastModel === 'object' && String(s.lastModel.providerId || '').trim()
+      ? { providerId: String(s.lastModel.providerId).trim(), model: String(s.lastModel.model || '').trim() }
+      : null,
     lastOrigin: s?.lastOrigin && typeof s.lastOrigin === 'object' ? {
       channel: String(s.lastOrigin.channel || '').trim(),
       surface: String(s.lastOrigin.surface || '').trim() || undefined,
