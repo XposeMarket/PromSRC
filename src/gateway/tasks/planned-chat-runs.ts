@@ -99,6 +99,8 @@ export class PlannedChatRunStore {
   // so queued activity can never overwrite newer progress/finish state.
   private chains = new Map<string, Promise<void>>();
   private known = new Set<string>();
+  /** Bounded finish intent (last 200): late progress/resume/activity for these runs is a no-op even with no record. */
+  private finished = new Set<string>();
   private pending = new Map<string, PlannedRunActivity[]>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastActivityWrite = new Map<string, number>();
@@ -152,35 +154,57 @@ export class PlannedChatRunStore {
     if (timer) { clearTimeout(timer); this.timers.delete(runtimeId); }
     return entries;
   }
-  progress(runtimeId: string, sessionId: string, payload: any, fallbackTitle: string, resumedFromRuntimeId?: string, originPrompt?: string, carry?: Pick<PlannedChatRun, 'originPrompt' | 'activity'> & { items?: PlannedRunItem[] }): Promise<void> {
-    if (payload?.source !== 'declared' || !Array.isArray(payload.items) || payload.items.length < 2 || payload.items.length > 6) return Promise.resolve();
+  private markFinished(runtimeId: string) {
+    this.finished.add(runtimeId);
+    if (this.finished.size > 200) this.finished.delete(this.finished.values().next().value as string);
+  }
+  private normalizeProgress(payload: any): { text: string; status: string }[] | undefined {
+    if (payload?.source !== 'declared' || !Array.isArray(payload.items) || payload.items.length < 2 || payload.items.length > 6) return undefined;
     const items = payload.items.map((item: any) => ({ text: String(item?.text || '').trim().slice(0, 500), status: ['pending', 'in_progress', 'completed', 'done', 'skipped', 'failed'].includes(item?.status) ? item.status : 'pending' }));
-    if (items.some((item: any) => !item.text)) return Promise.resolve();
-    this.known.add(runtimeId);
+    return items.some((item: any) => !item.text) ? undefined : items;
+  }
+  progress(runtimeId: string, sessionId: string, payload: any, fallbackTitle: string, resumedFromRuntimeId?: string, originPrompt?: string, carry?: Pick<PlannedChatRun, 'originPrompt' | 'activity'> & { items?: PlannedRunItem[] }): Promise<void> {
+    // Late calls for a finished run are rejected synchronously; calls queued before finish still land.
+    if (this.finished.has(runtimeId)) return Promise.resolve();
+    const items = this.normalizeProgress(payload);
+    if (!items) return Promise.resolve();
+    return this.enqueue(runtimeId, () => this.writeProgress(runtimeId, sessionId, payload, items, fallbackTitle, resumedFromRuntimeId, originPrompt, carry));
+  }
+  /** Read-merge-write for one progress update. Must run inside runtimeId's chain; never enqueues itself. */
+  private async writeProgress(runtimeId: string, sessionId: string, payload: any, items: { text: string; status: string }[], fallbackTitle: string, resumedFromRuntimeId?: string, originPrompt?: string, carry?: Pick<PlannedChatRun, 'originPrompt' | 'activity'> & { items?: PlannedRunItem[] }) {
+    const prior = await this.readAsync(runtimeId);
+    if (prior && (prior.status !== 'running' || prior.ownerPid !== this.ownerPid)) return;
+    const now = Date.now();
+    // originPrompt is set exactly once: prior record wins, then carried (resume), then the new turn message.
+    const origin = prior?.originPrompt || carry?.originPrompt || String(originPrompt || '').trim().slice(0, PLANNED_ORIGIN_PROMPT_MAX) || undefined;
+    const pendingActivity = this.takePendingActivity(runtimeId);
+    const activity = [...(prior?.activity || carry?.activity || []), ...pendingActivity].slice(-PLANNED_ACTIVITY_MAX);
+    await this.writeAsync({
+      id: `chat-plan:${runtimeId}`, sourceKind: 'planned_chat', runtimeId, ownerPid: this.ownerPid, sessionId,
+      title: String(payload.taskSummary || prior?.title || fallbackTitle || 'Planned chat').slice(0, 240),
+      status: 'running', createdAt: prior?.createdAt || now, updatedAt: now,
+      ...((resumedFromRuntimeId || prior?.resumedFromRuntimeId) ? { resumedFromRuntimeId: resumedFromRuntimeId || prior?.resumedFromRuntimeId } : {}),
+      ...(origin ? { originPrompt: origin } : {}),
+      ...(activity.length ? { activity } : {}),
+      runtimeProgress: { source: 'declared', activeIndex: Math.max(-1, Math.min(items.length, Number(payload.activeIndex) || 0)), updatedAt: now, items: applyPlannedItemTiming(items, prior?.runtimeProgress?.items || carry?.items, now) },
+    });
+    this.lastActivityWrite.set(runtimeId, now);
+    // Only an accepted write re-enters bookkeeping; a run finished meanwhile stays closed.
+    if (!this.finished.has(runtimeId)) this.known.add(runtimeId);
+  }
+  /** Reserves destination ordering synchronously: the source read runs inside runtimeId's chain, so a finish() called meanwhile lands after this write. */
+  resume(priorRuntimeId: string, runtimeId: string, sessionId: string): Promise<void> {
+    if (this.finished.has(runtimeId)) return Promise.resolve();
     return this.enqueue(runtimeId, async () => {
-      const prior = await this.readAsync(runtimeId);
-      if (prior && (prior.status !== 'running' || prior.ownerPid !== this.ownerPid)) return;
-      const now = Date.now();
-      // originPrompt is set exactly once: prior record wins, then carried (resume), then the new turn message.
-      const origin = prior?.originPrompt || carry?.originPrompt || String(originPrompt || '').trim().slice(0, PLANNED_ORIGIN_PROMPT_MAX) || undefined;
-      const pendingActivity = this.takePendingActivity(runtimeId);
-      const activity = [...(prior?.activity || carry?.activity || []), ...pendingActivity].slice(-PLANNED_ACTIVITY_MAX);
-      await this.writeAsync({
-        id: `chat-plan:${runtimeId}`, sourceKind: 'planned_chat', runtimeId, ownerPid: this.ownerPid, sessionId,
-        title: String(payload.taskSummary || prior?.title || fallbackTitle || 'Planned chat').slice(0, 240),
-        status: 'running', createdAt: prior?.createdAt || now, updatedAt: now,
-        ...((resumedFromRuntimeId || prior?.resumedFromRuntimeId) ? { resumedFromRuntimeId: resumedFromRuntimeId || prior?.resumedFromRuntimeId } : {}),
-        ...(origin ? { originPrompt: origin } : {}),
-        ...(activity.length ? { activity } : {}),
-        runtimeProgress: { source: 'declared', activeIndex: Math.max(-1, Math.min(items.length, Number(payload.activeIndex) || 0)), updatedAt: now, items: applyPlannedItemTiming(items, prior?.runtimeProgress?.items || carry?.items, now) },
-      });
-      this.lastActivityWrite.set(runtimeId, now);
+      const prior = await this.readAsync(priorRuntimeId);
+      if (!prior) return;
+      const payload = { ...prior.runtimeProgress, taskSummary: prior.title };
+      const items = this.normalizeProgress(payload);
+      if (!items) return;
+      await this.writeProgress(runtimeId, sessionId, payload, items, prior.title, priorRuntimeId, undefined, { originPrompt: prior.originPrompt, activity: prior.activity, items: prior.runtimeProgress.items });
     });
   }
-  async resume(priorRuntimeId: string, runtimeId: string, sessionId: string): Promise<void> {
-    const prior = await this.readAsync(priorRuntimeId);
-    if (prior) await this.progress(runtimeId, sessionId, { ...prior.runtimeProgress, taskSummary: prior.title }, prior.title, priorRuntimeId, undefined, { originPrompt: prior.originPrompt, activity: prior.activity, items: prior.runtimeProgress.items });
-  }
+
   /** SSE hook: bounded in-memory enqueue only (ring capped at PLANNED_ACTIVITY_MAX). Never touches the filesystem. */
   activity(runtimeId: string, entry: PlannedRunActivity): void {
     if (!this.known.has(runtimeId)) return;
@@ -207,7 +231,7 @@ export class PlannedChatRunStore {
     });
   }
   finish(runtimeId: string, status: Exclude<PlannedRunStatus, 'running'>): Promise<void> {
-    this.known.delete(runtimeId); this.lastActivityWrite.delete(runtimeId);
+    this.known.delete(runtimeId); this.lastActivityWrite.delete(runtimeId); this.markFinished(runtimeId);
     return this.enqueue(runtimeId, async () => {
       // Drain queued activity as part of the terminal write, in the same serialized chain.
       const entries = this.takePendingActivity(runtimeId);

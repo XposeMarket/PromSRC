@@ -94,10 +94,10 @@ const rows = collapseActivity({ journal: [
   { t: 7, type: 'error', content: 'File missing' },
   { t: 8, type: 'tool_call', content: 'read_file a.md' },
 ] });
-assert.deepEqual(rows.map(r => r.type), ['hidden', 'tool', 'status', 'hidden', 'error', 'tool']);
+assert.deepEqual(rows.map(r => r.type), ['hidden', 'tool', 'status', 'status', 'error', 'tool']);
 assert.equal(rows[0].count, 2);
 assert.equal(rows[1].name, 'web_search'); assert.ok(rows[1].result.includes('5 results'));
-assert.equal(rows[3].count, 1, 'exact consecutive duplicate collapsed');
+assert.equal(rows[3].text, 'Wrote draft', 'lone duplicate status renders inline, not as "Hiding 1"');
 assert.equal(rows[5].pending, true);
 const planned = collapseActivity({ activity: [
   { t: 1, kind: 'tool', name: 'workspace_read', detail: '{"path":"a"}' },
@@ -105,6 +105,20 @@ const planned = collapseActivity({ activity: [
 ] });
 assert.equal(planned.length, 1); assert.equal(planned[0].error, true);
 assert.deepEqual(collapseActivity({}), [], 'old records without activity/journal');
+// single status row renders inline; 3 consecutive folded rows become one "Hiding 3"
+const single = collapseActivity({ journal: [
+  { t: 1, type: 'tool_call', content: 'read_file a' },
+  { t: 2, type: 'status_push', content: 'Processing…' },
+  { t: 3, type: 'tool_call', content: 'read_file b' },
+] });
+assert.deepEqual(single.map(r => r.type), ['tool', 'status', 'tool']);
+assert.equal(single[1].text, 'Processing…');
+const triple = collapseActivity({ journal: [
+  { t: 1, type: 'status_push', content: 'Processing…' },
+  { t: 2, type: 'status_push', content: 'Thinking' },
+  { t: 3, type: 'status_push', content: 'Working…' },
+] });
+assert.deepEqual(triple.map(r => [r.type, r.count]), [['hidden', 3]]);
 console.log('PASS activity pairing + noise collapse');
 
 // ── Detail model + old records ──

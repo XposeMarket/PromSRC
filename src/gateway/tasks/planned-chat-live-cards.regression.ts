@@ -97,6 +97,29 @@ async function main() {
     assert.equal(failed.activity![1].name, 'queued_before_finish');
     console.log('PASS finish after queued activity keeps terminal state and activity');
 
+    // finished-run guard: a resume held on its source read must not resurrect the run after finish
+    {
+      const gs = new PlannedChatRunStore(path.join(dir, 'guard'));
+      await gs.progress('src', 'sg', progress(['in_progress', 'pending']), 'Guard', undefined, 'origin');
+      const readThrough = (gs as any).readAsync.bind(gs);
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      (gs as any).readAsync = async (id: string) => { if (id === 'src') await gate; return readThrough(id); };
+      const resumed = gs.resume('src', 'dst', 'sg');
+      const finished = gs.finish('dst', 'completed'); // queued behind the held resume, not awaited before release
+      release();
+      await Promise.all([resumed, finished]);
+      assert.equal(gs.get('dst')!.status, 'completed', 'held resume must not leave a running record after finish');
+      await gs.progress('dst', 'sg', progress(['in_progress', 'pending']), 'late');
+      await gs.resume('src', 'dst', 'sg');
+      gs.activity('dst', { t: clock, kind: 'tool', name: 'late' });
+      await gs.flushActivity('dst');
+      assert.equal(gs.get('dst')!.status, 'completed', 'late progress/resume after finish is a no-op');
+      assert.equal(gs.get('dst')!.activity, undefined, 'late activity after finish is ignored');
+      console.log('PASS finished-run guard: held resume cannot resurrect a completed run');
+    }
+
+
     // SSE mapping
     assert.deepEqual(plannedActivityFromSse('tool_call', { action: 'web_search', args: { q: 'x' } }, 5), { t: 5, kind: 'tool', name: 'web_search', detail: '{"q":"x"}' });
     assert.equal(plannedActivityFromSse('tool_result', { action: 'a', result: 'bad', error: true }, 5)!.kind, 'error');

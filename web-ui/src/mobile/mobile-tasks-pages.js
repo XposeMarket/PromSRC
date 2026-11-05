@@ -443,7 +443,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     const tasks = allTasks.filter(t => filterOf(t) === currentFilter && !(t.sourceKind === 'planned_chat' && t.status === 'awaiting_user_input' && needsYouItems.some(item => item.sessionId === t.sessionId)));
     if (!tasks.length && !nyEntries.length) {
       lastPaintSignature = '';
-      listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p></div>`;
+      listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div>${currentFilter === 'needs_you' ? '<h2>Nothing needs you right now.</h2><p>Questions, approvals and login requests will show up here.</p>' : '<h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p>'}</div>`;
       return;
     }
 
@@ -676,7 +676,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
           x.classList.toggle('active', x.getAttribute('data-filter') === currentFilter);
         });
       }
-    } else if (allTasks.length && !allTasks.some(t => filterOf(t) === currentFilter) && !(currentFilter === 'needs_you' && needsYouEntries(needsYouItems).length)) {
+    } else if (!nyAutoOpened && allTasks.length && !allTasks.some(t => filterOf(t) === currentFilter) && !(currentFilter === 'needs_you' && needsYouEntries(needsYouItems).length)) {
       const fallbackFilter = PM_TASK_FILTERS.find(f => allTasks.some(t => filterOf(t) === f.key))?.key;
       if (fallbackFilter) {
         currentFilter = fallbackFilter;

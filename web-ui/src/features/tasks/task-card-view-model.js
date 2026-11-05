@@ -296,7 +296,9 @@ export function collapseActivity(taskOrRows) {
   const rows = Array.isArray(taskOrRows) ? taskOrRows : activityRows(taskOrRows);
   const out = [];
   let hidden = null;
-  const flushHidden = () => { if (hidden) { out.push(hidden); hidden = null; } };
+  const statusItem = (row) => { const kind = str(row?.kind); return { type: kind === 'tool_result' ? 'tool' : 'status', t: row.t, name: row.name, text: row.text, call: '', result: kind === 'tool_result' ? row.text : '', detail: row.detail }; };
+  // A run of 2+ folded rows becomes one "Hiding N" group; a lone folded row renders inline as a normal row.
+  const flushHidden = () => { if (!hidden) return; if (hidden.count === 1 && oneLine(hidden.rows[0]?.text)) out.push(statusItem(hidden.rows[0])); else out.push(hidden); hidden = null; };
   let lastStatus = '';
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -319,7 +321,7 @@ export function collapseActivity(taskOrRows) {
       continue;
     }
     flushHidden(); lastStatus = key;
-    out.push({ type: kind === 'tool_result' ? 'tool' : 'status', t: row.t, name: row.name, text: row.text, call: '', result: kind === 'tool_result' ? row.text : '', detail: row.detail });
+    out.push(statusItem(row));
   }
   flushHidden();
   return out;
