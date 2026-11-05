@@ -1497,7 +1497,7 @@ async function fetchXStatusViaOEmbed(url: string, fxOnce?: () => Promise<FxLooku
   }
   // Never pass a preview off as the whole post: flag it on the payload AND on the tweet.
   const tweets = (result.tweets || []).map((tweet, index) => index === 0
-    ? { ...tweet, text_complete: false, long_post: true, text_source: 'oembed_preview' } as any
+    ? { ...tweet, truncated: true, text_complete: false, long_post: true, text_source: 'oembed_preview' } as any
     : tweet);
   return {
     ...result,

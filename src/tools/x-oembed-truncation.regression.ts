@@ -91,6 +91,8 @@ try {
       assert.equal(view.text_complete, false);
       assert.equal(view.long_post, true);
       assert.equal(view.tweets?.[0]?.text_complete, false, 'per-tweet flag must be present');
+      assert.equal(view.tweets?.[0]?.truncated, true, 'per-tweet truncated flag must be present');
+
       assert.equal(view.tweets?.[0]?.text_source, 'oembed_preview');
     }
     assert.match(String(out.message), /INCOMPLETE/);
