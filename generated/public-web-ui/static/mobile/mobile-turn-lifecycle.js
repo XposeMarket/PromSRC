@@ -76,14 +76,20 @@ export function claimMobileFinalize(aiTurn) {
   return true;
 }
 
-// Row fields that carry user-visible content (rendered in mobile-chat-message-renderer.js
-// and merged in mobile-pages.js _mergeMobileSessionMessage). A live row holding any of
-// these is never an empty placeholder, even when it has no text.
-const MOBILE_LIVE_CONTENT_FIELDS = Object.freeze([
-  'attachments', 'files', 'generatedImages', 'generatedVideos', 'artifacts', 'media', 'images',
-  'richArtifacts', 'productCarousel', 'fileChanges', 'approvalRequest', 'questionRequest',
-  'goalCompletionReport', 'steps', 'commandRuns',
-]);
+// Allowlist, not denylist (review round 2): a live row is a droppable
+// placeholder ONLY when every field it carries is inert stream bookkeeping
+// written by the placeholder constructors in mobile-chat-page-runtime.js
+// (send, recovery, WS adoption) or is empty. Any other field holding a value
+// (media, cards, artifacts, voice workgroups, attachment previews, buffered
+// answer text, steer captures, or a payload added later) protects the row:
+// it is finalized, never removed. A drift test pins the constructor keys.
+export const MOBILE_PLACEHOLDER_INERT_KEYS = Object.freeze(new Set([
+  'role', 'streaming', 'time', 'timestamp', 'workStartedAt', 'workEndedAt', 'workDurationMs',
+  'activeRunKind', 'agentRuntimeKind', 'messageKind', 'agentExecutionMode',
+  '_clientRequestId', '_pmAdmissionPending', '_pmAdmissionClientRequestId', '_streamId', 'runtimeId',
+  'workflowStreamId', 'workflowGroupId', 'workflowBoundarySeq', 'sourceIndex', 'toolActivityStarted',
+  '_pmVisualStreamTimer', '_pmRecoveryReplay', '_pmAbortRequested', '_pmLiveActivityCompleted', '_pmFinalized',
+]));
 
 function hasMobileContentValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -93,26 +99,30 @@ function hasMobileContentValue(value) {
 }
 
 /**
- * True ONLY for a proven-empty live placeholder: a streaming AI row with no text,
- * no trace, and no content field of any kind. Everything else (including rows the
- * text-only predicate calls empty) must be finalized, never removed.
+ * True ONLY for a proven-empty live placeholder: a streaming AI row whose
+ * every field is inert bookkeeping or empty. Everything else (including rows
+ * the text-only predicate calls empty) must be finalized, never removed.
  */
 export function isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer = () => false } = {}) {
   if (!row || typeof row !== 'object' || row.role !== 'ai' || row.streaming !== true) return false;
   if (row._pmFinalReceived === true || row._pmServerAuthoredFinal === true || row._pmAbortAcknowledged === true) return false;
   if (hasVisibleAnswer(row)) return false;
-  if (hasMobileContentValue(row.body?.text) || hasMobileContentValue(row.content) || hasMobileContentValue(row.text)) return false;
-  if (row.body && typeof row.body === 'object') {
-    for (const [key, value] of Object.entries(row.body)) {
-      if (key !== 'text' && hasMobileContentValue(value)) return false;
+  for (const [key, value] of Object.entries(row)) {
+    if (key === 'body') {
+      if (value && typeof value === 'object') {
+        for (const [bodyKey, bodyValue] of Object.entries(value)) {
+          if (bodyKey !== 'sender' && hasMobileContentValue(bodyValue)) return false;
+        }
+      } else if (hasMobileContentValue(value)) return false;
+      continue;
     }
-  }
-  if (hasMobileContentValue(row.liveTraceEntries) || hasMobileContentValue(row.processEntries)) return false;
-  // A dropped-stream notice is transient recovery state, not content (same rule as isEmptyLiveRow).
-  if (row.errorPresentation && row.errorPresentation.key !== 'chat-connection-dropped') return false;
-  if (String(row.workflowPart || '') === 'before_interruption') return false;
-  for (const field of MOBILE_LIVE_CONTENT_FIELDS) {
-    if (hasMobileContentValue(row[field])) return false;
+    // A dropped-stream notice is transient recovery state, not content (same rule as isEmptyLiveRow).
+    if (key === 'errorPresentation') {
+      if (value && value.key !== 'chat-connection-dropped') return false;
+      continue;
+    }
+    if (MOBILE_PLACEHOLDER_INERT_KEYS.has(key)) continue;
+    if (hasMobileContentValue(value)) return false;
   }
   return true;
 }

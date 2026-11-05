@@ -8,6 +8,7 @@ import {
   claimMobileFinalize,
   selectMobileTurnRowsToFinalize,
   isDroppableMobileLivePlaceholder,
+  MOBILE_PLACEHOLDER_INERT_KEYS,
   reconcileMobileStaleRuns,
   resolveDrawerActiveRun,
   createMobileSilenceBackstop,
@@ -243,6 +244,51 @@ async function runLoop(reader, timers, { idleMs = MOBILE_STREAM_IDLE_TIMEOUT_MS,
     assert.equal(isDroppableMobileLivePlaceholder({ ...empty, [flag]: true }, { hasVisibleAnswer: noText }), false, `${flag} protects the row`);
   }
 }
+
+// --- Review round 2: allowlist. Any non-bookkeeping payload (incl. ones added later) protects the row ---
+{
+  const noText = () => false;
+  const protectedRows = {
+    voice_workgroup: { voiceWorkgroup: { workers: [{ id: 'w1', status: 'running' }] } },
+    attachment_previews: { attachmentPreviews: [{ name: 'shot.png' }] },
+    visual_stream_full: { _pmVisualStreamFull: 'buffered answer text' },
+    visual_stream_pending: { _pmVisualStreamPending: 'pending chunk' },
+    final_response_started: { finalResponseStarted: true },
+    pending_thinking: { _pendingThinkingBurst: { text: 'thinking' } },
+    future_payload: { someFutureCard: { id: 'x' } },
+    body_extra: { body: { sender: '', text: '', actions: [{ id: 'a' }] } },
+  };
+  for (const [name, extra] of Object.entries(protectedRows)) {
+    const row = { role: 'ai', streaming: true, body: { sender: '', text: '' }, content: '', processEntries: [], liveTraceEntries: [], ...extra };
+    assert.equal(isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer: noText }), false, `${name}: protects the row`);
+    const { drop, finalize } = selectMobileTurnRowsToFinalize([{ role: 'user', content: 'q' }, row], { hasVisibleAnswer: noText });
+    assert.deepEqual(drop, [], `${name}: never dropped`);
+    assert.deepEqual(finalize, [row], `${name}: finalized instead of removed`);
+  }
+  // Real empty placeholder shapes (constructors in mobile-chat-page-runtime.js) stay droppable.
+  const now = Date.now();
+  const placeholders = {
+    send: { role: 'ai', streaming: true, time: '', timestamp: now, workStartedAt: now, body: { sender: '', text: '' }, content: '', processEntries: [], liveTraceEntries: [], agentExecutionMode: 'execute', _pmAdmissionPending: true, _pmAdmissionClientRequestId: 'c1', _clientRequestId: 'c1' },
+    recovery: { role: 'ai', streaming: true, time: '', timestamp: now, workStartedAt: now, body: { sender: '', text: '' }, content: '', processEntries: [], liveTraceEntries: [], activeRunKind: 'main', agentRuntimeKind: 'main', messageKind: undefined, _clientRequestId: 'c1' },
+    ws_adopted: { role: 'ai', streaming: true, timestamp: now, body: { sender: '', text: '' }, content: '', processEntries: [], liveTraceEntries: [], _clientRequestId: 'c1', _streamId: 's1' },
+    revived_with_bookkeeping: { role: 'ai', streaming: true, timestamp: now, workEndedAt: now + 5, workDurationMs: 5, body: { sender: 'Prometheus', text: '' }, content: '', liveTraceEntries: [], _pmVisualStreamTimer: 12, _pmVisualStreamFull: '', toolActivityStarted: true, _pmRecoveryReplay: true },
+  };
+  for (const [name, row] of Object.entries(placeholders)) {
+    assert.equal(isDroppableMobileLivePlaceholder(row, { hasVisibleAnswer: noText }), true, `${name}: real empty placeholder is still droppable`);
+  }
+  // Drift guard: every key the runtime's live-placeholder constructors write must be inert bookkeeping
+  // or an (empty) content holder, so a new constructor field forces a conscious decision here.
+  const contentHolders = new Set(['body', 'sender', 'text', 'content', 'processEntries', 'liveTraceEntries']);
+  const literals = runtime.match(/\{\s*role: 'ai',\s*streaming: true,[\s\S]*?\};/g) || [];
+  assert.ok(literals.length >= 4, `found the live placeholder constructors (got ${literals.length})`);
+  for (const literal of literals) {
+    for (const [, key] of literal.matchAll(/(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*:/gm)) {
+      assert.ok(MOBILE_PLACEHOLDER_INERT_KEYS.has(key) || contentHolders.has(key),
+        `placeholder constructor key "${key}" must be classified in MOBILE_PLACEHOLDER_INERT_KEYS`);
+    }
+  }
+}
+
 
 // --- Must-not: an answer visible to the predicate is never dropped ---
 {
