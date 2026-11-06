@@ -35,6 +35,8 @@ export type MediaAnalysisProgress = {
 };
 
 type AnalyzeVideoArgs = {
+  /** Trusted runtime session, never exposed in model tool schema. */
+  referenceSessionId?: string;
   file_path: string;
   prompt?: string;
   response_mode?: 'view' | 'report';
@@ -759,10 +761,13 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     let preserved: { path: string } | undefined;
     if (!preservationError) { try { preserved = await preserveAnalysisArtifacts({ ...preservationInput, analysis, status: 'complete' }); } catch (error: any) { preservationError = `Analysis manifest was not saved: ${String(error?.message || error).slice(0, 300)}`; } }
     let referenceCapture: any = 'disabled_until_library_controls_ready';
-    if (automaticReferenceCaptureReady()) {
+    if (automaticReferenceCaptureReady(getWorkspaceRoot())) {
       if (!preserved) referenceCapture = { status: 'skipped', reason: preservationError || 'Analysis manifest not saved' };
       else try {
-        const saved = getReferenceService(workspaceRoot).saveAnalysis({ operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path) });
+        if (!args.referenceSessionId) throw new Error('Reference capture requires a trusted runtime session');
+        const { assertPersonalReferenceCaller } = require('../gateway/resources/reference-library');
+        assertPersonalReferenceCaller(args.referenceSessionId);
+        const saved = getReferenceService(workspaceRoot).saveAnalysis({ operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path), sourceSession: args.referenceSessionId });
         referenceCapture = { status: 'saved', referenceId: saved.id };
       } catch (error: any) {
         // Capture failure never discards the completed analysis.

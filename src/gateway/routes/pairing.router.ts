@@ -203,7 +203,16 @@ function _safeCatalogSession(session: any): Record<string, unknown> {
         importedAt: String(externalImport.importedAt || '').slice(0, 40),
       },
     } : {}),
-    // Deliberately omit preview, history, workspace paths, project roots,
+    // The model that answered last, for the mobile drawer's provider logo.
+    // Only the provider id and model name: never routes, keys or settings.
+    // Without it every catalog-backed drawer row lost its logo (2026-11-05).
+    ...(session?.lastModel && typeof session.lastModel === 'object' && String(session.lastModel.providerId || '').trim() ? {
+      lastModel: {
+        providerId: String(session.lastModel.providerId).trim().slice(0, 80),
+        model: String(session.lastModel.model || '').trim().slice(0, 120),
+      },
+    } : {}),
+    // Deliberately omit history, workspace paths, project roots, model routes,
     // goals, and tool/runtime fields from the cross-origin catalog.
   };
 }

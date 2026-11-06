@@ -46,6 +46,17 @@ export function appendChatSteerWorkflowSplit({
   const start = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
   const entries = sess.processLog.slice(start);
   const traces = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
+  // A steer can arrive between a public token and the next tool event. Capture
+  // that visible buffer here; the tool-start mover has not run yet.
+  const pendingAnswer = String(st?.streamingAIText || '').trim();
+  // Deterministic id (no Date.now()) so a re-applied steer event cannot duplicate the captured text.
+  const stableSteerId = String(data.eventId || data.workflowGroupId || data.beforeMessageId || '').trim();
+  const commentaryId = `steer_commentary_${stableSteerId || `len_${pendingAnswer.length}`}`;
+  if (pendingAnswer && !traces.some((trace) => trace?.id === commentaryId)) traces.push({
+    id: commentaryId,
+    type: 'think', text: pendingAnswer, time: Date.now(),
+    extra: { source: 'agent_thought', visibility: 'user', reasoningKind: 'full_thought' },
+  });
   const groupId = String(data.workflowGroupId || '').trim() || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const text = String(steerText || '').trim();
   const previews = Array.isArray(data.attachmentPreviews) && data.attachmentPreviews.length
@@ -80,6 +91,8 @@ export function appendChatSteerWorkflowSplit({
     st.steerTimerAnchored = true;
     st.currentTurnStartIndex = continuationStart;
     st.liveTraceEntries = [];
+    st.streamingAIText = '';
+    st.finalResponseStarted = false;
     st.currentPreflightStatus = '';
     st.currentProgressLines = [];
     st.currentProgressThinkingText = '';

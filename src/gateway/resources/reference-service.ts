@@ -25,6 +25,7 @@ export class ReferenceService {
       if (existing.resourceId !== input.binding.resourceId || existing.versionId !== input.binding.versionId) throw new Error('Capture operation already saved different evidence');
       return existing;
     }
+    if (this.metadata.blocksResource(input.binding.resourceId) || (input.dependencies || []).some(binding => this.metadata.blocksResource(binding.resourceId))) throw new Error('This source was excluded from reference capture');
     const bindings = [input.binding, ...(input.dependencies || [])];
     if (!bindings.every(item => this.resources.referenceVersion(item.resourceId, item.versionId))) throw new Error('Saved evidence is unavailable or sensitive');
     const pending = this.metadata.pendingOperation(input.operationId);
@@ -44,7 +45,20 @@ export class ReferenceService {
     // This is synchronous: scheduled ResourceStore flush cannot run between attach and pending pin.
     this.metadata.prepare(reference, bindings);
     this.persistBindings(bindings);
-    return this.metadata.complete(input.operationId);
+    const saved = this.metadata.complete(input.operationId);
+    try {
+      const content = this.resources.referenceContent(saved.resourceId, saved.versionId);
+      if (content.version.snapshotKind === 'text') this.metadata.update(saved.id, { searchText: content.bytes.toString('utf8').slice(0, 24000) });
+    } catch { /* The saved evidence remains usable if indexing is unavailable. */ }
+    return saved;
+  }
+
+  saveText(input: { operationId: string; title: string; content: string; userQuote?: string; sourceSession?: string }): SavedReference {
+    const existing = this.metadata.findByOperation(input.operationId); if (existing) return existing;
+    const attached = this.resources.attach({ kind: 'file', title: input.title, mimeType: 'text/plain', origin: 'user_upload',
+      locator: { type: 'artifact', canonical: `reference-note:${input.operationId}` }, snapshotKind: 'text', content: input.content.slice(0, 100000) });
+    if (!attached.version) throw new Error('No note snapshot created');
+    return this.saveExisting({ ...input, binding: { resourceId: attached.resource.id, versionId: attached.version.id } });
   }
 
   private persistBindings(bindings: ReferenceBinding[]): void {
@@ -109,6 +123,7 @@ export class ReferenceService {
     if (!source.version || !run.version) throw new Error('Analysis snapshots unavailable');
     return this.saveExisting({ operationId: input.operationId, title: run.resource.title, sourceSession: input.sourceSession,
       binding: { resourceId: run.resource.id, versionId: run.version.id },
+      userQuote: manifest.analysisPrompt,
       dependencies: [{ resourceId: source.resource.id, versionId: source.version.id }],
     });
   }
@@ -135,5 +150,9 @@ export function getReferenceService(workspace: string): ReferenceService {
   return service;
 }
 
-/** Build readiness gate, not a hidden user setting. B+C must replace this with real controls. */
-export function automaticReferenceCaptureReady(): boolean { return AUTOMATIC_REFERENCE_CAPTURE_READY; }
+/** Forward-looking owner opt-in, stored with the canonical library metadata. */
+export function automaticReferenceCaptureReady(workspace?: string): boolean {
+  // Calls without a workspace remain off for backwards compatibility and health checks.
+  if (!workspace || !fs.existsSync(path.join(getResourceStore(workspace).rootDir, 'references.sqlite'))) return false;
+  try { return getReferenceService(workspace).metadata.settings().capture; } catch { return false; }
+}

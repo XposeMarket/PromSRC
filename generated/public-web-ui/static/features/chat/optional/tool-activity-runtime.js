@@ -173,9 +173,9 @@ export function setToolActivityDisclosureState(key, open) {
   return undefined;
 }
 
-export function applyToolActivityEvent(entries, phase, payload = {}) {
-  if (feature) return feature.applyToolActivityEvent(entries, phase, payload);
-  defer((module) => module.applyToolActivityEvent(entries, phase, payload));
+export function applyToolActivityEvent(entries, phase, payload = {}, knownEntries = null) {
+  if (feature) return feature.applyToolActivityEvent(entries, phase, payload, knownEntries);
+  defer((module) => module.applyToolActivityEvent(entries, phase, payload, knownEntries));
   return null;
 }
 
