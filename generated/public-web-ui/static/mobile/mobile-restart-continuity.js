@@ -8,6 +8,8 @@
 // This lives outside mobile-chat-page-runtime.js so the restart contract is
 // reviewable on its own and the page runtime stays under its module ceiling.
 
+import { foldMobileQuestionOnlyRows, isMobileQuestionOnlyRow } from './mobile-question-rows.js';
+
 export const RESTART_CONTINUITY_FLAG = '_pmRestartContinuity';
 export const RESTART_CONTINUITY_LABEL = 'Gateway restarting — turn will continue';
 
@@ -20,6 +22,9 @@ export const RESTART_CONTINUITY_LABEL = 'Gateway restarting — turn will contin
  */
 export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
   if (!turn || turn.role !== 'ai') return false;
+  // A question-only placeholder is hidden (the composer owns the card); it
+  // must never become the live row that recovery replays the stream into.
+  if (isMobileQuestionOnlyRow(turn)) return false;
   if (turn.streaming === true) return true;
   if (turn._pmFinalReceived === true || turn._pmServerAuthoredFinal === true || turn._pmAbortAcknowledged === true) return false;
   if (String(turn.workflowPart || '') === 'before_interruption') return false;
@@ -37,6 +42,13 @@ export function canReviveRecoveryTurn(thread, turn, clientRequestId = '') {
   const index = list.lastIndexOf(turn);
   if (index < 0) return false;
   for (let i = index + 1; i < list.length; i += 1) {
+    // The run's own question-only row sits after its live row; it is folded
+    // onto the revived row, so it does not end the request.
+    if (list[i]?.role === 'ai' && isMobileQuestionOnlyRow(list[i])) continue;
+    // A stray empty placeholder of this request (left by an earlier reconnect)
+    // is collapsed onto the revived row; reviving it instead hid the trace.
+    if (isEmptyLiveRow(list[i]) && (!String(list[i]._clientRequestId || '').trim()
+      || String(list[i]._clientRequestId || '').trim() === expected)) continue;
     if (list[i]?.role === 'user' || list[i]?.role === 'ai') return false;
   }
   return true;
@@ -415,7 +427,9 @@ export function reuseEmptyLiveRow(thread, clientRequestId = '') {
  */
 export function collapseEmptyLiveRows(thread, keep) {
   if (!Array.isArray(thread) || !keep) return 0;
-  let removed = 0;
+  // The request's pending question belongs on its live row, not on a hidden
+  // question-only sibling (which hid the trace and blocked cleanup).
+  let removed = isMobileQuestionOnlyRow(keep) ? 0 : foldMobileQuestionOnlyRows(thread, keep);
   for (let i = thread.length - 1; i >= 0; i -= 1) {
     const row = thread[i];
     if (row?.role === 'user' && !isChatSteerUser(row)) break;

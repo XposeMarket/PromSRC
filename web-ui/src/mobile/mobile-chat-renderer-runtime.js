@@ -14,6 +14,7 @@ import { normalizeMobileImage } from './mobile-image-shrink.js';
 import { swapKeyedTimelineSession } from '../features/chat/timeline/keyed-dom.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
+import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle, renderMobileReasoningLiveGroup } from './mobile-reasoning-summary-fold.js';
 import { mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
 import { isSteerFrozenRow } from './mobile-restart-continuity.js';
 import { agentModelLabel, agentAvatarHtml } from '../components/provider-logo.js';
@@ -356,7 +357,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
       return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
     }
-    const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+    // Name the tool when the entry knows it; never a bare "Tool" label.
+    const toolName = String(entry?.extra?.toolName || entry?.extra?.action || entry?.toolName || entry?.action || '')
+      .replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, (char) => char.toUpperCase());
+    const label = type === 'vision' ? 'Vision'
+      : type === 'result' ? (toolName ? `${toolName} result` : 'Step result')
+        : type === 'error' ? (toolName ? `${toolName} error` : 'Step error')
+          : (toolName || 'Step');
     const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
     return `<div class="pm-live-segment ${escapeHtml(type)}"${attr}><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
   }
@@ -948,6 +955,8 @@ export function createMobileChatRendererRuntime(context = {}) {
       : null;
     let groups = _mobileTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
     if (!groups.length) return '';
+    // OpenAI reasoning summaries overwrite one live label / sit in their tool phase.
+    if (!kindFilter) groups = foldMobileReasoningSummaryGroups(groups, { streaming });
     if (!streaming
       && !groups.some((group) => (
         group.kind === 'tools'
@@ -977,6 +986,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       ), -1);
     }
     return `<div class="pm-trace-timeline">${groups.map((group, index) => {
+      if (group.kind === 'reasoning-live') return renderMobileReasoningLiveGroup(group, { renderLabel: renderThinkingState });
       if (group.kind === 'thought' || group.kind === 'thought-summary') {
         const isSummaryThought = group.kind === 'thought-summary';
         const isLiveThought = streaming && index === groups.length - 1;
@@ -1011,12 +1021,14 @@ export function createMobileChatRendererRuntime(context = {}) {
       // The model summary belongs to the tool group it narrates. Looking only
       // at the newest raw event made a tool_call replace that summary with the
       // synthetic action label (for example, "Request Tool Category").
-      const progressSummary = _mobileTraceProgressSummary(group.entries);
+      const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries)
+        || _mobileTraceProgressSummary(group.entries);
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
       const visibleEntries = _mobileVisibleTraceEntries(group.entries);
       // Preserve the safe summary body in the same segment as its tools.
       const toolBodyEntries = visibleEntries;
+      const bodyTraceEntries = group.reasoningEntries?.length ? [...group.reasoningEntries, ...toolBodyEntries] : toolBodyEntries;
       const callCount = toolBodyEntries.filter((entry) => /^(operation|result)$/.test(entry?.activity?.kind)).length;
       const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
       const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
@@ -1027,7 +1039,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         // tool phase inline, even while a model progress summary is active;
         // otherwise that summary turns the entire phase into "24 items".
         const liveLabel = progressSummary ? `<div class="pm-trace-phase-label" aria-live="polite">${renderThinkingState(progressSummary)}</div>` : '';
-        return `<div class="pm-trace-tool-rows pm-trace-tool-body" data-pm-trace-group="${escapeHtml(group.id)}">${liveLabel}<div class="pm-live-trace">${toolBodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`;
+        return `<div class="pm-trace-tool-rows pm-trace-tool-body" data-pm-trace-group="${escapeHtml(group.id)}">${liveLabel}<div class="pm-live-trace">${bodyTraceEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`;
       }
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
@@ -1036,7 +1048,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>${isLiveCurrent ? waitCountdownHtml(toolBodyEntries) : ''}
         </summary>
-        <div class="pm-trace-tool-body">${_renderMobileLiveTrace(toolBodyEntries)}</div>
+        <div class="pm-trace-tool-body">${_renderMobileLiveTrace(bodyTraceEntries)}</div>
       </details>`;
     }).join('')}</div>`;
   }
