@@ -46,8 +46,8 @@ const files = {
   'team@home/notes.md': 'team@home/notes.md',
   'logs/app.log.1': 'logs/app.log.1',
   'reports/2026-11-04.md': 'reports/2026-11-04.md',
-  'C:\\Users\\me\\workspace\\out.json': 'C:\\Users\\me\\workspace\\out.json',
-  'file:///C:/Users/me/report.pdf': 'C:/Users/me/report.pdf',
+  'C:\\Users\\test-user\\workspace\\out.json': 'C:\\Users\\test-user\\workspace\\out.json',
+  'file:///C:/Users/test-user/report.pdf': 'C:/Users/test-user/report.pdf',
 };
 for (const [href, expected] of Object.entries(files)) {
   assert.equal(workspaceFilePathFromHref(href), expected, `should treat ${href} as a workspace file`);
