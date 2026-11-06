@@ -5090,6 +5090,14 @@ Do not produce prose. Use the canonical thread tool now.` });
     // only 168 of 1,057 multi-call batches overlapping under all-or-nothing.
     const lazyParallelGroupByCall = new Map<any, ParallelCallEntry[]>();
     const lazyParallelGroupsRun = new Set<ParallelCallEntry[]>();
+    // Explicit dispatch identity, not inferred from neighbouring timestamps.
+    const parallelMetaByCall = new Map<any, { parallelGroupId: string; parallelIndex: number; parallelSize: number }>();
+    let parallelGroupOrdinal = 0;
+    const registerParallelGroup = (entries: ParallelCallEntry[]) => {
+      const parallelGroupId = `${entries[0].toolCallId}:r${round}:g${parallelGroupOrdinal++}`;
+      entries.forEach((entry, parallelIndex) => parallelMetaByCall.set(entry.sourceCall, { parallelGroupId, parallelIndex, parallelSize: entries.length }));
+    };
+    if (canRunParallelBatch) registerParallelGroup(parallelCallEntries);
     const lazyParallelAllowed = !canRunParallelBatch
       && !parallelBatchHasRefusal
       && parallelCallEntries.length > 1
@@ -5105,6 +5113,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       for (const group of partitionToolCallsForParallelExecution(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall))) {
         if (!group.parallel || group.calls.length < 2) continue;
         const entries = group.calls.map((parallelCall) => entryByParallelCall.get(parallelCall)!).filter(Boolean);
+        registerParallelGroup(entries);
         for (const entry of entries) lazyParallelGroupByCall.set(entry.sourceCall, entries);
       }
     }
@@ -5144,6 +5153,7 @@ Do not produce prose. Use the canonical thread tool now.` });
           toolCallId: entry.toolCallId || undefined,
           tool_call_id: entry.toolCallId || undefined,
           parallel: true,
+          ...parallelMetaByCall.get(entry.sourceCall),
         });
       }
       const parallelOutcomes = await executeToolCallsInParallel(
@@ -5569,6 +5579,7 @@ Do not produce prose. Use the canonical thread tool now.` });
           stepNum: allToolResults.length + 1,
           toolCallId: toolCallId || undefined,
           tool_call_id: toolCallId || undefined,
+          ...parallelMetaByCall.get(call),
         });
       }
 

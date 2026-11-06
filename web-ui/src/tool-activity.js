@@ -159,9 +159,65 @@ export function setToolActivityDisclosureState(key, open) {
   }
 }
 
+// Geometry is measured from actual icon bounds: wrapped labels, theme icon
+// sizes and expanded details must never make the connector touch either icon.
+export function refreshParallelToolConnectors(root = document) {
+  for (const row of root.querySelectorAll('.tool-activity-wrap[data-parallel-group]')) {
+    const next = row.nextElementSibling;
+    const same = next?.classList.contains('tool-activity-wrap')
+      && next.dataset.parallelGroup === row.dataset.parallelGroup
+      && next.dataset.parallelCall && next.dataset.parallelCall !== row.dataset.parallelCall;
+    const icon = row.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo');
+    const nextIcon = same ? next.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo') : null;
+    let line = row.querySelector(':scope > .tool-parallel-connector');
+    const a = icon?.getBoundingClientRect();
+    const b = nextIcon?.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    const height = a && b ? b.top - a.bottom - 6 : 0;
+    if (!same || !a?.width || !b?.width || height <= 0) { line?.remove(); continue; }
+    if (!line) {
+      line = row.ownerDocument.createElement('span');
+      line.className = 'tool-parallel-connector';
+      line.setAttribute('aria-hidden', 'true');
+      row.appendChild(line);
+    }
+    const css = `position:absolute;pointer-events:none;width:1px;left:${a.left + a.width / 2 - box.left - .5}px;top:${a.bottom + 3 - box.top}px;height:${height}px;background:color-mix(in srgb,var(--pm-accent,var(--accent,#888)) 55%,transparent)`;
+    if (line.style.cssText !== css) line.style.cssText = css;
+  }
+}
+
+function installParallelToolConnectors(root) {
+  const win = root.defaultView || root.ownerDocument?.defaultView || window;
+  let queued = false;
+  const watched = new Set();
+  const resize = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(schedule) : null;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    win.requestAnimationFrame(() => {
+      queued = false;
+      refreshParallelToolConnectors(root);
+      for (const row of watched) if (!row.isConnected) { resize?.unobserve(row); watched.delete(row); }
+      for (const row of root.querySelectorAll('.tool-activity-wrap[data-parallel-group]')) {
+        if (!watched.has(row)) { watched.add(row); resize?.observe(row); }
+      }
+    });
+  }
+  const observer = new win.MutationObserver(records => {
+    if (records.some(record => !record.target?.classList?.contains('tool-parallel-connector')
+      && (record.target?.closest?.('.pm-live-trace,.live-turn-trace,.tool-activity-wrap')
+        || [...record.addedNodes].some(node => node.nodeType === 1 && (node.matches?.('[data-parallel-group]') || node.querySelector?.('[data-parallel-group]')))))) schedule();
+  });
+  observer.observe(root.documentElement || root, { childList: true, subtree: true });
+  root.addEventListener('toggle', schedule, true);
+  win.addEventListener('resize', schedule);
+  schedule();
+}
+
 export function installToolActivityExpansionPersistence(root = typeof document !== 'undefined' ? document : null) {
   if (!root || typeof window === 'undefined' || window.__toolActivityExpansionPersistenceInstalled) return;
   window.__toolActivityExpansionPersistenceInstalled = true;
+  installParallelToolConnectors(root);
   root.addEventListener('toggle', (event) => {
     const details = event.target;
     const key = details?.dataset?.toolDisclosureKey;
@@ -755,6 +811,11 @@ function makeActivity(payload, phase, previous = null) {
   }
   return {
     ...(previous || {}),
+    ...(typeof payload.parallelGroupId === 'string' && payload.parallelGroupId && Number(payload.parallelSize) >= 2 ? {
+      parallelGroupId: payload.parallelGroupId,
+      parallelIndex: Number(payload.parallelIndex),
+      parallelSize: Number(payload.parallelSize),
+    } : {}),
     kind: phase === 'result' ? 'result' : 'operation',
     callId,
     action,
@@ -1470,7 +1531,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   const rowDisclosureKey = inlineDisclosureKey || (terminalRow ? `terminal-row:${activityKey}` : '');
   const rowOpen = inlineDisclosureKey ? inlineOpen : (terminalRow && disclosureState()?.get(rowDisclosureKey) === true);
   if (inlineDetailHtml || terminalRow) {
-    return `<details class="tool-activity-wrap tool-activity-disclosure${terminalRow ? ' tool-activity-terminal-row' : ''}" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(rowDisclosureKey)}"${rowOpen ? ' open' : ''}>
+    return `<details class="tool-activity-wrap tool-activity-disclosure${terminalRow ? ' tool-activity-terminal-row' : ''}" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}"${activity.parallelGroupId ? ` data-parallel-group="${esc(activity.parallelGroupId)}" data-parallel-call="${esc(activity.callId || activityKey)}"` : ''} data-tool-disclosure-key="${esc(rowDisclosureKey)}"${rowOpen ? ' open' : ''}>
   <summary class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span><i class="tool-activity-chevron" aria-hidden="true">›</i></div>
   </summary>
@@ -1478,7 +1539,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   ${terminalHtml}
   </details>`;
   }
-  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}">
+  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}"${activity.parallelGroupId ? ` data-parallel-group="${esc(activity.parallelGroupId)}" data-parallel-call="${esc(activity.callId || activityKey)}"` : ''}>
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span></div>
   </div>

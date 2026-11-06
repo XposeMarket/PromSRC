@@ -118,55 +118,39 @@ const progress = (id, text) => ({ id, type: 'think', text, extra: { source: 'age
 const preamble = (id, text) => ({ id, type: 'preamble', text, extra: { source: 'agent_thought', visibility: 'user', reasoningKind: 'full_thought' } });
 const tool = (id, label) => ({ id, type: 'tool', text: label, activity: { kind: 'operation', callId: id } });
 
-const s1 = summary('s1', '**Inspecting the renderer**\n\nReading the mobile trace grouping code.');
-const s2 = summary('s2', '**Checking reasoning slot**\n\nComparing with the Anthropic path.');
-const s3 = summary('s3', '**Writing the fix**\n\nApplying the fold.');
-const reasoningGroups = (groups) => groups.filter((group) => group.kind === 'thought-summary'
-  && group.entries.some(isMobileReasoningSummaryEntry));
+const s1 = summary('s1', '**Inspecting the renderer**\nReading source.');
+const s2 = summary('s2', '**Checking reasoning slot**\nComparing providers.');
+const s3 = summary('s3', '**Writing the fix**\nApplying changes.');
 
 {
-  // Live: summary -> tool -> latest summary.
-  const folded = foldMobileReasoningSummaryGroups(groupTrace([s1, tool('t1', 'Read file'), s2]), { streaming: true });
-  assert.equal(reasoningGroups(folded).length, 0, 'no reasoning prose may remain as a standalone timeline paragraph');
-  const live = folded.filter((group) => group.kind === 'reasoning-live');
-  assert.equal(live.length, 1, 'exactly one live reasoning label');
-  assert.equal(live[0].title, 'Checking reasoning slot', 'the live label shows the LATEST summary title');
-  assert.equal(live[0].id, MOBILE_REASONING_LIVE_GROUP_ID);
-  const tools = folded.filter((group) => group.kind === 'tools');
-  assert.equal(tools.length, 1);
-  assert.deepEqual(tools[0].reasoningEntries.map((entry) => entry.id), ['s1'],
-    'the earlier summary moves inside its tool phase body');
-
-  // Overwrite: the next summary replaces the label in the same keyed slot.
-  const next = foldMobileReasoningSummaryGroups(groupTrace([s1, tool('t1', 'Read file'), s2, s3]), { streaming: true });
-  const nextLive = next.filter((group) => group.kind === 'reasoning-live');
-  assert.equal(nextLive.length, 1);
-  assert.equal(nextLive[0].id, live[0].id, 'same keyed group id, so the label is overwritten in place');
-  assert.equal(nextLive[0].title, 'Writing the fix');
-  assert.equal(next.length, folded.length, 'a newer summary must not add a timeline row');
+  // Interleaved summaries and tool batches must update ONE header, never split.
+  const entries = [s1, tool('t1', 'Read'), s2, tool('t2', 'Edit'), s3, tool('t3', 'Check')];
+  for (const streaming of [true, false]) {
+    const folded = foldMobileReasoningSummaryGroups(groupTrace(entries), { streaming });
+    assert.equal(folded.length, 1);
+    assert.equal(folded[0].kind, 'tools');
+    assert.equal(folded[0].entries.length, 3);
+    assert.equal(mobileReasoningSummaryTitle(folded[0].reasoningEntries), 'Writing the fix');
+    assert.deepEqual(folded[0].reasoningEntries.map(e => e.id), ['s1', 's2', 's3']);
+  }
+  const before = foldMobileReasoningSummaryGroups(groupTrace(entries.slice(0, 2)), { streaming: true });
+  const after = foldMobileReasoningSummaryGroups(groupTrace(entries), { streaming: true });
+  assert.equal(before[0].id, after[0].id, 'header/body keep their disclosure key across batches');
+  const trailing = foldMobileReasoningSummaryGroups(groupTrace([tool('t1','Read'), s1, s2]), { streaming: true });
+  assert.equal(trailing.length, 1, 'trailing summary updates tool header, not separate live label');
+  assert.equal(trailing[0].kind, 'tools');
+  assert.equal(mobileReasoningSummaryTitle(trailing[0].reasoningEntries), 'Checking reasoning slot');
+  const boundary = foldMobileReasoningSummaryGroups(groupTrace([tool('t1','Read'), s1, preamble('p2','Found it'), s2, tool('t2','Check')]), { streaming:true });
+  assert.equal(boundary.filter(g => g.kind === 'tools').length, 2);
+  assert.equal(boundary.filter(g => g.kind === 'thought').length, 1);
+  assert.equal(mobileReasoningSummaryTitle(boundary[0].reasoningEntries), 'Inspecting the renderer');
+  assert.equal(mobileReasoningSummaryTitle(boundary[2].reasoningEntries), 'Checking reasoning slot');
+  const pending = foldMobileReasoningSummaryGroups(groupTrace([s1,s2]), {streaming:true});
+  assert.equal(pending.length,1);
+  assert.equal(pending[0].kind,'reasoning-live');
+  assert.equal(pending[0].title,'Checking reasoning slot');
 }
 
-{
-  // Live: summary then a running tool. The tool header owns the summary title.
-  const folded = foldMobileReasoningSummaryGroups(groupTrace([s1, tool('t1', 'Read file'), s2, tool('t2', 'Edit file')]), { streaming: true });
-  assert.equal(folded.some((group) => group.kind === 'reasoning-live'), false);
-  const last = folded[folded.length - 1];
-  assert.equal(last.kind, 'tools');
-  assert.equal(mobileReasoningSummaryTitle(last.reasoningEntries), 'Checking reasoning slot',
-    'the running tool group header shows the summary that narrates it');
-}
-
-{
-  // Completed with tools: every summary sits in a collapsible tool body.
-  const folded = foldMobileReasoningSummaryGroups(groupTrace([
-    s1, tool('t1', 'Read file'), s2, tool('t2', 'Edit file'), s3,
-  ]), { streaming: false });
-  assert.equal(reasoningGroups(folded).length, 0);
-  assert.equal(folded.some((group) => group.kind === 'reasoning-live'), false, 'no live label after the turn ends');
-  const tools = folded.filter((group) => group.kind === 'tools');
-  assert.deepEqual(tools.map((group) => (group.reasoningEntries || []).map((entry) => entry.id)), [['s1'], ['s2', 's3']],
-    'trailing summaries stay with the latest tool phase');
-}
 
 {
   // Must not: Prom narration, preambles and full thoughts render exactly as before.
