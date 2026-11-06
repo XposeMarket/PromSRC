@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
+import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../web-ui/src/mobile/mobile-reasoning-summary-fold.js';
 
 const desktopPath = new URL('../web-ui/src/pages/ChatPage.js', import.meta.url);
 const desktop = fs.readFileSync(desktopPath, 'utf8');
@@ -71,6 +72,9 @@ assert.equal(testState.liveTraceEntries.length, 3, 'consecutive summary chunks s
 assert.equal(testState.liveTraceEntries[2].text, 'Reading the next result further');
 
 const renderContext = {
+  waitCountdownHtml: () => '',
+  foldMobileReasoningSummaryGroups,
+  mobileReasoningSummaryTitle,
   liveTraceGroups(entries) {
     const groups = [];
     let activeToolGroup = null;
@@ -91,7 +95,7 @@ const renderContext = {
         continue;
       }
       activeToolGroup = null;
-      const kind = isProgress ? 'thought-summary' : 'thought';
+      const kind = isProgress || isSummary ? 'thought-summary' : 'thought';
       const previous = groups.at(-1);
       if (previous?.kind === kind) previous.entries.push(entry);
       else groups.push({ kind, entries: [entry] });
@@ -129,7 +133,12 @@ const renderedThoughtBeforeTool = renderContext.renderLiveTurnTrace([
 ], { streaming: true });
 assert.match(renderedThoughtBeforeTool, /Planning the next step/, 'a tool event must not erase the preceding thought group');
 assert.match(renderedThoughtBeforeTool, /Session in browser/, 'the tool group must remain rendered after a thought');
-assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 2, 'a pre-tool mutable summary must remain a separate group from the tool');
+assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 2, 'unclassified progress remains a separate boundary; it must not be mistaken for an explicit summary');
+const renderedExplicitSummary = renderContext.renderLiveTurnTrace([
+  { id: 'explicit-summary', type: 'think', text: 'Planning the next step', extra: { source: 'reasoning_summary', visibility: 'user', reasoningKind: 'summary' } },
+  { id: 'tool-after-summary', type: 'tool', text: 'Session in browser', activity: { kind: 'operation', action: 'browser_open' } },
+], { streaming: true });
+assert.equal((renderedExplicitSummary.match(/data-live-trace-group=/g) || []).length, 1, 'an explicit public summary labels the tool phase');
 
 const renderedDurableThoughtAndLiveSummary = renderContext.renderLiveTurnTrace([
   {
@@ -184,7 +193,7 @@ const similarSummaryAndThought = visibleContext.visibleLiveTraceEntries([
   { id: 'summary', type: 'think', text: 'Investigating the current model behavior', extra: { source: 'agent_progress', reasoningKind: 'summary' } },
   { id: 'thought', type: 'think', text: 'Investigating the current model behavior', extra: { source: 'agent_thought', reasoningKind: 'full_thought' } },
 ]);
-assert.equal(similarSummaryAndThought.length, 2,
+assert.equal(similarSummaryAndThought.some(entry => entry.id === 'thought'), true,
   'a full thought that resembles the preceding summary must not be deduped away');
 
 const transientContext = {};
@@ -197,25 +206,25 @@ assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
   type: 'preamble',
   text: 'The durable thought streamed before the tool.',
   extra: { visibility: 'user', source: 'reasoning_summary' },
-}), true, 'the old summary metadata must remain transient for provider summaries');
+}), false, 'explicit provider summaries remain available for the stable header');
 assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
   type: 'preamble',
   text: 'The durable thought streamed before the tool.',
   extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
 }), false, 'moved pre-tool prose must survive transient-summary cleanup');
 
-assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,180}msg\.thinking \|\| msg\.text/);
+assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,180}msg\.text \|\| msg\.thinking/);
 assert.match(desktop, /source: visibility === 'summary' \? 'reasoning_summary' : 'agent_thought'/);
 assert.match(desktop, /function setDesktopLiveProgressNarration\([\s\S]*source: 'agent_progress'/);assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
 for (const text of [desktopSendRuntime, generatedDesktopSendRuntime]) {
   assert.match(text, /Commentary that already streamed visibly[\s\S]{0,260}source: 'agent_thought', reasoningKind: 'full_thought'/,
     'pre-tool assistant commentary must be durable on the locally-owned SSE path');
 }
-assert.match(desktop, /const isMutableProgress = isDesktopMutableProgressTraceEntry\(entry\)/);
+assert.match(desktop, /function isDesktopMutableProgressTraceEntry\(entry\)/);
 assert.doesNotMatch(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/,
   'the first tool event must not absorb and erase a preceding thought group');
-assert.match(desktop, /const progressSummary = desktopTraceProgressSummary\(group\.entries\)/);
-assert.match(desktop, /const toolBodyEntries = visibleEntries\.filter\(\(entry\) => !isDesktopMutableProgressTraceEntry\(entry\)\)/);
+assert.match(desktop, /const progressSummary = mobileReasoningSummaryTitle\(group\.reasoningEntries\) \|\| desktopTraceProgressSummary\(group\.entries\)/);
+assert.match(desktop, /visibleEntries\.filter\(\(entry\) => !isDesktopMutableProgressTraceEntry\(entry\)\)/);
 assert.doesNotMatch(desktop, /if \(duplicatesVisibleReasoning\) return 'Reasoning';/);
 assert.doesNotMatch(desktop, /groups = groups\.filter\(\(group\) => !\([\s\S]{0,220}activeProgressSummary/,
   'an old progress summary must not remove a completed thought group when a tool follows it');

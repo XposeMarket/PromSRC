@@ -42,70 +42,53 @@ export function mobileReasoningSummaryTitle(entries) {
   return '';
 }
 
-// Render-time fold over _mobileTraceGroups output. Data and caches keep every
-// per-phase summary; only the presentation changes:
-// - summaries waiting for a tool phase move into that tool group
-//   (reasoningEntries: full text in the collapsible body, latest title in the
-//   live header);
-// - when a summary is the newest live activity it becomes one live label
-//   with a stable id, so the next summary overwrites it in place;
-// - a completed turn without any tool phase keeps its original groups (they
-//   already sit inside the collapsed work drawer).
+// Safe provider summaries are mutable headers, NOT narration boundaries.
+// Keep one stable tool phase until actual commentary/vision/compaction arrives.
+// This reducer is shared by desktop and mobile, including restored history.
 export function foldMobileReasoningSummaryGroups(groups, { streaming = false } = {}) {
   const list = Array.isArray(groups) ? groups.filter(Boolean) : [];
-  if (!list.some((group) => group.kind === 'thought-summary'
-    && (group.entries || []).some(isMobileReasoningSummaryEntry))) return list;
+  if (!list.some((group) => (group.entries || []).some(isMobileReasoningSummaryEntry))) return list;
   if (!streaming && !list.some((group) => group.kind === 'tools')) return list;
-  const lastGroup = list[list.length - 1];
-  const lastEntries = Array.isArray(lastGroup?.entries) ? lastGroup.entries : [];
-  const latestIsReasoning = Boolean(streaming
-    && lastGroup?.kind === 'thought-summary'
-    && isMobileReasoningSummaryEntry(lastEntries[lastEntries.length - 1]));
   const out = [];
-  let pending = [];
-  const attachToLatestToolGroup = (entries) => {
-    for (let index = out.length - 1; index >= 0; index -= 1) {
-      if (out[index].kind !== 'tools') continue;
-      out[index] = { ...out[index], reasoningEntries: [...(out[index].reasoningEntries || []), ...entries] };
-      return true;
-    }
-    return false;
-  };
-  list.forEach((group) => {
+  let phase = null;
+  const appendBoundary = (group) => { phase = null; out.push(group); };
+  for (const group of list) {
     if (group.kind === 'thought-summary') {
-      const entries = Array.isArray(group.entries) ? group.entries : [];
-      const reasoning = entries.filter(isMobileReasoningSummaryEntry);
-      if (!reasoning.length) {
-        out.push(group);
-        return;
+      for (const entry of group.entries || []) {
+        if (!isMobileReasoningSummaryEntry(entry)) {
+          appendBoundary({ ...group, entries: [entry] });
+          continue;
+        }
+        if (!phase) {
+          phase = { kind: 'reasoning-live', id: `reasoning_phase_${entry.id || group.id || out.length}`, entries: [], reasoningEntries: [] };
+          out.push(phase);
+        }
+        phase.reasoningEntries.push(entry);
+        if (phase.kind === 'reasoning-live') phase.entries.push(entry);
+        phase.title = mobileReasoningSummaryTitle(phase.reasoningEntries);
       }
-      pending.push(...reasoning);
-      const rest = entries.filter((entry) => !isMobileReasoningSummaryEntry(entry));
-      if (rest.length) out.push({ ...group, entries: rest });
-      return;
+      continue;
     }
-    if (group.kind === 'tools' && pending.length) {
-      out.push({ ...group, reasoningEntries: [...(group.reasoningEntries || []), ...pending] });
-      pending = [];
-      return;
+    if (group.kind === 'tools') {
+      if (!phase) {
+        phase = { ...group, entries: [...(group.entries || [])], reasoningEntries: [...(group.reasoningEntries || [])] };
+        out.push(phase);
+      } else {
+        if (phase.kind === 'reasoning-live') {
+          // Keep every tool-group field (status, live flags, metadata); keep the phase id,
+          // header title and accumulated reasoning entries so the header stays stable.
+          const { id: _id, kind: _kind, entries: _entries, reasoningEntries: _reasoning, title: _title, ...toolFields } = group;
+          Object.assign(phase, toolFields, { kind: 'tools', entries: [] });
+        }
+        phase.entries.push(...(group.entries || []));
+        phase.reasoningEntries.push(...(group.reasoningEntries || []));
+      }
+      continue;
     }
-    out.push(group);
-  });
-  if (pending.length) {
-    if (latestIsReasoning) {
-      out.push({
-        kind: 'reasoning-live',
-        id: MOBILE_REASONING_LIVE_GROUP_ID,
-        entries: pending,
-        title: mobileReasoningSummaryTitle(pending),
-      });
-    } else {
-      // Not the newest activity: keep the text with the latest tool phase.
-      // A live turn without any tool phase yet simply hides it until one
-      // exists; the completed drawer still shows it.
-      attachToLatestToolGroup(pending);
-    }
+    appendBoundary(group);
   }
+  // A non-streaming (restored/completed) trailing summary phase is static history, not a live thinking label.
+  if (!streaming) for (const group of out) if (group.kind === 'reasoning-live') group.kind = 'thought-summary';
   return out;
 }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -21,6 +21,9 @@ const mobileCss = [
   read('web-ui/src/styles/mobile-shell.css'),
 ].join('\n');
 
+const { mobileReasoningSummaryTitle } = await import(pathToFileURL(path.join(root, 'web-ui/src/mobile/mobile-reasoning-summary-fold.js')).href);
+assert.equal(mobileReasoningSummaryTitle([{ text: '**Inspecting the renderer**\nbody' }, { text: '**Newest heading**' }]), 'Newest heading', 'the newest safe summary heading must title its tool phase');
+assert.equal(mobileReasoningSummaryTitle([]), '', 'an empty summary list must yield no title');
 assert.match(renderer, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
 assert.doesNotMatch(pages, /function _mobileTracePresentationEntries\(/, 'chat activity presentation must stay out of the static page chunk');
 assert.match(renderer, /<div class="pm-trace-thought-group"/, 'assistant commentary remains an ordinary visible activity block');
@@ -40,9 +43,9 @@ assert.doesNotMatch(renderer, /`Thought\$\{duration/, 'generic Thought duration 
 assert.doesNotMatch(renderer, /: 'Thought';/, 'generic Thought labels must stay removed');
 assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary journal/, 'live progress must own the active summary label');
 assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
-assert.doesNotMatch(renderer, /if \(isMutableProgress && activeToolGroup\)/, 'successive summaries must split tool phases');
+assert.doesNotMatch(renderer, /if \(isMutableProgress && activeToolGroup\)/, 'safe provider summaries are mutable headers and must not split a stable tool phase (only real commentary, vision, or compaction boundaries split)');
 assert.doesNotMatch(renderer, /const pendingSummary = previous\?\.kind === 'thought-summary'/, 'narration must remain inline outside the following tool disclosure');
-assert.match(renderer, /const progressSummary = _mobileTraceProgressSummary\(group\.entries\)/, 'tool groups must use the model summary attached to that group');
+assert.match(renderer, /const progressSummary = mobileReasoningSummaryTitle\(group\.reasoningEntries\)\s+\|\| _mobileTraceProgressSummary\(group\.entries\)/, 'tool groups must prefer the reasoning-summary title attached to that group, falling back to its own progress summary');
 assert.match(renderer, /const toolBodyEntries = visibleEntries;/, 'safe summary bodies must be visible inside their tool phase');
 assert.match(renderer, /String\(extra\.source \|\| entry\?\.source \|\| ''\)\.toLowerCase\(\) !== 'agent_progress'/, 'recovered summaries must retain their model-progress ownership');
 assert.match(renderer, /pm-trace-tool-icon\$\{isLiveCurrent \? ' is-live' : ''\}/, 'active tool rows must expose a live status indicator');

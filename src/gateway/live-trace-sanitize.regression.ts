@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readChatRouterSource } from '../testing/chat-router-source';
+import { isTransientLiveTraceEntryForUi, sanitizeLiveTraceEntriesForUi } from './routes/chat/shared';
 
 /**
  * Regression guard for the mobile live-trace payload cap.
@@ -47,36 +48,7 @@ assert.ok(
   'full/fullProcess reads must opt out of live-trace filtering',
 );
 
-// Guard 4: behavioural check of the predicate itself.
-function isTransientLiveTraceEntryForUi(entry: any): boolean {
-  if (!entry || typeof entry !== 'object') return false;
-  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const str = (value: any) => String(value || '').trim().toLowerCase();
-  const type = str(entry.type || entry.kind);
-  const event = str(entry.event || extra.event || extra.eventType);
-  const source = str(entry.source || extra.source);
-  const visibility = str(entry.visibility || extra.visibility);
-  const reasoningKind = str(entry.reasoningKind || extra.reasoningKind || extra.presentationKind);
-  if (reasoningKind === 'full_thought') return false;
-  return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-    || reasoningKind === 'summary'
-    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
-}
-
-const LIVE_TRACE_HEAD_RETENTION_RATIO = 0.35;
-
-function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
-  const durable = entries.filter((entry) => !isTransientLiveTraceEntryForUi(entry));
-  if (!(limit > 0) || durable.length <= limit) return durable;
-  const head = Math.min(limit - 1, Math.max(1, Math.floor(limit * LIVE_TRACE_HEAD_RETENTION_RATIO)));
-  const tail = limit - head;
-  return [...durable.slice(0, head), ...durable.slice(durable.length - tail)];
-}
-
-// Durable content must survive.
+// Guard 4: behavioural check of the PRODUCTION predicate and cap (not a copy).
 const fullThought = { type: 'think', reasoningKind: 'full_thought', text: 'durable reasoning' };
 const toolEntry = { type: 'tool_call', text: 'ran a tool' };
 const assistantText = { type: 'text', text: 'visible answer' };
@@ -87,15 +59,25 @@ const fullThoughtWithSummaryVisibility = {
   reasoningKind: 'full_thought',
   text: 'durable reasoning kept',
 };
+// Explicit public summary (the shape the gateway writes for reasoning_summary) must survive reload.
+const publicSummary = {
+  type: 'think',
+  text: 'Verifying stream continuity',
+  extra: { source: 'reasoning_summary', visibility: 'user', reasoningKind: 'summary', event: 'reasoning_summary' },
+};
+// Private thinking is never shown, even if a summary label is present.
+const privateThought = { type: 'think', visibility: 'private', text: 'secret reasoning' };
 
 // Transient streaming chatter must be dropped.
 const summaryDelta = { type: 'reasoning_summary_delta', text: 'partial...' };
+const rawDelta = { type: 'reasoning_delta', text: 'raw fragment' };
 const progressNarration = { source: 'agent_progress', text: 'still working' };
 const summaryVisibility = { type: 'thinking', visibility: 'summary', text: 'short summary' };
 const nestedExtraSummary = { type: 'think', extra: { reasoningKind: 'summary' }, text: 'x' };
 
 const mixed = [
   summaryDelta,
+  rawDelta,
   fullThought,
   progressNarration,
   toolEntry,
@@ -103,14 +85,19 @@ const mixed = [
   assistantText,
   nestedExtraSummary,
   fullThoughtWithSummaryVisibility,
+  publicSummary,
+  privateThought,
 ];
 
 const kept = sanitizeLiveTraceEntriesForUi(mixed, 0);
 assert.deepEqual(
   kept,
-  [fullThought, toolEntry, assistantText, fullThoughtWithSummaryVisibility],
-  'durable entries must survive and transient streaming entries must be dropped',
+  [fullThought, toolEntry, assistantText, fullThoughtWithSummaryVisibility, publicSummary],
+  'durable entries and explicit public summaries must survive; raw deltas, progress and private thoughts must be dropped',
 );
+assert.equal(isTransientLiveTraceEntryForUi(publicSummary), false, 'explicit public summary must not be transient');
+assert.equal(isTransientLiveTraceEntryForUi(privateThought), true, 'private thought must be transient');
+
 
 // The cap must never exceed `limit`, and must keep the newest entries.
 const many = Array.from({ length: 200 }, (_, i) => ({ type: 'tool_call', text: `entry-${i}` }));

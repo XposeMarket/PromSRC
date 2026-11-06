@@ -297,11 +297,16 @@ export function isTransientLiveTraceEntryForUi(entry: any): boolean {
   const source = str(entry.source || extra.source);
   const visibility = str(entry.visibility || extra.visibility);
   const reasoningKind = str(entry.reasoningKind || extra.reasoningKind || extra.presentationKind);
+  const RAW_DELTA_TYPES = ['reasoning_summary_delta', 'reasoning_delta'];
+  // Private thinking is never shown, even when a summary label is also present.
+  if (visibility === 'private' || visibility === 'internal') return true;
   if (reasoningKind === 'full_thought') return false;
+  // Raw streaming fragments are transient; the completed summary row replaces them.
+  if (RAW_DELTA_TYPES.includes(type) || RAW_DELTA_TYPES.includes(event)) return true;
+  // Explicit public summaries are timeline content and must survive save/reload.
+  if (source === 'reasoning_summary' || type === 'reasoning_summary' || event === 'reasoning_summary'
+    || (reasoningKind === 'summary' && ['user', 'summary'].includes(visibility))) return false;
   return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
     || reasoningKind === 'summary'
     || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
 }

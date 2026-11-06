@@ -1021,8 +1021,8 @@ export function createMobileChatRendererRuntime(context = {}) {
       // The model summary belongs to the tool group it narrates. Looking only
       // at the newest raw event made a tool_call replace that summary with the
       // synthetic action label (for example, "Request Tool Category").
-      const progressSummary = _mobileTraceProgressSummary(group.entries)
-        || (isLiveCurrent ? mobileReasoningSummaryTitle(group.reasoningEntries) : '');
+      const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries)
+        || _mobileTraceProgressSummary(group.entries);
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
       const visibleEntries = _mobileVisibleTraceEntries(group.entries);
