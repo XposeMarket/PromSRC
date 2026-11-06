@@ -135,6 +135,12 @@ const measurements = {
 // reverted <details> summary branch) measure 283060 (+352 over #785). Same ~0.1% allowance.
 // #823 adds default-off reference retention choice + partial-cleanup warning to the
 // existing delete sheet: 283494 gzip (+187 vs base283307); retain ~0.1% variance.
-assert(measurements.gzipBytes <= 283780, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #826 mobile turn lifecycle (stream idle watchdog, single finalize path, drawer
+// stale-run reconcile, mobile-turn-lifecycle.js placeholder allowlist) renders on the
+// live chat path: 285860 gzip (+2366 vs #823's 283494). Same ~0.1% allowance.
+// #828 question-host rows (_mobileQuestionHostRow eager copy, "Waiting for your answer"
+// label, callId tool-name lookup) merged on #826+#827: 286166 gzip (+251 vs #826's
+// 285915 measured). Same ~0.1% allowance.
+assert(measurements.gzipBytes <= 286450, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

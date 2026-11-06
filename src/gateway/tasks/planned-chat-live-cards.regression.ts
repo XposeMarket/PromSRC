@@ -103,12 +103,24 @@ async function main() {
       await gs.progress('src', 'sg', progress(['in_progress', 'pending']), 'Guard', undefined, 'origin');
       const readThrough = (gs as any).readAsync.bind(gs);
       let release!: () => void;
+      let sourceReadEntered!: () => void;
       const gate = new Promise<void>(resolve => { release = resolve; });
-      (gs as any).readAsync = async (id: string) => { if (id === 'src') await gate; return readThrough(id); };
+      const entered = new Promise<void>(resolve => { sourceReadEntered = resolve; });
+      (gs as any).readAsync = async (id: string) => {
+        if (id === 'src') { sourceReadEntered(); await gate; }
+        return readThrough(id);
+      };
       const resumed = gs.resume('src', 'dst', 'sg');
-      const finished = gs.finish('dst', 'completed'); // queued behind the held resume, not awaited before release
-      release();
-      await Promise.all([resumed, finished]);
+      await entered; // prove resume is blocked inside its source read, not merely queued
+      let finishSettled = false;
+      const finished = gs.finish('dst', 'completed').finally(() => { finishSettled = true; });
+      try {
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(finishSettled, false, 'finish waits for the already-entered source read');
+      } finally {
+        release(); // never await finish while keeping its prerequisite blocked
+        await Promise.all([resumed, finished]);
+      }
       assert.equal(gs.get('dst')!.status, 'completed', 'held resume must not leave a running record after finish');
       await gs.progress('dst', 'sg', progress(['in_progress', 'pending']), 'late');
       await gs.resume('src', 'dst', 'sg');

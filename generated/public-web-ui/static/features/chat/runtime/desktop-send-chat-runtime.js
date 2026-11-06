@@ -544,6 +544,9 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
           attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined,
         };
     userTurnMessage.content = messageWithFiles;
+    // The optimistic row must retain the same identity the gateway accepts.
+    // Steer/history sync can happen before the final assistant row is saved.
+    userTurnMessage.clientRequestId = userTurnMessage.clientRequestId || clientRequestId;
     userTurnMessage.attachmentPreviews = uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined;
     userTurnMessage.timestamp = userTurnMessage.timestamp || Date.now();
     if (realtimeAgentVoiceHandoff) {
