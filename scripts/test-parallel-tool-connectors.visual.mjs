@@ -30,9 +30,9 @@ try{
    if(expanded){await page.evaluate(()=>{const row=document.querySelector('.tool-activity-wrap');const d=document.createElement('div');d.textContent='Expanded tool details, several lines below the first icon.';d.style.height='90px';row.appendChild(d);});await page.waitForTimeout(120);}
    const metrics=await page.evaluate(()=>{
     window.tools.refreshParallelToolConnectors(document);
-    return {overflow:document.documentElement.scrollWidth>innerWidth,lines:[...document.querySelectorAll('.tool-parallel-connector')].map(l=>{const r=l.parentElement,a=r.querySelector('.tool-activity-tool-icon,.tool-activity-connector-logo').getBoundingClientRect(),b=r.nextElementSibling.querySelector('.tool-activity-tool-icon,.tool-activity-connector-logo').getBoundingClientRect(),c=l.getBoundingClientRect();return {top:c.top-a.bottom,bottom:b.top-c.bottom,x:Math.abs(c.left+.5-a.left-a.width/2),color:getComputedStyle(l).backgroundColor};})};
+    return {overflow:document.documentElement.scrollWidth>innerWidth,lines:[...document.querySelectorAll('.tool-parallel-connector')].map(l=>{const r=l.closest('.tool-activity-wrap'),a=r.querySelector('.tool-activity-tool-icon,.tool-activity-connector-logo').getBoundingClientRect(),b=r.nextElementSibling.querySelector('.tool-activity-tool-icon,.tool-activity-connector-logo').getBoundingClientRect(),c=l.getBoundingClientRect();return {visible:c.height>0&&l.getClientRects().length>0,top:c.top-a.bottom,bottom:b.top-c.bottom,x:Math.abs(c.left+.5-a.left-a.width/2),color:getComputedStyle(l).backgroundColor};})};
    });
-   assert.equal(metrics.overflow,false);assert.equal(metrics.lines.length,2,JSON.stringify({width,theme,expanded,metrics}));for(const x of metrics.lines){assert(x.top>=2.99&&x.bottom>=2.99);assert(x.x<.6);}
+   assert.equal(metrics.overflow,false);assert.equal(metrics.lines.length,2,JSON.stringify({width,theme,expanded,metrics}));for(const x of metrics.lines){assert(x.visible,'connector must render in collapsed/expanded state');assert(x.top>=2.99&&x.bottom>=2.99);assert(x.x<.6);}
    if(width===390||width===1024)await page.locator('#sample').screenshot({path:path.join(out,`${width}-${theme}${expanded?'-expanded':''}.png`)});
    console.log(JSON.stringify({width,theme,expanded,...metrics}));
   }

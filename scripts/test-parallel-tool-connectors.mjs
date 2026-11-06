@@ -19,4 +19,12 @@ assert.equal(operation.activity.parallelGroupId,'call1:r2:g0');
 assert.match(renderToolActivityEntry(operation),/data-parallel-group="call1:r2:g0"/);
 assert.doesNotMatch(renderToolActivityEntry({activity:{kind:'operation',callId:'legacy',action:'read_file'}}),/data-parallel-group/);
 assert.match(fs.readFileSync('web-ui/src/tool-activity.js','utf8'),/b\.top - a\.bottom - 6/);
+// Missing provider call ids must never yield "undefined" in the group id.
+const noIds=register(true,[{sourceCall:{},toolCallId:undefined,index:0},{sourceCall:{},toolCallId:'',index:1}],4);
+const noIdGroup=[...noIds.parallelMetaByCall.values()][0].parallelGroupId;
+assert.equal(noIdGroup,'batch:r4:g0');assert.doesNotMatch(noIdGroup,/undefined/);
+// History serialized roundtrip preserves parallelGroupId and still coalesces to the same identity.
+const saved=JSON.parse(JSON.stringify({history:[{role:'assistant',liveTraceEntries:trace}]}));
+const replayed=coalesceToolActivityEntries(saved.history[0].liveTraceEntries).find(x=>x.activity?.callId==='call1');
+assert.equal(replayed.activity.parallelGroupId,'call1:r2:g0');
 console.log('production full/mixed group identities + real activity result/coalesce retention PASS');

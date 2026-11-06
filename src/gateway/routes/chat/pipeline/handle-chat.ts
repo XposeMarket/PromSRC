@@ -5094,7 +5094,8 @@ Do not produce prose. Use the canonical thread tool now.` });
     const parallelMetaByCall = new Map<any, { parallelGroupId: string; parallelIndex: number; parallelSize: number }>();
     let parallelGroupOrdinal = 0;
     const registerParallelGroup = (entries: ParallelCallEntry[]) => {
-      const parallelGroupId = `${entries[0].toolCallId}:r${round}:g${parallelGroupOrdinal++}`;
+      // Provider call ids are not guaranteed on every path; never emit "undefined" in the group id.
+      const parallelGroupId = `${String(entries[0]?.toolCallId || '').trim() || 'batch'}:r${round}:g${parallelGroupOrdinal++}`;
       entries.forEach((entry, parallelIndex) => parallelMetaByCall.set(entry.sourceCall, { parallelGroupId, parallelIndex, parallelSize: entries.length }));
     };
     if (canRunParallelBatch) registerParallelGroup(parallelCallEntries);

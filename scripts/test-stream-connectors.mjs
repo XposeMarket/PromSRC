@@ -29,4 +29,18 @@ for(const [surface,group] of [['mobile',mobileGroup],['desktop',desktopGroup]]){
   }
   console.log(surface+': actual grouping + shared header reducer PASS');
 }
+{
+  // Summary->tools promotion keeps tool-group fields and the stable phase id/reasoning header.
+  const promoted=fold([{kind:'thought-summary',id:'s0',entries:[r('r1','**Read**')]},{kind:'tools',id:'tg1',entries:[t('t1')],status:'running',live:true,extra:{k:1}}],{streaming:true});
+  const pt=promoted.find(g=>g.kind==='tools');
+  assert.equal(pt.status,'running');assert.equal(pt.live,true);assert.deepEqual(pt.extra,{k:1});
+  assert.equal(pt.id.startsWith('reasoning_phase_'),true);assert.equal(title(pt.reasoningEntries),'Read');assert.equal(pt.entries.length,1);
+  // Non-streaming trailing summary after a boundary is static thought-summary, never live thinking.
+  const restored=fold([{kind:'commentary',id:'c',entries:[p('p1')]},{kind:'thought-summary',id:'s',entries:[r('r1','**Read**')]}],{streaming:false});
+  assert.equal(restored.some(g=>g.kind==='reasoning-live'),false);
+  assert.equal(restored[restored.length-1].kind,'thought-summary');
+  const live=fold([{kind:'commentary',id:'c',entries:[p('p1')]},{kind:'thought-summary',id:'s',entries:[r('r1','**Read**')]}],{streaming:true});
+  assert.equal(live[live.length-1].kind,'reasoning-live');
+  console.log('promotion field preservation + static trailing summary PASS');
+}
 console.log('stream grouping contracts PASS');

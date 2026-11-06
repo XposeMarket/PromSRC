@@ -169,17 +169,21 @@ export function refreshParallelToolConnectors(root = document) {
       && next.dataset.parallelCall && next.dataset.parallelCall !== row.dataset.parallelCall;
     const icon = row.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo');
     const nextIcon = same ? next.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo') : null;
-    let line = row.querySelector(':scope > .tool-parallel-connector');
+    // Closed <details> hides every child except <summary>, so the connector must live in the summary.
+    const host = row.tagName === 'DETAILS' ? (row.querySelector(':scope > summary') || row) : row;
+    let line = host.querySelector(':scope > .tool-parallel-connector') || row.querySelector(':scope > .tool-parallel-connector');
     const a = icon?.getBoundingClientRect();
     const b = nextIcon?.getBoundingClientRect();
-    const box = row.getBoundingClientRect();
+    const box = host.getBoundingClientRect();
     const height = a && b ? b.top - a.bottom - 6 : 0;
     if (!same || !a?.width || !b?.width || height <= 0) { line?.remove(); continue; }
     if (!line) {
       line = row.ownerDocument.createElement('span');
       line.className = 'tool-parallel-connector';
       line.setAttribute('aria-hidden', 'true');
-      row.appendChild(line);
+      // The connector is absolutely positioned: its containing block must be the host.
+      if (host !== row && row.ownerDocument.defaultView.getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.appendChild(line);
     }
     const css = `position:absolute;pointer-events:none;width:1px;left:${a.left + a.width / 2 - box.left - .5}px;top:${a.bottom + 3 - box.top}px;height:${height}px;background:color-mix(in srgb,var(--pm-accent,var(--accent,#888)) 55%,transparent)`;
     if (line.style.cssText !== css) line.style.cssText = css;

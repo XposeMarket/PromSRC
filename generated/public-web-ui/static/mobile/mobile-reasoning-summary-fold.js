@@ -74,7 +74,12 @@ export function foldMobileReasoningSummaryGroups(groups, { streaming = false } =
         phase = { ...group, entries: [...(group.entries || [])], reasoningEntries: [...(group.reasoningEntries || [])] };
         out.push(phase);
       } else {
-        if (phase.kind === 'reasoning-live') { phase.kind = 'tools'; phase.entries = []; }
+        if (phase.kind === 'reasoning-live') {
+          // Keep every tool-group field (status, live flags, metadata); keep the phase id,
+          // header title and accumulated reasoning entries so the header stays stable.
+          const { id: _id, kind: _kind, entries: _entries, reasoningEntries: _reasoning, title: _title, ...toolFields } = group;
+          Object.assign(phase, toolFields, { kind: 'tools', entries: [] });
+        }
         phase.entries.push(...(group.entries || []));
         phase.reasoningEntries.push(...(group.reasoningEntries || []));
       }
@@ -82,6 +87,8 @@ export function foldMobileReasoningSummaryGroups(groups, { streaming = false } =
     }
     appendBoundary(group);
   }
+  // A non-streaming (restored/completed) trailing summary phase is static history, not a live thinking label.
+  if (!streaming) for (const group of out) if (group.kind === 'reasoning-live') group.kind = 'thought-summary';
   return out;
 }
 
