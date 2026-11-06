@@ -44,3 +44,12 @@ for(const [surface,group] of [['mobile',mobileGroup],['desktop',desktopGroup]]){
   console.log('promotion field preservation + static trailing summary PASS');
 }
 console.log('stream grouping contracts PASS');
+
+// The extracted label helper keeps the legacy desktop selection and normalization.
+const {desktopTraceProgressSummary,liveTraceSummaryKey}=await import('../web-ui/src/features/chat/trace-summary-presentation.js');
+const normalize=text=>String(text).replace('duplicate duplicate','duplicate');
+assert.equal(desktopTraceProgressSummary([{text:'older',extra:{source:'agent_progress'}},{text:'ignored',extra:{source:'agent_thought'}},{text:' duplicate duplicate  latest ',extra:{source:'agent_progress'}}],normalize),'duplicate latest');
+assert.equal(desktopTraceProgressSummary([],normalize),'');
+assert.equal(desktopTraceProgressSummary([{text:'x'.repeat(240),extra:{source:'agent_progress'}}],normalize).length,220);
+assert.equal(liveTraceSummaryKey('  Mixed\n CASE  '),'mixed case');
+console.log('extracted desktop summary presentation PASS');

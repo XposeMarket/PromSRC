@@ -182,7 +182,8 @@ export function refreshParallelToolConnectors(root = document) {
       line.className = 'tool-parallel-connector';
       line.setAttribute('aria-hidden', 'true');
       // The connector is absolutely positioned: its containing block must be the host.
-      if (host !== row && row.ownerDocument.defaultView.getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      if (row.ownerDocument.defaultView.getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.style.overflow = 'visible';
       host.appendChild(line);
     }
     const css = `position:absolute;pointer-events:none;width:1px;left:${a.left + a.width / 2 - box.left - .5}px;top:${a.bottom + 3 - box.top}px;height:${height}px;background:color-mix(in srgb,var(--pm-accent,var(--accent,#888)) 55%,transparent)`;

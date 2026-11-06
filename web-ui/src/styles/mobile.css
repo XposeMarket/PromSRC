@@ -19054,6 +19054,3 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
 /* First-output status stays local to the pending assistant row. */
 pm-pending-status { display: block; margin: 6px 0; font-size: 12px; line-height: 1.5; color: var(--pm-text-muted, #9aa0ad); }
 pm-pending-status[hidden] { display: none; }
-
-/* Parallel dispatch connectors stop 3px before each measured icon edge. */
-.tool-activity-wrap[data-parallel-group] { position: relative; overflow: visible; }

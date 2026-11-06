@@ -1,4 +1,5 @@
 import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
 
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
@@ -13534,33 +13535,8 @@ function liveTraceCurrentToolLabel(entries, { coalesced = false } = {}) {
   return liveTraceToolSummary(entries, { coalesced });
 }
 
-function liveTraceSummaryKey(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function desktopTraceProgressText(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  for (let index = source.length - 1; index >= 0; index -= 1) {
-    const entry = source[index];
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = dedupeDesktopTraceProseText(entry?.text || entry?.content || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!text) continue;
-    return text.slice(0, 220);
-  }
-  return '';
-}
-
 function desktopTraceProgressSummary(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  const text = desktopTraceProgressText(source);
-  if (!text) return '';
-  // The provider's curated summary is the source of truth for the live
-  // expandable label. Do not replace it with a synthetic "Reasoning" label
-  // when the same prose also exists as a durable thought entry.
-  return text;
+  return formatDesktopTraceProgressSummary(entries, dedupeDesktopTraceProseText);
 }
 
 function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
