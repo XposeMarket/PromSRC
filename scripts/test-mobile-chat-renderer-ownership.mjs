@@ -141,6 +141,9 @@ const measurements = {
 // #828 question-host rows (_mobileQuestionHostRow eager copy, "Waiting for your answer"
 // label, callId tool-name lookup) merged on #826+#827: 286166 gzip (+251 vs #826's
 // 285915 measured). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 286450, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #820 integrated on #829: file-link marking plus authenticated canvas reads add
+// 699 gzip bytes (main 286161 -> combined 286860), within the previously reviewed
+// +713-byte feature increment. Keep the existing ~0.1% compression allowance.
+assert(measurements.gzipBytes <= 287150, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

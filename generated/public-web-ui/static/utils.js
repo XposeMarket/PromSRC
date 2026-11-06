@@ -10,6 +10,7 @@
 
 import { installGameProjectCards } from './components/game-project-card.js';
 import { extractCardFences, hasCardFence, installPromCards, renderDataCard, citeChips, extractInlineCards, withoutInlineCards, INLINE_CARD_RE } from './cards/index.js';
+import { resolveWorkspaceFileLinks } from './workspace-file-links.js';
 export { withoutInlineCards };
 
 // ─── HTML Escaping ─────────────────────────────────────────────
@@ -1219,6 +1220,25 @@ if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
   document.addEventListener('click', activate);
   document.addEventListener('keydown', activate);
 
+  // Markdown links to workspace files (`[plan](plans/x/PLAN.md)`) open in the
+  // host file viewer: mobile installs window.__promOpenWorkspaceFile (canvas
+  // sheet), desktop uses its Canvas. A plain navigation has no auth on a
+  // proxied/paired phone and landed on a raw Unauthorized JSON page.
+  document.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const link = event.target?.closest?.('a[data-workspace-file]');
+    const path = link?.getAttribute('data-workspace-file') || '';
+    if (!path) return;
+    const name = path.split(/[\\/]/).pop() || path;
+    const opener = typeof window.__promOpenWorkspaceFile === 'function'
+      ? window.__promOpenWorkspaceFile
+      : (typeof window.canvasPresentFile === 'function' ? (p, n) => window.canvasPresentFile(p, n) : null);
+    if (!opener) return;
+    event.preventDefault();
+    try { opener(path, name); } catch { /* the authenticated fallback href stays usable */ }
+  });
+
   import('./inline-video-controls.js').then(m => m.installInlineVideoControls());
 }
 
@@ -1351,9 +1371,9 @@ function renderMdUncached(text, options = {}) {
       withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `${placeholderPrefix}${idx}END`;
     }
 
-    let html = citeChips(resolveWorkspaceImageSources(
+    let html = citeChips(resolveWorkspaceFileLinks(resolveWorkspaceImageSources(
       sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false })),
-    ));
+    ), workspaceMediaUrl));
 
     if (visuals.length) {
       const placeholderRe = new RegExp(`${placeholderPrefix}(\\d+)END`, 'g');

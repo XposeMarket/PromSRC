@@ -3675,7 +3675,9 @@ export function initMobileCanvasSheet() {
     btn.textContent = 'Rendering…';
     bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">Rendering preview…</div>';
     try {
-      const r = await fetch(`/api/preview/screenshot?path=${encodeURIComponent(tab.path)}`).then(res => res.json());
+      // mobileGatewayFetch carries the pairing token and targets the active
+      // gateway; a bare fetch is rejected over Funnel/proxied access.
+      const r = await mobileGatewayFetch(`/api/preview/screenshot?path=${encodeURIComponent(tab.path)}`, { timeoutMs: 90000 });
       const chunks = Array.isArray(r?.chunks) ? r.chunks : [];
       if (!chunks.length) throw new Error('No preview generated');
       // Show all chunks stacked vertically as images
@@ -4056,11 +4058,15 @@ async function renderCanvasCodePreview(bodyEl, tab) {
   };
   try {
     const [rangesRes, fileRes] = await Promise.all([
-      fetch(`/api/canvas/diff-ranges?path=${encodeURIComponent(path)}`).then((r) => r.json()).catch(() => null),
-      fetch(`/api/canvas/file?path=${encodeURIComponent(path)}`).then((r) => r.json()).catch(() => null),
+      mobileGatewayFetch(`/api/canvas/diff-ranges?path=${encodeURIComponent(path)}`).catch(() => null),
+      mobileGatewayFetch(`/api/canvas/file?path=${encodeURIComponent(path)}`).catch((err) => ({ error: String(err?.message || err || '') })),
     ]);
     const content = fileRes && typeof fileRes.content === 'string' ? fileRes.content : null;
-    if (content === null) { renderDoc(canvasTextDocHtml('txt', `Could not load ${tab.name || 'this file'}.`)); return; }
+    if (content === null) {
+      const reason = fileRes?.error ? `\n\n${fileRes.error}` : '';
+      renderDoc(canvasTextDocHtml('txt', `Could not load ${tab.name || 'this file'}.${reason}`));
+      return;
+    }
     const ranges = rangesRes && Array.isArray(rangesRes.ranges) ? rangesRes.ranges : [];
     const hasChanges = ranges.length > 0;
     // Default = edited-regions-only when there are changes. Toggle state lives on
@@ -4118,8 +4124,10 @@ function renderCanvasTextInto(bodyEl, tab) {
   };
   if (!path) { show(canvasTextDocHtml(ext, '')); return; }
   const showError = (msg) => show(canvasTextDocHtml('txt', String(msg || 'Could not load this file.')));
-  fetch(`/api/canvas/file?path=${encodeURIComponent(path)}`)
-    .then((res) => res.json())
+  // Authenticated gateway read: bare fetch() carried no pairing token, so every
+  // text/markdown file failed over Funnel with "proxied remote requests require
+  // a paired device or gateway token" (2026-11-04).
+  mobileGatewayFetch(`/api/canvas/file?path=${encodeURIComponent(path)}`)
     .then((r) => {
       if (r && typeof r.content === 'string') { show(canvasTextDocHtml(ext, r.content)); return; }
       if (r && r.isImage) {
