@@ -5091,7 +5091,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     const lazyParallelGroupByCall = new Map<any, ParallelCallEntry[]>();
     const lazyParallelGroupsRun = new Set<ParallelCallEntry[]>();
     // Explicit dispatch identity, not inferred from neighbouring timestamps.
-    const parallelMetaByCall = new Map<any, { parallelGroupId: string; parallelIndex: number; parallelSize: number }>();
+    const parallelMetaByCall = new Map<ParallelCallEntry['sourceCall'], { parallelGroupId: string; parallelIndex: number; parallelSize: number }>();
     let parallelGroupOrdinal = 0;
     const registerParallelGroup = (entries: ParallelCallEntry[]) => {
       // Provider call ids are not guaranteed on every path; never emit "undefined" in the group id.
