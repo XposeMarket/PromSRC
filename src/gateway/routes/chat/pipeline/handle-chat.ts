@@ -8,7 +8,7 @@ import { getOrchestrationConfig } from '../.././chat/shared';
 import { compactVoiceDispatchTitle } from '../.././chat/voice/dispatch';
 import { createVoiceNarrator, buildChatSteerContextBlock } from '../.././chat/voice/narrator';
 import { summarizeUnlockedToolCategories } from '../.././chat/voice/context';
-import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../../../media-analysis-preview';
+import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads, buildReferenceObservationMessage } from '../../../media-analysis-preview';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -172,8 +172,8 @@ export function configureHandleChatDependencies(deps: HandleChatDependencies): v
  * result and readable at GET /api/traces/:traceId.
  */
 export async function handleChat(...args: Parameters<typeof handleChatUntraced>): ReturnType<typeof handleChatUntraced> {
-  const [message, sessionId, , , abortSignal, , , executionMode] = args;
-  return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive') }, async () => {
+  const [message, sessionId, , , abortSignal, , , executionMode, , , , , , runtimeOptions] = args;
+  return runInTrace({ sessionId: String(sessionId || 'default'), executionMode: String(executionMode || 'interactive'), personalReferenceAccess: runtimeOptions?.personalReferenceAccess }, async () => {
     const startedAt = Date.now();
     const trace = currentTrace();
     try {
@@ -217,7 +217,7 @@ export async function handleChatUntraced(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { personalReferenceAccess?: boolean; directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; toolCategoryDetectionText?: string; speedOverride?: 'standard' | 'fast'; brainRunBudget?: BrainRunBudgetOptions; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
@@ -2424,7 +2424,8 @@ export async function handleChatUntraced(
   } catch (error: any) {
     console.warn('[Resources] Context retrieval skipped:', redactResourceText(error?.message || error));
   }
-  const resourceContextBlock = resourceContext.block;
+  const { referenceRecallBlock } = require('../../../resources/reference-library');
+  const resourceContextBlock = resourceContext.block + '\n' + referenceRecallBlock(workspacePath, sessionId, message);
   turnTiming.mark('resource_context_built', {
     chars: resourceContext.chars,
     selectedCount: resourceContext.resourceIds.length,
@@ -2815,6 +2816,19 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult?: { error?: boolean; data?: any; name?: string; args?: Record<string, any> },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
+    if (toolName === 'memory' && toolInput?.action === 'open') {
+      if (toolResult?.error || toolResult?.data?.observation_mode !== 'direct') return;
+      try {
+        if (!currentModelCapabilities.hasVision) throw new Error('The current model does not support vision. Stored text only; images not viewed.');
+        const observation = await buildReferenceObservationMessage(workspacePath, sessionId, {
+          id: String(toolInput.reference_id || ''), versionId: toolInput.version_id, offset: Number(toolInput.offset || 0), limit: Number(toolInput.limit || 6),
+        });
+        if (observation) messages.push(observation);
+      } catch (error: unknown) {
+        messages.push({ role: 'user', content: `[REFERENCE_OBSERVATION_UNAVAILABLE] ${error instanceof Error ? error.message : String(error)}. Do not claim to have viewed the original. You may use labelled stored text.` });
+      }
+      return;
+    }
     if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
       let injected = toolResult?.data?.observation_mode !== 'direct';
       if (!toolResult?.error && toolResult?.data?.observation_mode === 'direct') {
@@ -3112,7 +3126,7 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult: ToolResult,
     decision: PostActionObservationDecision,
   ): Promise<void> => {
-    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+    if ((toolName === 'memory' && toolArgs.action === 'open') || ['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
     }
@@ -5076,6 +5090,15 @@ Do not produce prose. Use the canonical thread tool now.` });
     // only 168 of 1,057 multi-call batches overlapping under all-or-nothing.
     const lazyParallelGroupByCall = new Map<any, ParallelCallEntry[]>();
     const lazyParallelGroupsRun = new Set<ParallelCallEntry[]>();
+    // Explicit dispatch identity, not inferred from neighbouring timestamps.
+    const parallelMetaByCall = new Map<ParallelCallEntry['sourceCall'], { parallelGroupId: string; parallelIndex: number; parallelSize: number }>();
+    let parallelGroupOrdinal = 0;
+    const registerParallelGroup = (entries: ParallelCallEntry[]) => {
+      // Provider call ids are not guaranteed on every path; never emit "undefined" in the group id.
+      const parallelGroupId = `${String(entries[0]?.toolCallId || '').trim() || 'batch'}:r${round}:g${parallelGroupOrdinal++}`;
+      entries.forEach((entry, parallelIndex) => parallelMetaByCall.set(entry.sourceCall, { parallelGroupId, parallelIndex, parallelSize: entries.length }));
+    };
+    if (canRunParallelBatch) registerParallelGroup(parallelCallEntries);
     const lazyParallelAllowed = !canRunParallelBatch
       && !parallelBatchHasRefusal
       && parallelCallEntries.length > 1
@@ -5091,6 +5114,7 @@ Do not produce prose. Use the canonical thread tool now.` });
       for (const group of partitionToolCallsForParallelExecution(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall))) {
         if (!group.parallel || group.calls.length < 2) continue;
         const entries = group.calls.map((parallelCall) => entryByParallelCall.get(parallelCall)!).filter(Boolean);
+        registerParallelGroup(entries);
         for (const entry of entries) lazyParallelGroupByCall.set(entry.sourceCall, entries);
       }
     }
@@ -5130,6 +5154,7 @@ Do not produce prose. Use the canonical thread tool now.` });
           toolCallId: entry.toolCallId || undefined,
           tool_call_id: entry.toolCallId || undefined,
           parallel: true,
+          ...parallelMetaByCall.get(entry.sourceCall),
         });
       }
       const parallelOutcomes = await executeToolCallsInParallel(
@@ -5555,6 +5580,7 @@ Do not produce prose. Use the canonical thread tool now.` });
           stepNum: allToolResults.length + 1,
           toolCallId: toolCallId || undefined,
           tool_call_id: toolCallId || undefined,
+          ...parallelMetaByCall.get(call),
         });
       }
 

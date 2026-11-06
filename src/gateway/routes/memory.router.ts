@@ -1,8 +1,10 @@
 import { Router, Request, Response } from 'express';
+import { referenceLibraryRouter } from './reference-library.router';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { automaticReferenceCaptureReady, getReferenceService } from '../resources/reference-service';
 import {
   readMemoryRecord,
   getRelatedMemory,
@@ -290,6 +292,18 @@ router.post('/api/memory/create', async (req: Request, res: Response) => {
       });
     }
 
+    // Reference capture is opt-in and cannot invalidate the original Memory note.
+    if (automaticReferenceCaptureReady(workspacePath)) {
+      try {
+        const library = getReferenceService(workspacePath);
+        const note = library.saveText({ operationId: `memory:${noteId}`, title, content: content || description, userQuote: description });
+        for (const attachment of attachments) {
+          const ref = library.saveAttachment({ operationId: `memory:${noteId}:${attachment.path}`, filePath: attachment.path,
+            title: attachment.name, mimeType: attachment.mimeType, userQuote: description || content });
+          library.metadata.update(ref.id, { relatedIds: [note.id] });
+        }
+      } catch (e: any) { console.warn('[Memory] Reference capture unavailable:', e.message); }
+    }
     fs.mkdirSync(path.dirname(noteAbsPath), { recursive: true });
     fs.writeFileSync(noteAbsPath, buildMemoryNoteDocument({
       id: noteId,
@@ -336,5 +350,6 @@ router.get('/api/memory/sqlite/status', (_req: Request, res: Response) => {
   }
 });
 
+router.use(referenceLibraryRouter);
 export { router };
 

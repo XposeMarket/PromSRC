@@ -503,7 +503,11 @@ export abstract class OAuthConnector {
       }
     }
 
-    const missingScopes = missingRequiredScopes(this.cfg.requiredScopes, data.scope);
+    // Verify only the connector-required scopes this flow actually asked for. A least-privilege
+    // plan (e.g. read-only) must not be rejected for capability scopes it never requested.
+    const requested = new Set(flow.requestedScopes || []);
+    const selectedRequired = this.cfg.requiredScopes?.filter((s) => !flow.requestedScopes || requested.has(s));
+    const missingScopes = missingRequiredScopes(selectedRequired, data.scope);
     if (missingScopes.length) {
       return {
         success: false,

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import ts from 'typescript';
+import {applyToolActivityEvent,coalesceToolActivityEntries,renderToolActivityEntry} from '../web-ui/src/tool-activity.js';
+const src=fs.readFileSync('src/gateway/routes/chat/pipeline/handle-chat.ts','utf8');
+const a=src.indexOf('    const parallelMetaByCall'),b=src.indexOf('    const lazyParallelAllowed',a);
+const body=ts.transpile(src.slice(a,b),{target:ts.ScriptTarget.ES2022});
+const register=new Function('canRunParallelBatch','parallelCallEntries','round',body+'return {parallelMetaByCall,registerParallelGroup};');
+const entries=[1,2,3].map(i=>({sourceCall:{},toolCallId:'call'+i,index:i-1}));
+const full=register(true,entries,2);assert.equal(full.parallelMetaByCall.size,3);
+const mixed=register(false,entries,3);mixed.registerParallelGroup(entries.slice(0,2));mixed.registerParallelGroup([{sourceCall:{},toolCallId:'call4'},{sourceCall:{},toolCallId:'call5'}]);
+const ids=[...mixed.parallelMetaByCall.values()].map(x=>x.parallelGroupId);assert.equal(new Set(ids).size,2);
+assert.match(src,/parallelMetaByCall\.get\(entry\.sourceCall\)/);assert.match(src,/parallelMetaByCall\.get\(call\)/);
+let trace=[];
+for(const entry of entries) applyToolActivityEvent(trace,'call',{action:'read_file',args:{path:'example.txt'},toolCallId:entry.toolCallId,...full.parallelMetaByCall.get(entry.sourceCall)});
+applyToolActivityEvent(trace,'result',{action:'read_file',toolCallId:'call1',result:'done'});
+const folded=coalesceToolActivityEntries(trace);const operation=folded.find(x=>x.activity?.callId==='call1');
+assert.equal(operation.activity.parallelGroupId,'call1:r2:g0');
+assert.match(renderToolActivityEntry(operation),/data-parallel-group="call1:r2:g0"/);
+assert.doesNotMatch(renderToolActivityEntry({activity:{kind:'operation',callId:'legacy',action:'read_file'}}),/data-parallel-group/);
+assert.match(fs.readFileSync('web-ui/src/tool-activity.js','utf8'),/b\.top - a\.bottom - 6/);
+// Missing provider call ids must never yield "undefined" in the group id.
+const noIds=register(true,[{sourceCall:{},toolCallId:undefined,index:0},{sourceCall:{},toolCallId:'',index:1}],4);
+const noIdGroup=[...noIds.parallelMetaByCall.values()][0].parallelGroupId;
+assert.equal(noIdGroup,'batch:r4:g0');assert.doesNotMatch(noIdGroup,/undefined/);
+// History serialized roundtrip preserves parallelGroupId and still coalesces to the same identity.
+const saved=JSON.parse(JSON.stringify({history:[{role:'assistant',liveTraceEntries:trace}]}));
+const replayed=coalesceToolActivityEntries(saved.history[0].liveTraceEntries).find(x=>x.activity?.callId==='call1');
+assert.equal(replayed.activity.parallelGroupId,'call1:r2:g0');
+console.log('production full/mixed group identities + real activity result/coalesce retention PASS');

@@ -11,6 +11,10 @@
  */
 
 import { renderConnectorLogo } from './features/connectors/connector-logo-runtime.js';
+import {
+  createToolCallActionIndex, indexToolCallActions, lookupToolCallAction, toolPayloadCallId, toolPayloadStreamId,
+  withResolvedToolAction,
+} from './tool-call-action-lookup.js';
 import { agentModelLabel, providerLogoKey, renderProviderLogo } from './components/provider-logo.js';
 
 // "Opus 5.5 · Medium: prompt" for a spawn row; model/provider come from the call args.
@@ -155,9 +159,70 @@ export function setToolActivityDisclosureState(key, open) {
   }
 }
 
+// Geometry is measured from actual icon bounds: wrapped labels, theme icon
+// sizes and expanded details must never make the connector touch either icon.
+export function refreshParallelToolConnectors(root = document) {
+  for (const row of root.querySelectorAll('.tool-activity-wrap[data-parallel-group]')) {
+    const next = row.nextElementSibling;
+    const same = next?.classList.contains('tool-activity-wrap')
+      && next.dataset.parallelGroup === row.dataset.parallelGroup
+      && next.dataset.parallelCall && next.dataset.parallelCall !== row.dataset.parallelCall;
+    const icon = row.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo');
+    const nextIcon = same ? next.querySelector('.tool-activity-tool-icon, .tool-activity-connector-logo') : null;
+    // Closed <details> hides every child except <summary>, so the connector must live in the summary.
+    const host = row.tagName === 'DETAILS' ? (row.querySelector(':scope > summary') || row) : row;
+    let line = host.querySelector(':scope > .tool-parallel-connector') || row.querySelector(':scope > .tool-parallel-connector');
+    const a = icon?.getBoundingClientRect();
+    const b = nextIcon?.getBoundingClientRect();
+    const box = host.getBoundingClientRect();
+    const height = a && b ? b.top - a.bottom - 6 : 0;
+    if (!same || !a?.width || !b?.width || height <= 0) { line?.remove(); continue; }
+    if (!line) {
+      line = row.ownerDocument.createElement('span');
+      line.className = 'tool-parallel-connector';
+      line.setAttribute('aria-hidden', 'true');
+      // The connector is absolutely positioned: its containing block must be the host.
+      if (row.ownerDocument.defaultView.getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.style.overflow = 'visible';
+      host.appendChild(line);
+    }
+    const css = `position:absolute;pointer-events:none;width:1px;left:${a.left + a.width / 2 - box.left - .5}px;top:${a.bottom + 3 - box.top}px;height:${height}px;background:color-mix(in srgb,var(--pm-accent,var(--accent,#888)) 55%,transparent)`;
+    if (line.style.cssText !== css) line.style.cssText = css;
+  }
+}
+
+function installParallelToolConnectors(root) {
+  const win = root.defaultView || root.ownerDocument?.defaultView || window;
+  let queued = false;
+  const watched = new Set();
+  const resize = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(schedule) : null;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    win.requestAnimationFrame(() => {
+      queued = false;
+      refreshParallelToolConnectors(root);
+      for (const row of watched) if (!row.isConnected) { resize?.unobserve(row); watched.delete(row); }
+      for (const row of root.querySelectorAll('.tool-activity-wrap[data-parallel-group]')) {
+        if (!watched.has(row)) { watched.add(row); resize?.observe(row); }
+      }
+    });
+  }
+  const observer = new win.MutationObserver(records => {
+    if (records.some(record => !record.target?.classList?.contains('tool-parallel-connector')
+      && (record.target?.closest?.('.pm-live-trace,.live-turn-trace,.tool-activity-wrap')
+        || [...record.addedNodes].some(node => node.nodeType === 1 && (node.matches?.('[data-parallel-group]') || node.querySelector?.('[data-parallel-group]')))))) schedule();
+  });
+  observer.observe(root.documentElement || root, { childList: true, subtree: true });
+  root.addEventListener('toggle', schedule, true);
+  win.addEventListener('resize', schedule);
+  schedule();
+}
+
 export function installToolActivityExpansionPersistence(root = typeof document !== 'undefined' ? document : null) {
   if (!root || typeof window === 'undefined' || window.__toolActivityExpansionPersistenceInstalled) return;
   window.__toolActivityExpansionPersistenceInstalled = true;
+  installParallelToolConnectors(root);
   root.addEventListener('toggle', (event) => {
     const details = event.target;
     const key = details?.dataset?.toolDisclosureKey;
@@ -659,7 +724,12 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (/^(?:generate_image|image_gen|imagegen)$/.test(action)) return make('media.image', 'image generation', 'Preparing image generation…', 'Generating image', 'Generated image', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'image generation' });
   if (/^(?:generate_video|video_gen)$/.test(action)) return make('media.video', 'video generation', 'Preparing video generation…', 'Generating video', 'Generated video', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'video generation' });
 
-  const friendly = titleCase(action || 'tool');
+  if (!action) {
+    // A result whose call (and tool name) was lost to a replay gap. Never show
+    // a bare "Tool" / "Tool completed"; say something neutral and readable.
+    return make('tool.unknown', 'step', 'Preparing a step…', target ? `Running a step · ${target}` : 'Running a step', 'Finished a step', { target, countNoun: 'step' });
+  }
+  const friendly = titleCase(action);
   return make(`tool.${action || 'unknown'}`, friendly.toLowerCase(), `Preparing ${friendly.toLowerCase()}…`, target ? `${friendly} · ${target}` : friendly, `${friendly} completed`, { target, countNoun: friendly.toLowerCase() });
 }
 
@@ -746,6 +816,11 @@ function makeActivity(payload, phase, previous = null) {
   }
   return {
     ...(previous || {}),
+    ...(typeof payload.parallelGroupId === 'string' && payload.parallelGroupId && Number(payload.parallelSize) >= 2 ? {
+      parallelGroupId: payload.parallelGroupId,
+      parallelIndex: Number(payload.parallelIndex),
+      parallelSize: Number(payload.parallelSize),
+    } : {}),
     kind: phase === 'result' ? 'result' : 'operation',
     callId,
     action,
@@ -807,7 +882,9 @@ function matchingOperation(entries, payload, phase) {
   return null;
 }
 
-export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
+// `knownEntries`: other entries of the same turn (cached/checkpoint process
+// entries) used only to name a result whose call frame was missed.
+export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}, knownEntries = null) {
   const entries = Array.isArray(entriesInput) ? entriesInput : [];
   const phase = String(phaseRaw || '').toLowerCase();
   if (!['prepare', 'prepared', 'call', 'progress', 'result'].includes(phase)) return null;
@@ -840,6 +917,12 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
     return operationEntry;
   }
 
+  if (!operationEntry && !actionFromPayload(payload)) {
+    // Result-only frame (its call was missed): recover the tool name by call
+    // id from whatever the turn already holds before building the operation.
+    const resolved = withResolvedToolAction(payload, entries, knownEntries);
+    if (resolved !== payload) payload = resolved;
+  }
   if (!operationEntry) {
     const operation = makeActivity(payload, 'call');
     operationEntry = {
@@ -973,6 +1056,9 @@ function legacyPayload(entry = {}) {
 export function coalesceToolActivityEntries(entriesInput) {
   const source = Array.isArray(entriesInput) ? entriesInput : [];
   const out = [];
+  // One pass-wide call-id index (O(1) per result); `out` entries are indexed as they are added.
+  const actionIndex = indexToolCallActions(createToolCallActionIndex(), source);
+  let indexedOut = 0;
   for (const original of source) {
     if (!original || typeof original !== 'object') continue;
     if (original.activity) {
@@ -1009,6 +1095,26 @@ export function coalesceToolActivityEntries(entriesInput) {
     if ((type === 'result' || type === 'error') && action) {
       applyToolActivityEvent(out, 'result', payload);
       continue;
+    }
+    if ((type === 'result' || type === 'error') && toolPayloadCallId(payload)) {
+      // Reduced checkpoint/cache rows can keep the call id but drop the name.
+      // Scoped to the result's stream; ambiguous candidates give no name.
+      if (out.length > indexedOut) {
+        indexToolCallActions(actionIndex, out.slice(indexedOut));
+        indexedOut = out.length;
+      }
+      const scope = toolPayloadStreamId(payload)
+        || String(original.streamId || original.stream_id || original.extra?.streamId || original.extra?.stream_id || '').trim();
+      const found = lookupToolCallAction(actionIndex, toolPayloadCallId(payload), scope);
+      if (found.action) {
+        applyToolActivityEvent(out, 'result', { ...payload, action: found.action });
+        continue;
+      }
+      if (found.ambiguous) {
+        // Candidates disagree and scope cannot tell them apart: neutral label, never a guessed name.
+        applyToolActivityEvent(out, 'result', payload);
+        continue;
+      }
     }
     if (type === 'result' || type === 'error') {
       // Older persisted traces sometimes contain a result body without the
@@ -1430,7 +1536,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   const rowDisclosureKey = inlineDisclosureKey || (terminalRow ? `terminal-row:${activityKey}` : '');
   const rowOpen = inlineDisclosureKey ? inlineOpen : (terminalRow && disclosureState()?.get(rowDisclosureKey) === true);
   if (inlineDetailHtml || terminalRow) {
-    return `<details class="tool-activity-wrap tool-activity-disclosure${terminalRow ? ' tool-activity-terminal-row' : ''}" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(rowDisclosureKey)}"${rowOpen ? ' open' : ''}>
+    return `<details class="tool-activity-wrap tool-activity-disclosure${terminalRow ? ' tool-activity-terminal-row' : ''}" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}"${activity.parallelGroupId ? ` data-parallel-group="${esc(activity.parallelGroupId)}" data-parallel-call="${esc(activity.callId || activityKey)}"` : ''} data-tool-disclosure-key="${esc(rowDisclosureKey)}"${rowOpen ? ' open' : ''}>
   <summary class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span><i class="tool-activity-chevron" aria-hidden="true">›</i></div>
   </summary>
@@ -1438,7 +1544,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   ${terminalHtml}
   </details>`;
   }
-  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}">
+  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}"${activity.parallelGroupId ? ` data-parallel-group="${esc(activity.parallelGroupId)}" data-parallel-call="${esc(activity.callId || activityKey)}"` : ''}>
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span></div>
   </div>

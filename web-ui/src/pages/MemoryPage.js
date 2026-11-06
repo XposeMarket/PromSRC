@@ -1,4 +1,5 @@
 import { api, ENDPOINTS } from '../api.js';
+import { mountMemoryReferences } from './MemoryReferences.js';
 import { escHtml, showToast } from '../utils.js';
 
 const TYPE_COLORS = {
@@ -2011,6 +2012,7 @@ function init() {
   }
   if (state.initialized) return;
   state.initialized = true;
+  mountMemoryReferences();
   setupCanvas();
   loadMemoryGraphSettings();
   bindControls();
