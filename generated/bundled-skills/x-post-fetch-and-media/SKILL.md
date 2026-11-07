@@ -12,9 +12,10 @@ Fetch an exact X status URL with `web_fetch` and report only content actually ex
 1. Confirm the URL is an `x.com` or `twitter.com` status URL.
 2. Call `web_fetch` on that exact URL. Leave `include_media` and `include_thread` false for a simple exact-post read; this uses X's official oEmbed endpoint without opening a browser.
 3. Require at least one extracted tweet/post. A success flag with `tweets: []`, a zero count, placeholder text, or an extraction message is failure—not a captured post.
-4. Report author/handle, timestamp, text, thread order/count, metrics, and media hints only when present.
-5. Clearly label deleted, unavailable, login-gated, rate-limited, or extraction-blocked results. Do not guess the post text.
-6. Stop when the fetch satisfies the request.
+4. Treat the text as INCOMPLETE when `truncated: true` or `text_complete: false` appears on the payload or the tweet. Then only the ~280-char preview of an X long post was captured: say so plainly, never summarize the preview as the whole post, and if the user needs the rest, open the URL in the browser or retry `web_fetch` with `include_thread: true`. `text_complete: true` (for example with `text_source: "fxtwitter"`) means the full post was recovered, so use it normally. `long_post: true` only says the post is an X long post; it does not mean incomplete by itself. If no completeness flag is present at all and the text ends in `…` or `...` right before a trailing `t.co` / `pic.twitter.com` link, assume it is a clipped preview.
+5. Report author/handle, timestamp, text, thread order/count, metrics, and media hints only when present.
+6. Clearly label deleted, unavailable, login-gated, rate-limited, or extraction-blocked results. Do not guess the post text.
+7. Stop when the fetch satisfies the request.
 
 For an explicitly requested thread, set `include_thread: true` and require more than the target status only when the URL actually belongs to a thread. Browser extraction can be login-gated or rate-limited, so report an incomplete thread instead of treating the exact post as the whole thread.
 

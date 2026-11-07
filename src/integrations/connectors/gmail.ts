@@ -46,6 +46,11 @@ export class GmailConnector extends OAuthConnector {
         'https://www.googleapis.com/auth/userinfo.email',
         'openid',
       ],
+      requiredScopes: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/gmail.modify',
+      ],
       usePkce: false, // Google uses client_secret instead of PKCE for desktop apps
       useNonce: true,
       callbackPort: CALLBACK_PORT,
