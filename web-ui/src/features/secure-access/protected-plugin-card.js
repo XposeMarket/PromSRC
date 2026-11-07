@@ -143,9 +143,11 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
             let result;
             try { result = await postJson(fetchJson, `/api/connection-secure-input/${encodeURIComponent(request.id)}`, body, 'Save plugin key to protected storage'); }
             finally { for (const key of Object.keys(body.values)) body.values[key] = ''; }
-            await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(request.attemptId)}/continue`, { credentialRef: result?.credentialRef });
+            // Bindable plugin keys finish continuation server-side and return metadata only (no credentialRef),
+            // so the UI never replays a ref. Only the non-bindable legacy path still returns a ref to continue with.
+            if (result?.credentialRef) await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(request.attemptId)}/continue`, { credentialRef: result.credentialRef });
             clearTimeout(expiryTimer);
-            form.replaceChildren(el('p', { class: 'sa-muted', text: 'Stored, not verified. Prometheus has no safe check for this key; saving alone does not mean connected.' }));
+            form.replaceChildren(el('p', { class: 'sa-muted', text: result?.status === 'STORED_CONNECTION_PENDING' ? 'Key stored. Connection setup is pending; do not re-enter the key. Retry from Connections.' : 'Stored, not verified. Prometheus has no safe check for this key; saving alone does not mean connected.' }));
           }
           options.onSaved?.({ serviceId: service });
         } catch (err) { fail(err); }

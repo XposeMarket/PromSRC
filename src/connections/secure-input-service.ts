@@ -90,6 +90,39 @@ export class SecureInputService {
     if (this.references.delete(reference)) this.saveOwners();
   }
 
+  /**
+   * Bounded consumer read for a connection-owned reference. Requires ownership for the
+   * exact service/attempt and an explicit consumer caller; never a generic config read.
+   */
+  readForConsumer(reference: string, serviceId: string, attemptId: string): string | undefined {
+    if (!this.ownsReference(reference, serviceId, attemptId)) return undefined;
+    const key = String(reference || '').replace(/^vault:/, '');
+    if (!key.startsWith('connection.credentials.')) return undefined;
+    return getVault(this.configDir).get(key, 'connection-secure-input:consumer')?.expose();
+  }
+
+  /**
+   * Bounded copy of ONE scalar secret field from a connection-owned reference into an
+   * ordinary provider vault key (llm.provider-key.<providerId>). Requires exact
+   * service/attempt ownership. Never returns the secret: callers receive only the new
+   * vault ref. The original connection.credentials.* ref stays denied to generic callers.
+   */
+  copyScalarFieldForProvider(reference: string, serviceId: string, attemptId: string, field: string, targetKey: string): string {
+    if (!this.ownsReference(reference, serviceId, attemptId)) throw new Error('Credential reference does not belong to this connection attempt.');
+    if (!/^llm\.provider-key\.[a-z0-9_-]+$/.test(targetKey)) throw new Error('Invalid provider key target.');
+    const key = String(reference || '').replace(/^vault:/, '');
+    if (!key.startsWith('connection.credentials.')) throw new Error('Invalid connection credential reference.');
+    const vault = getVault(this.configDir);
+    const raw = vault.get(key, 'connection-secure-input:consumer')?.expose();
+    if (!raw) throw new Error('Credential is unavailable.');
+    let envelope: unknown;
+    try { envelope = JSON.parse(raw); } catch { throw new Error('Credential envelope is invalid.'); }
+    const value = envelope && typeof envelope === 'object' && !Array.isArray(envelope) ? (envelope as Record<string, unknown>)[field] : undefined;
+    if (typeof value !== 'string' || !value) throw new Error('Credential field is missing.');
+    vault.set(targetKey, value, 'connection-secure-input:provider-copy');
+    return `vault:${targetKey}`;
+  }
+
   status(id: string): { valid: boolean; serviceId?: string; attemptId?: string; expiresAt?: string; fields?: Array<{ key: string; label: string; required?: boolean }> } {
     const session = this.sessions.get(id);
     if (!session || session.consumed || session.expiresAt <= Date.now()) return { valid: false };

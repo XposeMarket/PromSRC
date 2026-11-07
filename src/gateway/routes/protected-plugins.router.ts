@@ -46,7 +46,7 @@ router.get('/api/protected-plugins/saved', (_req, res) => {
   res.json({ credentials: [{ id: 'x', name: 'X OAuth app', configured: status.credentialsConfigured, connected: status.connected, stopped: state.stopped, history: state.history }], connections: getConnectionRuntime().orchestrator.listConnections().filter(item => item.credentialRef).map(item => ({ id: item.id, serviceId: item.serviceId, configured: item.configured, authenticated: item.authenticated, authState: item.authState, stopped: pluginCredentialState(directory, item.serviceId).stopped, history: pluginCredentialState(directory, item.serviceId).history })) });
 });
 router.post('/api/protected-plugins/x/:action', (req, res, next) => {
-  if (['stop', 'disconnect'].includes(req.params.action)) {
+  if (req.params.action === 'stop') {
     if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
     next(); return;
   }
@@ -64,7 +64,7 @@ router.post('/api/protected-plugins/x/:action', (req, res, next) => {
 });
 
 router.post('/api/protected-plugins/connection/:id/:action', (req, res, next) => {
-  if (['stop', 'disconnect'].includes(req.params.action)) {
+  if (req.params.action === 'stop') {
     if (!secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
     next(); return;
   }

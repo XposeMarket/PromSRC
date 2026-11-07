@@ -45,6 +45,13 @@ const DERIVED_KEY_CACHE_MAX_ENTRIES = 256;
 // caller (MCP env refs, config.resolveSecret, webhooks, model tools) gets no value.
 const SECURE_ACCESS_RESERVED_PREFIX = 'secure.access.';
 const SECURE_ACCESS_TRUSTED_CALLER = 'secure-access';
+// Connection/plugin credential refs (connection.credentials.<service>.<uuid>) are readable only by
+// the explicit consumers below. Generic callers (config.resolveSecret, model tools, MCP env refs) get nothing.
+export const CONNECTION_CREDENTIAL_PREFIX = 'connection.credentials.';
+export const CONNECTION_CREDENTIAL_CONSUMER_CALLERS: ReadonlySet<string> = new Set(['protected-plugin:consumer', 'connection-secure-input:consumer']);
+function isConnectionCredentialKey(key: string): boolean {
+  return String(key ?? '').trim().startsWith(CONNECTION_CREDENTIAL_PREFIX);
+}
 function isReservedSecureAccessKey(key: string): boolean {
   return String(key ?? '').trim().toLowerCase().startsWith(SECURE_ACCESS_RESERVED_PREFIX);
 }
@@ -471,6 +478,10 @@ export class SecretVault {
    * Returns null if missing or expired.
    */
   get(key: string, caller = 'unknown'): SecretValue | null {
+    if (isConnectionCredentialKey(key) && !CONNECTION_CREDENTIAL_CONSUMER_CALLERS.has(caller)) {
+      this.audit('DENY', key, caller);
+      return null;
+    }
     if (isReservedSecureAccessKey(key) && caller !== SECURE_ACCESS_TRUSTED_CALLER) {
       this.audit('DENY', key, caller);
       return null;

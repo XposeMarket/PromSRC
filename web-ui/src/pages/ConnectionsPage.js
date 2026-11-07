@@ -972,7 +972,7 @@ async function startCanonicalConnection(id) {
 async function disconnectCanonicalConnection(connectionId, id) {
   if (!confirm('Disconnect this account and revoke the provider grant when supported?')) return;
   try {
-    await api(`/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`, { method: 'POST', body: '{}' });
+    await postJson(api, `/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`, {}, 'Disconnect account and clear its local credential');
     await loadConnectionsState();
     if (getConnectorById(id)) openConnectorView(id);
     showToast('Disconnected', 'The local session was cleared and provider revocation was attempted.', 'success');

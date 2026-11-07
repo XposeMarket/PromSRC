@@ -16,7 +16,7 @@ try {
   assert(!service.ownsReference('vault:openai.oauth_tokens', 'fixture', 'attempt-1'));
   assert.throws(() => service.clearReference('vault:openai.oauth_tokens', 'fixture', 'attempt-1'));
   assert.throws(() => service.clearReference(result.credentialRef, 'fixture', 'wrong-attempt'));
-  const read = new SecretVault(dir).get(result.credentialRef.replace('vault:', ''))?.expose(); assert.equal(JSON.parse(read!).api_key, '  CANARY_KEY  ');
+  const read = new SecretVault(dir).get(result.credentialRef.replace('vault:', ''), 'connection-secure-input:consumer')?.expose(); assert.equal(JSON.parse(read!).api_key, '  CANARY_KEY  ');
 
   // Pre-existing connection ref (no ownership index entry): refused by default,
   // cleared only via the trusted persisted connection.credentialRef flag.

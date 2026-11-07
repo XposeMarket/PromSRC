@@ -1,3 +1,4 @@
+import { publicConnectionValue } from './serialize-public';
 import { randomUUID } from 'crypto';
 import { ConnectionAdapterRegistry } from './adapter-registry';
 import { ConnectionActivityStore } from './activity-store';
@@ -257,8 +258,23 @@ export class ConnectionOrchestrator {
     return failed;
   }
 
+  /** Persist a manageable pending record before adapter continuation can fail. */
+  recordStoredCredential(id: string, credentialRef: string): void {
+    const attempt = this.requireAttempt(id);
+    if (!attempt.plan || !['api-key', 'setup-token'].includes(attempt.plan.strategy.adapter) || this.options.validateCredentialReference?.(credentialRef, attempt.serviceId, id) !== true) throw new Error('CREDENTIAL_BINDING_MISMATCH');
+    const record = this.options.connections.upsert({
+      pluginId: attempt.plan.pluginId || attempt.pluginId || 'core', serviceId: attempt.serviceId, serviceName: attempt.serviceName,
+      strategyId: attempt.plan.strategy.id, adapterId: attempt.plan.strategy.adapter, installed: true, enabled: true,
+      configured: true, authenticated: false, registered: false, exposed: false, verified: false,
+      authState: 'pending', health: 'unknown', grantedCapabilities: attempt.requestedCapabilities,
+      registeredTools: [], exposedTools: [], credentialRef,
+    });
+    this.options.attempts.update(id, { connectionId: record.id });
+    this.emitAttempt(id);
+  }
+
   private requireAttempt(id: string): ConnectionAttempt { const attempt = this.options.attempts.get(id); if (!attempt) throw new Error(`Unknown connection attempt: ${id}`); return attempt; }
   private record(attempt: ConnectionAttempt, type: string, message: string): void { this.options.activity.append({ type, attemptId: attempt.id, connectionId: attempt.connectionId, serviceId: attempt.serviceId, pluginId: attempt.pluginId, message }); this.emitAttempt(attempt.id); }
   private emitAttempt(id: string): void { this.emit({ type: 'connection_attempt_updated', attempt: this.options.attempts.get(id) }); }
-  private emit(event: Record<string, unknown>): void { try { this.options.broadcast?.(event); } catch {} }
+  private emit(event: Record<string, unknown>): void { try { this.options.broadcast?.(publicConnectionValue(event)); } catch {} }
 }

@@ -19,6 +19,10 @@ const CODE_ALPHABET = 'ACDEFGHJKMNPQRTUVWXY3479';
 const CONSENT_PATHS = [
   [/^\/api\/protected-plugins\/x\/delete$/, 'Delete saved X app credentials and stop local access'],
   [/^\/api\/protected-plugins\/connection\/[^/]+\/delete$/, 'Delete saved plugin credentials and stop local access'],
+  [/^\/api\/protected-plugins\/x\/disconnect$/, 'Disconnect X and clear local tokens'],
+  [/^\/api\/protected-plugins\/connection\/[^/]+\/disconnect$/, 'Disconnect plugin and clear its local credential'],
+  [/^\/api\/connections\/disconnect$/, 'Disconnect connector access and clear its local credential'],
+  [/^\/api\/connections-v2\/[^/]+\/disconnect$/, 'Disconnect connection and clear its local credential'],
   [/^\/api\/connection-secure-input\/[^/]+$/, 'Save protected plugin credentials'],
   [/^\/api\/(connections\/credentials|auth\/x-api\/credentials)$/, 'Save protected connector app credentials'],
   [/^\/api\/secure-access\/requests\/[^/]+\/submit$/, 'Save protected access entered in this card'],

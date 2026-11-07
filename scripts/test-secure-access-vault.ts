@@ -43,7 +43,8 @@ try {
   vault.set('integrations.github.pat', 'ORDINARY_TOKEN_0001', 'test');
   assert.equal(vault.get('integrations.github.pat', 'mcp:GH')?.expose(), 'ORDINARY_TOKEN_0001');
   vault.set('connection.credentials.fixture.ordinary', '{"api_key":"ORDINARY_KEY_0001"}', 'test');
-  assert.ok(vault.get('connection.credentials.fixture.ordinary', 'config:resolve'));
+  assert.equal(vault.get('connection.credentials.fixture.ordinary', 'config:resolve'), null, 'connection refs require a bounded consumer');
+  assert.ok(vault.get('connection.credentials.fixture.ordinary', 'connection-secure-input:consumer'));
   assert.equal(vault.rotate('integrations.github.pat', 'ORDINARY_TOKEN_0002', 'test'), true);
 
   const audit = auditText();

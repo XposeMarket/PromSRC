@@ -26,7 +26,8 @@ export function resolveBoundPluginCredential(directory: string, serviceId: strin
   try {
     if (pluginCredentialState(directory, serviceId).stopped) return { handled: true };
     const binding = read(directory)[serviceId];
-    if (!binding) return { handled: false };
+    // Missing binding file with a generation > 0 means credentials were once stored: fail closed, never fall back to legacy/env.
+    if (!binding) return { handled: pluginCredentialState(directory, serviceId).generation > 0 };
     const owners = JSON.parse(fs.readFileSync(path.join(directory, 'connection-credential-owners.json'), 'utf8'));
     if (owners[binding.reference]?.serviceId !== serviceId || owners[binding.reference]?.attemptId !== binding.attemptId) return { handled: true };
     const raw = getVault(directory).get(binding.reference.replace(/^vault:/, ''), 'protected-plugin:consumer')?.expose();

@@ -28,6 +28,28 @@ export {
   isManagedMcpToolAvailable,
 } from './tool-surface';
 
+export interface OpenAiCompatibleRegisterDeps {
+  readConfig(): any;
+  updateConfig(patch: Record<string, unknown>): void;
+  copyCredential(reference: string, serviceId: string, attemptId: string, field: string, targetKey: string): string;
+}
+
+/**
+ * Register an openai-compatible provider. A connection-owned secret ref is copied into an
+ * ordinary provider vault key, and only that copied ref is written to config. The original
+ * connection.credentials.* ref is never stored in llm.providers.
+ */
+export function registerOpenAiCompatibleProvider(context: ConnectionAdapterContext, configuration: Record<string, unknown>, deps: OpenAiCompatibleRegisterDeps): { providerId: string; models: string[] } {
+  if (context.attempt.plan?.strategy.adapter !== 'openai-compatible-model') throw new Error('Provider registration requires the openai-compatible-model adapter.');
+  const cfg: any = deps.readConfig();
+  const providerId = String(configuration.providerId || context.attempt.serviceId).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  const models = Array.isArray(configuration.discoveredModels) ? configuration.discoveredModels.map(String) : [];
+  const apiKeyRef = context.credentialRef ? deps.copyCredential(context.credentialRef, context.attempt.serviceId, context.attempt.id, 'api_key', `llm.provider-key.${providerId}`) : '';
+  const providers = { ...(cfg.llm?.providers || {}), [providerId]: { ...(cfg.llm?.providers?.[providerId] || {}), api_key: apiKeyRef, base_url: String(configuration.baseUrl || configuration.endpoint || ''), model: String(configuration.model || models[0] || '') } };
+  deps.updateConfig({ llm: { ...(cfg.llm || {}), providers } });
+  return { providerId, models };
+}
+
 let singleton: { orchestrator: ConnectionOrchestrator; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
 
 function mcpServerId(context: ConnectionAdapterContext): string {
@@ -109,7 +131,9 @@ export function getConnectionRuntime() {
     probe: async (context, configuration) => {
       const baseUrl = String(configuration.baseUrl || configuration.endpoint || '').replace(/\/$/, '');
       if (!baseUrl) return { ok: false, error: 'Base URL is required.' };
-      const key = context.credentialRef ? getConfig().resolveSecret(context.credentialRef) : undefined;
+      const envelope = context.credentialRef ? secureInput.readForConsumer(context.credentialRef, context.attempt.serviceId, context.attempt.id) : undefined;
+      let key: string | undefined;
+      try { const value = envelope ? JSON.parse(envelope).api_key : undefined; key = typeof value === 'string' ? value : undefined; } catch { return { ok: false, error: 'Credential is unavailable.' }; }
       const headers: Record<string, string> = { Accept: 'application/json' };
       if (key) headers.Authorization = `Bearer ${key}`;
       try {
@@ -120,14 +144,11 @@ export function getConnectionRuntime() {
         return { ok: true, models, streaming: true, toolCalling: true, details: { status: response.status } };
       } catch (error: any) { return { ok: false, error: String(error?.message || error) }; }
     },
-    register: async (context, configuration) => {
-      const cfg: any = getConfig().getConfig();
-      const providerId = String(configuration.providerId || context.attempt.serviceId).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-      const models = Array.isArray(configuration.discoveredModels) ? configuration.discoveredModels.map(String) : [];
-      const providers = { ...(cfg.llm?.providers || {}), [providerId]: { ...(cfg.llm?.providers?.[providerId] || {}), api_key: context.credentialRef || '', base_url: String(configuration.baseUrl || configuration.endpoint || ''), model: String(configuration.model || models[0] || '') } };
-      getConfig().updateConfig({ llm: { ...(cfg.llm || {}), providers } } as any);
-      return { providerId, models };
-    },
+    register: async (context, configuration) => registerOpenAiCompatibleProvider(context, configuration, {
+      readConfig: () => getConfig().getConfig(),
+      updateConfig: (patch) => getConfig().updateConfig(patch as any),
+      copyCredential: (reference, serviceId, attemptId, field, targetKey) => secureInput.copyScalarFieldForProvider(reference, serviceId, attemptId, field, targetKey),
+    }),
   }));
 
   adapters.register(new CustomHttpConnectionAdapter({

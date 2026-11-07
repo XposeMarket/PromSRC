@@ -19054,3 +19054,37 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
 /* First-output status stays local to the pending assistant row. */
 pm-pending-status { display: block; margin: 6px 0; font-size: 12px; line-height: 1.5; color: var(--pm-text-muted, #9aa0ad); }
 pm-pending-status[hidden] { display: none; }
+
+/* Placement: stacked directly above the topmost visible bottom control
+   (new-chat context dock, else voice/keyboard launcher, else composer).
+   --sa-add-secret-bottom is measured in mobile-chat-page-runtime.js. It sits
+   above the dock layer (10040) but below popovers/sheets (10050+), and never
+   overlaps the dock's invisible native pickers. */
+body.pm-mobile-active .sa-add-secret-host-mobile {
+  position: fixed;
+  left: var(--pm-mobile-chrome-inset, 22px);
+  right: var(--pm-mobile-chrome-inset, 22px);
+  bottom: var(--sa-add-secret-bottom, calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom, 0px) + var(--pm-composer-live-height, 86px) + 120px));
+  z-index: 10045;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+body.pm-mobile-active .sa-add-secret-host-mobile > * {
+  pointer-events: auto;
+}
+body.pm-mobile-active .sa-add-secret-host-mobile > :not(.sa-add-secret-mobile) {
+  align-self: stretch;
+  max-height: calc(var(--pm-vvh, 100dvh) - var(--sa-add-secret-bottom, 260px) - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+body.pm-mobile-active .sa-add-secret-host-mobile .sa-add-secret-mobile {
+  min-height: 36px;
+}
+body.pm-mobile-active:has(.pm-new-chat-context-dock.pm-attach-popover-open, .pm-new-chat-context-dock.pm-context-popover-open) .sa-add-secret-host-mobile {
+  visibility: hidden;
+  pointer-events: none;
+}

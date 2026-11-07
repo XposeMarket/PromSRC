@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { publicConnectionValue } from '../../connections/serialize-public';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
@@ -6,6 +7,23 @@ import { bindPluginCredential } from '../../connections/plugin-credential-bindin
 import { requireProtectedOwner } from './secure-access.router';
 
 export const router = Router();
+// The dedicated non-plugin secure-input handoff retains its owned opaque reference.
+// All ordinary HTTP responses (including nested metadata and errors) are public.
+router.use((req, res, next) => {
+  if (!req.path.startsWith('/api/connection-secure-input/')) {
+    const json = res.json.bind(res);
+    res.json = ((value: any) => json(publicConnectionValue(value))) as typeof res.json;
+  }
+  next();
+});
+
+// Protected new refs (connection.credentials.*) are server-side handles only; never serialize them to HTTP clients.
+function redactProtectedRef(item: any): any {
+  const ref = typeof item?.credentialRef === 'string' ? item.credentialRef.replace(/^vault:/, '') : '';
+  if (!ref.startsWith('connection.credentials.')) return item;
+  const { credentialRef: _omitted, ...rest } = item;
+  return rest;
+}
 
 router.get('/api/connection-discovery', (req, res) => {
   const service = String(req.query.service || '').trim();
@@ -15,7 +33,7 @@ router.get('/api/connection-discovery', (req, res) => {
 });
 
 router.get('/api/connection-attempts', (req, res) => {
-  try { res.json({ success: true, attempts: getConnectionRuntime().orchestrator.listAttempts(Number(req.query.limit) || 50) }); }
+  try { res.json({ success: true, attempts: getConnectionRuntime().orchestrator.listAttempts(Number(req.query.limit) || 50).map(redactProtectedRef) }); }
   catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
 });
 
@@ -84,19 +102,34 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requi
       res.status(400).json({ success: false, error: 'UNSUPPORTED_PLUGIN' }); return;
     }
     const result = runtime.secureInput.submit(req.params.sessionId, req.body?.values || {});
-    if (bindable) {
-      bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!);
-      // Persist the consumer record in this transaction, not a second UI-only continuation.
-      await runtime.orchestrator.continue(session.attemptId!, { credentialRef: result.credentialRef });
+    if (!bindable) {
+      // Non-bindable consumers (e.g. openai-compatible probe) keep the opaque ref for their own continue step.
+      res.json({ success: true, credentialRef: result.credentialRef, fieldsReceived: result.fieldsReceived });
+      return;
     }
-    // Deliberately return only an opaque reference; submitted values never enter
-    // chat history or a model-facing tool result.
-    res.json({ success: true, credentialRef: result.credentialRef, fieldsReceived: result.fieldsReceived });
+    // Protected plugin path: bind, then finish continuation server-side. Never return the ref.
+    try {
+      runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
+      bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!);
+    } catch {
+      // Bind failed: remove the value we just wrote so no orphan secret remains.
+      try { runtime.secureInput.clearReference(result.credentialRef, session.serviceId!, session.attemptId!); } catch {
+        res.status(503).json({ success: false, error: 'CREDENTIAL_CLEANUP_REQUIRED' }); return;
+      }
+      res.status(400).json({ success: false, error: 'CREDENTIAL_BINDING_FAILED' }); return;
+    }
+    try {
+      await runtime.orchestrator.continue(session.attemptId!, { credentialRef: result.credentialRef });
+    } catch {
+      // Stored and bound, but continuation failed: honest pending status; do not ask the user to re-enter the key.
+      res.status(202).json({ success: true, status: 'STORED_CONNECTION_PENDING', fieldsReceived: result.fieldsReceived }); return;
+    }
+    res.json({ success: true, status: 'STORED', fieldsReceived: result.fieldsReceived });
   } catch { res.status(400).json({ success: false, error: 'SECURE_INPUT_INVALID' }); }
 });
 
 router.get('/api/connections-v2', (_req, res) => {
-  try { res.json({ success: true, connections: getConnectionRuntime().orchestrator.listConnections() }); }
+  try { res.json({ success: true, connections: getConnectionRuntime().orchestrator.listConnections().map(redactProtectedRef) }); }
   catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
 });
 
@@ -128,7 +161,7 @@ router.post('/api/connections-v2/:id/tools', (req, res) => {
   } catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
-router.post('/api/connections-v2/:id/disconnect', async (req, res) => {
+router.post('/api/connections-v2/:id/disconnect', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
   try { await getConnectionRuntime().orchestrator.disconnect(req.params.id); res.json({ success: true }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
