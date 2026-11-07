@@ -492,7 +492,7 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
             : 'Routine memory recovery waited for active work to finish before restarting.');
           // Idle and the warm handoff did not take effect: nothing is running,
           // so one cold restart loses nothing and actually frees the memory.
-          if (lifecycle.restartLeftProcessServing?.(outcome) && handoffPolicy !== 'never'
+          if (outcome === 'handoff_aborted' && handoffPolicy !== 'never'
             && !_gatewayDraining && readMemoryRecoveryDecision() === 'restart_idle') {
             console.warn(`[GatewayRuntime] Warm memory recovery did not replace this gateway (${String(outcome)}); no active work, so recycling cold.`);
             outcome = await restartWith('never', 'Routine memory recovery: the warm handoff did not take effect and no work was running, so the gateway was recycled cold.');

@@ -138,6 +138,8 @@ async function main() {
   const abortedBusy = harness(); abortedBusy.setActive(0); abortedBusy.setOutcome('handoff_aborted');
   abortedBusy.setOnRestart(() => abortedBusy.setActive(1)); abortedBusy.tick(); await abortedBusy.fire();
   assert.deepEqual(abortedBusy.restarts, ['prefer'], 'no cold fallback once work is running again');
+  const spawnFailed = harness(); spawnFailed.setActive(0); spawnFailed.setOutcome('spawn_failed'); spawnFailed.tick(); await spawnFailed.fire();
+  assert.deepEqual(spawnFailed.restarts, ['prefer'], 'no cold fallback after spawn_failed (the cold path is what failed)');
   assert.equal(abortedBusy.box._memoryPressureRestartScheduled, false);
   assert.equal(aborted.box._memoryPressureRestartScheduled, false, 'aborted handoff re-arms the memory watchdog');
   aborted.tick();

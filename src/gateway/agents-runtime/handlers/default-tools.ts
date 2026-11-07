@@ -1684,9 +1684,11 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
               if (reuseVerifiedBackendBuild) {
                 const restartOutcome = await gracefulRestart(ctx);
                 if (restartOutcome === 'handoff_aborted' || restartOutcome === 'spawn_failed') {
+                  // Release the coordinated batch so a retry is not blocked by a stale 'applying' batch.
+                  if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', `gateway restart did not take effect (${restartOutcome})`);
                   return {
                     name, args,
-                    result: `prom_apply_dev_changes applied the changes and reused the verified backend build, but the gateway restart did not take effect (${restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then retry gateway_restart.`,
+                    result: `prom_apply_dev_changes applied the changes and reused the verified backend build, but the gateway restart did not take effect (${restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then re-run prom_apply_dev_changes.`,
                     error: true,
                   };
                 }
@@ -1716,9 +1718,11 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
                 };
               }
               if (buildResult.restartOutcome === 'handoff_aborted' || buildResult.restartOutcome === 'spawn_failed') {
+                // Release the coordinated batch so a retry is not blocked by a stale 'applying' batch.
+                if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', `build passed; gateway restart did not take effect (${buildResult.restartOutcome})`);
                 return {
                   name, args,
-                  result: `prom_apply_dev_changes build passed (${buildResult.durationMs}ms), but the gateway restart did not take effect (${buildResult.restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then retry gateway_restart.`,
+                  result: `prom_apply_dev_changes build passed (${buildResult.durationMs}ms), but the gateway restart did not take effect (${buildResult.restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then re-run prom_apply_dev_changes.`,
                   error: true,
                 };
               }

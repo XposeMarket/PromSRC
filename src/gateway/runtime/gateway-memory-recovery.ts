@@ -107,8 +107,12 @@ export function isMemoryPressureSample(input: {
   rssThresholdBytes: number;
   heapRatio?: number;
 }): boolean {
-  if (input.rssThresholdBytes > 0 && input.rssBytes >= input.rssThresholdBytes) return true;
   const ratio = input.heapRatio ?? MEMORY_RECOVERY_HEAP_RATIO;
+  // On a scaled heap (6-8 GB, PR #834) a fixed 4 GiB RSS line would GC/recycle
+  // long before the heap is under real pressure, so the RSS line never sits
+  // below the routine heap line. Default ~4 GB heaps keep the 4 GiB line.
+  if (input.rssThresholdBytes > 0
+    && input.rssBytes >= gcConfirmThresholdBytes(input.rssThresholdBytes, input.heapLimitBytes, ratio)) return true;
   return ratio > 0 && input.heapLimitBytes > 0 && input.heapUsedBytes >= input.heapLimitBytes * ratio;
 }
 
@@ -136,9 +140,16 @@ export function decideActiveWorkMemoryRecovery(input: {
 }): ActiveWorkMemoryDecision {
   const valid = [input.rssBytes, input.heapUsedBytes, input.heapLimitBytes, input.freeMemoryBytes, input.thresholdBytes]
     .every((n) => Number.isFinite(n) && n >= 0);
-  const emergency = !valid || input.heapLimitBytes <= 0 || input.thresholdBytes <= 0
+  // The RSS emergency line scales with the real heap: on a scaled 6-8 GB heap a
+  // healthy gateway full of garbage passes 6 GB RSS before its routine heap
+  // line, and RSS does not drop right after a forced GC. thresholdBytes <= 0
+  // disables only the RSS arm (the heap and free-memory arms still apply).
+  const rssEmergencyBytes = input.thresholdBytes > 0
+    ? gcConfirmThresholdBytes(input.thresholdBytes, input.heapLimitBytes) * 1.5
+    : Number.POSITIVE_INFINITY;
+  const emergency = !valid || input.heapLimitBytes <= 0
     || input.heapUsedBytes >= input.heapLimitBytes * MEMORY_EMERGENCY_HEAP_RATIO
-    || input.rssBytes >= input.thresholdBytes * 1.5
+    || input.rssBytes >= rssEmergencyBytes
     || input.freeMemoryBytes < 256 * 1024 * 1024;
   if (emergency) return 'restart_emergency';
   return input.activeWork ? 'defer_active_work' : 'restart_idle';

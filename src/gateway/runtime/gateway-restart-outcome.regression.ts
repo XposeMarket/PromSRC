@@ -31,11 +31,20 @@ function heapSignals(): void {
   assert.equal(r.isMemoryPressureSample({ ...base, heapUsedBytes: 0.71 * 4 * GB }), true);
   assert.equal(r.isMemoryPressureSample({ ...base, heapUsedBytes: 0.71 * 4 * GB, heapRatio: 0 }), false, 'ratio 0 disables the heap signal');
   assert.equal(r.isMemoryPressureSample({ ...base, rssBytes: 4 * GB, heapUsedBytes: 0 }), true, 'RSS signal remains');
+  const scaled = { heapLimitBytes: 8 * GB, rssThresholdBytes: 4 * GB, heapUsedBytes: 1 * GB };
+  assert.equal(r.isMemoryPressureSample({ ...scaled, rssBytes: 4.5 * GB }), false, '8 GB heap: 4.5 GB RSS is not pressure (RSS line follows the heap line)');
+  assert.equal(r.isMemoryPressureSample({ ...scaled, rssBytes: 5.7 * GB }), true, '8 GB heap: RSS above 70% of the heap limit is pressure');
   // The Nov 2026 crash shape: default 4144 MB heap, heap climbing, RSS still under 4 GiB.
   assert.equal(r.isMemoryPressureSample({ rssBytes: 3.4 * GB, heapUsedBytes: 3.0 * GB, heapLimitBytes: 4144 * 1024 ** 2, rssThresholdBytes: 4 * GB }), true);
   const d = { activeWork: true, rssBytes: 1 * GB, heapLimitBytes: 4 * GB, freeMemoryBytes: 8 * GB, thresholdBytes: 4 * GB };
   assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, heapUsedBytes: 0.84 * 4 * GB }), 'defer_active_work');
   assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, heapUsedBytes: 0.86 * 4 * GB }), 'restart_emergency');
+  // Review R2 N1: the RSS emergency line scales with the real heap limit.
+  assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, heapLimitBytes: 4144 * 1024 ** 2, heapUsedBytes: 1 * GB, rssBytes: 6 * GB }), 'restart_emergency', 'default heap: 6 GB RSS is still an emergency');
+  assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, heapLimitBytes: 8 * GB, heapUsedBytes: 0.1 * GB, rssBytes: 6.6 * GB }), 'defer_active_work', '8 GB heap: 6.6 GB RSS of uncollected garbage (RSS lags a GC) is not an emergency');
+  assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, heapLimitBytes: 8 * GB, heapUsedBytes: 1 * GB, rssBytes: 8.5 * GB }), 'restart_emergency', '8 GB heap: RSS above 1.5 x 70% of the heap limit is an emergency');
+  assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, thresholdBytes: 0, heapUsedBytes: 0.75 * 4 * GB, rssBytes: 9 * GB }), 'defer_active_work', 'RSS threshold 0 disables only the RSS arm; it is not an emergency');
+  assert.equal(r.decideActiveWorkMemoryRecovery({ ...d, thresholdBytes: 0, heapUsedBytes: 0.86 * 4 * GB }), 'restart_emergency', 'heap emergency still applies with the RSS arm disabled');
   console.log('  heap signals: OK');
 }
 
