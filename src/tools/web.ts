@@ -11,6 +11,7 @@ import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline
 import { getActiveWorkspace } from './workspace-context.js';
 import { getConfig } from '../config/config.js';
 import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
+import { fetchPublicUrl } from './outbound-url-guard.js';
 import {
   createFxLookup, fxTweetMediaHints, fxTweetQuoteHasMedia, fxTweetToPayload, hasXMediaHints,
   isLikelyTruncatedXText, stripTrailingXLinks, type FxLookup,
@@ -467,10 +468,9 @@ function selectDominantStoryCluster(query: string, ranked: SearchResultItem[]): 
 }
 
 async function fetchCleanArticle(url: string, maxChars = 5000): Promise<string> {
-  const res = await fetch(url, {
+  const res = await fetchPublicUrl(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
     signal: AbortSignal.timeout(15_000),
-    redirect: 'follow',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const ct = String(res.headers.get('content-type') || '');
@@ -2315,10 +2315,10 @@ async function fetchWithDirectHeadStart(url: string, maxChars: number, tinyfishK
 
 async function fetchDirectContent(url: string, maxChars: number): Promise<ToolResult> {
   try {
-    const res = await fetch(url, {
+    // Untrusted URL: refuse loopback/private destinations on every redirect hop.
+    const res = await fetchPublicUrl(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
       signal: AbortSignal.timeout(20_000),
-      redirect: 'follow',
     });
     if (!res.ok) return { success: false, error: `HTTP ${res.status} from ${url}` };
 
@@ -3315,8 +3315,7 @@ async function downloadArtifactImage(args: {
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return undefined;
   try {
     const maxBytes = 10 * 1024 * 1024;
-    const response = await fetch(imageUrl, {
-      redirect: 'follow',
+    const response = await fetchPublicUrl(imageUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
@@ -3370,13 +3369,12 @@ export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): P
   const empty: PagePreviewMetadata = { url: normalizedUrl };
   if (!/^https?:\/\//i.test(normalizedUrl) || !isTinyFishFetchEligible(normalizedUrl)) return empty;
   try {
-    const res = await fetch(normalizedUrl, {
+    const res = await fetchPublicUrl(normalizedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Prometheus/1.0',
         'Accept': 'text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      redirect: 'follow',
       signal: AbortSignal.timeout(Math.max(500, Math.min(10_000, timeoutMs))),
     });
     const contentType = String(res.headers.get('content-type') || '');

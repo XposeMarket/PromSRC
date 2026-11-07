@@ -53,6 +53,7 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 ## 7. Gateway / runtime
 - After pulling into PromSRC: build (see [07](07-source-editing-and-pr-workflow.md)), then restart the gateway, then smoke test. **A running gateway serves old `dist/` until it restarts.**
 - Restarts pause in-flight background tasks (`paused on gateway_restart`). Resume or cancel them explicitly.
+- **Never `await import()` a stateful gateway module (lifecycle, config, registries) from source code.** Under tsx source mode it evaluates a SECOND module instance, and every later `require()` of that path returns the copy too. Module-level hooks/flags then look empty. This aborted 20 warm handoffs ("listener ownership hooks are not registered") and stuck the memory watchdog until heap OOM (Nov 2026). Use `require()` or a static import; process-wide state goes through `processSingleton()` (`src/gateway/runtime/process-singleton.ts`). See [02](02-startup-gateway-runtime.md) "Restart-path correctness".
 - Health check: `GET http://localhost:18789/...`. See [02](02-startup-gateway-runtime.md) for the exact endpoint.
 
 ## 8. Teams (see [09](09-teams.md))
@@ -76,3 +77,10 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 **Pending, not live (branch `fix/x-long-post-fetch`, 2026-11-05):** the detector used to miss the real oEmbed shape, where the clipped body ends `… pic.twitter.com/<id>` (or a `t.co` link), so long posts were returned as `truncated:false`. `isLikelyTruncatedXText()` now strips trailing `t.co` / `pic.twitter.com` / `pic.x.com` links (`stripTrailingXLinks`) before checking for the ellipsis. Recovered tweets carry `text_source:"fxtwitter"`, `text_complete:true`, `long_post:true`. If FxTwitter fails, the payload, stdout status head and first tweet carry `truncated:true`, `text_complete:false`, `long_post:true`, the tweet has `text_source:"oembed_preview"`, and the message starts with `INCOMPLETE:` and points to the browser. Fallback order: oEmbed, then FxTwitter, then flagged preview. The X API v2 connector is not used in web_fetch (no existing code path).
 
 `long_post` is a post-type hint only; completeness is `text_complete`/`truncated`.
+
+## 10. Dynamic import() duplicates stateful modules under tsx source mode
+- **Symptom:** a module's registry, hook or flag looks set in one place and empty in another. Restart hooks are missing, or a `process.on` listener runs twice or never.
+- **Cause:** under `node --require tsx/dist/preflight.cjs --import tsx/dist/loader.mjs src/gateway/server-v2.ts`, a `await import('./x.js')` from a non-entry module loads a second instance of `x`. Static imports and `require()` share one instance. Only the directly imported module is duplicated, not its static dependencies.
+- **Fix:** use `require('./x')` or a static import. If the state must be reached from several paths, make it a process singleton.
+- **Guard:** `npm run check:stateful-imports` (`scripts/check-stateful-dynamic-imports.mjs`) fails CI when a dynamic import of a stateful module is new or exceeds the baseline in `scripts/stateful-dynamic-imports.baseline.json`. Type-only `typeof import()` and `import().T` are ignored (AST scan). There is no processSingleton exemption: a module that keeps state in processSingleton has no top-level stateful shape and passes on its own. `__fixtures__/` and `*.fixture.ts` are excluded. Run `--print` to list every dynamic import.
+- Repro used to confirm the bug class: `workspace/plans/gateway-restart-interruptions/repro`.

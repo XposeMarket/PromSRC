@@ -4,6 +4,7 @@ import path from 'path';
 import sharp from 'sharp';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
+import { fetchPublicUrl } from '../tools/outbound-url-guard.js';
 import type {
   GeneratedImageAsset,
   ImageAspectRatio,
@@ -439,8 +440,8 @@ export function resolveSecretReference(value: unknown): string | undefined {
 }
 
 export async function fetchBinaryAsset(url: string): Promise<{ bytes: Buffer; mimeType?: string }> {
-  const response = await fetch(url, {
-    redirect: 'follow',
+  // Reference/mask image URLs can come from the model: refuse loopback/private hosts on every hop.
+  const response = await fetchPublicUrl(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
     },

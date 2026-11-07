@@ -8,7 +8,8 @@ async function main(): Promise<void> {
   const store = new Map<string, string>();
   const publicUrl = 'https://phone.example.test/';
   const redirectUri = 'https://phone.example.test/mcp-oauth/callback';
-  setMcpOAuthTestOverrides({ publicUrl, storage: store });
+  // Fixture hosts are fake; resolve them to a public address so the outbound guard allows them.
+  setMcpOAuthTestOverrides({ publicUrl, storage: store, lookup: async () => ['93.184.216.34'] });
   const originalFetch = globalThis.fetch;
   const registrations: string[][] = [];
   const exchanges: URLSearchParams[] = [];
