@@ -1,0 +1,426 @@
+{
+  "generatedBy": "node scripts/check-stateful-dynamic-imports.mjs --write-baseline",
+  "note": "Today's violations. Stale entries warn only. Remove an entry when its import is fixed.",
+  "violations": [
+    {
+      "file": "src/agents/ollama-client.ts",
+      "target": "src/auth/openai-oauth.ts",
+      "count": 1
+    },
+    {
+      "file": "src/agents/ollama-client.ts",
+      "target": "src/auth/xai-oauth.ts",
+      "count": 1
+    },
+    {
+      "file": "src/agents/ollama-client.ts",
+      "target": "src/config/config.ts",
+      "count": 2
+    },
+    {
+      "file": "src/connections/runtime.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 4
+    },
+    {
+      "file": "src/games-engine/assets.ts",
+      "target": "src/media-engine/providers.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/memory-executor.ts",
+      "target": "src/gateway/memory-index/memory-topics.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/connections/runtime.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 3
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/gateway/tools/composite-tools.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/security/vault.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/web-media-executor.ts",
+      "target": "src/games-engine/tool.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/web-media-executor.ts",
+      "target": "src/media-engine/tool.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/handlers/agents.ts",
+      "target": "src/gateway/tasks/task-router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
+      "target": "src/gateway/tools/composite-tools.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/subagent-executor.ts",
+      "target": "src/extensions/plugin-import/plugin-hooks.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/subagent-executor.ts",
+      "target": "src/gateway/tool-search.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/agents-runtime/subagent-executor.ts",
+      "target": "src/tools/ui-cards.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/approval-actions.ts",
+      "target": "src/gateway/tasks/task-router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/approval-actions.ts",
+      "target": "src/security/log-scrubber.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/browser-tools.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/comms/broadcaster.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/prometheus-questions.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
+      "count": 9
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/routes/proposals.router.ts",
+      "count": 4
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/session.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/teams/team-manager-runner.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/verification-flow.ts",
+      "count": 7
+    },
+    {
+      "file": "src/gateway/core/startup.ts",
+      "target": "src/gateway/routes/pairing.router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/core/startup.ts",
+      "target": "src/gateway/teams/team-manager-runner.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/creative/layer-extraction.ts",
+      "target": "src/gateway/creative/onnx/pipeline.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/llm-primary.ts",
+      "target": "src/providers/factory.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/mcp-manager.ts",
+      "target": "src/connections/tool-surface.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/mcp-manager.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/mcp-oauth.ts",
+      "target": "src/gateway/mcp-manager.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/process/model-call-worker.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/process/model-call-worker.ts",
+      "target": "src/providers/factory.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/process/model-call-worker.ts",
+      "target": "src/security/vault.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/prompt-context.ts",
+      "target": "src/config/local-model-prompts.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/prompt-context.ts",
+      "target": "src/gateway/projects/project-store.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/routes/chat.router.ts",
+      "target": "src/extensions/plugin-import/plugin-hooks.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/chat/voice/tool-helpers.ts",
+      "target": "src/tools/ui-cards.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/extensions.router.ts",
+      "target": "src/config/config.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/routes/extensions.router.ts",
+      "target": "src/gateway/mcp-manager.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/extensions.router.ts",
+      "target": "src/security/vault.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/routes/game-project.routes.ts",
+      "target": "src/games-engine/tool.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/goals.router.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 3
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/tasks/task-router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/tasks/task-store.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/teams/managed-teams.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/teams/team-dispatch-runtime.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/settings.router.ts",
+      "target": "src/security/log-scrubber.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/video-project.routes.ts",
+      "target": "src/media-engine/tool.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/scheduling/cron-scheduler.ts",
+      "target": "src/gateway/chat/chat-helpers.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/scheduling/schedule-precheck.ts",
+      "target": "src/gateway/chat/chat-helpers.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/scheduling/schedule-precheck.ts",
+      "target": "src/gateway/process/supervisor.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/server-v2.ts",
+      "target": "src/gateway/memory-index/memory-atoms-hybrid.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/server-v2.ts",
+      "target": "src/gateway/user-chrome-relay.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/browser-tools.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/tasks/task-router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/teams/managed-teams.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/teams/notify-bridge.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/task-router.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tasks/task-router.ts",
+      "target": "src/gateway/teams/notify-bridge.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/teams/managed-teams.ts",
+      "target": "src/gateway/tasks/task-router.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/teams/team-manager-runner.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tools/composite-tools.ts",
+      "target": "src/gateway/session.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/tools/composite-tools.ts",
+      "target": "src/providers/factory.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/engine.ts",
+      "target": "src/media-engine/fal-catalog.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/inspect.ts",
+      "target": "src/media-engine/engine.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/providers.ts",
+      "target": "src/image-generation/registry.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/providers.ts",
+      "target": "src/video-generation/registry.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/studio.ts",
+      "target": "src/gateway/creative/generative-pipeline.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/studio.ts",
+      "target": "src/media-engine/engine.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/studio.ts",
+      "target": "src/media-engine/providers.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/tool.ts",
+      "target": "src/gateway/session-wake.ts",
+      "count": 2
+    },
+    {
+      "file": "src/media-engine/tool.ts",
+      "target": "src/gateway/video-project-wake.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/tool.ts",
+      "target": "src/media-engine/transcribe.ts",
+      "count": 1
+    },
+    {
+      "file": "src/media-engine/transcribe.ts",
+      "target": "src/gateway/creative/generative-pipeline.ts",
+      "count": 1
+    },
+    {
+      "file": "src/providers/usage-awareness.ts",
+      "target": "src/providers/provider-usage-limits.ts",
+      "count": 1
+    }
+  ]
+}
