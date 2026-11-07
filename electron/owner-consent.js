@@ -22,6 +22,7 @@ const CONSENT_PATHS = [
   [/^\/api\/protected-plugins\/x\/disconnect$/, 'Disconnect X and clear local tokens'],
   [/^\/api\/protected-plugins\/connection\/[^/]+\/disconnect$/, 'Disconnect plugin and clear its local credential'],
   [/^\/api\/connections\/disconnect$/, 'Disconnect connector access and clear its local credential'],
+  [/^\/api\/auth\/x-api\/disconnect$/, 'Disconnect X and clear local tokens'],
   [/^\/api\/connections-v2\/[^/]+\/disconnect$/, 'Disconnect connection and clear its local credential'],
   [/^\/api\/connection-secure-input\/[^/]+$/, 'Save protected plugin credentials'],
   [/^\/api\/(connections\/credentials|auth\/x-api\/credentials)$/, 'Save protected connector app credentials'],

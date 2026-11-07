@@ -97,7 +97,7 @@ try {
 
   // Steer: native raw-body parser covers connections-v2 so the consent body hash matches; desktop and mobile disconnects are consent-aware.
   const appTs = read('src/gateway/core/app.ts');
-  assert(appTs.includes("'/api/protected-plugins', '/api/connections-v2', '/api/connections/disconnect'], express.json({ limit: '32kb', verify: keepRawBody })"), 'connections-v2 body is hashed from raw bytes');
+  assert(appTs.includes("'/api/protected-plugins', '/api/connections-v2', '/api/connections/disconnect', '/api/auth/x-api/disconnect'], express.json({ limit: '32kb', verify: keepRawBody })"), 'connections-v2 body is hashed from raw bytes');
   const connPage = read('web-ui/src/pages/ConnectionsPage.js');
   assert(connPage.includes('await postJson(api, `/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`'), 'desktop canonical disconnect uses consent-aware postJson');
   const mobPlugins = read('web-ui/src/mobile/mobile-plugins-page.js');

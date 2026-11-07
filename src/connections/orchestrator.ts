@@ -258,18 +258,35 @@ export class ConnectionOrchestrator {
     return failed;
   }
 
-  /** Persist a manageable pending record before adapter continuation can fail. */
-  recordStoredCredential(id: string, credentialRef: string): void {
+  /** Persist a manageable pending record before adapter continuation can fail. Returns the prior record (null when created here) for revert. */
+  recordStoredCredential(id: string, credentialRef: string): { prior: ConnectionRecord | null; connectionId: string } {
     const attempt = this.requireAttempt(id);
     if (!attempt.plan || !['api-key', 'setup-token'].includes(attempt.plan.strategy.adapter) || this.options.validateCredentialReference?.(credentialRef, attempt.serviceId, id) !== true) throw new Error('CREDENTIAL_BINDING_MISMATCH');
+    const pluginId = attempt.plan.pluginId || attempt.pluginId || 'core';
+    const prior = this.options.connections.findByService(attempt.serviceId).find((item) => item.pluginId === pluginId && item.strategyId === attempt.plan!.strategy.id) ?? null;
     const record = this.options.connections.upsert({
-      pluginId: attempt.plan.pluginId || attempt.pluginId || 'core', serviceId: attempt.serviceId, serviceName: attempt.serviceName,
+      pluginId, serviceId: attempt.serviceId, serviceName: attempt.serviceName,
       strategyId: attempt.plan.strategy.id, adapterId: attempt.plan.strategy.adapter, installed: true, enabled: true,
       configured: true, authenticated: false, registered: false, exposed: false, verified: false,
       authState: 'pending', health: 'unknown', grantedCapabilities: attempt.requestedCapabilities,
       registeredTools: [], exposedTools: [], credentialRef,
     });
     this.options.attempts.update(id, { connectionId: record.id });
+    this.emitAttempt(id);
+    return { prior, connectionId: record.id };
+  }
+
+  /** N4: after a bind failure, restore the prior record exactly, or delete the record this call created.
+   *  Never touches vault keys: the old key/binding is left as-is (fail closed via binding checks). */
+  revertStoredCredential(id: string, stored: { prior: ConnectionRecord | null; connectionId: string }): void {
+    if (stored.prior) {
+      const { id: _id, schemaVersion: _schema, createdAt: _created, ...patch } = stored.prior;
+      this.options.connections.update(stored.prior.id, patch);
+      this.options.attempts.update(id, { connectionId: stored.prior.id });
+    } else {
+      this.options.connections.delete(stored.connectionId);
+      this.options.attempts.update(id, { connectionId: undefined });
+    }
     this.emitAttempt(id);
   }
 

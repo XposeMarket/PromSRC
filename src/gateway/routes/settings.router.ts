@@ -1,4 +1,5 @@
 import { requireProtectedOwner } from './secure-access.router';
+import { setPluginCredentialState } from '../../security/plugin-credential-state';
 // src/gateway/routes/settings.router.ts
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
 import { Router } from 'express';
@@ -2739,7 +2740,11 @@ router.post('/api/auth/x-api/manual', async (req, res) => {
   }
 });
 
-router.post('/api/auth/x-api/disconnect', (req, res) => {
+// N2: owner-gated like the other X disconnect paths. Lifecycle tombstone is written before any token/credential mutation;
+// tombstone failure returns a fixed 503 and mutates nothing.
+router.post('/api/auth/x-api/disconnect', (req, res, next) => requireProtectedOwner(req, res, next), (req, res) => {
+  try { setPluginCredentialState(CONFIG_DIR_PATH, 'x', true, 'disconnect'); }
+  catch { res.status(503).json({ error: 'CONNECTOR_STOP_FAILED' }); return; }
   clearXApiTokens(CONFIG_DIR_PATH);
   if (req.body?.clearCredentials === true) clearXApiCredentials(CONFIG_DIR_PATH);
   refreshXAITools();

@@ -7,10 +7,12 @@ import { bindPluginCredential } from '../../connections/plugin-credential-bindin
 import { requireProtectedOwner } from './secure-access.router';
 
 export const router = Router();
+// N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
+const CONNECTION_PUBLIC_PREFIXES = ['/api/connections-v2', '/api/connection-attempts', '/api/connection-discovery'];
 // The dedicated non-plugin secure-input handoff retains its owned opaque reference.
 // All ordinary HTTP responses (including nested metadata and errors) are public.
 router.use((req, res, next) => {
-  if (!req.path.startsWith('/api/connection-secure-input/')) {
+  if (CONNECTION_PUBLIC_PREFIXES.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`)) && !req.path.startsWith('/api/connection-secure-input/')) {
     const json = res.json.bind(res);
     res.json = ((value: any) => json(publicConnectionValue(value))) as typeof res.json;
   }
@@ -108,10 +110,16 @@ router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requi
       return;
     }
     // Protected plugin path: bind, then finish continuation server-side. Never return the ref.
+    let stored: { prior: any; connectionId: string } | undefined;
     try {
-      runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
+      stored = runtime.orchestrator.recordStoredCredential(session.attemptId!, result.credentialRef);
       bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!);
     } catch {
+      // N4: correct the pending record first (restore the prior record or remove the one this request created).
+      // The previous vault key/binding is never touched here.
+      try { if (stored) runtime.orchestrator.revertStoredCredential(session.attemptId!, stored); } catch {
+        res.status(503).json({ success: false, error: 'CREDENTIAL_CLEANUP_REQUIRED' }); return;
+      }
       // Bind failed: remove the value we just wrote so no orphan secret remains.
       try { runtime.secureInput.clearReference(result.credentialRef, session.serviceId!, session.attemptId!); } catch {
         res.status(503).json({ success: false, error: 'CREDENTIAL_CLEANUP_REQUIRED' }); return;

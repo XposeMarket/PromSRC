@@ -18,6 +18,7 @@ import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
 import { mountSavedAccessSettings } from '../features/secure-access/secure-access-settings.js';
 import { openProtectedPluginCard } from '../features/secure-access/protected-plugin-card.js';
+import { postJson as postJsonConsent } from '../features/secure-access/secure-access-core.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
@@ -2916,7 +2917,7 @@ async function submitXApiOAuthCode() {
 }
 
 async function disconnectXApiOAuth() {
-  await api('/api/auth/x-api/disconnect', { method: 'POST', body: '{}' });
+  await postJsonConsent(api, '/api/auth/x-api/disconnect', {}, 'Disconnect X and clear local tokens');
   await refreshXApiStatus();
   setSettingsStatus(document.getElementById('x-api-oauth-status'), 'info', 'X API OAuth disconnected.');
 }
