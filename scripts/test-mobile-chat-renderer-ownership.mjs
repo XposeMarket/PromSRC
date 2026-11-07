@@ -144,6 +144,9 @@ const measurements = {
 // #820 integrated on #829: file-link marking plus authenticated canvas reads add
 // 699 gzip bytes (main 286161 -> combined 286860), within the previously reviewed
 // +713-byte feature increment. Keep the existing ~0.1% compression allowance.
-assert(measurements.gzipBytes <= 287150, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #821 protected saved access mounts the shared secure-access dock, composer secret
+// guard and Add-secret host on the mobile chat page: main 286860 -> 287460 gzip (+600).
+// Same ~0.1% compression allowance.
+assert(measurements.gzipBytes <= 287750, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
