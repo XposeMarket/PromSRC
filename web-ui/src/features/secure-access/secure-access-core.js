@@ -84,12 +84,45 @@ export function lockIcon(size = 20) {
 // F3: protected writes need the desktop app owner session or a paired phone.
 // Agent-driven/plain browsers fail closed; say so instead of a generic retry hint.
 export const OWNER_SURFACE_MESSAGE = 'For your security, approve this in the Prometheus desktop app or on a phone paired with it. This browser cannot approve protected access.';
+export const OWNER_CONSENT_MESSAGE = 'Not approved. Prometheus asks you to type a code in its own approval window for this; nothing was changed.';
 export function secureAccessErrorText(error, fallback) {
-  return /OWNER_SURFACE_REQUIRED/.test(String(error?.message || error || '')) ? OWNER_SURFACE_MESSAGE : fallback;
+  const text = String(error?.message || error || '');
+  if (/OWNER_SURFACE_REQUIRED/.test(text)) return OWNER_SURFACE_MESSAGE;
+  if (/OWNER_CONSENT_(REQUIRED|DECLINED|UNAVAILABLE)/.test(text)) return OWNER_CONSENT_MESSAGE;
+  return fallback;
 }
 
-export function postJson(fetchJson, path, body = {}) {
-  return fetchJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+// PR821 I1: actions that need a human-typed code in the native owner-approval window
+// when sent from the desktop app. Paired phones prove ownership with their device token.
+const CONSENT_ROUTE = /^\/api\/secure-access\/(requests\/[^/]+\/submit|credentials\/[^/]+\/(grants|replace|delete|login\/submit))$/;
+export function needsOwnerConsent(path) { return CONSENT_ROUTE.test(String(path || '').split('?')[0]); }
+export function ownerConsentBridge() {
+  try { return globalThis.prometheusOwnerConsent && typeof globalThis.prometheusOwnerConsent.request === 'function' ? globalThis.prometheusOwnerConsent : null; } catch { return null; }
+}
+export async function postJson(fetchJson, path, body = {}, detail = '') {
+  const json = JSON.stringify(body);
+  const headers = { 'Content-Type': 'application/json' };
+  const bridge = needsOwnerConsent(path) ? ownerConsentBridge() : null;
+  if (bridge) {
+    // The header binds this exact body string; send the same string unchanged.
+    let res;
+    try { res = await bridge.request({ method: 'POST', path: String(path).split('?')[0], body: json, detail }); }
+    catch { throw new Error('OWNER_CONSENT_UNAVAILABLE'); }
+    if (!res || res.approved !== true || !res.header) throw new Error('OWNER_CONSENT_DECLINED');
+    headers['X-Prom-Owner-Consent'] = res.header;
+  }
+  return fetchJson(path, { method: 'POST', headers, body: json });
+}
+
+/** Fail-closed banner for surfaces that cannot approve (plain browser, CLI-served web, Docker). */
+export function ownerSurfaceBanner(status) {
+  const owner = status && status.owner;
+  if (!owner || owner.canApprove) return null;
+  return el('div', { class: 'sa-card', role: 'note', 'data-sa-owner-blocked': 'true' },
+    el('div', { class: 'sa-hd' }, lockIcon(18), el('div', { style: 'display:grid;gap:2px' },
+      el('h3', { text: 'Approvals are off on this screen' }),
+      el('p', { text: owner.message || OWNER_SURFACE_MESSAGE }),
+      el('p', { class: 'sa-muted', text: 'Open the Prometheus desktop app, or a phone paired from it with owner approvals allowed. Revoke still works here.' }))));
 }
 
 export function storageLabel(storage) {
@@ -162,6 +195,8 @@ export function mountSecureAccessCard(host, opts = {}) {
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
   const persistentAllowed = status.persistentAllowed === true;
+  // Fail closed (I1/I3): surfaces without owner proof never collect the secret at all.
+  const ownerBlocked = !!(status.owner && status.owner.canApprove === false);
   const uid = `sa-${String(request.id || Math.random()).replace(/[^a-zA-Z0-9_-]/g, '')}`;
   let remember = persistentAllowed;
   let busy = false;
@@ -247,7 +282,7 @@ export function mountSecureAccessCard(host, opts = {}) {
   }
   function syncSave() {
     const needRecovery = secretInput.dataset.generated === 'true' && !recoveryBox.checked;
-    saveBtn.disabled = busy || needRecovery;
+    saveBtn.disabled = busy || needRecovery || ownerBlocked;
   }
 
   const scope = el('details', {},
@@ -264,7 +299,8 @@ export function mountSecureAccessCard(host, opts = {}) {
     genRow, recoveryRow, remSwitch, scope, errorLine,
     el('div', { class: 'sa-row' }, saveBtn, cancelBtn));
 
-  const body = el('div', { style: 'display:grid;gap:12px' }, form);
+  if (ownerBlocked) { secretInput.disabled = true; idInput.disabled = true; }
+  const body = el('div', { style: 'display:grid;gap:12px' }, ownerBlocked ? ownerSurfaceBanner(status) : null, form);
   const card = el('section', { class: 'sa-card', 'aria-labelledby': `${uid}-h`, 'data-secure-access-request': request.id || '' },
     el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
       el('h3', { id: `${uid}-h`, text: `${copy.title}: ${request.label || 'access'}` }),

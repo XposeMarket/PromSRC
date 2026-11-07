@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Router, type Request } from 'express';
 import { SECURE_ACCESS_OWNER_COOKIE, secureAccessOwnerToken, pairedDeviceOwnerProofTrusted } from '../../security/secure-access-owner';
+import { OWNER_CONSENT_HEADER, verifyConsent } from '../../security/secure-access-consent';
 import { AccessError } from '../../security/secure-access';
 import { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } from '../../security/secure-access-runtime';
 const defaultRuntime = { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin };
@@ -17,16 +18,33 @@ export function secureInputTransportAllowed(req: Pick<Request, 'headers' | 'sock
   } catch { return false; }
 }
 /**
- * Owner proof (F3). Origin, loopback and gateway auth are NOT owner proof: a model
- * terminal curl satisfies all three. Accepted: the Electron owner window's HttpOnly
- * `prom_sa_owner` cookie, or a paired-device token when device minting is not
- * reachable by model tools (see pairedDeviceOwnerProofTrusted).
+ * Owner proof (F3) + per-action human consent (I1). Origin, loopback and gateway
+ * auth are NOT owner proof: a model terminal curl satisfies all three.
+ *  - Owner-proof routes accept the Electron owner window's HttpOnly `prom_sa_owner`
+ *    cookie, or a paired-device token whose owner provenance was recorded through
+ *    native desktop consent (see pairing-owner-provenance.ts).
+ *  - Consent routes (secret entry, regrant, replace, delete, sign-in approval)
+ *    additionally need, from the desktop window, a single-use X-Prom-Owner-Consent
+ *    header that only Electron main mints after the human completes the native,
+ *    capture-protected approval window. The cookie authenticates a window; the
+ *    header proves a human approved this exact request (method, path, body hash).
+ *    A paired phone with provenance is accepted on its own: desktop automation
+ *    tools cannot operate a separate physical device.
  */
-export type OwnerProof = { ownerToken: () => string; deviceTrusted: () => boolean; verifyDevice: (token: string) => boolean };
+export type OwnerProof = {
+  ownerToken: () => string;
+  /** Paired-device owner proof is possible on this install (Electron-managed, consent key present). */
+  deviceTrusted: () => boolean;
+  /** Token is valid, enabled AND carries native-consent owner provenance. */
+  verifyDevice: (token: string) => boolean;
+  /** Consumes a single-use consent header bound to this exact request. */
+  verifyConsent?: (req: any) => boolean;
+};
 const defaultOwnerProof: OwnerProof = {
   ownerToken: secureAccessOwnerToken,
   deviceTrusted: pairedDeviceOwnerProofTrusted,
-  verifyDevice: token => { try { return !!require('../pairing/pairing-store').verifyDeviceToken(token); } catch { return false; } },
+  verifyDevice: token => { try { return require('../pairing/pairing-owner-provenance').deviceHasOwnerProvenance(token); } catch { return false; } },
+  verifyConsent: req => verifyConsent(req.headers[OWNER_CONSENT_HEADER], req.method, String(req.originalUrl || '').split('?')[0], req.rawBody).ok,
 };
 function readCookie(header: unknown, name: string): string {
   for (const part of String(Array.isArray(header) ? header.join(';') : header || '').split(';')) {
@@ -35,24 +53,46 @@ function readCookie(header: unknown, name: string): string {
   }
   return '';
 }
-export function ownerProofOk(req: Pick<Request, 'headers'>, proof: OwnerProof): boolean {
+export function ownerCookieOk(req: Pick<Request, 'headers'>, proof: OwnerProof): boolean {
   const want = Buffer.from(proof.ownerToken() || '');
   const got = Buffer.from(readCookie(req.headers.cookie, SECURE_ACCESS_OWNER_COOKIE));
-  if (want.length > 0 && got.length === want.length && crypto.timingSafeEqual(got, want)) return true;
+  return want.length > 0 && got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+export function ownerDeviceOk(req: Pick<Request, 'headers'>, proof: OwnerProof): boolean {
   const device = req.headers['x-pairing-token'];
   return typeof device === 'string' && device.length > 0 && proof.deviceTrusted() && proof.verifyDevice(device);
 }
-/** Safe-direction aborts only; every other mutation needs owner proof. */
-const OWNER_EXEMPT = /^\/api\/secure-access\/(requests\/[^/]+\/cancel|credentials\/[^/]+\/login\/cancel)\/?$/;
+export function ownerProofOk(req: Pick<Request, 'headers'>, proof: OwnerProof): boolean {
+  return ownerCookieOk(req, proof) || ownerDeviceOk(req, proof);
+}
+/** Safe-direction actions only (abort, revoke): never need proof, so every surface has a visible reverse path. */
+const OWNER_EXEMPT = /^\/api\/secure-access\/(requests\/[^/]+\/cancel|credentials\/[^/]+\/login\/cancel|credentials\/[^/]+\/revoke)\/?$/;
+/** Human-consent actions: secret entry, regrant, replace, delete, sign-in approval. */
+const CONSENT_REQUIRED = /^\/api\/secure-access\/(requests\/[^/]+\/submit|credentials\/[^/]+\/(grants|replace|delete|login\/submit))\/?$/;
+export function ownerSurfaceState(req: Pick<Request, 'headers'>, proof: OwnerProof = defaultOwnerProof) {
+  const desktop = ownerCookieOk(req, proof);
+  const device = !desktop && ownerDeviceOk(req, proof);
+  return {
+    canApprove: desktop || device,
+    surface: desktop ? 'desktop' : device ? 'paired_device' : 'none',
+    message: desktop || device ? '' : 'Saving or changing protected access only works in the Prometheus desktop app or on a phone paired from it. You can still revoke access here.',
+  };
+}
 export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime, proof: OwnerProof = defaultOwnerProof) {
 const { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } = runtime;
 const router = Router();
 const mutationTimes = new Map<string, number[]>();
 router.use('/api/secure-access', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
+  const routePath = String(req.originalUrl || '').split('?')[0];
   if (req.method !== 'GET' && !secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
-  if (req.method !== 'GET' && !OWNER_EXEMPT.test(String(req.originalUrl || '').split('?')[0]) && !ownerProofOk(req, proof)) {
-    res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED', message: 'Approve this in the Prometheus desktop app or on a phone paired with it.' }); return;
+  if (req.method !== 'GET' && !OWNER_EXEMPT.test(routePath)) {
+    const device = ownerDeviceOk(req, proof);
+    const cookie = !device && ownerCookieOk(req, proof);
+    if (!device && !cookie) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED', message: 'Approve this in the Prometheus desktop app or on a phone paired with it.' }); return; }
+    if (cookie && CONSENT_REQUIRED.test(routePath) && !(proof.verifyConsent ? proof.verifyConsent(req) : false)) {
+      res.status(403).json({ error: 'OWNER_CONSENT_REQUIRED', message: 'Confirm this in the Prometheus owner approval window.' }); return;
+    }
   }
   if (req.method !== 'GET') {
     const key = req.socket.remoteAddress || 'unknown'; const now = Date.now();
@@ -66,7 +106,9 @@ router.use('/api/secure-access', (req, res, next) => {
 const safe = (fn: (req: any) => any) => async (req: any, res: any) => {
   try { res.json(await fn(req)); } catch (error) { res.status(error instanceof AccessError ? 400 : 503).json({ error: error instanceof AccessError ? error.code : 'SECURE_ACCESS_UNAVAILABLE' }); }
 };
-router.get('/api/secure-access/status', safe(() => secureAccessStatus()));
+// `owner` tells each surface whether it can approve here; surfaces without proof render a fail-closed state.
+router.get('/api/secure-access/status', safe(async req => ({ ...(await secureAccessStatus()), owner: ownerSurfaceState(req, proof) })));
+
 router.get('/api/secure-access/requests', safe(req => ({ requests: getSecureAccess().listRequests(typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined) })));
 router.get('/api/secure-access/credentials', safe(() => ({ credentials: secureAccessCredentials() })));
 router.post('/api/secure-access/requests', safe(req => ({ request: getSecureAccess().create({ sessionId: req.body.sessionId, label: req.body.label, purpose: req.body.purpose, origin: req.body.origin, mode: req.body.mode, identifier: req.body.identifier }) })));

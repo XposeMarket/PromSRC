@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createSecureAccessRouter, type OwnerProof } from '../src/gateway/routes/secure-access.router';
 import { captureGatewayOwnerSecrets, secureAccessOwnerToken, gatewayRespawnSecrets, pairedDeviceOwnerProofTrusted } from '../src/security/secure-access-owner';
+import { OWNER_CONSENT_HEADER, mintConsent, sha256Hex, verifyConsent, setConsentKeySourceForTests } from '../src/security/secure-access-consent';
 
 const OWNER = 'a'.repeat(64);
 type Spy = Record<string, number>;
@@ -36,7 +37,6 @@ function fakeRuntime(spy: Spy) {
 const MUTATIONS: Array<[string, object]> = [
   ['/requests', { origin: 'https://fixture.test', mode: 'existing', label: 'x' }],
   ['/requests/req_1/submit', { secret: 'DUMMY_SECRET_NOT_REAL', identifier: 'a@example.test' }],
-  ['/credentials/cred_1/revoke', {}],
   ['/credentials/cred_1/grants', { grants: ['main'] }],
   ['/credentials/cred_1/delete', { confirm: true }],
   ['/credentials/cred_1/replace', {}],
@@ -44,10 +44,13 @@ const MUTATIONS: Array<[string, object]> = [
   ['/credentials/cred_1/login/submit', { confirm: true }],
   ['/credentials/cred_1/outcome', { verified: true }],
 ];
+// I1: human-consent routes (cookie alone is not enough from the desktop window).
+const CONSENT_ROUTES = new Set(['/requests/req_1/submit', '/credentials/cred_1/grants', '/credentials/cred_1/delete', '/credentials/cred_1/replace', '/credentials/cred_1/login/submit']);
+const consentFor = (route: string, body: object, token = OWNER) => mintConsent(token, 'POST', '/api/secure-access' + route, sha256Hex(JSON.stringify(body)));
 
 async function withServer(proof: OwnerProof, fn: (call: (route: string, body?: object, extra?: Record<string, string>) => Promise<Response>, spy: Spy) => Promise<void>) {
   const spy: Spy = {};
-  const app = express(); app.use(express.json({ limit: '32kb' }));
+  const app = express(); app.use(express.json({ limit: '32kb', verify: (req: any, _res, buf) => { req.rawBody = Buffer.from(buf); } }));
   app.use(createSecureAccessRouter(fakeRuntime(spy), proof));
   const server = app.listen(0, '127.0.0.1'); await new Promise<void>(r => server.once('listening', r));
   const origin = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -59,30 +62,55 @@ async function withServer(proof: OwnerProof, fn: (call: (route: string, body?: o
 const total = (spy: Spy) => Object.entries(spy).filter(([k]) => !['listRequests', 'credentials', 'status', 'events'].includes(k)).reduce((n, [, v]) => n + v, 0);
 
 (async () => {
-  const proof: OwnerProof = { ownerToken: () => OWNER, deviceTrusted: () => true, verifyDevice: t => t === 'dev-ok' };
+  setConsentKeySourceForTests(() => OWNER);
+  const proof: OwnerProof = {
+    ownerToken: () => OWNER, deviceTrusted: () => true, verifyDevice: t => t === 'dev-ok',
+    verifyConsent: (req: any) => verifyConsent(req.headers[OWNER_CONSENT_HEADER], req.method, String(req.originalUrl).split('?')[0], req.rawBody).ok,
+  };
 
   await withServer(proof, async (call, spy) => {
     for (const [route, body] of MUTATIONS) {
-      for (const extra of [{}, { cookie: 'prom_sa_owner=' + 'b'.repeat(64) }, { cookie: 'prom_sa_owner=short' }, { cookie: 'other=' + OWNER }, { 'x-pairing-token': 'bad' }]) {
+      for (const extra of [{}, { cookie: 'prom_sa_owner=' + 'b'.repeat(64) }, { cookie: 'prom_sa_owner=short' }, { cookie: 'other=' + OWNER }, { 'x-pairing-token': 'bad' }, { [OWNER_CONSENT_HEADER]: consentFor(route, body) }]) {
         const res = await call(route, body, extra as any);
         assert.equal(res.status, 403, `${route} ${JSON.stringify(extra)}`);
         assert.equal((await res.json() as any).error, 'OWNER_SURFACE_REQUIRED');
       }
     }
     assert.equal(total(spy), 0, 'runtime must not be invoked without owner proof: ' + JSON.stringify(spy));
+    const cookie = `theme=dark; prom_sa_owner=${OWNER}`;
     for (const [route, body] of MUTATIONS) {
       const before = total(spy);
-      const res = await call(route, body, { cookie: `theme=dark; prom_sa_owner=${OWNER}` });
-      assert.equal(res.status, 200, `${route} owner cookie`);
-      assert(total(spy) > before, `${route} runtime invoked with owner cookie`);
+      const res = await call(route, body, { cookie });
+      if (CONSENT_ROUTES.has(route)) {
+        // I1: owner window cookie alone (what desktop automation driving the window gets) is refused.
+        assert.equal(res.status, 403, `${route} cookie without consent`);
+        assert.equal((await res.json() as any).error, 'OWNER_CONSENT_REQUIRED');
+        assert.equal(total(spy), before, `${route} runtime untouched without consent`);
+        // Consent bound to another route/body/key, expired, or malformed is refused.
+        for (const bad of [consentFor('/credentials/cred_9/delete', body), consentFor(route, { ...body, tampered: true }), consentFor(route, body, 'c'.repeat(64)), mintConsent(OWNER, 'POST', '/api/secure-access' + route, sha256Hex(JSON.stringify(body)), Date.now() - 200_000), 'v1.1.2.3']) {
+          assert.equal((await call(route, body, { cookie, [OWNER_CONSENT_HEADER]: bad })).status, 403, `${route} bad consent`);
+        }
+        const good = consentFor(route, body);
+        assert.equal((await call(route, body, { cookie, [OWNER_CONSENT_HEADER]: good })).status, 200, `${route} cookie + consent`);
+        assert.equal((await call(route, body, { cookie, [OWNER_CONSENT_HEADER]: good })).status, 403, `${route} consent replay`);
+      } else {
+        assert.equal(res.status, 200, `${route} owner cookie`);
+      }
+      assert(total(spy) > before, `${route} runtime invoked with owner proof`);
     }
-    for (const [route, body] of MUTATIONS) assert.equal((await call(route, body, { 'x-pairing-token': 'dev-ok' })).status, 200, `${route} paired device`);
-    // Cancel routes are safe-direction aborts: allowed without proof.
+    for (const [route, body] of MUTATIONS) assert.equal((await call(route, body, { 'x-pairing-token': 'dev-ok' })).status, 200, `${route} paired device with provenance`);
+    // Safe-direction actions (cancel, revoke) never need proof: every surface keeps a reverse path.
     assert.equal((await call('/requests/req_1/cancel', {})).status, 200);
     assert.equal((await call('/credentials/cred_1/login/cancel', {})).status, 200);
+    assert.equal((await call('/credentials/cred_1/revoke', {})).status, 200);
     for (const route of ['/status', '/requests', '/credentials', '/credentials/cred_1/audit']) assert.equal((await call(route)).status, 200, route);
+    // Status tells each surface whether it can approve (fail-closed UI state).
+    assert.equal(((await (await call('/status')).json()) as any).owner.canApprove, false);
+    assert.equal(((await (await call('/status', undefined, { cookie })).json()) as any).owner.surface, 'desktop');
+    assert.equal(((await (await call('/status', undefined, { 'x-pairing-token': 'dev-ok' })).json()) as any).owner.surface, 'paired_device');
     // Path tricks must not reach the exemption.
     assert.equal((await call('/requests/req_1/cancel/../submit', { secret: 'x' })).status, 403);
+    assert.equal((await call('/credentials/cred_1/revoke/../delete', { confirm: true })).status, 403);
   });
 
   // Untrusted paired path (CLI/standalone, or gateway token configured): device token fails closed.

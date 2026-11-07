@@ -282,6 +282,23 @@ export function evaluateHardToolDeny(input: HardToolDenyInput): HardToolDenyDeci
     );
   }
 
+  // PR821 I1: protected owner approval. While the native owner-approval window is
+  // open, no desktop tool may read the screen or send input; tools may never target
+  // that window or the Saved access / pairing owner surfaces by name.
+  if (/^(desktop_|voice_desktop_)/.test(toolName)) {
+    let consentOpen = false;
+    try { consentOpen = require('../security/secure-access-consent').ownerConsentActive(); } catch { consentOpen = false; }
+    if (consentOpen) {
+      return deny('owner_approval_in_progress', 'An owner approval window is open. Desktop tools are paused until the owner finishes it.', 'Do not read the screen, click, type or press keys while Prometheus asks the owner for approval.', 'Wait for the owner to approve or cancel, then continue.');
+    }
+    if (/prometheus owner approval|owner-consent|promownerconsent/.test(argsText)) {
+      return deny('owner_approval_window', 'The owner approval window cannot be operated by tools.', 'Never target the Prometheus owner approval window.', 'Ask the owner to complete the approval themselves.');
+    }
+  }
+  if (/^(browser_|web_fetch|http_request|fetch_url)/.test(toolName) && /\/api\/(secure-access|owner-consent|pairing\/(approve|devices))/.test(argsText)) {
+    return deny('owner_surface_automation', 'Saved access and pairing owner endpoints are not available to browser or HTTP tools.', 'Use the secure_access tool; owner approvals happen only in the desktop app or on a paired phone.', 'Ask the owner to approve in the Prometheus desktop app or on their paired phone.');
+  }
+
   if (/^desktop_/.test(toolName)) {
     if (toolName === 'desktop_set_clipboard' && /(password|token|api[_-]?key|secret|2fa|otp)/i.test(argsText)) {
       return deny(

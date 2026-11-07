@@ -15,6 +15,8 @@ import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
+import { mobileGatewayFetch as secureAccessMobileFetch } from './mobile-api.js';
+import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
 let mobileBusyComposerModeLoaded = false;
@@ -917,6 +919,23 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
   if (input) input.value = readComposerDraft(draftKeyFor());
+  // Protected access cards: same shared renderer as desktop. The dock stops
+  // polling and wipes card inputs when this chat page leaves the DOM.
+  {
+    const secureAccessHost = document.createElement('div');
+    secureAccessHost.className = 'sa-dock-mobile';
+    (form?.parentElement || page).appendChild(secureAccessHost);
+    const secureAccessSessionAtMount = String(requestedSession || '').trim();
+    mountSecureAccessDock(secureAccessHost, {
+      fetchJson: (path, opts = {}) => secureAccessMobileFetch(path, opts),
+      sessionId: secureAccessSessionAtMount,
+      getSessionId: () => String(requestedSession || '').trim(),
+      onResolved: createSecureAccessContinuation((text, meta) => {
+        if (String(requestedSession || '').trim() !== meta.sessionId) return;
+        return sendMessage(text);
+      }),
+    });
+  }
   // One-shot handoff from other routes (e.g. Creative → Video "Plan with Prom").
   try {
     const handoff = sessionStorage.getItem('pm_mobile_prefill_chat');

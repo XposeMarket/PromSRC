@@ -35,7 +35,9 @@ import {
   verifyDeviceToken,
 } from '../pairing/pairing-store';
 import { broadcastWS } from '../comms/broadcaster';
-import { requirePairingAdmin } from '../pairing/pairing-admin-auth';
+import { requirePairingAdmin, evaluatePairingAdminRequest } from '../pairing/pairing-admin-auth';
+import { grantDeviceOwnerProvenance, revokeDeviceOwnerProvenance, deviceOwnerProvenance } from '../pairing/pairing-owner-provenance';
+import { OWNER_CONSENT_HEADER, verifyConsent } from '../../security/secure-access-consent';
 import { getGatewayDescriptor } from '../gateway-identity';
 import { listSessionSummaries, searchSessionSummaries } from '../session';
 import { listTaskSummaries } from '../tasks/task-store';
@@ -262,6 +264,7 @@ function _publicDevice(d: any) {
     lastSeenAt: d.lastSeenAt,
     lastIpHint: d.lastIpHint,
     lastUserAgent: d.lastUserAgent,
+    ownerApproval: (() => { try { return !!deviceOwnerProvenance(d.id); } catch { return false; } })(),
   };
 }
 
@@ -483,8 +486,33 @@ router.patch('/api/pairing/devices/:id', requirePairingAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// ── desktop: paired-phone owner approvals (PR821 I2) ──────────────────────
+// Granting needs the Electron pairing authority AND a single-use native owner
+// consent header (human typed the capture-protected code). Gateway-token or
+// standalone loopback authority can never grant it, so devices minted while such
+// authority existed stay fail-closed. Revoking is always allowed (reverse path).
+router.post('/api/pairing/devices/:id/owner-approval', requirePairingAdmin, (req: any, res) => {
+  const id = String(req.params.id || '');
+  if (evaluatePairingAdminRequest(req).ok !== true || (evaluatePairingAdminRequest(req) as any).authority !== 'electron') {
+    return res.status(403).json({ success: false, error: 'Only the Prometheus desktop app can allow a phone to approve protected access.' });
+  }
+  if (!verifyConsent(req.headers[OWNER_CONSENT_HEADER], 'POST', String(req.originalUrl || '').split('?')[0], req.rawBody).ok) {
+    return res.status(403).json({ success: false, error: 'OWNER_CONSENT_REQUIRED' });
+  }
+  if (!grantDeviceOwnerProvenance(id)) return res.status(404).json({ success: false, error: 'Device not found or disabled.' });
+  broadcastWS({ type: 'pairing_device_changed', deviceId: id });
+  res.json({ success: true, ownerApproval: true });
+});
+router.delete('/api/pairing/devices/:id/owner-approval', requirePairingAdmin, (req, res) => {
+  const id = String(req.params.id || '');
+  revokeDeviceOwnerProvenance(id);
+  broadcastWS({ type: 'pairing_device_changed', deviceId: id });
+  res.json({ success: true, ownerApproval: false });
+});
+
 router.delete('/api/pairing/devices/:id', requirePairingAdmin, (req, res) => {
   const id = String(req.params.id || '');
+  revokeDeviceOwnerProvenance(id);
   const ok = removeDevice(id);
   if (!ok) return res.status(404).json({ success: false, error: 'Device not found.' });
   broadcastWS({ type: 'pairing_device_removed', deviceId: id });

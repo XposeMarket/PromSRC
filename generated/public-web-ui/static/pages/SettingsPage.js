@@ -16,6 +16,7 @@ import { renderContextSelection, wireContextSelection } from '../context-selecti
 
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
+import { mountSavedAccessSettings } from '../features/secure-access/secure-access-settings.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
@@ -541,8 +542,29 @@ async function installDesktopUpdate() {
   }
 }
 
+// Saved access (secure-access foundation): same shared renderer as mobile.
+let desktopSavedAccess = null;
+function mountDesktopSavedAccess() {
+  const host = document.getElementById('settings-secure-access-host');
+  if (!host) return;
+  if (desktopSavedAccess && host.firstChild) { desktopSavedAccess.refresh(); return; }
+  desktopSavedAccess = mountSavedAccessSettings(host, {
+    fetchJson: (path, opts = {}) => api(path, opts),
+    getSessionId: () => String(window.activeChatSessionId || '').trim(),
+    confirm: (message) => new Promise((resolve) => {
+      showConfirm(message, () => resolve(true), () => resolve(false), {
+        title: 'Delete saved access', confirmText: 'Delete', danger: true, onDismiss: () => resolve(false),
+      });
+    }),
+  });
+}
+
 function setSettingsTab(tab) {
   if (tab === 'credentials') tab = 'search';
+  // Saved access lives in Security; mobile deep links (#mobile/settings/saved-access)
+  // hand off here through openMobileSettings.
+  if (tab === 'saved-access') tab = 'security';
+  if (tab !== 'security') desktopSavedAccess?.clearDrafts();
   if (tab === 'migration') {
     // Keep the old navigation target working while the durable P11-37 flow
     // lives in General. The legacy migration service remains available to
@@ -609,7 +631,10 @@ function setSettingsTab(tab) {
             window._settingsSearchLoadedToUI = false;
           }));
         }
-        if (t === 'security') pendingLoads.push(loadSecuritySettings());
+        if (t === 'security') {
+          pendingLoads.push(loadSecuritySettings());
+          mountDesktopSavedAccess();
+        }
         if (t === 'migration') pendingLoads.push(loadMigrationPanel());
         if (t === 'shortcuts') pendingLoads.push(loadShortcutsPanel());
         if (t === 'pairing')   pendingLoads.push(loadPairingPanel());
@@ -7933,6 +7958,7 @@ async function refreshPairedDevices() {
           </div>
           <div style="display:flex;gap:6px">
             <button class="btn btn-sm" style="flex:1;background:${enabled ? '#fff' : '#16a34a'};color:${enabled ? 'var(--muted)' : '#fff'};border:1px solid ${enabled ? 'var(--line)' : '#16a34a'}" data-device-action="toggle" data-id="${escHtml(d.id)}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Disable' : 'Enable'}</button>
+            ${enabled && window.prometheusOwnerConsent ? `<button class="btn btn-sm" style="flex:1" data-device-action="owner" data-id="${escHtml(d.id)}" data-next="${d.ownerApproval ? 'false' : 'true'}" title="${d.ownerApproval ? 'This phone can save and approve protected access. Click to stop.' : 'Let this phone save and approve protected access (asks for a code on this computer).'}">${d.ownerApproval ? 'Stop owner approvals' : 'Allow owner approvals'}</button>` : ''}
             ${renderSettingsIconButton('trash', 'Remove', `data-device-action="remove" data-id="${escHtml(d.id)}"`, 'is-danger')}
           </div>
         </div>
@@ -7950,6 +7976,12 @@ async function refreshPairedDevices() {
             const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
             if (!ok?.success) throw new Error(ok?.error || 'Update failed');
             showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
+          } else if (act === 'owner') {
+            // PR821 I2: granting opens the native owner-approval window (code typed by the owner).
+            const next = btn.getAttribute('data-next') === 'true';
+            const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}/owner-approval`, { method: next ? 'POST' : 'DELETE', body: next ? JSON.stringify({}) : undefined });
+            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
+            showToast?.(next ? 'Phone can approve protected access' : 'Phone owner approvals stopped', '', 'success');
           } else if (act === 'remove') {
             if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return; }
             const ok = await pairingAdminApi(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });

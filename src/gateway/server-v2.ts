@@ -172,6 +172,7 @@ import { router as resourcesRouter } from './routes/resources.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
+import { router as ownerConsentRouter } from './routes/owner-consent.router';
 import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
 import { router as connectorOAuthCallbackRouter } from './routes/connector-oauth-callback.router';
 import { router as chatgptBridgeRouter, setChatGPTBridgeFallbackCatalog } from './routes/chatgpt-bridge.router';
@@ -1029,6 +1030,8 @@ startupMark('routers initialized');
 // reached by an unpaired phone. Desktop administration is independently gated
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
+// PR821 I1: HMAC-authenticated owner-approval lock from Electron main (no gateway credential).
+app.use('/', ownerConsentRouter);
 app.use('/', mcpOAuthCallbackRouter);
 app.use('/', connectorOAuthCallbackRouter);
 // Trigger webhooks are called by external services (GitHub, Zapier, local

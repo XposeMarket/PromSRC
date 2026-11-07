@@ -4078,6 +4078,8 @@ const PAIRING_ADMIN_ROUTES = [
   ['GET', /^\/api\/pairing\/devices$/],
   ['PATCH', /^\/api\/pairing\/devices\/[^/?#]+$/],
   ['DELETE', /^\/api\/pairing\/devices\/[^/?#]+$/],
+  ['POST', /^\/api\/pairing\/devices\/[^/?#]+\/owner-approval$/],
+  ['DELETE', /^\/api\/pairing\/devices\/[^/?#]+\/owner-approval$/],
   ['GET', /^\/api\/pairing\/remote-access$/],
   ['PUT', /^\/api\/pairing\/remote-access$/],
   ['GET', /^\/api\/pairing\/tailscale\/status$/],
@@ -4133,6 +4135,25 @@ function relayTeachEvent(event, channel, payload = {}) {
   }
 }
 
+// PR821 I1: per-action human consent. The owner cookie authenticates the window;
+// this native, capture-protected approval proves a human approved this request.
+const ownerConsent = require('./owner-consent').createOwnerConsent({
+  BrowserWindow, app, ipcMain, ownerToken: SECURE_ACCESS_OWNER_TOKEN,
+  getGatewayUrl: () => GATEWAY_URL, getParent: () => mainWindow,
+  log: (line) => { try { writeGatewayLog(line); } catch {} },
+});
+// Renderer passes the exact JSON body string it will send; the header binds its SHA-256.
+handleTrustedMain('owner-consent:request', async (_event, payload = {}) => {
+  const method = String(payload?.method || 'POST').toUpperCase();
+  const routePath = String(payload?.path || '');
+  const body = typeof payload?.body === 'string' ? payload.body : '';
+  if (Buffer.byteLength(body, 'utf8') > 32 * 1024) throw new Error('Approval request is too large.');
+  if (!/^\/api\/secure-access\//.test(routePath)) throw new Error('This action does not use owner approval.');
+  const header = await ownerConsent.request({ method, path: routePath, body, detail: String(payload?.detail || '') });
+  return header ? { approved: true, header } : { approved: false };
+});
+handleTrustedMain('owner-consent:status', () => ({ supported: ownerConsent.supported() }));
+
 handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
   const method = String(payload?.method || 'GET').trim().toUpperCase();
   const requestPath = String(payload?.path || '').trim();
@@ -4154,11 +4175,18 @@ handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
   if (body && Buffer.byteLength(body, 'utf8') > 64 * 1024) {
     throw new Error('Pairing administration request is too large.');
   }
+  // Allowing a paired phone to approve protected access needs native owner consent (PR821 I2).
+  let consentHeader = '';
+  if (method === 'POST' && /^\/api\/pairing\/devices\/[^/]+\/owner-approval$/.test(parsed.pathname)) {
+    consentHeader = await ownerConsent.request({ method, path: parsed.pathname, body: body || '', detail: 'The phone can then save, change and approve protected access without this computer.' });
+    if (!consentHeader) throw new Error('Owner approval was cancelled.');
+  }
   const response = await fetch(parsed.href, {
     method,
     headers: {
       'Content-Type': 'application/json',
       'X-Prometheus-Pairing-Admin': PAIRING_ADMIN_TOKEN,
+      ...(consentHeader ? { 'X-Prom-Owner-Consent': consentHeader } : {}),
     },
     body: method === 'GET' || method === 'HEAD' ? undefined : body,
   });

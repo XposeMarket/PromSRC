@@ -2,7 +2,7 @@
 // mobile Settings > Security. Metadata only: no API here returns stored values.
 import {
   SECURE_ACCESS_API, ensureSecureAccessStyles, el, lockIcon, postJson,
-  storageLabel, isExactHttpsOriginUrl, mountSecureAccessCard, secureAccessErrorText,
+  storageLabel, isExactHttpsOriginUrl, mountSecureAccessCard, secureAccessErrorText, ownerSurfaceBanner,
 } from './secure-access-core.js';
 
 const KIND_LABEL = { login: 'Login', api_key: 'API key', otp: 'One-time code' };
@@ -25,6 +25,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
   let status = null;
 
   const statusLine = el('p', { class: 'sa-muted' });
+  const ownerHost = el('div', { 'data-sa-owner-host': 'true' });
   const msgLine = el('p', { class: 'sa-muted', role: 'status', 'aria-live': 'polite' });
   const list = el('div', { style: 'display:grid;gap:10px' });
   const addHost = el('div', { style: 'display:grid;gap:10px' });
@@ -34,7 +35,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
       el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px' },
         el('h3', { text: 'Saved access' }),
         el('p', { text: 'Sign-ins and keys Prom can use for you on exact sites. Prom never sees the values, and posting, sending or buying still asks you separately.' }))),
-      statusLine, el('div', { class: 'sa-row' }, addBtn), addHost, msgLine),
+      statusLine, ownerHost, el('div', { class: 'sa-row' }, addBtn), addHost, msgLine),
     list);
   host.replaceChildren(root);
 
@@ -185,6 +186,11 @@ export function mountSavedAccessSettings(host, opts = {}) {
       ]);
       if (destroyed) return;
       status = st;
+      // Fail closed: surfaces without owner proof cannot add/change access, only revoke it.
+      const banner = ownerSurfaceBanner(st);
+      ownerHost.replaceChildren(...(banner ? [banner] : []));
+      addBtn.disabled = !!banner;
+      addBtn.title = banner ? 'Available in the Prometheus desktop app or on a paired phone' : '';
       statusLine.textContent = st?.persistentAllowed
         ? 'Remembered access is encrypted with this computer\'s protected key store. Programs already running as you on this computer are not blocked by it.'
         : 'This computer has no protected key store, so access is kept in memory only and cleared when Prometheus restarts.';
