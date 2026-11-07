@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "1363c6ed70036f6a",
-  "sourceDigest": "1363c6ed70036f6a6fa23228fdf84adfad7549f1d358fbb91dc6a41488a9e666",
+  "buildId": "d5b3f0a83fc32fe6",
+  "sourceDigest": "d5b3f0a83fc32fe69c6bc769102f9b5ef246e3b99a9df3d45809864d049b6963",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -25,7 +25,7 @@
     "mobile": {
       "html": "/mobile.html",
       "js": "/build/entries/mobile-VYJ2IZY3.js",
-      "css": "/build/styles/mobile-NSS3SNIT.css",
+      "css": "/build/styles/mobile-AFBIG744.css",
       "modulePreloads": []
     }
   },
@@ -164,15 +164,15 @@
         "/build/inline/mobile-inline-01-606d0eb0eaa3.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
-        "/build/styles/mobile-NSS3SNIT.css"
+        "/build/styles/mobile-AFBIG744.css"
       ],
       "files": 21,
-      "bytes": 1061582,
-      "gzipBytes": 246960,
+      "bytes": 1060616,
+      "gzipBytes": 246758,
       "jsBytes": 498560,
       "jsGzipBytes": 157193,
-      "cssBytes": 563022,
-      "cssGzipBytes": 89767
+      "cssBytes": 562056,
+      "cssGzipBytes": 89565
     }
   },
   "assets": [
@@ -4493,10 +4493,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-NSS3SNIT.css",
-      "bytes": 563022,
-      "gzipBytes": 89767,
-      "sha256": "d4c9232ef2fae952dff99e2eb6383bdf9b70b6b0a26928de4d57d9ba9671ab56",
+      "path": "/build/styles/mobile-AFBIG744.css",
+      "bytes": 562056,
+      "gzipBytes": 89565,
+      "sha256": "5718239bea8eff29d42db7fb419fb4080ebc49353c924b64ee1c2af5cc3948f8",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }
