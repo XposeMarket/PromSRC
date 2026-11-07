@@ -19,6 +19,7 @@
   },
   "scripts": {
     "test:x-fetch-media-routing": "tsx src/tools/x-fetch-media-routing.regression.ts",
+    "test:outbound-url-guard": "tsx src/tools/outbound-url-guard.regression.ts",
     "test:main-chat-reasoning-summary": "node scripts/test-main-chat-reasoning-summary.regression.mjs",
     "test:task-cancel-terminal": "tsx src/gateway/tasks/task-cancel-terminal.regression.ts",
     "test:background-restart-recovery": "tsx src/gateway/tasks/background-restart-recovery.regression.ts && tsx src/gateway/tasks/background-result-delivery.regression.ts",
