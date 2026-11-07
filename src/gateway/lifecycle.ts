@@ -24,6 +24,7 @@ import { getConfig } from '../config/config.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { releaseHandoffListeners, canExitAfterFailedHandoff, runListenerReleaseHandoff } from './runtime/gateway-handoff-safe-abort';
+import { processSingleton, registerModuleInstance } from './runtime/process-singleton';
 import { prepareActiveRuntimesForGatewayShutdown, prepareInitiatingRuntimesForGatewayHandoff } from './runtime-recovery';
 import { recordActiveMainChatGoalsInterruptedForRestart, recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
@@ -476,6 +477,8 @@ export interface BuildResult {
   success: boolean;
   output: string;
   durationMs: number;
+  /** Set by buildAndRestart when the build passed and a restart was attempted. */
+  restartOutcome?: RestartOutcome;
 }
 
 /**
@@ -545,10 +548,41 @@ interface ShutdownHooks {
   hasListeningGateway?: () => boolean;
 }
 
-let _shutdownHooks: ShutdownHooks = {};
+// Process-wide, not module-level: a duplicate lifecycle instance (dynamic
+// import() under tsx source mode) must see the hooks server-v2 registered and
+// the same handoff-draining flag. See runtime/process-singleton.ts.
+const _lifecycleState = processSingleton('lifecycle', () => ({
+  shutdownHooks: {} as ShutdownHooks,
+  handoffDraining: false,
+  ipcListenerInstalled: false,
+}));
+if (registerModuleInstance('lifecycle').instances > 1) {
+  console.warn('[lifecycle] lifecycle module was loaded more than once in this process (dynamic import() under tsx?). Sharing process state; use require() or a static import.');
+}
 
 export function setShutdownHooks(hooks: ShutdownHooks): void {
-  _shutdownHooks = { ..._shutdownHooks, ...hooks };
+  _lifecycleState.shutdownHooks = { ..._lifecycleState.shutdownHooks, ...hooks };
+}
+
+/** Diagnostics/tests: whether server-v2 registered a given hook in this process. */
+export function hasRegisteredShutdownHook(name: keyof ShutdownHooks): boolean {
+  return typeof _lifecycleState.shutdownHooks[name] === 'function';
+}
+
+/**
+ * What a restart request actually did. gracefulRestart used to return void on
+ * both a launched replacement and an aborted handoff, so watchdogs could not
+ * tell that this process was still serving.
+ */
+export type RestartOutcome =
+  | 'forwarded'        // draining host relayed the request to its replacement
+  | 'handoff_started'  // warm handoff committed; this process drains then exits
+  | 'handoff_aborted'  // warm handoff failed; this process keeps serving
+  | 'exiting'          // full restart; this process exits shortly
+  | 'spawn_failed';    // full restart could not launch a replacement; still serving
+
+export function restartLeftProcessServing(outcome: unknown): boolean {
+  return outcome === 'handoff_aborted' || outcome === 'spawn_failed';
 }
 
 // ─── Startup/Restart Notification Queue (durable across reconnects) ───────────
@@ -697,28 +731,28 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   }
   shutdownMark('main-chat goal checkpoints captured');
   shutdownMark('runtime checkpoints captured');
-  try { _shutdownHooks.stopCron?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopCron?.(); } catch (e: any) {
     console.warn('[lifecycle] Cron stop error:', e.message);
   }
-  try { _shutdownHooks.stopAutoSettle?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopAutoSettle?.(); } catch (e: any) {
     console.warn('[lifecycle] Auto-settle stop error:', e.message);
   }
-  try { _shutdownHooks.stopTimers?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopTimers?.(); } catch (e: any) {
     console.warn('[lifecycle] Timer stop error:', e.message);
   }
-  try { _shutdownHooks.stopInternalWatches?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopInternalWatches?.(); } catch (e: any) {
     console.warn('[lifecycle] Internal watch stop error:', e.message);
   }
-  try { _shutdownHooks.stopHeartbeat?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopHeartbeat?.(); } catch (e: any) {
     console.warn('[lifecycle] Heartbeat stop error:', e.message);
   }
-  try { _shutdownHooks.stopBrain?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopBrain?.(); } catch (e: any) {
     console.warn('[lifecycle] Brain stop error:', e.message);
   }
-  try { _shutdownHooks.stopTelegram?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.stopTelegram?.(); } catch (e: any) {
     console.warn('[lifecycle] Telegram stop error:', e.message);
   }
-  try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
     console.warn('[lifecycle] Runtime worker stop error:', e.message);
   }
   shutdownMark('runtime workers stopped');
@@ -728,17 +762,17 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   shutdownMark('desktop background stopped');
 
   // 2. Flush sessions to disk
-  try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.flushSessions?.(); } catch (e: any) {
     console.warn('[lifecycle] Session flush error:', e.message);
   }
   shutdownMark('sessions flushed');
 
   // 3. Close network listeners
-  try { _shutdownHooks.closeWebSocket?.(); } catch (e: any) {
+  try { _lifecycleState.shutdownHooks.closeWebSocket?.(); } catch (e: any) {
     console.warn('[lifecycle] WebSocket close error:', e.message);
   }
   shutdownMark('websocket listeners closed');
-  try { await _shutdownHooks.closeHttpServer?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.closeHttpServer?.(); } catch (e: any) {
     console.warn('[lifecycle] HTTP server close error:', e.message);
   }
   shutdownMark('http listeners closed');
@@ -758,8 +792,6 @@ type HandoffLauncher = 'supervisor_ipc' | 'electron_ipc' | 'self_spawn';
 function hasLauncherIpcChannel(): boolean {
   return typeof process.send === 'function' && process.connected === true;
 }
-
-let _handoffDraining = false;
 
 /** Acknowledged child → launcher → active-child relay; never invoke a second restart on this host. */
 async function forwardDrainingRestart(ctx: RestartContext): Promise<number | undefined> {
@@ -788,7 +820,7 @@ async function forwardDrainingRestart(ctx: RestartContext): Promise<number | und
 }
 
 // The active child receives exactly one hop. A draining replacement refuses it.
-process.on('message', (value: unknown) => {
+function handleHandoffRestartMessage(value: unknown): void {
   if (!isHandoffRestartRequest(value)) return;
   const sendResult = (accepted: boolean, error?: string) => {
     if (hasLauncherIpcChannel()) process.send!({
@@ -796,7 +828,7 @@ process.on('message', (value: unknown) => {
       pid: process.pid, ...(error ? { error } : {}),
     });
   };
-  if (!acceptHandoffRestart(_handoffDraining, value)) {
+  if (!acceptHandoffRestart(_lifecycleState.handoffDraining, value)) {
     sendResult(false, 'Replacement is itself draining or the request lacks a single-hop marker');
     return;
   }
@@ -805,10 +837,16 @@ process.on('message', (value: unknown) => {
     void gracefulRestart(value.context).catch((error) =>
       console.error(`[lifecycle] Forwarded restart failed: ${error?.message || error}`));
   });
-});
+}
+// Installed once per process, so a duplicate module instance cannot handle a
+// forwarded restart twice.
+if (!_lifecycleState.ipcListenerInstalled) {
+  _lifecycleState.ipcListenerInstalled = true;
+  process.on('message', handleHandoffRestartMessage);
+}
 
 export function isGatewayHandoffDraining(): boolean {
-  return _handoffDraining;
+  return _lifecycleState.handoffDraining;
 }
 
 function handoffMaxDrainMs(): number {
@@ -912,7 +950,7 @@ function startColdRecoveryLoop(): void {
   void tick();
 }
 
-async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHandoffPlan): Promise<void> {
+async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHandoffPlan): Promise<RestartOutcome> {
   // Order: prepare the socket/manifest (no globals) -> release listeners ->
   // commit (checkpoint, context, activate, drain mode, teardown). Any failure
   // after release reopens the predecessor's listeners; if that fails, cold recovery runs.
@@ -931,7 +969,7 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
 
   const result = await runListenerReleaseHandoff({
     prepare: () => prepareGatewayHandoffHost({ reason: label, restartTimestamp: restartCtx.timestamp }),
-    release: () => releaseHandoffListeners(_shutdownHooks),
+    release: () => releaseHandoffListeners(_lifecycleState.shutdownHooks),
     commit: async (host) => {
       // 0. The restart-context write is the step that can realistically throw, so
       //    it runs before anything with side effects. A failure here aborts with
@@ -966,22 +1004,22 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
         try { writeRestartContext(restartCtx); } catch {}
         throw error;
       }
-      _handoffDraining = true;
-      try { await _shutdownHooks.finishListenerHandoff?.(); } catch (e: any) {
+      _lifecycleState.handoffDraining = true;
+      try { await _lifecycleState.shutdownHooks.finishListenerHandoff?.(); } catch (e: any) {
         console.warn('[lifecycle] Handoff listener teardown error:', e.message);
       }
     },
     dispose: (host) => disposePreparedGatewayHandoffHost(host),
     reopen: async () => {
-      if (!_shutdownHooks.reopenListenersAfterFailedHandoff) throw new Error('Listener reopen hooks are not registered.');
-      await _shutdownHooks.reopenListenersAfterFailedHandoff();
+      if (!_lifecycleState.shutdownHooks.reopenListenersAfterFailedHandoff) throw new Error('Listener reopen hooks are not registered.');
+      await _lifecycleState.shutdownHooks.reopenListenersAfterFailedHandoff();
     },
     coldRecover: () => startColdRecoveryLoop(),
     log: (message) => console.error(`[lifecycle] ${message}`),
   });
   if (!result.ok) {
     console.error(`[lifecycle] Warm handoff aborted at stage=${result.stage}; recovered=${result.recovered}. No replacement was launched.`);
-    return;
+    return 'handoff_aborted';
   }
   const host = result.host;
 
@@ -1005,7 +1043,7 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   if (initiating.length) console.log(`[lifecycle] Checkpointed ${initiating.length} restart-initiating runtime(s) for the replacement.`);
 
   // Stop everything that would start *new* work here.
-  try { await _shutdownHooks.stopSchedulersForHandoff?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.stopSchedulersForHandoff?.(); } catch (e: any) {
     console.warn('[lifecycle] Handoff scheduler stop error:', e.message);
   }
 
@@ -1035,11 +1073,12 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
   // Drain in the background. Callers (the restart tool, /restart routes)
   // must return promptly; the process exits on its own when done.
   void runGatewayHandoffDrain(host, carriedRuntimeIds.length);
+  return 'handoff_started';
 }
 
 
 async function restartAfterFailedHandoff(): Promise<boolean> {
-  const listening = _shutdownHooks.hasListeningGateway?.() ?? true;
+  const listening = _lifecycleState.shutdownHooks.hasListeningGateway?.() ?? true;
   const running = listLocalRunningRuntimes().length;
   if (!canExitAfterFailedHandoff(listening, running)) {
     console.error(`[lifecycle] Failed replacement: retaining predecessor (listening=${listening}, runtimes=${running}). No agents interrupted; handoff channel remains available.`);
@@ -1116,13 +1155,13 @@ async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise
   } else {
     console.log(`[lifecycle] Handoff drain complete: all ${carriedCount} carried runtime(s) finished in ${Math.round(drain.waitedMs / 1000)}s.`);
   }
-  try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
     console.warn('[lifecycle] Handoff worker stop error:', e.message);
   }
   try { await desktopBackgroundShutdown(); } catch (e: any) {
     console.warn('[lifecycle] Handoff desktop stop error:', e.message);
   }
-  try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
+  try { await _lifecycleState.shutdownHooks.flushSessions?.(); } catch (e: any) {
     console.warn('[lifecycle] Handoff session flush error:', e.message);
   }
   try { await completeGatewayHandoffHost(interruptedIds); } catch (e: any) {
@@ -1144,13 +1183,13 @@ async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise
  *
  * The new process will pick up the restart-context.json on boot.
  */
-export async function gracefulRestart(ctx: RestartContext): Promise<void> {
-  if (_handoffDraining) {
-    if (shouldForwardHandoffRestart(_handoffDraining, !!ctx.forwardedFromHandoff)) {
+export async function gracefulRestart(ctx: RestartContext): Promise<RestartOutcome> {
+  if (_lifecycleState.handoffDraining) {
+    if (shouldForwardHandoffRestart(_lifecycleState.handoffDraining, !!ctx.forwardedFromHandoff)) {
       try {
         ctx.forwardedToPid = (await forwardDrainingRestart(ctx)) || 0;
         console.log(`[lifecycle] Restart forwarded to replacement gateway${ctx.forwardedToPid ? ` (pid=${ctx.forwardedToPid})` : ''}.`);
-        return;
+        return 'forwarded';
       } catch (error: any) {
         console.warn(`[lifecycle] Restart forwarding failed: ${error?.message || error}`);
       }
@@ -1185,19 +1224,22 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
 
   const handoffPlan = planGatewayHandoff(restartCtx);
   if (handoffPlan.eligible) {
+    let outcome: RestartOutcome = 'handoff_aborted';
     try {
-      await beginGatewayHandoff(restartCtx, handoffPlan);
+      outcome = await beginGatewayHandoff(restartCtx, handoffPlan);
     } catch (error: any) {
       // The watchdog caller historically exits on rejection. A partially
       // prepared handoff is NOT permission to destroy the runtimes still here.
       // Outcome unknown: the failure may have happened after listeners were released.
       console.error('[lifecycle] Warm handoff threw; outcome unknown:', error?.message || error);
-      if (!(_shutdownHooks.hasListeningGateway?.() ?? true)) {
-        try { await _shutdownHooks.reopenListenersAfterFailedHandoff?.(); console.error('[lifecycle] Reopened listeners after unknown handoff outcome.'); }
+      // Past the commit point this host is already draining toward a replacement.
+      outcome = _lifecycleState.handoffDraining ? 'handoff_started' : 'handoff_aborted';
+      if (!(_lifecycleState.shutdownHooks.hasListeningGateway?.() ?? true)) {
+        try { await _lifecycleState.shutdownHooks.reopenListenersAfterFailedHandoff?.(); console.error('[lifecycle] Reopened listeners after unknown handoff outcome.'); }
         catch (reopenError: any) { console.error('[lifecycle] Reopen after unknown handoff outcome failed:', reopenError?.message || reopenError); startColdRecoveryLoop(); }
       }
     }
-    return;
+    return outcome;
   }
   console.log(`[lifecycle] Warm handoff not used (${handoffPlan.reason}); performing a full restart.`);
 
@@ -1272,7 +1314,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     setTimeout(() => {
       process.exit(relaunchApp ? 43 : 42);
     }, 250);
-    return;
+    return 'exiting';
   }
 
   // A supervised gateway must never spawn a second detached `prom` tree. Exit
@@ -1284,7 +1326,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     setTimeout(() => {
       process.exit(42);
     }, 250);
-    return;
+    return 'exiting';
   }
 
   // Step 3: Spawn a detached gateway process directly. The previous shell ->
@@ -1297,7 +1339,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   } catch (err: any) {
     console.error(`[lifecycle] Failed to spawn new process: ${err.message}`);
     console.error('[lifecycle] The gateway will NOT restart automatically. Manual restart required.');
-    return; // Don't exit if spawn failed
+    return 'spawn_failed'; // Don't exit if spawn failed
   }
 
   // Step 4: Exit current process.
@@ -1305,6 +1347,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   setTimeout(() => {
     process.exit(0);
   }, Math.max(100, Number(process.env.PROMETHEUS_RESTART_EXIT_DELAY_MS || 250)));
+  return 'exiting';
 }
 
 // ─── Build + Restart Combo ────────────────────────────────────────────────────
@@ -1331,13 +1374,14 @@ export async function buildAndRestart(
   }
 
   emit(`Build succeeded (${buildResult.durationMs}ms). Initiating restart...`);
-  await gracefulRestart({
+  const restartOutcome = await gracefulRestart({
     ...ctx,
     buildOutput: buildResult.output,
     timestamp: ctx.timestamp || Date.now(),
   });
+  if (restartLeftProcessServing(restartOutcome)) emit(`Restart did not take effect (${restartOutcome}); this gateway is still serving the previous code.`);
 
-  return buildResult;
+  return { ...buildResult, restartOutcome };
 }
 
 // ─── Proposal-Specific Helper ─────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import {
   MEMORY_RECOVERY_GC_THROTTLE_MS,
   runRecoveryGc,
   shouldKeepSkippingWithinGcWindow,
+  gcConfirmThresholdBytes,
 } from './gateway-memory-recovery';
 
 const GB = 1024 ** 3;
@@ -25,13 +26,15 @@ assert.equal(canAttemptRecoveryGc(0, now), true, 'first attempt allowed');
 assert.equal(canAttemptRecoveryGc(now - 1000, now), false, 'throttled within 5 minutes');
 assert.equal(canAttemptRecoveryGc(now - MEMORY_RECOVERY_GC_THROTTLE_MS, now), true, 'allowed again after the throttle window');
 
-// Review F1: skip, then a second RSS breach inside the throttle window.
+// Review F1 + 2026-11-07 heap-signal fix: skip, then a second breach inside the throttle window.
 const gcAt = now - 60_000;
-assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: gcAt, heapUsedBytes: 1.3 * GB, thresholdBytes: threshold }), true, 'small heap after a GC-confirmed skip keeps skipping (RSS stays committed)');
-assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: gcAt, heapUsedBytes: 3.5 * GB, thresholdBytes: threshold }), false, 'a heap that grew past the ratio recycles (real leak)');
-assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: 0, heapUsedBytes: 1 * GB, thresholdBytes: threshold }), false, 'no prior skip: last GC said recycle');
-assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: gcAt - 1, heapUsedBytes: 1 * GB, thresholdBytes: threshold }), false, 'skip from an older GC does not carry over');
-assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: now - MEMORY_RECOVERY_GC_THROTTLE_MS, lastSkipAt: now - MEMORY_RECOVERY_GC_THROTTLE_MS, heapUsedBytes: 1 * GB, thresholdBytes: threshold }), false, 'after the window a fresh GC decides');
+assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: gcAt }), true, 'inside the window after a GC-confirmed skip, keep skipping (a pre-GC reading is not evidence)');
+assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: 0 }), false, 'no prior skip: last GC said recycle');
+assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: gcAt, lastSkipAt: gcAt - 1 }), false, 'skip from an older GC does not carry over');
+assert.equal(shouldKeepSkippingWithinGcWindow({ now, lastGcAt: now - MEMORY_RECOVERY_GC_THROTTLE_MS, lastSkipAt: now - MEMORY_RECOVERY_GC_THROTTLE_MS }), false, 'after the window a fresh GC decides');
+assert.equal(gcConfirmThresholdBytes(threshold, 4144 * 1024 ** 2, 0.7), threshold, 'default heap: the RSS threshold is the GC-confirm line');
+assert.equal(gcConfirmThresholdBytes(threshold, 8 * GB, 0.7), 8 * GB * 0.7, 'large heap: the GC-confirm line follows the real heap limit');
+assert.equal(gcConfirmThresholdBytes(0, 4 * GB, 0), 0, 'both signals disabled');
 
 // The runtime GC hook works without --expose-gc on the command line.
 assert.equal(typeof getFullGc(), 'function', 'full GC can be enabled at runtime');

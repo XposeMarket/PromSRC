@@ -53,6 +53,7 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 ## 7. Gateway / runtime
 - After pulling into PromSRC: build (see [07](07-source-editing-and-pr-workflow.md)), then restart the gateway, then smoke test. **A running gateway serves old `dist/` until it restarts.**
 - Restarts pause in-flight background tasks (`paused on gateway_restart`). Resume or cancel them explicitly.
+- **Never `await import()` a stateful gateway module (lifecycle, config, registries) from source code.** Under tsx source mode it evaluates a SECOND module instance, and every later `require()` of that path returns the copy too. Module-level hooks/flags then look empty. This aborted 20 warm handoffs ("listener ownership hooks are not registered") and stuck the memory watchdog until heap OOM (Nov 2026). Use `require()` or a static import; process-wide state goes through `processSingleton()` (`src/gateway/runtime/process-singleton.ts`). See [02](02-startup-gateway-runtime.md) "Restart-path correctness".
 - Health check: `GET http://localhost:18789/...`. See [02](02-startup-gateway-runtime.md) for the exact endpoint.
 
 ## 8. Teams (see [09](09-teams.md))
