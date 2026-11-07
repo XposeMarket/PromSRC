@@ -761,14 +761,21 @@ function saveIndex(index: TaskIndex): void {
  * target. A crash mid-write can no longer leave a truncated task record.
  * Retries transient Windows sharing errors like saveIndex does.
  */
-function writeFileAtomic(target: string, payload: string): void {
+function writeFileAtomic(target: string, payload: string, durable = false): void {
   const dir = path.dirname(target);
   let lastError: any;
   for (let attempt = 0; attempt < 5; attempt++) {
     const tmp = path.join(dir, `.${path.basename(target)}.${process.pid}.${Date.now()}.${taskIndexWriteCounter++}.tmp`);
     try {
-      fs.writeFileSync(tmp, payload, 'utf-8');
+      if (durable) {
+        // Flush before rename so a crash cannot keep a later side effect (pin release) while losing this record.
+        const fd = fs.openSync(tmp, 'w');
+        try { fs.writeSync(fd, payload, null, 'utf-8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      } else {
+        fs.writeFileSync(tmp, payload, 'utf-8');
+      }
       fs.renameSync(tmp, target);
+      if (durable) { try { const dfd = fs.openSync(dir, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* directory fsync unsupported (Windows) */ } }
       return;
     } catch (err: any) {
       lastError = err;
@@ -1270,7 +1277,9 @@ export function saveTask(task: TaskRecord, options: { referenceSelectionWrite?: 
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
   const { retainTaskReferences, releaseTerminalTaskReferences } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
   retainTaskReferences(task);
-  writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2));
+  // Only tasks that ever held reference selections pay for a durable write before their pins are released.
+  const releasesPins = Array.isArray(task.referenceBindings) && ['complete', 'failed', 'cancelled'].includes(task.status);
+  writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2), releasesPins);
   releaseTerminalTaskReferences(task);
   upsertTaskSummary(task);
   // Keep the durable journal searchable from the task's originating chat. A

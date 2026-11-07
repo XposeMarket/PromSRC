@@ -165,6 +165,7 @@ async function check(name, fn) {
 function staticChecks() {
   const src = fs.readFileSync(modulePath, 'utf8');
   const refs = fs.readFileSync(refsPath, 'utf8');
+  assert.ok(refs.includes('overview = mountCollectionOverview(') && refs.includes('overview?.refresh()'), 'reference-side membership change must refresh the collection overview');
   for (const s of ['seq !== generation', 'Choose an existing team first', "pending = { kind: 'add'", 'acknowledgeSharedAudience: true',
     'Read-only: another gateway owns', 'if (busy || !writable || destroyed) return;', 'cannot be unsent']) {
     assert.ok(src.includes(s), 'missing: ' + s);

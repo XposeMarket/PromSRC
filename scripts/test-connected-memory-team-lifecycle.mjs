@@ -74,6 +74,28 @@ kase('4 revoke: validate/resume fail, pause+fail saves not wedged', ()=>{
   tasks.updateTaskStatus(task.id,'failed',{pauseReason:undefined});assert.equal(tasks.loadTask(task.id).status,'failed','fail save wedged');
 });
 
+kase('6 unselect-all task releases historical pins only after a durable terminal write', ()=>{
+  const team=mkTeam('C6');const a=service.saveText({operationId:'c6-a',title:'C6 A',content:'A6 bytes'});
+  sharing().grant(team.id,'reference',a.id);const t=mkTask(team,'c6');
+  teamRun(team.id,t.id,'c6',()=>rt.selectTeamEvidence('c6',{referenceId:a.id,purpose:'t6'}));
+  teamRun(team.id,t.id,'c6',()=>rt.selectTeamEvidence('c6',{referenceId:a.id,remove:true}));
+  assert.deepEqual(tasks.loadTask(t.id).referenceBindings,[],'precondition: unselected');
+  assert.ok(holderRows(t.id).length>0,'precondition: historical pins remain until terminal');
+  const fsMod=require('fs');const proto=Object.getPrototypeOf(sharing());const origFsync=fsMod.fsyncSync,origRel=proto.releaseTask;const order=[];
+  fsMod.fsyncSync=fd=>{order.push('fsync');return origFsync(fd);};proto.releaseTask=function(id){order.push('release');return origRel.call(this,id);};
+  try{tasks.updateTaskStatus(t.id,'complete');}finally{fsMod.fsyncSync=origFsync;proto.releaseTask=origRel;}
+  assert.equal(holderRows(t.id).length,0,'unselect-all task kept pins after terminal');
+  assert.ok(order.includes('fsync')&&order.indexOf('fsync')<order.indexOf('release'),'pins released before durable terminal write: '+order.join(','));
+});
+
+{ const name='7 trusted team turn cannot read owner memory via related';
+  try{ const team=mkTeam('C7');const t=mkTask(team,'c7');
+    fs.writeFileSync(path.join(workspace,'MEMORY.md'),'# Memory\n## projects\n- [m:canry] owner-only canary fact [[stage-d-canary]]\n');
+    const {memoryCapabilityExecutor}=require('../src/gateway/agents-runtime/capabilities/memory-executor.ts');
+    const r=await teamRun(team.id,t.id,'c7-verifier',()=>memoryCapabilityExecutor.execute({name:'memory',args:{action:'related',query:'stage-d-canary'},workspacePath:workspace,sessionId:'c7-verifier'}));
+    assert.equal(r.error,true,'memory related allowed inside trusted team scope');assert.ok(!String(r.result).includes('owner-only canary fact'),'owner memory leaked');
+    results[name]='PASS'; }catch(e){results[name]='FAIL: '+String(e&&e.message||e).split('\n')[0];} }
+
 kase('5 terminal release only own pins; restart read-only', ()=>{
   const team=mkTeam('C5');const a=service.saveText({operationId:'c5-a',title:'C5 A',content:'A5 bytes'});const b=service.saveText({operationId:'c5-b',title:'C5 B',content:'B5 bytes'});
   sharing().grant(team.id,'reference',a.id);sharing().grant(team.id,'reference',b.id);

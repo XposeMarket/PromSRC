@@ -385,6 +385,8 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         try {
           const { readRelatedMemory } = await import('../../memory-index/memory-topics.js');
           const actor = getRuntimeActorContext(String(sessionId || ''));
+          // Trusted team turns (members, verifiers) without their own agent memory must not fall back to the owner's workspace memory.
+          if (sharedTeamContext && actor?.kind !== 'agent' && actor?.kind !== 'manager') return { name, args, result: 'memory related is unavailable in team turns; use memory search/open for explicitly shared references.', error: true };
           const root = actor?.kind === 'agent' || actor?.kind === 'manager'
             ? path.dirname(resolveMemoryPath(workspacePath, 'MEMORY.md', sessionId)) : workspacePath;
           return { name, args, result: readRelatedMemory(root, String(args.query || ''), Number(args.limit || 20)), error: false };
