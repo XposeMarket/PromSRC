@@ -261,6 +261,7 @@ export interface ProposalExecutionState {
 }
 
 export interface TaskRecord {
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
   id: string;
   title: string;
   prompt: string;                    // canonical immutable assignment envelope
@@ -1175,6 +1176,7 @@ export function createTask(params: {
   originatingSessionId?: string;
   suppressOriginDelivery?: boolean;
   voiceDispatch?: TaskRecord['voiceDispatch'];
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
 }): TaskRecord {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -1198,6 +1200,7 @@ export function createTask(params: {
     agentWorkspace: params.agentWorkspace,
     agentAllowedWorkPaths: params.agentAllowedWorkPaths,
     teamSubagent: params.teamSubagent,
+    referenceBindings: params.referenceBindings,
     // Schedule linkage
     scheduleId: params.scheduleId,
     // Executor model override
@@ -1247,19 +1250,28 @@ export function loadTask(id: string): TaskRecord | null {
   if (!fs.existsSync(p)) return null;
   try {
     const task = JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskRecord;
-    return { ...task, id: taskId, continuationHistory: normalizeContinuationHistory(task.continuationHistory) };
+    const { normalizeReferenceBindings } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
+    return { ...task, id: taskId, referenceBindings: normalizeReferenceBindings(task.referenceBindings), continuationHistory: normalizeContinuationHistory(task.continuationHistory) };
   } catch {
     return null;
   }
 }
 
-export function saveTask(task: TaskRecord): void {
+export function saveTask(task: TaskRecord, options: { referenceSelectionWrite?: boolean } = {}): void {
+  // Runner/checkpoint snapshots predate tool selections. Only the selection path may replace this field.
+  if (!options.referenceSelectionWrite && fs.existsSync(taskFilePath(task.id))) {
+    const persisted = JSON.parse(fs.readFileSync(taskFilePath(task.id), 'utf8')) as TaskRecord;
+    task.referenceBindings = persisted.referenceBindings;
+  }
   // Trim journal to last 500 entries to prevent unbounded growth
   if (task.journal.length > 500) {
     task.journal = task.journal.slice(-500);
   }
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
+  const { retainTaskReferences, releaseTerminalTaskReferences } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
+  retainTaskReferences(task);
   writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2));
+  releaseTerminalTaskReferences(task);
   upsertTaskSummary(task);
   // Keep the durable journal searchable from the task's originating chat. A
   // dynamic import avoids coupling the task persistence module to the chat
@@ -1574,6 +1586,7 @@ export function deleteTask(id: string): boolean {
     }
   }
 
+  if (!fs.existsSync(p)) { try { (require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime')).releaseDeletedTaskReferences(taskId); } catch { /* keep pins conservatively if metadata is unavailable */ } }
   // Always remove from index to prevent stale list entries.
   if (inIndex) {
     removeFromIndex(taskId);

@@ -8,12 +8,13 @@ import { openReference, publicReference, exportReference } from '../resources/re
 
 // Mounted behind the same gateway + account authentication as Memory. Never accepts workspace/owner from requests.
 export const referenceLibraryRouter = Router();
+referenceLibraryRouter.use(require('./reference-sharing.router').referenceSharingRouter);
 const library = () => getReferenceService(getConfig().getWorkspacePath());
 const error = (res: any, err: any) => res.status(/unavailable|excluded|match/.test(err.message) ? 404 : 400).json({ success: false, error: err.message });
 referenceLibraryRouter.get('/api/memory/references', (req, res) => {
   try {
     const s = library(); const items = s.metadata.list({ query: String(req.query.q || ''), includeExcluded: true, limit: 50, offset: Number(req.query.offset || 0), sourceSession: req.query.sourceSession ? String(req.query.sourceSession) : undefined });
-    res.json({ success: true, ...s.metadata.stats(), storageBytes: s.metadata.storageUsage(), items: items.map(publicReference), settings: s.metadata.settings(), writable: s.metadata.writable, visibility: 'personal', sharingAvailable: false });
+    res.json({ success: true, ...s.metadata.stats(), storageBytes: s.metadata.storageUsage(), items: items.map(publicReference), settings: s.metadata.settings(), writable: s.metadata.writable, visibility: 'personal', sharingAvailable: true });
   } catch (e) { error(res, e); }
 });
 referenceLibraryRouter.patch('/api/memory/references/settings', (req, res) => {

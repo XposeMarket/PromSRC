@@ -12,6 +12,14 @@ export class ReferenceService {
     if (resources.rootDir !== metadata.rootDir || resources.workspaceScope !== metadata.workspace) throw new Error('Reference store scope mismatch');
     if (metadata.writable) {
       metadata.recover(binding => Boolean(resources.referenceVersion(binding.resourceId, binding.versionId, true)));
+      metadata.sharing().reconcileTaskPins(id => {
+        if(!/^[a-zA-Z0-9_-]+$/.test(id))return false;
+        const {getConfig}=require('../../config/config') as typeof import('../../config/config');
+        const taskPath=resolveConfinedStoragePath(getConfig().getConfigDir(),path.join('tasks',`${id}.json`),{label:'reference task recovery'});
+        if(!fs.existsSync(taskPath))return true;
+        const task=JSON.parse(fs.readFileSync(taskPath,'utf8'));
+        return task.id===id && ['complete','failed','cancelled'].includes(task.status) && !['pending','running'].includes(task.verificationStatus);
+      });
     }
   }
 

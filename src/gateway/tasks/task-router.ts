@@ -1051,6 +1051,8 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       };
     }
 
+    try { (require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime')).validateTaskReferences(task); } catch(e) {return {success:false,action,code:'reference_access_revoked',message:e instanceof Error?e.message:String(e)};}
+
     // Status is 'running' but no active runner found — runner died without cleanup.
     // Auto-correct the stale status so the resume proceeds normally.
 	    if (task.status === 'running') {

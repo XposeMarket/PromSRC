@@ -60,6 +60,7 @@ export interface SubagentDefinition {
 }
 
 export interface SubagentContextReference {
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
   id: string;
   title: string;
   content: string;
@@ -231,20 +232,23 @@ export class SubagentManager {
     return path.join(agentDir, 'context-refs.json');
   }
 
-  private normalizeContextRefInput(input: any): { title: string; content: string } | null {
+  private normalizeContextRefInput(input: any): Pick<SubagentContextReference,'title'|'content'|'referenceBindings'> | null {
     if (!input || typeof input !== 'object') return null;
     const title = String(input.title || '').trim();
     const content = String(input.content || '').trim();
-    if (!title || !content) return null;
-    return { title, content };
+    let referenceBindings: SubagentContextReference['referenceBindings'];
+    try { referenceBindings=require('../resources/reference-team-runtime').normalizeReferenceBindings(input.referenceBindings); } catch {return null;}
+    if (!title || (!content && !referenceBindings?.length)) return null;
+    return { title, content, referenceBindings };
   }
 
-  private makeContextRef(input: { title: string; content: string }): SubagentContextReference {
+  private makeContextRef(input: Pick<SubagentContextReference,'title'|'content'|'referenceBindings'>): SubagentContextReference {
     const now = Date.now();
     return {
       id: `ref_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       title: input.title,
       content: input.content,
+      referenceBindings: input.referenceBindings,
       createdAt: now,
       updatedAt: now,
     };
@@ -261,10 +265,11 @@ export class SubagentManager {
           id: String(ref?.id || '').trim(),
           title: String(ref?.title || '').trim(),
           content: String(ref?.content || '').trim(),
+          referenceBindings: require('../resources/reference-team-runtime').normalizeReferenceBindings(ref?.referenceBindings),
           createdAt: Number(ref?.createdAt) || Date.now(),
           updatedAt: Number(ref?.updatedAt) || Number(ref?.createdAt) || Date.now(),
         }))
-        .filter((ref: SubagentContextReference) => ref.id && ref.title && ref.content);
+        .filter((ref: SubagentContextReference) => ref.id && ref.title && (ref.content || ref.referenceBindings?.length));
     } catch {
       return [];
     }
@@ -306,8 +311,9 @@ export class SubagentManager {
           if (!existing) continue;
           const title = item.title !== undefined ? String(item.title || '').trim() : existing.title;
           const content = item.content !== undefined ? String(item.content || '').trim() : existing.content;
-          if (!title || !content) continue;
-          byId.set(id, { ...existing, title, content, updatedAt: Date.now() });
+          const normalized=this.normalizeContextRefInput({title,content,referenceBindings:item.referenceBindings === undefined ? existing.referenceBindings : item.referenceBindings});
+          if (!normalized) continue;
+          byId.set(id, { ...existing, ...normalized, updatedAt: Date.now() });
         }
         refs = refs.map((ref) => byId.get(ref.id) || ref);
       }

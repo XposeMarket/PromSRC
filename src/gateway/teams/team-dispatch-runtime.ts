@@ -1,3 +1,5 @@
+import { teamReferenceChat, dispatchReferenceBindings } from '../resources/reference-team-runtime';
+
 import fs from 'fs';
 import path from 'path';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
@@ -363,6 +365,7 @@ async function runTeamAgentViaChatInternal(
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
   receipt?: TeamRunReceiptWriter,
   toolFilter?: string[],
+  referenceBindings: import('../resources/reference-sharing').SelectedReferenceBinding[] = [],
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
     return { success: false, result: '', error: 'Dispatch deps not initialized', durationMs: 0, agentName: agentId };
@@ -462,6 +465,7 @@ async function runTeamAgentViaChatInternal(
   // Create task record
   const cronTask = deps.createTask({
     title: `${agentName}: ${task.slice(0, 80)}`,
+    referenceBindings,
     prompt: task,
     sessionId,
     channel: 'web',
@@ -861,7 +865,7 @@ async function runTeamAgentViaChatInternal(
     // Bind the async workspace scope (team workspace + team allowed_work_paths).
     // setWorkspace() alone only sets the root, so team allowed_work_paths were
     // silently ignored by file tools for dispatched members.
-    const result = await withAdmissionRetry(() => runScopedTeamWorkspace(executionRoot || teamWorkspacePath, allowedWorkPaths, () => deps.handleChat(
+    const result = await withAdmissionRetry(() => runScopedTeamWorkspace(executionRoot || teamWorkspacePath, allowedWorkPaths, () => teamReferenceChat(teamId, cronTask.id, deps.handleChat)(
       task,
       sessionId,
       (event, data) => broadcastTeamTaskEvent({
@@ -1154,7 +1158,9 @@ export async function runTeamAgentViaChat(
   };
   if (!teamId) return finalizeReceipt(await runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter));
   try {
-    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter)));
+    // Snapshot under the CALLER's scope before the queue may run under a different async context.
+    const referenceBindings = dispatchReferenceBindings(teamId,agentId);
+    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter, referenceBindings)));
   } catch (error: any) {
     const message = String(error?.message || error || 'Team execution could not be admitted.');
     const admissionCode = error instanceof TeamExecutionQueueError ? error.code : undefined;
@@ -1365,7 +1371,8 @@ function buildGenericTeamContext(agentId: string, teamId?: string): string {
     if (refs.length > 0) {
       lines.push('', 'Reference docs:');
       for (const ref of refs.slice(0, 5)) {
-        lines.push(`  [${ref.title}]: ${String(ref.content || '').slice(0, 300)}`);
+        // Bound originals are validated and injected from durable selections, never a stale text excerpt.
+        if (!ref.referenceBindings?.length) lines.push(`  [${ref.title}]: ${String(ref.content || '').slice(0, 300)}`);
       }
     }
 

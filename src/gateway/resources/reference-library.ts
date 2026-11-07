@@ -74,8 +74,8 @@ export function openReference(service: ReferenceService, id: string, options: { 
   return { reference: publicReference(ref), text, coverage, assets, totalAssets: assets.length, nextOffset: null };
 }
 export function referenceOpenPayload(workspace: string, sessionId: string | undefined, id: string, options: { offset?: number; limit?: number; versionId?: string } = {}) {
-  assertPersonalReferenceCaller(sessionId);
-  const opened = openReference(getReferenceService(workspace), id, options);
+  const { accessibleReferenceOpen } = require('./reference-access') as typeof import('./reference-access');
+  const opened = accessibleReferenceOpen(workspace, sessionId, id, options);
   return { reference: opened.reference, stored_text: opened.text, coverage: opened.coverage,
     visual_count: opened.assets.length, total_visuals: opened.totalAssets, next_offset: opened.nextOffset,
     observation_mode: opened.assets.length ? 'direct' : 'stored_text',
