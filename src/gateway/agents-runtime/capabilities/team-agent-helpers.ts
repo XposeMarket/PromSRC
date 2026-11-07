@@ -145,6 +145,8 @@ export function maybeStartTeamStatusTaskMirror(
   const task = createTask({
     title,
     prompt: taskText,
+    // Raw member assignment (pre-envelope) so Tasks cards show a clean "Started from".
+    originalAssignment: taskText,
     sessionId,
     channel: 'web',
     plan: [{
