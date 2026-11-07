@@ -77,14 +77,47 @@ async function main(): Promise<void> {
     assert.equal(get(guarded.id).status, 'scheduled', `updateJob ignores status "${status}"`);
   }
 
-  // ── completed one-shot: disable keeps completed, re-enable schedules ────────
-  const done = make('completed');
-  Object.assign(raw(done.id), { status: 'completed', enabled: false, nextRun: null });
-  scheduler.updateJob(done.id, { enabled: false });
-  assert.equal(get(done.id).status, 'completed', 'disabling a completed job leaves it completed');
-  assert.equal(get(done.id).enabled, false);
-  scheduler.updateJob(done.id, { enabled: true });
-  assertActive(done.id, 're-enabled completed job');
+  // ── one-shot cases: real type 'one-shot' with runAt (not recurring make()) ──
+  const past = new Date(Date.now() - 86_400_000).toISOString();
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const oneShot = (name: string, fields: Record<string, unknown>) => {
+    const job = make(name);
+    Object.assign(raw(job.id), { type: 'one-shot', schedule: null, ...fields });
+    return job;
+  };
+  // (a) completed one-shot, past runAt, plain enable -> stays completed, not due
+  const doneOld = oneShot('done-old', { runAt: past, status: 'completed', enabled: false, nextRun: null });
+  scheduler.updateJob(doneOld.id, { enabled: true });
+  assert.equal(get(doneOld.id).status, 'completed', 'completed one-shot stays completed on plain enable');
+  assert.equal(get(doneOld.id).nextRun, null, 'completed one-shot has no nextRun');
+  assert.equal(isFuture(get(doneOld.id).nextRun), false, 'completed one-shot is not due');
+  // (b) completed one-shot + explicit future runAt -> rearmed with nextRun = new runAt
+  const doneRearm = oneShot('done-rearm', { runAt: past, status: 'completed', enabled: false, nextRun: null });
+  scheduler.updateJob(doneRearm.id, { enabled: true, runAt: future } as any);
+  assertActive(doneRearm.id, 'completed one-shot rearmed with future runAt');
+  assert.equal(get(doneRearm.id).nextRun, future, 'rearmed nextRun is the new runAt');
+  // (c) paused one-shot, future runAt, resume -> scheduled
+  const pausedFuture = oneShot('paused-future', { runAt: future, status: 'paused', enabled: false, nextRun: null, pausedReason: 'manual' });
+  scheduler.resumeJob(pausedFuture.id);
+  assertActive(pausedFuture.id, 'paused one-shot with future runAt resumes');
+  // (d) paused one-shot, past runAt, resume -> stays paused (never fires immediately)
+  const pausedPast = oneShot('paused-past', { runAt: past, status: 'paused', enabled: false, nextRun: null, pausedReason: 'manual' });
+  scheduler.resumeJob(pausedPast.id);
+  assertPaused(pausedPast.id, 'paused one-shot with past runAt stays paused on resume');
+
+  // ── F2 normalizer: repairs paused+enabled and stale nextRun, never enables ──
+  const normA = make('normalize-a');
+  Object.assign(raw(normA.id), { status: 'paused', enabled: true, nextRun: future });
+  const normB = make('normalize-b');
+  Object.assign(raw(normB.id), { status: 'scheduled', enabled: false, nextRun: future });
+  const normC = make('normalize-c');
+  Object.assign(raw(normC.id), { status: 'scheduled', enabled: true });
+  (scheduler as any).normalizeDisabledJobStatuses();
+  assertPaused(normA.id, 'normalizer repairs paused+enabled');
+  assertPaused(normB.id, 'normalizer clears stale nextRun on disabled job');
+  assert.equal(get(normC.id).enabled, true, 'normalizer never flips a job to enabled');
+  assert.equal(get(normC.id).status, 'scheduled', 'normalizer leaves enabled job status alone');
+
 
   // ── resume of an active job is a no-op ──────────────────────────────────────
   const active = make('active');

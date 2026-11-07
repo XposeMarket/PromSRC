@@ -889,11 +889,19 @@ export class CronScheduler {
   private normalizeDisabledJobStatuses(): void {
     let changed = 0;
     for (const job of this.store.jobs) {
-      if (job.enabled !== false || job.status === 'paused' || job.status === 'completed') continue;
-      job.status = 'paused';
-      job.pausedReason = job.pausedReason || 'manual';
-      job.queuedAt = null;
-      changed += 1;
+      const before = JSON.stringify([job.enabled, job.status, job.nextRun]);
+      // Conservative repair: a paused job must never stay enabled. Never sets enabled=true.
+      if (job.status === 'paused' && job.enabled !== false) job.enabled = false;
+      if (job.enabled === false) {
+        if (job.status !== 'paused' && job.status !== 'completed') {
+          job.status = 'paused';
+          job.pausedReason = job.pausedReason || 'manual';
+          job.queuedAt = null;
+        }
+        // A disabled job never carries a live nextRun.
+        job.nextRun = null;
+      }
+      if (JSON.stringify([job.enabled, job.status, job.nextRun]) !== before) changed += 1;
     }
     if (changed > 0) {
       this.saveStore();
@@ -1175,6 +1183,16 @@ export class CronScheduler {
       }
     }
     const wasPaused = current.status === 'paused' || current.enabled === false;
+    // Completed one-shots stay terminal on a plain enable/resume. They are rearmed only when
+    // the same update supplies a future runAt; validate before any mutation.
+    const rearmOneShot = pauseIntent === false && current.type === 'one-shot'
+      && current.status === 'completed' && normalizedPartial.runAt !== undefined;
+    if (rearmOneShot) {
+      const runAtMs = Date.parse(String(normalizedPartial.runAt));
+      if (!Number.isFinite(runAtMs) || runAtMs <= Date.now()) {
+        throw new Error('Rearming a completed one-shot requires a valid future runAt');
+      }
+    }
     // Mutate in place: a running executeJobInner holds this same object, so
     // replacing it would leave the run writing to a stale copy (pauses and
     // edits made during a run were silently lost or undone).
@@ -1183,7 +1201,13 @@ export class CronScheduler {
       if (value === undefined) delete (current as any)[key];
     }
     if (pauseIntent === true) this.applyPauseState(current, true, pausedReasonInput || current.pausedReason || 'manual');
-    else if (pauseIntent === false) this.applyPauseState(current, false);
+    else if (rearmOneShot) {
+      // Explicit future runAt rearms a completed one-shot (validated above, before mutation).
+      current.enabled = true;
+      current.status = 'scheduled';
+      current.pausedReason = undefined;
+      current.nextRun = current.runAt;
+    } else if (pauseIntent === false) this.applyPauseState(current, false);
     const nowPaused = current.status === 'paused' || current.enabled === false;
     // applyPauseState recomputed nextRun on resume (otherwise a resumed job keeps a
     // months-old nextRun and fires instantly). A paused job never carries a nextRun,
@@ -1619,6 +1643,7 @@ export class CronScheduler {
 
         if (scheduledTeamId) {
           if (!team) {
+            job.enabled = false;
             job.status = 'paused';
             job.pausedReason = 'configuration_error';
             job.lastResult = `ERROR: Scheduled team not found: ${scheduledTeamId}. Repair the team registry or schedule target before resuming.`;
@@ -2577,6 +2602,12 @@ export class CronScheduler {
       return true;
     }
     if (job.status !== 'paused' && job.enabled !== false) return false;
+    // Completed one-shots are terminal: a plain enable/resume never revives them.
+    // Only updateJob rearms one, and only with an explicit future runAt.
+    if (job.status === 'completed') return false;
+    // A one-shot whose runAt has passed stays paused rather than firing at once on resume.
+    if (job.type === 'one-shot' && job.status !== 'queued' && job.status !== 'running'
+      && (!job.runAt || Date.parse(job.runAt) <= Date.now())) return false;
     job.enabled = true;
     job.pausedReason = undefined;
     // A legacy disabled-but-queued/running job keeps its live run status; the
