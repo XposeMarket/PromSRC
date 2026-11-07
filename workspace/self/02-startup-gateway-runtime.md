@@ -192,3 +192,12 @@ Regression: `src/gateway/runtime/gateway-memory-active-work.regression.ts`, exis
 
 ### Pending human questions and foreground watchdogs (2026-10-31)
 A pending question/login card with a live resolver suspends both foreground age and semantic-stall watchdogs until its actual durable expiry. The card must belong to the current session and current question call (or exact resumed question ID); an old card, settled/expired card or detached waiter is not an exemption. Ordinary process/background waits retain fixed capped deadlines; transport heartbeats never renew them. `semantic_progress_stall` and `max_age_exceeded` are foreground-turn interruptions, not proof of a gateway process restart or measured downtime. Recovery provenance labels them TURN WATCHDOG.
+
+## Memory-pressure recycle and the resource registry
+
+- `.prometheus/resources/registry.json` is owned by `ResourceStore` (`src/gateway/resources/resource-store.ts`). The parsed registry lives in memory, keyed by file `mtimeMs:size`. Mutations edit it in place and schedule one coalesced flush (1.5 s, plus on exit). An external edit changes mtime/size and forces a reload when nothing is pending.
+- Since perf/resource-store-hot-path, that in-memory state is shared per registry file across every `ResourceStore` instance in the process. `getResourceStore()` makes one per workspace path, and task agent workspaces used to ping-pong full flush+reparse cycles.
+- Dedupe lookups (`findExisting`) and `getVersion` use per-state indexes instead of O(R x V) scans. See `self/10` "Cron hot path" for numbers. The stall on cron ticks (8-14 s) came from here, not from the scheduler.
+- Retention at flush (`pruneState`): non-task kinds keep 20 versions / 60 provenance. `task` resources keep `PROMETHEUS_TASK_JOURNAL_VERSION_RETENTION` versions (default 3, `0` = keep all) and 8 provenance events. Versions referenced by `currentVersionId`, a thread link, or a reference pin are never pruned. Snapshot files under `content/` are deleted only when no kept version references the same path.
+- Before the first task-journal prune in a process, the on-disk registry is copied to `resources/registry.backup-<epochMs>.json`. This is skipped when a backup newer than 24 h exists. Backups are never deleted automatically, so remove old ones by hand if disk matters.
+- Diagnosing a heap or stall spike: check registry size and resource/version counts first. A large `task` share means task-journal churn.
