@@ -25,6 +25,7 @@
     "test:background-restart-recovery": "tsx src/gateway/tasks/background-restart-recovery.regression.ts && tsx src/gateway/tasks/background-result-delivery.regression.ts",
     "test:needs-you-view-model": "node scripts/test-needs-you-view-model.mjs",
     "test:task-card-view-model": "node scripts/test-task-card-view-model.mjs",
+    "test:desktop-chat-row-options": "node scripts/test-desktop-chat-row-options.mjs",
     "test:planned-chat-live-cards": "tsx src/gateway/tasks/planned-chat-live-cards.regression.ts",
     "test:source-panel-mini": "node scripts/test-source-panel-mini-caps.mjs",
     "test:anthropic-stream-terminated": "tsx src/providers/anthropic-stream-terminated.regression.ts",

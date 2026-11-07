@@ -19,6 +19,7 @@ import { preserveRequestCards } from '../features/tasks/preserve-request-cards.j
  */
 
 import { api } from '../api.js';
+import { renderProviderLogo } from '../components/provider-logo.js';
 import { buildTeamReplyPayload } from '../needs-you-team-reply.js';
 import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
@@ -802,13 +803,12 @@ function bgtCardHTML(t, col) {
   return `
   <div class="bgt-lr-card tone-${card.tone}${compactDone ? ' is-compact' : ''}${bgtOpenTaskId === t.id ? ' is-open' : ''}${card.planned ? ' bgt-planned-chat' : ''}" onclick="bgtOpenCardFromClick(event,'${id}')" draggable="${draggable ? 'true' : 'false'}" ${draggable ? `ondragstart="bgtHandleCardDragStart(event,'${id}')" ondragend="bgtHandleCardDragEnd(event)"` : ''} data-bgt-id="${id}" data-task-kind="${escHtml(card.kind)}">
     <div class="bgt-lr-head">
-      <span class="bgt-lr-avatar kind-${escHtml(card.kind)}" aria-hidden="true">${escHtml(card.initials)}</span>
+      <span class="bgt-lr-avatar kind-${escHtml(card.kind)}${card.avatar.logoKey ? ' has-logo' : ''}" data-provider="${escHtml(card.avatar.logoKey)}"${card.avatar.model ? ` title="${escHtml(card.avatar.model)}"` : ''} aria-hidden="true">${card.avatar.logoKey ? renderProviderLogo(card.avatar.providerId, card.avatar.model, 'bgt-lr-logo') : escHtml(card.initials)}</span>
       <div class="bgt-lr-who">
         <div class="bgt-lr-actor">${escHtml(brainLabel || card.actor)}${brainLabel && t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>
         <div class="bgt-lr-sub">${escHtml(card.sub)}</div>
       </div>
       ${bgtEditMode && !card.planned ? `<button onclick="event.stopPropagation(); bgtHideTask('${id}')" title="Hide task" class="bgt-lr-hide">🗑</button>` : ''}
-      <span class="bgt-lr-pill tone-${card.tone}">${escHtml(card.statusLabel)}</span>
     </div>
     <div class="bgt-lr-title">${escHtml(card.title)}</div>
     ${compactDone ? '' : `${segments}

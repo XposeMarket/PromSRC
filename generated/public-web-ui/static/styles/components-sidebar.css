@@ -481,8 +481,53 @@ body:not(.pm-mobile-active) :is(
 }
 
 @media (max-width: 900px) {
-  .session-hover-preview { display: none !important; }
+  .session-hover-preview:not(.is-options-open) { display: none !important; }
 }
+
+/* Desktop chat-row options trigger (keyboard + narrow-desktop entry to the options menu).
+   It takes its own reserved slot just left of the pin (pin: right 8px, 22px wide; trigger: right 32px),
+   and swaps in for the "ago" timestamp on hover/focus. It stays rendered while the menu is open
+   (.is-menu-open on the row) or while it holds focus, so Escape can return focus to it. */
+body:not(.pm-mobile-active) .chat-session-item { position: relative; }
+body:not(.pm-mobile-active) .chat-session-options-trigger {
+  position: absolute;
+  top: 7px;
+  right: 32px;
+  z-index: 1;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted, inherit);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+body:not(.pm-mobile-active) .chat-session-item:hover .chat-session-options-trigger,
+body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-options-trigger,
+body:not(.pm-mobile-active) .chat-session-item.is-menu-open .chat-session-options-trigger,
+body:not(.pm-mobile-active) .chat-session-options-trigger[aria-expanded="true"],
+body:not(.pm-mobile-active) .chat-session-options-trigger:focus,
+body:not(.pm-mobile-active) .chat-session-options-trigger:focus-visible { display: inline-flex; }
+body:not(.pm-mobile-active) .chat-session-options-trigger:hover,
+body:not(.pm-mobile-active) .chat-session-options-trigger:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--pm-gold, var(--brand)) 60%, transparent);
+  color: var(--pm-gold, var(--brand));
+}
+body:not(.pm-mobile-active) .chat-session-item:hover .chat-session-top-time,
+body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-top-time,
+body:not(.pm-mobile-active) .chat-session-item.is-menu-open .chat-session-top-time { visibility: hidden; }
+@media (max-width: 900px) {
+  body:not(.pm-mobile-active) .chat-session-options-trigger { display: inline-flex; }
+  body:not(.pm-mobile-active) .chat-session-item .chat-session-top-time { visibility: hidden; }
+}
+
 
 .job-item-unread-dot {
   display: inline-block;
