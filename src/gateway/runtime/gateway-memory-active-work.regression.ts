@@ -60,6 +60,7 @@ async function main() {
     let timer: (() => Promise<void>) | undefined;
     let restartError = '';
     let restartOutcome = 'exiting';
+    let onRestart: (() => void) | undefined;
     let activateOnLoad = false;
     const restarts: string[] = [];
     const exits: number[] = [];
@@ -70,20 +71,22 @@ async function main() {
       countLocalRunningRuntimes: () => active,
       getConfig: () => ({ getConfigDir: () => 'unused' }), enqueueAsyncAppend() {}, getRuntimeWorkerDiagnostics: () => ({}),
       setTimeout: (fn: () => Promise<void>) => { timer = fn; return { unref() {} }; },
-      loadLifecycle: async () => {
+      // loadLifecycle() is synchronous require() in production (never a dynamic import).
+      runRecoveryGc: () => ({ gcRan: false }),
+      loadLifecycle: () => {
         if (activateOnLoad) active = 1;
         return {
-          gracefulRestart: async (ctx: any) => { if (restartError) throw Error(restartError); restarts.push(ctx.handoffPolicy); return restartOutcome; },
+          gracefulRestart: async (ctx: any) => { if (restartError) throw Error(restartError); restarts.push(ctx.handoffPolicy); onRestart?.(); return restartOutcome; },
           restartLeftProcessServing: (o: unknown) => o === 'handoff_aborted' || o === 'spawn_failed',
         };
       },
       canAttemptRecoveryGc: () => false,
       MEMORY_RESTART_RSS_BYTES: 4 * GB, MEMORY_RESTART_CONSECUTIVE_SAMPLES: 3,
-      MEMORY_AUTORESTART_ENABLED: true, MEMORY_RESTART_MIN_UPTIME_MS: 120000,
+      MEMORY_AUTORESTART_ENABLED: true, MEMORY_RESTART_MIN_UPTIME_MS: 120000, MEMORY_RESTART_RETRY_COOLDOWN_MS: 300000,
       _gatewayDraining: false, _modelBusyCount: 0, _memoryPressureConsecutiveSamples: 0,
       _memoryPressureDeferredForActiveWork: false, _memoryPressureRestartScheduled: false,
       _eventLoopStallRestartScheduled: false, _lastMemoryRecoveryGcAt: 0,
-      _lastMemoryRecoverySkippedAfterGcAt: 0, _lastHeartbeatAt: 0, _nodeRuntime: {}, _lastMainSessionId: 'test',
+      _lastMemoryRecoverySkippedAfterGcAt: 0, _memoryPressureRetryAfter: 0, _lastEmergencyConfirmGcAt: 0, EMERGENCY_CONFIRM_GC_MIN_INTERVAL_MS: 30000, _lastHeartbeatAt: 0, _nodeRuntime: {}, _lastMainSessionId: 'test',
     };
     vm.createContext(box);
     vm.runInContext(compiled, box);
@@ -92,6 +95,7 @@ async function main() {
       setRss: (n: number) => { memory = { ...memory, rss: n }; },
       setError: (s: string) => { restartError = s; },
       setOutcome: (s: string) => { restartOutcome = s; },
+      setOnRestart: (fn: () => void) => { onRestart = fn; },
       setMemory: (m: Partial<typeof memory>) => { memory = { ...memory, ...m }; },
       activateDuringLoad: () => { activateOnLoad = true; },
       tick: () => { for (let i = 0; i < 3; i++) box.maybeScheduleMemoryPressureRecovery(memory, 1000000 + i); },
@@ -130,8 +134,30 @@ async function main() {
   const drained = harness(); drained.setActive(0); drained.tick(); drained.box._gatewayDraining = true; await drained.fire();
   assert.deepEqual(drained.restarts, []);
   const aborted = harness(); aborted.setActive(0); aborted.setOutcome('handoff_aborted'); aborted.tick(); await aborted.fire();
-  assert.deepEqual(aborted.restarts, ['prefer']);
+  assert.deepEqual(aborted.restarts, ['prefer', 'never'], 'idle: an aborted warm handoff falls back to one cold restart (no work to lose)');
+  const abortedBusy = harness(); abortedBusy.setActive(0); abortedBusy.setOutcome('handoff_aborted');
+  abortedBusy.setOnRestart(() => abortedBusy.setActive(1)); abortedBusy.tick(); await abortedBusy.fire();
+  assert.deepEqual(abortedBusy.restarts, ['prefer'], 'no cold fallback once work is running again');
+  assert.equal(abortedBusy.box._memoryPressureRestartScheduled, false);
   assert.equal(aborted.box._memoryPressureRestartScheduled, false, 'aborted handoff re-arms the memory watchdog');
+  aborted.tick();
+  assert.equal(aborted.scheduled(), false, 'a still-serving outcome starts a retry cooldown, not a listener release/reopen loop');
+  aborted.box._memoryPressureRetryAfter = 0; aborted.tick();
+  assert.equal(aborted.scheduled(), true, 'recovery retries after the cooldown');
+  const windowAt = 1000000 - 60_000;
+  const gcWindow = harness(); gcWindow.setActive(0); gcWindow.setMemory({ rss: 3.4 * GB, heapUsed: 3.0 * GB });
+  gcWindow.box._lastMemoryRecoveryGcAt = windowAt; gcWindow.box._lastMemoryRecoverySkippedAfterGcAt = windowAt; gcWindow.tick();
+  assert.equal(gcWindow.scheduled(), false, 'a pre-GC heap reading inside the GC window cannot override a GC-confirmed skip');
+  const clearedEmergency = harness(); clearedEmergency.setActive(1); clearedEmergency.setMemory({ rss: 3.9 * GB, heapUsed: 3.6 * GB });
+  clearedEmergency.box._lastMemoryRecoveryGcAt = windowAt; clearedEmergency.box._lastMemoryRecoverySkippedAfterGcAt = windowAt;
+  let forcedGcs = 0;
+  clearedEmergency.box.runRecoveryGc = () => { forcedGcs++; clearedEmergency.setMemory({ heapUsed: 1.5 * GB }); return { gcRan: true, postGcHeapUsedBytes: 1.5 * GB }; };
+  clearedEmergency.tick();
+  assert.equal(forcedGcs, 1, 'a pre-GC emergency reading is confirmed with one forced GC');
+  assert.equal(clearedEmergency.scheduled(), false, 'an emergency the forced GC clears does not cold-recycle active work');
+  clearedEmergency.setMemory({ heapUsed: 3.6 * GB }); clearedEmergency.tick();
+  assert.equal(forcedGcs, 1, 'confirm-GC is rate limited (no full GC on every sample)');
+  assert.equal(clearedEmergency.scheduled(), true, 'an emergency that returns within the interval is treated as real');
   const exiting = harness(); exiting.setActive(0); exiting.tick(); await exiting.fire();
   assert.equal(exiting.box._memoryPressureRestartScheduled, true, 'an exiting restart keeps its latch');
   const heapOnly = harness(); heapOnly.setActive(0); heapOnly.setMemory({ rss: 3.4 * GB, heapUsed: 3.0 * GB }); heapOnly.tick();

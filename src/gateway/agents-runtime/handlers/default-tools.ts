@@ -1682,7 +1682,14 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
                 });
               const reuseVerifiedBackendBuild = runningSourceGateway && backendVerificationIsFresh;
               if (reuseVerifiedBackendBuild) {
-                await gracefulRestart(ctx);
+                const restartOutcome = await gracefulRestart(ctx);
+                if (restartOutcome === 'handoff_aborted' || restartOutcome === 'spawn_failed') {
+                  return {
+                    name, args,
+                    result: `prom_apply_dev_changes applied the changes and reused the verified backend build, but the gateway restart did not take effect (${restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then retry gateway_restart.`,
+                    error: true,
+                  };
+                }
                 return {
                   name,
                   args,
@@ -1705,6 +1712,13 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
                     `prom_apply_dev_changes failed during npm run build (${buildResult.durationMs}ms). Gateway was not restarted.` +
                     (steps.length ? `\n\nCompleted first:\n${steps.map((s) => `- ${s.command}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
                     `\n\n${buildResult.output}`,
+                  error: true,
+                };
+              }
+              if (buildResult.restartOutcome === 'handoff_aborted' || buildResult.restartOutcome === 'spawn_failed') {
+                return {
+                  name, args,
+                  result: `prom_apply_dev_changes build passed (${buildResult.durationMs}ms), but the gateway restart did not take effect (${buildResult.restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then retry gateway_restart.`,
                   error: true,
                 };
               }

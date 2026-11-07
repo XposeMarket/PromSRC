@@ -33,21 +33,22 @@ export function canAttemptRecoveryGc(lastAttemptAt: number, now: number, throttl
 }
 
 /**
- * Inside the GC throttle window, after a GC-confirmed skip, keep skipping
- * while the current heap is still small (RSS stays high because V8 keeps pages
- * committed). Once heapUsed crosses the ratio, a real leak recycles.
+ * Inside the GC throttle window after a GC-confirmed skip, keep skipping. A
+ * pre-GC heapUsed reading cannot disprove a GC that just showed the heap was
+ * garbage: heap-ratio samples always sit above the post-GC skip line, so the
+ * old "re-validate from current heapUsed" rule recycled healthy gateways
+ * minutes after a GC cleared them. A real leak recycles at the next GC once
+ * the throttle expires; emergencies are confirmed by the caller with a forced
+ * GC instead.
  */
 export function shouldKeepSkippingWithinGcWindow(input: {
   now: number;
   lastGcAt: number;
   lastSkipAt: number;
-  heapUsedBytes: number;
-  thresholdBytes: number;
   throttleMs?: number;
 }): boolean {
   if (input.lastSkipAt <= 0 || input.lastSkipAt !== input.lastGcAt) return false;
-  if (canAttemptRecoveryGc(input.lastGcAt, input.now, input.throttleMs)) return false;
-  return decideMemoryRecoveryAfterGc({ gcRan: true, postGcHeapUsedBytes: input.heapUsedBytes, thresholdBytes: input.thresholdBytes }) === 'skip_after_gc';
+  return !canAttemptRecoveryGc(input.lastGcAt, input.now, input.throttleMs);
 }
 
 let cachedGc: (() => void) | null | undefined;
@@ -109,6 +110,17 @@ export function isMemoryPressureSample(input: {
   if (input.rssThresholdBytes > 0 && input.rssBytes >= input.rssThresholdBytes) return true;
   const ratio = input.heapRatio ?? MEMORY_RECOVERY_HEAP_RATIO;
   return ratio > 0 && input.heapLimitBytes > 0 && input.heapUsedBytes >= input.heapLimitBytes * ratio;
+}
+
+/**
+ * Line a post-GC heap must stay above to justify a recycle (skip below half of
+ * it). The RSS threshold on default heaps; on large heaps (PROMETHEUS heap
+ * scaling) it follows the routine heap-ratio line so a healthy multi-GB live
+ * set is not recycled.
+ */
+export function gcConfirmThresholdBytes(rssThresholdBytes: number, heapLimitBytes: number, heapRatio = MEMORY_RECOVERY_HEAP_RATIO): number {
+  const heapLine = heapRatio > 0 && heapLimitBytes > 0 ? heapLimitBytes * heapRatio : 0;
+  return Math.max(rssThresholdBytes > 0 ? rssThresholdBytes : 0, heapLine);
 }
 
 export type ActiveWorkMemoryDecision = 'defer_active_work' | 'restart_idle' | 'restart_emergency';

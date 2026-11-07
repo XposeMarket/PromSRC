@@ -477,6 +477,8 @@ export interface BuildResult {
   success: boolean;
   output: string;
   durationMs: number;
+  /** Set by buildAndRestart when the build passed and a restart was attempted. */
+  restartOutcome?: RestartOutcome;
 }
 
 /**
@@ -1230,6 +1232,8 @@ export async function gracefulRestart(ctx: RestartContext): Promise<RestartOutco
       // prepared handoff is NOT permission to destroy the runtimes still here.
       // Outcome unknown: the failure may have happened after listeners were released.
       console.error('[lifecycle] Warm handoff threw; outcome unknown:', error?.message || error);
+      // Past the commit point this host is already draining toward a replacement.
+      outcome = _lifecycleState.handoffDraining ? 'handoff_started' : 'handoff_aborted';
       if (!(_lifecycleState.shutdownHooks.hasListeningGateway?.() ?? true)) {
         try { await _lifecycleState.shutdownHooks.reopenListenersAfterFailedHandoff?.(); console.error('[lifecycle] Reopened listeners after unknown handoff outcome.'); }
         catch (reopenError: any) { console.error('[lifecycle] Reopen after unknown handoff outcome failed:', reopenError?.message || reopenError); startColdRecoveryLoop(); }
@@ -1370,13 +1374,14 @@ export async function buildAndRestart(
   }
 
   emit(`Build succeeded (${buildResult.durationMs}ms). Initiating restart...`);
-  await gracefulRestart({
+  const restartOutcome = await gracefulRestart({
     ...ctx,
     buildOutput: buildResult.output,
     timestamp: ctx.timestamp || Date.now(),
   });
+  if (restartLeftProcessServing(restartOutcome)) emit(`Restart did not take effect (${restartOutcome}); this gateway is still serving the previous code.`);
 
-  return buildResult;
+  return { ...buildResult, restartOutcome };
 }
 
 // ─── Proposal-Specific Helper ─────────────────────────────────────────────────
