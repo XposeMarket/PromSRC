@@ -549,10 +549,15 @@ export class SecretVault {
 
   /** Factory-reset: wipe all entries */
   clear(caller = 'unknown'): void {
-    this.data = { version: 1, entries: {} };
+    // PR821 review (F1 follow-up): a generic clear must not destroy protected saved
+    // access or paired-phone owner grants. Only the broker may wipe its namespace;
+    // the visible reverse path for those entries is Saved access > Delete.
+    const entries = caller === SECURE_ACCESS_TRUSTED_CALLER ? {} : Object.fromEntries(
+      Object.entries(this.data.entries || {}).filter(([key]) => isReservedSecureAccessKey(key)));
+    this.data = { version: 1, entries } as any;
     this.derivedKeyCache.clear();
     this.persist({ mergeExisting: false });
-    this.audit('CLEAR', '*', caller);
+    this.audit('CLEAR', caller === SECURE_ACCESS_TRUSTED_CALLER ? '*' : '*(reserved kept)', caller);
   }
 }
 

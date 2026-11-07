@@ -49,6 +49,13 @@ try {
   const audit = auditText();
   assert.match(audit, /DENY/, 'denials must be audited');
   assert.ok(!audit.includes(CANARY) && !audit.includes('ATTACKER_VALUE'), 'audit must never contain values');
+  // Generic clear() (factory reset by any non-broker caller) keeps the reserved namespace.
+  vault.clear('settings-reset');
+  assert.equal(vault.get(RESERVED, 'secure-access')?.expose(), CANARY, 'non-broker clear keeps protected access');
+  assert.equal(vault.get('integrations.github.pat', 'test'), null, 'non-broker clear wipes ordinary entries');
+  assert.equal(new SecretVault(dir).get(RESERVED, 'secure-access')?.expose(), CANARY, 'kept across reload');
+  vault.clear('secure-access');
+  assert.equal(vault.get(RESERVED, 'secure-access'), null, 'broker clear wipes its namespace');
   console.log('PASS secure-access vault: reserved namespace denied to untrusted get/set/delete/rotate/has, broker allowed, ordinary refs unaffected, denials audited without values.');
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
