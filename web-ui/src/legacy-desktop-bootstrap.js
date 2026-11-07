@@ -895,8 +895,10 @@ let _sessionOptionsTrigger = null;
 
 function closeChatSessionOptions(restoreFocus = false) {
   const trigger = _sessionOptionsTrigger;
-  hideSessionHoverPreview();
+  // Focus the trigger BEFORE the menu state clears: it stays rendered while focused (CSS :focus),
+  // so focus cannot be dropped by a display:none that happens during close.
   if (restoreFocus && trigger?.isConnected) trigger.focus();
+  hideSessionHoverPreview();
 }
 
 window.openChatSessionOptions = function openChatSessionOptions(trigger, event) {
@@ -915,6 +917,7 @@ window.openChatSessionOptions = function openChatSessionOptions(trigger, event) 
   _sessionOptionsOpen = true;
   _sessionOptionsTrigger = trigger;
   trigger.setAttribute('aria-expanded', 'true');
+  row.classList.add('is-menu-open');
   popover.classList.add('is-options-open');
   if (menu) menu.hidden = false;
   popover.querySelector('.session-hover-preview-option')?.focus();
@@ -922,6 +925,7 @@ window.openChatSessionOptions = function openChatSessionOptions(trigger, event) 
 
 function _syncChatSessionOptionsClosed() {
   if (_sessionOptionsTrigger?.isConnected) _sessionOptionsTrigger.setAttribute('aria-expanded', 'false');
+  _sessionOptionsTrigger?.closest?.('.chat-session-item')?.classList.remove('is-menu-open');
   _sessionOptionsOpen = false;
   _sessionOptionsTrigger = null;
   document.getElementById('session-hover-preview')?.classList.remove('is-options-open');

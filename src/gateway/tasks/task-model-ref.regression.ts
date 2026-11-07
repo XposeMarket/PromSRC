@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { resolveTaskModelRef, type TaskModelRefDeps } from './task-model-ref';
+import { projectBgTaskRow } from '../routes/tasks.router';
 
 const deps: TaskModelRefDeps = {
   sessionModel: (id) => (id === 'ran' ? { providerId: 'xai', model: 'grok-4.3' } : id === 'chat1' ? { providerId: 'anthropic', model: 'claude-opus-5-5' } : null),
@@ -37,14 +38,18 @@ assert.equal(resolveTaskModelRef({ sessionId: 's' }, { sessionModel: () => { thr
 assert.equal(resolveTaskModelRef(null, deps), null);
 console.log('PASS task modelRef: session > executor > schedule > agent > primary, planned chat, unknown');
 
-// Route projection: /api/bg-tasks must keep executorReasoningEffort on the projected task so the
-// model ref can carry it (mirrors the projected shape in tasks.router.ts, which must keep that field).
-const projected = { id: 't-eff', sessionId: 'ran', executorProvider: 'xai/grok-4.3', executorReasoningEffort: 'high' };
+// Route projection: run the EXACT function /api/bg-tasks uses for each row (projectBgTaskRow), not a
+// hand-built copy. Removing the executorReasoningEffort mapping there makes this assertion fail.
+const taskRow = (overrides: Record<string, unknown>): any => ({ id: 't-eff', title: 'x', status: 'running', plan: [], ...overrides });
+const projected = projectBgTaskRow(taskRow({ sessionId: 'ran', executorProvider: 'xai/grok-4.3', executorReasoningEffort: 'high' }), false);
+assert.equal(projected.executorReasoningEffort, 'high', 'projection must keep executorReasoningEffort');
 assert.deepEqual(resolveTaskModelRef(projected, deps), { providerId: 'xai', model: 'grok-4.3', source: 'session', reasoningEffort: 'high' });
-// Null / unknown effort never renders as the string 'undefined'.
+// Null / absent / empty effort never renders as the string 'undefined' and never adds a field.
 for (const effort of [undefined, null, '']) {
-  const ref = resolveTaskModelRef({ sessionId: 'ran', executorReasoningEffort: effort }, deps);
+  const row = projectBgTaskRow(taskRow({ sessionId: 'ran', executorReasoningEffort: effort }), false);
+  const ref = resolveTaskModelRef(row, deps);
   assert.ok(ref && !('reasoningEffort' in ref), 'absent effort must not produce a reasoningEffort field');
-  assert.equal(ref?.reasoningEffort, undefined);
+  assert.notEqual(ref?.reasoningEffort, 'undefined');
 }
 console.log('PASS task modelRef: projected reasoning effort survives; null/unknown effort never renders undefined');
+

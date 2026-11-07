@@ -485,14 +485,15 @@ body:not(.pm-mobile-active) :is(
 }
 
 /* Desktop chat-row options trigger (keyboard + narrow-desktop entry to the options menu).
-   It swaps in for the "ago" timestamp on hover/focus, and stays visible at narrow widths
-   where the hover popover is disabled. */
+   It takes its own reserved slot just left of the pin (pin: right 8px, 22px wide; trigger: right 32px),
+   and swaps in for the "ago" timestamp on hover/focus. It stays rendered while the menu is open
+   (.is-menu-open on the row) or while it holds focus, so Escape can return focus to it. */
 body:not(.pm-mobile-active) .chat-session-item { position: relative; }
 body:not(.pm-mobile-active) .chat-session-options-trigger {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
+  top: 7px;
+  right: 32px;
+  z-index: 1;
   display: none;
   align-items: center;
   justify-content: center;
@@ -509,7 +510,10 @@ body:not(.pm-mobile-active) .chat-session-options-trigger {
 }
 body:not(.pm-mobile-active) .chat-session-item:hover .chat-session-options-trigger,
 body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-options-trigger,
-body:not(.pm-mobile-active) .chat-session-options-trigger[aria-expanded="true"] { display: inline-flex; }
+body:not(.pm-mobile-active) .chat-session-item.is-menu-open .chat-session-options-trigger,
+body:not(.pm-mobile-active) .chat-session-options-trigger[aria-expanded="true"],
+body:not(.pm-mobile-active) .chat-session-options-trigger:focus,
+body:not(.pm-mobile-active) .chat-session-options-trigger:focus-visible { display: inline-flex; }
 body:not(.pm-mobile-active) .chat-session-options-trigger:hover,
 body:not(.pm-mobile-active) .chat-session-options-trigger:focus-visible {
   outline: none;
@@ -517,11 +521,13 @@ body:not(.pm-mobile-active) .chat-session-options-trigger:focus-visible {
   color: var(--pm-gold, var(--brand));
 }
 body:not(.pm-mobile-active) .chat-session-item:hover .chat-session-top-time,
-body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-top-time { visibility: hidden; }
+body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-top-time,
+body:not(.pm-mobile-active) .chat-session-item.is-menu-open .chat-session-top-time { visibility: hidden; }
 @media (max-width: 900px) {
   body:not(.pm-mobile-active) .chat-session-options-trigger { display: inline-flex; }
   body:not(.pm-mobile-active) .chat-session-item .chat-session-top-time { visibility: hidden; }
 }
+
 
 .job-item-unread-dot {
   display: inline-block;

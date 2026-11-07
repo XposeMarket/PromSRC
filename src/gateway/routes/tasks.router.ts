@@ -431,58 +431,7 @@ router.get('/api/bg-tasks', (req, res) => {
   const requestedLimit = Number(req.query.limit || 0);
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : undefined;
   const compact = String(req.query.mobile || '') === '1' || String(req.query.compact || '') === '1';
-  const tasks = listTaskSummaries({ limit }).map((task: any) => ({
-    id: task.id,
-    title: task.title,
-    sessionId: task.sessionId,
-    channel: task.channel,
-    telegramChatId: task.telegramChatId,
-    teamSubagent: compact && task.teamSubagent ? {
-      teamId: task.teamSubagent.teamId,
-      agentId: task.teamSubagent.agentId,
-      agentName: task.teamSubagent.agentName,
-    } : task.teamSubagent,
-    status: task.status,
-    pauseReason: task.pauseReason,
-    // Failed cards show the real failure reason without opening the task.
-    lastError: task.status === 'failed' && task.finalSummary ? String(task.finalSummary).slice(0, 240) : undefined,
-    // Why a paused/stalled/needs-you/failed task stopped, as Prometheus explained it.
-    attentionMessage: buildTaskAttentionMessage(task),
-    originalAssignment: task.originalAssignment ? String(task.originalAssignment).slice(0, 280) : undefined,
-    pausedByScheduleId: task.pausedByScheduleId,
-    shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
-    plan: Array.isArray(task.plan) ? task.plan.slice(0, compact ? 10 : 20).map((step: any) => compact ? {
-      index: step.index,
-      description: String(step.description || step.text || '').slice(0, 280),
-      status: step.status,
-    } : step) : [],
-    currentStepIndex: task.currentStepIndex,
-    runtimeProgress: compact && task.runtimeProgress ? {
-      source: task.runtimeProgress.source,
-      activeIndex: task.runtimeProgress.activeIndex,
-      updatedAt: task.runtimeProgress.updatedAt,
-      items: (Array.isArray(task.runtimeProgress.items) ? task.runtimeProgress.items : []).slice(0, 12).map((item: any) => ({
-        text: String(item?.text || item?.description || '').slice(0, 280),
-        status: item?.status,
-      })),
-    } : task.runtimeProgress,
-    lastProgressAt: task.lastProgressAt,
-    startedAt: task.startedAt,
-    completedAt: task.completedAt,
-    pendingClarificationQuestion: compact ? String(task.pendingClarificationQuestion || '').slice(0, 320) || undefined : task.pendingClarificationQuestion,
-    scheduleId: task.scheduleId,
-    taskKind: task.taskKind,
-    brainJob: task.brainJob,
-    brainRunId: task.brainRunId,
-    brainDate: task.brainDate,
-    brainArtifact: task.brainArtifact,
-    verificationStatus: task.verificationStatus,
-    voiceDispatch: task.voiceDispatch,
-    managerEnabled: task.managerEnabled,
-    executorProvider: task.executorProvider,
-    // Keep the stored effort so withModelRef can surface it on task cards.
-    executorReasoningEffort: task.executorReasoningEffort,
-  }));
+  const tasks = listTaskSummaries({ limit }).map((task: any) => projectBgTaskRow(task, compact));
   const plannedRuns = listPlannedChatRuns(collectNeedsYouItems());
   const modelDeps = taskModelRefDeps();
   const combined = [...tasks, ...plannedRuns].map((task: any) => withModelRef(task, modelDeps)).sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
@@ -1129,3 +1078,61 @@ router.use((err: any, _req: any, res: any, next: any) => {
   }
   res.status(400).json({ success: false, error: err.message });
 });
+
+// Pure projection of one /api/bg-tasks row. The route uses this exact function, and the task-model
+// regression imports it, so the regression exercises production mapping. executorReasoningEffort must
+// survive; a null/absent effort stays absent (never the string 'undefined').
+export function projectBgTaskRow(task: any, compact: boolean): any {
+  return {
+    id: task.id,
+    title: task.title,
+    sessionId: task.sessionId,
+    channel: task.channel,
+    telegramChatId: task.telegramChatId,
+    teamSubagent: compact && task.teamSubagent ? {
+      teamId: task.teamSubagent.teamId,
+      agentId: task.teamSubagent.agentId,
+      agentName: task.teamSubagent.agentName,
+    } : task.teamSubagent,
+    status: task.status,
+    pauseReason: task.pauseReason,
+    // Failed cards show the real failure reason without opening the task.
+    lastError: task.status === 'failed' && task.finalSummary ? String(task.finalSummary).slice(0, 240) : undefined,
+    // Why a paused/stalled/needs-you/failed task stopped, as Prometheus explained it.
+    attentionMessage: buildTaskAttentionMessage(task),
+    originalAssignment: task.originalAssignment ? String(task.originalAssignment).slice(0, 280) : undefined,
+    pausedByScheduleId: task.pausedByScheduleId,
+    shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
+    plan: Array.isArray(task.plan) ? task.plan.slice(0, compact ? 10 : 20).map((step: any) => compact ? {
+      index: step.index,
+      description: String(step.description || step.text || '').slice(0, 280),
+      status: step.status,
+    } : step) : [],
+    currentStepIndex: task.currentStepIndex,
+    runtimeProgress: compact && task.runtimeProgress ? {
+      source: task.runtimeProgress.source,
+      activeIndex: task.runtimeProgress.activeIndex,
+      updatedAt: task.runtimeProgress.updatedAt,
+      items: (Array.isArray(task.runtimeProgress.items) ? task.runtimeProgress.items : []).slice(0, 12).map((item: any) => ({
+        text: String(item?.text || item?.description || '').slice(0, 280),
+        status: item?.status,
+      })),
+    } : task.runtimeProgress,
+    lastProgressAt: task.lastProgressAt,
+    startedAt: task.startedAt,
+    completedAt: task.completedAt,
+    pendingClarificationQuestion: compact ? String(task.pendingClarificationQuestion || '').slice(0, 320) || undefined : task.pendingClarificationQuestion,
+    scheduleId: task.scheduleId,
+    taskKind: task.taskKind,
+    brainJob: task.brainJob,
+    brainRunId: task.brainRunId,
+    brainDate: task.brainDate,
+    brainArtifact: task.brainArtifact,
+    verificationStatus: task.verificationStatus,
+    voiceDispatch: task.voiceDispatch,
+    managerEnabled: task.managerEnabled,
+    executorProvider: task.executorProvider,
+    // Keep the stored effort so withModelRef can surface it on task cards.
+    executorReasoningEffort: task.executorReasoningEffort,
+  };
+}
