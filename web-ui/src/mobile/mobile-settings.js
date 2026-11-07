@@ -231,7 +231,7 @@ async function loadSection(page, section, navigate) {
   if (section === 'credentials') return renderCredentials(content, page);
   if (section === 'search') return renderSearch(content, page);
   if (section === 'heartbeat') return renderHeartbeat(content, page);
-  if (section === 'security' || section === 'saved-access') return renderSecurity(content, page);
+  if (section === 'security') return renderSecurity(content, page);
   if (section === 'agents') return renderAgents(content, page);
   if (section === 'channels') return renderChannels(content, page);
   if (section === 'integrations') return renderIntegrations(content, page);
@@ -675,7 +675,6 @@ async function renderSecurity(content, page) {
   const chromeGrant = await mobileGatewayFetch('/api/browser/chrome-signin-sync').catch(() => null);
   const chromeOn = chromeGrant?.enabled === true;
   content.innerHTML = `
-    <div id="pm-saved-access-host" style="margin-bottom:12px"></div>
     ${card('Chrome sign-ins', `
       <div class="pm-card-body">When on, opening a site copies that site's sign-in from your paired Personal Chrome. Cookie values stay on your computer.</div>
       ${toggleRow('pm-chrome-signin-sync', 'Always use my Chrome sign-ins', chromeOn)}
@@ -689,17 +688,6 @@ async function renderSecurity(content, page) {
       <div id="pm-settings-live-status"></div>
     `, 'check', 'pm-card-strong')}
   `;
-  // Saved access (PR821): shared renderer with desktop. Paired phones without owner
-  // approval see the fail-closed banner; revoke stays available everywhere.
-  const savedHost = page.querySelector('#pm-saved-access-host');
-  if (savedHost) {
-    import('../features/secure-access/secure-access-settings.js')
-      .then(({ mountSavedAccessSettings }) => mountSavedAccessSettings(savedHost, {
-        fetchJson: (path, opts = {}) => mobileGatewayFetch(path, opts),
-        confirm: (message) => Promise.resolve(window.confirm(message)),
-      }))
-      .catch(() => { savedHost.textContent = 'Saved access is unavailable right now.'; });
-  }
   const chromeToggle = page.querySelector('#pm-chrome-signin-sync');
   chromeToggle?.addEventListener('click', async () => {
     const next = !chromeToggle.classList.contains('on');
