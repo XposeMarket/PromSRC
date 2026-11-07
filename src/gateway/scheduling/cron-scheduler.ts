@@ -889,11 +889,19 @@ export class CronScheduler {
   private normalizeDisabledJobStatuses(): void {
     let changed = 0;
     for (const job of this.store.jobs) {
-      if (job.enabled !== false || job.status === 'paused' || job.status === 'completed') continue;
-      job.status = 'paused';
-      job.pausedReason = job.pausedReason || 'manual';
-      job.queuedAt = null;
-      changed += 1;
+      const before = JSON.stringify([job.enabled, job.status, job.nextRun]);
+      // Conservative repair: a paused job must never stay enabled. Never sets enabled=true.
+      if (job.status === 'paused' && job.enabled !== false) job.enabled = false;
+      if (job.enabled === false) {
+        if (job.status !== 'paused' && job.status !== 'completed') {
+          job.status = 'paused';
+          job.pausedReason = job.pausedReason || 'manual';
+          job.queuedAt = null;
+        }
+        // A disabled job never carries a live nextRun.
+        job.nextRun = null;
+      }
+      if (JSON.stringify([job.enabled, job.status, job.nextRun]) !== before) changed += 1;
     }
     if (changed > 0) {
       this.saveStore();
@@ -1126,6 +1134,8 @@ export class CronScheduler {
       createdAt: now.toISOString(),
     };
 
+    // A job created disabled starts paused instead of "scheduled" with a live nextRun.
+    if (job.enabled === false) this.applyPauseState(job, true);
     this.store.jobs.push(job);
     this.saveStore();
     this.broadcastUpdate();
@@ -1138,6 +1148,18 @@ export class CronScheduler {
     const idx = this.store.jobs.findIndex(j => j.id === id);
     if (idx === -1) return null;
     const normalizedPartial: Partial<CronJob> = { ...partial };
+    // Run state is not a free-form field. Map status/enabled input to pause or
+    // resume intent and apply it through applyPauseState so the two never disagree.
+    let pauseIntent: boolean | null = null;
+    if (normalizedPartial.enabled === false || normalizedPartial.status === 'paused') pauseIntent = true;
+    else if (normalizedPartial.enabled === true || normalizedPartial.status === 'scheduled') pauseIntent = false;
+    if (normalizedPartial.status !== undefined && normalizedPartial.status !== 'paused' && normalizedPartial.status !== 'scheduled') {
+      console.warn(`[CronScheduler] Ignored status "${String(normalizedPartial.status)}" in updateJob(${id}); run state is owned by the scheduler.`);
+    }
+    const pausedReasonInput = normalizedPartial.pausedReason;
+    delete normalizedPartial.status;
+    delete normalizedPartial.enabled;
+    delete normalizedPartial.pausedReason;
     if (partial.type !== undefined) {
       normalizedPartial.type = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
       if (normalizedPartial.type === 'one-shot' && partial.schedule === undefined) normalizedPartial.schedule = null;
@@ -1161,6 +1183,16 @@ export class CronScheduler {
       }
     }
     const wasPaused = current.status === 'paused' || current.enabled === false;
+    // Completed one-shots stay terminal on a plain enable/resume. They are rearmed only when
+    // the same update supplies a future runAt; validate before any mutation.
+    const rearmOneShot = pauseIntent === false && current.type === 'one-shot'
+      && current.status === 'completed' && normalizedPartial.runAt !== undefined;
+    if (rearmOneShot) {
+      const runAtMs = Date.parse(String(normalizedPartial.runAt));
+      if (!Number.isFinite(runAtMs) || runAtMs <= Date.now()) {
+        throw new Error('Rearming a completed one-shot requires a valid future runAt');
+      }
+    }
     // Mutate in place: a running executeJobInner holds this same object, so
     // replacing it would leave the run writing to a stale copy (pauses and
     // edits made during a run were silently lost or undone).
@@ -1168,13 +1200,21 @@ export class CronScheduler {
     for (const [key, value] of Object.entries(normalizedPartial)) {
       if (value === undefined) delete (current as any)[key];
     }
+    if (pauseIntent === true) this.applyPauseState(current, true, pausedReasonInput || current.pausedReason || 'manual');
+    else if (rearmOneShot) {
+      // Explicit future runAt rearms a completed one-shot (validated above, before mutation).
+      current.enabled = true;
+      current.status = 'scheduled';
+      current.pausedReason = undefined;
+      current.nextRun = current.runAt;
+    } else if (pauseIntent === false) this.applyPauseState(current, false);
     const nowPaused = current.status === 'paused' || current.enabled === false;
-    const resumed = wasPaused && !nowPaused;
-    // Recalculate nextRun if schedule changed, or the job was just resumed
-    // (otherwise a resumed job keeps a months-old nextRun and fires instantly).
-    if (nowPaused && !wasPaused) {
+    // applyPauseState recomputed nextRun on resume (otherwise a resumed job keeps a
+    // months-old nextRun and fires instantly). A paused job never carries a nextRun,
+    // even when its schedule is edited; an active job recomputes on schedule edits.
+    if (nowPaused) {
       current.nextRun = null;
-    } else if (resumed || partial.schedule !== undefined || partial.runAt !== undefined || partial.tz !== undefined) {
+    } else if (!wasPaused && (partial.schedule !== undefined || partial.runAt !== undefined || partial.tz !== undefined)) {
       const job = current;
       job.nextRun = job.type === 'one-shot' && job.runAt
         ? job.runAt
@@ -1603,6 +1643,7 @@ export class CronScheduler {
 
         if (scheduledTeamId) {
           if (!team) {
+            job.enabled = false;
             job.status = 'paused';
             job.pausedReason = 'configuration_error';
             job.lastResult = `ERROR: Scheduled team not found: ${scheduledTeamId}. Repair the team registry or schedule target before resuming.`;
@@ -2544,15 +2585,52 @@ export class CronScheduler {
   // ─── Task Pause/Resume/Interrupt ─────────────────────────────────────────────
 
   /**
+   * The one place pause/resume changes a job's run state. `status` and `enabled`
+   * used to be synced by hand at each call site: the UI toggle only flipped
+   * `enabled`, pauseJob only flipped `status`, so the two could disagree.
+   * Returns false when a resume finds nothing to resume.
+   */
+  private applyPauseState(job: CronJob, paused: boolean, reason: CronJob['pausedReason'] = 'manual'): boolean {
+    if (paused) {
+      job.enabled = false;
+      job.nextRun = null;
+      // A finished job stays finished; disabling it only stops it being revived.
+      if (job.status !== 'completed') {
+        job.status = 'paused';
+        job.pausedReason = reason || 'manual';
+      }
+      return true;
+    }
+    if (job.status !== 'paused' && job.enabled !== false) return false;
+    // Completed one-shots are terminal: a plain enable/resume never revives them.
+    // Only updateJob rearms one, and only with an explicit future runAt.
+    if (job.status === 'completed') return false;
+    // A one-shot whose runAt has passed stays paused rather than firing at once on resume.
+    if (job.type === 'one-shot' && job.status !== 'queued' && job.status !== 'running'
+      && (!job.runAt || Date.parse(job.runAt) <= Date.now())) return false;
+    job.enabled = true;
+    job.pausedReason = undefined;
+    // A legacy disabled-but-queued/running job keeps its live run status; the
+    // completion path settles it.
+    if (job.status !== 'queued' && job.status !== 'running') job.status = 'scheduled';
+    job.nextRun = job.type === 'one-shot' && job.runAt
+      ? job.runAt
+      : applyDeterministicStagger(
+          getNextRun(job.schedule, new Date(), job.tz).toISOString(),
+          job.id,
+          job.schedule
+        );
+    return true;
+  }
+
+  /**
    * Pause a job (e.g., to resume/retry later)
    */
   pauseJob(id: string, reason: 'manual' | 'interrupted_by_schedule' = 'manual'): CronJob | null {
     this.refreshStoreFromDiskIfChanged();
     const job = this.store.jobs.find(j => j.id === id);
     if (!job) return null;
-    job.status = 'paused';
-    job.pausedReason = reason;
-    job.nextRun = null;
+    this.applyPauseState(job, true, reason);
     this.saveStore();
     this.broadcastUpdate();
     console.log(`[CronScheduler] Job "${job.name}" paused (reason: ${reason})`);
@@ -2566,21 +2644,12 @@ export class CronScheduler {
     this.refreshStoreFromDiskIfChanged();
     const job = this.store.jobs.find(j => j.id === id);
     if (!job) return null;
-    if (job.status !== 'paused') {
+    // Also recovers a legacy disabled-but-"scheduled" job, which used to be
+    // refused here and could never fire again.
+    if (!this.applyPauseState(job, false)) {
       console.warn(`[CronScheduler] Attempt to resume non-paused job "${job.name}"`);
       return job;
     }
-    job.status = 'scheduled';
-    job.pausedReason = undefined;
-    // Recalculate nextRun
-    const now = new Date();
-    job.nextRun = job.type === 'one-shot' && job.runAt
-      ? job.runAt
-      : applyDeterministicStagger(
-          getNextRun(job.schedule, now, job.tz).toISOString(),
-          job.id,
-          job.schedule
-        );
     this.saveStore();
     this.broadcastUpdate();
     console.log(`[CronScheduler] Job "${job.name}" resumed`);

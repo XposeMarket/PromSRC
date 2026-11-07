@@ -758,13 +758,13 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         }
 
         if (action === 'pause') {
-          const updated = deps.cronScheduler.updateJob(jobId, { status: 'paused', enabled: false, pausedReason: 'manual' } as any);
+          const updated = deps.cronScheduler.pauseJob(jobId, 'manual');
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
           return { name, args, result: JSON.stringify({ success: true, action: 'pause', job: summarizeCronJob(updated) }, null, 2), error: false };
         }
 
         if (action === 'resume') {
-          const updated = deps.cronScheduler.updateJob(jobId, { status: 'scheduled', enabled: true, pausedReason: undefined } as any);
+          const updated = deps.cronScheduler.resumeJob(jobId);
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
           return { name, args, result: JSON.stringify({ success: true, action: 'resume', job: summarizeCronJob(updated) }, null, 2), error: false };
         }
