@@ -24,6 +24,7 @@ export class GoogleDriveConnector extends OAuthConnector {
         'https://www.googleapis.com/auth/userinfo.email',
         'openid',
       ],
+      requiredScopes: ['https://www.googleapis.com/auth/drive.readonly'],
       usePkce: false,
       useNonce: true,
       callbackPort: 19425,

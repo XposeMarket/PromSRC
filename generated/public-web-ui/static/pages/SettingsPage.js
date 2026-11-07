@@ -16,7 +16,6 @@ import { renderContextSelection, wireContextSelection } from '../context-selecti
 
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
-import { mountSavedAccessSettings } from '../features/secure-access/secure-access-settings.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
@@ -542,29 +541,8 @@ async function installDesktopUpdate() {
   }
 }
 
-// Saved access (secure-access foundation): same shared renderer as mobile.
-let desktopSavedAccess = null;
-function mountDesktopSavedAccess() {
-  const host = document.getElementById('settings-secure-access-host');
-  if (!host) return;
-  if (desktopSavedAccess && host.firstChild) { desktopSavedAccess.refresh(); return; }
-  desktopSavedAccess = mountSavedAccessSettings(host, {
-    fetchJson: (path, opts = {}) => api(path, opts),
-    getSessionId: () => String(window.activeChatSessionId || '').trim(),
-    confirm: (message) => new Promise((resolve) => {
-      showConfirm(message, () => resolve(true), () => resolve(false), {
-        title: 'Delete saved access', confirmText: 'Delete', danger: true, onDismiss: () => resolve(false),
-      });
-    }),
-  });
-}
-
 function setSettingsTab(tab) {
   if (tab === 'credentials') tab = 'search';
-  // Saved access lives in Security; mobile deep links (#mobile/settings/saved-access)
-  // hand off here through openMobileSettings.
-  if (tab === 'saved-access') tab = 'security';
-  if (tab !== 'security') desktopSavedAccess?.clearDrafts();
   if (tab === 'migration') {
     // Keep the old navigation target working while the durable P11-37 flow
     // lives in General. The legacy migration service remains available to
@@ -631,10 +609,7 @@ function setSettingsTab(tab) {
             window._settingsSearchLoadedToUI = false;
           }));
         }
-        if (t === 'security') {
-          pendingLoads.push(loadSecuritySettings());
-          mountDesktopSavedAccess();
-        }
+        if (t === 'security') pendingLoads.push(loadSecuritySettings());
         if (t === 'migration') pendingLoads.push(loadMigrationPanel());
         if (t === 'shortcuts') pendingLoads.push(loadShortcutsPanel());
         if (t === 'pairing')   pendingLoads.push(loadPairingPanel());

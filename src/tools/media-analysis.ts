@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { createAnalysisRun, hashFile, preserveAnalysisArtifacts } from '../gateway/resources/analysis-artifacts';
+import { automaticReferenceCaptureReady, getReferenceService } from '../gateway/resources/reference-service';
 import fsp from 'fs/promises';
 import path from 'path';
 import { execFile, spawn, type ChildProcess } from 'child_process';
@@ -33,6 +35,8 @@ export type MediaAnalysisProgress = {
 };
 
 type AnalyzeVideoArgs = {
+  /** Trusted runtime session, never exposed in model tool schema. */
+  referenceSessionId?: string;
   file_path: string;
   prompt?: string;
   response_mode?: 'view' | 'report';
@@ -548,9 +552,12 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       : 0;
     const maxDetailFrames = boundedNumber(args?.max_detail_frames ?? args?.detail_frame_budget, 42, 2, 72);
     const defaultOutputDir = path.join('downloads', 'video_analysis', sanitizeStem(path.basename(absPath, path.extname(absPath))));
-    const outputDirRel = String(args?.output_dir || defaultOutputDir).trim();
-    const outputDirAbs = ensureWorkspacePath(workspaceRoot, outputDirRel);
-    await fsp.mkdir(outputDirAbs, { recursive: true });
+    const outputParent = ensureWorkspacePath(workspaceRoot, String(args?.output_dir || defaultOutputDir).trim());
+    const run = createAnalysisRun(workspaceRoot, outputParent);
+    const outputDirAbs = run.directory;
+    let sourceHash = ''; let preservationError: string | undefined; let sourceSnapshot: { size: number; mtimeMs: number } | undefined;
+    try { const st = fs.statSync(absPath); sourceSnapshot = { size: st.size, mtimeMs: st.mtimeMs }; sourceHash = await hashFile(absPath); }
+    catch (error: any) { preservationError = `Source could not be fingerprinted for analysis preservation: ${String(error?.message || error).slice(0, 300)}`; }
 
     const analyzerArgs = [
       absPath,
@@ -706,6 +713,17 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       });
     }
 
+    const frameMetadata = [...(quick?.frames || []), ...(detail?.frames || [])];
+    const preservationInput = {
+      workspace: workspaceRoot, directory: outputDirAbs, runId: run.id, sourcePath: absPath, sourceHash, sourceSnapshot,
+      frames: framePaths.map((framePath: string) => ({ path: framePath, timestampSeconds: frameMetadata.find((frame: any) => frame.path === framePath)?.at_seconds })),
+      contactSheets: contactSheets.map((sheet: any) => String(sheet.path)),
+      audioPath: analyzerResult?.audio?.available ? analyzerResult.audio.path : undefined,
+      transcript, transcriptionProvider, analysisPrompt: prompt,
+      observationMode: (args.direct_observation === true && args.response_mode !== 'report' ? 'direct' : 'report') as 'direct' | 'report',
+    };
+    // Save produced evidence before the optional model call can fail or be interrupted.
+    if (!preservationError) { try { await preserveAnalysisArtifacts({ ...preservationInput, status: 'extracted' }); } catch (error: any) { preservationError = `Extracted evidence was not preserved: ${String(error?.message || error).slice(0, 300)}`; } }
     args.onProgress?.({ phase: 'analyzing', message: 'Analyzing the sampled frames and transcript…' });
     const direct = args.direct_observation === true && args.response_mode !== 'report';
     const analysis = direct ? undefined : await analyzeWithPrimaryVision([
@@ -740,6 +758,22 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     };
     if (args?.include_raw_probe === true) compactExtraction.raw_probe = probeJson;
 
+    let preserved: { path: string } | undefined;
+    if (!preservationError) { try { preserved = await preserveAnalysisArtifacts({ ...preservationInput, analysis, status: 'complete' }); } catch (error: any) { preservationError = `Analysis manifest was not saved: ${String(error?.message || error).slice(0, 300)}`; } }
+    let referenceCapture: any = 'disabled_until_library_controls_ready';
+    if (automaticReferenceCaptureReady(getWorkspaceRoot())) {
+      if (!preserved) referenceCapture = { status: 'skipped', reason: preservationError || 'Analysis manifest not saved' };
+      else try {
+        if (!args.referenceSessionId) throw new Error('Reference capture requires a trusted runtime session');
+        const { assertPersonalReferenceCaller } = require('../gateway/resources/reference-library');
+        assertPersonalReferenceCaller(args.referenceSessionId);
+        const saved = getReferenceService(workspaceRoot).saveAnalysis({ operationId: `analysis:${run.id}`, manifestPath: relPath(workspaceRoot, preserved.path), sourceSession: args.referenceSessionId });
+        referenceCapture = { status: 'saved', referenceId: saved.id };
+      } catch (error: any) {
+        // Capture failure never discards the completed analysis.
+        referenceCapture = { status: 'failed', error: String(error?.message || error).slice(0, 300) };
+      }
+    }
     args.onProgress?.({ phase: 'complete', message: 'Video analysis complete.' });
     return {
       success: true,
@@ -748,6 +782,10 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         file_path: absPath,
         rel_path: path.relative(workspaceRoot, absPath).replace(/\\/g, '/'),
         output_dir: outputDirAbs,
+        analysis_manifest: preserved ? relPath(workspaceRoot, preserved.path) : null,
+        analysis_manifest_error: preservationError || null,
+        analysis_run_id: run.id,
+        reference_capture: referenceCapture,
         output_dir_rel: relPath(workspaceRoot, outputDirAbs),
         analysis_mode: analysisMode,
         sample_count: framePaths.length,
@@ -808,7 +846,7 @@ export const analyzeVideoTool = {
     quick_sample_count: 'How many frames to include in the quick contact sheet (default 16, max 24)',
     detail_frame_budget: 'Optional number of detail frames to extract across the full duration. Leave unset to let the Python analyzer choose from duration.',
     max_detail_frames: 'Hard cap for auto detail extraction (default 42, max 72)',
-    output_dir: 'Optional workspace-relative output directory for extracted artifacts',
+    output_dir: 'Optional workspace-relative parent directory; each run is saved in a new UUID child folder (retained, not overwritten).',
     extract_audio: 'If true, extract audio when ffmpeg is available (default true)',
     transcribe: 'If true, use the configured speech-to-text provider when audio is available (default true)',
     include_raw_probe: 'If true, include full ffprobe JSON; default false keeps output compact',
@@ -824,7 +862,7 @@ export const analyzeVideoTool = {
       quick_sample_count: { type: 'number', description: 'Frames for the quick contact sheet (default 16, max 24)' },
       detail_frame_budget: { type: 'number', description: 'Optional detail frame budget across the whole duration. Use this instead of asking for every frame on long videos.' },
       max_detail_frames: { type: 'number', description: 'Hard cap for automatic detail extraction (default 42, max 72)' },
-      output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
+      output_dir: { type: 'string', description: 'Optional workspace-relative PARENT directory; each run is saved in a new UUID child folder (retained, not overwritten).' },
       extract_audio: { type: 'boolean', description: 'Extract audio when ffmpeg is available' },
       transcribe: { type: 'boolean', description: 'Use the configured speech-to-text provider when audio is available' },
       include_raw_probe: { type: 'boolean', description: 'Include full ffprobe JSON. Default false for compact output.' },

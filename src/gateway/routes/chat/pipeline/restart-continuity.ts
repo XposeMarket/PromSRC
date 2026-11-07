@@ -1,4 +1,4 @@
-import { recordPlannedChatProgress, finishPlannedChatRun, resumePlannedChatRun } from '../../../tasks/planned-chat-runs';
+import { recordPlannedChatProgress, recordPlannedChatActivity, finishPlannedChatRun, resumePlannedChatRun } from '../../../tasks/planned-chat-runs';
 
 import { claimRuntimeRecovery, releaseRuntimeRecoveryClaim } from '../../../runtime/recovery-claims';
 import { type MainChatStreamState } from '../../../chat/main-chat-stream-store';
@@ -247,6 +247,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   let lastRuntimeNarrationCheckpointAt = 0;
   const sendSSE = (event: string, data: any) => {
     if (event === 'progress_state') recordPlannedChatProgress(runtimeId, sessionId, data, message, runtime.id);
+    else if (event === 'tool_call' || event === 'tool_result') recordPlannedChatActivity(runtimeId, event, data);
     if (event === 'thinking_delta') {
       const delta = String(data?.thinking || data?.text || '').trim();
       if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);

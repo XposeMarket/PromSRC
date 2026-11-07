@@ -133,6 +133,17 @@ const measurements = {
 // Keep the established bounded ~0.1% compression variance above the measured total.
 // #798 per-chat route cache in mobile-model-badge + lastModel drawer logos (net of the
 // reverted <details> summary branch) measure 283060 (+352 over #785). Same ~0.1% allowance.
-assert(measurements.gzipBytes <= 283350, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #823 adds default-off reference retention choice + partial-cleanup warning to the
+// existing delete sheet: 283494 gzip (+187 vs base283307); retain ~0.1% variance.
+// #826 mobile turn lifecycle (stream idle watchdog, single finalize path, drawer
+// stale-run reconcile, mobile-turn-lifecycle.js placeholder allowlist) renders on the
+// live chat path: 285860 gzip (+2366 vs #823's 283494). Same ~0.1% allowance.
+// #828 question-host rows (_mobileQuestionHostRow eager copy, "Waiting for your answer"
+// label, callId tool-name lookup) merged on #826+#827: 286166 gzip (+251 vs #826's
+// 285915 measured). Same ~0.1% allowance.
+// #820 integrated on #829: file-link marking plus authenticated canvas reads add
+// 699 gzip bytes (main 286161 -> combined 286860), within the previously reviewed
+// +713-byte feature increment. Keep the existing ~0.1% compression allowance.
+assert(measurements.gzipBytes <= 287150, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

@@ -1,3 +1,6 @@
+import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
+import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
+
 import { formatContextDurationLabel, formatContextToolDurationSuffix, formatContextTokenCount } from '../chat-context-formatters.js';
 import { OPENAI_PUBLIC_REALTIME_VOICE_IDS, CODEX_AVAS_REALTIME_VOICE_IDS, getSpeechRecognitionCtor, getStoredVoiceProvider, storeVoiceProvider, getStoredVoiceSetting, storeVoiceSetting, DESKTOP_VOICE_SETTINGS_KEY, normalizeDesktopVoiceMode, loadDesktopVoiceSettings, desktopVoiceParticipantKey, desktopVoiceParticipantLabel, normalizeDesktopVoiceParticipant, normalizeDesktopVoiceRoomState } from '../voice/desktop-voice-state.js';
 import { api } from '../api.js';
@@ -6665,6 +6668,7 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     activateSession: (sid, history) => {
       if (window.activeChatSessionId !== sid) return;
       window.chatHistory = history;
+      window.streamingAIText = getSessionStreamState(sid)?.streamingAIText || '';
       renderChatMessages();
     },
   });
@@ -7031,14 +7035,6 @@ function saveChatSessions() {
       return;
     }
     throw err;
-  }
-}
-
-async function deleteSessionFromServer(id) {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok && res.status !== 404) {
-    const body = await res.text().catch(() => '');
-    throw new Error(body || `Delete failed (${res.status})`);
   }
 }
 
@@ -8743,6 +8739,8 @@ async function openTerminalSession(id, source = 'terminal') {
         history: (s.history || []).map(m => ({
           role: m.role === 'user' ? 'user' : 'assistant',
           content: m.content,
+          clientRequestId: m.clientRequestId || m._clientRequestId || undefined,
+          messageId: m.messageId || undefined,
           timestamp: m.timestamp,
           channel: m.channel || source,
           channelLabel: m.channelLabel || source,
@@ -8836,7 +8834,8 @@ function toggleSessionsEditMode() {
 async function deleteChatSession(id, ev) {
   if (ev) ev.stopPropagation();
   try {
-    await deleteSessionFromServer(id);
+    const { deleteReferenceSession } = await import('./MemoryReferences.js');
+    if ((await deleteReferenceSession(id)).cancelled) return;
   } catch (err) {
     showToast(`Delete failed: ${err.message}`, 'error');
     return;
@@ -13536,33 +13535,8 @@ function liveTraceCurrentToolLabel(entries, { coalesced = false } = {}) {
   return liveTraceToolSummary(entries, { coalesced });
 }
 
-function liveTraceSummaryKey(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function desktopTraceProgressText(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  for (let index = source.length - 1; index >= 0; index -= 1) {
-    const entry = source[index];
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = dedupeDesktopTraceProseText(entry?.text || entry?.content || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!text) continue;
-    return text.slice(0, 220);
-  }
-  return '';
-}
-
 function desktopTraceProgressSummary(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  const text = desktopTraceProgressText(source);
-  if (!text) return '';
-  // The provider's curated summary is the source of truth for the live
-  // expandable label. Do not replace it with a synthetic "Reasoning" label
-  // when the same prose also exists as a durable thought entry.
-  return text;
+  return formatDesktopTraceProgressSummary(entries, dedupeDesktopTraceProseText);
 }
 
 function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
@@ -13570,6 +13544,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
     : null;
   let groups = liveTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
+  if (!kindFilter) groups = foldMobileReasoningSummaryGroups(groups, { streaming });
   if (!groups.length) return '';
   if (!streaming
     && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
@@ -13579,6 +13554,9 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     group.kind === 'tools' ? index : latest
   ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
+    if (group.kind === 'reasoning-live') {
+      return `<div class="live-turn-thought-summary" data-live-trace-group="${escHtml(group.id)}" aria-live="polite"><strong class="t-think">${renderThinkingState(mobileReasoningSummaryTitle(group.reasoningEntries))}</strong></div>`;
+    }
     if (group.kind === 'narration') {
       return `<div class="live-turn-narration" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
     }
@@ -13621,7 +13599,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.
-    const progressSummary = desktopTraceProgressSummary(group.entries);
+    const progressSummary = mobileReasoningSummaryTitle(group.reasoningEntries) || desktopTraceProgressSummary(group.entries);
     // liveTraceGroups already folded and filtered this presentation list.
     // Replaying it here (and again for the body) rebuilds every tool payload.
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries, { coalesced: true }) : liveTraceToolSummary(group.entries, { coalesced: true }));
@@ -13630,7 +13608,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     // The mutable progress packet is rendered in the header only. Leaving it
     // in the body creates a duplicate summary and makes the next event appear
     // to overwrite the stream instead of extending it.
-    const toolBodyEntries = visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+    const toolBodyEntries = [...(group.reasoningEntries || []), ...visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry))];
     const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
     const nonReasoningEntries = toolBodyEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
     const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);

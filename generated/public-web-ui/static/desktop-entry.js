@@ -1,7 +1,7 @@
 import './legacy-desktop-bootstrap.js';
 import './context-review-entry.js';
 import { checkSessionDetailed, mountLoginScreen, getAccount, getPersistedAccount } from './auth/account.js';
-import { installMobileSettingsReturnBridge, normalizeRequestedSettingsTab } from './settings-return.js';
+import { installMobileSettingsReturnBridge } from './settings-return.js';
 import { finishPanelMotion } from './features/shell/panel-motion.js';
 
 installMobileSettingsReturnBridge(window);
@@ -31,10 +31,6 @@ if (mobileSurface) {
     import('./ws.js'),
     import('./app.js'),
   ]);
-  // Protected access cards in desktop/web chat (metadata polling only).
-  window.__PROM_DESKTOP_MODULES_READY
-    .then(() => import('./features/secure-access/secure-access-desktop-dock.js'))
-    .catch(() => {});
 }
 
 // Mobile Settings intentionally crosses into the canonical desktop document.
@@ -42,8 +38,7 @@ if (mobileSurface) {
 try {
   const settingsParams = new URLSearchParams(window.location.search || '');
   if (!mobileSurface && settingsParams.get('settings') === '1') {
-    // Old handoff URLs may still carry a section alias (settingsTab=saved-access).
-    const requestedSettingsTab = normalizeRequestedSettingsTab(settingsParams.get('settingsTab'));
+    const requestedSettingsTab = String(settingsParams.get('settingsTab') || '').trim();
     // The inline desktop shim is already available and reveals the canonical
     // settings surface before its lazy module finishes loading. Do not wait on
     // the unrelated desktop bundle: one failed import must not strand a mobile

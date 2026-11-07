@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { mergeBackgroundReasoningSummary } from '../web-ui/src/background-stream-summary.js';
+import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../web-ui/src/mobile/mobile-reasoning-summary-fold.js';
 import { applyToolActivityEvent, coalesceToolActivityEntries, renderToolActivityEntry, toolActivitySummary } from '../web-ui/src/tool-activity.js';
 import { normalizeBackgroundAgentWork, resolveBackgroundAgentIdentity } from '../web-ui/src/features/chat/core/background-agent-work.js';
 
@@ -278,9 +279,13 @@ assert.equal(mobileSummaryMessage.liveTraceEntries[0].extra.source, 'reasoning_s
 assert.equal(mobileSummaryMessage.content, undefined, 'mobile summary never becomes body content');
 const summaryHtml = runtime._renderMobileAgentChatBubble({ content: '', liveTraceEntries: [desktopSummary], traceExpanded: true }, { sender: 'Juno', live: true, backgroundAgentId: 'summary' });
 assert.doesNotMatch(summaryHtml, /<details class="pm-trace-thought-group"/, 'summary renders as visible text, not a nested collapsed disclosure');
-assert.match(summaryHtml, /<div class="pm-trace-thought-group"[\s\S]*SUMMARY NOT BODY/, 'summary text is visible inside the expanded trace');
-assert.equal((summaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1, 'summary has one owner, not a second body/progress copy');
+assert.match(summaryHtml, /<div class="pm-trace-thought-group pm-trace-reasoning-live"[\s\S]*SUMMARY NOT BODY/, 'summary text is visible inside the expanded trace');
+const visibleSummaryHtml = summaryHtml.replace(/<span[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/span>/g, '').replace(/<[^>]*>/g, '');
+assert.equal((visibleSummaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1, 'summary has one visible owner; sizing/accessibility attributes are not duplicate body prose');
 const desktopRender = {
+  foldMobileReasoningSummaryGroups,
+  mobileReasoningSummaryTitle,
+  renderThinkingState: escapeHtml,
   liveTraceGroups: entries => [{ id: 'summary', kind: 'thought-summary', entries }],
   desktopTraceProgressSummary: () => '',
   isDesktopMutableProgressTraceEntry: () => false,
@@ -290,8 +295,8 @@ const desktopRender = {
 vm.createContext(desktopRender);
 vm.runInContext(extract('web-ui/src/pages/ChatPage.js', ['renderLiveTurnTrace']), desktopRender);
 const desktopSummaryHtml = desktopRender.renderLiveTurnTrace([desktopSummary], { streaming: true, openThoughts: true });
-assert.match(desktopSummaryHtml, /<details class="live-turn-thought-group"[^>]*>/);
-assert.match(desktopSummaryHtml, /<details[^>]*\sopen(?:\s|>)/, 'desktop reasoning text stays visible (open) while streaming');
+assert.match(desktopSummaryHtml, /<div class="live-turn-thought-summary"[^>]*aria-live="polite"/);
+assert.doesNotMatch(desktopSummaryHtml, /<details/, 'the live summary is visible without a separate nested disclosure');
 assert.equal((desktopSummaryHtml.match(/SUMMARY NOT BODY/g) || []).length, 1);
 
 assert.equal(desktopTrace[0].text, chunks.join(''));

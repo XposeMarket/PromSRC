@@ -1,4 +1,4 @@
-import { listPlannedChatRuns } from '../tasks/planned-chat-runs';
+import { listPlannedChatRuns, getPlannedChatRunDetail } from '../tasks/planned-chat-runs';
 
 // src/gateway/routes/tasks.router.ts
 // Tasks, Background Tasks, Schedules, Error Response routes
@@ -388,6 +388,24 @@ router.get('/api/needs-you', (_req, res) => {
   }
 });
 
+const ATTENTION_STATUSES = new Set(['paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'failed']);
+/** Compact (<=320 chars) attention text for list cards. Priority: pending question > pause analysis > last assistant recovery turn > failure summary. */
+export function buildTaskAttentionMessage(task: any): string | undefined {
+  if (!task || !ATTENTION_STATUSES.has(String(task.status || ''))) return undefined;
+  const pick = (value: unknown) => (typeof value === 'string' && value.trim() ? value.replace(/\s+/g, ' ').trim().slice(0, 320) : '');
+  const recoveryTail = (() => {
+    if (typeof task.recoveryAssistantTail === 'string') return task.recoveryAssistantTail;
+    const turns = Array.isArray(task.recoveryConversation) ? task.recoveryConversation : [];
+    for (let i = turns.length - 1; i >= 0; i--) if (turns[i]?.role === 'assistant' && turns[i]?.content) return turns[i].content;
+    return '';
+  })();
+  return pick(task.pendingClarificationQuestion)
+    || pick(task.pauseAnalysisMessage ?? task.pauseAnalysis?.message)
+    || pick(recoveryTail)
+    || (task.status === 'failed' ? pick(task.finalSummary) : '')
+    || undefined;
+}
+
 router.get('/api/bg-tasks', (req, res) => {
   const requestedLimit = Number(req.query.limit || 0);
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : undefined;
@@ -407,6 +425,9 @@ router.get('/api/bg-tasks', (req, res) => {
     pauseReason: task.pauseReason,
     // Failed cards show the real failure reason without opening the task.
     lastError: task.status === 'failed' && task.finalSummary ? String(task.finalSummary).slice(0, 240) : undefined,
+    // Why a paused/stalled/needs-you/failed task stopped, as Prometheus explained it.
+    attentionMessage: buildTaskAttentionMessage(task),
+    originalAssignment: task.originalAssignment ? String(task.originalAssignment).slice(0, 280) : undefined,
     pausedByScheduleId: task.pausedByScheduleId,
     shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
     plan: Array.isArray(task.plan) ? task.plan.slice(0, compact ? 10 : 20).map((step: any) => compact ? {
@@ -445,6 +466,12 @@ router.get('/api/bg-tasks', (req, res) => {
 });
 
 router.get('/api/bg-tasks/:id', (req, res) => {
+  if (String(req.params.id || '').startsWith('chat-plan:')) {
+    const planned = getPlannedChatRunDetail(req.params.id, collectNeedsYouItems());
+    if (!planned) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+    res.json({ success: true, task: planned, evidenceBus: null });
+    return;
+  }
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   // Include evidence bus snapshot if available

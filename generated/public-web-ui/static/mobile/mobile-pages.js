@@ -1,5 +1,6 @@
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
+import { reconcileMobileStaleRuns } from './mobile-turn-lifecycle.js';
 import { renderAgentPet } from '../components/agent-pets.js';
 import { orderMobileTurnDeliveries, repairMobileLiveRowPlacement } from './mobile-thread-order.js';
 import {
@@ -1500,24 +1501,70 @@ function _getMobileRunningSessionIds() {
 
 window.enrichMobileSessionGroupsForDrawer = enrichMobileSessionGroupsForDrawer;
 
+// A local busy run is deleted only when a terminal frame is applied, so one
+// missed final frame left the drawer on Working forever. Against an
+// authoritative server run list: a run the server lists is kept, a run younger
+// than the grace window is kept, otherwise it is cleared after 2 consecutive
+// misses. The open foreground thread is recovered (which finalizes its live
+// row) instead of having rows spliced out.
+function _applyMobileStaleRunReconcile(serverIds = []) {
+  if (!__pmChat.staleRunMisses || typeof __pmChat.staleRunMisses !== 'object') __pmChat.staleRunMisses = {};
+  const { keep, clear } = reconcileMobileStaleRuns({
+    localRuns: __pmChat.activeRuns || {},
+    serverIds,
+    misses: __pmChat.staleRunMisses,
+  });
+  for (const sid of clear) {
+    const foreground = String(__pmChat.activeSessionId || '').trim() === sid;
+    if (foreground) {
+      if (__pmChat.activeRuns) delete __pmChat.activeRuns[sid];
+      _clearMobileActiveRun(sid);
+      _markMobileSessionRunning(sid, false);
+      __pmChat.busy = Object.values(__pmChat.activeRuns || {}).some((run) => run?.busy);
+      try { window.__pmMobileRecoverActiveChatRun?.(sid); } catch {}
+    } else {
+      _clearMobileLiveRunForSession(sid);
+    }
+  }
+  const server = (Array.isArray(serverIds) ? serverIds : []).map((id) => String(id || '').trim()).filter(Boolean);
+  return new Set([...keep, ...server]);
+}
+
+let _mobileStaleRunReconcileInFlight = null;
+window.reconcileMobileStaleRunsFromServer = function reconcileMobileStaleRunsFromServer() {
+  if (_mobileStaleRunReconcileInFlight) return _mobileStaleRunReconcileInFlight;
+  if (typeof loadMobileChatRunStatuses !== 'function') return Promise.resolve(null);
+  _mobileStaleRunReconcileInFlight = loadMobileChatRunStatuses()
+    .then((status) => {
+      if (!Array.isArray(status?.activeSessionIds)) return null;
+      __pmChat.drawerRunSessionIds = _applyMobileStaleRunReconcile(status.activeSessionIds);
+      return __pmChat.drawerRunSessionIds;
+    })
+    .catch(() => null)
+    .finally(() => { _mobileStaleRunReconcileInFlight = null; });
+  return _mobileStaleRunReconcileInFlight;
+};
+
 async function enrichMobileSessionGroupsForDrawer(loadSessions) {
   const data = typeof loadSessions === 'function' ? await loadSessions() : { mobile: [], channels: [] };
   let activeIds = _getMobileRunningSessionIds();
+  let authoritative = false;
   try {
     const status = typeof loadMobileChatRunStatuses === 'function' ? await loadMobileChatRunStatuses() : null;
-    const serverIds = Array.isArray(status?.activeSessionIds) ? status.activeSessionIds : [];
     // The server answer is authoritative. Re-unioning the previous drawer set
-    // kept a finished chat on Working forever; only a run this page is still
-    // streaming may add to it.
+    // kept a finished chat on Working forever; only a local run that survives
+    // the stale-run reconcile may add to it.
     if (Array.isArray(status?.activeSessionIds)) {
-      activeIds = new Set(Object.entries(__pmChat.activeRuns || {}).filter(([, run]) => run?.busy).map(([id]) => String(id)));
+      authoritative = true;
+      activeIds = _applyMobileStaleRunReconcile(status.activeSessionIds);
+      __pmChat.drawerRunSessionIds = activeIds;
     }
-    activeIds = new Set([...activeIds, ...serverIds.map((id) => String(id || '').trim()).filter(Boolean)]);
-    __pmChat.drawerRunSessionIds = activeIds;
   } catch {}
   const applyState = (session) => ({
     ...(session || {}),
-    activeRun: activeIds.has(String(session?.id || '')) || session?.activeRun === true,
+    activeRun: activeIds.has(String(session?.id || ''))
+      || (!authoritative && session?.activeRun === true),
+    ...(authoritative ? { activeRunKnown: true } : {}),
   });
   return {
     ...data,
@@ -4868,7 +4915,9 @@ function _applyMobileToolActivity(message, phase, payload = {}) {
   if (!message) return null;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   _closeMobileTraceThoughts(message);
-  return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
+  // A result whose call was missed (replay gap) still names its tool when the
+  // turn's cached/checkpoint process entries know the call id.
+  return applyToolActivityEvent(message.liveTraceEntries, phase, payload, message.processEntries);
 }
 
 function _mobileCommandActivityCollections(sessionId) {
@@ -8752,6 +8801,30 @@ function _mergeMobileFileChangeSummaries(current, incoming) {
 // the only question-specific write path back into the legacy mobile thread;
 // history hydration can seed a runtime record once, but it cannot compete with
 // controller transitions after that seed.
+// Same-request live row after the last real user row (mirrors
+// findMobileQuestionHostRow in mobile-question-rows.js, which stays in the
+// lazy chunks; this eager copy keeps the initial Chat slice small).
+function _mobileQuestionHostRow(thread, q) {
+  // Mirrors findMobileQuestionHostRow in mobile-question-rows.js (same order of
+  // checks, same normalization); the parity matrix in the regression test pins it.
+  const qid = String(q?.id || q?.questionId || '').trim();
+  const qcid = String(q?.clientRequestId || '').trim();
+  const hasEntries = (value) => Array.isArray(value) && value.length > 0;
+  for (let i = thread.length - 1; i >= 0; i -= 1) {
+    const t = thread[i];
+    if (t?.role === 'user') { if (/^chat_steer_/i.test(String(t.workflowGroupId || '')) && String(t.workflowPart || '') === 'interruption') continue; return null; }
+    if (t?.role !== 'ai') continue;
+    if (t._pmFinalReceived === true || t._pmServerAuthoredFinal === true || t._pmAbortAcknowledged === true) return null;
+    if (t._steerFrozenTrace === true || String(t.workflowPart || '') === 'before_interruption') continue;
+    const otherQ = String(t.questionRequest?.id || '').trim();
+    if (otherQ && otherQ !== qid) continue;
+    const own = String(t._clientRequestId || '').trim();
+    if (qcid && own && qcid !== own) continue;
+    if (t.streaming === true || hasEntries(t.liveTraceEntries) || hasEntries(t.processEntries)) return t;
+  }
+  return null;
+}
+
 function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = {}) {
   const sid = String(sessionId || question?.sessionId || question?.sourceSessionId || '').trim();
   const qid = String(question?.id || question?.questionId || '').trim();
@@ -8811,14 +8884,22 @@ function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = 
       changed = true;
     });
   } else if (options.create !== false) {
-    thread.push({
-      role: 'ai',
-      timestamp: Date.now(),
-      time: _nowTime(),
-      body: { sender: 'Prometheus', text: '' },
-      content: '',
-      questionRequest: question,
-    });
+    // Attach to the live row of the run that asked (same request, after the
+    // last real user row) so its tool stream and preamble stay with the
+    // question. A separate question-only row is the fallback only.
+    const host = _mobileQuestionHostRow(thread, question);
+    if (host) {
+      host.questionRequest = question;
+    } else {
+      thread.push({
+        role: 'ai',
+        timestamp: Date.now(),
+        time: _nowTime(),
+        body: { sender: 'Prometheus', text: '' },
+        content: '',
+        questionRequest: question,
+      });
+    }
     changed = true;
   }
   if (changed) _scheduleMobileThreadCacheSave(sid, 80);
@@ -10366,6 +10447,13 @@ if (typeof window !== 'undefined') {
     src: detail?.src,
     path: detail?.path,
     name: detail?.name,
+  });
+  // Markdown links to workspace files (utils.js data-workspace-file) open in
+  // the authenticated canvas sheet instead of navigating the PWA.
+  window.__promOpenWorkspaceFile = (path, name) => _openMobileMediaTarget({
+    kind: _mobileMediaKind({ path }),
+    path,
+    name,
   });
 }
 

@@ -23,6 +23,7 @@ import { buildTeamReplyPayload } from '../needs-you-team-reply.js';
 import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { isNeedsYouTask, needsYouCount, needsYouEntries, needsYouTaskIds } from '../needs-you-view-model.js';
+import { buildTaskCard, cleanTaskTitle, detailSections, formatDuration as formatTaskDuration, isTerminalStatus } from '../features/tasks/task-card-view-model.js';
 import { installProcessRunCardHandlers, loadRecentProcessRuns, renderProcessRunsHTML } from '../components/ProcessRunCard.js';
 import { installCodingWorkspaceHandlers, loadCodingWorkspace, renderCodingWorkspacePanel } from '../components/CodingWorkspacePanel.js';
 
@@ -313,6 +314,7 @@ function bgtHandleCardDragEnd(e) {
 }
 
 function bgtOpenCardFromClick(e, taskId) {
+  if (e?.target?.closest?.('button, a, textarea, input, summary')) return;
   if (Date.now() < bgtDragClickSuppressUntil) {
     if (e) e.stopPropagation();
     return;
@@ -787,59 +789,101 @@ function bgtNeedsYouEntryHTML(entry) {
   </article>`;
 }
 
+// Option B live run card (shared semantics: features/tasks/task-card-view-model.js).
 function bgtCardHTML(t, col) {
-  if (t.sourceKind === 'planned_chat') return `<article class="bgt-planned-chat" style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;overflow-wrap:anywhere" data-bgt-id="${escHtml(t.id)}"><strong>${escHtml(t.title)}</strong><div style="font-size:11px;color:var(--muted);margin:6px 0">Chat · ${escHtml(t.status)}</div><ol style="padding-left:20px;font-size:12px">${getTaskProgressItems(t).map(step => `<li style="margin:6px 0">${['done','completed'].includes(step.status) ? '✓ ' : step.status === 'in_progress' ? '› ' : ''}${escHtml(step.text || step.description || '')}</li>`).join('')}</ol><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId)}">Open chat</button></article>`;
-  const displayStatus = bgtNormalizeStatus(t.status);
-  const brainLabel = bgtBrainTaskLabel(t);
+  const card = buildTaskCard(t);
+  const id = escHtml(String(t.id || ''));
   const isBrainTask = bgtIsBrainTask(t);
-  const mins = Math.round((Date.now() - (t.lastProgressAt || t.startedAt)) / 60000);
-  const timeAgo = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
-  const progressItems = getTaskProgressItems(t);
-  const stepsDone = progressItems.filter(s => s.status === 'done' || s.status === 'skipped').length;
-  const totalSteps = progressItems.length > 0 ? progressItems.length : (t.plan || []).length;
-  const pct = totalSteps > 0 ? Math.round(stepsDone / totalSteps * 100) : 0;
-  let currentStepIndex = progressItems.findIndex(s => s.status === 'in_progress');
-  if (currentStepIndex < 0) currentStepIndex = progressItems.findIndex(s => s.status === 'pending');
-  if (currentStepIndex < 0 && totalSteps > 0) currentStepIndex = Math.max(0, Math.min(totalSteps - 1, Number(t.currentStepIndex || 0)));
-  const currentStep = currentStepIndex >= 0 ? progressItems[currentStepIndex] : null;
-  const channel = t.channel === 'telegram' ? 'Telegram' : 'Web UI';
-
+  const brainLabel = bgtBrainTaskLabel(t);
+  const draggable = !isBrainTask && !card.planned;
+  const compactDone = card.status === 'complete' && bgtOpenTaskId !== t.id;
+  const segments = card.progress.total
+    ? `<div class="bgt-lr-progress"><div class="bgt-lr-bar">${card.progress.items.map(item => `<span class="bgt-lr-seg is-${item.state}"></span>`).join('')}</div><span class="bgt-lr-count">${card.progress.done}/${card.progress.total}</span></div>` : '';
   return `
-  <div onclick="bgtOpenCardFromClick(event,'${escHtml(t.id)}')" draggable="${isBrainTask ? 'false' : 'true'}" ${isBrainTask ? '' : `ondragstart="bgtHandleCardDragStart(event,'${escHtml(t.id)}')" ondragend="bgtHandleCardDragEnd(event)"`} data-bgt-id="${escHtml(t.id)}" style="
-    background:var(--panel);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;
-    cursor:pointer;transition:border-color 0.15s,box-shadow 0.15s;
-    ${bgtOpenTaskId === t.id ? 'border-color:var(--brand);box-shadow:0 0 0 2px rgba(90,145,255,0.15);' : ''}
-  " onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='${bgtOpenTaskId===t.id?'var(--brand)':'var(--line)'}'">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
-      <span style="font-size:13px;font-weight:700;line-height:1.3;flex:1;min-width:0">${escHtml(t.title || 'Untitled Task')}</span>
-      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-        ${bgtEditMode ? `<button
-          onclick="event.stopPropagation(); bgtHideTask('${escHtml(t.id)}')"
-          title="Hide task"
-          style="border:none;background:none;color:#f87171;font-size:15px;cursor:pointer;padding:0 2px;line-height:1;opacity:0.85"
-        >🗑</button>` : ''}
-        <span style="font-size:14px;flex-shrink:0">${STATUS_ICON[displayStatus] || '●'}</span>
+  <div class="bgt-lr-card tone-${card.tone}${compactDone ? ' is-compact' : ''}${bgtOpenTaskId === t.id ? ' is-open' : ''}${card.planned ? ' bgt-planned-chat' : ''}" onclick="bgtOpenCardFromClick(event,'${id}')" draggable="${draggable ? 'true' : 'false'}" ${draggable ? `ondragstart="bgtHandleCardDragStart(event,'${id}')" ondragend="bgtHandleCardDragEnd(event)"` : ''} data-bgt-id="${id}" data-task-kind="${escHtml(card.kind)}">
+    <div class="bgt-lr-head">
+      <span class="bgt-lr-avatar kind-${escHtml(card.kind)}" aria-hidden="true">${escHtml(card.initials)}</span>
+      <div class="bgt-lr-who">
+        <div class="bgt-lr-actor">${escHtml(brainLabel || card.actor)}${brainLabel && t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>
+        <div class="bgt-lr-sub">${escHtml(card.sub)}</div>
       </div>
+      ${bgtEditMode && !card.planned ? `<button onclick="event.stopPropagation(); bgtHideTask('${id}')" title="Hide task" class="bgt-lr-hide">🗑</button>` : ''}
+      <span class="bgt-lr-pill tone-${card.tone}">${escHtml(card.statusLabel)}</span>
     </div>
-    ${brainLabel ? `<div style="font-size:10px;color:#c4b5fd;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin:-2px 0 7px">${escHtml(brainLabel)}${t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>` : ''}
-    ${currentStep ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.4">Step ${currentStepIndex + 1}/${totalSteps}: ${escHtml(String(currentStep.text || '').slice(0,60))}${String(currentStep.text || '').length>60?'…':''}</div>` : ''}
-    ${totalSteps > 0 ? `
-    <div style="background:var(--line);border-radius:999px;height:3px;margin-bottom:8px;overflow:hidden">
-      <div style="background:${col.color};width:${pct}%;height:100%;border-radius:999px;transition:width 0.4s"></div>
-    </div>` : ''}
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:10px;color:var(--muted)">${channel} ${timeAgo}</span>
-      ${displayStatus === 'needs_assistance' ? `<span style="font-size:10px;background:color-mix(in srgb, #a78bfa 12%, transparent);color:#c4b5fd;border-radius:999px;padding:1px 8px;font-weight:700">Needs you</span>` : ''}
-      ${displayStatus === 'paused' ? `<span style="font-size:10px;background:color-mix(in srgb, var(--text) 4%, transparent);color:#555;border-radius:999px;padding:1px 8px;font-weight:700">${t.pauseReason || 'paused'}</span>` : ''}
-    </div>
-    ${displayStatus === 'failed' && (t.lastError || t.finalSummary) ? `<div title="${escHtml(String(t.lastError || t.finalSummary))}" style="margin-top:7px;font-size:10px;line-height:1.4;color:#9b1c1c;background:rgba(239,68,68,.08);border-radius:6px;padding:4px 7px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(String(t.lastError || t.finalSummary).slice(0, 160))}</div>` : ''}
+    <div class="bgt-lr-title">${escHtml(card.title)}</div>
+    ${compactDone ? '' : `${segments}
+    ${!card.terminal && card.progress.currentText ? `<div class="bgt-lr-step"><span>›</span> ${escHtml(card.progress.currentText.slice(0, 120))}</div>` : ''}
+    ${card.tool ? `<div class="bgt-lr-now">now: <code>${escHtml(card.tool)}</code></div>` : ''}
+    ${card.stalledFor ? `<div class="bgt-lr-stall">No progress for ${escHtml(card.stalledFor)}. Probably stuck.</div>` : ''}
+    ${card.attention ? `<div class="bgt-lr-attn tone-${card.tone}" title="${escHtml(card.attention)}"><strong>Prometheus:</strong> ${escHtml(card.attention)}</div>` : ''}`}
+    ${card.planned ? `<div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:5px 10px;white-space:nowrap" data-planned-chat-session="${escHtml(t.sessionId || '')}">Open chat</button></div>` : ''}
   </div>`;
+}
+
+function bgtProgressListHTML(progress) {
+  if (!progress.total) return '<div class="progress-empty">No plan steps recorded yet.</div>';
+  return `<ol class="bgt-lr-steps">${progress.items.map((item, idx) => `<li class="is-${item.state}"><span class="bgt-lr-step-dot">${item.state === 'done' ? '✓' : item.state === 'failed' ? '!' : idx + 1}</span><span class="bgt-lr-step-text">${escHtml(item.text.slice(0, 200))}</span>${item.durationMs != null ? `<span class="bgt-lr-step-time">${escHtml(formatTaskDuration(item.durationMs))}</span>` : ''}</li>`).join('')}</ol>`;
+}
+
+function bgtActivityHTML(rows) {
+  if (!rows.length) return '<div style="color:var(--muted);padding:8px;font-size:12px">No activity recorded yet.</div>';
+  const time = (t) => (t ? `<span class="bgt-lr-act-time">${escHtml(new Date(t).toLocaleTimeString())}</span>` : '');
+  return `<div class="bgt-lr-activity">${rows.map(row => {
+    if (row.type === 'hidden') return `<details class="bgt-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="bgt-lr-act is-status">${escHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
+    if (row.type === 'tool') return `<div class="bgt-lr-act is-tool${row.error ? ' is-error' : ''}"><div class="bgt-lr-act-line"><code>${escHtml(row.name || 'tool')}</code>${row.pending ? '<span class="bgt-lr-act-run">running…</span>' : ''}${time(row.t)}</div>${row.call ? `<div class="bgt-lr-act-call">${escHtml(String(row.call).slice(0, 200))}</div>` : ''}${row.result ? `<div class="bgt-lr-act-result">→ ${escHtml(String(row.result).slice(0, 240))}</div>` : ''}</div>`;
+    if (row.type === 'error') return `<div class="bgt-lr-act is-error"><div class="bgt-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escHtml(row.name)}</code>` : ''}${time(row.t)}</div><div>${escHtml(String(row.text || '').slice(0, 400))}</div></div>`;
+    return `<div class="bgt-lr-act is-status"><div class="bgt-lr-act-line">${escHtml(String(row.text || '').slice(0, 300))}${time(row.t)}</div></div>`;
+  }).join('')}</div>`;
+}
+
+let bgtPanelTab = 'overview';
+function bgtSetPanelTab(tab) {
+  bgtPanelTab = ['overview', 'activity', 'evidence'].includes(tab) ? tab : 'overview';
+  const body = document.getElementById('bgt-panel-body');
+  if (!body) return;
+  body.querySelectorAll('[data-bgt-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.bgtTab === bgtPanelTab));
+  body.querySelectorAll('[data-bgt-pane]').forEach(pane => { pane.style.display = pane.dataset.bgtPane === bgtPanelTab ? '' : 'none'; });
+}
+
+function bgtTabsHTML() {
+  return `<div class="bgt-lr-tabs">${['overview', 'activity', 'evidence'].map(key => `<button type="button" data-bgt-tab="${key}" class="${bgtPanelTab === key ? 'active' : ''}" onclick="bgtSetPanelTab('${key}')">${key[0].toUpperCase()}${key.slice(1)}</button>`).join('')}</div>`;
+}
+
+function bgtOverviewTopHTML(view) {
+  return `
+    ${view.attention ? `<div class="bgt-lr-attn-box tone-${view.card.tone}"><div class="bgt-lr-label">What Prometheus needs</div><div>${escHtml(view.attention)}</div></div>` : ''}`;
+}
+
+function bgtStartedFromHTML(view) {
+  if (!view.startedFrom) return '';
+  return `<div class="bgt-lr-origin-wrap"><div class="bgt-lr-label">Started from</div><div class="bgt-lr-origin">${escHtml(view.startedFrom.slice(0, 4000))}</div>${view.rawInstructions ? `<details class="bgt-lr-raw"><summary>Show full agent instructions</summary><pre>${escHtml(view.rawInstructions)}</pre></details>` : ''}</div>`;
+}
+
+function bgtRenderPlannedPanel(task, body) {
+  const view = detailSections(task);
+  body.innerHTML = `
+    ${bgtTabsHTML()}
+    <div data-bgt-pane="overview" style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="bgt-lr-pill tone-${view.card.tone}">${escHtml(view.card.statusLabel)}</span>
+        <span style="font-size:11px;color:var(--muted)">${escHtml(view.card.actor)} · ${escHtml(view.card.sub)}</span>
+      </div>
+      ${bgtOverviewTopHTML(view)}
+      ${bgtStartedFromHTML(view)}
+      <div><div class="bgt-lr-label">Progress</div>${bgtProgressListHTML(view.progress)}</div>
+    </div>
+    <div data-bgt-pane="activity">${bgtActivityHTML(view.activity)}</div>
+    <div data-bgt-pane="evidence"><div style="color:var(--muted);font-size:12px">Chat plans keep their evidence in the chat thread.</div></div>
+    <div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
+  body.querySelectorAll('[data-planned-chat-session]').forEach(button => {
+    button.onclick = event => bgtOpenOriginChat(event, button.dataset.plannedChatSession);
+  });
+  bgtSetPanelTab(bgtPanelTab);
 }
 
 // --- Side Panel --------------------------------------------------------------
 async function openBgtPanel(taskId) {
-  const planned = bgtGetTask(taskId);
-  if (planned?.sourceKind === 'planned_chat') { bgtOpenOriginChat(null, planned.sessionId); return; }
+  if (bgtOpenTaskId !== taskId) bgtPanelTab = 'overview';
   bgtOpenTaskId = taskId;
   window.bgtOpenTaskId = taskId;
   const panel = document.getElementById('bgt-panel');
@@ -869,6 +913,21 @@ async function bgtRefreshOpenPanel() {
   } catch {}
   if (!task) { task = bgtTasks.find(t => t.id === bgtOpenTaskId); }
   if (!task) return;
+  // Composer is available for every non-terminal task (running included); planned chats route to their chat.
+  const isPlannedTask = task.sourceKind === 'planned_chat' || String(task.id || '').startsWith('chat-plan:');
+  const chatRow = document.getElementById('bgt-chat-input')?.parentElement;
+  if (chatRow) chatRow.style.display = isPlannedTask || ['complete', 'completed', 'done', 'cancelled'].includes(String(task.status || '').trim().toLowerCase()) ? 'none' : '';
+  if (isPlannedTask) {
+    const listed = bgtTasks.find(t => t.id === task.id) || {};
+    const merged = { ...listed, ...task, sourceKind: 'planned_chat' };
+    const plannedTitle = document.getElementById('bgt-panel-title');
+    if (plannedTitle) plannedTitle.textContent = cleanTaskTitle(merged);
+    const plannedPause = document.getElementById('bgt-panel-pause');
+    if (plannedPause) plannedPause.style.display = 'none';
+    const plannedBody = document.getElementById('bgt-panel-body');
+    if (plannedBody) bgtRenderPlannedPanel(merged, plannedBody);
+    return;
+  }
   const pendingApprovals = await loadTaskApprovals(task.id);
   try {
     const runs = await loadRecentProcessRuns(12);
@@ -884,7 +943,8 @@ async function bgtRefreshOpenPanel() {
   }
 
   const titleEl = document.getElementById('bgt-panel-title');
-  if (titleEl) titleEl.textContent = task.title || 'Task Details';
+  if (titleEl) titleEl.textContent = cleanTaskTitle(task) || 'Task Details';
+  const lrView = detailSections({ ...(bgtTasks.find(t => t.id === task.id) || {}), ...task });
 
   const pauseBtn = document.getElementById('bgt-panel-pause');
   if (pauseBtn) {
@@ -1010,6 +1070,8 @@ async function bgtRefreshOpenPanel() {
     : '';
 
   body.innerHTML = `
+    ${bgtTabsHTML()}
+    <div data-bgt-pane="overview" style="display:flex;flex-direction:column;gap:14px">
     <!-- Status row -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span style="font-size:11px;background:var(--line);border-radius:999px;padding:2px 10px;font-weight:700;color:${sc}">${STATUS_ICON[displayStatus] || '●'} ${displayStatus.replace(/_/g,' ')}</span>
@@ -1021,14 +1083,16 @@ async function bgtRefreshOpenPanel() {
       <strong>${escHtml(brainLabel)}</strong>${task.brainDate ? ` · ${escHtml(String(task.brainDate))}` : ''}${task.brainRunId ? `<br><span style="opacity:.78">Run ${escHtml(String(task.brainRunId))}</span>` : ''}${task.brainArtifact ? `<br><span style="opacity:.78">Primary artifact: ${escHtml(String(task.brainArtifact))}</span>` : ''}
     </div>` : ''}
 
-    <!-- Summary if complete -->
-    ${task.finalSummary ? `<div style="background:#efffea;border:1px solid #b2dfb2;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#1a6e35">
-      <div style="font-weight:800;margin-bottom:4px">📝 Summary</div>
+	    <!-- Attention: why it stopped / what it needs (top of Overview) -->
+	    ${assistanceHTML || bgtOverviewTopHTML(lrView)}
+
+    <!-- Result pinned when done -->
+    ${task.finalSummary ? `<div class="bgt-lr-result tone-${lrView.card.tone}">
+      <div class="bgt-lr-label">Result</div>
       ${renderMd(task.finalSummary)}
     </div>` : ''}
 
-	    <!-- Needs assistance -->
-	    ${assistanceHTML}
+    ${bgtStartedFromHTML(lrView)}
 
 		    <!-- Approval cards -->
 		    ${approvalHTML}
@@ -1050,18 +1114,10 @@ async function bgtRefreshOpenPanel() {
       </div>
     </div>
 
-    <!-- Progress checklist -->
+    <!-- Progress checklist (with per-step durations when known) -->
     <div>
-      <div class="progress-card">
-        <div class="progress-card-header" style="cursor:default;padding-bottom:6px">
-          <span>Progress</span>
-        </div>
-        <div class="progress-list-wrap">
-          ${progressItems.length > 0
-            ? `<div class="progress-list">${stepsHTML}</div>`
-            : `<div class="progress-empty">Progress - This panel will be used to make a short to-do list</div>`}
-        </div>
-      </div>
+      <div class="bgt-lr-label">Progress</div>
+      ${bgtProgressListHTML(lrView.progress)}
     </div>
 
     <!-- Coding workspace -->
@@ -1090,6 +1146,20 @@ async function bgtRefreshOpenPanel() {
       <div id="process-runs-body" class="process-runs-list" style="display:none">${renderProcessRunsHTML(bgtRecentProcessRuns)}</div>
     </div>
 
+    </div>
+
+    <!-- Activity tab: paired tool rows, errors in red, noise collapsed; raw log kept below -->
+    <div data-bgt-pane="activity" style="display:flex;flex-direction:column;gap:14px">
+      ${bgtActivityHTML(lrView.activity)}
+      <details class="bgt-lr-raw"><summary>Raw process log (latest first)</summary>
+        <div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
+          ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}
+        </div>
+      </details>
+    </div>
+
+    <!-- Evidence tab -->
+    <div data-bgt-pane="evidence" style="display:flex;flex-direction:column;gap:14px">
     <!-- Evidence Bus panel (collapsible) -->
     <div id="evidence-bus-section">
       <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleEvidenceBus()">
@@ -1100,12 +1170,7 @@ async function bgtRefreshOpenPanel() {
       <div id="evidence-bus-body" style="display:none"></div>
     </div>
 
-    <!-- Process journal -->
-    <div>
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Process Log <span style="font-weight:400;opacity:0.6">(latest first)</span></div>
-      <div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
-        ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}
-      </div>
+    ${lrView.artifacts.length ? `<div><div class="bgt-lr-label">Artifacts</div><ul style="margin:0;padding-left:18px;font-size:12px">${lrView.artifacts.map(a => `<li>${escHtml(String(a?.path || a?.name || a || '').slice(0, 240))}</li>`).join('')}</ul></div>` : ''}
     </div>
 
     <!-- Finished-task actions -->
@@ -1116,6 +1181,7 @@ async function bgtRefreshOpenPanel() {
     </div>` : ''}
   `;
 
+  bgtSetPanelTab(bgtPanelTab);
   // Restore collapse state for coding workspace and command runs
   const wsBodyNew = document.getElementById('coding-workspace-body');
   const wsToggleNew = document.getElementById('coding-workspace-toggle');
@@ -1705,6 +1771,7 @@ window.bgtHandleColumnDragEnter = bgtHandleColumnDragEnter;
 window.bgtHandleColumnDragLeave = bgtHandleColumnDragLeave;
 window.bgtHandleColumnDrop = bgtHandleColumnDrop;
 window.openBgtPanel = openBgtPanel;
+window.bgtSetPanelTab = bgtSetPanelTab;
 window.closeBgtPanel = closeBgtPanel;
 window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
 window.bgtPauseResume = bgtPauseResume;
