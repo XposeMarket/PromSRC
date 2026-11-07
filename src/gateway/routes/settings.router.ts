@@ -2041,12 +2041,13 @@ router.post('/api/lifecycle/restart', requireGatewayAuth, (req, res) => {
           ? `Manual restart requested from ${originChannel} session ${previousSessionId}.`
           : `Manual restart requested from ${originChannel}.`,
       };
-      if (rebuild) {
-        const { buildAndRestart } = await import('../lifecycle.js');
-        await buildAndRestart(restartContext);
-      } else {
-        const { gracefulRestart } = await import('../lifecycle.js');
-        await gracefulRestart(restartContext);
+      // require(), not import(): under tsx import() loads a hookless second lifecycle instance.
+      const lifecycle = require('../lifecycle') as typeof import('../lifecycle');
+      const outcome = rebuild
+        ? (await lifecycle.buildAndRestart(restartContext)).restartOutcome
+        : await lifecycle.gracefulRestart(restartContext);
+      if (lifecycle.restartLeftProcessServing(outcome)) {
+        console.warn(`[lifecycle] Manual restart did not take effect (${outcome}); this gateway is still serving.`);
       }
     } catch (e) {
       console.error('[lifecycle] restart error:', e);

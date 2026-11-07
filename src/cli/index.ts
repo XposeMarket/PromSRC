@@ -34,6 +34,7 @@ import {
 import { isGatewayHandoffLauncherNotice } from '../gateway/runtime/gateway-handoff-protocol.js';
 import { getInjectedMasterKey } from '../security/vault-key-bootstrap.js';
 import { HANDOFF_RESTART_RESULT, handoffRestartTarget, isHandoffRestartRequest, isHandoffRestartResult } from '../gateway/runtime/handoff-restart-forward.js';
+import { gatewayNodeFlagExtras } from '../gateway/runtime/gateway-node-flags.js';
 import {
   readCanonicalUpdateStatus,
 } from '../update/canonical-updater';
@@ -255,7 +256,9 @@ function gatewayChildArgs(): string[] {
   // created a CLI -> server grandchild tree, so killing a frozen server left
   // the watched CLI alive and forced recovery to wait for health timeouts.
   const entry = resolveGatewayEntryForTerminal();
-  return entry.endsWith('.ts') ? [...process.execArgv, entry] : [entry];
+  // Heap limit + optional near-limit snapshots for the gateway child (see gateway-node-flags.ts).
+  const heapFlags = gatewayNodeFlagExtras({ configDir: getConfig().getConfigDir() });
+  return entry.endsWith('.ts') ? [...process.execArgv, ...heapFlags, entry] : [...heapFlags, entry];
 }
 
 function killGatewayChild(child: ChildProcess): void {

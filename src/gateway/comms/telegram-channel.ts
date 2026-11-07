@@ -848,7 +848,8 @@ export class TelegramChannel {
   private async runFullRestart(chatId: number, userId: number): Promise<void> {
     const sessionId = this.getTelegramSessionId(userId, chatId);
     await this.sendMessage(chatId, '🔁 Full restart requested. Running build now...');
-    const { buildAndRestart } = await import('../lifecycle.js');
+    // require(), not import(): under tsx import() loads a hookless second lifecycle instance.
+    const { buildAndRestart } = require('../lifecycle') as typeof import('../lifecycle');
     const result = await buildAndRestart({
       reason: 'manual',
       timestamp: Date.now(),
@@ -865,14 +866,18 @@ export class TelegramChannel {
       await this.sendMessage(chatId, `❌ Build failed. Restart cancelled.\n\n<code>${String(result.output || '').slice(-1200)}</code>`);
       return;
     }
+    if (result.restartOutcome === 'handoff_aborted' || result.restartOutcome === 'spawn_failed') {
+      await this.sendMessage(chatId, `⚠️ Build succeeded, but the restart did not take effect (${result.restartOutcome}). The gateway is still running the previous code; check gateway.log.`);
+      return;
+    }
     await this.sendMessage(chatId, `✅ Build succeeded (${result.durationMs}ms). Restarting now...`);
   }
 
   private async runQuickRestart(chatId: number, userId: number): Promise<void> {
     const sessionId = this.getTelegramSessionId(userId, chatId);
     await this.sendMessage(chatId, '⚡ Quick restart requested. Restarting gateway without build...');
-    const { gracefulRestart } = await import('../lifecycle.js');
-    await gracefulRestart({
+    const { gracefulRestart } = require('../lifecycle') as typeof import('../lifecycle');
+    const outcome = await gracefulRestart({
       reason: 'manual',
       timestamp: Date.now(),
       title: 'Telegram quick restart',
@@ -884,6 +889,9 @@ export class TelegramChannel {
       previousTelegramUserId: userId,
       testInstructions: 'Confirm gateway booted and Telegram polling resumed.',
     });
+    if (outcome === 'handoff_aborted' || outcome === 'spawn_failed') {
+      await this.sendMessage(chatId, `⚠️ Restart did not take effect (${outcome}). The gateway is still running; check gateway.log.`);
+    }
   }
 
   private async sendPhotoToChat(
