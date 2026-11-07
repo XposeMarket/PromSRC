@@ -1,7 +1,8 @@
 /**
  * Extra Node execArgv for the gateway child process.
  *
- * Heap limit: --max-old-space-size=clamp(floor(25% of total RAM in MB), 4096, 8192).
+ * Heap limit: --max-old-space-size=min(8192, floor(25% of total RAM in MB)), added only when
+ *   that value is at least 4096 (16 GB+ RAM). Below 16 GB no flag is added and V8's default applies.
  *   - PROMETHEUS_GATEWAY_HEAP_LIMIT_MB=<n> overrides the computed value; 0 disables it.
  *   - Skipped when NODE_OPTIONS or the existing execArgv already set max-old-space-size.
  * Near-limit heap snapshots (OFF by default; files can be gigabytes):
@@ -22,9 +23,11 @@ export const GATEWAY_HEAP_MAX_MB = 8192;
 const MAX_OLD_SPACE_RE = /max[-_]old[-_]space[-_]size/i;
 const NEAR_LIMIT_SNAPSHOT_RE = /heapsnapshot-near-heap-limit/i;
 
-export function computeGatewayHeapLimitMb(totalMemBytes: number): number {
+/** null = no flag: floor(25% of RAM in MB) is below 4096, so V8's own default already applies (under 16 GB). */
+export function computeGatewayHeapLimitMb(totalMemBytes: number): number | null {
   const quarterMb = Math.floor((totalMemBytes * 0.25) / (1024 * 1024));
-  return Math.min(GATEWAY_HEAP_MAX_MB, Math.max(GATEWAY_HEAP_MIN_MB, quarterMb));
+  if (quarterMb < GATEWAY_HEAP_MIN_MB) return null;
+  return Math.min(GATEWAY_HEAP_MAX_MB, quarterMb);
 }
 
 export interface GatewayNodeFlagOptions {
@@ -51,7 +54,7 @@ export function gatewayNodeFlagExtras(options: GatewayNodeFlagOptions = {}): str
   const override = parseOverrideMb(env.PROMETHEUS_GATEWAY_HEAP_LIMIT_MB);
   if (!alreadySet && override !== 0) {
     const mb = override ?? computeGatewayHeapLimitMb(options.totalMemBytes ?? os.totalmem());
-    flags.push(`--max-old-space-size=${mb}`);
+    if (mb !== null) flags.push(`--max-old-space-size=${mb}`);
   }
 
   const snapshotsAlreadySet = execArgv.some((arg) => NEAR_LIMIT_SNAPSHOT_RE.test(arg));

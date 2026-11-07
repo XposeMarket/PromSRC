@@ -77,9 +77,9 @@ PRs have edited the repo copy (e.g. #559 changed `WEB_UI_THEMES.md` on 2026-10-0
 
 `long_post` is a post-type hint only; completeness is `text_complete`/`truncated`.
 
-## 9. Dynamic import() duplicates stateful modules under tsx source mode
+## 10. Dynamic import() duplicates stateful modules under tsx source mode
 - **Symptom:** a module's registry, hook or flag looks set in one place and empty in another. Restart hooks are missing, or a `process.on` listener runs twice or never.
 - **Cause:** under `node --require tsx/dist/preflight.cjs --import tsx/dist/loader.mjs src/gateway/server-v2.ts`, a `await import('./x.js')` from a non-entry module loads a second instance of `x`. Static imports and `require()` share one instance. Only the directly imported module is duplicated, not its static dependencies.
 - **Fix:** use `require('./x')` or a static import. If the state must be reached from several paths, make it a process singleton.
-- **Guard:** `npm run check:stateful-imports` (`scripts/check-stateful-dynamic-imports.mjs`) fails CI when a dynamic import of a stateful module is new or exceeds the baseline in `scripts/stateful-dynamic-imports.baseline.json`. Modules that keep their state in `processSingleton(` are exempt. `__fixtures__/` and `*.fixture.ts` are excluded. Run `--print` to list every dynamic import.
+- **Guard:** `npm run check:stateful-imports` (`scripts/check-stateful-dynamic-imports.mjs`) fails CI when a dynamic import of a stateful module is new or exceeds the baseline in `scripts/stateful-dynamic-imports.baseline.json`. Type-only `typeof import()` and `import().T` are ignored (AST scan). There is no processSingleton exemption: a module that keeps state in processSingleton has no top-level stateful shape and passes on its own. `__fixtures__/` and `*.fixture.ts` are excluded. Run `--print` to list every dynamic import.
 - Repro used to confirm the bug class: `workspace/plans/gateway-restart-interruptions/repro`.

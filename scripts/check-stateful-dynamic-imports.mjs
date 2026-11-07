@@ -3,21 +3,24 @@
 //
 // Guards the tsx-source gateway bug class: a dynamic import('./x') from a NON-entry
 // module loads a second instance of x. Static imports and require() share one instance.
-// If x holds module-level mutable state (registries, hooks, flags, process listeners)
-// the copies diverge. Use require() or a static import, or make the state a process singleton.
+// If x holds module-level mutable state the copies diverge. Use require() or a static
+// import, or keep the state in a process singleton (processSingleton) inside x.
 //
-// Heuristic (line-based, deliberately simple):
-//   A target .ts file is STATEFUL when any line starts at column 0 (no indentation, so it is
-//   top-level and outside functions/classes in normally formatted code) and matches:
-//     - `let ...` or `var ...` (optionally after `export `)
-//     - `const X = new Map|Set|WeakMap|EventEmitter` (optionally typed, optionally exported)
-//     - `process.on(`
-//   Known limits: a column-0 line inside a multi-line template string counts; a `let` at
-//   column 0 inside a block comment counts. Both are rare and fail toward reporting.
+// Detection uses the TypeScript AST (typescript is a repo dependency).
+//   Dynamic import: a CallExpression whose callee is the import keyword, with a first
+//     argument that is a string literal or no-substitution template starting with ./ or ../.
+//     Multi-line calls count. Type-only `typeof import('./x')` and `import('./x').T` are
+//     ImportTypeNodes and do NOT count.
+//   Stateful target: only TOP-LEVEL statements are inspected:
+//     - a VariableStatement declared with let or var (declare skipped)
+//     - a const whose initializer (through parens / as / satisfies / non-null) is
+//       new Map|Set|WeakMap|WeakSet|EventEmitter(...), typed or not
+//     - an ExpressionStatement calling process.on / process.once / process.addListener
+//   A module whose state lives in processSingleton(...) has none of these shapes, so it
+//   passes on its own. There is no processSingleton exemption.
 //
-// Scan: src/**/*.ts excluding *.regression.ts, *.test.ts and *.d.ts. Only string-literal
-// dynamic imports whose specifier starts with ./ or ../ are considered. Specifiers resolve
-// by stripping a .js suffix, then trying <base>.ts, then <base>/index.ts.
+// Scan: src/**/*.ts excluding *.regression.ts, *.test.ts, *.d.ts, *.fixture.ts and any
+// __fixtures__ directory. Specifiers resolve by stripping .js, then <base>.ts, then <base>/index.ts.
 //
 // Baseline: scripts/stateful-dynamic-imports.baseline.json, shape {"violations":[{file,target,count}]}.
 //   NEW pair or higher count -> exit 1.  Stale entries -> warning only.
@@ -32,6 +35,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const args = process.argv.slice(2);
 const argValue = (name) => {
@@ -46,12 +50,8 @@ const BASELINE_PATH = path.resolve(
   argValue('--baseline') || path.join(ROOT, 'scripts', 'stateful-dynamic-imports.baseline.json'),
 );
 
-const IMPORT_RE = /\bimport\(\s*(['"])(\.\.?\/[^'"]+)\1\s*\)/g;
-const STATEFUL_PATTERNS = [
-  /^(export\s+)?(let|var)\s/,
-  /^(export\s+)?const\s+\w+\s*(:[^=]+)?=\s*new\s+(Map|Set|WeakMap|EventEmitter)\b/,
-  /^process\.on\(/,
-];
+const STATEFUL_CTORS = new Set(['Map', 'Set', 'WeakMap', 'WeakSet', 'EventEmitter']);
+const PROCESS_LISTENER_METHODS = new Set(['on', 'once', 'addListener']);
 
 const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/');
 const pairKey = (file, target) => `${file}\u0000${target}`;
@@ -69,7 +69,7 @@ function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      // __fixtures__ holds deliberate probes (e.g. a dynamic import that tests a singleton fix).
+      // __fixtures__ holds deliberate probes; they are not production imports.
       if (entry.name !== 'node_modules' && entry.name !== '__fixtures__') walk(full, out);
     } else if (isScannable(entry.name)) {
       out.push(full);
@@ -86,39 +86,86 @@ function resolveTarget(fromFile, spec) {
   return null;
 }
 
-const statefulCache = new Map();
-function statefulReason(file) {
-  if (statefulCache.has(file)) return statefulCache.get(file);
-  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-  // Steer rule: a module that keeps its state in processSingleton(...) is a process
-  // singleton, so duplicate instances agree. Skip it when it has no top-level let/var.
-  if (/processSingleton\(/.test(lines.join('\n')) && !lines.some((line) => /^(export\s+)?(let|var)\s/.test(line))) {
-    statefulCache.set(file, null);
-    return null;
+function parseSource(file, text) {
+  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+/** Dynamic import() calls with a relative string/template specifier. ImportType nodes are skipped. */
+function dynamicImports(sf) {
+  const out = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteralLike(arg) && /^\.\.?\//.test(arg.text)) {
+        out.push({ spec: arg.text, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+function unwrap(expr) {
+  let e = expr;
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isNonNullExpression(e)) {
+    e = e.expression;
   }
-  const hit = lines.find((line) => STATEFUL_PATTERNS.some((re) => re.test(line)));
-  const reason = hit ? hit.trim().slice(0, 120) : null;
-  statefulCache.set(file, reason);
-  return reason;
+  return e;
+}
+
+function hasDeclareModifier(node) {
+  return (node.modifiers || []).some((m) => m.kind === ts.SyntaxKind.DeclareKeyword);
+}
+
+/** Returns a short reason when the module has top-level mutable state, else null. */
+function statefulReason(sf) {
+  for (const stmt of sf.statements) {
+    if (ts.isVariableStatement(stmt) && !hasDeclareModifier(stmt)) {
+      const flags = stmt.declarationList.flags;
+      if (!(flags & ts.NodeFlags.Const)) {
+        return `top-level ${flags & ts.NodeFlags.Let ? 'let' : 'var'}`;
+      }
+      for (const decl of stmt.declarationList.declarations) {
+        const init = decl.initializer && unwrap(decl.initializer);
+        if (init && ts.isNewExpression(init) && ts.isIdentifier(init.expression)
+          && STATEFUL_CTORS.has(init.expression.text)) {
+          return `top-level const = new ${init.expression.text}`;
+        }
+      }
+    }
+    if (ts.isExpressionStatement(stmt) && ts.isCallExpression(stmt.expression)) {
+      const callee = stmt.expression.expression;
+      if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+        && callee.expression.text === 'process' && PROCESS_LISTENER_METHODS.has(callee.name.text)) {
+        return `top-level process.${callee.name.text}()`;
+      }
+    }
+  }
+  return null;
+}
+
+const statefulCache = new Map();
+function statefulReasonFor(file) {
+  if (!statefulCache.has(file)) {
+    statefulCache.set(file, statefulReason(parseSource(file, fs.readFileSync(file, 'utf8'))));
+  }
+  return statefulCache.get(file);
 }
 
 function collect() {
   const all = [];
   const violations = [];
   for (const file of walk(path.join(ROOT, 'src'))) {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-    lines.forEach((line, idx) => {
-      const re = new RegExp(IMPORT_RE.source, 'g');
-      let match;
-      while ((match = re.exec(line)) !== null) {
-        const target = resolveTarget(file, match[2]);
-        if (!target) continue;
-        const entry = { file: rel(file), line: idx + 1, spec: match[2], target: rel(target) };
-        all.push(entry);
-        const reason = statefulReason(target);
-        if (reason) violations.push({ ...entry, reason });
-      }
-    });
+    const sf = parseSource(file, fs.readFileSync(file, 'utf8'));
+    for (const { spec, line } of dynamicImports(sf)) {
+      const target = resolveTarget(file, spec);
+      if (!target) continue;
+      const reason = statefulReasonFor(target);
+      const entry = { file: rel(file), line, spec, target: rel(target), reason };
+      all.push(entry);
+      if (reason) violations.push(entry);
+    }
   }
   return { all, violations };
 }
@@ -147,20 +194,18 @@ function main() {
 
   if (PRINT) {
     for (const e of all) {
-      const reason = statefulReason(path.join(ROOT, e.target));
-      console.log(`${e.file}:${e.line} -> ${e.target}${reason ? `  [STATEFUL: ${reason}]` : ''}`);
+      console.log(`${e.file}:${e.line} -> ${e.target}${e.reason ? `  [stateful: ${e.reason}]` : ''}`);
     }
-    console.log(`dynamic imports: ${all.length}; stateful targets hit: ${violations.length}`);
-    return 0;
+    console.log(`${all.length} dynamic imports; ${violations.length} hit a stateful target`);
   }
 
   if (WRITE_BASELINE) {
     const violationsOut = [...current.values()]
       .map(({ file, target, count }) => ({ file, target, count }))
-      .sort((a, b) => b.count - a.count || a.file.localeCompare(b.file));
+      .sort((a, b) => a.file.localeCompare(b.file) || a.target.localeCompare(b.target));
     const out = {
       generatedBy: 'node scripts/check-stateful-dynamic-imports.mjs --write-baseline',
-      note: 'Today\'s violations. Stale entries warn only. Remove an entry when its import is fixed.',
+      note: "Today's violations. Stale entries warn only. Remove an entry when its import is fixed.",
       violations: violationsOut,
     };
     fs.writeFileSync(BASELINE_PATH, `${JSON.stringify(out, null, 2)}\n`);
@@ -185,8 +230,8 @@ function main() {
     for (const v of newViolations) {
       console.error(`  ${v.file}:${v.lines.join(',')} -> ${v.target}  (count ${v.count}, baseline allows ${v.allowed})`);
     }
-    console.error('Fix: use require() or a static import, or make the module state a process singleton (processSingleton).');
-    console.error('Run with --print to list every dynamic import.');
+    console.error('Fix: use require() or a static import, or keep the module state in a process singleton (processSingleton).');
+    console.error('Type-only imports (typeof import(...), import(...).T) are not counted. Run with --print to list every dynamic import.');
     return 1;
   }
 

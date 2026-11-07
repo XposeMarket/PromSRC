@@ -105,11 +105,14 @@ try {
     assert.equal(result.status, 0, result.stdout + result.stderr);
   });
 
-  check('heap limit formula: 8 GB -> 4096, 32 GB -> 8192, 64 GB -> 8192', () => {
-    assert.equal(computeGatewayHeapLimitMb(8 * GB), 4096);
+  check('heap limit formula: 8 GB -> no flag, 16 GB -> 4096, 24 GB -> 6144, 32 GB -> 8192, 64 GB -> 8192', () => {
+    assert.equal(computeGatewayHeapLimitMb(8 * GB), null);
+    assert.equal(computeGatewayHeapLimitMb(16 * GB), 4096);
+    assert.equal(computeGatewayHeapLimitMb(24 * GB), 6144);
     assert.equal(computeGatewayHeapLimitMb(32 * GB), 8192);
     assert.equal(computeGatewayHeapLimitMb(64 * GB), 8192);
-    assert.deepEqual(gatewayNodeFlagExtras({ env: {}, execArgv: [], totalMemBytes: 8 * GB }), ['--max-old-space-size=4096']);
+    assert.deepEqual(gatewayNodeFlagExtras({ env: {}, execArgv: [], totalMemBytes: 8 * GB }), []);
+    assert.deepEqual(gatewayNodeFlagExtras({ env: {}, execArgv: [], totalMemBytes: 16 * GB }), ['--max-old-space-size=4096']);
     assert.deepEqual(gatewayNodeFlagExtras({ env: {}, execArgv: [], totalMemBytes: 32 * GB }), ['--max-old-space-size=8192']);
   });
 
@@ -163,6 +166,49 @@ try {
       if (previous === undefined) delete process.env.PROMETHEUS_GATEWAY_HEAP_SAMPLER;
       else process.env.PROMETHEUS_GATEWAY_HEAP_SAMPLER = previous;
     }
+  });
+
+  check('type-only import() references (typeof import, import().T) are not dynamic imports', () => {
+    const root = makeFixture({
+      'entry.ts': "export type Foo = import('./state.js').Foo;\nexport const probe = null as unknown as typeof import('./state.js');\n",
+      'state.ts': 'let counter = 0;\nexport const bump = () => ++counter;\nexport interface Foo { a: number }\n',
+    });
+    const result = runCheck(root);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+
+  check('multi-line and template-literal dynamic imports are flagged', () => {
+    const stateful = 'let counter = 0;\nexport const bump = () => ++counter;\n';
+    const multi = "export async function load() {\n  return await import(\n    './state.js'\n  );\n}\n";
+    const multiResult = runCheck(makeFixture({ 'entry.ts': multi, 'state.ts': stateful }));
+    assert.equal(multiResult.status, 1, multiResult.stdout + multiResult.stderr);
+    assert.match(multiResult.stderr, /src\/entry\.ts:2 -> src\/state\.ts/);
+    const tpl = 'export async function load() {\n  return await import(`./state.js`);\n}\n';
+    assert.equal(runCheck(makeFixture({ 'entry.ts': tpl, 'state.ts': stateful })).status, 1);
+  });
+
+  check('a typed const Map makes the target stateful', () => {
+    const root = makeFixture({
+      'entry.ts': ENTRY,
+      'state.ts': 'const handlers: Map<string, () => void> = new Map();\nexport { handlers };\n',
+    });
+    assert.equal(runCheck(root).status, 1);
+  });
+
+  check('a processSingleton-only module is not stateful', () => {
+    const root = makeFixture({
+      'entry.ts': ENTRY,
+      'state.ts': "const s = processSingleton('x', () => ({}));\nexport { s };\n",
+    });
+    assert.equal(runCheck(root).status, 0);
+  });
+
+  check('a top-level process.on makes the target stateful', () => {
+    const root = makeFixture({
+      'entry.ts': ENTRY,
+      'state.ts': "process.on('exit', () => undefined);\nexport const VALUE = 1;\n",
+    });
+    assert.equal(runCheck(root).status, 1);
   });
 
   console.log(`gateway guardrails: ${passed} checks passed`);

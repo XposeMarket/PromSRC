@@ -3,301 +3,6 @@
   "note": "Today's violations. Stale entries warn only. Remove an entry when its import is fixed.",
   "violations": [
     {
-      "file": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 14
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 14
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/proposals/proposal-store.ts",
-      "count": 9
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/verification-flow.ts",
-      "count": 7
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "target": "src/gateway/routes/chat/pipeline/text-guards.ts",
-      "count": 7
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/stream.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 6
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/restart-continuity.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 5
-    },
-    {
-      "file": "src/gateway/tools/handlers/xai-handlers.ts",
-      "target": "src/config/config.ts",
-      "count": 5
-    },
-    {
-      "file": "src/connections/runtime.ts",
-      "target": "src/gateway/mcp-oauth.ts",
-      "count": 4
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/routes/proposals.router.ts",
-      "count": 4
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/compaction.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 4
-    },
-    {
-      "file": "src/gateway/routes/teams.router.ts",
-      "target": "src/gateway/teams/team-workspace.ts",
-      "count": 4
-    },
-    {
-      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
-      "target": "src/gateway/mcp-oauth.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/agents.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/creative-controls.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/delivery.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/memory.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/misc.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/scheduling.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/web.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/workspace.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/goal-runner.ts",
-      "target": "src/gateway/routes/chat/pipeline/text-guards.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/goal-runner.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "target": "src/gateway/routes/chat/pipeline/stream.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "target": "src/gateway/routes/chat/pipeline/text-guards.ts",
-      "count": 3
-    },
-    {
-      "file": "src/gateway/routes/goals.router.ts",
-      "target": "src/gateway/mcp-oauth.ts",
-      "count": 3
-    },
-    {
-      "file": "src/tools/web.ts",
-      "target": "src/config/config.ts",
-      "count": 3
-    },
-    {
-      "file": "src/agents/ollama-client.ts",
-      "target": "src/config/config.ts",
-      "count": 2
-    },
-    {
-      "file": "src/config/config.ts",
-      "target": "src/config/config-classic.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/agents-runtime/capabilities/memory-executor.ts",
-      "target": "src/gateway/memory-index/memory-topics.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/agents-runtime/capabilities/memory-executor.ts",
-      "target": "src/gateway/resources/reference-library.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
-      "target": "src/connections/runtime.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/teams/team-dispatch-runtime.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/browser/sessions.ts",
-      "target": "src/gateway/teams/managed-teams.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/comms/broadcaster.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/browser-tools.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/prometheus-questions.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/tasks/task-runner.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/mcp-manager.ts",
-      "target": "src/gateway/mcp-oauth.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/process/model-call-worker.ts",
-      "target": "src/config/config.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/process/model-call-worker.ts",
-      "target": "src/providers/factory.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/prompt-context.ts",
-      "target": "src/gateway/projects/project-store.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "target": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/extensions.router.ts",
-      "target": "src/security/vault.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/extensions.router.ts",
-      "target": "src/config/config.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/settings.router.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/teams.router.ts",
-      "target": "src/gateway/teams/team-dispatch-runtime.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/routes/video-project.routes.ts",
-      "target": "src/media-engine/tool.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/runtime/gateway-handoff-bridge.ts",
-      "target": "src/gateway/tasks/background-task-runner.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/scheduling/cron-scheduler.ts",
-      "target": "src/gateway/teams/team-dispatch-runtime.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/tasks/background-task-runner.ts",
-      "target": "src/gateway/browser-tools.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/tasks/background-task-runner.ts",
-      "target": "src/gateway/teams/managed-teams.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/tasks/task-recovery.ts",
-      "target": "src/gateway/teams/managed-teams.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/tasks/task-store.ts",
-      "target": "src/gateway/teams/managed-teams.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/tasks/task-store.ts",
-      "target": "src/gateway/resources/resource-store.ts",
-      "count": 2
-    },
-    {
-      "file": "src/gateway/verification-flow.ts",
-      "target": "src/gateway/observability/turn-trace.ts",
-      "count": 2
-    },
-    {
-      "file": "src/media-engine/tool.ts",
-      "target": "src/gateway/session-wake.ts",
-      "count": 2
-    },
-    {
       "file": "src/agents/ollama-client.ts",
       "target": "src/auth/openai-oauth.ts",
       "count": 1
@@ -308,49 +13,14 @@
       "count": 1
     },
     {
-      "file": "src/embed/index.ts",
-      "target": "src/providers/factory.ts",
-      "count": 1
-    },
-    {
-      "file": "src/embed/index.ts",
-      "target": "src/gateway/verification-flow.ts",
-      "count": 1
-    },
-    {
-      "file": "src/embed/index.ts",
-      "target": "src/extensions/runtime-registry.ts",
-      "count": 1
-    },
-    {
-      "file": "src/embed/index.ts",
-      "target": "src/gateway/session.ts",
-      "count": 1
-    },
-    {
-      "file": "src/embed/index.ts",
-      "target": "src/gateway/skills-runtime/skills-manager.ts",
-      "count": 1
-    },
-    {
-      "file": "src/embed/index.ts",
-      "target": "src/gateway/live-runtime-registry.ts",
-      "count": 1
-    },
-    {
-      "file": "src/extensions/bundled/connectors/x/runtime.ts",
+      "file": "src/agents/ollama-client.ts",
       "target": "src/config/config.ts",
-      "count": 1
+      "count": 2
     },
     {
-      "file": "src/extensions/bundled/connectors/x/x-api-client.ts",
-      "target": "src/config/config.ts",
-      "count": 1
-    },
-    {
-      "file": "src/extensions/runtime-api.ts",
-      "target": "src/gateway/tool-capabilities.ts",
-      "count": 1
+      "file": "src/connections/runtime.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 4
     },
     {
       "file": "src/games-engine/assets.ts",
@@ -359,7 +29,22 @@
     },
     {
       "file": "src/gateway/agents-runtime/capabilities/memory-executor.ts",
-      "target": "src/gateway/resources/reference-service.ts",
+      "target": "src/gateway/memory-index/memory-topics.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/connections/runtime.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 3
+    },
+    {
+      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
+      "target": "src/gateway/tools/composite-tools.ts",
       "count": 1
     },
     {
@@ -368,18 +53,13 @@
       "count": 1
     },
     {
-      "file": "src/gateway/agents-runtime/capabilities/platform-executor.ts",
-      "target": "src/gateway/tools/composite-tools.ts",
+      "file": "src/gateway/agents-runtime/capabilities/web-media-executor.ts",
+      "target": "src/games-engine/tool.ts",
       "count": 1
     },
     {
       "file": "src/gateway/agents-runtime/capabilities/web-media-executor.ts",
       "target": "src/media-engine/tool.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/capabilities/web-media-executor.ts",
-      "target": "src/games-engine/tool.ts",
       "count": 1
     },
     {
@@ -389,47 +69,7 @@
     },
     {
       "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
-      "target": "src/gateway/live-runtime-registry.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
-      "target": "src/gateway/runtime/gateway-restart-queue.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/handlers/default-tools.ts",
       "target": "src/gateway/tools/composite-tools.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/creative/motion-runtime.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/creative/hyperframes-bridge.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/tasks/background-task-runner.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/routes/channels.router.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/agents-runtime/subagent-executor.ts",
-      "target": "src/gateway/observability/turn-trace.ts",
       "count": 1
     },
     {
@@ -448,11 +88,6 @@
       "count": 1
     },
     {
-      "file": "src/gateway/agents-runtime/workspace-helpers.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 1
-    },
-    {
       "file": "src/gateway/approval-actions.ts",
       "target": "src/gateway/tasks/task-router.ts",
       "count": 1
@@ -463,29 +98,19 @@
       "count": 1
     },
     {
-      "file": "src/gateway/brain/brain-runner.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 1
+      "file": "src/gateway/comms/broadcaster.ts",
+      "target": "src/gateway/lifecycle.ts",
+      "count": 2
     },
     {
-      "file": "src/gateway/browser/sessions.ts",
+      "file": "src/gateway/comms/telegram-channel.ts",
       "target": "src/config/config.ts",
       "count": 1
     },
     {
-      "file": "src/gateway/browser/sessions.ts",
-      "target": "src/gateway/tasks/task-store.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/browser/streaming.ts",
-      "target": "src/gateway/tasks/task-store.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/chat/chat-helpers.ts",
-      "target": "src/gateway/session.ts",
-      "count": 1
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/browser-tools.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/comms/telegram-channel.ts",
@@ -494,13 +119,23 @@
     },
     {
       "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/config/config.ts",
-      "count": 1
+      "target": "src/gateway/lifecycle.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/teams/team-manager-runner.ts",
-      "count": 1
+      "target": "src/gateway/prometheus-questions.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
+      "count": 9
+    },
+    {
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/routes/proposals.router.ts",
+      "count": 4
     },
     {
       "file": "src/gateway/comms/telegram-channel.ts",
@@ -508,63 +143,23 @@
       "count": 1
     },
     {
-      "file": "src/gateway/core/server.ts",
-      "target": "src/gateway/runtime-recovery.ts",
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/teams/team-manager-runner.ts",
       "count": 1
     },
     {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/routes/channels.router.ts",
-      "count": 1
+      "file": "src/gateway/comms/telegram-channel.ts",
+      "target": "src/gateway/verification-flow.ts",
+      "count": 7
     },
     {
       "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/tasks/background-task-runner.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/teams/team-manager-autowake.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/teams/team-coordinator.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/terminal-ui.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/live-runtime-registry.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/tasks/task-router.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/runtime/gateway-handoff-bridge.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/operation-ledger.ts",
+      "target": "src/gateway/routes/pairing.router.ts",
       "count": 1
     },
     {
       "file": "src/gateway/core/startup.ts",
       "target": "src/gateway/teams/team-manager-runner.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/core/startup.ts",
-      "target": "src/gateway/routes/pairing.router.ts",
       "count": 1
     },
     {
@@ -583,8 +178,23 @@
       "count": 1
     },
     {
+      "file": "src/gateway/mcp-manager.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 2
+    },
+    {
       "file": "src/gateway/mcp-oauth.ts",
       "target": "src/gateway/mcp-manager.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/process/model-call-worker.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/process/model-call-worker.ts",
+      "target": "src/providers/factory.ts",
       "count": 1
     },
     {
@@ -593,93 +203,18 @@
       "count": 1
     },
     {
-      "file": "src/gateway/prometheus-questions.ts",
-      "target": "src/gateway/live-runtime-registry.ts",
-      "count": 1
-    },
-    {
       "file": "src/gateway/prompt-context.ts",
       "target": "src/config/local-model-prompts.ts",
       "count": 1
     },
     {
-      "file": "src/gateway/resources/resource-store.ts",
-      "target": "src/gateway/resources/reference-service.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/canvas.router.ts",
-      "target": "src/gateway/creative/motion-runtime.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/canvas.router.ts",
-      "target": "src/gateway/creative/hyperframes-bridge.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/channels.router.ts",
-      "target": "src/gateway/chat/attachment-context.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat.router.ts",
-      "target": "src/providers/reasoning-capabilities.ts",
-      "count": 1
+      "file": "src/gateway/prompt-context.ts",
+      "target": "src/gateway/projects/project-store.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/routes/chat.router.ts",
       "target": "src/extensions/plugin-import/plugin-hooks.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/compaction.ts",
-      "target": "src/gateway/context/model-context.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/goal-runner.ts",
-      "target": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/goal-runner.ts",
-      "target": "src/gateway/routes/chat/pipeline/stream.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "target": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/handle-chat.ts",
-      "target": "src/gateway/routes/chat/pipeline/compaction.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "target": "src/gateway/routes/chat/pipeline/restart-continuity.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "target": "src/gateway/routes/chat/pipeline/goal-runner.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/pipeline/restart-continuity.ts",
-      "target": "src/gateway/routes/chat/pipeline/interactive-turn.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/voice/dispatch.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/chat/voice/task-tools.ts",
-      "target": "src/gateway/routes/channels.router.ts",
       "count": 1
     },
     {
@@ -689,12 +224,37 @@
     },
     {
       "file": "src/gateway/routes/extensions.router.ts",
+      "target": "src/config/config.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/routes/extensions.router.ts",
       "target": "src/gateway/mcp-manager.ts",
       "count": 1
     },
     {
+      "file": "src/gateway/routes/extensions.router.ts",
+      "target": "src/security/vault.ts",
+      "count": 2
+    },
+    {
       "file": "src/gateway/routes/game-project.routes.ts",
       "target": "src/games-engine/tool.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/goals.router.ts",
+      "target": "src/gateway/mcp-oauth.ts",
+      "count": 3
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/config/config.ts",
+      "count": 1
+    },
+    {
+      "file": "src/gateway/routes/proposals.router.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
       "count": 1
     },
     {
@@ -709,11 +269,6 @@
     },
     {
       "file": "src/gateway/routes/proposals.router.ts",
-      "target": "src/gateway/proposals/proposal-store.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/proposals.router.ts",
       "target": "src/gateway/teams/managed-teams.ts",
       "count": 1
     },
@@ -723,9 +278,9 @@
       "count": 1
     },
     {
-      "file": "src/gateway/routes/proposals.router.ts",
-      "target": "src/config/config.ts",
-      "count": 1
+      "file": "src/gateway/routes/settings.router.ts",
+      "target": "src/gateway/lifecycle.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/routes/settings.router.ts",
@@ -733,24 +288,9 @@
       "count": 1
     },
     {
-      "file": "src/gateway/routes/tasks.router.ts",
-      "target": "src/gateway/tasks/task-runner.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/routes/teams.router.ts",
-      "target": "src/gateway/chat/attachment-context.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/runtime-recovery.ts",
-      "target": "src/gateway/comms/broadcaster.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/runtime/gateway-handoff-bridge.ts",
-      "target": "src/gateway/live-runtime-registry.ts",
-      "count": 1
+      "file": "src/gateway/routes/video-project.routes.ts",
+      "target": "src/media-engine/tool.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/scheduling/cron-scheduler.ts",
@@ -769,17 +309,7 @@
     },
     {
       "file": "src/gateway/server-v2.ts",
-      "target": "src/gateway/routes/chat.router.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/server-v2.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/server-v2.ts",
-      "target": "src/gateway/runtime/gateway-restart-queue.ts",
+      "target": "src/gateway/memory-index/memory-atoms-hybrid.ts",
       "count": 1
     },
     {
@@ -788,13 +318,18 @@
       "count": 1
     },
     {
-      "file": "src/gateway/server-v2.ts",
-      "target": "src/gateway/memory-index/memory-atoms-hybrid.ts",
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/config/config.ts",
       "count": 1
     },
     {
-      "file": "src/gateway/session.ts",
-      "target": "src/gateway/context/model-context.ts",
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/browser-tools.ts",
+      "count": 2
+    },
+    {
+      "file": "src/gateway/tasks/background-task-runner.ts",
+      "target": "src/gateway/proposals/proposal-store.ts",
       "count": 1
     },
     {
@@ -804,13 +339,8 @@
     },
     {
       "file": "src/gateway/tasks/background-task-runner.ts",
-      "target": "src/gateway/proposals/proposal-store.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/tasks/background-task-runner.ts",
-      "target": "src/config/config.ts",
-      "count": 1
+      "target": "src/gateway/teams/managed-teams.ts",
+      "count": 2
     },
     {
       "file": "src/gateway/tasks/background-task-runner.ts",
@@ -825,21 +355,11 @@
     {
       "file": "src/gateway/tasks/task-router.ts",
       "target": "src/gateway/teams/notify-bridge.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/tasks/task-store.ts",
-      "target": "src/gateway/proposals/proposal-store.ts",
       "count": 1
     },
     {
       "file": "src/gateway/teams/managed-teams.ts",
       "target": "src/gateway/tasks/task-router.ts",
-      "count": 1
-    },
-    {
-      "file": "src/gateway/teams/team-coordinator.ts",
-      "target": "src/gateway/session.ts",
       "count": 1
     },
     {
@@ -849,12 +369,12 @@
     },
     {
       "file": "src/gateway/tools/composite-tools.ts",
-      "target": "src/providers/factory.ts",
+      "target": "src/gateway/session.ts",
       "count": 1
     },
     {
       "file": "src/gateway/tools/composite-tools.ts",
-      "target": "src/gateway/session.ts",
+      "target": "src/providers/factory.ts",
       "count": 1
     },
     {
@@ -869,12 +389,12 @@
     },
     {
       "file": "src/media-engine/providers.ts",
-      "target": "src/video-generation/registry.ts",
+      "target": "src/image-generation/registry.ts",
       "count": 1
     },
     {
       "file": "src/media-engine/providers.ts",
-      "target": "src/image-generation/registry.ts",
+      "target": "src/video-generation/registry.ts",
       "count": 1
     },
     {
@@ -891,6 +411,11 @@
       "file": "src/media-engine/studio.ts",
       "target": "src/media-engine/providers.ts",
       "count": 1
+    },
+    {
+      "file": "src/media-engine/tool.ts",
+      "target": "src/gateway/session-wake.ts",
+      "count": 2
     },
     {
       "file": "src/media-engine/tool.ts",
@@ -910,51 +435,6 @@
     {
       "file": "src/providers/usage-awareness.ts",
       "target": "src/providers/provider-usage-limits.ts",
-      "count": 1
-    },
-    {
-      "file": "src/runtime/context-receipt.ts",
-      "target": "src/config/config.ts",
-      "count": 1
-    },
-    {
-      "file": "src/runtime/prompt-manifest.ts",
-      "target": "src/config/config.ts",
-      "count": 1
-    },
-    {
-      "file": "src/runtime/retrieval-provenance.ts",
-      "target": "src/runtime/context-receipt.ts",
-      "count": 1
-    },
-    {
-      "file": "src/runtime/tool-category-manifest.ts",
-      "target": "src/config/config.ts",
-      "count": 1
-    },
-    {
-      "file": "src/testing/replay/harness.ts",
-      "target": "src/providers/factory.ts",
-      "count": 1
-    },
-    {
-      "file": "src/testing/replay/harness.ts",
-      "target": "src/gateway/skills-runtime/skills-manager.ts",
-      "count": 1
-    },
-    {
-      "file": "src/testing/replay/harness.ts",
-      "target": "src/gateway/verification-flow.ts",
-      "count": 1
-    },
-    {
-      "file": "src/testing/replay/harness.ts",
-      "target": "src/gateway/agents-runtime/subagent-executor.ts",
-      "count": 1
-    },
-    {
-      "file": "src/tools/ui-cards.ts",
-      "target": "src/config/config.ts",
       "count": 1
     }
   ]
