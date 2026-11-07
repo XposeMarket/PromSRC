@@ -33,21 +33,22 @@ export function canAttemptRecoveryGc(lastAttemptAt: number, now: number, throttl
 }
 
 /**
- * Inside the GC throttle window, after a GC-confirmed skip, keep skipping
- * while the current heap is still small (RSS stays high because V8 keeps pages
- * committed). Once heapUsed crosses the ratio, a real leak recycles.
+ * Inside the GC throttle window after a GC-confirmed skip, keep skipping. A
+ * pre-GC heapUsed reading cannot disprove a GC that just showed the heap was
+ * garbage: heap-ratio samples always sit above the post-GC skip line, so the
+ * old "re-validate from current heapUsed" rule recycled healthy gateways
+ * minutes after a GC cleared them. A real leak recycles at the next GC once
+ * the throttle expires; emergencies are confirmed by the caller with a forced
+ * GC instead.
  */
 export function shouldKeepSkippingWithinGcWindow(input: {
   now: number;
   lastGcAt: number;
   lastSkipAt: number;
-  heapUsedBytes: number;
-  thresholdBytes: number;
   throttleMs?: number;
 }): boolean {
   if (input.lastSkipAt <= 0 || input.lastSkipAt !== input.lastGcAt) return false;
-  if (canAttemptRecoveryGc(input.lastGcAt, input.now, input.throttleMs)) return false;
-  return decideMemoryRecoveryAfterGc({ gcRan: true, postGcHeapUsedBytes: input.heapUsedBytes, thresholdBytes: input.thresholdBytes }) === 'skip_after_gc';
+  return !canAttemptRecoveryGc(input.lastGcAt, input.now, input.throttleMs);
 }
 
 let cachedGc: (() => void) | null | undefined;
@@ -81,6 +82,51 @@ export function runRecoveryGc(): { gcRan: boolean; postGcHeapUsedBytes?: number;
   return { gcRan: true, postGcHeapUsedBytes: memory.heapUsed, postGcRssBytes: memory.rss, gcMs: Date.now() - started };
 }
 
+function readRatioEnv(name: string, fallback: number, allowZero: boolean): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n < 1 && (allowZero ? n >= 0 : n > 0) ? n : fallback;
+}
+
+/**
+ * Routine recycle once heapUsed reaches this share of the REAL V8 heap limit.
+ * The old trigger was RSS >= 4 GiB, which on a default 4144 MB heap is the OOM
+ * point itself, so the watchdog never acted before V8 aborted (exit 134).
+ * 0 disables the heap signal (RSS signal remains).
+ */
+export const MEMORY_RECOVERY_HEAP_RATIO = readRatioEnv('PROMETHEUS_GATEWAY_MEMORY_RESTART_HEAP_RATIO', 0.7, true);
+/** Emergency recycle (does not wait for active work) at this share of the heap limit. */
+export const MEMORY_EMERGENCY_HEAP_RATIO = readRatioEnv('PROMETHEUS_GATEWAY_MEMORY_EMERGENCY_HEAP_RATIO', 0.85, false);
+
+/** One watchdog sample: under pressure when RSS crosses its threshold OR heap crosses its ratio. */
+export function isMemoryPressureSample(input: {
+  rssBytes: number;
+  heapUsedBytes: number;
+  heapLimitBytes: number;
+  rssThresholdBytes: number;
+  heapRatio?: number;
+}): boolean {
+  const ratio = input.heapRatio ?? MEMORY_RECOVERY_HEAP_RATIO;
+  // On a scaled heap (6-8 GB, PR #834) a fixed 4 GiB RSS line would GC/recycle
+  // long before the heap is under real pressure, so the RSS line never sits
+  // below the routine heap line. Default ~4 GB heaps keep the 4 GiB line.
+  if (input.rssThresholdBytes > 0
+    && input.rssBytes >= gcConfirmThresholdBytes(input.rssThresholdBytes, input.heapLimitBytes, ratio)) return true;
+  return ratio > 0 && input.heapLimitBytes > 0 && input.heapUsedBytes >= input.heapLimitBytes * ratio;
+}
+
+/**
+ * Line a post-GC heap must stay above to justify a recycle (skip below half of
+ * it). The RSS threshold on default heaps; on large heaps (PROMETHEUS heap
+ * scaling) it follows the routine heap-ratio line so a healthy multi-GB live
+ * set is not recycled.
+ */
+export function gcConfirmThresholdBytes(rssThresholdBytes: number, heapLimitBytes: number, heapRatio = MEMORY_RECOVERY_HEAP_RATIO): number {
+  const heapLine = heapRatio > 0 && heapLimitBytes > 0 ? heapLimitBytes * heapRatio : 0;
+  return Math.max(rssThresholdBytes > 0 ? rssThresholdBytes : 0, heapLine);
+}
+
 export type ActiveWorkMemoryDecision = 'defer_active_work' | 'restart_idle' | 'restart_emergency';
 
 /** Routine maintenance must not kill unrelated work. True exhaustion still wins. */
@@ -94,9 +140,16 @@ export function decideActiveWorkMemoryRecovery(input: {
 }): ActiveWorkMemoryDecision {
   const valid = [input.rssBytes, input.heapUsedBytes, input.heapLimitBytes, input.freeMemoryBytes, input.thresholdBytes]
     .every((n) => Number.isFinite(n) && n >= 0);
-  const emergency = !valid || input.heapLimitBytes <= 0 || input.thresholdBytes <= 0
-    || input.heapUsedBytes >= input.heapLimitBytes * 0.9
-    || input.rssBytes >= input.thresholdBytes * 1.5
+  // The RSS emergency line scales with the real heap: on a scaled 6-8 GB heap a
+  // healthy gateway full of garbage passes 6 GB RSS before its routine heap
+  // line, and RSS does not drop right after a forced GC. thresholdBytes <= 0
+  // disables only the RSS arm (the heap and free-memory arms still apply).
+  const rssEmergencyBytes = input.thresholdBytes > 0
+    ? gcConfirmThresholdBytes(input.thresholdBytes, input.heapLimitBytes) * 1.5
+    : Number.POSITIVE_INFINITY;
+  const emergency = !valid || input.heapLimitBytes <= 0
+    || input.heapUsedBytes >= input.heapLimitBytes * MEMORY_EMERGENCY_HEAP_RATIO
+    || input.rssBytes >= rssEmergencyBytes
     || input.freeMemoryBytes < 256 * 1024 * 1024;
   if (emergency) return 'restart_emergency';
   return input.activeWork ? 'defer_active_work' : 'restart_idle';

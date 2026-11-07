@@ -388,7 +388,8 @@ function writePendingWakeups(list: PendingWakeup[]): void {
 
 export function startGatewayRestartQueueRunner(deps: {
   listRuntimes: () => RestartRuntime[];
-  restart: (ctx: RestartContext) => Promise<void>;
+  /** Resolves with lifecycle's RestartOutcome (unknown here to keep the queue decoupled). */
+  restart: (ctx: RestartContext) => Promise<unknown>;
   isHandoffDraining?: () => boolean;
   /** Retries wake-up delivery for a stale/undelivered record (throttled to every 30s). */
   deliverContinuations?: () => void;
@@ -438,10 +439,14 @@ export function startGatewayRestartQueueRunner(deps: {
     };
     console.log(`[restart-queue] Gateway quiet for ${Math.round(quietMs / 1000)}s; running queued restart ${pending.id}.`);
     try {
-      await deps.restart(ctx);
+      const outcome = await deps.restart(ctx);
+      if (outcome === 'handoff_aborted' || outcome === 'spawn_failed') {
+        console.warn(`[restart-queue] Queued restart ${pending.id} did not take effect (${outcome}); it is restored after the acceptance window.`);
+      }
       // gracefulRestart can return normally without restarting (replacement
       // spawn failure, failed warm handoff). Only a process exit or an active
-      // handoff proves acceptance; otherwise restore the request.
+      // handoff proves acceptance; otherwise restore the request. The window
+      // doubles as retry backoff, so a persistent abort cannot loop restarts.
       const check = setTimeout(() => {
         if (deps.isHandoffDraining?.()) return;
         restoreFailed(pending, 'restart returned but this gateway is still running (launch or handoff failed)');
