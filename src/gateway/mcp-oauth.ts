@@ -19,6 +19,7 @@ import { assertTokenRefreshAllowed } from './runtime/preview-mode';
 import http from 'http';
 import { spawn } from 'child_process';
 import { getConfig } from '../config/config.js';
+import { fetchPublicUrl, isLocalHostname, type OutboundGuardOptions } from '../tools/outbound-url-guard.js';
 import { getVault } from '../security/vault.js';
 
 const REDIRECT_PORT = 19847;
@@ -73,8 +74,9 @@ interface ActiveFlow {
 const activeFlows = new Map<string, ActiveFlow>();
 
 // In-memory overrides are only available to isolated regression processes, never the gateway.
-let testOverrides: { publicUrl?: string; storage?: Map<string, string> } | null = null;
-export function setMcpOAuthTestOverrides(overrides: { publicUrl?: string; storage?: Map<string, string> } | null): void {
+type McpOAuthTestOverrides = { publicUrl?: string; storage?: Map<string, string>; lookup?: (host: string) => Promise<string[]> };
+let testOverrides: McpOAuthTestOverrides | null = null;
+export function setMcpOAuthTestOverrides(overrides: McpOAuthTestOverrides | null): void {
   if (process.env.MCP_OAUTH_TEST_MODE !== '1') throw new Error('OAuth test overrides require MCP_OAUTH_TEST_MODE=1');
   testOverrides = overrides;
 }
@@ -161,7 +163,7 @@ export async function revokeMcpOAuth(id: string): Promise<{ revoked: boolean; cl
   const endpoint = client?.metadata?.revocation_endpoint;
   if (tokens?.access_token && endpoint) {
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchPublicUrl(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: new URLSearchParams({
@@ -171,7 +173,7 @@ export async function revokeMcpOAuth(id: string): Promise<{ revoked: boolean; cl
           ...(client.client_secret ? { client_secret: client.client_secret } : {}),
         }).toString(),
         signal: AbortSignal.timeout(10000),
-      });
+      }, mcpGuardOptions(isLocalServerUrl(client.resource)));
       revoked = response.ok || response.status === 400 || response.status === 404;
     } catch {
       // Local state is still cleared below; the provider can be revisited from repair.
@@ -201,9 +203,23 @@ function originOf(url: string): string {
   return `${u.protocol}//${u.host}`;
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<any | null> {
+/**
+ * Every MCP OAuth fetch (discovery, registration, token, revocation) uses
+ * remote-supplied URLs, so it goes through the outbound guard: a remote MCP
+ * server cannot point the gateway at loopback/private hosts, even via a
+ * redirect. Only a server that is itself local may use local endpoints.
+ */
+function isLocalServerUrl(serverUrl: string | undefined): boolean {
+  try { return !!serverUrl && isLocalHostname(new URL(serverUrl).hostname); } catch { return false; }
+}
+
+function mcpGuardOptions(allowPrivate: boolean): OutboundGuardOptions {
+  return { allowPrivate, ...(testOverrides?.lookup ? { lookup: testOverrides.lookup } : {}) };
+}
+
+async function fetchJson(url: string, init?: RequestInit, allowPrivate = false): Promise<any | null> {
   try {
-    const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+    const r = await fetchPublicUrl(url, { ...init, signal: AbortSignal.timeout(10000) }, mcpGuardOptions(allowPrivate));
     if (!r.ok) return null;
     return await r.json();
   } catch { return null; }
@@ -235,6 +251,7 @@ export function buildAuthMetadataCandidates(authServerUrl: string | undefined, r
 
 export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?: string | null): Promise<AuthServerMetadata> {
   const origin = originOf(serverUrl);
+  const local = isLocalServerUrl(serverUrl);
 
   // 1. Protected-resource metadata → authorization_servers[]
   let authServerUrl: string | undefined;
@@ -244,7 +261,7 @@ export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?:
     ? [advertisedResourceMetadata]
     : [`${origin}/.well-known/oauth-protected-resource${resourcePath}`, `${origin}/.well-known/oauth-protected-resource`];
   for (const rmUrl of [...new Set(resourceCandidates)]) {
-    const rm = await fetchJson(rmUrl);
+    const rm = await fetchJson(rmUrl, undefined, local);
     if (rm && Array.isArray(rm.authorization_servers) && rm.authorization_servers.length) {
       authServerUrl = String(rm.authorization_servers[0]);
       break;
@@ -255,14 +272,16 @@ export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?:
   const candidates = buildAuthMetadataCandidates(authServerUrl, origin);
 
   for (const url of candidates) {
-    const meta = await fetchJson(url);
+    const meta = await fetchJson(url, undefined, local);
     if (meta?.authorization_endpoint && meta?.token_endpoint) {
       return {
         issuer: meta.issuer,
-        authorization_endpoint: meta.authorization_endpoint,
-        token_endpoint: meta.token_endpoint,
-        revocation_endpoint: meta.revocation_endpoint,
-        registration_endpoint: meta.registration_endpoint,
+        // Remote metadata is third-party input; the authorize URL is later
+        // handed to the OS browser launcher, so only plain http(s) is accepted.
+        authorization_endpoint: validateOAuthEndpoint(meta.authorization_endpoint, 'authorization_endpoint', { allowLocal: local }),
+        token_endpoint: validateOAuthEndpoint(meta.token_endpoint, 'token_endpoint', { allowLocal: local }),
+        revocation_endpoint: meta.revocation_endpoint ? validateOAuthEndpoint(meta.revocation_endpoint, 'revocation_endpoint', { allowLocal: local }) : undefined,
+        registration_endpoint: meta.registration_endpoint ? validateOAuthEndpoint(meta.registration_endpoint, 'registration_endpoint', { allowLocal: local }) : undefined,
         scopes_supported: meta.scopes_supported,
         code_challenge_methods_supported: meta.code_challenge_methods_supported,
       };
@@ -308,7 +327,7 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
         token_endpoint_auth_method: 'none',
         ...(scope ? { scope } : {}),
       }),
-    });
+    }, isLocalServerUrl(serverUrl));
     if (reg?.client_id) {
       clientId = String(reg.client_id);
       clientSecret = reg.client_secret ? String(reg.client_secret) : undefined;
@@ -332,23 +351,57 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
 }
 
 // ─── browser ──────────────────────────────────────────────────────────────────
+/**
+ * OAuth endpoints from remote metadata must be https, must not name a
+ * loopback/private/local host, and carry no credentials. allowLocal is set
+ * only when the MCP server itself is local (dev servers), which may then use
+ * http and local hosts. Throws otherwise.
+ */
+export function validateOAuthEndpoint(raw: unknown, field: string, opts: { allowLocal?: boolean } = {}): string {
+  let u: URL;
+  try { u = new URL(String(raw ?? '').trim()); } catch { throw new Error(`OAuth metadata has an invalid ${field}.`); }
+  if (u.username || u.password) throw new Error(`OAuth metadata ${field} must not contain credentials.`);
+  if (opts.allowLocal) {
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error(`OAuth metadata ${field} must be an http(s) URL (got ${u.protocol}).`);
+    return u.toString();
+  }
+  if (u.protocol !== 'https:') throw new Error(`OAuth metadata ${field} must be an https URL (got ${u.protocol}//${u.host}).`);
+  if (isLocalHostname(u.hostname)) throw new Error(`OAuth metadata ${field} must not point at a loopback, private, or local host (got ${u.host}).`);
+  return u.toString();
+}
+
+/**
+ * Command that opens a URL in the default browser WITHOUT a shell. On Windows
+ * this used to be `cmd /c start "" <url>`, where an `&` in a server-supplied
+ * authorize URL ran a second command (security audit 2026-11-06).
+ * rundll32 url.dll,FileProtocolHandler does not interpret shell syntax.
+ */
+export function browserLaunchCommand(url: string, platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+  const u = new URL(url);
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('Refusing to open a non-http(s) URL.');
+  const href = u.toString();
+  if (/[\s"<>`\x00-\x1f\x7f]/.test(href)) throw new Error('Refusing to open a URL with unsafe characters.');
+  if (platform === 'win32') return { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', href] };
+  if (platform === 'darwin') return { command: 'open', args: [href] };
+  return { command: 'xdg-open', args: [href] };
+}
+
 function openBrowser(url: string): void {
   if (process.env.MCP_OAUTH_NO_BROWSER === '1') return; // headless / tests
   try {
-    if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
-    else if (process.platform === 'darwin') spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
-    else spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    const { command, args } = browserLaunchCommand(url);
+    spawn(command, args, { detached: true, stdio: 'ignore', shell: false, windowsHide: true }).unref();
   } catch { /* caller still has the URL to open manually */ }
 }
 
 // ─── token exchange / refresh ──────────────────────────────────────────────────
-async function postToken(metadata: AuthServerMetadata, body: Record<string, string>): Promise<StoredTokens> {
-  const r = await fetch(metadata.token_endpoint, {
+async function postToken(metadata: AuthServerMetadata, body: Record<string, string>, allowPrivate: boolean): Promise<StoredTokens> {
+  const r = await fetchPublicUrl(metadata.token_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: new URLSearchParams(body).toString(),
     signal: AbortSignal.timeout(15000),
-  });
+  }, mcpGuardOptions(allowPrivate));
   const text = await r.text();
   if (!r.ok) throw new Error(`token endpoint rejected request (${r.status})`);
   const json = JSON.parse(text);
@@ -379,7 +432,7 @@ export async function getValidMcpAccessToken(serverId: string): Promise<string |
       refresh_token: tokens.refresh_token,
       client_id: client.client_id,
       ...(client.client_secret ? { client_secret: client.client_secret } : {}),
-    });
+    }, isLocalServerUrl(client.resource));
     if (!refreshed.refresh_token) refreshed.refresh_token = tokens.refresh_token;
     saveTokens(serverId, refreshed);
     return refreshed.access_token;
@@ -432,7 +485,7 @@ export async function handleMcpOAuthCallback(query: URLSearchParams): Promise<{ 
       client_id: flow.client.client_id,
       code_verifier: flow.codeVerifier,
       ...(flow.client.client_secret ? { client_secret: flow.client.client_secret } : {}),
-    });
+    }, isLocalServerUrl(flow.client.resource));
     saveTokens(flow.serverId, tokens);
     flow.status = 'connected';
     return page(true, 'Authorization complete.', flow.serverId);
