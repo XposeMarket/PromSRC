@@ -206,11 +206,18 @@ function proposalLifecycleAuditArgs(proposal: any, extra: Record<string, any> = 
 }
 
 export function denyProposalAction(proposalId: string, notes?: string): any {
-  const proposal = denyProposal(proposalId, notes);
+  const existing = loadProposal(proposalId);
+  // Repeated deny clicks/callbacks are idempotent and do not re-audit.
+  if (existing?.status === 'denied') return existing;
+  const proposal = existing ? denyProposal(proposalId, notes) : null;
   if (!proposal) {
     const err: any = new Error('Proposal not found');
     err.statusCode = 404;
     throw err;
+  }
+  if (proposal.status !== 'denied') {
+    // The store refuses to deny work that already started or finished.
+    throw proposalActionError(409, `Proposal is ${proposal.status} and can no longer be denied.`, proposal);
   }
   appendAuditEntry({
     sessionId: `proposal_${proposal.id}`,
@@ -637,7 +644,7 @@ async function approveProposalActionOnce(
       };
     } catch (err: any) {
       throw proposalActionError(
-        502,
+        err?.statusCode === 409 ? 409 : 502,
         `Proposal was already approved, but executor handoff failed: ${compactProposalError(err, 'executor handoff failed')}`,
         loadProposal(existing.id) || existing,
       );
@@ -695,7 +702,7 @@ async function approveProposalActionOnce(
       console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, reason);
       _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: reason });
       throw proposalActionError(
-        502,
+        err?.statusCode === 409 ? 409 : 502,
         `Proposal approved, but executor dispatch failed: ${reason}`,
         loadProposal(proposal.id) || proposal,
       );
@@ -1001,6 +1008,14 @@ export async function dispatchApprovedProposal(
         if (fromConfig) executorProviderStr = fromConfig;
       } catch { /* non-fatal — fall through to default */ }
     }
+	    // Re-read the durable status right before the executor exists: a deny or expiry
+	    // that landed during the awaits above must not start a task.
+	    const storedStatus = loadProposal(proposalId)?.status;
+	    if (storedStatus !== 'approved') {
+	      const statusErr: any = proposalActionError(409, `Proposal is ${storedStatus || 'missing'}, so no executor task was started.`);
+	      statusErr.proposalStatusGuard = true;
+	      throw statusErr;
+	    }
 	    const task = createTask({
 		      sessionId,
 		      title: `[Proposal] ${proposal.title || 'Untitled'}`,
@@ -1089,6 +1104,8 @@ export async function dispatchApprovedProposal(
 	    launchBackgroundTaskRunner(task.id);
 	    return { taskId: task.id, sessionId };
 	  } catch (taskErr: any) {
+	    // A status-guard refusal created nothing, so there is nothing to fail or repair.
+	    if (taskErr?.proposalStatusGuard) throw taskErr;
 	    console.error(`[Proposals] Task launch failed for ${proposalId}:`, taskErr?.message);
 	    markProposalFailed(proposalId, taskErr?.message || 'Task launch failed');
       appendAuditEntry({
