@@ -259,8 +259,10 @@ export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?:
     if (meta?.authorization_endpoint && meta?.token_endpoint) {
       return {
         issuer: meta.issuer,
-        authorization_endpoint: meta.authorization_endpoint,
-        token_endpoint: meta.token_endpoint,
+        // Remote metadata is third-party input; the authorize URL is later
+        // handed to the OS browser launcher, so only plain http(s) is accepted.
+        authorization_endpoint: validateOAuthEndpoint(meta.authorization_endpoint, 'authorization_endpoint'),
+        token_endpoint: validateOAuthEndpoint(meta.token_endpoint, 'token_endpoint'),
         revocation_endpoint: meta.revocation_endpoint,
         registration_endpoint: meta.registration_endpoint,
         scopes_supported: meta.scopes_supported,
@@ -332,12 +334,42 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
 }
 
 // ─── browser ──────────────────────────────────────────────────────────────────
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * OAuth endpoints from remote metadata must be https (http only on loopback,
+ * for local dev servers) and carry no credentials. Throws otherwise.
+ */
+export function validateOAuthEndpoint(raw: unknown, field: string): string {
+  let u: URL;
+  try { u = new URL(String(raw ?? '').trim()); } catch { throw new Error(`OAuth metadata has an invalid ${field}.`); }
+  const ok = u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname));
+  if (!ok) throw new Error(`OAuth metadata ${field} must be an https URL (got ${u.protocol}//${u.host}).`);
+  if (u.username || u.password) throw new Error(`OAuth metadata ${field} must not contain credentials.`);
+  return u.toString();
+}
+
+/**
+ * Command that opens a URL in the default browser WITHOUT a shell. On Windows
+ * this used to be `cmd /c start "" <url>`, where an `&` in a server-supplied
+ * authorize URL ran a second command (security audit 2026-11-06).
+ * rundll32 url.dll,FileProtocolHandler does not interpret shell syntax.
+ */
+export function browserLaunchCommand(url: string, platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+  const u = new URL(url);
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('Refusing to open a non-http(s) URL.');
+  const href = u.toString();
+  if (/[\s"<>`\x00-\x1f\x7f]/.test(href)) throw new Error('Refusing to open a URL with unsafe characters.');
+  if (platform === 'win32') return { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', href] };
+  if (platform === 'darwin') return { command: 'open', args: [href] };
+  return { command: 'xdg-open', args: [href] };
+}
+
 function openBrowser(url: string): void {
   if (process.env.MCP_OAUTH_NO_BROWSER === '1') return; // headless / tests
   try {
-    if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
-    else if (process.platform === 'darwin') spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
-    else spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    const { command, args } = browserLaunchCommand(url);
+    spawn(command, args, { detached: true, stdio: 'ignore', shell: false, windowsHide: true }).unref();
   } catch { /* caller still has the URL to open manually */ }
 }
 
