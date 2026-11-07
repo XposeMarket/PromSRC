@@ -697,6 +697,34 @@ export function updatePendingProposal(
   return { ok: true, proposal: next, changed: true };
 }
 
+// ─── Lifecycle transitions ─────────────────────────────────────────────────────
+// Explicit proposal state machine (same pattern as CONNECTION_STATE_TRANSITIONS in
+// src/connections/schema.ts). Every store setter checks this table; an illegal move
+// is refused: nothing is saved and the proposal is returned unchanged.
+export const PROPOSAL_STATUS_TRANSITIONS: Readonly<Record<ProposalStatus, readonly ProposalStatus[]>> = {
+  pending: ['approved', 'denied', 'expired'],
+  // denied = revoke before an executor starts (denyProposal checks executorTaskId).
+  approved: ['executing', 'executed', 'failed', 'denied'],
+  executing: ['repairing', 'executed', 'failed'],
+  repairing: ['executing', 'executed', 'failed'],
+  // Terminal states only move to the archive bucket (archiveOldProposals).
+  executed: ['expired'],
+  failed: ['expired'],
+  denied: ['expired'],
+  expired: [],
+};
+
+export function canTransitionProposal(from: ProposalStatus, to: ProposalStatus): boolean {
+  return from === to || (PROPOSAL_STATUS_TRANSITIONS[from] || []).includes(to);
+}
+
+/** True when the move is illegal; logs it so a refused path is visible in gateway logs. */
+function refuseProposalTransition(p: Proposal, to: ProposalStatus): boolean {
+  if (canTransitionProposal(p.status, to)) return false;
+  console.warn(`[ProposalStore] Refused proposal transition ${p.status} -> ${to} for ${p.id}`);
+  return true;
+}
+
 export function approveProposal(id: string, notes?: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
@@ -723,6 +751,13 @@ export function approveProposal(id: string, notes?: string): Proposal | null {
 export function denyProposal(id: string, notes?: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
+  if (p.status === 'denied') return p;
+  // Revoking an approval is only possible before its executor has started.
+  if (p.status === 'approved' && p.executorTaskId) {
+    console.warn(`[ProposalStore] Refused proposal transition approved -> denied for ${p.id}: executor task ${p.executorTaskId} already started`);
+    return p;
+  }
+  if (refuseProposalTransition(p, 'denied')) return p;
   p.status = 'denied';
   p.decidedAt = Date.now();
   if (notes) p.notes = notes;
@@ -733,7 +768,7 @@ export function denyProposal(id: string, notes?: string): Proposal | null {
 export function markProposalExecuting(id: string, taskId: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
-  if (p.status === 'executed' || p.status === 'failed') return p;
+  if (refuseProposalTransition(p, 'executing')) return p;
   p.status = 'executing';
   p.executorTaskId = taskId;
   saveProposal(p);
@@ -744,6 +779,7 @@ export function markProposalExecuting(id: string, taskId: string): Proposal | nu
 export function markProposalRepairing(id: string, reason: string, taskId?: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
+  if (refuseProposalTransition(p, 'repairing')) return p;
   p.status = 'repairing';
   if (taskId) p.executorTaskId = taskId;
   p.executionResult = reason.slice(0, 1000);
@@ -756,6 +792,7 @@ export function markProposalExecuted(id: string, result: string): Proposal | nul
   const p = loadProposal(id);
   if (!p) return null;
   if (p.status === 'executed' || p.status === 'failed') return p;
+  if (refuseProposalTransition(p, 'executed')) return p;
   p.status = 'executed';
   p.executedAt = Date.now();
   p.executionResult = boundedProposalResult(result, 'Proposal execution completed.');
@@ -776,6 +813,7 @@ export function markProposalFailed(id: string, reason: string): Proposal | null 
   const p = loadProposal(id);
   if (!p) return null;
   if (p.status === 'executed' || p.status === 'failed') return p;
+  if (refuseProposalTransition(p, 'failed')) return p;
   p.status = 'failed';
   p.executionResult = compactProposalError(reason, 'Proposal executor failed.');
   saveProposal(p);
