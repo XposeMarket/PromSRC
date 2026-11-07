@@ -36,3 +36,15 @@ assert.equal(resolveTaskModelRef({ title: 'x' }, {}), null);
 assert.equal(resolveTaskModelRef({ sessionId: 's' }, { sessionModel: () => { throw new Error('boom'); } }), null);
 assert.equal(resolveTaskModelRef(null, deps), null);
 console.log('PASS task modelRef: session > executor > schedule > agent > primary, planned chat, unknown');
+
+// Route projection: /api/bg-tasks must keep executorReasoningEffort on the projected task so the
+// model ref can carry it (mirrors the projected shape in tasks.router.ts, which must keep that field).
+const projected = { id: 't-eff', sessionId: 'ran', executorProvider: 'xai/grok-4.3', executorReasoningEffort: 'high' };
+assert.deepEqual(resolveTaskModelRef(projected, deps), { providerId: 'xai', model: 'grok-4.3', source: 'session', reasoningEffort: 'high' });
+// Null / unknown effort never renders as the string 'undefined'.
+for (const effort of [undefined, null, '']) {
+  const ref = resolveTaskModelRef({ sessionId: 'ran', executorReasoningEffort: effort }, deps);
+  assert.ok(ref && !('reasoningEffort' in ref), 'absent effort must not produce a reasoningEffort field');
+  assert.equal(ref?.reasoningEffort, undefined);
+}
+console.log('PASS task modelRef: projected reasoning effort survives; null/unknown effort never renders undefined');

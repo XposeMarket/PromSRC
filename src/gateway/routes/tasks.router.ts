@@ -480,6 +480,8 @@ router.get('/api/bg-tasks', (req, res) => {
     voiceDispatch: task.voiceDispatch,
     managerEnabled: task.managerEnabled,
     executorProvider: task.executorProvider,
+    // Keep the stored effort so withModelRef can surface it on task cards.
+    executorReasoningEffort: task.executorReasoningEffort,
   }));
   const plannedRuns = listPlannedChatRuns(collectNeedsYouItems());
   const modelDeps = taskModelRefDeps();

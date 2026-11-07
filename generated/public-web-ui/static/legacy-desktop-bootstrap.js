@@ -873,6 +873,7 @@ function queueSessionHoverPreview(source) {
 }
 
 function scheduleSessionHoverPreviewClose() {
+  if (_sessionOptionsOpen) return;
   if (_sessionHoverPreviewEditing) return;
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
   _sessionHoverPreviewCloseTimer = setTimeout(hideSessionHoverPreview, 1500);
@@ -880,12 +881,75 @@ function scheduleSessionHoverPreviewClose() {
 
 function hideSessionHoverPreview() {
   if (_sessionHoverPreviewEditing) return;
+  _syncChatSessionOptionsClosed();
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
   _sessionHoverPreviewCloseTimer = null;
   _sessionHoverPreviewSource = null;
   const popover = document.getElementById('session-hover-preview');
   if (popover) popover.classList.remove('is-visible');
 }
+
+// Keyboard/narrow-desktop entry to the same popover menu (settle / move / remove / delete).
+let _sessionOptionsOpen = false;
+let _sessionOptionsTrigger = null;
+
+function closeChatSessionOptions(restoreFocus = false) {
+  const trigger = _sessionOptionsTrigger;
+  hideSessionHoverPreview();
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+window.openChatSessionOptions = function openChatSessionOptions(trigger, event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const row = trigger?.closest?.('[data-session-hover-preview]');
+  if (!row) return;
+  if (_sessionOptionsOpen && _sessionOptionsTrigger === trigger) {
+    closeChatSessionOptions(true);
+    return;
+  }
+  showSessionHoverPreview(row);
+  const popover = document.getElementById('session-hover-preview');
+  if (!popover || !popover.classList.contains('is-visible')) return;
+  const menu = popover.querySelector('.session-hover-preview-options');
+  _sessionOptionsOpen = true;
+  _sessionOptionsTrigger = trigger;
+  trigger.setAttribute('aria-expanded', 'true');
+  popover.classList.add('is-options-open');
+  if (menu) menu.hidden = false;
+  popover.querySelector('.session-hover-preview-option')?.focus();
+};
+
+function _syncChatSessionOptionsClosed() {
+  if (_sessionOptionsTrigger?.isConnected) _sessionOptionsTrigger.setAttribute('aria-expanded', 'false');
+  _sessionOptionsOpen = false;
+  _sessionOptionsTrigger = null;
+  document.getElementById('session-hover-preview')?.classList.remove('is-options-open');
+}
+
+document.addEventListener('keydown', (event) => {
+  if (!_sessionOptionsOpen) return;
+  const popover = document.getElementById('session-hover-preview');
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeChatSessionOptions(true);
+    return;
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  const items = Array.from(popover?.querySelectorAll('.session-hover-preview-option') || []);
+  if (!items.length) return;
+  event.preventDefault();
+  const at = items.indexOf(document.activeElement);
+  const next = event.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
+  items[next].focus();
+});
+
+document.addEventListener('pointerdown', (event) => {
+  if (!_sessionOptionsOpen) return;
+  const popover = document.getElementById('session-hover-preview');
+  if (popover?.contains(event.target) || _sessionOptionsTrigger?.contains(event.target)) return;
+  closeChatSessionOptions(false);
+});
 
 function _renderSessionHoverPreviewTitle(popover, id, title) {
   popover.dataset.sessionId = id;
@@ -1869,6 +1933,7 @@ function renderChatSessionCard(s, options = {}) {
       ${renderImportedSourceMeta(s, sessionTimestamp)}
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}
+      <button class="chat-session-options-trigger" type="button" title="Chat options" aria-label="Chat options" aria-haspopup="menu" aria-expanded="false" onclick="openChatSessionOptions(this, event)">&#8943;</button>
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
           ${unreadDot}

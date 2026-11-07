@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "8b7b5a368c7639bc",
-  "sourceDigest": "8b7b5a368c7639bc200f2358b79512c858f22feba325b7514750430ae2e9a85c",
+  "buildId": "9dcff5fbd2e1492d",
+  "sourceDigest": "9dcff5fbd2e1492dd1774e472e86c9e3c947ae40cd447b55049e99c998d7fe59",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -10,8 +10,8 @@
   "entries": {
     "desktop": {
       "html": "/index.html",
-      "js": "/build/entries/desktop-76225FQ3.js",
-      "css": "/build/styles/desktop-Q4FBTD3Q.css",
+      "js": "/build/entries/desktop-RAWXVOU5.js",
+      "css": "/build/styles/desktop-GS5P5NKG.css",
       "modulePreloads": [
         "/build/chunks/chunk-6FFPACLU.js",
         "/build/chunks/chunk-DJBPOZDJ.js",
@@ -46,7 +46,7 @@
     "src/components/video-project-card.js": "/build/chunks/video-project-card-XWWMWNBP.js",
     "src/context-review.js": "/build/chunks/context-review-FEXKUOBC.js",
     "src/context-window-live-tracking.js": "/build/chunks/context-window-live-tracking-6B6MMXD7.js",
-    "src/desktop-entry.js": "/build/entries/desktop-76225FQ3.js",
+    "src/desktop-entry.js": "/build/entries/desktop-RAWXVOU5.js",
     "src/features/chat/canonical-desktop-composer.js": "/build/chunks/canonical-desktop-composer-ABD6TDHD.js",
     "src/features/chat/desktop-turn-file-diff.js": "/build/chunks/desktop-turn-file-diff-I2A35HSD.js",
     "src/features/chat/multi-chat-intent.js": "/build/chunks/multi-chat-intent-UO233JH7.js",
@@ -118,7 +118,7 @@
         "/build/chunks/chunk-PZSASZYM.js",
         "/build/chunks/chunk-VIPO6N7H.js",
         "/build/chunks/chunk-WXZ4L2EE.js",
-        "/build/entries/desktop-76225FQ3.js",
+        "/build/entries/desktop-RAWXVOU5.js",
         "/build/inline/index-inline-01-213bcef90a36.js",
         "/build/inline/index-inline-02-6cf9e5c9ebc6.js",
         "/build/inline/index-inline-03-57964227a42d.js",
@@ -131,15 +131,15 @@
         "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
         "/build/inline/index-inline-11-4550e6a395a8.js",
         "/build/inline/index-inline-12-047d20aba693.js",
-        "/build/styles/desktop-Q4FBTD3Q.css"
+        "/build/styles/desktop-GS5P5NKG.css"
       ],
       "files": 21,
-      "bytes": 959747,
-      "gzipBytes": 183524,
-      "jsBytes": 219281,
-      "jsGzipBytes": 69086,
-      "cssBytes": 740466,
-      "cssGzipBytes": 114438
+      "bytes": 962644,
+      "gzipBytes": 184127,
+      "jsBytes": 220857,
+      "jsGzipBytes": 69507,
+      "cssBytes": 741787,
+      "cssGzipBytes": 114620
     },
     "mobile": {
       "paths": [
@@ -4138,10 +4138,10 @@
       ]
     },
     {
-      "path": "/build/entries/desktop-76225FQ3.js",
-      "bytes": 141215,
-      "gzipBytes": 39167,
-      "sha256": "bc98f86c440ddc3bbddbe4473383f5c643b23c2c7249c51864568644549962be",
+      "path": "/build/entries/desktop-RAWXVOU5.js",
+      "bytes": 142791,
+      "gzipBytes": 39588,
+      "sha256": "3dd44d6f470eed990960da2862682bf28254c8e0180b706edc0bf46f4633613f",
       "entryPoint": "web-ui/src/desktop-entry.js",
       "imports": [
         {
@@ -4429,10 +4429,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-Q4FBTD3Q.css",
-      "bytes": 740466,
-      "gzipBytes": 114438,
-      "sha256": "ae9ebf7bf3f26c20ebe95fa1dd5a0f129ff1354b3262333f06b618491dedc347",
+      "path": "/build/styles/desktop-GS5P5NKG.css",
+      "bytes": 741787,
+      "gzipBytes": 114620,
+      "sha256": "6a47045789f34b1200ed87f9723095f1afc16a089e5e3ce160f9d2efaf67ab50",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
