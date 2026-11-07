@@ -1,7 +1,7 @@
 import assert from 'assert';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 import { splitOnCacheMarker } from '../providers/content-utils';
-import { assembleCacheAwareSystemPrompt } from './prompt-cache';
+import { assembleCacheAwareSystemPrompt, partitionInvariantToolGuidance } from './prompt-cache';
 
 function buildTurn(input: { time: string; caller: string; retrieved: string }): string {
   return assembleCacheAwareSystemPrompt({
@@ -77,3 +77,26 @@ testTurnVolatilityDoesNotChangePrefix();
 testContextWithoutItsOwnMarkerStillGetsAStablePrefix();
 testCallerContextCanRemainMostSpecific();
 console.log('prompt cache assembly regression checks passed');
+
+const guidance = ['PARALLELISM: fixed rules', 'SKILLS: fixed rules', 'BACKGROUND: fixed rules'];
+const makeMenu = (active: string) => `[TOOLS] live menu\n\n${guidance[2]}\n\n[ACTIVE_TOOL_CATEGORIES] ${active}\n\n${guidance[0]}\n\n${guidance[1]}`;
+const firstParts = [makeMenu('browser'), '[SUBAGENTS] first roster', '[TODAY_NOTES] first notes'];
+const firstPartition = partitionInvariantToolGuidance(firstParts, guidance);
+const secondPartition = partitionInvariantToolGuidance([makeMenu('workspace'), '[SUBAGENTS] second roster'], guidance);
+assert.deepEqual(firstPartition.stable, guidance);
+assert.deepEqual(secondPartition.stable, firstPartition.stable);
+assert.ok(firstPartition.volatile[0].includes('browser'));
+assert.ok(secondPartition.volatile[0].includes('workspace'));
+assert.equal(firstPartition.volatile[1], firstParts[1]);
+assert.equal(firstPartition.volatile[2], firstParts[2]);
+for (const block of guidance) {
+  assert.ok(!firstPartition.volatile.join('\n').includes(block));
+  assert.equal(firstPartition.stable.filter(value => value === block).length, 1);
+}
+assert.ok(firstParts[0].includes(guidance[0]), 'input not mutated');
+const unrelated = `User quoted\n\n${guidance[0]}`;
+assert.deepEqual(partitionInvariantToolGuidance([unrelated], guidance), { stable: [], volatile: [unrelated] });
+const partial = `[TOOLS] menu\n\n${guidance[0]} plus changed policy`;
+assert.deepEqual(partitionInvariantToolGuidance([partial], guidance), { stable: [], volatile: [partial] });
+assert.deepEqual(partitionInvariantToolGuidance(['[TOOLS] no fixed guidance'], guidance).stable, []);
+console.log('invariant tool guidance cache partition checks passed');

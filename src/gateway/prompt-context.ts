@@ -1,3 +1,4 @@
+import { partitionInvariantToolGuidance } from './prompt-cache';
 // src/gateway/prompt-context.ts
 // Full prompt context assembly — workspace memory, personality, tool hints, skill windows.
 // Extracted from server-v2.ts (Step 12 of Phase 3 refactor).
@@ -67,8 +68,11 @@ function assembleContext(
   stableParts: Array<string | undefined | null | false>,
   volatileParts: Array<string | undefined | null | false>,
 ): string {
-  const stable = stableParts.filter(Boolean) as string[];
-  const volatile = volatileParts.filter(Boolean) as string[];
+  const toolGuidance = partitionInvariantToolGuidance(volatileParts.filter(Boolean) as string[], [
+    TOOL_BLOCKS.parallelism, TOOL_BLOCKS.skills, BG_AGENT_RUNTIME_HINT,
+  ]);
+  const stable = [...stableParts.filter(Boolean), ...toolGuidance.stable] as string[];
+  const volatile = toolGuidance.volatile;
   const stableStr = stable.join('\n\n');
   const volatileStr = volatile.join('\n\n');
   if (!stableStr && !volatileStr) return '';
