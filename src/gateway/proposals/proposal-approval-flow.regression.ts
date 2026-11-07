@@ -55,6 +55,8 @@ async function run(): Promise<void> {
   assert.match(malformed.error, /malformed|empty/i);
 
   const failed = proposal('Malformed executor response');
+  // Only started work can fail; pending -> failed is refused by the transition table.
+  assert.ok(approveProposal(failed.id));
   const failedProposal = markProposalFailed(failed.id, malformed.error);
   assert.equal(failedProposal?.status, 'failed');
   assert.equal(loadProposal(failed.id)?.executionResult, malformed.error);

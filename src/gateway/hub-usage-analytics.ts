@@ -1,10 +1,12 @@
-import { readRecentModelUsageEvents, type ModelUsageEvent } from '../providers/model-usage.js';
+import { readRecentModelUsageEvents, resolveProviderPromptTokens, type ModelUsageEvent } from '../providers/model-usage.js';
 
 export type HubUsageAnalyticsRange = '24h' | '7d' | '30d';
 
 export interface HubUsageTotals {
   totalTokens: number;
   inputTokens: number;
+  /** Provider-normalized full prompt size, including cached input exactly once. */
+  promptTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -22,7 +24,7 @@ function number(value: unknown): number {
 }
 
 function emptyTotals(): HubUsageTotals {
-  return { totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, requests: 0, costMicros: 0, pricedRequests: 0, cacheHitPercent: 0 };
+  return { totalTokens: 0, inputTokens: 0, promptTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, requests: 0, costMicros: 0, pricedRequests: 0, cacheHitPercent: 0 };
 }
 
 function rangeMs(range: HubUsageAnalyticsRange): number {
@@ -37,9 +39,10 @@ export function normalizeHubUsageAnalyticsRange(value: unknown): HubUsageAnalyti
 function add(target: HubUsageTotals, event: ModelUsageEvent): { durationMs: number } {
   const inputTokens = number(event.inputTokens);
   const outputTokens = number(event.outputTokens);
-  const cacheReadTokens = number(event.cacheReadTokens);
   const cacheWriteTokens = number(event.cacheWriteTokens);
-  const totalTokens = number(event.totalTokens) || inputTokens + outputTokens + number(event.reasoningTokens) + cacheReadTokens + cacheWriteTokens;
+  const promptTokens = resolveProviderPromptTokens(event);
+  const cacheReadTokens = Math.min(number(event.cacheReadTokens), promptTokens);
+  const totalTokens = number(event.totalTokens) || promptTokens + outputTokens + number(event.reasoningTokens);
   // Only count prices recorded on usage events; do not manufacture costs for unpriced logs.
   const hasRecordedCost = typeof event.totalCostMicros === 'number'
     && Object.prototype.hasOwnProperty.call(event, 'totalCostMicros')
@@ -47,6 +50,7 @@ function add(target: HubUsageTotals, event: ModelUsageEvent): { durationMs: numb
     && Number(event.totalCostMicros) >= 0;
   const costMicros = hasRecordedCost ? number(event.totalCostMicros) : 0;
   target.inputTokens += inputTokens;
+  target.promptTokens += promptTokens;
   target.outputTokens += outputTokens;
   target.cacheReadTokens += cacheReadTokens;
   target.cacheWriteTokens += cacheWriteTokens;
@@ -58,8 +62,8 @@ function add(target: HubUsageTotals, event: ModelUsageEvent): { durationMs: numb
 }
 
 function finalize<T extends HubUsageTotals>(row: T): T {
-  row.cacheHitPercent = row.inputTokens + row.cacheReadTokens > 0
-    ? Math.round((row.cacheReadTokens / (row.inputTokens + row.cacheReadTokens)) * 10_000) / 100
+  row.cacheHitPercent = row.promptTokens > 0
+    ? Math.round((row.cacheReadTokens / row.promptTokens) * 10_000) / 100
     : 0;
   return row;
 }

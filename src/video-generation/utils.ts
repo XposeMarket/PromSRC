@@ -3,6 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
+import { fetchPublicUrl } from '../tools/outbound-url-guard.js';
 import type {
   GeneratedVideoAsset,
   VideoAspectRatio,
@@ -235,8 +236,7 @@ export async function resolveVideoInput(input: string): Promise<ResolvedVideoInp
 }
 
 export async function fetchBinaryAsset(url: string): Promise<{ bytes: Buffer; mimeType?: string }> {
-  const response = await fetch(url, {
-    redirect: 'follow',
+  const response = await fetchPublicUrl(url, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
     },

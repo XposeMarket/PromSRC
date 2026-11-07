@@ -1682,7 +1682,16 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
                 });
               const reuseVerifiedBackendBuild = runningSourceGateway && backendVerificationIsFresh;
               if (reuseVerifiedBackendBuild) {
-                await gracefulRestart(ctx);
+                const restartOutcome = await gracefulRestart(ctx);
+                if (restartOutcome === 'handoff_aborted' || restartOutcome === 'spawn_failed') {
+                  // Release the coordinated batch so a retry is not blocked by a stale 'applying' batch.
+                  if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', `gateway restart did not take effect (${restartOutcome})`);
+                  return {
+                    name, args,
+                    result: `prom_apply_dev_changes applied the changes and reused the verified backend build, but the gateway restart did not take effect (${restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then re-run prom_apply_dev_changes.`,
+                    error: true,
+                  };
+                }
                 return {
                   name,
                   args,
@@ -1705,6 +1714,15 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
                     `prom_apply_dev_changes failed during npm run build (${buildResult.durationMs}ms). Gateway was not restarted.` +
                     (steps.length ? `\n\nCompleted first:\n${steps.map((s) => `- ${s.command}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
                     `\n\n${buildResult.output}`,
+                  error: true,
+                };
+              }
+              if (buildResult.restartOutcome === 'handoff_aborted' || buildResult.restartOutcome === 'spawn_failed') {
+                // Release the coordinated batch so a retry is not blocked by a stale 'applying' batch.
+                if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', `build passed; gateway restart did not take effect (${buildResult.restartOutcome})`);
+                return {
+                  name, args,
+                  result: `prom_apply_dev_changes build passed (${buildResult.durationMs}ms), but the gateway restart did not take effect (${buildResult.restartOutcome}). This gateway is still serving the PREVIOUS code. Check gateway.log [lifecycle] lines, then re-run prom_apply_dev_changes.`,
                   error: true,
                 };
               }
@@ -1896,7 +1914,16 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             }
             // Same quick restart path used by Telegram/mobile/terminal /restart.
             // This is async and will kill the process, so it should remain a final action.
-            await gracefulRestart(ctx);
+            const restartOutcome = await gracefulRestart(ctx);
+            // An aborted warm handoff or failed spawn leaves this gateway serving
+            // the old code. Say so, and keep any queued request for a retry.
+            if (restartOutcome === 'handoff_aborted' || restartOutcome === 'spawn_failed') {
+              return {
+                name, args,
+                result: `gateway_restart did not take effect (${restartOutcome}): this gateway is still running and serving the current code. Check gateway.log [lifecycle] lines for the reason before retrying.`,
+                error: true,
+              };
+            }
             if (ctx.queuedRestart) restartQueue.clearPendingGatewayRestart();
             return {
               name, args,

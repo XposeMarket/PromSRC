@@ -16,7 +16,7 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 import { StallProfiler } from '../runtime/stall-profiler';
-import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
+import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, gcConfirmThresholdBytes, isMemoryPressureSample, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
 import { countLocalRunningRuntimes } from '../live-runtime-registry';
 import { getHeapStatistics } from 'node:v8';
 import { freemem } from 'node:os';
@@ -51,6 +51,13 @@ let _memoryPressureConsecutiveSamples = 0;
 let _memoryPressureDeferredForActiveWork = false;
 let _lastMemoryRecoveryGcAt = 0;
 let _lastMemoryRecoverySkippedAfterGcAt = 0;
+// Set when a memory recovery restart left this process serving (aborted warm
+// handoff / failed spawn). Routine recovery waits until then.
+let _memoryPressureRetryAfter = 0;
+// Emergency readings are confirmed with a forced GC at most this often; a heap
+// that is back at the emergency line within the interval is a real emergency.
+const EMERGENCY_CONFIRM_GC_MIN_INTERVAL_MS = 30_000;
+let _lastEmergencyConfirmGcAt = 0;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
 // Warm handoff: once this gateway is draining, the replacement owns the
 // supervisor-facing status file, the auto-restart triggers, and the WebSocket
@@ -133,6 +140,7 @@ const MEMORY_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv(
 );
 const memoryAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_MEMORY_AUTORESTART || '').trim().toLowerCase();
 const MEMORY_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(memoryAutorestartEnv);
+const MEMORY_RESTART_RETRY_COOLDOWN_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_MEMORY_RETRY_COOLDOWN_MS', 5 * 60_000);
 
 interface EventLoopMetrics {
   maxMs: number;
@@ -228,6 +236,46 @@ function appendEventLoopStallDiagnostic(
   } catch {}
 }
 
+// Load lifecycle via require(), never a dynamic import(). Under tsx source mode
+// import() from a non-entry module creates a SECOND lifecycle instance whose
+// shutdown hooks were never registered, so every warm handoff aborted with
+// "listener ownership hooks are not registered". require() reuses the instance
+// server-v2 initialized (same pattern as server-v2.ts and voice/dispatch.ts).
+function loadLifecycle(): typeof import('../lifecycle') {
+  return require('../lifecycle') as typeof import('../lifecycle');
+}
+
+// gracefulRestart can return while this process keeps serving (aborted warm
+// handoff, failed replacement spawn). The stall latch must never outlive that:
+// a stuck latch also blocks the memory-pressure watchdog for the rest of the
+// process lifetime (Nov 2026 heap-OOM crashes). It clears immediately on a
+// "still serving" outcome, or after a bounded wait when no outcome proves the
+// process is leaving, then a cooldown prevents a restart loop.
+const EVENT_LOOP_STALL_LATCH_TIMEOUT_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_LATCH_TIMEOUT_MS', 120_000);
+const EVENT_LOOP_STALL_RETRY_COOLDOWN_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RETRY_COOLDOWN_MS', 10 * 60_000);
+let _eventLoopStallRestartCooldownUntil = 0;
+
+function releaseStallLatch(scheduledAt: number, reason: string): void {
+  if (!_eventLoopStallRestartScheduled) return;
+  _eventLoopStallRestartScheduled = false;
+  _eventLoopStallRestartCooldownUntil = Date.now() + EVENT_LOOP_STALL_RETRY_COOLDOWN_MS;
+  console.warn(`[GatewayRuntime] Event-loop stall recovery did not replace this gateway (${reason}); stall and memory watchdogs re-armed.`);
+  try {
+    enqueueAsyncAppend(
+      path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+      JSON.stringify({ timestamp: new Date().toISOString(), event: 'event_loop_stall_recovery_incomplete', reason, pid: process.pid, scheduledAt: new Date(scheduledAt).toISOString(), cooldownMs: EVENT_LOOP_STALL_RETRY_COOLDOWN_MS }) + '\n',
+    );
+  } catch {}
+}
+
+function expireStallLatchIfStillServing(scheduledAt: number): void {
+  const timer = setTimeout(() => {
+    if (_gatewayDraining) return;
+    releaseStallLatch(scheduledAt, 'timeout');
+  }, Math.max(1_000, EVENT_LOOP_STALL_LATCH_TIMEOUT_MS));
+  (timer as any).unref?.();
+}
+
 // Brain runtimes are intentionally not special here. A gateway event-loop
 // stall is a process-health failure, so the normal lifecycle restart must own
 // interruption and recovery for every active runtime, including Thought/Dream.
@@ -238,6 +286,7 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
   if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
   if (_eventLoopStallRestartScheduled || _memoryPressureRestartScheduled) return;
+  if (now < _eventLoopStallRestartCooldownUntil) return;
   _eventLoopStallRestartScheduled = true;
 
   try {
@@ -264,8 +313,8 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   console.error(`[GatewayRuntime] Event loop stalled for ${seconds}s. Scheduling gateway recovery restart...`);
   const timer = setTimeout(async () => {
     try {
-      const { gracefulRestart } = await import('../lifecycle.js');
-      await gracefulRestart({
+      const lifecycle = loadLifecycle();
+      const outcome = await lifecycle.gracefulRestart({
         reason: 'repair',
         timestamp: now,
         previousSessionId: _lastMainSessionId,
@@ -273,6 +322,8 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
         title: 'Gateway event-loop stall recovery',
         summary: `Gateway event loop stopped responding for ${seconds}s, so Prometheus restarted itself to recover mobile/web connectivity.`,
       });
+      if (lifecycle.restartLeftProcessServing(outcome)) releaseStallLatch(now, String(outcome));
+      else expireStallLatchIfStillServing(now);
     } catch (err: any) {
       console.error('[GatewayRuntime] Event-loop stall recovery restart failed:', err?.message || err);
       // The lifecycle deliberately defers a restart while coordinated source
@@ -289,14 +340,11 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
 }
 
 export function shouldScheduleGatewayMemoryRecovery(
-  rssBytes: number,
+  underPressure: boolean,
   consecutiveSamples: number,
-  thresholdBytes = MEMORY_RESTART_RSS_BYTES,
   requiredSamples = MEMORY_RESTART_CONSECUTIVE_SAMPLES,
 ): boolean {
-  return thresholdBytes > 0
-    && rssBytes >= thresholdBytes
-    && consecutiveSamples >= Math.max(1, requiredSamples);
+  return underPressure && consecutiveSamples >= Math.max(1, requiredSamples);
 }
 
 function readMemoryRecoveryDecision() {
@@ -315,38 +363,49 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
   if (_gatewayDraining) return;
   const previouslyDeferred = _memoryPressureDeferredForActiveWork;
   _memoryPressureDeferredForActiveWork = false;
-  if (MEMORY_RESTART_RSS_BYTES <= 0 || memory.rss < MEMORY_RESTART_RSS_BYTES) {
+  // RSS alone fired only at the V8 OOM point on a default 4 GB heap, so the
+  // real heap limit is a first-class signal too (isMemoryPressureSample).
+  if (!isMemoryPressureSample({
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    heapLimitBytes: getHeapStatistics().heap_size_limit,
+    rssThresholdBytes: MEMORY_RESTART_RSS_BYTES,
+  })) {
     _memoryPressureConsecutiveSamples = 0;
     return;
   }
   _memoryPressureConsecutiveSamples += 1;
   if (!MEMORY_AUTORESTART_ENABLED) return;
   if (process.uptime() * 1000 < MEMORY_RESTART_MIN_UPTIME_MS) return;
-  if (!shouldScheduleGatewayMemoryRecovery(memory.rss, _memoryPressureConsecutiveSamples)) return;
+  if (!shouldScheduleGatewayMemoryRecovery(true, _memoryPressureConsecutiveSamples)) return;
   if (_memoryPressureRestartScheduled || _eventLoopStallRestartScheduled) return;
-  // High RSS under allocation churn is often uncollected garbage, not live
-  // memory. Confirm with one full GC (throttled) before interrupting every
-  // running turn and agent with a recycle.
-  // RSS often stays high after a full GC (V8 keeps the pages committed), so
-  // inside the GC throttle window a recent skip is re-validated from the
-  // current heapUsed instead of recycling on the next RSS breach. A real leak
-  // still recycles: once heapUsed crosses the ratio, this check fails.
-  if (shouldKeepSkippingWithinGcWindow({
+  // A recovery restart that left this process serving waits out a cooldown;
+  // otherwise every sample would re-run listener release/reopen.
+  if (now < _memoryPressureRetryAfter && readMemoryRecoveryDecision() !== 'restart_emergency') return;
+  const gcThresholdBytes = gcConfirmThresholdBytes(MEMORY_RESTART_RSS_BYTES, getHeapStatistics().heap_size_limit);
+  // High RSS/heap under allocation churn is often uncollected garbage, not
+  // live memory. Confirm with one full GC (throttled) before interrupting
+  // every running turn and agent with a recycle. Inside the throttle window
+  // after a GC-confirmed skip, a pre-GC reading cannot disprove that GC, so
+  // keep skipping; only an emergency that survives a forced GC (below)
+  // recycles early. A real leak recycles at the next GC.
+  const withinConfirmedSkipWindow = shouldKeepSkippingWithinGcWindow({
     now,
     lastGcAt: _lastMemoryRecoveryGcAt,
     lastSkipAt: _lastMemoryRecoverySkippedAfterGcAt,
-    heapUsedBytes: memory.heapUsed,
-    thresholdBytes: MEMORY_RESTART_RSS_BYTES,
-  }) && readMemoryRecoveryDecision() !== 'restart_emergency') {
+  });
+  if (withinConfirmedSkipWindow && readMemoryRecoveryDecision() !== 'restart_emergency') {
     _memoryPressureConsecutiveSamples = 0;
     return;
   }
+  let gcRanThisTick = false;
   if (canAttemptRecoveryGc(_lastMemoryRecoveryGcAt, now)) {
     _lastMemoryRecoveryGcAt = now;
     const gcResult = runRecoveryGc();
+    gcRanThisTick = gcResult.gcRan;
     // The forced GC pause is intentional; don't let it read as a heartbeat stall.
     _lastHeartbeatAt = Date.now();
-    if (decideMemoryRecoveryAfterGc({ ...gcResult, thresholdBytes: MEMORY_RESTART_RSS_BYTES }) === 'skip_after_gc'
+    if (decideMemoryRecoveryAfterGc({ ...gcResult, thresholdBytes: gcThresholdBytes }) === 'skip_after_gc'
       && readMemoryRecoveryDecision() !== 'restart_emergency') {
       _lastMemoryRecoverySkippedAfterGcAt = now;
       _memoryPressureConsecutiveSamples = 0;
@@ -361,7 +420,7 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
             postGcHeapUsedBytes: gcResult.postGcHeapUsedBytes,
             postGcRssBytes: gcResult.postGcRssBytes,
             gcMs: gcResult.gcMs,
-            thresholdBytes: MEMORY_RESTART_RSS_BYTES,
+            thresholdBytes: gcThresholdBytes,
           }) + '\n',
         );
       } catch {}
@@ -369,7 +428,20 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
       return;
     }
   }
-  const decision = readMemoryRecoveryDecision();
+  let decision = readMemoryRecoveryDecision();
+  if (decision === 'restart_emergency' && !gcRanThisTick
+    && now - _lastEmergencyConfirmGcAt >= EMERGENCY_CONFIRM_GC_MIN_INTERVAL_MS) {
+    _lastEmergencyConfirmGcAt = now;
+    // Emergency readings are pre-GC and cold-recycle active work. Confirm with
+    // one forced GC first (the 5 min throttle limits routine GCs, not this).
+    runRecoveryGc();
+    _lastHeartbeatAt = Date.now();
+    decision = readMemoryRecoveryDecision();
+    if (decision !== 'restart_emergency' && withinConfirmedSkipWindow) {
+      _memoryPressureConsecutiveSamples = 0;
+      return;
+    }
+  }
   if (decision === 'defer_active_work') {
     _memoryPressureDeferredForActiveWork = true;
     if (!previouslyDeferred) console.warn('[GatewayRuntime] Deferring routine memory recovery until active work finishes. Emergency limits remain enforced.');
@@ -403,20 +475,42 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
     try {
       if (_gatewayDraining) { _memoryPressureRestartScheduled = false; return; }
       const result = await runMemoryRecoveryRestart(readMemoryRecoveryDecision, async () => {
-        const { gracefulRestart } = await import('../lifecycle.js');
+        const lifecycle = loadLifecycle();
         return async (handoffPolicy) => {
           if (_gatewayDraining) return;
-          await gracefulRestart({
+          const restartWith = (policy: typeof handoffPolicy, summary: string) => lifecycle.gracefulRestart({
             reason: 'repair',
             timestamp: Date.now(),
             previousSessionId: _lastMainSessionId,
             originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
             title: 'Gateway memory-pressure recovery',
-            summary: handoffPolicy === 'never'
-              ? 'Emergency memory exhaustion required checkpointing active work and recycling the gateway.'
-              : 'Routine memory recovery waited for active work to finish before restarting.',
-            handoffPolicy,
+            summary,
+            handoffPolicy: policy,
           });
+          let outcome = await restartWith(handoffPolicy, handoffPolicy === 'never'
+            ? 'Emergency memory exhaustion required checkpointing active work and recycling the gateway.'
+            : 'Routine memory recovery waited for active work to finish before restarting.');
+          // Idle and the warm handoff did not take effect: nothing is running,
+          // so one cold restart loses nothing and actually frees the memory.
+          if (outcome === 'handoff_aborted' && handoffPolicy !== 'never'
+            && !_gatewayDraining && readMemoryRecoveryDecision() === 'restart_idle') {
+            console.warn(`[GatewayRuntime] Warm memory recovery did not replace this gateway (${String(outcome)}); no active work, so recycling cold.`);
+            outcome = await restartWith('never', 'Routine memory recovery: the warm handoff did not take effect and no work was running, so the gateway was recycled cold.');
+          }
+          // Same stuck-latch class as the stall watchdog: a restart that leaves
+          // this process serving must re-arm the memory watchdog (with cooldown).
+          if (lifecycle.restartLeftProcessServing?.(outcome)) {
+            _memoryPressureRestartScheduled = false;
+            _memoryPressureConsecutiveSamples = 0;
+            _memoryPressureRetryAfter = Date.now() + MEMORY_RESTART_RETRY_COOLDOWN_MS;
+            console.warn(`[GatewayRuntime] Memory recovery restart did not replace this gateway (${String(outcome)}); retrying after ${Math.round(MEMORY_RESTART_RETRY_COOLDOWN_MS / 1000)}s unless memory becomes an emergency.`);
+            try {
+              enqueueAsyncAppend(
+                path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+                JSON.stringify({ timestamp: new Date().toISOString(), event: 'memory_pressure_recovery_incomplete', reason: String(outcome), pid: process.pid, retryAfterMs: MEMORY_RESTART_RETRY_COOLDOWN_MS }) + '\n',
+              );
+            } catch {}
+          }
         };
       });
       if (result === 'defer_active_work') {

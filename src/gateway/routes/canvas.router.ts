@@ -12,7 +12,6 @@
  * POST /api/canvas/close          — remove a file from canvas tracking
  * GET  /preview                   — serve a workspace file as renderable HTML
  * GET  /api/preview/screenshot    — take a screenshot of the preview route
- * GET  /api/open-path             — open a path in the OS file manager
  * POST /api/clear-history         — clear chat history for a session
  */
 
@@ -8388,16 +8387,10 @@ router.get('/api/preview/screenshot', (req: any, res: any, next: any) => {
   }
 });
 
-// GET /api/open-path — open a path in the OS file manager / shell
-router.get('/api/open-path', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
-  const fp = req.query.path as string;
-  if (!fp) { res.status(400).json({ error: 'Path required' }); return; }
-  try {
-    const { exec } = await import('child_process');
-    const cmd = process.platform === 'win32' ? `start "" "${fp}"` : process.platform === 'darwin' ? `open "${fp}"` : `xdg-open "${fp}"`;
-    exec(cmd, (err) => { err ? res.status(500).json({ error: err.message }) : res.json({ success: true }); });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
-});
+// GET /api/open-path was removed (security audit 2026-11-06): it interpolated
+// the query string into a shell command and ran a side effect on GET. Every
+// client uses POST /api/open-path in settings.router.ts, which uses execFile
+// and confines the path to the workspace / allowed paths.
 
 // POST /api/clear-history — clear chat history for a session
 router.post('/api/clear-history', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {

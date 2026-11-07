@@ -84,6 +84,7 @@ import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
+import { startHeapPressureSampler, stopHeapPressureSampler } from './runtime/heap-pressure-sampler';
 import { closeListeningHandle, listenWithHandoffRetry, setGatewayListenerReopenInProgress } from './runtime/handoff-replacement-bind';
 import { predecessorOwnsHandoffListener } from './runtime/gateway-handoff-safe-abort';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
@@ -1150,7 +1151,7 @@ setShutdownHooks({
   stopAutoSettle: () => stopAutoSettleScheduler(),
   stopTimers: () => mainChatTimerRunner.stop(),
   stopInternalWatches: () => internalWatchRunner.stop(),
-  stopHeartbeat: () => heartbeatRunner.stop(),
+  stopHeartbeat: () => { heartbeatRunner.stop(); stopHeapPressureSampler(); },
   stopBrain: () => brainRunner.stop('gateway_restart'),
   stopRuntimeWorkers: () => {
     stopThreadSupervisionRunner();
@@ -1421,6 +1422,8 @@ async function startGatewayListeners(): Promise<void> {
     } catch (err: any) {
       console.warn('[ApprovalQueue] stale sweep setup failed:', err?.message || err);
     }
+    // OOM evidence: samples heap pressure every 60s (PROMETHEUS_GATEWAY_HEAP_SAMPLER=0 disables).
+    startHeapPressureSampler();
     skillsManager.warmInBackground((count, ms) => startupMark(`skills warmed after listen (${count} in ${ms}ms)`));
     // The mobile model picker's first open after a restart used to pay a
     // ~1.5s cold build of the provider catalog. Build it once off the

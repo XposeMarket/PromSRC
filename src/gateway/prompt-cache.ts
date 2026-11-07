@@ -35,3 +35,26 @@ export function assembleCacheAwareSystemPrompt(input: {
   if (!volatile) return stable;
   return `${stable}${PROMPT_CACHE_MARKER}${volatile}`;
 }
+
+/** Promote only exact invariant guidance emitted inside a tool-menu block.
+ * Never inspect arbitrary notes/user content or cache the dynamic menu itself.
+ */
+export function partitionInvariantToolGuidance(parts: string[], guidance: string[]): { stable: string[]; volatile: string[] } {
+  const stable: string[] = [];
+  const volatile = parts.map(part => {
+    if (!part.startsWith('[TOOLS]')) return part;
+    let remaining = part;
+    for (const block of guidance) {
+      if (!block) continue;
+      // Match complete emitted sections, not substrings in other instructions.
+      const needle = `\n\n${block}`;
+      const index = remaining.indexOf(needle);
+      const end = index + needle.length;
+      if (index < 0 || (end < remaining.length && !remaining.startsWith('\n\n', end))) continue;
+      if (!stable.includes(block)) stable.push(block);
+      remaining = remaining.slice(0, index) + remaining.slice(end);
+    }
+    return remaining;
+  });
+  return { stable, volatile };
+}

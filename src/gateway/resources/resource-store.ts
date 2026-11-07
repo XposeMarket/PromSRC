@@ -280,6 +280,119 @@ const MAX_VERSIONS_PER_RESOURCE = 20;
 const MAX_TASK_VERSIONS_PER_RESOURCE = 3;
 const MAX_TASK_PROVENANCE_PER_RESOURCE = 8;
 const REGISTRY_FLUSH_DELAY_MS = 1_500;
+const REGISTRY_BACKUP_RE = /^registry\.backup-(\d+)\.json$/;
+const REGISTRY_BACKUP_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+const REGISTRY_BACKUP_KEEP = 2;
+let registryBackupWarned = false;
+const defaultRegistryBackupWriter = (source: string, destination: string): void => fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+let registryBackupWriter: (source: string, destination: string) => void = defaultRegistryBackupWriter;
+
+/** Test hook: inject a failing or custom backup writer. Pass null to restore the default. */
+export function setRegistryBackupWriterForTests(writer: ((source: string, destination: string) => void) | null): void {
+  registryBackupWriter = writer ?? defaultRegistryBackupWriter;
+}
+
+/** Keeps only the newest REGISTRY_BACKUP_KEEP registry.backup-<epochMs>.json files in rootDir. */
+function rotateRegistryBackups(rootDir: string): void {
+  const backups = fs.readdirSync(rootDir).flatMap((name) => {
+    const match = REGISTRY_BACKUP_RE.exec(name);
+    return match ? [{ name, at: Number(match[1]) }] : [];
+  }).sort((a, b) => b.at - a.at);
+  for (const { name } of backups.slice(REGISTRY_BACKUP_KEEP)) {
+    try { fs.rmSync(path.join(rootDir, name), { force: true }); } catch { /* best effort */ }
+  }
+}
+const MAX_TASK_JOURNAL_SYNC_HASHES = 5_000;
+
+/** Task-journal version retention. Env 0 keeps all; invalid values use the default. */
+function taskJournalVersionRetention(): number {
+  const raw = String(process.env.PROMETHEUS_TASK_JOURNAL_VERSION_RETENTION ?? '').trim();
+  if (!raw) return MAX_TASK_VERSIONS_PER_RESOURCE;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return MAX_TASK_VERSIONS_PER_RESOURCE;
+  return value === 0 ? Number.POSITIVE_INFINITY : Math.max(1, Math.floor(value));
+}
+
+// One in-memory registry per registry file, shared by every ResourceStore
+// instance in this process. getResourceStore() creates one store per
+// workspace path (task agent workspaces included); with per-instance state two
+// stores on the same file flushed and reparsed the whole (~20 MB) registry
+// every time they alternated, which stalled cron ticks for seconds.
+interface RegistryHolder {
+  live: { key: string; state: ResourceState } | null;
+  dirty: boolean;
+  flushTimer: NodeJS.Timeout | null;
+}
+const registryHolders = new Map<string, RegistryHolder>();
+const registryBackupChecked = new Set<string>();
+
+// Lookup indexes derived from one loaded registry state. Resources are only
+// ever appended, so new tail entries are indexed lazily; mutating code paths
+// re-index the touched resource. Every candidate is re-validated with the
+// original predicate, so a stale entry can only cost a check, never a match.
+interface ResourceStateIndex {
+  resources: ResourceRecord[];
+  indexed: number;
+  versions: ResourceVersion[];
+  versionCount: number;
+  position: Map<ResourceRecord, number>;
+  byId: Map<string, ResourceRecord>;
+  byDedupeKey: Map<string, ResourceRecord[]>;
+  byLocator: Map<string, ResourceRecord[]>;
+  byKindHash: Map<string, ResourceRecord[]>;
+  versionsById: Map<string, ResourceVersion>;
+}
+const stateIndexes = new WeakMap<ResourceState, ResourceStateIndex>();
+
+function addIndexEntry(map: Map<string, ResourceRecord[]>, key: string, resource: ResourceRecord): void {
+  const list = map.get(key);
+  if (!list) map.set(key, [resource]);
+  else if (!list.includes(resource)) list.push(resource);
+}
+
+function indexVersions(index: ResourceStateIndex, versions: ResourceVersion[]): void {
+  index.versions = versions;
+  index.versionCount = versions.length;
+  index.versionsById = new Map();
+  // First occurrence wins, matching Array.prototype.find().
+  for (const version of versions) if (!index.versionsById.has(version.id)) index.versionsById.set(version.id, version);
+}
+
+function indexResource(index: ResourceStateIndex, resource: ResourceRecord): void {
+  if (!index.byId.has(resource.id)) index.byId.set(resource.id, resource);
+  const dedupeKey = String(resource.metadata?.dedupeKey || '');
+  if (dedupeKey) addIndexEntry(index.byDedupeKey, dedupeKey, resource);
+  if (resource.locator) addIndexEntry(index.byLocator, `${resource.locator.type}\u0000${locatorKey(resource.locator)}`, resource);
+  const current = resource.currentVersionId ? index.versionsById.get(resource.currentVersionId) : undefined;
+  if (current?.contentHash) addIndexEntry(index.byKindHash, `${resource.kind}\u0000${current.contentHash}`, resource);
+}
+
+function getStateIndex(state: ResourceState): ResourceStateIndex {
+  let index = stateIndexes.get(state);
+  if (!index || index.resources !== state.resources || index.indexed > state.resources.length) {
+    index = {
+      resources: state.resources, indexed: 0, versions: state.versions, versionCount: 0, position: new Map(), byId: new Map(),
+      byDedupeKey: new Map(), byLocator: new Map(), byKindHash: new Map(), versionsById: new Map(),
+    };
+    indexVersions(index, state.versions);
+    stateIndexes.set(state, index);
+  } else if (index.versions !== state.versions) {
+    indexVersions(index, state.versions); // pruneState() replaced the array
+  } else {
+    // Versions are appended by attach(); index only the new tail.
+    for (let i = index.versionCount; i < state.versions.length; i += 1) {
+      const version = state.versions[i];
+      if (!index.versionsById.has(version.id)) index.versionsById.set(version.id, version);
+    }
+    index.versionCount = state.versions.length;
+  }
+  for (; index.indexed < state.resources.length; index.indexed += 1) {
+    const resource = state.resources[index.indexed];
+    index.position.set(resource, index.indexed);
+    indexResource(index, resource);
+  }
+  return index;
+}
 
 // One pending writer per registry file; a second store instance (or a reload)
 // flushes it first so nothing reads stale data. Flushed on exit too.
@@ -296,6 +409,7 @@ async function removeFilesInBatches(files: string[]): Promise<void> {
   }
 }
 process.once('exit', () => {
+  try { drainTaskJournalSyncs(); } catch { /* best effort on exit */ }
   for (const writer of Array.from(pendingRegistryWriters.values())) {
     try { writer.flushSync(); } catch { /* best effort on exit */ }
   }
@@ -565,9 +679,14 @@ export class ResourceStore {
   // the whole (tens of MB) registry synchronously on every attach: a card-heavy
   // turn used to block the event loop for 60s+, trip the stall watchdog and
   // lose the finished reply.
-  private live: { key: string; state: ResourceState } | null = null;
-  private dirty = false;
-  private flushTimer: NodeJS.Timeout | null = null;
+  // The holder is shared per registry file (see registryHolders).
+  private readonly holder: RegistryHolder;
+  private get live() { return this.holder.live; }
+  private set live(value: { key: string; state: ResourceState } | null) { this.holder.live = value; }
+  private get dirty() { return this.holder.dirty; }
+  private set dirty(value: boolean) { this.holder.dirty = value; }
+  private get flushTimer() { return this.holder.flushTimer; }
+  private set flushTimer(value: NodeJS.Timeout | null) { this.holder.flushTimer = value; }
 
   constructor(options: { configDir?: string; rootDir?: string; workspacePath?: string; telemetry?: ResourceTelemetrySink } = {}) {
     const configDir = options.configDir || getConfig().getConfigDir();
@@ -577,6 +696,12 @@ export class ResourceStore {
     this.registryPath = path.join(this.rootDir, 'registry.json');
     this.contentDir = path.join(this.rootDir, 'content');
     this.migrationDir = path.join(this.rootDir, 'migrations');
+    let holder = registryHolders.get(this.registryPath);
+    if (!holder) {
+      holder = { live: null, dirty: false, flushTimer: null };
+      registryHolders.set(this.registryPath, holder);
+    }
+    this.holder = holder;
   }
 
   private ensureStorageDirs(): void {
@@ -604,6 +729,7 @@ export class ResourceStore {
     if (this.live && this.live.key === key) return this.live.state;
     flushPendingRegistryWrites(this.registryPath, this);
     const state = this.loadStateFromDisk();
+    lastTaskJournalSyncHashes.clear(); // reloaded registry: drop cached sync hashes
     this.live = { key, state };
     return state;
   }
@@ -687,24 +813,38 @@ export class ResourceStore {
     for (const link of state.links) if (link.versionId) pinned.add(link.versionId);
     const taskResources = new Set<string>();
     for (const resource of state.resources) if (resource.kind === 'task') taskResources.add(resource.id);
-    const versionCap = (resourceId: string) => taskResources.has(resourceId) ? MAX_TASK_VERSIONS_PER_RESOURCE : MAX_VERSIONS_PER_RESOURCE;
+    const taskVersionCap = taskJournalVersionRetention();
+    const versionCap = (resourceId: string) => taskResources.has(resourceId) ? taskVersionCap : MAX_VERSIONS_PER_RESOURCE;
     const provenanceCap = (resourceId: string) => taskResources.has(resourceId) ? MAX_TASK_PROVENANCE_PER_RESOURCE : MAX_PROVENANCE_PER_RESOURCE;
     const versionCounts = new Map<string, number>();
     const keptVersions: ResourceVersion[] = [];
-    const removedFiles: string[] = [];
-    const contentRoot = path.resolve(this.contentDir) + path.sep;
+    const prunedVersions: ResourceVersion[] = [];
     for (let index = state.versions.length - 1; index >= 0; index -= 1) {
       const version = state.versions[index];
       const count = versionCounts.get(version.resourceId) || 0;
       if (count < versionCap(version.resourceId) || pinned.has(version.id)) {
         keptVersions.push(version);
         versionCounts.set(version.resourceId, count + 1);
-      } else if (version.snapshotPath) {
-        // Cheap lexical containment (no realpath syscalls): pruning can touch
-        // tens of thousands of versions on the first flush of an old registry.
-        const candidate = path.resolve(this.rootDir, version.snapshotPath);
-        if (candidate.startsWith(contentRoot) && /\.(txt|bin)$/.test(candidate)) removedFiles.push(candidate);
+      } else {
+        prunedVersions.push(version);
       }
+    }
+    // One safety copy of the on-disk registry before this process first drops
+    // task-journal versions (skipped when a backup from the last 24 h exists).
+    if (prunedVersions.some((version) => taskResources.has(version.resourceId)) && !this.ensureRegistryBackup()) {
+      // No usable pre-prune backup: keep every version and snapshot this flush; retry on a later flush.
+      return [];
+    }
+    const removedFiles: string[] = [];
+    const contentRoot = path.resolve(this.contentDir) + path.sep;
+    // Only delete snapshot files no remaining version still references.
+    const keptPaths = prunedVersions.length ? new Set(keptVersions.map((version) => version.snapshotPath && path.resolve(this.rootDir, version.snapshotPath))) : new Set<string | undefined>();
+    for (const version of prunedVersions) {
+      if (!version.snapshotPath) continue;
+      // Cheap lexical containment (no realpath syscalls): pruning can touch
+      // tens of thousands of versions on the first flush of an old registry.
+      const candidate = path.resolve(this.rootDir, version.snapshotPath);
+      if (candidate.startsWith(contentRoot) && /\.(txt|bin)$/.test(candidate) && !keptPaths.has(candidate)) removedFiles.push(candidate);
     }
     if (keptVersions.length !== state.versions.length) state.versions = keptVersions.reverse();
     const provenanceCounts = new Map<string, number>();
@@ -718,8 +858,52 @@ export class ResourceStore {
       }
     }
     if (keptProvenance.length !== state.provenance.length) state.provenance = keptProvenance.reverse();
+    if (prunedVersions.length) console.log(`[Resources] Pruned ${prunedVersions.length} versions (${prunedVersions.filter((version) => taskResources.has(version.resourceId)).length} task-journal) and ${removedFiles.length} snapshot files.`);
     return removedFiles;
   }
+
+  /**
+   * Before the first task-journal prune in this process, copy the on-disk
+   * registry (still the pre-prune state) to registry.backup-<epochMs>.json.
+   * The copy goes to a temp file and is renamed only once its size matches, so
+   * a partial copy never counts. Keeps the newest REGISTRY_BACKUP_KEEP backups.
+   * Returns false when no usable backup exists; the caller then keeps every
+   * task version and snapshot for this flush and retries on a later flush.
+   */
+  private ensureRegistryBackup(): boolean {
+    if (registryBackupChecked.has(this.registryPath)) return true;
+    try {
+      if (!fs.existsSync(this.registryPath)) return true; // nothing on disk yet
+      const now = Date.now();
+      const recent = fs.readdirSync(this.rootDir).some((name) => {
+        const match = REGISTRY_BACKUP_RE.exec(name);
+        return Boolean(match) && now - Number(match![1]) < REGISTRY_BACKUP_MIN_AGE_MS
+          && fs.statSync(path.join(this.rootDir, name)).size > 0;
+      });
+      if (!recent) {
+        const finalPath = path.join(this.rootDir, `registry.backup-${now}.json`);
+        const tmpPath = `${finalPath}.${process.pid}.tmp`;
+        try {
+          registryBackupWriter(this.registryPath, tmpPath);
+          const copied = fs.statSync(tmpPath).size;
+          if (copied === 0 || copied !== fs.statSync(this.registryPath).size) throw new Error('registry backup size mismatch');
+          fs.renameSync(tmpPath, finalPath);
+        } finally {
+          fs.rmSync(tmpPath, { force: true });
+        }
+        rotateRegistryBackups(this.rootDir);
+      }
+      registryBackupChecked.add(this.registryPath);
+      return true;
+    } catch (error: any) {
+      if (!registryBackupWarned) {
+        registryBackupWarned = true;
+        console.warn('[Resources] Registry backup before task-journal pruning failed; keeping all task versions and retrying on a later flush:', redactResourceText(error?.message || error));
+      }
+      return false;
+    }
+  }
+
 
   private emitTelemetry(event: ResourceTelemetryEventName, fields: Omit<ResourceTelemetryEvent, 'event' | 'at'> = {}): void {
     const item: ResourceTelemetryEvent = { event, at: nowIso(), ...fields };
@@ -835,28 +1019,68 @@ export class ResourceStore {
 
   private getVersion(state: ResourceState, resource: ResourceRecord, versionId?: string): ResourceVersion | undefined {
     const selectedId = versionId || resource.currentVersionId;
+    if (!selectedId) return undefined;
+    const indexed = getStateIndex(state).versionsById.get(selectedId);
+    if (indexed && indexed.resourceId === resource.id) return indexed;
+    // Duplicate version ids are not expected; fall back to the original scan.
     return state.versions.find((item) => item.id === selectedId && item.resourceId === resource.id);
   }
 
-  private findExisting(state: ResourceState, input: AttachResourceInput, contentHash?: string): ResourceRecord | undefined {
+  /**
+   * Dedupe predicate, unchanged from the original linear scan. findExisting()
+   * only narrows the candidates through indexes and returns the earliest
+   * matching resource in registry order, exactly like resources.find().
+   */
+  private matchesExisting(state: ResourceState, resource: ResourceRecord, input: AttachResourceInput, contentHash: string | undefined, findVersion: (id: string) => ResourceVersion | undefined): boolean {
     const locator = input.locator || ({} as ResourceLocator);
     const canonicalLocator = locatorKey(locator);
     const explicitKey = String(input.metadata?.dedupeKey || '').trim();
-    return state.resources.find((resource) => {
-      if (resource.workspaceScope !== (input.workspaceScope || this.workspaceScope)) return false;
-      if (resource.status === 'deleted') return false;
-      const resourceLocator = locatorKey(resource.locator);
-      if (explicitKey && String(resource.metadata?.dedupeKey || '') === explicitKey
-        && (!['file', 'image'].includes(input.kind) || (resource.locator.type === locator.type && resourceLocator === canonicalLocator))) return true;
-      if (resource.kind === input.kind && canonicalLocator && resource.locator.type === locator.type && resourceLocator === canonicalLocator) return true;
-      // File/image identity includes path semantics. Never collapse two files
-      // solely because their bytes happen to match.
-      if (contentHash && resource.currentVersionId && !['file', 'image'].includes(input.kind)) {
-        const current = state.versions.find((version) => version.id === resource.currentVersionId);
-        if (current?.contentHash === contentHash && resource.kind === input.kind) return true;
+    if (resource.workspaceScope !== (input.workspaceScope || this.workspaceScope)) return false;
+    if (resource.status === 'deleted') return false;
+    const resourceLocator = locatorKey(resource.locator);
+    if (explicitKey && String(resource.metadata?.dedupeKey || '') === explicitKey
+      && (!['file', 'image'].includes(input.kind) || (resource.locator.type === locator.type && resourceLocator === canonicalLocator))) return true;
+    if (resource.kind === input.kind && canonicalLocator && resource.locator.type === locator.type && resourceLocator === canonicalLocator) return true;
+    // File/image identity includes path semantics. Never collapse two files
+    // solely because their bytes happen to match.
+    if (contentHash && resource.currentVersionId && !['file', 'image'].includes(input.kind)) {
+      const current = findVersion(resource.currentVersionId);
+      if (current?.contentHash === contentHash && resource.kind === input.kind) return true;
+    }
+    return false;
+  }
+
+  /** Reference O(R x V) implementation; kept for equivalence tests. */
+  findExistingLinear(state: ResourceState, input: AttachResourceInput, contentHash?: string): ResourceRecord | undefined {
+    return state.resources.find((resource) => this.matchesExisting(state, resource, input, contentHash,
+      (id) => state.versions.find((version) => version.id === id)));
+  }
+
+  private findExisting(state: ResourceState, input: AttachResourceInput, contentHash?: string): ResourceRecord | undefined {
+    const index = getStateIndex(state);
+    const locator = input.locator || ({} as ResourceLocator);
+    const canonicalLocator = locatorKey(locator);
+    const explicitKey = String(input.metadata?.dedupeKey || '').trim();
+    const candidates: ResourceRecord[] = [];
+    if (explicitKey) candidates.push(...(index.byDedupeKey.get(explicitKey) || []));
+    if (canonicalLocator) candidates.push(...(index.byLocator.get(`${locator.type}\u0000${canonicalLocator}`) || []));
+    if (contentHash && !['file', 'image'].includes(input.kind)) candidates.push(...(index.byKindHash.get(`${input.kind}\u0000${contentHash}`) || []));
+    let best: ResourceRecord | undefined;
+    let bestPosition = Number.POSITIVE_INFINITY;
+    for (const resource of candidates) {
+      const position = index.position.get(resource);
+      if (position === undefined || position >= bestPosition || state.resources[position] !== resource) continue;
+      if (this.matchesExisting(state, resource, input, contentHash, (id) => index.versionsById.get(id))) {
+        best = resource;
+        bestPosition = position;
       }
-      return false;
-    });
+    }
+    return best;
+  }
+
+  /** Test seam: the registry state this store currently serves (shared object; do not mutate). */
+  debugState(): ResourceState {
+    return this.readState();
   }
 
   private ensureLink(state: ResourceState, input: AttachResourceInput, resource: ResourceRecord, version?: ResourceVersion): ThreadResourceLink | undefined {
@@ -1001,6 +1225,10 @@ export class ResourceStore {
     }
 
     resource.updatedAt = timestamp;
+    // Dedupe/locator/current-version keys may have changed: refresh this
+    // resource's index entries (new resources are indexed lazily by position).
+    if (existing) indexResource(getStateIndex(state), existing);
+    else getStateIndex(state);
     const link = this.ensureLink(state, normalizedInput, resource, version);
     this.writeState(state);
     this.emitTelemetry('attach', { resourceId: resource.id, versionId: version?.id, result: created ? 'created' : 'updated', status: resource.status });
@@ -1479,6 +1707,7 @@ export class ResourceStore {
     resource.status = status;
     resource.updatedAt = nowIso();
     if (status === 'deleted') resource.deletedAt = resource.updatedAt;
+    if (status === 'deleted') lastTaskJournalSyncHashes.clear(); // a deleted task must re-attach on the next sync
     this.appendProvenance(state, {
       resourceId,
       eventType: status === 'unavailable' || status === 'stale' ? 'refresh_failed' : status === 'deleted' ? 'deleted' : 'refreshed',
@@ -1848,9 +2077,59 @@ export async function autoAttachChatInputResources(options: ChatInputResourceOpt
   return { attached, fetched };
 }
 
-export function syncTaskJournalResource(task: TaskJournalResourceInput): AttachResourceResult | undefined {
-  try { return getResourceStore(task.workspacePath).syncTaskJournal(task); } catch (error: any) {
+// saveTask() (the only caller) persists on almost every tool step and ignores
+// the result, so journal syncs are coalesced: the latest input per task is
+// synced once on setImmediate, and skipped when nothing it records changed
+// since the last successful sync for that task.
+const pendingTaskJournalSyncs = new Map<string, TaskJournalResourceInput>();
+const lastTaskJournalSyncHashes = new Map<string, string>();
+let taskJournalSyncImmediate: NodeJS.Immediate | null = null;
+
+function taskJournalSyncKey(task: TaskJournalResourceInput): string {
+  return `${path.resolve(task.workspacePath || getConfig().getWorkspacePath())}|${task.id}`;
+}
+
+function taskJournalSyncHash(task: TaskJournalResourceInput): string {
+  // updatedAt only feeds metadata.versionedBy; it is not a content change.
+  const journal = Array.isArray(task.journal) ? task.journal.slice(-80) : [];
+  return sha256(JSON.stringify({ ...task, journal, updatedAt: undefined }));
+}
+
+/** Run every queued task-journal sync now (also runs before the exit flush). */
+export function drainTaskJournalSyncs(): void {
+  if (taskJournalSyncImmediate) clearImmediate(taskJournalSyncImmediate);
+  taskJournalSyncImmediate = null;
+  const queued = Array.from(pendingTaskJournalSyncs.entries());
+  pendingTaskJournalSyncs.clear();
+  for (const [key, task] of queued) {
+    try {
+      const hash = taskJournalSyncHash(task);
+      if (lastTaskJournalSyncHashes.get(key) === hash) continue;
+      getResourceStore(task.workspacePath).syncTaskJournal(task);
+      lastTaskJournalSyncHashes.delete(key);
+      lastTaskJournalSyncHashes.set(key, hash);
+      if (lastTaskJournalSyncHashes.size > MAX_TASK_JOURNAL_SYNC_HASHES) {
+        const oldest = lastTaskJournalSyncHashes.keys().next().value;
+        if (oldest) lastTaskJournalSyncHashes.delete(oldest);
+      }
+    } catch (error: any) {
+      console.warn('[Resources] Task journal sync skipped:', redactResourceText(error?.message || error));
+    }
+  }
+}
+
+export function syncTaskJournalResource(task: TaskJournalResourceInput): void {
+  if (!task?.id) return;
+  try {
+    // Snapshot the mutable task fields now; saveTask() callers keep mutating.
+    const snapshot: TaskJournalResourceInput = { ...task, journal: Array.isArray(task.journal) ? task.journal.slice(-80) : task.journal };
+    pendingTaskJournalSyncs.set(taskJournalSyncKey(snapshot), snapshot);
+  } catch (error: any) {
     console.warn('[Resources] Task journal sync skipped:', redactResourceText(error?.message || error));
-    return undefined;
+    return;
+  }
+  if (!taskJournalSyncImmediate) {
+    taskJournalSyncImmediate = setImmediate(drainTaskJournalSyncs);
+    taskJournalSyncImmediate.unref?.();
   }
 }

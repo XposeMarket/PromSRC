@@ -62,6 +62,10 @@ jobs:
         run: npm run test:skill-matcher-perf
       - name: Verify source file-size and any budgets
         run: npm run check:file-budgets
+      - name: Verify no new stateful dynamic import() of module-level state (tsx duplicate-instance guard)
+        run: npm run -s check:stateful-imports
+      - name: Verify gateway heap flags, heap-pressure sampler and the stateful-import guard
+        run: npm run -s test:gateway-guardrails
       - name: Verify public skill bundle (visibility tags, no owner-specific content)
         run: npm run test:public-skills
       - name: Verify scheduler misfire, leases, dedupe, script execution and crash-window lock recovery

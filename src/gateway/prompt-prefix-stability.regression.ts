@@ -110,6 +110,19 @@ async function main(): Promise<void> {
     assert.ok(!teachA.stable.includes('[TOOLS]'), 'teach_mode tool menu must not be in stable prefix');
     assert.equal(countOf(teachA.volatile, '[TOOLS]'), 1, 'teach_mode tool menu must appear exactly once in volatile');
 
+    // Invariant instructions remain exactly once, but no longer repay the volatile tail.
+    for (const parts of [t1A, t1B, t2A, t2B, bgA, bgB, teachA, teachB]) {
+      for (const heading of ['TOOL CALL PARALLELISM:', 'BACKGROUND AGENTS:']) {
+        assert.equal(countOf(parts.stable, heading), 1, `${heading} belongs in cached prefix`);
+        assert.equal(countOf(parts.volatile, heading), 0, `${heading} must not be paid again in tail`);
+      }
+    }
+    const removedCharacters = t2A.stable.indexOf('TOOL CALL PARALLELISM:') >= 0
+      ? t2A.stable.slice(t2A.stable.indexOf('TOOL CALL PARALLELISM:')).length : 0;
+    assert.ok(removedCharacters > 2000, 'meaningful invariant text removed from each uncached tail');
+    console.log(`Invariant guidance moved out of uncached tail: ${removedCharacters} characters`);
+
+
     // Negative: an edited durable profile must change the stable prefix.
     fs.writeFileSync(path.join(root, 'USER.md'), 'USER_PROFILE_EDITED');
     const t2Edited = splitPrompt(await render(root, 'prefix_t2', { historyLength: 3, snap: snapshot({ activatedToolCategories: toolsA, subagentsRosterBlock: rosterA }) }));

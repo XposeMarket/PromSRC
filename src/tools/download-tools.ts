@@ -90,6 +90,7 @@ import { promisify } from 'util';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from './workspace-context.js';
 import type { ToolResult } from '../types.js';
+import { fetchPublicUrl } from './outbound-url-guard.js';
 import { resolveMuxingFfmpeg, resolveRuntimeBinary } from '../runtime/dependencies.js';
 
 const execFileAsync = promisify(execFile);
@@ -249,8 +250,7 @@ export async function executeDownloadUrl(args: DownloadUrlArgs): Promise<ToolRes
     const { absDir } = ensureOutputDir(workspaceRoot, args.output_dir);
     await fsp.mkdir(absDir, { recursive: true });
 
-    const response = await fetch(url, {
-      redirect: 'follow',
+    const response = await fetchPublicUrl(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
       },
