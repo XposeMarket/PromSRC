@@ -85,6 +85,13 @@ try {
   assert.doesNotMatch(mobile, /secureAccessHost\.prepend\(createAddSecretButton/);
   assert.match(mobile, /sa-add-secret-host-mobile/);
   assert.match(mobile, /cardHost: addSecretHost/);
+  // No standing Add secret button in either composer: protected entry opens only when the guard catches a key.
+  assert.doesNotMatch(mobile, /createAddSecretButton/);
+  assert.doesNotMatch(read('web-ui/src/features/secure-access/secure-access-desktop-dock.js'), /createAddSecretButton/);
+  // Mobile email card busy state stays text-only (an unsized send SVG ballooned the buttons).
+  const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
+  assert.doesNotMatch(mobilePages, /\$\{ICONS\.send\}<span>Sending<\/span>/);
+  assert.match(mobilePages, /card\.outerHTML = _renderMobileEmailComposerArtifact\(/);
 
   // M1: native + web consent allowlists cover every destructive disconnect alias.
   const nativeConsent = read('electron/owner-consent.js');
