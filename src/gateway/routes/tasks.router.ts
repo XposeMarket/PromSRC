@@ -26,6 +26,27 @@ import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-r
 import { isStorageBoundaryError } from '../storage/storage-paths';
 import { collectNeedsYouItems } from '../needs-you-collect';
 import { notifyNeedsYouChanged } from '../comms/broadcaster';
+import { getIndexedSessionModelRef } from '../session';
+import { resolveTaskModelRef, type TaskModelRefDeps } from '../tasks/task-model-ref';
+import { getPrimaryModelRef, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+
+/** Live deps for task card provider logos (index/config lookups only, no transcript reads). */
+function taskModelRefDeps(): TaskModelRefDeps {
+  const cfg = getConfig().getConfig() as any;
+  const jobs = new Map<string, any>();
+  try { for (const job of (_cronScheduler?.getJobs?.() || [])) jobs.set(String(job.id), job); } catch { /* scheduler not ready */ }
+  return {
+    sessionModel: (sessionId) => getIndexedSessionModelRef(sessionId),
+    scheduleModel: (scheduleId) => jobs.get(scheduleId)?.model,
+    agentModel: (agentId) => resolveConfiguredAgentModel(cfg, getAgentById(agentId) || { id: agentId }, { agentType: 'subagent', fallbackToPrimary: false }).model || undefined,
+    primaryModel: () => getPrimaryModelRef(cfg),
+    defaultProvider: () => String(cfg?.llm?.provider || ''),
+  };
+}
+function withModelRef<T extends Record<string, any>>(task: T, deps: TaskModelRefDeps): T & { modelRef?: { providerId: string; model: string; source: string } } {
+  const ref = resolveTaskModelRef(task, deps);
+  return ref ? { ...task, modelRef: ref } : task;
+}
 
 // Server push: fingerprint the needs-you set every 5s and broadcast needs_you_changed on change.
 // The desktop Tasks page debounces this into a re-fetch of /api/needs-you.
@@ -461,7 +482,8 @@ router.get('/api/bg-tasks', (req, res) => {
     executorProvider: task.executorProvider,
   }));
   const plannedRuns = listPlannedChatRuns(collectNeedsYouItems());
-  const combined = [...tasks, ...plannedRuns].sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
+  const modelDeps = taskModelRefDeps();
+  const combined = [...tasks, ...plannedRuns].map((task: any) => withModelRef(task, modelDeps)).sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
   res.json({ success: true, tasks: limit ? combined.slice(0, limit) : combined });
 });
 

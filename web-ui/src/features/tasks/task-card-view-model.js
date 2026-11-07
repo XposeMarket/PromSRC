@@ -2,6 +2,8 @@
 // Pure ES module (no DOM, no globals) used by BOTH the desktop Tasks page and
 // the mobile tasks route so card/detail semantics cannot drift.
 
+import { providerLogoKey } from '../../components/provider-logo.js';
+
 export const STALL_THRESHOLD_MS = 30 * 60 * 1000;
 
 const ENVELOPE_SECTION = /\n\s*\n\s*(?:ADDITIONAL CONTEXT|CONTEXT DATA|CONTEXT|CONSTRAINTS|SUCCESS CRITERIA|TOOL RULES|EVIDENCE BUS|PROCESS LOG|OUTPUT FORMAT|RULES|DELIVERABLES?|NOTES)\s*:/i;
@@ -202,6 +204,18 @@ export function actorLabel(task) {
   return { actor: cap(actor, 80), initials: kind === 'plan' ? 'P' : kind === 'background' ? 'BG' : initials(avatarSource).slice(0, 2), kind };
 }
 
+/**
+ * Avatar provider for the card: the server-resolved modelRef (actual run model,
+ * else configured route). logoKey '' means unknown -> renderers fall back to initials.
+ */
+export function taskAvatar(task) {
+  const ref = task?.modelRef && typeof task.modelRef === 'object' ? task.modelRef : null;
+  const providerId = oneLine(ref?.providerId);
+  const model = oneLine(ref?.model);
+  const logoKey = providerId || model ? providerLogoKey(providerId, model) : '';
+  return { providerId, model, logoKey, modelSource: oneLine(ref?.source) };
+}
+
 export function sourceLabel(task) {
   const kind = taskKind(task);
   if (kind === 'plan') return 'chat';
@@ -254,6 +268,7 @@ export function buildTaskCard(task, now = Date.now()) {
     kind: actor.kind,
     actor: actor.actor,
     initials: actor.initials,
+    avatar: taskAvatar(task),
     sub: [startedAt ? `started ${relTime(startedAt, now)}` : '', sourceLabel(task)].filter(Boolean).join(' · '),
     title: cleanTaskTitle(task),
     status,

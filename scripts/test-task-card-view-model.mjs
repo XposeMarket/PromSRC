@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {
   cleanTaskTitle, dispatchedMessage, rawInstructions, taskKind, statusTone, progressSummary,
-  isLikelyStalled, attentionText, actorLabel, collapseActivity, buildTaskCard, detailSections,
+  isLikelyStalled, attentionText, actorLabel, collapseActivity, buildTaskCard, detailSections, taskAvatar,
 } from '../web-ui/src/features/tasks/task-card-view-model.js';
 
 const NOW = 10_000_000_000;
@@ -140,4 +140,19 @@ assert.equal(detailSections({ id: 'p', status: 'paused', title: 'P' }).canMessag
 console.log('PASS failed-task recovery composer');
 
 console.log('PASS detail sections + old record compatibility');
+// ── Provider-logo avatar (shared desktop + mobile) ──
+assert.deepEqual(taskAvatar({ modelRef: { providerId: 'anthropic', model: 'claude-opus-5-5', source: 'session' } }),
+  { providerId: 'anthropic', model: 'claude-opus-5-5', logoKey: 'anthropic', modelSource: 'session' });
+assert.equal(taskAvatar({ modelRef: { providerId: 'openai_codex', model: 'gpt-6.1-sol' } }).logoKey, 'openai', 'codex alias -> openai logo');
+assert.equal(taskAvatar({ modelRef: { providerId: 'xai', model: 'grok-4.3' } }).logoKey, 'xai');
+assert.equal(taskAvatar({ modelRef: { providerId: '', model: 'claude-haiku-5-5' } }).logoKey, 'anthropic', 'model-only ref still maps');
+assert.equal(taskAvatar({}).logoKey, '', 'no modelRef -> unknown');
+assert.equal(taskAvatar({ modelRef: { providerId: 'ollama', model: 'qwen3:4b' } }).logoKey, '', 'unbranded provider -> initials fallback');
+const logoCard = buildTaskCard({ id: 'sch', scheduleId: 'j', title: 'Merge Steward', status: 'running', modelRef: { providerId: 'openai_codex', model: 'gpt-6.1-sol' } }, NOW);
+assert.equal(logoCard.avatar.logoKey, 'openai');
+assert.equal(logoCard.actor, 'Scheduled · Merge Steward', 'kind stays visible in the actor label');
+assert.equal(logoCard.initials, 'S', 'initials kept as the unknown-provider fallback');
+assert.equal(buildTaskCard({ id: 'bg', status: 'running' }, NOW).avatar.logoKey, '');
+console.log('PASS provider-logo avatar');
+
 console.log('All task-card view-model tests passed');
