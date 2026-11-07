@@ -11,6 +11,7 @@
 
 // MUST be first: synchronously consumes the master key handed over stdin by the
 // Electron main process, before any vault access or config side effects run.
+import '../security/secure-access-owner-boot.js';
 import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
 import './startup-async-diagnostics.js';
@@ -165,12 +166,15 @@ import { router as proposalsRouter, setProposalsBroadcast, broadcastProposalCrea
 import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
 import { router as connectionsV2Router } from './routes/connections-v2.router';
+import { router as secureAccessRouter } from './routes/secure-access.router';
+import { router as protectedPluginsRouter } from './routes/protected-plugins.router';
 import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as resourcesRouter } from './routes/resources.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
+import { router as ownerConsentRouter } from './routes/owner-consent.router';
 import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
 import { router as connectorOAuthCallbackRouter } from './routes/connector-oauth-callback.router';
 import { router as chatgptBridgeRouter, setChatGPTBridgeFallbackCatalog } from './routes/chatgpt-bridge.router';
@@ -1028,6 +1032,8 @@ startupMark('routers initialized');
 // reached by an unpaired phone. Desktop administration is independently gated
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
+// PR821 I1: HMAC-authenticated owner-approval lock from Electron main (no gateway credential).
+app.use('/', ownerConsentRouter);
 app.use('/', mcpOAuthCallbackRouter);
 app.use('/', connectorOAuthCallbackRouter);
 // Trigger webhooks are called by external services (GitHub, Zapier, local
@@ -1063,6 +1069,8 @@ app.use('/', requireGatewayAuth, requireAccountAccess, proposalsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, auditLogRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsV2Router);
+app.use('/', requireGatewayAuth, requireAccountAccess, secureAccessRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, protectedPluginsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, canvasRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, resourcesRouter);
@@ -1079,6 +1087,11 @@ app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
 
 app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (/^\/api\/(secure-access|connection-secure-input|connections\/credentials|auth\/x-api\/credentials|protected-plugins)(\/|$)/.test(_req.path)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(400).json({ error: 'SECURE_INPUT_INVALID' });
+    return;
+  }
   if (!isStorageBoundaryError(err)) {
     next(err);
     return;

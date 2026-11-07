@@ -15,6 +15,8 @@ import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
+import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
+import { installComposerSecretGuard, createAddSecretButton } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
 let mobileBusyComposerModeLoaded = false;
@@ -519,7 +521,33 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let targetPopover = null;
   let closeTargetPopover = () => {};
 
+  // Protected-entry "Add secret" host: stack it directly above the topmost
+  // visible bottom control (context dock rows, else launcher, else composer)
+  // so it never sits under the dock's invisible native <select> pickers.
+  function syncAddSecretHostPlacement() {
+    const host = page?.querySelector?.('.sa-add-secret-host-mobile');
+    if (!host) return;
+    const visibleTop = (el) => {
+      if (!el || el.getAttribute?.('aria-hidden') === 'true') return null;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return null;
+      const r = el.getBoundingClientRect?.();
+      return r && r.height > 0 ? r.top : null;
+    };
+    const tops = [
+      visibleTop(page.querySelector('#pm-new-chat-context-dock')),
+      visibleTop(page.querySelector('#pm-chat-mode-launcher')),
+      form && !form.classList.contains('pm-composer-mode-hidden') ? visibleTop(form) : null,
+    ].filter((v) => typeof v === 'number');
+    if (!tops.length) return;
+    const viewport = window.visualViewport;
+    const viewportBottom = Number(viewport?.offsetTop || 0) + Number(viewport?.height || window.innerHeight || 0);
+    if (!viewportBottom) return;
+    host.style.setProperty('--sa-add-secret-bottom', `${Math.max(8, Math.round(viewportBottom - Math.min(...tops) + 6))}px`);
+  }
+
   function syncContextDockToComposer() {
+    queueMicrotask(syncAddSecretHostPlacement);
     if (!contextDock || !form) return;
     // Lock the dock above whichever bottom control is actually showing: the
     // voice/keyboard launcher while the composer is collapsed, the composer
@@ -917,6 +945,49 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
   if (input) input.value = readComposerDraft(draftKeyFor());
+  // Protected access cards: same shared renderer as desktop. The dock stops
+  // polling and wipes card inputs when this chat page leaves the DOM.
+  {
+    const secureAccessHost = document.createElement('div');
+    secureAccessHost.className = 'sa-dock-mobile';
+    (form?.parentElement || page).appendChild(secureAccessHost);
+    const secureAccessSessionAtMount = String(requestedSession || '').trim();
+    mountSecureAccessDock(secureAccessHost, {
+      fetchJson: (path, opts = {}) => mobileGatewayFetch(path, opts),
+      sessionId: secureAccessSessionAtMount,
+      getSessionId: () => String(requestedSession || '').trim(),
+      onResolved: createSecureAccessContinuation((text, meta) => {
+        if (String(requestedSession || '').trim() !== meta.sessionId) return;
+        return sendMessage(text);
+      }),
+    });
+    // Add secret + composer paste guard (helpers live in protected-plugin-entry.js).
+    const protectedInput = page.querySelector('#pm-composer-input');
+    const protectedFetch = (path, opts = {}) => mobileGatewayFetch(path, opts);
+    if (protectedInput) {
+      // Entry lives in a sibling host, NOT the polled dock: refresh() replaceChildren would remove the button/form while typing.
+      const addSecretHost = document.createElement('div');
+      addSecretHost.className = 'sa-add-secret-host-mobile';
+      secureAccessHost.insertAdjacentElement('beforebegin', addSecretHost);
+      // Stays a sibling (not inside the composer form): the form is hidden in
+      // launcher mode and the button must remain reachable there. CSS lifts it above the tab bar.
+      addSecretHost.append(createAddSecretButton(protectedFetch, { className: 'sa-add-secret-mobile', cardHost: addSecretHost }));
+      installComposerSecretGuard(protectedInput, { fetchJson: protectedFetch, form, sendButton: page.querySelector('#pm-send-btn'), cardHost: addSecretHost });
+      // Placement tracks the dock/launcher/composer; re-run on layout changes.
+      const placeAddSecret = () => requestAnimationFrame(syncAddSecretHostPlacement);
+      placeAddSecret();
+      window.addEventListener('resize', placeAddSecret, { passive: true });
+      window.visualViewport?.addEventListener?.('resize', placeAddSecret, { passive: true });
+      if (typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver(placeAddSecret);
+        ['#pm-new-chat-context-dock', '#pm-chat-mode-launcher', '#pm-composer'].forEach((sel) => { const el = page.querySelector(sel); if (el) ro.observe(el); });
+      }
+      if (typeof MutationObserver === 'function') {
+        const mo = new MutationObserver(placeAddSecret);
+        ['#pm-new-chat-context-dock', '#pm-chat-mode-launcher', '#pm-composer'].forEach((sel) => { const el = page.querySelector(sel); if (el) mo.observe(el, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden', 'hidden'] }); });
+      }
+    }
+  }
   // One-shot handoff from other routes (e.g. Creative → Video "Plan with Prom").
   try {
     const handoff = sessionStorage.getItem('pm_mobile_prefill_chat');

@@ -1,5 +1,6 @@
 import { getConfig } from '../config/config.js';
 import { getVault } from '../security/vault.js';
+import { resolveBoundPluginCredential } from '../connections/plugin-credential-binding';
 
 /**
  * Resolve a single saved credential field for a connector.
@@ -24,6 +25,8 @@ export function resolveConnectorCredential(
   if (!id || !key) return undefined;
 
   const configDir = getConfig().getConfigDir();
+  const bound = resolveBoundPluginCredential(configDir, id, key);
+  if (bound.handled) return bound.value;
 
   for (const vaultKey of [
     `integration.${id}.credentials`,

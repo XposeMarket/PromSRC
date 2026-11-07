@@ -14,6 +14,7 @@ import {
   wireHeaderActions,
 } from './mobile-pages.js';
 import { mobileGatewayFetch } from './mobile-api.js';
+import { postJson as postJsonConsent } from '../features/secure-access/secure-access-core.js';
 import { ensureMobileStyleOwner } from './mobile-style-owners.js';
 import { getConnectorLogoUrl, resolveConnectorLogoId } from '../features/connectors/connector-logo-runtime.js';
 
@@ -293,9 +294,9 @@ export async function disconnectPlugin(row) {
     return;
   }
   if (row.connectionId) {
-    await post(`/api/connections-v2/${encodeURIComponent(row.connectionId)}/disconnect`).catch(() => null);
+    await postJsonConsent((p, o = {}) => mobileGatewayFetch(p, { ...o, timeoutMs: 20000 }), `/api/connections-v2/${encodeURIComponent(row.connectionId)}/disconnect`, {}, 'Disconnect account and clear its local credential').catch((e) => { if (/OWNER_CONSENT_/.test(String(e?.message || e))) throw e; return null; });
   }
-  const out = await post('/api/connections/disconnect', { id: row.id });
+  const out = await postJsonConsent((p, o = {}) => mobileGatewayFetch(p, { ...o, timeoutMs: 20000 }), '/api/connections/disconnect', { id: row.id }, 'Disconnect connector access and clear its local credential');
   if (out?.success === false || out?.error) throw new Error(out.error || 'disconnect failed');
 }
 

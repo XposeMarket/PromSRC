@@ -135,7 +135,8 @@ export function getPairingAdminPolicy(): PairingAdminPolicy {
   try { gatewayToken = resolveGatewayAuthToken(); }
   catch { gatewayAuthError = true; }
   return {
-    desktopToken: String(process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN || '').trim(),
+    // Captured from env at gateway boot (secure-access-owner.ts) so tool children cannot inherit it.
+    desktopToken: String((globalThis as any)[Symbol.for('prometheus.capturedGatewaySecrets')]?.pairingAdmin || process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN || '').trim(),
     gatewayToken,
     gatewayAuthError,
     electronManaged: String(process.env.PROMETHEUS_ELECTRON_MANAGED || '').trim() === '1',

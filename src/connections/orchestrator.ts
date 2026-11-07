@@ -1,3 +1,4 @@
+import { publicConnectionValue } from './serialize-public';
 import { randomUUID } from 'crypto';
 import { ConnectionAdapterRegistry } from './adapter-registry';
 import { ConnectionActivityStore } from './activity-store';
@@ -21,6 +22,7 @@ export interface ConnectionOrchestratorOptions {
   adapters: ConnectionAdapterRegistry;
   activity: ConnectionActivityStore;
   plans: ConnectionPlanResolver;
+  validateCredentialReference?: (reference: string, serviceId: string, attemptId: string) => boolean;
   broadcast?: (event: Record<string, unknown>) => void;
 }
 
@@ -179,10 +181,17 @@ export class ConnectionOrchestrator {
   async disconnect(connectionId: string): Promise<void> {
     const connection = this.options.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown connection: ${connectionId}`);
-    const attempt = this.options.attempts.list({ serviceId: connection.serviceId }).find((item) => item.connectionId === connectionId && item.plan);
+    const candidates = this.options.attempts.list({ serviceId: connection.serviceId }).filter((item) => item.connectionId === connectionId && item.plan);
+    // Use the attempt that owns the persisted reference, not whichever attempt happens to be first.
+    const attempt = candidates.find((item) => Boolean(connection.credentialRef) && this.options.validateCredentialReference?.(connection.credentialRef as string, item.serviceId, item.id) === true) ?? candidates[0];
     if (attempt?.plan) {
-      const adapter = this.options.adapters.resolve(attempt.plan.strategy);
-      await adapter.disconnect?.(this.context(attempt), connection);
+      try {
+        const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+        await adapter.disconnect?.(this.context(attempt), connection);
+      } catch (error: any) {
+        // Cleanup failure must never leave the connection enabled; the vault entry can be retried.
+        console.warn(`[connections] disconnect cleanup failed for ${connectionId}:`, error?.message || error);
+      }
     }
     this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable' });
     invalidateConnectionToolSurfaceCache();
@@ -191,6 +200,9 @@ export class ConnectionOrchestrator {
   }
 
   private context(attempt: ConnectionAttempt, input?: Record<string, unknown>) {
+    if (input?.credentialRef !== undefined && (typeof input.credentialRef !== 'string' || this.options.validateCredentialReference?.(input.credentialRef, attempt.serviceId, attempt.id) !== true)) {
+      throw new Error('Credential reference was not issued for this connection attempt. Enter credentials through its secure card.');
+    }
     return { attempt, credentialRef: typeof input?.credentialRef === 'string' ? input.credentialRef : undefined, configuration: input, emitProgress: (message: string, details?: Record<string, unknown>) => { this.options.attempts.addProgress(attempt.id, { state: this.requireAttempt(attempt.id).state, message, details }); this.emitAttempt(attempt.id); } };
   }
 
@@ -246,8 +258,40 @@ export class ConnectionOrchestrator {
     return failed;
   }
 
+  /** Persist a manageable pending record before adapter continuation can fail. Returns the prior record (null when created here) for revert. */
+  recordStoredCredential(id: string, credentialRef: string): { prior: ConnectionRecord | null; connectionId: string } {
+    const attempt = this.requireAttempt(id);
+    if (!attempt.plan || !['api-key', 'setup-token'].includes(attempt.plan.strategy.adapter) || this.options.validateCredentialReference?.(credentialRef, attempt.serviceId, id) !== true) throw new Error('CREDENTIAL_BINDING_MISMATCH');
+    const pluginId = attempt.plan.pluginId || attempt.pluginId || 'core';
+    const prior = this.options.connections.findByService(attempt.serviceId).find((item) => item.pluginId === pluginId && item.strategyId === attempt.plan!.strategy.id) ?? null;
+    const record = this.options.connections.upsert({
+      pluginId, serviceId: attempt.serviceId, serviceName: attempt.serviceName,
+      strategyId: attempt.plan.strategy.id, adapterId: attempt.plan.strategy.adapter, installed: true, enabled: true,
+      configured: true, authenticated: false, registered: false, exposed: false, verified: false,
+      authState: 'pending', health: 'unknown', grantedCapabilities: attempt.requestedCapabilities,
+      registeredTools: [], exposedTools: [], credentialRef,
+    });
+    this.options.attempts.update(id, { connectionId: record.id });
+    this.emitAttempt(id);
+    return { prior, connectionId: record.id };
+  }
+
+  /** N4: after a bind failure, restore the prior record exactly, or delete the record this call created.
+   *  Never touches vault keys: the old key/binding is left as-is (fail closed via binding checks). */
+  revertStoredCredential(id: string, stored: { prior: ConnectionRecord | null; connectionId: string }): void {
+    if (stored.prior) {
+      const { id: _id, schemaVersion: _schema, createdAt: _created, ...patch } = stored.prior;
+      this.options.connections.update(stored.prior.id, patch);
+      this.options.attempts.update(id, { connectionId: stored.prior.id });
+    } else {
+      this.options.connections.delete(stored.connectionId);
+      this.options.attempts.update(id, { connectionId: undefined });
+    }
+    this.emitAttempt(id);
+  }
+
   private requireAttempt(id: string): ConnectionAttempt { const attempt = this.options.attempts.get(id); if (!attempt) throw new Error(`Unknown connection attempt: ${id}`); return attempt; }
   private record(attempt: ConnectionAttempt, type: string, message: string): void { this.options.activity.append({ type, attemptId: attempt.id, connectionId: attempt.connectionId, serviceId: attempt.serviceId, pluginId: attempt.pluginId, message }); this.emitAttempt(attempt.id); }
   private emitAttempt(id: string): void { this.emit({ type: 'connection_attempt_updated', attempt: this.options.attempts.get(id) }); }
-  private emit(event: Record<string, unknown>): void { try { this.options.broadcast?.(event); } catch {} }
+  private emit(event: Record<string, unknown>): void { try { this.options.broadcast?.(publicConnectionValue(event)); } catch {} }
 }

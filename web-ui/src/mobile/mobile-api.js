@@ -1,3 +1,4 @@
+import { assertSafeChatRequest } from '../features/chat/secret-format-guard.js';
 // Mobile API shim — adapts Prometheus gateway endpoints into the shapes
 // expected by mobile-pages.js. Keep this layer thin; do not put rendering here.
 
@@ -171,6 +172,7 @@ export function buildMobileGatewayWsUrl(path, params = {}) {
 }
 
 async function mfetch(path, opts = {}) {
+  assertSafeChatRequest(path, opts.body);
   _assertMobileRequestTarget();
   const method = String(opts.method || 'GET').trim().toUpperCase() || 'GET';
   const canRetryGatewayRestart = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';

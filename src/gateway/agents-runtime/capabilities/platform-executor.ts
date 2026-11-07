@@ -1,3 +1,4 @@
+import { publicConnectionValue } from '../../../connections/serialize-public';
 import { getMCPManager } from '../../mcp-manager';
 import { buildConnectorStatus } from '../../tool-builder';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/extension-bootstrap';
@@ -7,11 +8,13 @@ import type { ToolResult } from '../../tool-builder';
 import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
 import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
+import * as secureAccessRuntime from '../../../security/secure-access-runtime';
 
 const PLATFORM_TOOL_NAMES = new Set([
   'plugin_ops',
   'mcp_server_manage',
   'connection_ops',
+  'secure_access',
   'connector_list',
   'webhook_manage',
   'integration_quick_setup',
@@ -47,6 +50,29 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
 
   async execute(ctx: CapabilityExecutionContext): Promise<ToolResult> {
     const { name, args, workspacePath, deps, sessionId } = ctx;
+
+    if (name === 'secure_access') {
+      // Identity comes from the runtime context, never model arguments. Unknown actors fail closed.
+      // Chat channels (Telegram/Discord/WhatsApp) may not create requests or prepare logins.
+      if (/^(telegram_|discord_|whatsapp_)/.test(String(sessionId)) && (args.action === 'request' || args.action === 'fill')) {
+        return { name, args, result: 'Saved access requests and protected logins are not available from chat channels. Use the Prometheus app main chat.', error: true };
+      }
+      if (!/^(mobile_|web_|telegram_|discord_|whatsapp_|terminal_|main$)/.test(sessionId) || deps.internalWatchContext || deps.threadOpsSupervisionId || deps.executionPolicy?.mode === 'goal_autonomous') {
+        return { name, args, result: 'Saved access currently supports owner main chats only. Teams, jobs and supervised turns require separate grants in a later release.', error: true };
+      }
+      try {
+        const runtime = secureAccessRuntime;
+        const broker = runtime.getSecureAccess();
+        let result: unknown;
+        if (args.action === 'status') result = await runtime.secureAccessStatus();
+        else if (args.action === 'list') result = { credentials: runtime.secureAccessCredentials() };
+        else if (args.action === 'request') result = { request: broker.create({ sessionId, label: args.label, purpose: args.purpose, origin: args.origin, mode: args.mode || 'existing', identifier: args.identifier }), next: 'Owner enters credentials in the protected chat card. Never ask for passwords in a chat message.' };
+        else if (args.action === 'fill') result = await runtime.prepareProtectedLogin(String(args.credential_id || ''), String(args.url || ''), sessionId, 'main');
+        else if (args.action === 'revoke') { result = { credential: broker.revoke(String(args.credential_id || '')) }; await runtime.cancelProtectedLogin(String(args.credential_id || '')); }
+        else return { name, args, result: 'Unknown secure_access action.', error: true };
+        return { name, args, result: JSON.stringify(result), error: false };
+      } catch { return { name, args, result: 'Secure access refused or unavailable. Check Saved access status; use login takeover if unsupported. No secret is returned.', error: true }; }
+    }
 
     if (name.startsWith('mcp__')) {
       const parts = name.split('__');
@@ -275,6 +301,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
     }
 
     if (name === 'connection_ops') {
+      return publicConnectionValue(await (async () => {
       try {
         const { getConnectionRuntime } = await import('../../../connections/runtime.js');
         const runtime = getConnectionRuntime();
@@ -293,7 +320,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           return summarizeConnectionOps(connection, { mcpStatus, live });
         };
         if (action === 'list' || action === 'list_connections') {
-          const connections = runtime.orchestrator.listConnections();
+          const connections = publicConnectionValue(runtime.orchestrator.listConnections());
           const result = args.detail === 'full' ? connections : connections.map(summarizeConnection);
           return { name, args, result: JSON.stringify({ connections: result }), error: false };
         }
@@ -355,9 +382,10 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         if (action === 'verify') { const attempt = await runtime.orchestrator.verify(attemptId); return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: attempt.state === 'failed' }; }
         if (action === 'repair') { const attempt = await runtime.orchestrator.repair(attemptId); return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: attempt.state === 'failed' }; }
         if (action === 'cancel') return { name, args, result: JSON.stringify({ attempt: runtime.orchestrator.cancel(attemptId) }, null, 2), error: false };
-        if (action === 'disconnect') { const id = String(args.connection_id || '').trim(); if (!id) return { name, args, result: 'disconnect requires connection_id', error: true }; await runtime.orchestrator.disconnect(id); return { name, args, result: `Disconnected "${id}".`, error: false }; }
+        if (action === 'disconnect') { const id = String(args.connection_id || '').trim(); if (!id) return { name, args, result: 'disconnect requires connection_id', error: true }; const connection = runtime.orchestrator.listConnections().find(item => item.id === id); if (connection?.credentialRef?.replace(/^vault:/, '').startsWith('connection.credentials.') || ['api-key', 'setup-token'].includes(connection?.adapterId || '')) return { name, args, result: 'Owner approval required. Disconnect this protected credential in Saved access or Connections.', error: true }; await runtime.orchestrator.disconnect(id); return { name, args, result: `Disconnected "${id}".`, error: false }; }
         return { name, args, result: `Unknown connection_ops action: ${action}`, error: true };
       } catch (error: any) { return { name, args, result: `connection_ops failed: ${error?.message || error}`, error: true }; }
+      })());
     }
 
     if (name === 'webhook_manage') {

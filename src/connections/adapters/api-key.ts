@@ -31,7 +31,7 @@ export class ApiKeyConnectionAdapter implements ConnectionAdapter {
       const session = await this.options.createCredentialSession(context, fields);
       return { state: 'awaiting_secure_input', userAction: { type: 'secure-input', label: `Enter credentials for ${context.attempt.serviceName || context.attempt.serviceId}`, credentialSessionId: session.id, fields, expiresAt: session.expiresAt } };
     }
-    return { state: 'registering', connection: { configured: true, authenticated: true, authState: 'healthy', credentialRef: context.credentialRef } };
+    return { state: 'registering', connection: { configured: true, authenticated: false, authState: 'pending', credentialRef: context.credentialRef } };
   }
 
   async continue(context: ConnectionAdapterContext, input: Record<string, unknown> = {}): Promise<ConnectionAdapterResult> {
@@ -42,7 +42,7 @@ export class ApiKeyConnectionAdapter implements ConnectionAdapter {
   async verify(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionVerificationResult[]> {
     const checked = connection.credentialRef && this.options.verifyCredential
       ? await this.options.verifyCredential(connection.credentialRef, context)
-      : { ok: Boolean(connection.credentialRef), message: connection.credentialRef ? 'Credential reference is stored.' : 'Credential reference is missing.' };
+      : { ok: false, message: connection.credentialRef ? 'Stored, not verified: no safe authentication verifier is available.' : 'Credential reference is missing.' };
     return [{ id: `${connection.id}:credential`, check: 'credential.authentication', passed: checked.ok, message: checked.message, details: checked.details, verifiedAt: new Date().toISOString() }];
   }
 

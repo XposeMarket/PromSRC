@@ -9,6 +9,9 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const index = read('web-ui/index.html');
 const app = read('web-ui/src/app.js');
 const connections = read('web-ui/src/pages/ConnectionsPage.js');
+// #821 moved the protected key save (/api/connection-secure-input/) into the shared
+// protected plugin card used by ConnectionsPage on desktop and mobile.
+const protectedPluginCard = read('web-ui/src/features/secure-access/protected-plugin-card.js');
 const pagesCss = read('web-ui/src/styles/pages.css');
 const desktopDocs = read('workspace/self/17-desktop-web-ui.md');
 const connectorDocs = read('workspace/self/12-connectors-mcp-integrations.md');
@@ -54,7 +57,7 @@ for (const route of [
   'startBrowserLogin',
   'openMcpServerView',
 ]) {
-  assert.match(connections, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `connection flow must preserve ${route}`);
+  assert.match(connections + '\n' + protectedPluginCard, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `connection flow must preserve ${route}`);
 }
 assert.match(connections, /function startCanonicalConnection\(id\)/, 'managed connector flow must start through the host-owned attempt API');
 assert.match(connections, /function disconnectCanonicalConnection\(connectionId, id\)/, 'managed disconnect must use the canonical connection route');

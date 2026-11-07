@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 import { getVault } from '../security/vault.js';
+import { resolveBoundPluginCredential } from '../connections/plugin-credential-binding';
 
 export type SavedConnectionsMap = Record<
   string,
@@ -40,6 +41,9 @@ export function saveSavedConnections(data: SavedConnectionsMap): void {
 }
 
 export function getVercelCredentials(): VercelCredentials | null {
+  const directory = getConfig().getConfigDir();
+  const bound = resolveBoundPluginCredential(directory, 'vercel', 'apiKey');
+  if (bound.handled) return bound.value ? { apiKey: bound.value, projectId: resolveBoundPluginCredential(directory, 'vercel', 'projectId').value || '', teamId: resolveBoundPluginCredential(directory, 'vercel', 'teamId').value || '' } : null;
   try {
     const envApiKey = String(process.env.VERCEL_API_TOKEN || '').trim();
     const envProjectId = String(process.env.VERCEL_PROJECT_ID || '').trim();

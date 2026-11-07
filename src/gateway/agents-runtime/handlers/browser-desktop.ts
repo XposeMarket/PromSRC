@@ -12,6 +12,7 @@ import { getBrowserRefLabel } from '../../browser-tools';
 import { desktopAccessibilityAction, desktopAccessibilityFindAndAct, desktopBackgroundCommand, desktopBackgroundPrepareSandbox, desktopBackgroundStatus, desktopClick, desktopClickText, desktopCloseApp, desktopDiffScreenshot, desktopDoctor, desktopDrag, desktopFindInstalledApp, desktopFindWindow, desktopFocusWindowCanonical, desktopFocusWindowVerified, desktopGetAccessibilityState, desktopGetAccessibilityTree, desktopGetClipboard, desktopGetMonitorsSummary, desktopGetProcessList, desktopGetWindowState, desktopGetWindowText, desktopLaunchApp, desktopListApps, desktopListInstalledApps, desktopListMacros, desktopListWindowsCanonical, desktopLocateText, desktopPixelWatch, desktopPressKey, desktopRecordMacro, desktopReplayMacro, desktopScreenshotWithHistory, desktopScroll, desktopSetClipboard, desktopStopMacro, desktopType, desktopTypeRaw, desktopWait, desktopWaitForChange, desktopWindowClick, desktopWindowControl, desktopWindowDrag, desktopWindowPressKey, desktopWindowScreenshot, desktopWindowScroll, desktopWindowType, getDesktopAdvisorPacketById, parseDesktopPointerMonitorArgs, parseDesktopScreenshotToolArgs, resolveCanonicalWindow, resolveDesktopActionPoint } from '../../desktop-tools';
 import { executeDeliverySendScreenshot } from '../../delivery-screenshot.js';
 import { defaultChromeSigninDeps, listChromeAccounts } from '../../browser/chrome-signin-sync';
+import { ownerConsentActive } from '../../../security/secure-access-consent';
 
 import { executeTool, resolveBoundedToolTimeoutMs, withBoundedToolTimeout } from '../subagent-executor';
 
@@ -20,6 +21,11 @@ export const HANDLEBROWSERDESKTOPTOOL_TOOL_NAMES: ReadonlySet<string> = new Set(
 export async function handleBrowserDesktopTool(ctx: BrowserDesktopHandlerContext): Promise<any> {
   const { name, args, workspacePath, deps, sessionId, broadcastBrowserStatus, maybeBroadcastBrowserStatus } = ctx;
   void workspacePath; void deps;
+  // PR821 I1 chokepoint (defense in depth behind evaluateHardToolDeny): no desktop
+  // screen read or input while the native owner-approval window is open.
+  if (/^desktop_/.test(String(name)) && ownerConsentActive()) {
+    return { name, args, result: 'Desktop tools are paused while the owner approves a protected action. Wait for the owner, then continue.', error: true };
+  }
   switch (name) {
       // Read-only Chrome inventory (Google account names + site cookie counts; no values)
       case 'browser_chrome_accounts': {

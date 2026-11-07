@@ -97,6 +97,15 @@ contextBridge.exposeInMainWorld('prometheusPairingAdmin', {
   request: (payload = {}) => ipcRenderer.invoke('pairing-admin:request', payload),
 });
 
+// PR821 I1: opens the native owner-approval window; returns a single-use header or {approved:false}.
+contextBridge.exposeInMainWorld('prometheusOwnerConsent', {
+  request: (payload = {}) => ipcRenderer.invoke('owner-consent:request', {
+    method: String(payload?.method || 'POST'), path: String(payload?.path || ''),
+    body: typeof payload?.body === 'string' ? payload.body : '', detail: String(payload?.detail || '').slice(0, 160),
+  }),
+  status: () => ipcRenderer.invoke('owner-consent:status'),
+});
+
 // ─── Local File Selection Bridge ────────────────────────────────────────────
 contextBridge.exposeInMainWorld('prometheusFiles', {
   selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),

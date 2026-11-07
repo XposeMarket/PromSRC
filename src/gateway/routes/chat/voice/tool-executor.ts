@@ -128,6 +128,10 @@ import { _skillsManager, _telegramChannel, _cronScheduler } from './dependencies
 
 export async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
   const workspacePath = getConfig().getWorkspacePath();
+  // PR821 I1: voice desktop tools pause while the native owner-approval window is open.
+  if (/^(voice_)?desktop_/.test(String(name || ''))) {
+    try { if (require('../../../../security/secure-access-consent').ownerConsentActive()) return voiceToolResult(false, 'Desktop tools are paused while the owner approves a protected action.'); } catch { /* module unavailable: no lock */ }
+  }
   // Wrapper normalization (voice_ops/voice_browser/show_ui) produces internal
   // voice_* / show_* names that are not in the definition list; keep them here.
   if (name && !voiceOwnToolNames().has(name) && !/^(voice_|show_|skill_)/.test(name)) {

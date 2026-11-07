@@ -8,6 +8,11 @@
 import { api, ENDPOINTS } from '../api.js';
 import { getConnectorLogoUrl as getSharedConnectorLogoUrl } from '../features/connectors/connector-logo-runtime.js';
 import { escHtml, showToast } from '../utils.js';
+import { postJson } from '../features/secure-access/secure-access-core.js';
+import { openProtectedPluginCard, protectedRequestFromAction, protectedErrorText } from '../features/secure-access/protected-plugin-card.js';
+
+const protectedFetch = (path, opts = {}) => api(path, opts);
+const pendingProtectedRequests = new Map();
 
 let CONNECTORS = [];
 let connectionsState = {};
@@ -667,11 +672,9 @@ function renderCanonicalConnectionActions(connector, isConnected) {
   if (attemptId && action?.type === 'oauth') {
     controls.push(`<button class="cv-btn-connect" onclick="openConnectionAttemptOAuth(decodeURIComponent('${attemptId}'), decodeURIComponent('${encodedInlineValue(action.authorizationUrl)}'), this)">${escHtml(action.label || 'Authorize in browser')}</button>`);
   } else if (attemptId && action?.type === 'secure-input') {
-    const session = encodedInlineValue(action.credentialSessionId);
-    const fields = (Array.isArray(action.fields) ? action.fields : []).map((field) => `
-      <label class="cv-attempt-field"><span>${escHtml(field.label || field.key)}</span><input type="password" autocomplete="off" data-attempt-key="${escHtml(field.key || '')}" placeholder="${escHtml(field.placeholder || '')}" /></label>
-    `).join('');
-    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Secure setup required')}</div>${fields}<button class="cv-btn-connect" onclick="submitConnectionAttemptSecureInput(decodeURIComponent('${attemptId}'), decodeURIComponent('${session}'), this)">Save securely and continue</button></div>`);
+    const meta = protectedRequestFromAction(attempt?.serviceId, attempt?.id, action);
+    if (meta) pendingProtectedRequests.set(String(attempt.id), meta);
+    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Secure setup required')}</div><button class="cv-btn-connect" onclick="submitConnectionAttemptSecureInput(decodeURIComponent('${attemptId}'), '', this)">Open protected entry</button></div>`);
   } else if (attemptId && action?.type === 'browser-login') {
     controls.push(`<button class="cv-btn-connect" onclick="window.openPrometheusExternalLink ? window.openPrometheusExternalLink(decodeURIComponent('${encodedInlineValue(action.url)}'), {target:'_blank',features:'noopener,noreferrer'}) : window.open(decodeURIComponent('${encodedInlineValue(action.url)}'), '_blank', 'noopener,noreferrer');this.nextElementSibling.hidden=false">${escHtml(action.label || 'Sign in in browser')}</button><button class="cv-btn-connect" hidden onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {}, this)">Continue after login</button>`);
   } else if (attemptId && action?.type === 'device-code') {
@@ -746,19 +749,10 @@ async function openConnectionAttemptOAuth(attemptId, url, button) {
 }
 
 async function submitConnectionAttemptSecureInput(attemptId, sessionId, button) {
-  const wrap = button?.closest?.('.cv-attempt-card');
-  const values = {};
-  wrap?.querySelectorAll?.('input[data-attempt-key]').forEach((input) => {
-    values[input.getAttribute('data-attempt-key')] = input.value;
-  });
-  if (button) { button.disabled = true; button.textContent = 'Saving securely…'; }
-  try {
-    const saved = await api(`/api/connection-secure-input/${encodeURIComponent(sessionId)}`, { method: 'POST', body: JSON.stringify({ values }) });
-    await continueConnectionAttempt(attemptId, { credentialRef: saved.credentialRef }, button);
-  } catch (error) {
-    showToast('Secure setup failed', error?.message || String(error), 'error');
-    if (button) { button.disabled = false; button.textContent = 'Save securely and continue'; }
-  }
+  // Shared protected card owns values, owner consent, expiry and clearing.
+  const meta = pendingProtectedRequests.get(String(attemptId));
+  if (!meta) { showToast('Protected entry unavailable', 'Refresh and try again. Nothing was collected.', 'error'); return; }
+  await openProtectedPluginCard(protectedFetch, { serviceId: meta.serviceId, request: meta.request, onSaved: () => { pendingProtectedRequests.delete(String(attemptId)); loadConnectionsState?.(); } });
 }
 
 function renderObsidianVaultList() {
@@ -978,7 +972,7 @@ async function startCanonicalConnection(id) {
 async function disconnectCanonicalConnection(connectionId, id) {
   if (!confirm('Disconnect this account and revoke the provider grant when supported?')) return;
   try {
-    await api(`/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`, { method: 'POST', body: '{}' });
+    await postJson(api, `/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`, {}, 'Disconnect account and clear its local credential');
     await loadConnectionsState();
     if (getConnectorById(id)) openConnectorView(id);
     showToast('Disconnected', 'The local session was cleared and provider revocation was attempted.', 'success');
@@ -1307,6 +1301,10 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
   const el = document.getElementById('cv-actions');
   if (!el || !connector) return;
 
+  if (connector.id === 'x') {
+    el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px"><div style="font-size:12px;color:var(--muted)">X app Client ID / Secret are entered only in protected entry, then X sign-in continues in your browser.</div><button class="cv-btn-connect" onclick="saveConnectorCredentials('x')">Open protected entry</button></div>`;
+    return;
+  }
   const info = connector.credInfo;
   if (!info) {
     el.innerHTML = `<div style="font-size:12px;color:var(--err)">No credential configuration found for ${escHtml(connector.name)}.</div>`;
@@ -1389,6 +1387,7 @@ async function saveConnectorCredentials(id) {
   const connector = getConnectorById(id);
   const info = connector?.credInfo;
   if (!connector || !info) return;
+  if (id === 'x') { openProtectedPluginCard(protectedFetch, { serviceId: 'x', onSaved: () => loadConnectionsState?.() }); return; }
 
   const btn = document.getElementById(`cred-save-btn-${id}`);
   const statusEl = document.getElementById(`cred-status-${id}`);
@@ -1437,17 +1436,19 @@ async function saveConnectorCredentials(id) {
   }
 
   try {
-    await api(ENDPOINTS.CONNECTIONS_CREDENTIALS, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    // Owner-consent bound; inputs are cleared whatever the outcome.
+    try { await postJson(protectedFetch, ENDPOINTS.CONNECTIONS_CREDENTIALS, body, `Save ${connector.name} credentials`); }
+    finally {
+      info.fields.forEach((field) => { const inputEl = document.getElementById(`cred-input-${id}-${field.key}`); if (inputEl) inputEl.value = ''; });
+      for (const key of Object.keys(body)) if (key !== 'id') body[key] = '';
+    }
   } catch (e) {
     if (btn) {
       btn.disabled = false;
       btn.textContent = connector.authType === 'api_key' ? 'Save Credentials' : 'Save and Authorize';
     }
     if (statusEl) {
-      statusEl.textContent = 'Failed to save: ' + e.message;
+      statusEl.textContent = protectedErrorText(e, 'Not saved. Fields were cleared; re-enter to retry.');
       statusEl.style.color = 'var(--err)';
     }
     return;

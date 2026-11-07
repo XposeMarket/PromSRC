@@ -445,6 +445,22 @@ let isGatewayRestarting = false;
 const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
+// PR821 F3: owner proof for /api/secure-access mutations. Held only by the owner
+// window session as an HttpOnly cookie; the gateway captures and scrubs it from
+// env at boot (src/security/secure-access-owner.ts) so tool children never see it.
+const SECURE_ACCESS_OWNER_TOKEN = crypto.randomBytes(32).toString('hex');
+async function installSecureAccessOwnerCookie(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    await win.webContents.session.cookies.set({
+      url: GATEWAY_URL, name: 'prom_sa_owner', value: SECURE_ACCESS_OWNER_TOKEN,
+      httpOnly: true, secure: false, sameSite: 'strict', path: '/api/secure-access',
+    });
+  } catch (err) {
+    // Fail closed: without the cookie, protected card writes return OWNER_SURFACE_REQUIRED.
+    try { writeGatewayLog(`[main] secure-access owner cookie not set: ${err && err.message ? err.message : err}\n`); } catch {}
+  }
+}
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 
 function restoreMainWindow() {
@@ -1356,7 +1372,7 @@ function requestPrometheusBrowserNavigation(rawUrl) {
 // or null if protection is unavailable (child then falls back to its key file).
 function resolveVaultMasterKey() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text')) {
       writeGatewayLog('[main] safeStorage unavailable — vault key will use file fallback\n');
       return null;
     }
@@ -1774,11 +1790,13 @@ function buildGatewayEnvironment() {
     PROMETHEUS_SUPERVISOR_RESTART:  '1',
     PROMETHEUS_DISABLE_UPDATE_CHECK: '1',
     PROMETHEUS_ELECTRON_MANAGED:    '1',
+    PROMETHEUS_VAULT_OS_PROTECTED: safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') ? '1' : '0',
     PROMETHEUS_ELECTRON_PID:        String(process.pid),
     // Lets the gateway know exit 43 (full app relaunch) is understood here.
     PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
     PROMETHEUS_GATEWAY_STALL_AUTORESTART: process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART ?? '1',
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
+    PROMETHEUS_SECURE_ACCESS_OWNER_TOKEN: SECURE_ACCESS_OWNER_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
     ...(IS_PACKAGED_RUNTIME ? {
@@ -1936,6 +1954,7 @@ async function restartGatewayFromElectron(options = {}) {
       mainWindow.webContents.once('did-finish-load', () => {
         if (!mainWindow.isDestroyed()) mainWindow.webContents.send('gateway-recovered', { reason });
       });
+      await installSecureAccessOwnerCookie(mainWindow);
       mainWindow.loadURL(GATEWAY_URL);
     }
     writeGatewayLog('[main] Gateway restart complete\n');
@@ -3265,7 +3284,7 @@ function buildNativeSnapshotScript() {
       const style = getComputedStyle(el);
       return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
     };
-    const textOf = (el) => String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.innerText || el.value || el.href || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
+    const textOf = (el) => String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.innerText || ((el.type === 'password' || /password|one-time-code/i.test(el.autocomplete || '') || el.hasAttribute('data-prom-secret')) ? '' : el.value) || el.href || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
     const roleOf = (el) => String(el.getAttribute('role') || el.tagName || '').toLowerCase();
     const inputish = (el) => {
       const tag = String(el.tagName || '').toLowerCase();
@@ -3379,7 +3398,7 @@ async function locateNativeElement(payload = {}, sessionId = '') {
     const cx = Math.round(Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)));
     const cy = Math.round(Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2)));
     const tag = String(el.tagName || '').toLowerCase();
-    const name = String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.value || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+    const name = String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || ((el.type === 'password' || /password|one-time-code/i.test(el.autocomplete || '') || el.hasAttribute('data-prom-secret')) ? '' : el.value) || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
     const role = String(el.getAttribute('role') || el.tagName || '').toLowerCase();
     const editable = tag === 'input' || tag === 'textarea' || el.isContentEditable === true;
     return { ok: true, x: cx, y: cy, tag, role, name, editable,
@@ -3918,6 +3937,17 @@ async function inspectNativeBrowserPoint(payload = {}) {
   })(${JSON.stringify(point)})`, sessionId);
 }
 
+const protectedAccess = require('./protected-access').createProtectedAccess({ BrowserWindow, session, app,
+  transferCookies: async (sessionId, origin, cookies) => {
+    await openNativeBrowserSurface({ sessionId, url: origin });
+    const { wc } = requireNativeViewForSession(sessionId);
+    for (const cookie of cookies) {
+      await wc.session.cookies.set({ url: origin, name: cookie.name, value: cookie.value, path: cookie.path || '/', secure: true, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, ...(cookie.expirationDate ? { expirationDate: cookie.expirationDate } : {}) });
+    }
+    await wc.loadURL(origin);
+  }
+});
+
 async function startNativeBrowserRpcServer() {
   if (nativeBrowserRpcServer) return nativeBrowserRpcPort;
   nativeBrowserRpcServer = http.createServer((req, res) => {
@@ -3937,7 +3967,11 @@ async function startNativeBrowserRpcServer() {
       try {
         const pathName = new URL(req.url || '/', 'http://127.0.0.1').pathname;
         let result;
-        if (pathName === '/state') result = stateNativeBrowserSurface(payload);
+        if (pathName === '/protected-status') result = { supported: protectedAccess.supported() };
+        else if (pathName === '/protected-prepare') result = await protectedAccess.prepare(payload);
+        else if (pathName === '/protected-submit') result = await protectedAccess.submit(payload);
+        else if (pathName === '/protected-cancel') result = protectedAccess.cancel(payload);
+        else if (pathName === '/state') result = stateNativeBrowserSurface(payload);
         else if (pathName === '/metrics') result = await getNativeBrowserResourceMetrics(payload);
         else if (pathName === '/tabs') result = listNativeBrowserTabs(payload);
         else if (pathName === '/select-tab') result = selectNativeBrowserTab(payload);
@@ -4044,6 +4078,8 @@ const PAIRING_ADMIN_ROUTES = [
   ['GET', /^\/api\/pairing\/devices$/],
   ['PATCH', /^\/api\/pairing\/devices\/[^/?#]+$/],
   ['DELETE', /^\/api\/pairing\/devices\/[^/?#]+$/],
+  ['POST', /^\/api\/pairing\/devices\/[^/?#]+\/owner-approval$/],
+  ['DELETE', /^\/api\/pairing\/devices\/[^/?#]+\/owner-approval$/],
   ['GET', /^\/api\/pairing\/remote-access$/],
   ['PUT', /^\/api\/pairing\/remote-access$/],
   ['GET', /^\/api\/pairing\/tailscale\/status$/],
@@ -4099,6 +4135,25 @@ function relayTeachEvent(event, channel, payload = {}) {
   }
 }
 
+// PR821 I1: per-action human consent. The owner cookie authenticates the window;
+// this native, capture-protected approval proves a human approved this request.
+const ownerConsent = require('./owner-consent').createOwnerConsent({
+  BrowserWindow, app, ipcMain, ownerToken: SECURE_ACCESS_OWNER_TOKEN,
+  getGatewayUrl: () => GATEWAY_URL, getParent: () => mainWindow,
+  log: (line) => { try { writeGatewayLog(line); } catch {} },
+});
+// Renderer passes the exact JSON body string it will send; the header binds its SHA-256.
+handleTrustedMain('owner-consent:request', async (_event, payload = {}) => {
+  const method = String(payload?.method || 'POST').toUpperCase();
+  const routePath = String(payload?.path || '');
+  const body = typeof payload?.body === 'string' ? payload.body : '';
+  if (Buffer.byteLength(body, 'utf8') > 32 * 1024) throw new Error('Approval request is too large.');
+  if (!/^\/api\/secure-access\//.test(routePath)) throw new Error('This action does not use owner approval.');
+  const header = await ownerConsent.request({ method, path: routePath, body, detail: String(payload?.detail || '') });
+  return header ? { approved: true, header } : { approved: false };
+});
+handleTrustedMain('owner-consent:status', () => ({ supported: ownerConsent.supported() }));
+
 handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
   const method = String(payload?.method || 'GET').trim().toUpperCase();
   const requestPath = String(payload?.path || '').trim();
@@ -4120,11 +4175,18 @@ handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
   if (body && Buffer.byteLength(body, 'utf8') > 64 * 1024) {
     throw new Error('Pairing administration request is too large.');
   }
+  // Allowing a paired phone to approve protected access needs native owner consent (PR821 I2).
+  let consentHeader = '';
+  if (method === 'POST' && /^\/api\/pairing\/devices\/[^/]+\/owner-approval$/.test(parsed.pathname)) {
+    consentHeader = await ownerConsent.request({ method, path: parsed.pathname, body: body || '', detail: 'The phone can then save, change and approve protected access without this computer.' });
+    if (!consentHeader) throw new Error('Owner approval was cancelled.');
+  }
   const response = await fetch(parsed.href, {
     method,
     headers: {
       'Content-Type': 'application/json',
       'X-Prometheus-Pairing-Admin': PAIRING_ADMIN_TOKEN,
+      ...(consentHeader ? { 'X-Prom-Owner-Consent': consentHeader } : {}),
     },
     body: method === 'GET' || method === 'HEAD' ? undefined : body,
   });
@@ -4314,7 +4376,10 @@ function createWindow() {
   refreshNativeBrowserAvailability();
 
   Menu.setApplicationMenu(null);
-  mainWindow.loadURL(GATEWAY_URL);
+  const ownerWindow = mainWindow;
+  installSecureAccessOwnerCookie(ownerWindow).finally(() => {
+    if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.loadURL(GATEWAY_URL);
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
