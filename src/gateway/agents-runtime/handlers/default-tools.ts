@@ -1896,7 +1896,16 @@ export async function handleDefaultTool(ctx: DefaultToolContext): Promise<Awaite
             }
             // Same quick restart path used by Telegram/mobile/terminal /restart.
             // This is async and will kill the process, so it should remain a final action.
-            await gracefulRestart(ctx);
+            const restartOutcome = await gracefulRestart(ctx);
+            // An aborted warm handoff or failed spawn leaves this gateway serving
+            // the old code. Say so, and keep any queued request for a retry.
+            if (restartOutcome === 'handoff_aborted' || restartOutcome === 'spawn_failed') {
+              return {
+                name, args,
+                result: `gateway_restart did not take effect (${restartOutcome}): this gateway is still running and serving the current code. Check gateway.log [lifecycle] lines for the reason before retrying.`,
+                error: true,
+              };
+            }
             if (ctx.queuedRestart) restartQueue.clearPendingGatewayRestart();
             return {
               name, args,

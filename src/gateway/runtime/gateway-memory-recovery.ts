@@ -81,6 +81,36 @@ export function runRecoveryGc(): { gcRan: boolean; postGcHeapUsedBytes?: number;
   return { gcRan: true, postGcHeapUsedBytes: memory.heapUsed, postGcRssBytes: memory.rss, gcMs: Date.now() - started };
 }
 
+function readRatioEnv(name: string, fallback: number, allowZero: boolean): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n < 1 && (allowZero ? n >= 0 : n > 0) ? n : fallback;
+}
+
+/**
+ * Routine recycle once heapUsed reaches this share of the REAL V8 heap limit.
+ * The old trigger was RSS >= 4 GiB, which on a default 4144 MB heap is the OOM
+ * point itself, so the watchdog never acted before V8 aborted (exit 134).
+ * 0 disables the heap signal (RSS signal remains).
+ */
+export const MEMORY_RECOVERY_HEAP_RATIO = readRatioEnv('PROMETHEUS_GATEWAY_MEMORY_RESTART_HEAP_RATIO', 0.7, true);
+/** Emergency recycle (does not wait for active work) at this share of the heap limit. */
+export const MEMORY_EMERGENCY_HEAP_RATIO = readRatioEnv('PROMETHEUS_GATEWAY_MEMORY_EMERGENCY_HEAP_RATIO', 0.85, false);
+
+/** One watchdog sample: under pressure when RSS crosses its threshold OR heap crosses its ratio. */
+export function isMemoryPressureSample(input: {
+  rssBytes: number;
+  heapUsedBytes: number;
+  heapLimitBytes: number;
+  rssThresholdBytes: number;
+  heapRatio?: number;
+}): boolean {
+  if (input.rssThresholdBytes > 0 && input.rssBytes >= input.rssThresholdBytes) return true;
+  const ratio = input.heapRatio ?? MEMORY_RECOVERY_HEAP_RATIO;
+  return ratio > 0 && input.heapLimitBytes > 0 && input.heapUsedBytes >= input.heapLimitBytes * ratio;
+}
+
 export type ActiveWorkMemoryDecision = 'defer_active_work' | 'restart_idle' | 'restart_emergency';
 
 /** Routine maintenance must not kill unrelated work. True exhaustion still wins. */
@@ -95,7 +125,7 @@ export function decideActiveWorkMemoryRecovery(input: {
   const valid = [input.rssBytes, input.heapUsedBytes, input.heapLimitBytes, input.freeMemoryBytes, input.thresholdBytes]
     .every((n) => Number.isFinite(n) && n >= 0);
   const emergency = !valid || input.heapLimitBytes <= 0 || input.thresholdBytes <= 0
-    || input.heapUsedBytes >= input.heapLimitBytes * 0.9
+    || input.heapUsedBytes >= input.heapLimitBytes * MEMORY_EMERGENCY_HEAP_RATIO
     || input.rssBytes >= input.thresholdBytes * 1.5
     || input.freeMemoryBytes < 256 * 1024 * 1024;
   if (emergency) return 'restart_emergency';

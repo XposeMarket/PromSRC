@@ -49,14 +49,17 @@ async function main() {
   assert.match(source, /memoryPressureDeferredForActiveWork:/);
   // Execute the actual watchdog functions with fake process/lifecycle dependencies.
   // No gateway imports, live state, timers or restart side effects are permitted.
-  const watchdogSource = source.slice(source.indexOf('export function shouldScheduleGatewayMemoryRecovery('), source.indexOf('function writeRuntimeStatus('))
-    .replace("await import('../lifecycle.js')", 'await loadLifecycle()');
+  // The watchdog loads lifecycle through loadLifecycle() (require, never a
+  // dynamic import). The harness supplies a fake loadLifecycle.
+  assert.equal(/(?<!typeof\s)import\(\s*['"]\.\.\/lifecycle(\.js)?['"]\s*\)/.test(source), false, 'broadcaster must not dynamically import lifecycle');
+  const watchdogSource = source.slice(source.indexOf('export function shouldScheduleGatewayMemoryRecovery('), source.indexOf('function writeRuntimeStatus('));
   const compiled = ts.transpileModule(watchdogSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   function harness() {
     let active = 1;
     let memory = { rss: 4.2 * GB, heapUsed: 2.2 * GB, heapTotal: 3 * GB, external: 0, arrayBuffers: 0 };
     let timer: (() => Promise<void>) | undefined;
     let restartError = '';
+    let restartOutcome = 'exiting';
     let activateOnLoad = false;
     const restarts: string[] = [];
     const exits: number[] = [];
@@ -69,7 +72,10 @@ async function main() {
       setTimeout: (fn: () => Promise<void>) => { timer = fn; return { unref() {} }; },
       loadLifecycle: async () => {
         if (activateOnLoad) active = 1;
-        return { gracefulRestart: async (ctx: any) => { if (restartError) throw Error(restartError); restarts.push(ctx.handoffPolicy); } };
+        return {
+          gracefulRestart: async (ctx: any) => { if (restartError) throw Error(restartError); restarts.push(ctx.handoffPolicy); return restartOutcome; },
+          restartLeftProcessServing: (o: unknown) => o === 'handoff_aborted' || o === 'spawn_failed',
+        };
       },
       canAttemptRecoveryGc: () => false,
       MEMORY_RESTART_RSS_BYTES: 4 * GB, MEMORY_RESTART_CONSECUTIVE_SAMPLES: 3,
@@ -85,6 +91,8 @@ async function main() {
       setActive: (n: number) => { active = n; },
       setRss: (n: number) => { memory = { ...memory, rss: n }; },
       setError: (s: string) => { restartError = s; },
+      setOutcome: (s: string) => { restartOutcome = s; },
+      setMemory: (m: Partial<typeof memory>) => { memory = { ...memory, ...m }; },
       activateDuringLoad: () => { activateOnLoad = true; },
       tick: () => { for (let i = 0; i < 3; i++) box.maybeScheduleMemoryPressureRecovery(memory, 1000000 + i); },
       fire: async () => { const cb = timer; timer = undefined; if (cb) await cb(); },
@@ -121,6 +129,13 @@ async function main() {
   assert.deepEqual(failedRoutine.exits, [], 'routine failure cannot force-exit other work');
   const drained = harness(); drained.setActive(0); drained.tick(); drained.box._gatewayDraining = true; await drained.fire();
   assert.deepEqual(drained.restarts, []);
+  const aborted = harness(); aborted.setActive(0); aborted.setOutcome('handoff_aborted'); aborted.tick(); await aborted.fire();
+  assert.deepEqual(aborted.restarts, ['prefer']);
+  assert.equal(aborted.box._memoryPressureRestartScheduled, false, 'aborted handoff re-arms the memory watchdog');
+  const exiting = harness(); exiting.setActive(0); exiting.tick(); await exiting.fire();
+  assert.equal(exiting.box._memoryPressureRestartScheduled, true, 'an exiting restart keeps its latch');
+  const heapOnly = harness(); heapOnly.setActive(0); heapOnly.setMemory({ rss: 3.4 * GB, heapUsed: 3.0 * GB }); heapOnly.tick();
+  assert.equal(heapOnly.scheduled(), true, 'heap ratio triggers recovery before RSS reaches the old 4 GiB threshold');
   console.log('gateway active-work memory recovery regression: PASS (policy + actual watchdog busy/idle/emergency/disabled/races/drain/barrier paths)');
 }
 void main().catch((error) => { console.error(error); process.exitCode = 1; });

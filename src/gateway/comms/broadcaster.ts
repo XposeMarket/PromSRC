@@ -16,7 +16,7 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 import { StallProfiler } from '../runtime/stall-profiler';
-import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
+import { canAttemptRecoveryGc, decideMemoryRecoveryAfterGc, decideActiveWorkMemoryRecovery, isMemoryPressureSample, runMemoryRecoveryRestart, runRecoveryGc, shouldKeepSkippingWithinGcWindow } from '../runtime/gateway-memory-recovery';
 import { countLocalRunningRuntimes } from '../live-runtime-registry';
 import { getHeapStatistics } from 'node:v8';
 import { freemem } from 'node:os';
@@ -228,6 +228,46 @@ function appendEventLoopStallDiagnostic(
   } catch {}
 }
 
+// Load lifecycle via require(), never a dynamic import(). Under tsx source mode
+// import() from a non-entry module creates a SECOND lifecycle instance whose
+// shutdown hooks were never registered, so every warm handoff aborted with
+// "listener ownership hooks are not registered". require() reuses the instance
+// server-v2 initialized (same pattern as server-v2.ts and voice/dispatch.ts).
+function loadLifecycle(): typeof import('../lifecycle') {
+  return require('../lifecycle') as typeof import('../lifecycle');
+}
+
+// gracefulRestart can return while this process keeps serving (aborted warm
+// handoff, failed replacement spawn). The stall latch must never outlive that:
+// a stuck latch also blocks the memory-pressure watchdog for the rest of the
+// process lifetime (Nov 2026 heap-OOM crashes). It clears immediately on a
+// "still serving" outcome, or after a bounded wait when no outcome proves the
+// process is leaving, then a cooldown prevents a restart loop.
+const EVENT_LOOP_STALL_LATCH_TIMEOUT_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_LATCH_TIMEOUT_MS', 120_000);
+const EVENT_LOOP_STALL_RETRY_COOLDOWN_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RETRY_COOLDOWN_MS', 10 * 60_000);
+let _eventLoopStallRestartCooldownUntil = 0;
+
+function releaseStallLatch(scheduledAt: number, reason: string): void {
+  if (!_eventLoopStallRestartScheduled) return;
+  _eventLoopStallRestartScheduled = false;
+  _eventLoopStallRestartCooldownUntil = Date.now() + EVENT_LOOP_STALL_RETRY_COOLDOWN_MS;
+  console.warn(`[GatewayRuntime] Event-loop stall recovery did not replace this gateway (${reason}); stall and memory watchdogs re-armed.`);
+  try {
+    enqueueAsyncAppend(
+      path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+      JSON.stringify({ timestamp: new Date().toISOString(), event: 'event_loop_stall_recovery_incomplete', reason, pid: process.pid, scheduledAt: new Date(scheduledAt).toISOString(), cooldownMs: EVENT_LOOP_STALL_RETRY_COOLDOWN_MS }) + '\n',
+    );
+  } catch {}
+}
+
+function expireStallLatchIfStillServing(scheduledAt: number): void {
+  const timer = setTimeout(() => {
+    if (_gatewayDraining) return;
+    releaseStallLatch(scheduledAt, 'timeout');
+  }, Math.max(1_000, EVENT_LOOP_STALL_LATCH_TIMEOUT_MS));
+  (timer as any).unref?.();
+}
+
 // Brain runtimes are intentionally not special here. A gateway event-loop
 // stall is a process-health failure, so the normal lifecycle restart must own
 // interruption and recovery for every active runtime, including Thought/Dream.
@@ -238,6 +278,7 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
   if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
   if (_eventLoopStallRestartScheduled || _memoryPressureRestartScheduled) return;
+  if (now < _eventLoopStallRestartCooldownUntil) return;
   _eventLoopStallRestartScheduled = true;
 
   try {
@@ -264,8 +305,8 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   console.error(`[GatewayRuntime] Event loop stalled for ${seconds}s. Scheduling gateway recovery restart...`);
   const timer = setTimeout(async () => {
     try {
-      const { gracefulRestart } = await import('../lifecycle.js');
-      await gracefulRestart({
+      const lifecycle = loadLifecycle();
+      const outcome = await lifecycle.gracefulRestart({
         reason: 'repair',
         timestamp: now,
         previousSessionId: _lastMainSessionId,
@@ -273,6 +314,8 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
         title: 'Gateway event-loop stall recovery',
         summary: `Gateway event loop stopped responding for ${seconds}s, so Prometheus restarted itself to recover mobile/web connectivity.`,
       });
+      if (lifecycle.restartLeftProcessServing(outcome)) releaseStallLatch(now, String(outcome));
+      else expireStallLatchIfStillServing(now);
     } catch (err: any) {
       console.error('[GatewayRuntime] Event-loop stall recovery restart failed:', err?.message || err);
       // The lifecycle deliberately defers a restart while coordinated source
@@ -289,14 +332,11 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
 }
 
 export function shouldScheduleGatewayMemoryRecovery(
-  rssBytes: number,
+  underPressure: boolean,
   consecutiveSamples: number,
-  thresholdBytes = MEMORY_RESTART_RSS_BYTES,
   requiredSamples = MEMORY_RESTART_CONSECUTIVE_SAMPLES,
 ): boolean {
-  return thresholdBytes > 0
-    && rssBytes >= thresholdBytes
-    && consecutiveSamples >= Math.max(1, requiredSamples);
+  return underPressure && consecutiveSamples >= Math.max(1, requiredSamples);
 }
 
 function readMemoryRecoveryDecision() {
@@ -315,14 +355,21 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
   if (_gatewayDraining) return;
   const previouslyDeferred = _memoryPressureDeferredForActiveWork;
   _memoryPressureDeferredForActiveWork = false;
-  if (MEMORY_RESTART_RSS_BYTES <= 0 || memory.rss < MEMORY_RESTART_RSS_BYTES) {
+  // RSS alone fired only at the V8 OOM point on a default 4 GB heap, so the
+  // real heap limit is a first-class signal too (isMemoryPressureSample).
+  if (!isMemoryPressureSample({
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    heapLimitBytes: getHeapStatistics().heap_size_limit,
+    rssThresholdBytes: MEMORY_RESTART_RSS_BYTES,
+  })) {
     _memoryPressureConsecutiveSamples = 0;
     return;
   }
   _memoryPressureConsecutiveSamples += 1;
   if (!MEMORY_AUTORESTART_ENABLED) return;
   if (process.uptime() * 1000 < MEMORY_RESTART_MIN_UPTIME_MS) return;
-  if (!shouldScheduleGatewayMemoryRecovery(memory.rss, _memoryPressureConsecutiveSamples)) return;
+  if (!shouldScheduleGatewayMemoryRecovery(true, _memoryPressureConsecutiveSamples)) return;
   if (_memoryPressureRestartScheduled || _eventLoopStallRestartScheduled) return;
   // High RSS under allocation churn is often uncollected garbage, not live
   // memory. Confirm with one full GC (throttled) before interrupting every
@@ -403,10 +450,10 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
     try {
       if (_gatewayDraining) { _memoryPressureRestartScheduled = false; return; }
       const result = await runMemoryRecoveryRestart(readMemoryRecoveryDecision, async () => {
-        const { gracefulRestart } = await import('../lifecycle.js');
+        const lifecycle = await loadLifecycle();
         return async (handoffPolicy) => {
           if (_gatewayDraining) return;
-          await gracefulRestart({
+          const outcome = await lifecycle.gracefulRestart({
             reason: 'repair',
             timestamp: Date.now(),
             previousSessionId: _lastMainSessionId,
@@ -417,6 +464,12 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
               : 'Routine memory recovery waited for active work to finish before restarting.',
             handoffPolicy,
           });
+          // Same stuck-latch class as the stall watchdog: an aborted handoff
+          // leaves this process serving, so the memory watchdog must re-arm.
+          if (lifecycle.restartLeftProcessServing?.(outcome)) {
+            _memoryPressureRestartScheduled = false;
+            console.warn(`[GatewayRuntime] Memory recovery restart did not replace this gateway (${String(outcome)}); memory watchdog re-armed.`);
+          }
         };
       });
       if (result === 'defer_active_work') {

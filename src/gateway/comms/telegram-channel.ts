@@ -848,7 +848,8 @@ export class TelegramChannel {
   private async runFullRestart(chatId: number, userId: number): Promise<void> {
     const sessionId = this.getTelegramSessionId(userId, chatId);
     await this.sendMessage(chatId, '🔁 Full restart requested. Running build now...');
-    const { buildAndRestart } = await import('../lifecycle.js');
+    // require(), not import(): under tsx import() loads a hookless second lifecycle instance.
+    const { buildAndRestart } = require('../lifecycle') as typeof import('../lifecycle');
     const result = await buildAndRestart({
       reason: 'manual',
       timestamp: Date.now(),
@@ -871,7 +872,7 @@ export class TelegramChannel {
   private async runQuickRestart(chatId: number, userId: number): Promise<void> {
     const sessionId = this.getTelegramSessionId(userId, chatId);
     await this.sendMessage(chatId, '⚡ Quick restart requested. Restarting gateway without build...');
-    const { gracefulRestart } = await import('../lifecycle.js');
+    const { gracefulRestart } = require('../lifecycle') as typeof import('../lifecycle');
     await gracefulRestart({
       reason: 'manual',
       timestamp: Date.now(),
