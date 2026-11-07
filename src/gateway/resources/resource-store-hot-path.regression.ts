@@ -179,6 +179,71 @@ async function main() {
   assert.equal(countVersions(), 2, 'changed journal syncs again');
   shared.flushSync();
 
+  // (5) M1: a failed backup keeps every task version and snapshot file for that
+  // flush (nothing deleted, no backup written). A later flush with a working
+  // backup prunes, leaves exactly one backup and no temp file.
+  const root3 = path.join(tmp, 'resources-backup-gate');
+  const ws3 = path.join(tmp, 'ws3');
+  fs.mkdirSync(ws3, { recursive: true });
+  const store3 = mod.createResourceStore({ rootDir: root3, workspacePath: ws3 }) as any;
+  const task3 = (n: number) => ({ id: 'gated-task', title: 'gated', journal: [{ timestamp: `${n}`, content: `gate ${n}` }], workspacePath: ws3 });
+  const backups3 = () => fs.readdirSync(root3).filter((name) => /^registry\.backup-\d+\.json$/.test(name));
+  for (let n = 1; n <= 4; n += 1) store3.syncTaskJournal(task3(n));
+  store3.flushSync(); // registry on disk, nothing to back up yet
+  for (let n = 5; n <= 7; n += 1) store3.syncTaskJournal(task3(n));
+  const snapshotsBefore = store3.debugState().versions.filter((v: any) => v.snapshotPath).map((v: any) => path.resolve(root3, v.snapshotPath));
+  const versionsBefore = store3.debugState().versions.length;
+  mod.setRegistryBackupWriterForTests(() => { throw new Error('forced backup failure'); });
+  store3.flushSync();
+  mod.setRegistryBackupWriterForTests(null);
+  assert.equal(store3.debugState().versions.length, versionsBefore, 'failed backup prunes no versions');
+  assert.ok(snapshotsBefore.length > 0, 'test has snapshot files to protect');
+  assert.ok(snapshotsBefore.every((file: string) => fs.existsSync(file)), 'failed backup deletes no snapshot files');
+  assert.equal(backups3().length, 0, 'failed backup leaves no backup behind');
+  store3.syncTaskJournal(task3(8));
+  store3.flushSync();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(backups3().length, 1, 'later flush with a working backup writes one backup');
+  assert.ok(store3.debugState().versions.filter((v: any) => v.resourceId === store3.debugState().resources.find((r: any) => r.locator?.taskId === 'gated-task')?.id).length <= 3, 'later flush prunes to the retention cap');
+  assert.deepEqual(fs.readdirSync(root3).filter((name) => name.endsWith('.tmp')), [], 'no temp backup file is left behind');
+
+  // (6) M2: rotation keeps exactly the newest 2 backups. A pre-PR backup
+  // (registry.backup-1791087601776.json) counts toward the window like any other.
+  const root4 = path.join(tmp, 'resources-rotation');
+  const ws4 = path.join(tmp, 'ws4');
+  fs.mkdirSync(ws4, { recursive: true });
+  const store4 = mod.createResourceStore({ rootDir: root4, workspacePath: ws4 }) as any;
+  const task4 = (n: number) => ({ id: 'rotated-task', title: 'rotated', journal: [{ timestamp: `${n}`, content: `rot ${n}` }], workspacePath: ws4 });
+  for (let n = 1; n <= 4; n += 1) store4.syncTaskJournal(task4(n));
+  store4.flushSync();
+  for (const name of ['registry.backup-1791087601776.json', 'registry.backup-1700000000000.json', 'registry.backup-1600000000000.json']) {
+    fs.copyFileSync(path.join(root4, 'registry.json'), path.join(root4, name));
+  }
+  store4.syncTaskJournal(task4(5));
+  store4.flushSync();
+  const rotated = fs.readdirSync(root4).filter((name) => /^registry\.backup-\d+\.json$/.test(name)).sort();
+  assert.equal(rotated.length, 2, 'rotation keeps exactly the newest 2 backups');
+  assert.ok(rotated.includes('registry.backup-1791087601776.json'), 'pre-PR backup counts toward the newest-2 window');
+  assert.ok(!rotated.includes('registry.backup-1700000000000.json'), 'older backup is deleted');
+  assert.ok(!rotated.includes('registry.backup-1600000000000.json'), 'oldest backup is deleted');
+
+  // (7) Deleting a task resource then syncing identical journal content re-attaches it.
+  const ws5 = path.join(tmp, 'ws5');
+  fs.mkdirSync(ws5, { recursive: true });
+  const shared5 = mod.getResourceStore(ws5) as any;
+  const input5 = { id: 'deleted-task', title: 'd', journal: [{ timestamp: 'd', content: 'same' }], workspacePath: ws5 };
+  const liveTaskResources = () => shared5.debugState().resources.filter((r: any) => r.locator?.taskId === 'deleted-task' && r.status !== 'deleted');
+  mod.syncTaskJournalResource(input5);
+  mod.drainTaskJournalSyncs();
+  assert.equal(liveTaskResources().length, 1, 'first sync attaches the task resource');
+  shared5.deleteResource(liveTaskResources()[0].id);
+  assert.equal(liveTaskResources().length, 0, 'task resource is deleted');
+  mod.syncTaskJournalResource(input5);
+  mod.drainTaskJournalSyncs();
+  assert.equal(liveTaskResources().length, 1, 'identical journal after delete re-attaches');
+  shared5.flushSync();
+
+
   console.log('resource-store-hot-path.regression: PASS');
 }
 

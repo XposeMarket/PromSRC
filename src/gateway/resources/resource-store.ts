@@ -282,6 +282,26 @@ const MAX_TASK_PROVENANCE_PER_RESOURCE = 8;
 const REGISTRY_FLUSH_DELAY_MS = 1_500;
 const REGISTRY_BACKUP_RE = /^registry\.backup-(\d+)\.json$/;
 const REGISTRY_BACKUP_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+const REGISTRY_BACKUP_KEEP = 2;
+let registryBackupWarned = false;
+const defaultRegistryBackupWriter = (source: string, destination: string): void => fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+let registryBackupWriter: (source: string, destination: string) => void = defaultRegistryBackupWriter;
+
+/** Test hook: inject a failing or custom backup writer. Pass null to restore the default. */
+export function setRegistryBackupWriterForTests(writer: ((source: string, destination: string) => void) | null): void {
+  registryBackupWriter = writer ?? defaultRegistryBackupWriter;
+}
+
+/** Keeps only the newest REGISTRY_BACKUP_KEEP registry.backup-<epochMs>.json files in rootDir. */
+function rotateRegistryBackups(rootDir: string): void {
+  const backups = fs.readdirSync(rootDir).flatMap((name) => {
+    const match = REGISTRY_BACKUP_RE.exec(name);
+    return match ? [{ name, at: Number(match[1]) }] : [];
+  }).sort((a, b) => b.at - a.at);
+  for (const { name } of backups.slice(REGISTRY_BACKUP_KEEP)) {
+    try { fs.rmSync(path.join(rootDir, name), { force: true }); } catch { /* best effort */ }
+  }
+}
 const MAX_TASK_JOURNAL_SYNC_HASHES = 5_000;
 
 /** Task-journal version retention. Env 0 keeps all; invalid values use the default. */
@@ -709,6 +729,7 @@ export class ResourceStore {
     if (this.live && this.live.key === key) return this.live.state;
     flushPendingRegistryWrites(this.registryPath, this);
     const state = this.loadStateFromDisk();
+    lastTaskJournalSyncHashes.clear(); // reloaded registry: drop cached sync hashes
     this.live = { key, state };
     return state;
   }
@@ -810,7 +831,10 @@ export class ResourceStore {
     }
     // One safety copy of the on-disk registry before this process first drops
     // task-journal versions (skipped when a backup from the last 24 h exists).
-    if (prunedVersions.some((version) => taskResources.has(version.resourceId))) this.ensureRegistryBackup();
+    if (prunedVersions.some((version) => taskResources.has(version.resourceId)) && !this.ensureRegistryBackup()) {
+      // No usable pre-prune backup: keep every version and snapshot this flush; retry on a later flush.
+      return [];
+    }
     const removedFiles: string[] = [];
     const contentRoot = path.resolve(this.contentDir) + path.sep;
     // Only delete snapshot files no remaining version still references.
@@ -834,31 +858,52 @@ export class ResourceStore {
       }
     }
     if (keptProvenance.length !== state.provenance.length) state.provenance = keptProvenance.reverse();
+    if (prunedVersions.length) console.log(`[Resources] Pruned ${prunedVersions.length} versions (${prunedVersions.filter((version) => taskResources.has(version.resourceId)).length} task-journal) and ${removedFiles.length} snapshot files.`);
     return removedFiles;
   }
 
   /**
    * Before the first task-journal prune in this process, copy the on-disk
-   * registry (still the pre-prune state) to registry.backup-<epochMs>.json,
-   * unless a backup from the last 24 h already exists. Never deletes backups.
+   * registry (still the pre-prune state) to registry.backup-<epochMs>.json.
+   * The copy goes to a temp file and is renamed only once its size matches, so
+   * a partial copy never counts. Keeps the newest REGISTRY_BACKUP_KEEP backups.
+   * Returns false when no usable backup exists; the caller then keeps every
+   * task version and snapshot for this flush and retries on a later flush.
    */
-  private ensureRegistryBackup(): void {
-    if (registryBackupChecked.has(this.registryPath)) return;
+  private ensureRegistryBackup(): boolean {
+    if (registryBackupChecked.has(this.registryPath)) return true;
     try {
-      // Nothing on disk yet (first write of a new registry): nothing to save.
-      if (!fs.existsSync(this.registryPath)) return;
-      registryBackupChecked.add(this.registryPath);
+      if (!fs.existsSync(this.registryPath)) return true; // nothing on disk yet
       const now = Date.now();
       const recent = fs.readdirSync(this.rootDir).some((name) => {
         const match = REGISTRY_BACKUP_RE.exec(name);
-        return Boolean(match) && now - Number(match![1]) < REGISTRY_BACKUP_MIN_AGE_MS;
+        return Boolean(match) && now - Number(match![1]) < REGISTRY_BACKUP_MIN_AGE_MS
+          && fs.statSync(path.join(this.rootDir, name)).size > 0;
       });
-      if (recent) return;
-      fs.copyFileSync(this.registryPath, path.join(this.rootDir, `registry.backup-${now}.json`), fs.constants.COPYFILE_EXCL);
+      if (!recent) {
+        const finalPath = path.join(this.rootDir, `registry.backup-${now}.json`);
+        const tmpPath = `${finalPath}.${process.pid}.tmp`;
+        try {
+          registryBackupWriter(this.registryPath, tmpPath);
+          const copied = fs.statSync(tmpPath).size;
+          if (copied === 0 || copied !== fs.statSync(this.registryPath).size) throw new Error('registry backup size mismatch');
+          fs.renameSync(tmpPath, finalPath);
+        } finally {
+          fs.rmSync(tmpPath, { force: true });
+        }
+        rotateRegistryBackups(this.rootDir);
+      }
+      registryBackupChecked.add(this.registryPath);
+      return true;
     } catch (error: any) {
-      console.warn('[Resources] Registry backup before task-journal pruning failed:', redactResourceText(error?.message || error));
+      if (!registryBackupWarned) {
+        registryBackupWarned = true;
+        console.warn('[Resources] Registry backup before task-journal pruning failed; keeping all task versions and retrying on a later flush:', redactResourceText(error?.message || error));
+      }
+      return false;
     }
   }
+
 
   private emitTelemetry(event: ResourceTelemetryEventName, fields: Omit<ResourceTelemetryEvent, 'event' | 'at'> = {}): void {
     const item: ResourceTelemetryEvent = { event, at: nowIso(), ...fields };
@@ -1662,6 +1707,7 @@ export class ResourceStore {
     resource.status = status;
     resource.updatedAt = nowIso();
     if (status === 'deleted') resource.deletedAt = resource.updatedAt;
+    if (status === 'deleted') lastTaskJournalSyncHashes.clear(); // a deleted task must re-attach on the next sync
     this.appendProvenance(state, {
       resourceId,
       eventType: status === 'unavailable' || status === 'stale' ? 'refresh_failed' : status === 'deleted' ? 'deleted' : 'refreshed',
