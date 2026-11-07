@@ -10,7 +10,7 @@ const result = aggregateHubUsageAnalytics([
 ] as any, { range: '24h', now });
 
 assert.deepEqual(result.providers, ['anthropic', 'openai']);
-assert.deepEqual(result.totals, { totalTokens: 170, inputTokens: 130, outputTokens: 32, cacheReadTokens: 58, cacheWriteTokens: 10, requests: 3, costMicros: 250, pricedRequests: 2, cacheHitPercent: 30.85 });
+assert.deepEqual(result.totals, { totalTokens: 170, inputTokens: 130, promptTokens: 138, outputTokens: 32, cacheReadTokens: 58, cacheWriteTokens: 10, requests: 3, costMicros: 250, pricedRequests: 2, cacheHitPercent: 42.03 });
 assert.equal(result.models[0].provider, 'openai');
 assert.equal(result.models[0].averageDurationMs, 150);
 assert.deepEqual(result.agents.map((row) => row.name), ['writer', 'researcher']);
@@ -22,6 +22,35 @@ assert.equal(result.coverage.bucket, 'hour');
 const filtered = aggregateHubUsageAnalytics([{ timestamp: '2026-10-18T11:00:00.000Z', provider: 'openai', model: 'gpt-test', callType: 'chat', inputTokens: 1, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 1, source: 'provider' }] as any, { range: '24h', provider: 'anthropic', now });
 assert.equal(filtered.totals.requests, 0);
 assert.deepEqual(filtered.providers, ['openai'], 'provider selector options remain available when filtered');
+
+// Provider inputs differ: Anthropic excludes cache buckets; OpenAI includes them.
+const event = (provider: string, inputTokens: number, cacheReadTokens: number, cacheWriteTokens = 0) => ({
+  timestamp: new Date(now).toISOString(), provider, model: 'cache-test', callType: 'chat',
+  inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens: 0, source: 'provider',
+});
+const cases = [
+  [event('anthropic', 20, 60, 20), 100, 60],
+  [event('openai_codex', 100, 60), 100, 60],
+  [event('openai', 100, 60), 100, 60],
+  [event('anthropic', 0, 0, 100), 100, 0],
+  [event('openai', 0, 0), 0, 0],
+  [event('openai', -5, -10, -1), 0, 0],
+  [event('openai', 10, 99), 10, 100],
+  [event('openai', NaN, Infinity), 0, 0],
+] as const;
+for (const [sample, promptTokens, hit] of cases) {
+  const actual = aggregateHubUsageAnalytics([sample] as any, { now }).totals;
+  assert.equal(actual.promptTokens, promptTokens);
+  assert.equal(actual.cacheHitPercent, hit);
+  assert.equal(actual.totalTokens, promptTokens, 'missing totals use provider-normalized prompt, not double-counted caches');
+}
+const mixed = aggregateHubUsageAnalytics([event('anthropic', 20, 60, 20), event('openai_codex', 200, 100)] as any, { now });
+assert.equal(mixed.totals.promptTokens, 300);
+assert.equal(mixed.totals.cacheHitPercent, 53.33, 'weighted ratio, not mean of provider percentages');
+assert.equal(mixed.agents[0].cacheHitPercent, 53.33);
+assert.equal(mixed.surfaces[0].cacheHitPercent, 53.33);
+assert.deepEqual(mixed.models.map(row => row.cacheHitPercent).sort(), [50, 60]);
+
 
 async function testAsyncWindowReads() {
   for (const [range, days] of [['24h', 1], ['7d', 7], ['30d', 30], ['invalid', 7]] as const) {
