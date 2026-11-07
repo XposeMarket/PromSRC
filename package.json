@@ -29,6 +29,7 @@
     "test:source-panel-mini": "node scripts/test-source-panel-mini-caps.mjs",
     "test:anthropic-stream-terminated": "tsx src/providers/anthropic-stream-terminated.regression.ts",
     "test:proposal-approval-flow": "tsx src/gateway/proposals/proposal-approval-flow.regression.ts",
+    "test:proposal-transitions": "tsx src/gateway/proposals/proposal-transitions.regression.ts",
     "test:schedule-precheck": "tsx src/gateway/scheduling/schedule-precheck.regression.ts",
     "test:interruption-recovery": "tsx src/providers/openai-codex-transport.regression.ts && tsx src/gateway/agents-runtime/workspace-path-recovery.regression.ts",
     "test:mobile-bg-compaction-dupes": "node scripts/test-mobile-bg-compaction-dupes.cjs",
