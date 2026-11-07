@@ -8181,9 +8181,11 @@ async function _sendMobileEmailComposer(button) {
     _setMobileEmailComposerNotice(card, 'Add a subject before sending.', 'error');
     return;
   }
-  button.disabled = true;
-  const previous = button.innerHTML;
-  button.innerHTML = `${ICONS.send}<span>Sending</span>`;
+  // Text-only busy label: the bare send SVG has no size rule here and blew both buttons up into giant circles.
+  const actions = Array.from(card?.querySelectorAll?.('[data-email-composer-action]') || []);
+  actions.forEach((b) => { b.disabled = true; });
+  const previous = button.textContent;
+  button.textContent = 'Sending…';
   _setMobileEmailComposerNotice(card, '', 'info');
   try {
     const data = await mobileGatewayFetch('/api/connectors/gmail/send-composer', {
@@ -8201,11 +8203,19 @@ async function _sendMobileEmailComposer(button) {
       });
     }
     pmToast('Email sent', 'success');
-    _renderMobileChatSessionNow(sid);
+    // Swap this card to its sent state in place (the thread re-render can keep the stale draft DOM).
+    // Never let a refresh error fall into the send-failure path after Gmail accepted the email.
+    try {
+      const sentArtifact = found?.artifact || data.artifact;
+      if (sentArtifact && card?.isConnected) card.outerHTML = _renderMobileEmailComposerArtifact({ ...sentArtifact, status: 'sent' });
+      _renderMobileChatSessionNow(sid);
+    } catch (err) {
+      console.warn('[mobile email composer] sent-card refresh failed:', err);
+    }
   } catch (err) {
     _setMobileEmailComposerNotice(card, err?.message || 'Could not send email.', 'error');
-    button.disabled = false;
-    button.innerHTML = previous;
+    actions.forEach((b) => { b.disabled = false; });
+    button.textContent = previous;
   }
 }
 

@@ -16,7 +16,7 @@ import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsT
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
-import { installComposerSecretGuard, createAddSecretButton } from '../features/secure-access/protected-plugin-entry.js';
+import { installComposerSecretGuard } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
 let mobileBusyComposerModeLoaded = false;
@@ -961,7 +961,9 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         return sendMessage(text);
       }),
     });
-    // Add secret + composer paste guard (helpers live in protected-plugin-entry.js).
+    // Composer paste guard (protected-plugin-entry.js). No standing Add secret button in chat:
+    // protected entry opens only when the guard catches a key (or a connection asks for one).
+    // Add secret for arbitrary keys lives in Settings > Saved access.
     const protectedInput = page.querySelector('#pm-composer-input');
     const protectedFetch = (path, opts = {}) => mobileGatewayFetch(path, opts);
     if (protectedInput) {
@@ -969,9 +971,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const addSecretHost = document.createElement('div');
       addSecretHost.className = 'sa-add-secret-host-mobile';
       secureAccessHost.insertAdjacentElement('beforebegin', addSecretHost);
-      // Stays a sibling (not inside the composer form): the form is hidden in
-      // launcher mode and the button must remain reachable there. CSS lifts it above the tab bar.
-      addSecretHost.append(createAddSecretButton(protectedFetch, { className: 'sa-add-secret-mobile', cardHost: addSecretHost }));
+      // Empty until the guard opens the protected card; CSS lifts the card above the composer/tab bar.
       installComposerSecretGuard(protectedInput, { fetchJson: protectedFetch, form, sendButton: page.querySelector('#pm-send-btn'), cardHost: addSecretHost });
       // Placement tracks the dock/launcher/composer; re-run on layout changes.
       const placeAddSecret = () => requestAnimationFrame(syncAddSecretHostPlacement);

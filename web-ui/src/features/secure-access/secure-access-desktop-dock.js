@@ -6,7 +6,7 @@
 // line through the existing queued send (window.sendChat).
 import { api } from '../../api.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from './secure-access-core.js';
-import { installComposerSecretGuard, createAddSecretButton } from './protected-plugin-entry.js';
+import { installComposerSecretGuard } from './protected-plugin-entry.js';
 import { openProtectedPluginCard, protectedRequestFromAction } from './protected-plugin-card.js';
 
 // ChatPage connection cards reach the shared card through this bridge (ChatPage size ratchet).
@@ -15,14 +15,13 @@ window.promProtectedPlugin = Object.freeze({
   open: (options = {}) => openProtectedPluginCard((path, opts = {}) => api(path, opts), options),
 });
 
-/** Add secret button + accidental-paste guard on the real desktop composer only. */
+/** Accidental-paste guard on the real desktop composer only. No standing Add secret button:
+ *  protected entry opens when the guard catches a key; arbitrary keys go through Settings > Saved access. */
 export function installDesktopProtectedEntry(doc = document) {
   const input = doc.getElementById('chat-input');
   if (!input) return null;
   const fetchJson = (path, opts = {}) => api(path, opts);
-  const sendButton = doc.getElementById('send-btn');
-  if (sendButton?.parentElement && !doc.querySelector('[data-add-secret]')) sendButton.parentElement.insertBefore(createAddSecretButton(fetchJson, { className: 'sa-add-secret-desktop' }), sendButton);
-  return installComposerSecretGuard(input, { fetchJson, sendButton });
+  return installComposerSecretGuard(input, { fetchJson, sendButton: doc.getElementById('send-btn') });
 }
 
 const activeSessionId = () => String(window.activeChatSessionId || '').trim();
