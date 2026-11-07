@@ -103,6 +103,9 @@ function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   if (!next.toolLog && prior.toolLog) next.toolLog = prior.toolLog;
   if (!next.thinking && prior.thinking) next.thinking = prior.thinking;
   if (!next.fileChanges && prior.fileChanges) next.fileChanges = prior.fileChanges;
+  // Server-only: clients never echo it, so a mobile history sync used to strip
+  // the model that answered (and with it the chat list provider logo).
+  if (!next.turnProviderUsage && prior.turnProviderUsage) next.turnProviderUsage = prior.turnProviderUsage;
   for (const key of ['generatedImages', 'generatedVideos', 'canvasFiles', 'files', 'artifacts', 'richArtifacts', 'attachmentPreviews']) {
     if ((!Array.isArray(next[key]) || next[key].length === 0) && Array.isArray(prior[key]) && prior[key].length) next[key] = prior[key];
   }

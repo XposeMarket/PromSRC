@@ -430,3 +430,8 @@ body.pm-mobile-active .pm-lr-brain { font-size: 11px; line-height: 1.5; padding:
 /* Needs You inline question/approval: the original card and Open chat never touch. */
 body.pm-mobile-active .pm-ny-entry .pm-ny-original { min-width: 0; }
 body.pm-mobile-active .pm-ny-entry .pm-ny-footer { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 2px; }
+
+/* Tasks card avatar: provider logo of the model the task ran on (initials only when unknown). */
+body.pm-mobile-active .pm-lr-avatar.has-logo { padding: 5px; }
+body.pm-mobile-active .pm-lr-avatar .pm-lr-logo { width: 17px; height: 17px; display: block; color: var(--pm-text); }
+

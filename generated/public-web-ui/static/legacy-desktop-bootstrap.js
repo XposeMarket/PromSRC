@@ -1412,6 +1412,9 @@ function _prioritySessionProvider(session) {
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   const provider = route?.effective?.providerId || route?.providerId || session?.providerId || session?.provider;
   if (provider) return String(provider).trim().toLowerCase();
+  // The model that actually answered (server SessionSummary.lastModel), same source as mobile.
+  const lastProvider = String(session?.lastModel?.providerId || '').trim().toLowerCase();
+  if (lastProvider) return lastProvider;
   const imported = _getImportedSourceBrand(session);
   if (imported?.key === 'openai') return 'openai';
   if (imported?.key === 'claude') return 'anthropic';

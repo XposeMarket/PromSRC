@@ -25,6 +25,7 @@ import {
 } from './mobile-teams-pages.js';
 
 import { wsEventBus } from '../ws.js';
+import { renderProviderLogo } from '../components/provider-logo.js';
 import { buildTaskCard, detailSections, formatDuration as formatTaskDuration, dispatchedMessage } from '../features/tasks/task-card-view-model.js';
 import { isNeedsYouTask, needsYouCount, needsYouEntries, needsYouTaskIds, nyRelTime } from '../needs-you-view-model.js';
 import {
@@ -328,7 +329,7 @@ function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
     ? `<div class="pm-lr-step"><span class="pm-lr-step-mark">›</span> ${escapeHtml(card.progress.currentText.slice(0, 160))}</div>` : '';
   return `<article class="pm-card pm-task-card pm-lr-card tone-${card.tone}${compactDone ? ' is-compact' : ''}${isOpen ? ' is-open' : ''}${card.planned ? ' pm-planned-chat' : ''}" data-task-id="${id}" data-task-kind="${escapeHtml(card.kind)}">
     <div class="pm-lr-head">
-      <span class="pm-lr-avatar kind-${escapeHtml(card.kind)}" aria-hidden="true">${escapeHtml(card.initials)}</span>
+      <span class="pm-lr-avatar kind-${escapeHtml(card.kind)}${card.avatar.logoKey ? ' has-logo' : ''}" data-provider="${escapeHtml(card.avatar.logoKey)}" aria-hidden="true">${card.avatar.logoKey ? renderProviderLogo(card.avatar.providerId, card.avatar.model, 'pm-lr-logo') : escapeHtml(card.initials)}</span>
       <div class="pm-lr-who">
         <div class="pm-lr-actor">${escapeHtml(brainLabel || card.actor)}${brainLabel && t.brainDate ? ` · ${escapeHtml(String(t.brainDate))}` : ''}</div>
         <div class="pm-lr-sub">${escapeHtml(card.sub)}</div>

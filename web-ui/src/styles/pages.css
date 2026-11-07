@@ -4408,3 +4408,8 @@
 .bgt-lr-act-run { font-size: 10px; color: var(--lr-run); }
 .bgt-lr-act-call, .bgt-lr-act-result { margin-top: 2px; color: var(--muted); word-break: break-word; }
 .bgt-lr-hidden summary { font-size: 11px; color: var(--muted); cursor: pointer; }
+
+/* Tasks card avatar: provider logo of the model the task ran on (initials only when unknown). */
+.bgt-lr-avatar.has-logo { padding: 4px; }
+.bgt-lr-avatar .bgt-lr-logo { width: 16px; height: 16px; display: block; color: var(--text); }
+
