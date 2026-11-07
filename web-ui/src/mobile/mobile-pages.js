@@ -10448,6 +10448,13 @@ if (typeof window !== 'undefined') {
     path: detail?.path,
     name: detail?.name,
   });
+  // Markdown links to workspace files (utils.js data-workspace-file) open in
+  // the authenticated canvas sheet instead of navigating the PWA.
+  window.__promOpenWorkspaceFile = (path, name) => _openMobileMediaTarget({
+    kind: _mobileMediaKind({ path }),
+    path,
+    name,
+  });
 }
 
 
