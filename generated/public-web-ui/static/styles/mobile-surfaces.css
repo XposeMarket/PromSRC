@@ -382,12 +382,6 @@ body.pm-mobile-active .pm-lr-avatar { flex: 0 0 auto; width: 28px; height: 28px;
 body.pm-mobile-active .pm-lr-who { flex: 1; min-width: 0; }
 body.pm-mobile-active .pm-lr-actor { font-size: 12px; font-weight: 700; color: var(--pm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.pm-mobile-active .pm-lr-sub { font-size: 11px; color: var(--pm-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-body.pm-mobile-active .pm-lr-pill { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; }
-body.pm-mobile-active .pm-lr-pill.tone-run { color: var(--lr-run); }
-body.pm-mobile-active .pm-lr-pill.tone-ok { color: var(--lr-ok); }
-body.pm-mobile-active .pm-lr-pill.tone-warn { color: var(--lr-warn); }
-body.pm-mobile-active .pm-lr-pill.tone-bad { color: var(--lr-bad); }
-body.pm-mobile-active .pm-lr-pill.tone-muted { color: var(--lr-muted); }
 body.pm-mobile-active .pm-lr-title { font-size: 14px; font-weight: 700; line-height: 1.35; color: var(--pm-text); }
 body.pm-mobile-active .pm-lr-progress { display: flex; align-items: center; gap: 8px; }
 body.pm-mobile-active .pm-lr-bar { flex: 1; display: flex; gap: 3px; }
@@ -432,6 +426,9 @@ body.pm-mobile-active .pm-ny-entry .pm-ny-original { min-width: 0; }
 body.pm-mobile-active .pm-ny-entry .pm-ny-footer { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 2px; }
 
 /* Tasks card avatar: provider logo of the model the task ran on (initials only when unknown). */
-body.pm-mobile-active .pm-lr-avatar.has-logo { padding: 5px; }
-body.pm-mobile-active .pm-lr-avatar .pm-lr-logo { width: 17px; height: 17px; display: block; color: var(--pm-text); }
+/* Logo avatars sit bare on the card; OpenAI/xAI keep the white tile used by chat lists. */
+body.pm-mobile-active .pm-lr-avatar.has-logo { width: auto; height: auto; padding: 0; background: transparent; border: 0; }
+body.pm-mobile-active .pm-lr-avatar .pm-lr-logo { width: 19px; height: 19px; display: block; color: var(--pm-text); }
+body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="openai"], body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="xai"] { padding: 2px; border-radius: 4px; background: #fff; }
+body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="openai"] .pm-lr-logo, body.pm-mobile-active .pm-lr-avatar.has-logo[data-provider="xai"] .pm-lr-logo { width: 17px; height: 17px; color: #111; }
 

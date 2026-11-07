@@ -809,7 +809,6 @@ function bgtCardHTML(t, col) {
         <div class="bgt-lr-sub">${escHtml(card.sub)}</div>
       </div>
       ${bgtEditMode && !card.planned ? `<button onclick="event.stopPropagation(); bgtHideTask('${id}')" title="Hide task" class="bgt-lr-hide">🗑</button>` : ''}
-      <span class="bgt-lr-pill tone-${card.tone}">${escHtml(card.statusLabel)}</span>
     </div>
     <div class="bgt-lr-title">${escHtml(card.title)}</div>
     ${compactDone ? '' : `${segments}

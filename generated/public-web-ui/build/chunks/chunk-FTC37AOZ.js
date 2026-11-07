@@ -28,7 +28,6 @@ import{a as he,b as ke,d as $e,e as Se,f as _e,g as xe,h as we,i as N,j as Te,k 
         <div class="pm-lr-actor">${n(u||a.actor)}${u&&s.brainDate?` \xB7 ${n(String(s.brainDate))}`:""}</div>
         <div class="pm-lr-sub">${n(a.sub)}</div>
       </div>
-      <span class="pm-lr-pill tone-${a.tone}">${n(a.statusLabel)}</span>
     </div>
     <div class="pm-lr-title">${n(a.title)}</div>
     ${r?"":`${k}${f}

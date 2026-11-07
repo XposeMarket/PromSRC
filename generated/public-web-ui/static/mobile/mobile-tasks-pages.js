@@ -334,7 +334,6 @@ function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
         <div class="pm-lr-actor">${escapeHtml(brainLabel || card.actor)}${brainLabel && t.brainDate ? ` · ${escapeHtml(String(t.brainDate))}` : ''}</div>
         <div class="pm-lr-sub">${escapeHtml(card.sub)}</div>
       </div>
-      <span class="pm-lr-pill tone-${card.tone}">${escapeHtml(card.statusLabel)}</span>
     </div>
     <div class="pm-lr-title">${escapeHtml(card.title)}</div>
     ${compactDone ? '' : `${progressLine}${stepLine}
