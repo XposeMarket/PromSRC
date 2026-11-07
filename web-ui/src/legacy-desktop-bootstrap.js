@@ -873,6 +873,7 @@ function queueSessionHoverPreview(source) {
 }
 
 function scheduleSessionHoverPreviewClose() {
+  if (_sessionOptionsOpen) return;
   if (_sessionHoverPreviewEditing) return;
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
   _sessionHoverPreviewCloseTimer = setTimeout(hideSessionHoverPreview, 1500);
@@ -880,12 +881,79 @@ function scheduleSessionHoverPreviewClose() {
 
 function hideSessionHoverPreview() {
   if (_sessionHoverPreviewEditing) return;
+  _syncChatSessionOptionsClosed();
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
   _sessionHoverPreviewCloseTimer = null;
   _sessionHoverPreviewSource = null;
   const popover = document.getElementById('session-hover-preview');
   if (popover) popover.classList.remove('is-visible');
 }
+
+// Keyboard/narrow-desktop entry to the same popover menu (settle / move / remove / delete).
+let _sessionOptionsOpen = false;
+let _sessionOptionsTrigger = null;
+
+function closeChatSessionOptions(restoreFocus = false) {
+  const trigger = _sessionOptionsTrigger;
+  // Focus the trigger BEFORE the menu state clears: it stays rendered while focused (CSS :focus),
+  // so focus cannot be dropped by a display:none that happens during close.
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+  hideSessionHoverPreview();
+}
+
+window.openChatSessionOptions = function openChatSessionOptions(trigger, event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const row = trigger?.closest?.('[data-session-hover-preview]');
+  if (!row) return;
+  if (_sessionOptionsOpen && _sessionOptionsTrigger === trigger) {
+    closeChatSessionOptions(true);
+    return;
+  }
+  showSessionHoverPreview(row);
+  const popover = document.getElementById('session-hover-preview');
+  if (!popover || !popover.classList.contains('is-visible')) return;
+  const menu = popover.querySelector('.session-hover-preview-options');
+  _sessionOptionsOpen = true;
+  _sessionOptionsTrigger = trigger;
+  trigger.setAttribute('aria-expanded', 'true');
+  row.classList.add('is-menu-open');
+  popover.classList.add('is-options-open');
+  if (menu) menu.hidden = false;
+  popover.querySelector('.session-hover-preview-option')?.focus();
+};
+
+function _syncChatSessionOptionsClosed() {
+  if (_sessionOptionsTrigger?.isConnected) _sessionOptionsTrigger.setAttribute('aria-expanded', 'false');
+  _sessionOptionsTrigger?.closest?.('.chat-session-item')?.classList.remove('is-menu-open');
+  _sessionOptionsOpen = false;
+  _sessionOptionsTrigger = null;
+  document.getElementById('session-hover-preview')?.classList.remove('is-options-open');
+}
+
+document.addEventListener('keydown', (event) => {
+  if (!_sessionOptionsOpen) return;
+  const popover = document.getElementById('session-hover-preview');
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeChatSessionOptions(true);
+    return;
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  const items = Array.from(popover?.querySelectorAll('.session-hover-preview-option') || []);
+  if (!items.length) return;
+  event.preventDefault();
+  const at = items.indexOf(document.activeElement);
+  const next = event.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
+  items[next].focus();
+});
+
+document.addEventListener('pointerdown', (event) => {
+  if (!_sessionOptionsOpen) return;
+  const popover = document.getElementById('session-hover-preview');
+  if (popover?.contains(event.target) || _sessionOptionsTrigger?.contains(event.target)) return;
+  closeChatSessionOptions(false);
+});
 
 function _renderSessionHoverPreviewTitle(popover, id, title) {
   popover.dataset.sessionId = id;
@@ -936,7 +1004,36 @@ function _renderSessionHoverPreviewTitle(popover, id, title) {
     event.stopPropagation();
     confirmSessionHoverDelete(id, title);
   });
-  options.append(settleButton, deleteButton);
+  const moveButton = document.createElement('button');
+  moveButton.type = 'button';
+  moveButton.className = 'session-hover-preview-option';
+  moveButton.textContent = 'Move to project…';
+  moveButton.setAttribute('role', 'menuitem');
+  moveButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    window.openChatMoveToProjectPicker?.(id);
+  });
+  const inProject = !!(String(session?.projectId || '').trim() || session?.projectName
+    || _sessionHoverPreviewSource?.classList?.contains('chat-in-project')
+    || _sessionHoverPreviewSource?.classList?.contains('project-chat-session-card'));
+  const menuItems = [settleButton, moveButton];
+  if (inProject) {
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'session-hover-preview-option';
+    removeButton.textContent = 'Remove from project';
+    removeButton.setAttribute('role', 'menuitem');
+    removeButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideSessionHoverPreview();
+      window.removeChatFromProjectNow?.(id);
+    });
+    menuItems.push(removeButton);
+  }
+  menuItems.push(deleteButton);
+  options.append(...menuItems);
   optionsButton.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1412,6 +1509,9 @@ function _prioritySessionProvider(session) {
   const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
   const provider = route?.effective?.providerId || route?.providerId || session?.providerId || session?.provider;
   if (provider) return String(provider).trim().toLowerCase();
+  // The model that actually answered (server SessionSummary.lastModel), same source as mobile.
+  const lastProvider = String(session?.lastModel?.providerId || '').trim().toLowerCase();
+  if (lastProvider) return lastProvider;
   const imported = _getImportedSourceBrand(session);
   if (imported?.key === 'openai') return 'openai';
   if (imported?.key === 'claude') return 'anthropic';
@@ -1827,29 +1927,17 @@ function renderChatSessionCard(s, options = {}) {
     ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
     : '';
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
+  // Settle / move / remove-from-project live in the hover popover's options menu, not on the row.
   const chatProjectOwned = !!(projectId || s.projectName || searchResult?.projectName);
-  const folderIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-  const detachIcon = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
-  const moveProjectAction = `<button class="chat-session-action-btn chat-move-project-btn" onclick="event.preventDefault();event.stopPropagation();openChatMoveToProjectPicker('${escHtml(s.id)}')" title="Move to project…" aria-label="Move to project…">${folderIcon}</button>`;
-  const removeProjectAction = chatProjectOwned
-    ? `<button class="chat-session-action-btn chat-remove-project-btn" onclick="event.preventDefault();event.stopPropagation();removeChatFromProjectNow('${escHtml(s.id)}')" title="Remove from project" aria-label="Remove from project">${detachIcon}</button>`
-    : '';
   const projectDeleteAction = projectId && options.projectDelete
     ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${escHtml(projectId)}','${escHtml(s.id)}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
-  const settleLabel = isSettled ? 'Reopen chat' : 'Settle chat';
-  const settleAction = isSettled
-    ? `confirmSessionHoverUnsettle('${s.id}')`
-    : `confirmSessionHoverSettle('${s.id}', '${escHtml(s.title || 'New chat')}')`;
-  const settleButton = `<button class="chat-session-action-btn chat-settle-btn${isSettled ? ' active' : ''}" onclick="event.preventDefault();event.stopPropagation();${settleAction}" title="${settleLabel}" aria-label="${settleLabel}">${CHAT_SETTLE_ICON}</button>`;
   return `
-    <div class="job-item chat-session-item${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+    <div class="job-item chat-session-item${nestedClass}${chatProjectOwned ? ' chat-in-project' : ''} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
       ${renderImportedSourceMeta(s, sessionTimestamp)}
-      ${settleButton}
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}
-      ${moveProjectAction}
-      ${removeProjectAction}
+      <button class="chat-session-options-trigger" type="button" title="Chat options" aria-label="Chat options" aria-haspopup="menu" aria-expanded="false" onclick="openChatSessionOptions(this, event)">&#8943;</button>
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
           ${unreadDot}

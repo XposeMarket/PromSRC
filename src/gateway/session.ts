@@ -9,7 +9,7 @@
 import fs from 'fs';
 import { cancelMainChatGoalTimers } from './timers/timer-store';
 import { quarantineCorruptStateFile, writeFileAtomicSync } from './state-file-quarantine';
-import { getLastAssistantModel, normalizeSessionModelRef, type SessionModelRef } from './session-last-model';
+import { getLastAssistantModel, normalizeSessionModelRef, SESSION_LAST_MODEL_VERSION, type SessionModelRef } from './session-last-model';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
@@ -453,6 +453,8 @@ export interface SessionSummary {
   chatModelRoute?: ChatModelRoute;
   /** Model that produced the latest assistant reply (sidebar logo). null = none on record. */
   lastModel?: SessionModelRef | null;
+  /** Derivation version of lastModel; older rows are recomputed once. */
+  lastModelVersion?: number;
   voiceRoom?: VoiceRoomMetadata | null;
   externalImport?: Pick<ExternalImportBinding, 'version' | 'source' | 'continuation' | 'sourceResume' | 'importedAt'>;
 }
@@ -1224,7 +1226,9 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
       : null,
     canvasProjectLink: normalizeCanvasProjectLink(input?.canvasProjectLink),
     chatModelRoute: normalizeChatModelRoute(input?.chatModelRoute),
-    lastModel: normalizeSessionModelRef(input?.lastModel),
+    // Rows from an older derivation read as not computed so the index rehydrates them once.
+    lastModel: Number(input?.lastModelVersion) === SESSION_LAST_MODEL_VERSION ? normalizeSessionModelRef(input?.lastModel) : undefined,
+    lastModelVersion: SESSION_LAST_MODEL_VERSION,
     voiceRoom: input?.voiceRoom && typeof input.voiceRoom === 'object' ? input.voiceRoom as VoiceRoomMetadata : null,
     externalImport: normalizeExternalImport(input?.externalImport),
   };
@@ -1526,6 +1530,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     mainChatGoal: session.mainChatGoal || null,
     chatModelRoute: normalizeChatModelRoute(session.chatModelRoute),
     lastModel: getLastAssistantModel(session.history),
+    lastModelVersion: SESSION_LAST_MODEL_VERSION,
     voiceRoom: session.voiceRoom || null,
     externalImport: session.externalImport
       ? {
@@ -1618,6 +1623,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
       chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
       lastModel: getLastAssistantModel(history),
+      lastModelVersion: SESSION_LAST_MODEL_VERSION,
       voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
       externalImport: normalizeExternalImport(data?.externalImport),
     };
@@ -1702,6 +1708,13 @@ function getSortedSessionSummaries(
       return Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0)
         - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0);
     });
+}
+
+/** Cheap index lookup: model a chat last answered with, else its pinned route. */
+export function getIndexedSessionModelRef(id: string): SessionModelRef | null {
+  const summary = loadSessionIndex().summaries[String(id || '')];
+  if (summary?.lastModel) return summary.lastModel;
+  return summary?.chatModelRoute ? { providerId: summary.chatModelRoute.providerId, model: summary.chatModelRoute.model } : null;
 }
 
 export function listSessionSummaries(channel?: Session['channel']): SessionSummary[];
