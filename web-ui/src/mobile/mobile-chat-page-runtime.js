@@ -15,7 +15,6 @@ import { finalizeMobileMainPlan } from './mobile-plan-finalize.js';
 import { createMobileSilenceBackstop, claimMobileFinalize, selectMobileTurnRowsToFinalize } from './mobile-turn-lifecycle.js';
 import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
-import { mobileGatewayFetch as secureAccessMobileFetch } from './mobile-api.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
 import { installComposerSecretGuard, createAddSecretButton } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
@@ -954,7 +953,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     (form?.parentElement || page).appendChild(secureAccessHost);
     const secureAccessSessionAtMount = String(requestedSession || '').trim();
     mountSecureAccessDock(secureAccessHost, {
-      fetchJson: (path, opts = {}) => secureAccessMobileFetch(path, opts),
+      fetchJson: (path, opts = {}) => mobileGatewayFetch(path, opts),
       sessionId: secureAccessSessionAtMount,
       getSessionId: () => String(requestedSession || '').trim(),
       onResolved: createSecureAccessContinuation((text, meta) => {
@@ -964,7 +963,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     });
     // Add secret + composer paste guard (helpers live in protected-plugin-entry.js).
     const protectedInput = page.querySelector('#pm-composer-input');
-    const protectedFetch = (path, opts = {}) => secureAccessMobileFetch(path, opts);
+    const protectedFetch = (path, opts = {}) => mobileGatewayFetch(path, opts);
     if (protectedInput) {
       // Entry lives in a sibling host, NOT the polled dock: refresh() replaceChildren would remove the button/form while typing.
       const addSecretHost = document.createElement('div');
