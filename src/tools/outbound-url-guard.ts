@@ -100,6 +100,8 @@ export function isBlockedAddress(raw: string): boolean {
       return isBlockedAddress(v4); // IPv4-mapped / IPv4-compatible
     }
     if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) return isBlockedAddress(v4); // NAT64
+    if (h[0] === 0x2002) return isBlockedAddress(`${h[1] >> 8}.${h[1] & 255}.${h[2] >> 8}.${h[2] & 255}`); // 6to4
+    if ((h[0] & 0xffc0) === 0xfec0) return true; // deprecated site-local
     if ((h[0] & 0xfe00) === 0xfc00) return true; // unique local
     if ((h[0] & 0xffc0) === 0xfe80) return true; // link-local
     if ((h[0] & 0xff00) === 0xff00) return true; // multicast
@@ -107,6 +109,13 @@ export function isBlockedAddress(raw: string): boolean {
     return false;
   }
   return true;
+}
+
+/** True for local names (localhost, *.local, *.internal) and loopback/private IP literals. No DNS. */
+export function isLocalHostname(hostname: string): boolean {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return true;
+  return net.isIP(host) ? isBlockedAddress(host) : false;
 }
 
 async function defaultLookup(host: string): Promise<string[]> {
@@ -135,13 +144,11 @@ export async function assertPublicUrl(rawUrl: string, opts: OutboundGuardOptions
     `Blocked fetch to ${u.host}: ${detail}. Fetch tools only reach public internet addresses; use the browser tools for local or private-network pages.`,
   );
   const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
-  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
-    throw blocked('local hostname');
-  }
   if (net.isIP(host)) {
     if (isBlockedAddress(host)) throw blocked(`${host} is a loopback, private, or link-local address`);
     return u;
   }
+  if (isLocalHostname(host)) throw blocked('local hostname');
   let addresses: string[];
   try {
     addresses = await (opts.lookup ?? defaultLookup)(host);
@@ -164,9 +171,10 @@ export async function fetchPublicUrl(input: string, init: RequestInit = {}, opts
   let url = String(input || '').trim();
   let method = init.method;
   let body = init.body;
+  let headers = init.headers;
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     await assertPublicUrl(url, opts);
-    const res = await fetchImpl(url, { ...init, method, body, redirect: 'manual' });
+    const res = await fetchImpl(url, { ...init, method, body, headers, redirect: 'manual' });
     const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
     if (!location) return res;
     try { await res.body?.cancel(); } catch { /* ignore */ }
@@ -175,7 +183,14 @@ export async function fetchPublicUrl(input: string, init: RequestInit = {}, opts
       method = 'GET';
       body = undefined;
     }
-    url = new URL(location, url).toString();
+    const next = new URL(location, url);
+    // Like native fetch: never carry credentials to a different origin.
+    if (headers && next.origin !== new URL(url).origin) {
+      const copy = new Headers(headers);
+      for (const name of ['authorization', 'cookie', 'proxy-authorization']) copy.delete(name);
+      headers = copy;
+    }
+    url = next.toString();
   }
   throw new OutboundUrlBlockedError(`Too many redirects (more than ${maxRedirects}) starting at ${String(input).slice(0, 200)}.`);
 }

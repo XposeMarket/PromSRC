@@ -20,6 +20,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-outbound-guard-'));
 process.env.PROMETHEUS_DATA_DIR = root;
 process.env.PROMETHEUS_WORKSPACE_DIR = root;
 process.env.MCP_OAUTH_NO_BROWSER = '1';
+process.env.MCP_OAUTH_TEST_MODE = '1';
 delete process.env.PROMETHEUS_ALLOW_PRIVATE_FETCH;
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -43,7 +44,7 @@ async function main(): Promise<void> {
   await check('blocks loopback, private, link-local, CGNAT and mapped addresses', () => {
     for (const ip of ['127.0.0.1', '127.9.9.9', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254',
       '100.100.1.1', '0.0.0.0', '224.0.0.1', '255.255.255.255', '::1', '::', '::ffff:127.0.0.1', '::ffff:7f00:1',
-      'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '64:ff9b::7f00:1', 'not-an-ip']) {
+      'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '64:ff9b::7f00:1', '2002:7f00:1::1', 'fec0::1', 'not-an-ip']) {
       assert.equal(guard.isBlockedAddress(ip), true, `${ip} must be blocked`);
     }
   });
@@ -92,6 +93,34 @@ async function main(): Promise<void> {
     await assert.rejects(guard.fetchPublicUrl('https://example.com/x', {}, { fetchImpl: loop, lookup: publicLookup, maxRedirects: 3 }), /Too many redirects/);
   });
 
+  await check('fetchPublicUrl drops credential headers on a cross-origin redirect', async () => {
+    const seen: Array<string | null> = [];
+    const fetchImpl = (async (input: any, init: any) => {
+      seen.push(new Headers(init.headers).get('authorization'));
+      if (String(input).includes('first.example')) return new Response(null, { status: 302, headers: { location: 'https://second.example/x' } });
+      return new Response('ok');
+    }) as typeof fetch;
+    await guard.fetchPublicUrl('https://first.example/a', { headers: { Authorization: 'Bearer secret' } }, { fetchImpl, lookup: publicLookup });
+    assert.deepEqual(seen, ['Bearer secret', null]);
+  });
+
+  await check('model-supplied image/video asset URLs refuse the gateway loopback API', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const img = require('../image-generation/utils') as typeof import('../image-generation/utils');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const vid = require('../video-generation/utils') as typeof import('../video-generation/utils');
+    const originalFetch = globalThis.fetch;
+    let called = 0;
+    globalThis.fetch = (async () => { called += 1; return new Response('owner data'); }) as typeof fetch;
+    try {
+      await rejectsBlocked(img.fetchBinaryAsset('http://127.0.0.1:18789/api/sessions'));
+      await rejectsBlocked(vid.fetchBinaryAsset('http://[::1]:18789/api/settings'));
+      assert.equal(called, 0, 'no request may reach a loopback destination');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   await check('PROMETHEUS_ALLOW_PRIVATE_FETCH=1 is an explicit owner opt-out', async () => {
     process.env.PROMETHEUS_ALLOW_PRIVATE_FETCH = '1';
     try {
@@ -131,9 +160,13 @@ async function main(): Promise<void> {
     assert.ok(/router\.post\('\/api\/open-path'[\s\S]{0,1600}execFile\('explorer\.exe', \[resolvedFp\]\)/.test(settings));
   });
 
-  await check('MCP OAuth endpoints from remote metadata must be https (http only on loopback)', () => {
+  await check('MCP OAuth endpoints from remote metadata must be public https (local only for a local server)', () => {
     assert.equal(mcpOAuth.validateOAuthEndpoint('https://auth.example.test/authorize', 'authorization_endpoint'), 'https://auth.example.test/authorize');
-    assert.equal(mcpOAuth.validateOAuthEndpoint('http://127.0.0.1:9000/authorize', 'authorization_endpoint'), 'http://127.0.0.1:9000/authorize');
+    assert.equal(mcpOAuth.validateOAuthEndpoint('http://127.0.0.1:9000/authorize', 'authorization_endpoint', { allowLocal: true }), 'http://127.0.0.1:9000/authorize');
+    for (const bad of ['http://127.0.0.1:18789/api/internal/shutdown', 'https://127.0.0.1:18789/token', 'https://localhost/token', 'https://10.0.0.5/token', 'https://[::1]/token']) {
+      assert.throws(() => mcpOAuth.validateOAuthEndpoint(bad, 'token_endpoint'), /token_endpoint/, bad);
+    }
+    assert.throws(() => mcpOAuth.validateOAuthEndpoint('file:///C:/x', 'token_endpoint', { allowLocal: true }), /token_endpoint/);
     for (const bad of ['http://evil.example/authorize', 'javascript:alert(1)', 'file:///C:/x', 'ms-settings:', 'https://u:p@auth.example.test/a', 'not a url']) {
       assert.throws(() => mcpOAuth.validateOAuthEndpoint(bad, 'authorization_endpoint'), /authorization_endpoint/, bad);
     }
@@ -164,10 +197,45 @@ async function main(): Promise<void> {
       if (url.includes('oauth-authorization-server')) return json({ authorization_endpoint: 'http://auth.evil.test/authorize?x=1&calc', token_endpoint: 'https://auth.evil.test/token' });
       return new Response('no', { status: 404 });
     }) as typeof fetch;
+    mcpOAuth.setMcpOAuthTestOverrides({ lookup: publicLookup });
     try {
       await assert.rejects(mcpOAuth.discoverMcpAuthServer('https://mcp.evil.test/mcp'), /authorization_endpoint must be an https URL/);
     } finally {
       globalThis.fetch = originalFetch;
+      mcpOAuth.setMcpOAuthTestOverrides(null);
+    }
+  });
+
+  await check('a remote MCP server cannot aim registration/token fetches at the gateway (direct or via redirect)', async () => {
+    const originalFetch = globalThis.fetch;
+    const requested: string[] = [];
+    const json = (body: object) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const meta = (extra: object) => json({ authorization_endpoint: 'https://auth.evil.test/authorize', token_endpoint: 'https://auth.evil.test/token', ...extra });
+    let variant: object = {};
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.includes('oauth-protected-resource')) return json({ authorization_servers: ['https://auth.evil.test'] });
+      if (url.includes('oauth-authorization-server')) return meta(variant);
+      if (url === 'https://auth.evil.test/register') return new Response(null, { status: 307, headers: { location: 'http://127.0.0.1:18789/api/internal/shutdown' } });
+      return new Response('no', { status: 404 });
+    }) as typeof fetch;
+    mcpOAuth.setMcpOAuthTestOverrides({ lookup: publicLookup, storage: new Map() });
+    try {
+      variant = { token_endpoint: 'http://127.0.0.1:18789/api/internal/shutdown' };
+      await assert.rejects(mcpOAuth.discoverMcpAuthServer('https://mcp.evil.test/mcp'), /token_endpoint must be an https URL/);
+      variant = { registration_endpoint: 'https://localhost:18789/api/internal/shutdown' };
+      await assert.rejects(mcpOAuth.discoverMcpAuthServer('https://mcp.evil.test/mcp'), /registration_endpoint must not point at a loopback/);
+      variant = { registration_endpoint: 'https://auth.evil.test/register' };
+      const started = await mcpOAuth.startMcpOAuthFlow('evil-mcp', 'https://mcp.evil.test/mcp', undefined, undefined, { openBrowser: false });
+      assert.equal(started.status, 'error');
+      assert.ok(!requested.some((u) => u.includes('127.0.0.1')), 'the 307 to loopback must not be followed');
+      // A server that is itself local keeps working with local endpoints.
+      const local = mcpOAuth.validateOAuthEndpoint('http://localhost:3000/token', 'token_endpoint', { allowLocal: true });
+      assert.equal(local, 'http://localhost:3000/token');
+    } finally {
+      globalThis.fetch = originalFetch;
+      mcpOAuth.setMcpOAuthTestOverrides(null);
     }
   });
 
