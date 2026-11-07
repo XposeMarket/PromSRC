@@ -1,7 +1,7 @@
 import { inferProviderForBareModel, parseProviderModelRef } from '../../agents/model-routing.js';
 
 /** Provider/model a task card shows as its avatar logo. */
-export interface TaskModelRef { providerId: string; model: string; source: string }
+export interface TaskModelRef { providerId: string; model: string; source: string; reasoningEffort?: string }
 
 export interface TaskModelRefDeps {
   /** Model a session last answered with (index lookup); planned runs + task sessions. */
@@ -36,6 +36,13 @@ function refFrom(raw: unknown, source: string, deps: TaskModelRefDeps): TaskMode
  */
 export function resolveTaskModelRef(task: any, deps: TaskModelRefDeps = {}): TaskModelRef | null {
   if (!task || typeof task !== 'object') return null;
+  const ref = resolveTaskModelRoute(task, deps);
+  // Reasoning effort the run was launched with (explicit executor route), shown next to the model on cards.
+  const effort = String(task.executorReasoningEffort || task.reasoningEffort || '').trim().slice(0, 32);
+  return ref && effort ? { ...ref, reasoningEffort: effort } : ref;
+}
+
+function resolveTaskModelRoute(task: any, deps: TaskModelRefDeps): TaskModelRef | null {
   const sessionId = String(task.sessionId || '').trim();
   const fromSession = (source: string) => {
     if (!sessionId || !deps.sessionModel) return null;

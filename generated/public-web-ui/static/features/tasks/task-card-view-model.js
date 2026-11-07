@@ -2,7 +2,7 @@
 // Pure ES module (no DOM, no globals) used by BOTH the desktop Tasks page and
 // the mobile tasks route so card/detail semantics cannot drift.
 
-import { providerLogoKey } from '../../components/provider-logo.js';
+import { agentModelLabel, providerLogoKey } from '../../components/provider-logo.js';
 
 export const STALL_THRESHOLD_MS = 30 * 60 * 1000;
 
@@ -213,7 +213,14 @@ export function taskAvatar(task) {
   const providerId = oneLine(ref?.providerId);
   const model = oneLine(ref?.model);
   const logoKey = providerId || model ? providerLogoKey(providerId, model) : '';
-  return { providerId, model, logoKey, modelSource: oneLine(ref?.source) };
+  const reasoningEffort = oneLine(ref?.reasoningEffort);
+  return { providerId, model, logoKey, reasoningEffort, modelSource: oneLine(ref?.source) };
+}
+
+/** "Opus 5.5 · Medium" for the card's sub line; falls back to the source kind when the model is unknown. */
+export function taskModelLabel(task) {
+  const { providerId, model, reasoningEffort } = taskAvatar(task);
+  return oneLine(agentModelLabel({ providerId, model, reasoningEffort })) || sourceLabel(task);
 }
 
 export function sourceLabel(task) {
@@ -269,7 +276,7 @@ export function buildTaskCard(task, now = Date.now()) {
     actor: actor.actor,
     initials: actor.initials,
     avatar: taskAvatar(task),
-    sub: [startedAt ? `started ${relTime(startedAt, now)}` : '', sourceLabel(task)].filter(Boolean).join(' · '),
+    sub: [startedAt ? `started ${relTime(startedAt, now)}` : '', taskModelLabel(task)].filter(Boolean).join(' · '),
     title: cleanTaskTitle(task),
     status,
     statusLabel: stalled ? 'Stalled?' : statusLabel(task?.status),

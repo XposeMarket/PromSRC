@@ -12,6 +12,11 @@ const deps: TaskModelRefDeps = {
 // Actual run evidence beats every configured route.
 assert.deepEqual(resolveTaskModelRef({ sessionId: 'ran', executorProvider: 'anthropic/claude-opus-5-5', scheduleId: 'job-sol' }, deps),
   { providerId: 'xai', model: 'grok-4.3', source: 'session' });
+// Launch reasoning effort rides along so cards can show "model · effort".
+assert.deepEqual(resolveTaskModelRef({ sessionId: 'ran', executorReasoningEffort: 'high' }, deps),
+  { providerId: 'xai', model: 'grok-4.3', source: 'session', reasoningEffort: 'high' });
+assert.equal(resolveTaskModelRef({ executorReasoningEffort: 'high' }, {}), null, 'effort alone never invents a model');
+
 // Explicit executor route next.
 assert.equal(resolveTaskModelRef({ sessionId: 'none', executorProvider: 'anthropic/claude-opus-5-5' }, deps)?.providerId, 'anthropic');
 // Bare executor model: inferred provider, else active provider.

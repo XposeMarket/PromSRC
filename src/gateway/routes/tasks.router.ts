@@ -27,7 +27,7 @@ import { isStorageBoundaryError } from '../storage/storage-paths';
 import { collectNeedsYouItems } from '../needs-you-collect';
 import { notifyNeedsYouChanged } from '../comms/broadcaster';
 import { getIndexedSessionModelRef } from '../session';
-import { resolveTaskModelRef, type TaskModelRefDeps } from '../tasks/task-model-ref';
+import { resolveTaskModelRef, type TaskModelRef, type TaskModelRefDeps } from '../tasks/task-model-ref';
 import { getPrimaryModelRef, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 
 /** Live deps for task card provider logos (index/config lookups only, no transcript reads). */
@@ -43,7 +43,7 @@ function taskModelRefDeps(): TaskModelRefDeps {
     defaultProvider: () => String(cfg?.llm?.provider || ''),
   };
 }
-function withModelRef<T extends Record<string, any>>(task: T, deps: TaskModelRefDeps): T & { modelRef?: { providerId: string; model: string; source: string } } {
+function withModelRef<T extends Record<string, any>>(task: T, deps: TaskModelRefDeps): T & { modelRef?: TaskModelRef } {
   const ref = resolveTaskModelRef(task, deps);
   return ref ? { ...task, modelRef: ref } : task;
 }

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {
   cleanTaskTitle, dispatchedMessage, rawInstructions, taskKind, statusTone, progressSummary,
-  isLikelyStalled, attentionText, actorLabel, collapseActivity, buildTaskCard, detailSections, taskAvatar,
+  isLikelyStalled, attentionText, actorLabel, collapseActivity, buildTaskCard, detailSections, taskAvatar, taskModelLabel,
 } from '../web-ui/src/features/tasks/task-card-view-model.js';
 
 const NOW = 10_000_000_000;
@@ -142,7 +142,11 @@ console.log('PASS failed-task recovery composer');
 console.log('PASS detail sections + old record compatibility');
 // ── Provider-logo avatar (shared desktop + mobile) ──
 assert.deepEqual(taskAvatar({ modelRef: { providerId: 'anthropic', model: 'claude-opus-5-5', source: 'session' } }),
-  { providerId: 'anthropic', model: 'claude-opus-5-5', logoKey: 'anthropic', modelSource: 'session' });
+  { providerId: 'anthropic', model: 'claude-opus-5-5', logoKey: 'anthropic', reasoningEffort: '', modelSource: 'session' });
+assert.match(taskModelLabel({ modelRef: { providerId: 'anthropic', model: 'claude-opus-5-5', reasoningEffort: 'medium' } }), /Opus 5\.5.*Medium/i, 'model + reasoning on the card sub line');
+assert.equal(taskModelLabel({ modelRef: { providerId: 'xai', model: 'grok-4.3' } }), 'Grok 4.3', 'model without recorded effort');
+assert.equal(taskModelLabel({ scheduleId: 's1' }), 'schedule', 'unknown model falls back to the source kind');
+assert.equal(buildTaskCard({ id: 'm', status: 'running', startedAt: NOW - 120000, modelRef: { providerId: 'xai', model: 'grok-4.3' } }, NOW).sub.includes('schedule'), false, 'sub shows the model, not the source kind');
 assert.equal(taskAvatar({ modelRef: { providerId: 'openai_codex', model: 'gpt-6.1-sol' } }).logoKey, 'openai', 'codex alias -> openai logo');
 assert.equal(taskAvatar({ modelRef: { providerId: 'xai', model: 'grok-4.3' } }).logoKey, 'xai');
 assert.equal(taskAvatar({ modelRef: { providerId: '', model: 'claude-haiku-5-5' } }).logoKey, 'anthropic', 'model-only ref still maps');
