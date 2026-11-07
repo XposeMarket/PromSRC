@@ -98,11 +98,6 @@
       "count": 1
     },
     {
-      "file": "src/gateway/comms/broadcaster.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
-    },
-    {
       "file": "src/gateway/comms/telegram-channel.ts",
       "target": "src/config/config.ts",
       "count": 1
@@ -116,11 +111,6 @@
       "file": "src/gateway/comms/telegram-channel.ts",
       "target": "src/gateway/comms/broadcaster.ts",
       "count": 1
-    },
-    {
-      "file": "src/gateway/comms/telegram-channel.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
     },
     {
       "file": "src/gateway/comms/telegram-channel.ts",
@@ -276,11 +266,6 @@
       "file": "src/gateway/routes/proposals.router.ts",
       "target": "src/gateway/teams/team-dispatch-runtime.ts",
       "count": 1
-    },
-    {
-      "file": "src/gateway/routes/settings.router.ts",
-      "target": "src/gateway/lifecycle.ts",
-      "count": 2
     },
     {
       "file": "src/gateway/routes/settings.router.ts",

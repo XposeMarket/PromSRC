@@ -46,7 +46,10 @@ function runCheck(root: string): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [CHECK_SCRIPT, '--root', root], { encoding: 'utf8' });
 }
 
-const ENTRY = "export async function load() {\n  return await import('./state.js');\n}\n";
+// Fixture specifiers are interpolated so scripts/test-dynamic-require-paths.mjs does
+// not read these strings as real relative imports of this file (CI failure on f9d9cfbee).
+const STATE_SPEC = "'./state.js'";
+const ENTRY = `export async function load() {\n  return await import(${STATE_SPEC});\n}\n`;
 
 try {
   check('check script flags a dynamic import of a stateful module', () => {
@@ -170,7 +173,7 @@ try {
 
   check('type-only import() references (typeof import, import().T) are not dynamic imports', () => {
     const root = makeFixture({
-      'entry.ts': "export type Foo = import('./state.js').Foo;\nexport const probe = null as unknown as typeof import('./state.js');\n",
+      'entry.ts': `export type Foo = import(${STATE_SPEC}).Foo;\nexport const probe = null as unknown as typeof import(${STATE_SPEC});\n`,
       'state.ts': 'let counter = 0;\nexport const bump = () => ++counter;\nexport interface Foo { a: number }\n',
     });
     const result = runCheck(root);
