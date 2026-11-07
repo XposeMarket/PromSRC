@@ -40,6 +40,15 @@ const AUDIT_MAX_BYTES = 10 * 1024 * 1024;
 const AUDIT_SIZE_CHECK_INTERVAL_MS = 30_000;
 const DERIVED_KEY_CACHE_MAX_ENTRIES = 256;
 
+// Reserved namespace for secure-access owner-only credentials. Only the trusted
+// secure-access broker may read, write, delete, or rotate these keys; every other
+// caller (MCP env refs, config.resolveSecret, webhooks, model tools) gets no value.
+const SECURE_ACCESS_RESERVED_PREFIX = 'secure.access.';
+const SECURE_ACCESS_TRUSTED_CALLER = 'secure-access';
+function isReservedSecureAccessKey(key: string): boolean {
+  return String(key ?? '').trim().toLowerCase().startsWith(SECURE_ACCESS_RESERVED_PREFIX);
+}
+
 // Derived keys are shared by every SecretVault instance in the process. Several
 // call sites construct or resolve the vault through different config-dir
 // spellings (and mcp-manager builds its own instance), so a per-instance cache
@@ -438,6 +447,10 @@ export class SecretVault {
    * @param ttlMs  Time-to-live ms; 0 = never expire
    */
   set(key: string, value: string, caller = 'unknown', ttlMs = 0): void {
+    if (isReservedSecureAccessKey(key) && caller !== SECURE_ACCESS_TRUSTED_CALLER) {
+      this.audit('DENY', key, caller);
+      throw new Error('Vault write refused.');
+    }
     const { enc, iv, tag } = this.encrypt(value);
     // Re-read right before writing and change ONLY this key. Overlaying the
     // whole in-memory snapshot on disk let a process holding a stale copy
@@ -458,6 +471,10 @@ export class SecretVault {
    * Returns null if missing or expired.
    */
   get(key: string, caller = 'unknown'): SecretValue | null {
+    if (isReservedSecureAccessKey(key) && caller !== SECURE_ACCESS_TRUSTED_CALLER) {
+      this.audit('DENY', key, caller);
+      return null;
+    }
     this.refreshFromDisk();
     const entry = this.data.entries[key];
     if (!entry) return null;
@@ -476,6 +493,8 @@ export class SecretVault {
 
   /** Check existence without decrypting or emitting a GET audit event */
   has(key: string): boolean {
+    // has() carries no caller, so reserved secure-access keys are never reported as present.
+    if (isReservedSecureAccessKey(key)) { this.audit('DENY', key, 'has'); return false; }
     this.refreshFromDisk();
     const entry = this.data.entries[key];
     if (!entry) return false;
@@ -487,6 +506,10 @@ export class SecretVault {
   }
 
   delete(key: string, caller = 'unknown'): void {
+    if (isReservedSecureAccessKey(key) && caller !== SECURE_ACCESS_TRUSTED_CALLER) {
+      this.audit('DENY', key, caller);
+      throw new Error('Vault delete refused.');
+    }
     this.refreshFromDisk();
     if (this.data.entries[key]) {
       delete this.data.entries[key];
@@ -509,6 +532,10 @@ export class SecretVault {
    * Returns false if key doesn't exist.
    */
   rotate(key: string, newValue: string, caller = 'unknown'): boolean {
+    if (isReservedSecureAccessKey(key) && caller !== SECURE_ACCESS_TRUSTED_CALLER) {
+      this.audit('DENY', key, caller);
+      return false;
+    }
     this.refreshFromDisk();
     const existing = this.data.entries[key];
     if (!existing) return false;

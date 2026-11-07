@@ -867,6 +867,9 @@ export function planGatewayHandoff(ctx: RestartContext): GatewayHandoffPlan {
 
 function spawnDetachedReplacementGateway(root: string, handoffHostPid: number | null = process.pid): { entry?: string } {
   const replacementEnv = { ...process.env } as NodeJS.ProcessEnv;
+  // Owner/pairing/RPC secrets were scrubbed from process.env at boot; hand them
+  // to the replacement gateway only (never to tool children).
+  try { Object.assign(replacementEnv, require('../security/secure-access-owner').gatewayRespawnSecrets()); } catch {}
   if (handoffHostPid) {
     replacementEnv.PROMETHEUS_HOT_RESTART = '1';
     replacementEnv.PROMETHEUS_HANDOFF_HOST_PID = String(handoffHostPid);

@@ -51,6 +51,10 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
 
     if (name === 'secure_access') {
       // Identity comes from the runtime context, never model arguments. Unknown actors fail closed.
+      // Chat channels (Telegram/Discord/WhatsApp) may not create requests or prepare logins.
+      if (/^(telegram_|discord_|whatsapp_)/.test(String(sessionId)) && (args.action === 'request' || args.action === 'fill')) {
+        return { name, args, result: 'Saved access requests and protected logins are not available from chat channels. Use the Prometheus app main chat.', error: true };
+      }
       if (!/^(mobile_|web_|telegram_|discord_|whatsapp_|terminal_|main$)/.test(sessionId) || deps.internalWatchContext || deps.threadOpsSupervisionId || deps.executionPolicy?.mode === 'goal_autonomous') {
         return { name, args, result: 'Saved access currently supports owner main chats only. Teams, jobs and supervised turns require separate grants in a later release.', error: true };
       }

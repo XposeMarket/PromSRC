@@ -378,7 +378,8 @@ export function getBrowserProfileLabel(kind: BrowserProfileKind): string {
 
 export function getInHouseBrowserRpcConfig(): { url: string; token: string } | null {
   const url = String(process.env.PROMETHEUS_ELECTRON_BROWSER_RPC_URL || '').trim();
-  const token = String(process.env.PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN || '').trim();
+  // Captured from env at gateway boot (secure-access-owner.ts) so tool children cannot inherit it.
+  const token = String((globalThis as any)[Symbol.for('prometheus.capturedGatewaySecrets')]?.browserRpc || process.env.PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN || '').trim();
   if (!url || !token) return null;
   return { url: url.replace(/\/+$/, ''), token };
 }

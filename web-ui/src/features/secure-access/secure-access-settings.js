@@ -2,7 +2,7 @@
 // mobile Settings > Security. Metadata only: no API here returns stored values.
 import {
   SECURE_ACCESS_API, ensureSecureAccessStyles, el, lockIcon, postJson,
-  storageLabel, isExactHttpsOriginUrl, mountSecureAccessCard,
+  storageLabel, isExactHttpsOriginUrl, mountSecureAccessCard, secureAccessErrorText,
 } from './secure-access-core.js';
 
 const KIND_LABEL = { login: 'Login', api_key: 'API key', otp: 'One-time code' };
@@ -39,7 +39,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
   host.replaceChildren(root);
 
   const say = (text, tone = '') => { msgLine.textContent = text; msgLine.className = `sa-muted ${tone}`; };
-  const fail = () => say('That did not work. Refresh and try again.', 'sa-err');
+  const fail = (error) => say(secureAccessErrorText(error, 'That did not work. Refresh and try again.'), 'sa-err');
 
   function showCard(request) {
     const card = mountSecureAccessCard(addHost, {
@@ -78,7 +78,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
         });
         form.remove();
         if (res?.request) showCard(res.request);
-      } catch { err.textContent = 'Could not start. Try again.'; }
+      } catch (error) { err.textContent = secureAccessErrorText(error, 'Could not start. Try again.'); }
     });
     addHost.prepend(form);
     label.focus();
@@ -90,7 +90,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
     const revoked = String(cred.state || '') === 'revoked';
     const btn = (text, fn, cls = '') => el('button', { type: 'button', class: `sa-btn sa-sm ${cls}`, text, onclick: fn });
     const run = async (fn, okText) => {
-      try { await fn(); say(okText, 'sa-ok'); refresh(); } catch { fail(); }
+      try { await fn(); say(okText, 'sa-ok'); refresh(); } catch (error) { fail(error); }
     };
 
     const actions = el('div', { class: 'sa-row' },
@@ -133,7 +133,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
           const res = await postJson(fetchJson, `${SECURE_ACCESS_API}/credentials/${encodeURIComponent(cred.id)}/login/prepare`, { url: url.value.trim(), sessionId: (typeof opts.getSessionId === 'function' && opts.getSessionId()) || 'main' });
           if (res?.phase !== 'ready') { err.textContent = 'This sign-in page is not supported. Sign in yourself in the browser.'; return; }
           renderApprove(res);
-        } catch { err.textContent = 'This sign-in page is not supported or the browser is unavailable. Sign in yourself in the browser.'; }
+        } catch (error) { err.textContent = secureAccessErrorText(error, 'This sign-in page is not supported or the browser is unavailable. Sign in yourself in the browser.'); }
       });
       function renderApprove(res) {
         const filled = Array.isArray(res.filled) ? res.filled.join(' and ') : 'fields';
@@ -144,7 +144,7 @@ export function mountSavedAccessSettings(host, opts = {}) {
               try {
                 const out = await postJson(fetchJson, `${SECURE_ACCESS_API}/credentials/${encodeURIComponent(cred.id)}/login/submit`, { confirm: true });
                 renderOutcome(out);
-              } catch { err.textContent = 'Sign-in could not be sent.'; }
+              } catch (error) { err.textContent = secureAccessErrorText(error, 'Sign-in could not be sent.'); }
             } }),
             el('button', { type: 'button', class: 'sa-btn sa-sm', text: 'Cancel', onclick: async () => {
               try { await postJson(fetchJson, `${SECURE_ACCESS_API}/credentials/${encodeURIComponent(cred.id)}/login/cancel`, {}); } catch { /* best effort */ }

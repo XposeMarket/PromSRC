@@ -81,6 +81,13 @@ export function lockIcon(size = 20) {
   return wrap.firstChild;
 }
 
+// F3: protected writes need the desktop app owner session or a paired phone.
+// Agent-driven/plain browsers fail closed; say so instead of a generic retry hint.
+export const OWNER_SURFACE_MESSAGE = 'For your security, approve this in the Prometheus desktop app or on a phone paired with it. This browser cannot approve protected access.';
+export function secureAccessErrorText(error, fallback) {
+  return /OWNER_SURFACE_REQUIRED/.test(String(error?.message || error || '')) ? OWNER_SURFACE_MESSAGE : fallback;
+}
+
 export function postJson(fetchJson, path, body = {}) {
   return fetchJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
@@ -306,8 +313,8 @@ export function mountSecureAccessCard(host, opts = {}) {
       });
       const cred = res?.credential || {};
       finish('saved', { credentialId: cred.id, storage: cred.storage });
-    } catch {
-      errorLine.textContent = 'Could not save. Check the request has not expired and try again.';
+    } catch (error) {
+      errorLine.textContent = secureAccessErrorText(error, 'Could not save. Check the request has not expired and try again.');
     } finally {
       busy = false; saveBtn.textContent = 'Save protected access'; syncSave();
     }
@@ -385,7 +392,7 @@ export function mountPendingLoginCard(host, opts = {}) {
       await postJson(fetchJson, `${base}/outcome`, { verified });
       body.replaceChildren(el('p', { class: 'sa-muted', text: verified ? 'Marked as working.' : 'Marked as not working. You can replace it in Settings > Saved access.' }));
       resolve(verified ? 'login_verified' : 'login_failed');
-    } catch { err.textContent = 'Could not record that. Try again.'; }
+    } catch (error) { err.textContent = secureAccessErrorText(error, 'Could not record that. Try again.'); }
   };
   body.append(
     el('p', { class: 'sa-muted', text: 'Prom filled the sign-in form in a protected page it cannot read. Approving submits that sign-in only. Posting, sending, buying or other actions still ask you separately.' }),
@@ -402,7 +409,7 @@ export function mountPendingLoginCard(host, opts = {}) {
               el('button', { type: 'button', class: 'sa-btn sa-sm', text: 'It did not work', onclick: () => outcome(false) }),
               el('button', { type: 'button', class: 'sa-btn sa-sm', text: 'Not sure yet', onclick: () => resolve('login_submitted') })));
           if (out?.transferred === false) resolve('login_not_sent');
-        } catch { err.textContent = 'Sign-in could not be sent. It may have expired.'; event.currentTarget.disabled = false; }
+        } catch (error) { err.textContent = secureAccessErrorText(error, 'Sign-in could not be sent. It may have expired.'); event.currentTarget.disabled = false; }
       } }),
       el('button', { type: 'button', class: 'sa-btn', text: 'Decline', onclick: async () => {
         try { await postJson(fetchJson, `${base}/login/cancel`, {}); } catch { /* best effort */ }

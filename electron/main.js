@@ -445,6 +445,22 @@ let isGatewayRestarting = false;
 const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
+// PR821 F3: owner proof for /api/secure-access mutations. Held only by the owner
+// window session as an HttpOnly cookie; the gateway captures and scrubs it from
+// env at boot (src/security/secure-access-owner.ts) so tool children never see it.
+const SECURE_ACCESS_OWNER_TOKEN = crypto.randomBytes(32).toString('hex');
+async function installSecureAccessOwnerCookie(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    await win.webContents.session.cookies.set({
+      url: GATEWAY_URL, name: 'prom_sa_owner', value: SECURE_ACCESS_OWNER_TOKEN,
+      httpOnly: true, secure: false, sameSite: 'strict', path: '/api/secure-access',
+    });
+  } catch (err) {
+    // Fail closed: without the cookie, protected card writes return OWNER_SURFACE_REQUIRED.
+    try { writeGatewayLog(`[main] secure-access owner cookie not set: ${err && err.message ? err.message : err}\n`); } catch {}
+  }
+}
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 
 function restoreMainWindow() {
@@ -1780,6 +1796,7 @@ function buildGatewayEnvironment() {
     PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
     PROMETHEUS_GATEWAY_STALL_AUTORESTART: process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART ?? '1',
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
+    PROMETHEUS_SECURE_ACCESS_OWNER_TOKEN: SECURE_ACCESS_OWNER_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
     ...(IS_PACKAGED_RUNTIME ? {
@@ -1937,6 +1954,7 @@ async function restartGatewayFromElectron(options = {}) {
       mainWindow.webContents.once('did-finish-load', () => {
         if (!mainWindow.isDestroyed()) mainWindow.webContents.send('gateway-recovered', { reason });
       });
+      await installSecureAccessOwnerCookie(mainWindow);
       mainWindow.loadURL(GATEWAY_URL);
     }
     writeGatewayLog('[main] Gateway restart complete\n');
@@ -4330,7 +4348,10 @@ function createWindow() {
   refreshNativeBrowserAvailability();
 
   Menu.setApplicationMenu(null);
-  mainWindow.loadURL(GATEWAY_URL);
+  const ownerWindow = mainWindow;
+  installSecureAccessOwnerCookie(ownerWindow).finally(() => {
+    if (ownerWindow && !ownerWindow.isDestroyed()) ownerWindow.loadURL(GATEWAY_URL);
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();

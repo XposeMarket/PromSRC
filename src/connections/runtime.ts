@@ -97,7 +97,7 @@ export function getConnectionRuntime() {
   adapters.register(new ApiKeyConnectionAdapter({
     createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
     verifyCredential: async (reference) => ({ ok: String(reference).startsWith('vault:'), message: 'Credential is stored as an opaque vault reference.' }),
-    clearCredential: async (reference, context) => secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id),
+    clearCredential: async (reference, context) => secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true }),
   }));
 
   adapters.register(new OpenAiCompatibleModelConnectionAdapter({

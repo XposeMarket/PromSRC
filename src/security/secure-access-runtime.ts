@@ -36,7 +36,7 @@ export async function prepareProtectedLogin(id: string, url: string, sessionId: 
     catch { await callInHouseBrowser('protected-cancel', { credentialId: id }).catch(() => undefined); throw new AccessError('PREPARE_FAILED'); }
     try { check(); } catch { await callInHouseBrowser('protected-cancel', { credentialId: id }); throw new AccessError('USE_DENIED'); }
   });
-  pending.set(id, { sessionId, origin, expiresAt: Date.now() + 110_000 });
+  pending.set(id, { sessionId, origin, expiresAt: Date.now() + 120_000 });
   return { ...result, phase: 'ready', origin, filled: ['identifier', 'password'], next: 'Owner must approve sign-in in Saved access. No form was submitted.' };
 }
 export async function submitProtectedLogin(id: string) {

@@ -8,7 +8,8 @@ function createProtectedAccess({ BrowserWindow, session, app, transferCookies })
   async function prepare({ credentialId, origin, url, identifier, secret, sessionId }) {
     if (!supported()) throw new Error('Protected login unavailable; use takeover.');
     const target = new URL(url); if (target.origin !== origin || target.protocol !== 'https:' || target.username || target.password) throw new Error('Login origin mismatch.');
-    if (active.has(credentialId)) throw new Error('Login already prepared. Cancel before retry.');
+    // Replace a stale same-credential window: clear its timer and destroy it before creating the new one.
+    if (active.has(credentialId)) close(credentialId);
     const partition = session.fromPartition(`protected-access-${randomUUID()}`, { cache: false });
     partition.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     partition.webRequest.onBeforeRequest((details, callback) => {

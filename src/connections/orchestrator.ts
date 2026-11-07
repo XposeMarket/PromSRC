@@ -180,10 +180,17 @@ export class ConnectionOrchestrator {
   async disconnect(connectionId: string): Promise<void> {
     const connection = this.options.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown connection: ${connectionId}`);
-    const attempt = this.options.attempts.list({ serviceId: connection.serviceId }).find((item) => item.connectionId === connectionId && item.plan);
+    const candidates = this.options.attempts.list({ serviceId: connection.serviceId }).filter((item) => item.connectionId === connectionId && item.plan);
+    // Use the attempt that owns the persisted reference, not whichever attempt happens to be first.
+    const attempt = candidates.find((item) => Boolean(connection.credentialRef) && this.options.validateCredentialReference?.(connection.credentialRef as string, item.serviceId, item.id) === true) ?? candidates[0];
     if (attempt?.plan) {
-      const adapter = this.options.adapters.resolve(attempt.plan.strategy);
-      await adapter.disconnect?.(this.context(attempt), connection);
+      try {
+        const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+        await adapter.disconnect?.(this.context(attempt), connection);
+      } catch (error: any) {
+        // Cleanup failure must never leave the connection enabled; the vault entry can be retried.
+        console.warn(`[connections] disconnect cleanup failed for ${connectionId}:`, error?.message || error);
+      }
     }
     this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable' });
     invalidateConnectionToolSurfaceCache();

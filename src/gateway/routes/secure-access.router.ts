@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import { Router, type Request } from 'express';
+import { SECURE_ACCESS_OWNER_COOKIE, secureAccessOwnerToken, pairedDeviceOwnerProofTrusted } from '../../security/secure-access-owner';
 import { AccessError } from '../../security/secure-access';
 import { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } from '../../security/secure-access-runtime';
 const defaultRuntime = { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin };
@@ -14,13 +16,44 @@ export function secureInputTransportAllowed(req: Pick<Request, 'headers' | 'sock
     return url.protocol === 'https:' || (directLocal && url.protocol === 'http:');
   } catch { return false; }
 }
-export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime) {
+/**
+ * Owner proof (F3). Origin, loopback and gateway auth are NOT owner proof: a model
+ * terminal curl satisfies all three. Accepted: the Electron owner window's HttpOnly
+ * `prom_sa_owner` cookie, or a paired-device token when device minting is not
+ * reachable by model tools (see pairedDeviceOwnerProofTrusted).
+ */
+export type OwnerProof = { ownerToken: () => string; deviceTrusted: () => boolean; verifyDevice: (token: string) => boolean };
+const defaultOwnerProof: OwnerProof = {
+  ownerToken: secureAccessOwnerToken,
+  deviceTrusted: pairedDeviceOwnerProofTrusted,
+  verifyDevice: token => { try { return !!require('../pairing/pairing-store').verifyDeviceToken(token); } catch { return false; } },
+};
+function readCookie(header: unknown, name: string): string {
+  for (const part of String(Array.isArray(header) ? header.join(';') : header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return '';
+}
+export function ownerProofOk(req: Pick<Request, 'headers'>, proof: OwnerProof): boolean {
+  const want = Buffer.from(proof.ownerToken() || '');
+  const got = Buffer.from(readCookie(req.headers.cookie, SECURE_ACCESS_OWNER_COOKIE));
+  if (want.length > 0 && got.length === want.length && crypto.timingSafeEqual(got, want)) return true;
+  const device = req.headers['x-pairing-token'];
+  return typeof device === 'string' && device.length > 0 && proof.deviceTrusted() && proof.verifyDevice(device);
+}
+/** Safe-direction aborts only; every other mutation needs owner proof. */
+const OWNER_EXEMPT = /^\/api\/secure-access\/(requests\/[^/]+\/cancel|credentials\/[^/]+\/login\/cancel)\/?$/;
+export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime, proof: OwnerProof = defaultOwnerProof) {
 const { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } = runtime;
 const router = Router();
 const mutationTimes = new Map<string, number[]>();
 router.use('/api/secure-access', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
   if (req.method !== 'GET' && !secureInputTransportAllowed(req)) { res.status(403).json({ error: 'SECURE_ORIGIN_REQUIRED' }); return; }
+  if (req.method !== 'GET' && !OWNER_EXEMPT.test(String(req.originalUrl || '').split('?')[0]) && !ownerProofOk(req, proof)) {
+    res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED', message: 'Approve this in the Prometheus desktop app or on a phone paired with it.' }); return;
+  }
   if (req.method !== 'GET') {
     const key = req.socket.remoteAddress || 'unknown'; const now = Date.now();
     for (const [peer, times] of mutationTimes) if (!times.some(at => at > now - 60_000)) mutationTimes.delete(peer);

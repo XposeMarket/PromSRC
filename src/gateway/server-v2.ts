@@ -11,6 +11,7 @@
 
 // MUST be first: synchronously consumes the master key handed over stdin by the
 // Electron main process, before any vault access or config side effects run.
+import '../security/secure-access-owner-boot.js';
 import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
 import './startup-async-diagnostics.js';
