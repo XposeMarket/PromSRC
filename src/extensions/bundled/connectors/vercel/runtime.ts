@@ -5,6 +5,8 @@ import type {
   PrometheusToolExecutionResult,
 } from '../../../runtime-api.js';
 import { getVercelCredentials } from '../../../../integrations/connection-state.js';
+import { getConfig } from '../../../../config/config.js';
+import { resolveBoundPluginCredential } from '../../../../connections/plugin-credential-binding';
 
 const ID = 'vercel';
 const NAME = 'Vercel';
@@ -132,6 +134,8 @@ function pickRecord(value: unknown): JsonRecord | undefined {
 }
 
 function getAuth(context?: PrometheusToolContext): VercelAuth | null {
+  const bound = resolveBoundPluginCredential(getConfig().getConfigDir(), ID, 'apiKey');
+  if (bound.handled) { const saved = getVercelCredentials(); return saved ? { token: saved.apiKey, projectId: saved.projectId, teamId: saved.teamId } : null; }
   const token =
     pickString(context?.getCredential?.('apiKey', ID)) ||
     pickString(context?.getCredential?.('token', ID)) ||

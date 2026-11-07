@@ -1,3 +1,4 @@
+import { requireProtectedOwner } from './secure-access.router';
 // src/gateway/routes/settings.router.ts
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
 import { Router } from 'express';
@@ -2687,14 +2688,15 @@ router.get('/api/auth/x-api/status', (_req, res) => {
   res.json({ success: true, ...getXApiOAuthStatus(CONFIG_DIR_PATH) });
 });
 
-router.post('/api/auth/x-api/credentials', (req, res) => {
+router.post('/api/auth/x-api/credentials', (req, res, next) => requireProtectedOwner(req, res, next), (req, res) => {
+  if (Object.keys(req.body || {}).some(key => !['clientId', 'clientSecret'].includes(key))) {
+    res.status(400).json({ success: false, error: 'X_OAUTH_APP_FIELDS_REQUIRED' }); return;
+  }
   try {
     const credentials = saveXApiCredentials(CONFIG_DIR_PATH, {
       clientId: req.body?.clientId,
       clientSecret: req.body?.clientSecret,
-      bearerToken: req.body?.bearerToken,
-      redirectUri: req.body?.redirectUri,
-      scopes: req.body?.scopes,
+
     });
     res.json({
       success: true,
@@ -2702,7 +2704,7 @@ router.post('/api/auth/x-api/credentials', (req, res) => {
       scopes: credentials.scopes,
     });
   } catch (err: any) {
-    res.status(400).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, error: 'X_OAUTH_APP_FIELDS_INVALID' });
   }
 });
 

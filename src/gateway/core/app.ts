@@ -1,3 +1,4 @@
+import { payloadContainsRecognizableSecret } from '../../security/secret-format-guard';
 /**
  * core/app.ts — B3 Refactor
  *
@@ -188,9 +189,18 @@ export function createApp(): express.Application {
   // Credential bodies are deliberately small and never reflected by parser errors.
   // rawBody: owner-consent headers (PR821 I1) bind the SHA-256 of the exact bytes sent.
   const keepRawBody = (req: any, _res: any, buf: Buffer) => { req.rawBody = Buffer.from(buf); };
-  app.use(['/api/secure-access', '/api/connection-secure-input'], express.json({ limit: '32kb', verify: keepRawBody }));
+  app.use(['/api/secure-access', '/api/connection-secure-input', '/api/connections/credentials', '/api/auth/x-api/credentials', '/api/protected-plugins'], express.json({ limit: '32kb', verify: keepRawBody }));
   app.use(['/api/pairing/approve', '/api/pairing/devices', '/api/owner-consent'], express.json({ limit: '64kb', verify: keepRawBody }));
   app.use(express.json({ limit: '50mb' }));
+  // Before chat admission/audit/history/model work. Never reflect rejected input.
+  app.use((req, res, next) => {
+    const chatWrite = req.method !== 'GET' && /^\/api\/(chat(?:\/|$)|sessions\/[^/]+\/(?:messages|history|edit-rerun-reset|steer|queue|send|edit)(?:\/|$))/.test(req.path);
+    if (chatWrite && payloadContainsRecognizableSecret(req.body)) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(400).json({ error: 'PROTECTED_ENTRY_REQUIRED', message: 'Recognizable credential blocked. Remove it or use Add secret in the protected card.' }); return;
+    }
+    next();
+  });
   // Large JSON API responses (chat history pages reach several MB, mostly
   // repetitive trace JSON) were sent uncompressed. Over LAN/Tailscale that is
   // the dominant cost of opening a thread on mobile: 3.5 MB -> ~340 KB with

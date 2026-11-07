@@ -17,6 +17,7 @@ import { rememberMobileStreamOwner } from './mobile-stream-owner.js';
 import { attachNativePicker } from './mobile-native-picker.js';
 import { mobileGatewayFetch as secureAccessMobileFetch } from './mobile-api.js';
 import { mountSecureAccessDock, createSecureAccessContinuation } from '../features/secure-access/secure-access-core.js';
+import { installComposerSecretGuard, createAddSecretButton } from '../features/secure-access/protected-plugin-entry.js';
 import { getCachedBusyComposerMode, loadBusyComposerModeFromServer, shouldAutoSteerBusyTurn } from '../features/chat/runtime/busy-composer-mode.js';
 
 let mobileBusyComposerModeLoaded = false;
@@ -935,6 +936,13 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         return sendMessage(text);
       }),
     });
+    // Add secret + composer paste guard (helpers live in protected-plugin-entry.js).
+    const protectedInput = page.querySelector('#pm-composer-input');
+    const protectedFetch = (path, opts = {}) => secureAccessMobileFetch(path, opts);
+    if (protectedInput) {
+      secureAccessHost.prepend(createAddSecretButton(protectedFetch, { className: 'sa-add-secret-mobile', cardHost: secureAccessHost }));
+      installComposerSecretGuard(protectedInput, { fetchJson: protectedFetch, form, sendButton: page.querySelector('#pm-send-btn'), cardHost: secureAccessHost });
+    }
   }
   // One-shot handoff from other routes (e.g. Creative → Video "Plan with Prom").
   try {

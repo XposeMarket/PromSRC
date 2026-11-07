@@ -7,7 +7,7 @@ import { SecretVault } from '../src/security/vault';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'connection-ownership-'));
 try {
-  const service = new SecureInputService(dir);
+  const service = new SecureInputService(dir, 600000, () => true);
   const vault = new SecretVault(dir);
   const session = service.create({ serviceId: 'fixture', attemptId: 'attempt-1', fields: [{ key: 'api_key', label: 'Key', secret: true, required: true }] });
   const result = service.submit(session.id, { api_key: '  CANARY_KEY  ' });
@@ -38,7 +38,7 @@ try {
   assert.throws(() => service.clearReference('vault:secure.access.owner.cred_x.v1', 'fixture', 'attempt-1', { persistedLegacy: true }));
   assert.ok(vault.has(forgedKey), 'forged ref must not delete anything');
 
-  const restarted = new SecureInputService(dir);
+  const restarted = new SecureInputService(dir, 600000, () => true);
   assert(restarted.ownsReference(result.credentialRef, 'fixture', 'attempt-1'));
   restarted.clearReference(result.credentialRef, 'fixture', 'attempt-1');
   assert(!restarted.ownsReference(result.credentialRef, 'fixture', 'attempt-1'));

@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { getConnectionRuntime } from '../../connections/runtime';
-import { secureInputTransportAllowed } from './secure-access.router';
+import { getConfig } from '../../config/config';
+import { getExtensionDescriptor } from '../../extensions/registry';
+import { bindPluginCredential } from '../../connections/plugin-credential-binding';
+import { requireProtectedOwner } from './secure-access.router';
 
 export const router = Router();
 
@@ -68,15 +71,28 @@ router.get('/api/connection-secure-input/:sessionId', (req, res) => {
   res.status(status.valid ? 200 : 404).json({ success: status.valid, ...status });
 });
 
-router.post('/api/connection-secure-input/:sessionId', (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
+router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
   try {
-    const result = getConnectionRuntime().secureInput.submit(req.params.sessionId, req.body?.values || {});
+    const runtime = getConnectionRuntime();
+    const session = runtime.secureInput.status(req.params.sessionId);
+    const attempt = session.attemptId ? runtime.orchestrator.getAttempt(session.attemptId) : undefined;
+    const adapter = attempt?.plan?.strategy.adapter;
+    const bindable = ['api-key', 'setup-token'].includes(adapter || '');
+    const descriptor = session.serviceId ? getExtensionDescriptor(session.serviceId) : undefined;
+    const manifestKey = descriptor?.setup?.authType === 'api_key' && descriptor.setup.fields?.length && attempt?.plan?.strategy.id === `${descriptor.id}-manifest-key`;
+    if (bindable && !manifestKey && !descriptor?.connection?.strategies?.some(strategy => strategy.id === attempt?.plan?.strategy.id && ['api-key', 'setup-token'].includes(strategy.adapter))) {
+      res.status(400).json({ success: false, error: 'UNSUPPORTED_PLUGIN' }); return;
+    }
+    const result = runtime.secureInput.submit(req.params.sessionId, req.body?.values || {});
+    if (bindable) {
+      bindPluginCredential(getConfig().getConfigDir(), session.serviceId!, result.credentialRef, session.attemptId!);
+      // Persist the consumer record in this transaction, not a second UI-only continuation.
+      await runtime.orchestrator.continue(session.attemptId!, { credentialRef: result.credentialRef });
+    }
     // Deliberately return only an opaque reference; submitted values never enter
     // chat history or a model-facing tool result.
     res.json({ success: true, credentialRef: result.credentialRef, fieldsReceived: result.fieldsReceived });
-  } catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+  } catch { res.status(400).json({ success: false, error: 'SECURE_INPUT_INVALID' }); }
 });
 
 router.get('/api/connections-v2', (_req, res) => {

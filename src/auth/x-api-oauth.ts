@@ -1,3 +1,4 @@
+import { assertPluginCredentialUse, pluginCredentialState, setPluginCredentialState } from '../security/plugin-credential-state';
 /**
  * x-api-oauth.ts
  *
@@ -251,7 +252,10 @@ export function saveXApiCredentials(configDir: string, input: {
     scopes: normalizeScopes(input.scopes),
     stored_at: Date.now(),
   };
+  setPluginCredentialState(configDir, 'x', true, 'replace-start');
+  clearXApiTokens(configDir);
   getVault(configDir).set(CREDENTIALS_VAULT_KEY, JSON.stringify(credentials), 'x-api-oauth:credentials:save');
+  setPluginCredentialState(configDir, 'x', false, 'saved-awaiting-oauth');
   log.security('[x-api-oauth] Credentials saved to vault');
   return credentials;
 }
@@ -288,6 +292,7 @@ function saveTokens(configDir: string, tokens: XApiTokens): void {
 }
 
 export function loadXApiTokens(configDir: string): XApiTokens | null {
+  if (pluginCredentialState(configDir, 'x').stopped) return null;
   const secret = getVault(configDir).get(TOKENS_VAULT_KEY, 'x-api-oauth:tokens:load');
   if (!secret) return null;
   try {
@@ -299,6 +304,9 @@ export function loadXApiTokens(configDir: string): XApiTokens | null {
 }
 
 export function clearXApiTokens(configDir: string): void {
+  setPluginCredentialState(configDir, 'x', true, 'disconnect');
+  _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'Access stopped or credentials replaced.' });
+  _activeFlow = null;
   const vault = getVault(configDir);
   vault.delete(TOKENS_VAULT_KEY, 'x-api-oauth:tokens:clear');
   vault.delete(LEGACY_SOCIAL_X_TOKEN_KEY, 'x-api-oauth:legacy-token:clear');
@@ -327,6 +335,7 @@ async function fetchXUser(accessToken: string): Promise<{ username?: string; use
 }
 
 async function exchangeAuthorizationCode(configDir: string, code: string, flow: NonNullable<typeof _activeFlow>): Promise<XApiTokens> {
+  const generation = assertPluginCredentialUse(configDir, 'x');
   const credentials = flow.credentials;
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -343,8 +352,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, flow: 
     signal: AbortSignal.timeout(30_000),
   });
   if (!tokenRes.ok) {
-    const text = await tokenRes.text().catch(() => '');
-    throw new Error(`X API token exchange failed (${tokenRes.status}): ${text.slice(0, 300)}`);
+    throw new Error(`X API token exchange failed (HTTP ${tokenRes.status}).`);
   }
   const data = await tokenRes.json() as any;
   if (!data?.access_token) throw new Error('X API OAuth response missing access_token.');
@@ -361,12 +369,14 @@ async function exchangeAuthorizationCode(configDir: string, code: string, flow: 
     stored_at: Date.now(),
   };
   flow.lifecycle!.assertActive();
+  assertPluginCredentialUse(configDir, 'x', generation);
   saveTokens(configDir, tokens);
   return tokens;
 }
 
 export async function refreshXApiTokens(configDir: string): Promise<XApiTokens> {
   assertTokenRefreshAllowed('x-api');
+  const generation = assertPluginCredentialUse(configDir, 'x');
   const existing = loadXApiTokens(configDir);
   const credentials = loadXApiCredentials(configDir);
   if (!existing?.refresh_token) throw new Error('No X API refresh token; reconnect X API OAuth.');
@@ -385,8 +395,7 @@ export async function refreshXApiTokens(configDir: string): Promise<XApiTokens> 
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`X API token refresh failed (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(`X API token refresh failed (HTTP ${res.status}).`);
   }
   const data = await res.json() as any;
   const tokens: XApiTokens = {
@@ -400,11 +409,13 @@ export async function refreshXApiTokens(configDir: string): Promise<XApiTokens> 
     expires_at: Date.now() + Number(data.expires_in || 7200) * 1000,
     stored_at: existing.stored_at || Date.now(),
   };
+  assertPluginCredentialUse(configDir, 'x', generation);
   saveTokens(configDir, tokens);
   return tokens;
 }
 
 export async function getValidXApiToken(configDir: string): Promise<string> {
+  const generation = assertPluginCredentialUse(configDir, 'x');
   let tokens = loadXApiTokens(configDir);
   const vaultBacked = !!tokens;
   if (!tokens) tokens = loadXurlOAuthToken();
@@ -417,13 +428,14 @@ export async function getValidXApiToken(configDir: string): Promise<string> {
   if (tokens.expires_at && Date.now() > Number(tokens.expires_at) - 2 * 60 * 1000) {
     tokens = await refreshXApiTokens(configDir);
   }
+  assertPluginCredentialUse(configDir, 'x', generation);
   return tokens.access_token;
 }
 
 export function getXApiOAuthStatus(configDir: string): XApiOAuthStatus {
   const credentials = loadXApiCredentials(configDir);
   const tokens = loadXApiTokens(configDir);
-  const xurlTokens = tokens ? null : loadXurlOAuthToken();
+  const xurlTokens = tokens || pluginCredentialState(configDir, 'x').stopped ? null : loadXurlOAuthToken();
   const activeTokens = tokens || xurlTokens;
   return {
     connected: !!activeTokens,
@@ -439,6 +451,7 @@ export function getXApiOAuthStatus(configDir: string): XApiOAuthStatus {
 }
 
 export async function startXApiOAuthFlowBackground(configDir: string): Promise<{ authUrl: string } | { error: string; needsCredentials?: boolean; redirectUri?: string }> {
+  assertPluginCredentialUse(configDir, 'x');
   const credentials = loadXApiCredentials(configDir);
   if (!credentials) {
     return {

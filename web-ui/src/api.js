@@ -1,3 +1,4 @@
+import { assertSafeChatRequest } from './features/chat/secret-format-guard.js';
 /**
  * api.js — F1 Scaffold
  *
@@ -97,6 +98,7 @@ function getDedupeKey(path, opts) {
 }
 
 async function apiRequest(path, opts = {}) {
+  assertSafeChatRequest(path, opts.body);
   const candidates = buildApiCandidateUrls(path);
   let lastError = null;
   const timeoutMs = Number(opts.timeoutMs || 10000);

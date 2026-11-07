@@ -17,6 +17,7 @@ import { renderContextSelection, wireContextSelection } from '../context-selecti
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
 import { mountSavedAccessSettings } from '../features/secure-access/secure-access-settings.js';
+import { openProtectedPluginCard } from '../features/secure-access/protected-plugin-card.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js';
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
@@ -1732,13 +1733,10 @@ function renderDynamicProviderPanel(provider) {
         <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Official X API OAuth</div>
         <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">X API/xurl tools require an X Developer app and OAuth 2.0 user context. xAI/Grok OAuth stays separate for models, x_search, TTS, and STT.</div>
         <div style="display:grid;gap:6px;margin-bottom:8px">
-          <input id="x-api-client-id" class="settings-input" placeholder="OAuth 2.0 Client ID, not API Key / Consumer Key" style="font-size:12px" />
-          <input id="x-api-client-secret" class="settings-input" placeholder="OAuth 2.0 Client Secret, not API Secret Key" type="password" style="font-size:12px" />
-          <input id="x-api-redirect-uri" class="settings-input" placeholder="http://localhost:8080/callback" style="font-size:12px" />
-          <input id="x-api-scopes" class="settings-input" placeholder="tweet.read users.read follows.read like.read bookmark.read offline.access" style="font-size:12px" />
+          <div style="font-size:11px;color:var(--muted)">App Client ID / Secret are entered in protected entry, never in this form.</div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="saveXApiCredentials()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Save App</button>
+          <button class="btn btn-sm" onclick="saveXApiCredentials()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Set up X app (protected)</button>
           <button class="btn btn-sm" onclick="startXApiOAuth()" style="background:#111827;color:#fff;border:1px solid #111827">Connect X API OAuth</button>
           <button class="btn btn-sm" onclick="disconnectXApiOAuth()" style="background:transparent;border:1px solid color-mix(in srgb, var(--text) 12%, transparent);color:var(--text)">Disconnect</button>
         </div>
@@ -2847,27 +2845,8 @@ async function refreshXApiStatus() {
 }
 
 async function saveXApiCredentials() {
-  const statusEl = document.getElementById('x-api-oauth-status');
-  const clientId = document.getElementById('x-api-client-id')?.value?.trim() || '';
-  const clientSecret = document.getElementById('x-api-client-secret')?.value?.trim() || '';
-  const redirectUri = document.getElementById('x-api-redirect-uri')?.value?.trim() || '';
-  const scopes = document.getElementById('x-api-scopes')?.value?.trim() || '';
-  if (!clientId) {
-    setSettingsStatus(statusEl, 'error', 'X API Client ID is required.');
-    return;
-  }
-  setSettingsStatus(statusEl, 'info', 'Saving X API app credentials...');
-  try {
-    const data = await api('/api/auth/x-api/credentials', { method: 'POST', body: JSON.stringify({ clientId, clientSecret, redirectUri, scopes }) });
-    if (data?.success) {
-      setSettingsStatus(statusEl, 'success', `Saved. Use redirect URI in X Developer Portal: ${data.redirect_uri}`);
-      await refreshXApiStatus();
-    } else {
-      setSettingsStatus(statusEl, 'error', data?.error || 'Failed to save X API credentials.');
-    }
-  } catch (e) {
-    setSettingsStatus(statusEl, 'error', e.message);
-  }
+  // Migrated: shared protected card (owner consent, fixed callback/scopes, no raw fields here).
+  await openProtectedPluginCard((path, opts = {}) => api(path, opts), { serviceId: 'x', onSaved: () => refreshXApiStatus() });
 }
 
 async function startXApiOAuth() {

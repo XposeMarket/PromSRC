@@ -7,13 +7,13 @@ function normalize(value: string): string { return String(value || '').toLowerCa
 function tokens(value: string): string[] { return normalize(value).split(' ').filter((item) => item.length > 1 && !['mcp', 'api', 'connector', 'plugin', 'server'].includes(item)); }
 
 function descriptorMatch(item: ReturnType<typeof listExtensionDescriptors>[number], query: string): ConnectionDiscoveryMatch | undefined {
-  if (!item.connection) return undefined;
+  if (!item.connection && !(item.setup?.authType === 'api_key' && item.setup.fields?.length)) return undefined;
   const q = normalize(query);
   if (!q) return undefined;
   const identities = [
     { value: item.id, kind: 'id' }, { value: item.name, kind: 'name' },
-    ...(item.connection.aliases || []).map((value) => ({ value, kind: 'alias' })),
-    ...(item.connection.domains || []).map((value) => ({ value, kind: 'domain' })),
+    ...(item.connection?.aliases || []).map((value) => ({ value, kind: 'alias' })),
+    ...(item.connection?.domains || []).map((value) => ({ value, kind: 'domain' })),
   ];
   let score = 0; const matchedOn: string[] = [];
   for (const identity of identities) {
@@ -101,11 +101,19 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
           providerApp: descriptor?.connection?.providerApp,
           registeredTools: getDeclaredExtensionTools(descriptor),
           ...(input.metadata || {}),
+          // Credential field schema belongs to the installed plugin, never the model's metadata.
+          ...(['api-key', 'setup-token'].includes(item.adapter) ? { credentialFields: item.config?.credentialFields } : {}),
         },
         verification: item.verification,
       };
     });
 
+    // Installed setup schemas are server-owned typed API-key destinations, not research fallbacks.
+    if (!strategies.length && descriptor?.setup?.authType === 'api_key' && descriptor.setup.fields?.length) {
+      strategies = [{ id: `${descriptor.id}-manifest-key`, adapter: 'api-key', priority: 80, capabilities: [], readOnly: true,
+        authentication: { type: 'api-key' }, configuration: { credentialFields: descriptor.setup.fields.map(field => ({ key: field.key, label: field.label, required: field.required, secret: field.secret !== false })) },
+        verification: ['credential.authentication'] }];
+    }
     const mcp = this.getMcpConfigs().find((item) => normalize(item.id) === normalize(canonicalServiceId) || normalize(item.name || '') === normalize(canonicalServiceId));
     if (!strategies.length && mcp) {
       const remote = mcp.transport === 'http' || mcp.transport === 'sse';

@@ -1,3 +1,4 @@
+import { requireProtectedOwner } from './secure-access.router';
 /**
  * connections.router.ts
  *
@@ -315,7 +316,10 @@ router.get('/api/connections/xurl/poll', (_req: any, res: any) => {
   res.json(xurlSetupState || { pending: false, success: false, error: 'No xurl setup has been started yet.', output: [] });
 });
 
-router.post('/api/connections/credentials', async (req: any, res: any) => {
+router.post('/api/connections/credentials', (req, res, next) => requireProtectedOwner(req, res, next), async (req: any, res: any) => {
+  if (req.body?.id === 'x' && Object.keys(req.body || {}).some(key => !['id', 'clientId', 'clientSecret'].includes(key))) {
+    res.status(400).json({ error: 'X_OAUTH_APP_FIELDS_REQUIRED' }); return;
+  }
   const { id, clientId, clientSecret, apiKey, consumerKey, secretKey, bearerToken, redirectUri, scopes, accessToken } = req.body || {};
   if (!id) {
     res.status(400).json({ error: 'id required' });
@@ -338,7 +342,7 @@ router.post('/api/connections/credentials', async (req: any, res: any) => {
       });
       res.json({ success: true, connected: true, account: result.account });
     } catch (err: any) {
-      res.status(400).json({ error: err?.message || String(err) });
+      res.status(400).json({ error: 'SECURE_INPUT_INVALID' });
     }
     return;
   }
@@ -351,14 +355,12 @@ router.post('/api/connections/credentials', async (req: any, res: any) => {
 
   try {
     if (id === 'x') {
-      const xClientId = String(clientId || consumerKey || apiKey || '').trim();
-      const xClientSecret = String(clientSecret || secretKey || '').trim();
+      const xClientId = String(clientId || '').trim();
+      const xClientSecret = String(clientSecret || '');
       saveXApiCredentials(getConfig().getConfigDir(), {
         clientId: xClientId,
         clientSecret: xClientSecret,
-        bearerToken: String(bearerToken || '').trim(),
-        redirectUri: String(redirectUri || '').trim() || undefined,
-        scopes,
+
       });
       const connections = loadSavedConnections();
       connections.x = {
@@ -418,7 +420,7 @@ router.post('/api/connections/credentials', async (req: any, res: any) => {
     }
     res.json({ success: true });
   } catch (e: any) {
-    res.status(400).json({ error: e.message });
+    res.status(400).json({ error: 'SECURE_INPUT_INVALID' });
   }
 });
 

@@ -4,6 +4,7 @@ import {
   SECURE_ACCESS_API, ensureSecureAccessStyles, el, lockIcon, postJson,
   storageLabel, isExactHttpsOriginUrl, mountSecureAccessCard, secureAccessErrorText, ownerSurfaceBanner,
 } from './secure-access-core.js';
+import { mountProtectedPluginSaved } from './protected-plugin-settings.js';
 
 const KIND_LABEL = { login: 'Login', api_key: 'API key', otp: 'One-time code' };
 
@@ -37,7 +38,10 @@ export function mountSavedAccessSettings(host, opts = {}) {
         el('p', { text: 'Sign-ins and keys Prom can use for you on exact sites. Prom never sees the values, and posting, sending or buying still asks you separately.' }))),
       statusLine, ownerHost, el('div', { class: 'sa-row' }, addBtn), addHost, msgLine),
     list);
+  const pluginHost = el('div', { 'data-protected-plugin-host': 'true' });
+  root.append(pluginHost);
   host.replaceChildren(root);
+  const pluginKeys = mountProtectedPluginSaved(pluginHost, { fetchJson, confirm: confirmFn });
 
   const say = (text, tone = '') => { msgLine.textContent = text; msgLine.className = `sa-muted ${tone}`; };
   const fail = (error) => say(secureAccessErrorText(error, 'That did not work. Refresh and try again.'), 'sa-err');
@@ -203,11 +207,12 @@ export function mountSavedAccessSettings(host, opts = {}) {
   refresh();
 
   return {
-    refresh,
+    refresh() { pluginKeys.refresh(); return refresh(); },
     /** Wipe any open protected cards (e.g. when Settings leaves this tab). */
     clearDrafts() { for (const card of cards) card.destroy(); cards.clear(); },
     destroy() {
       destroyed = true;
+      pluginKeys.destroy();
       for (const card of cards) card.destroy();
       cards.clear();
       host.replaceChildren();

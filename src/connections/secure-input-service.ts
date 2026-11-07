@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getVault } from '../security/vault';
 import type { SecureSecretField } from './types';
+import { protectedPluginStorageAvailable } from '../security/plugin-credential-state';
 
 interface SecureInputSession {
   id: string; serviceId: string; attemptId: string; fields: SecureSecretField[];
@@ -14,7 +15,7 @@ type CredentialOwner = { serviceId: string; attemptId: string };
 export class SecureInputService {
   private readonly sessions = new Map<string, SecureInputSession>();
   private readonly references = new Map<string, CredentialOwner>();
-  constructor(private readonly configDir: string, private readonly ttlMs = 10 * 60_000) {
+  constructor(private readonly configDir: string, private readonly ttlMs = 10 * 60_000, private readonly storageAvailable: () => boolean = protectedPluginStorageAvailable) {
     const file = path.join(configDir, 'connection-credential-owners.json');
     if (!fs.existsSync(file)) return;
     try {
@@ -50,7 +51,9 @@ export class SecureInputService {
 
   submit(id: string, values: Record<string, unknown>): { credentialRef: string; fieldsReceived: string[] } {
     const session = this.sessions.get(id);
+    if (!this.storageAvailable()) throw new Error('PROTECTED_STORAGE_REQUIRED');
     if (!session || session.consumed || session.expiresAt <= Date.now()) throw new Error('Secure credential session is missing, expired, or already consumed.');
+    if (Object.keys(values).some(key => !session.fields.some(field => field.key === key))) throw new Error('SECURE_INPUT_INVALID');
     const accepted: Record<string, string> = {};
     for (const field of session.fields) {
       const value = String(values[field.key] ?? '');
@@ -87,10 +90,10 @@ export class SecureInputService {
     if (this.references.delete(reference)) this.saveOwners();
   }
 
-  status(id: string): { valid: boolean; expiresAt?: string; fields?: Array<{ key: string; label: string; required?: boolean }> } {
+  status(id: string): { valid: boolean; serviceId?: string; attemptId?: string; expiresAt?: string; fields?: Array<{ key: string; label: string; required?: boolean }> } {
     const session = this.sessions.get(id);
     if (!session || session.consumed || session.expiresAt <= Date.now()) return { valid: false };
-    return { valid: true, expiresAt: new Date(session.expiresAt).toISOString(), fields: session.fields.map(({ key, label, required }) => ({ key, label, required })) };
+    return { valid: true, serviceId: session.serviceId, attemptId: session.attemptId, expiresAt: new Date(session.expiresAt).toISOString(), fields: session.fields.map(({ key, label, required }) => ({ key, label, required })) };
   }
 
   private prune(): void { const now = Date.now(); for (const [id, session] of this.sessions) if (session.consumed || session.expiresAt <= now) this.sessions.delete(id); }

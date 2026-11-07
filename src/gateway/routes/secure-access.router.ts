@@ -3,6 +3,7 @@ import { Router, type Request } from 'express';
 import { SECURE_ACCESS_OWNER_COOKIE, secureAccessOwnerToken, pairedDeviceOwnerProofTrusted } from '../../security/secure-access-owner';
 import { OWNER_CONSENT_HEADER, verifyConsent } from '../../security/secure-access-consent';
 import { AccessError } from '../../security/secure-access';
+import { protectedPluginStorageAvailable } from '../../security/plugin-credential-state';
 import { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } from '../../security/secure-access-runtime';
 const defaultRuntime = { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin };
 /** Gateway authentication/account access are mounted by server-v2. No secret bodies logged here. */
@@ -78,6 +79,18 @@ export function ownerSurfaceState(req: Pick<Request, 'headers'>, proof: OwnerPro
     message: desktop || device ? '' : 'Saving or changing protected access only works in the Prometheus desktop app or on a phone paired from it. You can still revoke access here.',
   };
 }
+
+/** Reused by typed plugin input. Gateway auth/Origin alone never authorizes secret entry. */
+export function requireProtectedOwner(req: any, res: any, next: () => void, proof: OwnerProof = defaultOwnerProof, storageAvailable: () => boolean = protectedPluginStorageAvailable): void {
+  res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
+  if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
+  if (!storageAvailable() && !String(req.path).endsWith('/delete')) { res.status(409).json({ success: false, error: 'PROTECTED_STORAGE_REQUIRED' }); return; }
+  if (ownerDeviceOk(req, proof)) { next(); return; }
+  if (!ownerCookieOk(req, proof)) { res.status(403).json({ success: false, error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  if (!proof.verifyConsent?.(req)) { res.status(403).json({ success: false, error: 'OWNER_CONSENT_REQUIRED' }); return; }
+  next();
+}
+
 export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime, proof: OwnerProof = defaultOwnerProof) {
 const { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } = runtime;
 const router = Router();

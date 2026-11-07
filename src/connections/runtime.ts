@@ -22,6 +22,7 @@ import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-
 import { migrateLegacyConnections } from './legacy-migration';
 import { reconcileNativeConnectorToolSnapshots } from './native-tool-reconcile';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
+import { setPluginCredentialState } from '../security/plugin-credential-state';
 export {
   isManagedConnectorToolAvailable,
   isManagedMcpToolAvailable,
@@ -96,8 +97,11 @@ export function getConnectionRuntime() {
 
   adapters.register(new ApiKeyConnectionAdapter({
     createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
-    verifyCredential: async (reference) => ({ ok: String(reference).startsWith('vault:'), message: 'Credential is stored as an opaque vault reference.' }),
-    clearCredential: async (reference, context) => secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true }),
+    verifyCredential: async () => ({ ok: false, message: 'Stored, not verified: this adapter has no safe authentication verifier.' }),
+    clearCredential: async (reference, context) => {
+      setPluginCredentialState(configDir, context.attempt.serviceId, true, 'disconnected');
+      secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true });
+    },
   }));
 
   adapters.register(new OpenAiCompatibleModelConnectionAdapter({

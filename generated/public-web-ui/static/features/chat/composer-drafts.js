@@ -1,3 +1,4 @@
+import { containsRecognizableSecret, removeRecognizableSecrets } from './secret-format-guard.js';
 // Text drafts are local to this device and scoped to the exact chat target.
 // Keeping the storage format shared lets desktop and mobile use the same
 // lifecycle without allowing one surface (or gateway) to overwrite another.
@@ -8,7 +9,13 @@ const MAX_TEXT_LENGTH = 100_000;
 function readDrafts() {
   try {
     const value = JSON.parse(globalThis.localStorage?.getItem(STORAGE_KEY) || '{}');
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    let changed = false;
+    for (const draft of Object.values(value)) {
+      if (draft && containsRecognizableSecret(draft.text)) { draft.text = removeRecognizableSecrets(draft.text); changed = true; }
+    }
+    if (changed) writeDrafts(value);
+    return value;
   } catch { return {}; }
 }
 
@@ -27,7 +34,7 @@ export function readComposerDraft(key) {
 export function saveComposerDraft(key, text) {
   if (!key) return;
   const drafts = readDrafts();
-  const value = String(text || '').slice(0, MAX_TEXT_LENGTH);
+  const value = removeRecognizableSecrets(String(text || '').slice(0, MAX_TEXT_LENGTH));
   if (value) drafts[key] = { text: value, at: Date.now() };
   else delete drafts[key];
   const retained = Object.entries(drafts)

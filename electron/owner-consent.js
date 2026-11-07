@@ -17,6 +17,10 @@ const path = require('path');
 const WINDOW_TITLE = 'Prometheus owner approval';
 const CODE_ALPHABET = 'ACDEFGHJKMNPQRTUVWXY3479';
 const CONSENT_PATHS = [
+  [/^\/api\/protected-plugins\/x\/delete$/, 'Delete saved X app credentials and stop local access'],
+  [/^\/api\/protected-plugins\/connection\/[^/]+\/delete$/, 'Delete saved plugin credentials and stop local access'],
+  [/^\/api\/connection-secure-input\/[^/]+$/, 'Save protected plugin credentials'],
+  [/^\/api\/(connections\/credentials|auth\/x-api\/credentials)$/, 'Save protected connector app credentials'],
   [/^\/api\/secure-access\/requests\/[^/]+\/submit$/, 'Save protected access entered in this card'],
   [/^\/api\/secure-access\/credentials\/[^/]+\/grants$/, 'Change who may use this saved access'],
   [/^\/api\/secure-access\/credentials\/[^/]+\/replace$/, 'Replace this saved access'],

@@ -12525,8 +12525,9 @@ function renderConnectionCardArtifact(artifact) {
   }
   if (state === 'research_required') controls = `<div class="artifact-row">Official-source research is required before this connector can be installed or authorized.</div>`;
   if (action?.type === 'secure-input') {
-    const fields = Array.isArray(action.fields) ? action.fields : [];
-    controls = `<div class="connection-secure-fields" data-session="${escHtml(String(action.credentialSessionId || ''))}">${fields.map((field) => `<label>${escHtml(String(field.label || field.key))}<input type="password" autocomplete="off" data-key="${escHtml(String(field.key || ''))}" placeholder="${escHtml(String(field.placeholder || ''))}"></label>`).join('')}<button class="artifact-btn" onclick="connectionCardSecureInput(${idArg}, this)">Save securely and continue</button></div>`;
+    // Metadata only; values are entered in the shared protected card, never inline here.
+    const meta = window.promProtectedPlugin?.fromAction?.(attempt?.serviceId, id, action) || null;
+    controls = `<div class="connection-secure-fields" data-protected-request="${escHtml(JSON.stringify(meta || {}))}"><button class="artifact-btn" onclick="connectionCardSecureInput(${idArg}, this)">Open protected entry</button></div>`;
   }
   return `<div class="artifact-card connection-card" data-connection-attempt="${escHtml(id)}"><div class="artifact-head"><div class="artifact-title">${escHtml(title)}</div><div class="artifact-status ${escHtml(state)}">${escHtml(state.replace(/_/g, ' '))}</div></div>${summary ? `<div class="artifact-row">${escHtml(summary)}</div>` : ''}${scopes.length ? `<div class="artifact-row"><b>Requested scopes:</b> ${escHtml(scopes.join(', '))}</div>` : ''}<div class="artifact-actions">${controls}<button class="artifact-btn" onclick="connectionCardRefresh(${idArg}, this)">Refresh</button></div></div>`;
 }
@@ -12552,15 +12553,10 @@ async function connectionCardOAuth(attemptId, url, button) {
 
 async function connectionCardSecureInput(attemptId, button) {
   const wrap = button?.closest?.('.connection-secure-fields');
-  const sessionId = String(wrap?.getAttribute('data-session') || '');
-  const values = {};
-  wrap?.querySelectorAll?.('input[data-key]').forEach((input) => { values[input.getAttribute('data-key')] = input.value; });
-  try {
-    button.disabled = true;
-    const saved = await api(`/api/connection-secure-input/${encodeURIComponent(sessionId)}`, { method: 'POST', body: JSON.stringify({ values }) });
-    wrap?.querySelectorAll?.('input').forEach((input) => { input.value = ''; });
-    await connectionCardContinue(attemptId, { credentialRef: saved.credentialRef }, button);
-  } catch (error) { showToast?.('Credential setup failed', String(error?.message || error), 'error', 5000); button.disabled = false; }
+  let meta = null;
+  try { meta = JSON.parse(wrap?.getAttribute('data-protected-request') || 'null'); } catch { meta = null; }
+  if (!meta?.request?.id) { showToast?.('Protected entry unavailable', 'Refresh this card and try again. Nothing was collected.', 'error', 5000); return; }
+  await window.promProtectedPlugin?.open?.({ serviceId: meta.serviceId, request: meta.request, onSaved: () => connectionCardRefresh(attemptId, button) });
 }
 
 async function connectionCardRefresh(attemptId, button) {
