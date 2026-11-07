@@ -138,4 +138,4 @@ function createOwnerConsent({ BrowserWindow, app, ipcMain, ownerToken, getGatewa
   return { supported, request, isOpen: () => !!active, windowTitle: WINDOW_TITLE };
 }
 
-module.exports = { createOwnerConsent, mintConsent, consentAction, WINDOW_TITLE, CONSENT_PATHS };
+module.exports = { createOwnerConsent, mintConsent, consentAction, consentHtml, WINDOW_TITLE, CONSENT_PATHS };
