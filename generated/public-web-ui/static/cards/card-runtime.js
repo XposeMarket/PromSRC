@@ -9,6 +9,7 @@
 import { decodeCardData, sendCardFollowUp, esc } from './card-utils.js';
 import { renderInteractiveCard, reduceInteractiveCard } from './cards-interactive.js';
 import { CARD_CSS } from './cards-styles.js';
+import { FOCUSED_CSS, FOCUSED_TRACKS, hydrateFocusedCarousels } from './focused-carousel.js';
 import { updateConvert, updateCalculator, pressCalculatorKey } from './cards-tools.js';
 
 const STATE_PREFIX = 'prom-card-state:';
@@ -192,6 +193,7 @@ function syncClockTimer() {
 
 /** Hydrate anything that needs a first paint (currency results, clocks). */
 export function hydrateCards(root = document) {
+  hydrateFocusedCarousels(root);
   root.querySelectorAll?.('.pc-currency:not([data-pc-ready])').forEach((card) => { card.setAttribute('data-pc-ready', '1'); updateCurrency(card); });
   syncClockTimer();
 }
@@ -203,7 +205,7 @@ export function installPromCards() {
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    style.textContent = CARD_CSS;
+    style.textContent = CARD_CSS + FOCUSED_CSS;
     document.head.appendChild(style);
   }
   document.addEventListener('click', onClick);
@@ -227,7 +229,7 @@ export function installPromCards() {
   let scheduled = false;
   new MutationObserver((records) => {
     // Ignore token/text churn; only card insertion/removal requires hydration.
-    if (document.hidden || window.__promSidePaneSuspended || !records.some((record) => [...record.addedNodes, ...record.removedNodes].some((node) => node.nodeType === 1 && (node.matches?.('.pc-card, .pc-clock-cell') || node.querySelector?.('.pc-card, .pc-clock-cell'))))) return;
+    if (document.hidden || window.__promSidePaneSuspended || !records.some((record) => record.target.matches?.(FOCUSED_TRACKS) || [...record.addedNodes, ...record.removedNodes].some((node) => node.nodeType === 1 && (node.matches?.('.pc-card, .pc-clock-cell, .pcx, ' + FOCUSED_TRACKS) || node.querySelector?.('.pc-card, .pc-clock-cell, .pcx, ' + FOCUSED_TRACKS))))) return;
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => { scheduled = false; hydrateCards(); });
