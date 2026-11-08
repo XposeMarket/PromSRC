@@ -201,3 +201,6 @@ Pending desktop chat picker work uses shared `web-ui/src/model-family-grouping.j
 
 ### Main-chat summary assembly
 Desktop SSE and replay use source reasoning_summary, visibility summary, exact delta append and complete snapshot replace. Tool/commentary boundaries freeze earlier summaries; agent_progress retains its separate heuristic. Collapse classification is coordinated with #780 before shipping.
+
+### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
+`features/tasks/task-detail-render.js` is shared by desktop TasksPage and mobile Tasks. Tool activity uses native details/summary with tool name and timestamp; arguments/results are hidden initially and use escaped pretty JSON or existing sanitized Markdown. Evidence renders actual content/value as Markdown, not raw object JSON. Open disclosures survive polling replacement. Existing compact activity retention/truncation is unchanged. No glass/navigation redesign. Not merged/live.

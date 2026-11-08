@@ -1,5 +1,9 @@
 # 18 — Mobile app
 
+### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
+Mobile Tasks shares `features/tasks/task-detail-render.js` with desktop: minimal tool-name disclosures and sanitized Markdown evidence/run notes. `renderTasksPage` awaits the existing Markdown-vendor hook on cold direct navigation. Native tool-open state survives polling; existing request-card preservation and glass shell remain unchanged. Not merged/live.
+
+
 
 ## Tasks planned-chat tracking and original interactions (pending feat/planned-chat-tasks)
 Mobile Tasks uses shared planned_chat projections and history. Needs You embeds original _renderMobileQuestionCard and _renderMobileApprovalCard via prepareMobileTaskInteractions, loaded only when Needs You contains an interaction, with source-chat fallback on renderer-load failure. Questions use the shared controller and original source session; approvals keep their original handlers/endpoints. Refresh preserves matching request DOM nodes/drafts; manual refresh no longer clears forms to a skeleton. Cards fit narrow widths. Not deployed yet.

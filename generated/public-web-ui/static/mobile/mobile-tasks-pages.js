@@ -1,3 +1,4 @@
+import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
 
 
@@ -266,14 +267,7 @@ function _pmRenderTaskRecovery(task) {
 }
 
 function _pmRenderTaskEvidence(entries) {
-  if (!entries?.length) return `<div class="pm-card-body">No evidence bus entries yet.</div>`;
-  return `<div class="pm-task-evidence-list">${entries.slice().reverse().map(entry => `<div class="pm-task-evidence-entry">
-    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
-      <strong style="font-size:12px;">${escapeHtml(entry?.title || entry?.type || 'Evidence')}</strong>
-      <span style="font-size:10px;color:var(--pm-muted);">${entry?.t || entry?.timestamp ? escapeHtml(_formatChatTime(entry.t || entry.timestamp)) : ''}</span>
-    </div>
-    <div style="font-size:12px;color:var(--pm-text-soft);white-space:pre-wrap;word-break:break-word;">${escapeHtml(entry?.content || entry?.summary || entry?.text || JSON.stringify(entry).slice(0, 700))}</div>
-  </div>`).join('')}</div>`;
+  return renderTaskEvidence(entries, _renderMobileMarkdown, _formatChatTime);
 }
 
 // Task prompts include the execution envelope (agent identity, workspace rules,
@@ -344,7 +338,7 @@ function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
   </article>`;
 }
 
-function _pmRenderActivity(rows) {
+function _pmRenderActivity(rows, taskId) {
   if (!rows.length) return '<div class="pm-card-body">No activity recorded yet.</div>';
   return `<div class="pm-lr-activity" data-pm-task-journal>${rows.map((row, idx) => {
     const time = row.t ? `<span class="pm-lr-act-time">${escapeHtml(_formatTimeAgo(row.t))}</span>` : '';
@@ -352,7 +346,7 @@ function _pmRenderActivity(rows) {
       return `<details class="pm-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="pm-lr-act is-status">${escapeHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
     }
     if (row.type === 'tool') {
-      return `<div class="pm-lr-act is-tool${row.error ? ' is-error' : ''}" data-act="${idx}"><div class="pm-lr-act-line"><code>${escapeHtml(row.name || 'tool')}</code>${row.pending ? '<span class="pm-lr-act-run">running…</span>' : ''}${time}</div>${row.call ? `<div class="pm-lr-act-call">${escapeHtml(String(row.call).slice(0, 200))}</div>` : ''}${row.result ? `<div class="pm-lr-act-result">→ ${escapeHtml(String(row.result).slice(0, 240))}</div>` : ''}</div>`;
+      return renderTaskTool(row, _renderMobileMarkdown, time, `${taskId}:${idx}`);
     }
     if (row.type === 'error') return `<div class="pm-lr-act is-error"><div class="pm-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escapeHtml(row.name)}</code>` : ''}${time}</div><div>${escapeHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="pm-lr-act is-status"><div class="pm-lr-act-line">${escapeHtml(String(row.text || '').slice(0, 300))}${time}</div></div>`;
@@ -373,7 +367,7 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
   const tabs = ['overview', 'activity', 'evidence'].map(key => `<button type="button" class="${tab === key ? 'active' : ''}" data-task-tab="${key}" data-task-id="${id}">${key[0].toUpperCase()}${key.slice(1)}</button>`).join('');
   let content = '';
   if (tab === 'activity') {
-    content = `<section>${_pmRenderActivity(view.activity)}</section>`;
+    content = `<section>${_pmRenderActivity(view.activity, merged.id)}</section>`;
   } else if (tab === 'evidence') {
     const artifacts = view.artifacts.length ? `<section><div class="pm-card-head">Artifacts</div><ul class="pm-lr-artifacts">${view.artifacts.map(a => `<li>${escapeHtml(String(a?.path || a?.name || a || '').slice(0, 240))}</li>`).join('')}</ul></section>` : '';
     content = `<section><div class="pm-card-head">Evidence</div>${_pmRenderTaskEvidence(view.evidence)}</section>${artifacts}`;
@@ -398,6 +392,8 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
 }
 
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
+  // Secondary routes do not preload Markdown vendors; Tasks now renders notes.
+  try { await window.__PROM_ENSURE_MARKDOWN_LIBS?.(); } catch { /* escaped fallback */ }
   let taskInteractions = null;
   const taskPageSize = 40;
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count"></span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
@@ -477,6 +473,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       nearBottom: (journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight) < 48,
     } : null;
 
+    const restoreTools = rememberTaskTools(listEl);
     const restoreRequestCards = preserveRequestCards(listEl, nyEntries);
     listEl.innerHTML = visibleTasks.map(t => {
       const id = String(t.id || '');
@@ -494,6 +491,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       listEl.insertAdjacentHTML('afterbegin', nyEntries.map(nyEntryHtml).join(''));
     }
     restoreRequestCards();
+    restoreTools();
     wireNyEntries();
     wireTaskCards();
     const nextJournal = listEl.querySelector('[data-pm-task-journal]');
