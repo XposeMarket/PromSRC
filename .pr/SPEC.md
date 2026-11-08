@@ -22,6 +22,9 @@ Scoped mobile-only CSS final-authority block plus a dedicated button class in th
 - Cancel/Send/draft hooks unchanged; regression test passes.
 
 ## Files
+- web-ui/src/mobile/mobile-chat-page-runtime.js
+- web-ui/src/mobile/mobile-chat-message-renderer.js
+- scripts/test-mobile-composer-edit.mjs
 - web-ui/src/mobile/mobile-pages.js
 - web-ui/src/styles/mobile.css
 - scripts/test-mobile-message-edit-ui.mjs
