@@ -12,6 +12,15 @@ Mobile edit composer Cancel/Send used `.pm-msg-action`, whose late mobile overri
 - Final-authority font rule for body-level long-press portal nodes.
 - Draft/edit/send/cancel semantics unchanged (same data-msg-action / data-msg-edit-input hooks).
 
+## Chosen approach
+Scoped mobile-only CSS final-authority block plus a dedicated button class in the renderer (no change to the shared `.pm-msg-action` icon sizing, chat engine, storage or permissions).
+
+## Acceptance
+- Cancel/Send are pill text buttons >=44px tall with natural width at 320 and 390px viewports.
+- Textarea grows with content and caps at min(45dvh,320px) with internal scroll; short drafts stay compact.
+- Long-press lifted clone and popover render in the system sans font.
+- Cancel/Send/draft hooks unchanged; regression test passes.
+
 ## Files
 - web-ui/src/mobile/mobile-pages.js
 - web-ui/src/styles/mobile.css
