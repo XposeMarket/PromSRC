@@ -228,3 +228,5 @@ Mobile live/replay use exact raw delta append and complete snapshot replace in t
 - Regression: `node scripts/test-mobile-drawer-search-morph.regression.mjs`. It checks the fake-DOM contract plus Playwright geometry with real `mobile.css`. Add `--shoot <dir>` to save screenshots.
 
 - Integration correction: mobile-drawer-search-morph styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.
+
+- The obsolete inline message editor and its context bridge/styles were removed; message edits exclusively borrow the bottom composer. Drawer morph helper loads on first search interaction with stale-node guards.

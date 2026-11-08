@@ -53,7 +53,6 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _renderMobileRichArtifacts,
       _renderMobileSkillReferencedMarkdown,
       _renderMobileThreadLinkArtifacts,
-      _renderMobileUserEditComposer,
       _renderMobileVoiceLyrics,
       _renderMobileVoiceWorkgroup,
       _renderMobileWorkTimer,

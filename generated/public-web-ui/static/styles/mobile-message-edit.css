@@ -5,62 +5,6 @@
 body.pm-mobile-active :is(#pm-msg-lp-bubble-clone, .pm-bubble--lifted, .pm-msg-lp-popover, .pm-msg-lp-backdrop) {
   font-family: var(--pm-font, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif);
 }
-body.pm-mobile-active .pm-mobile-edit-composer {
-  font-family: var(--pm-font, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif);
-  width: min(86vw, 460px);
-}
-body.pm-mobile-active .pm-mobile-edit-input {
-  display: block;
-  min-height: 84px;
-  max-height: min(45dvh, 320px);
-  overflow-y: auto;
-  resize: none;
-  font-family: inherit;
-  font-size: 16px; /* >=16px prevents iOS focus zoom */
-  line-height: 1.45;
-  padding: 11px 13px;
-}
-body.pm-mobile-active .pm-mobile-edit-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-body.pm-mobile-active .pm-mobile-edit-btn {
-  appearance: none;
-  -webkit-appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
-  min-width: 84px;
-  min-height: 44px;
-  padding: 0 20px;
-  border: 1px solid var(--pm-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pm-surface) 88%, transparent);
-  color: var(--pm-text);
-  font-family: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-body.pm-mobile-active .pm-mobile-edit-btn.primary {
-  background: var(--pm-orange);
-  border-color: var(--pm-orange);
-  color: #fff;
-}
-body.pm-mobile-active .pm-mobile-edit-btn:active { transform: scale(.97); }
-body.pm-mobile-active .pm-mobile-edit-btn:disabled { opacity: .45; }
-body.pm-mobile-active .pm-mobile-edit-btn:focus-visible {
-  outline: 2px solid var(--pm-orange);
-  outline-offset: 2px;
-}
-
 /* Message edits temporarily borrow the normal composer. */
 body.pm-mobile-active .pm-msg.from-user.editing { opacity: .42; filter: grayscale(1); pointer-events: none; }
 body.pm-mobile-active #pm-composer.is-message-editing { display: flex; flex-direction: column; }
