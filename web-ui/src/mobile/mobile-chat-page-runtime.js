@@ -942,6 +942,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const mainPlanDock = page.querySelector('#pm-main-plan-dock');
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const goalStrip = page.querySelector('#pm-mobile-goal-strip');
+  let messageComposerEdit = null;
   const input    = page.querySelector('#pm-composer-input');
   const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
   if (input) input.value = readComposerDraft(draftKeyFor());
@@ -3431,6 +3432,16 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function updateComposerSubmitState(sessionForBusy = requestedSession) {
+    if (messageComposerEdit) {
+      sendBtn.disabled = messageComposerEdit.submitting || !input.value.trim();
+      sendBtn.classList.remove('is-abort', 'is-voice', 'is-stop-locked');
+      sendBtn.style.opacity = '';
+      sendBtn.title = 'Save and resend';
+      sendBtn.setAttribute('aria-label', 'Save and resend');
+      sendBtn.innerHTML = ICONS.send;
+      updateComposerExpandedState();
+      return;
+    }
     const sid = String(sessionForBusy || requestedSession || MOBILE_CHAT_SESSION_ID);
     // The composer belongs to the requested route. Do not let a run in a
     // different chat session turn a fresh/new-chat composer into a stop button.
@@ -6067,32 +6078,73 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     if (action === 'fork') return forkMobileBackgroundConversation(id);
   }
 
+  function finishMobileComposerEdit() {
+    const edit = messageComposerEdit;
+    if (!edit) return;
+    messageComposerEdit = null;
+    __pmChat.editingMessageIndex = -1;
+    form.querySelector('.pm-composer-edit-status')?.remove();
+    form.classList.remove('is-message-editing');
+    input.value = edit.previousDraft;
+    input.readOnly = false;
+    resizeComposerInput();
+    _pmUpdateComposerRichPreview(page, input);
+    updateComposerSubmitState();
+  }
+
   function startMobileEditUserMessage(index) {
     const thread = _activeMobileThread();
     const msg = thread[index];
     if (!msg || msg.role !== 'user') return;
+    if (messageComposerEdit?.submitting) return;
+    const previousDraft = messageComposerEdit?.previousDraft ?? input.value;
+    finishMobileComposerEdit();
+    messageComposerEdit = { index, previousDraft, submitting: false };
     __pmChat.editingMessageIndex = index;
-    msg._editingDraft = _mobileMessageCopyText(msg);
+    const status = document.createElement('div');
+    status.className = 'pm-composer-edit-status';
+    status.innerHTML = '<span>Editing message</span><button type="button" aria-label="Cancel message edit">Cancel</button>';
+    status.querySelector('button').addEventListener('click', () => cancelMobileEditUserMessage(index));
+    form.prepend(status);
+    form.classList.add('is-message-editing');
+    input.value = _mobileMessageCopyText(msg);
+    setChatComposerMode(true, { animate: true, preserveScroll: true, reason: 'edit' });
+    resizeComposerInput();
+    _pmUpdateComposerRichPreview(page, input);
+    updateComposerSubmitState();
     renderThreadNow();
-    setTimeout(() => {
-      const inputEl = threadEl?.querySelector(`[data-msg-edit-input="${index}"]`);
-      inputEl?.focus?.();
-      inputEl?.setSelectionRange?.(inputEl.value.length, inputEl.value.length);
-    }, 0);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
   }
 
   function cancelMobileEditUserMessage(index) {
-    const msg = _activeMobileThread()[index];
-    if (msg) delete msg._editingDraft;
-    __pmChat.editingMessageIndex = -1;
+    if (messageComposerEdit?.submitting) return;
+    finishMobileComposerEdit();
     renderThreadNow();
   }
 
   async function submitMobileEditedUserMessage(index) {
-    const inputEl = threadEl?.querySelector(`[data-msg-edit-input="${index}"]`);
-    const nextText = String(inputEl?.value || '').trim();
-    if (!nextText) return;
-    await rerunMobileEditedUserMessage(index, nextText);
+    const edit = messageComposerEdit;
+    const nextText = String(input?.value || '').trim();
+    if (!edit || edit.index !== index || edit.submitting || !nextText) return;
+    edit.submitting = true;
+    input.readOnly = true;
+    updateComposerSubmitState();
+    try {
+      await rerunMobileEditedUserMessage(index, nextText);
+      if (messageComposerEdit === edit) finishMobileComposerEdit();
+      renderThreadNow();
+    } catch (error) {
+      edit.submitting = false;
+      if (messageComposerEdit === edit) {
+        input.readOnly = false;
+        __pmChat.editingMessageIndex = index;
+        input.value = nextText;
+      }
+      updateComposerSubmitState();
+      renderThreadNow();
+      pmToast(`Message could not be edited: ${error?.message || error}`, 'error');
+    }
   }
 
   async function rerunMobileEditedUserMessage(index, nextText) {
@@ -6122,6 +6174,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     _reindexMobileThread(thread);
     renderThreadNow();
     await syncMobileThreadHistory(_mobileHistoryForServer(thread.slice(0, index)), { resetCompaction: true });
+    finishMobileComposerEdit();
     await sendMessage(nextText, { reuseExistingUserIndex: index, skipUserBubble: true, attachments: Array.isArray(userMsg.body?.attachments) ? userMsg.body.attachments : [] });
   }
 
@@ -7325,7 +7378,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         __pmChat.attachments[busySessionId] = [];
         renderPendingAttachments();
       }
-      resetComposerInput();
+      if (!options.skipUserBubble) resetComposerInput();
       _pmClearActiveSlashCommand(page, input, { focus: false });
       _renderMobileQueuedPromptsPanel(busySessionId);
       pmToast(`Queued prompt #${queue.length}. It will run automatically next.`, 'success');
@@ -7403,7 +7456,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
-    if (!fromQueue && String(input?.value || '').trim() === msg) resetComposerInput();
+    if (!fromQueue && !options.skipUserBubble && String(input?.value || '').trim() === msg) resetComposerInput();
     const activeTurnStartedAt = Date.now();
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
@@ -8295,7 +8348,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   };
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
-    if (input) saveComposerDraft(draftKeyFor(), input.value);
+    if (input) saveComposerDraft(draftKeyFor(), messageComposerEdit?.previousDraft ?? input.value);
+    messageComposerEdit = null;
+    __pmChat.editingMessageIndex = -1;
     attachmentPickerCleanup?.();
     attachmentPickerCleanup = null;
     initialBottomPinStop?.();
@@ -8460,6 +8515,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // keyboard before the send/queue/abort/voice branch updates the layout.
     try { input?.blur?.(); } catch {}
     const text = _pmGetComposerValue(input);
+    if (messageComposerEdit) {
+      await submitMobileEditedUserMessage(messageComposerEdit.index);
+      return;
+    }
     const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
     // Every send/steer arms the Stop soft-lock (not just idle->busy).
     if (text.trim() || getPendingAttachments().length) {
@@ -8652,7 +8711,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   });
 
   input?.addEventListener('input', () => {
-    saveComposerDraft(draftKeyFor(), input.value);
+    if (!messageComposerEdit) saveComposerDraft(draftKeyFor(), input.value);
     resizeComposerInput();
     _pmHandleSlashInput(page, input);
     _pmRenderSkillTriggerPill(page, input);

@@ -34,3 +34,9 @@ Parity: single-surface: desktop uses its own `.msg-edit-composer` (web-ui/src/pa
 ## Risks
 - Only mobile edit composer + long-press portal styling; desktop untouched (all selectors scoped to body.pm-mobile-active / mobile renderer).
 - Notice via edit composer layout regressions on phone; rollback = revert commit.
+
+## Composer edit revision (Raul Nov 7)
+Edit now borrows the normal bottom composer temporarily. Original user bubble remains visible, greyed out; Cancel restores prior draft. Submit routes to existing edit/rerun handler before question/slash/send handling. Edit text is transient and does not overwrite the ordinary saved composer draft. No backend/storage format change. Desktop intentionally retains its existing editor; request is mobile-only.
+Additional files: web-ui/src/mobile/mobile-chat-page-runtime.js, web-ui/src/mobile/mobile-chat-message-renderer.js, scripts/test-mobile-composer-edit.mjs.
+Test: node scripts/test-mobile-composer-edit.mjs
+Acceptance: same composer input, dimmed original bubble, visible Cancel, draft restored, no inline editor, existing rerun retained.

@@ -19117,3 +19117,9 @@ body.pm-mobile-active .pm-mobile-edit-btn:focus-visible {
   outline: 2px solid var(--pm-orange);
   outline-offset: 2px;
 }
+
+/* Message edits temporarily borrow the normal composer. */
+body.pm-mobile-active .pm-msg.from-user.editing { opacity: .42; filter: grayscale(1); pointer-events: none; }
+body.pm-mobile-active #pm-composer.is-message-editing { flex-wrap: wrap; }
+body.pm-mobile-active .pm-composer-edit-status { display: flex; align-items: center; justify-content: space-between; flex: 0 0 100%; gap: 12px; min-width: 0; color: var(--pm-text-muted); font: 500 12px/1.4 var(--pm-font, system-ui, sans-serif); }
+body.pm-mobile-active .pm-composer-edit-status button { appearance: none; border: 0; background: transparent; color: var(--pm-text); font: inherit; min-height: 44px; padding: 0 12px; cursor: pointer; }
