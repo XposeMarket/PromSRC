@@ -433,6 +433,37 @@ function _wireDrawerSwipeGesture() {
     });
   };
 
+  // Batch drag writes to one per frame; iOS can deliver several touchmoves
+  // per frame and synchronous style writes on each one make the drag judder.
+  let progressFrame = 0;
+  let pendingProgress = null;
+  const scheduleProgress = (progress) => {
+    pendingProgress = progress;
+    if (progressFrame) return;
+    progressFrame = requestAnimationFrame(() => {
+      progressFrame = 0;
+      if (pendingProgress != null) applyProgress(pendingProgress);
+      pendingProgress = null;
+    });
+  };
+  const flushProgress = () => {
+    if (progressFrame) cancelAnimationFrame(progressFrame);
+    progressFrame = 0;
+    pendingProgress = null;
+  };
+
+  // A rightward swipe inside content that can still scroll left belongs to
+  // that content (code blocks, tables, carousels), not to the drawer.
+  const insideLeftScrollable = (target) => {
+    for (let node = target; node && node !== document.body && node.nodeType === 1; node = node.parentElement) {
+      if (node.scrollWidth > node.clientWidth + 1 && node.scrollLeft > 0) {
+        const ox = getComputedStyle(node).overflowX;
+        if (ox === 'auto' || ox === 'scroll') return true;
+      }
+    }
+    return false;
+  };
+
   const applyProgress = (progress) => {
     const p = Math.max(0, Math.min(1, progress));
     const app = appEl();
@@ -449,6 +480,7 @@ function _wireDrawerSwipeGesture() {
   };
 
   const settle = (open, velocity = 0) => {
+    flushProgress();
     const remaining = open ? 1 - (gesture?.progress ?? 0) : (gesture?.progress ?? 1);
     const speed = Math.max(0.9, Math.abs(velocity));
     const duration = Math.round(Math.max(150, Math.min(300, (remaining * viewportWidth()) / speed)));
@@ -476,10 +508,18 @@ function _wireDrawerSwipeGesture() {
     const touch = event.touches[0];
     const drawerOpen = document.body.classList.contains('pm-mobile-drawer-open');
     const edge = Math.max(24, Math.min(44, viewportWidth() * 0.09));
-    if (!drawerOpen && touch.clientX > edge) return;
+    const fromEdge = !drawerOpen && touch.clientX <= edge;
     if (drawerOpen && !_drawerEl.contains(target)) return;
+    if (!drawerOpen && !fromEdge) {
+      // Open from anywhere on the page (like iOS back-swipe apps), except where
+      // a horizontal drag already means something else.
+      if (target?.closest?.('.pm-tabbar, .pm-msheet, #pm-msheet, [role="dialog"], [data-pm-no-drawer-swipe], .pm-composer, input[type="range"]')) return;
+      if (document.querySelector('.pm-haptic-gesture-surface:not(.pm-tabbar-haptic-gesture-surface)')?.contains?.(target)) return;
+      if (insideLeftScrollable(target)) return;
+    }
     const now = performance.now();
     gesture = {
+      fromEdge,
       mode: drawerOpen ? 'close' : 'open',
       startX: touch.clientX,
       startY: touch.clientY,
@@ -498,7 +538,10 @@ function _wireDrawerSwipeGesture() {
     if (!gesture.locked) {
       if (Math.abs(dx) < DECIDE_PX && Math.abs(dy) < DECIDE_PX) return;
       const wrongWay = gesture.mode === 'open' ? dx <= 0 : dx >= 0;
-      if (Math.abs(dy) > Math.abs(dx) * 0.9 || wrongWay) { gesture = null; return; }
+      // Edge and close drags accept up to ~42deg; a mid-page open must be
+      // clearly horizontal (~27deg) so diagonal scrolls never grab the drawer.
+      const maxSlope = gesture.mode === 'open' && !gesture.fromEdge ? 0.5 : 0.9;
+      if (Math.abs(dy) > Math.abs(dx) * maxSlope || wrongWay) { gesture = null; return; }
       gesture.locked = true;
       gesture.startX = touch.clientX - Math.sign(dx) * DECIDE_PX;
       clearTimeout(settleTimer);
@@ -509,7 +552,7 @@ function _wireDrawerSwipeGesture() {
     if (event.cancelable) event.preventDefault();
     const shift = (touch.clientX - gesture.startX) / viewportWidth();
     gesture.progress = gesture.mode === 'open' ? shift : 1 + shift;
-    applyProgress(gesture.progress);
+    scheduleProgress(gesture.progress);
     const now = performance.now();
     gesture.samples.push({ x: touch.clientX, t: now });
     while (gesture.samples.length > 2 && now - gesture.samples[0].t > 90) gesture.samples.shift();
@@ -563,6 +606,7 @@ function _wireDrawerSwipeGesture() {
     document.removeEventListener('touchcancel', onTouchCancel, true);
     document.removeEventListener('click', onClick, true);
     clearTimeout(settleTimer);
+    flushProgress();
     clearInline();
     gesture = null;
   };
@@ -1267,6 +1311,24 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     settle(tabbar.querySelector('.pm-tab.active'));
     gestureGeometry = null;
   };
+
+  // Fallback: a click that reaches a real tab button (haptic sensor briefly
+  // misplaced, keyboard, VoiceOver) still navigates. The sensor is a body
+  // child that stops its own clicks, so a normal tap never navigates twice.
+  tabbar.addEventListener('click', (event) => {
+    if (pointerId !== null) return;
+    const tabEl = event.target?.closest?.('.pm-tab');
+    if (!tabEl || !tabbar.contains(tabEl)) return;
+    const id = tabEl.getAttribute('data-tab');
+    const tabObj = mobileNavTabs.find((x) => x.id === id);
+    const currentId = (getActiveTab ? getActiveTab() : '')
+      || tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab') || '';
+    if (!tabObj || id === currentId) return;
+    try { if (currentId) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentId); } catch {}
+    setActive(tabEl);
+    settle(tabEl);
+    if (typeof onNavigate === 'function') onNavigate(tabObj.route);
+  });
 
   attachMobileHapticGestureSurface(tabbar, {
     onPointerDown: (e, gesture) => {
@@ -3333,7 +3395,8 @@ export function closeDrawer() {
     _drawerCloseResetTimer = null;
     if (!_isDrawerOpen()) _resetDrawerSearch();
   }, _drawerSlideMs() + 40);
-  setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
+  // Listeners (hamburger glass capture) do DOM-heavy work; keep it off the slide.
+  setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), _drawerSlideMs() + 40);
 }
 
 export function renderMobileHeader({ title, online = true, showModelBadge = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {

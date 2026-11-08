@@ -147,6 +147,9 @@ const measurements = {
 // #821 protected saved access mounts the shared secure-access dock, composer secret
 // guard and Add-secret host on the mobile chat page: main 286860 -> 287460 gzip (+600).
 // Same ~0.1% compression allowance.
-assert(measurements.gzipBytes <= 287750, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// fix/mobile-drawer-tabbar: tab bar haptic sensor settle loop + tab click fallback and
+// rAF-batched drawer swipe with mid-page open exclusions: main 287541 -> 288107 gzip (+566).
+// Same ~0.1% compression allowance.
+assert(measurements.gzipBytes <= 288400, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
