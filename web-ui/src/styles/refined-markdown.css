@@ -1,0 +1,225 @@
+/* Refined Markdown: shared assistant-prose reading style (desktop + mobile).
+ *
+ * Scope: assistant prose roots ONLY. User bubbles, cards, rich media, app
+ * chrome and glass surfaces are never matched. Loaded last by index.html and
+ * mobile.html. The leading `:is(#prom-rmd, html) :is(#prom-rmd, body)` pair
+ * matches every page but carries id-level specificity (2,0,0), so these rules
+ * also win over skin selectors such as
+ * `:root[data-skin="p1"] body:not(.pm-mobile-active) #chat-view .markdown-body code`
+ * and over mobile.css when the desktop shell injects it dynamically.
+ * Font family is inherited (existing app / mobile chat font preferences).
+ */
+
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(
+  .msg:not(.user) .msg-content.markdown-body,
+  .live-turn-prose > .live-turn-md,
+  .pm-msg.from-ai .pm-bubble > .markdown-body,
+  .pm-msg.from-ai .pm-bubble > .pm-live-md
+) {
+  --rmd-text: var(--pm-text, var(--text, currentColor));
+  --rmd-muted: var(--pm-muted, var(--muted, currentColor));
+  --rmd-accent: var(--pm-accent, var(--t-accent, var(--brand, currentColor)));
+  --rmd-mono: var(--t-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  color: var(--rmd-text);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.7;
+  letter-spacing: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+  min-width: 0;
+}
+
+/* Paragraphs and lists */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(p, li):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: inherit;
+  font-size: 1em;
+  font-weight: inherit;
+  line-height: 1.7;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) p:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin: 0 0 12px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(ul, ol):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin: 4px 0 12px;
+  padding-left: 1.4em;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) li:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin: 0 0 7px;
+  padding-left: 0.1em;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) li > :is(ul, ol):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin: 7px 0 0;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) li::marker:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: var(--rmd-muted);
+  font-weight: 400;
+}
+
+/* Headings h1-h6 */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(h1, h2, h3, h4, h5, h6):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: var(--rmd-text);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin: 20px 0 6px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h1:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-size: 25px;
+  line-height: 1.22;
+  letter-spacing: -0.035em;
+  margin: 28px 0 10px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h2:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-size: 17px;
+  letter-spacing: -0.015em;
+  margin: 26px 0 8px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h3:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-size: 15.5px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h4:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-size: 15px;
+  margin: 16px 0 4px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h5:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-size: 14px;
+  margin: 14px 0 4px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) h6:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: var(--rmd-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 14px 0 4px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) > :first-child:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin-top: 0;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) > :last-child:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin-bottom: 0;
+}
+
+/* Restrained emphasis and links */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(strong, b):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: var(--rmd-text);
+  font-weight: 620;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) a:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  color: var(--rmd-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--rmd-accent) 45%, transparent);
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) a:hover:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  text-decoration-color: currentColor;
+}
+
+/* Inline code */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :not(pre) > code:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-family: var(--rmd-mono);
+  font-size: 0.86em;
+  font-weight: 450;
+  line-height: inherit;
+  color: var(--rmd-text);
+  background: color-mix(in srgb, var(--rmd-text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rmd-text) 12%, transparent);
+  border-radius: 4px;
+  padding: 0.08em 0.36em;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Code blocks: quieter 8px container, local horizontal scroll. Copy buttons
+   and padding-right reserved for them by existing styles are untouched. */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) pre:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 10px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--rmd-text) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rmd-text) 4.5%, transparent);
+  padding-top: 11px;
+  padding-bottom: 11px;
+  padding-left: 13px;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) pre code:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  display: block;
+  font-family: var(--rmd-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--rmd-text);
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Quotes, rules, tables */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) blockquote:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  margin: 12px 0;
+  padding: 1px 0 1px 14px;
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--rmd-accent) 60%, transparent);
+  background: none;
+  color: color-mix(in srgb, var(--rmd-text) 80%, var(--rmd-muted));
+  font-style: normal;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) hr:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  height: 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--rmd-text) 10%, transparent);
+  margin: 22px 0;
+  background: none;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) table:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  margin: 10px 0 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td):not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  border: 1px solid color-mix(in srgb, var(--rmd-text) 12%, transparent);
+  padding: 6px 10px;
+  vertical-align: top;
+}
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) th:not(:where(.pcx, .pcx *, .pc-inline-card, .pc-inline-card *, .prom-vp-card, .prom-vp-card *, .prom-gp-card, .prom-gp-card *)) {
+  font-weight: 620;
+  background: color-mix(in srgb, var(--rmd-text) 5%, transparent);
+}
+
+/* Mobile Tasks: source, task and metadata have distinct reading roles.
+   Display only: task state, controls and glass/card surfaces are unchanged. */
+body.pm-mobile-active .pm-task-card.pm-lr-card .pm-lr-actor {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pm-muted);
+  line-height: 1.4;
+}
+body.pm-mobile-active .pm-task-card.pm-lr-card .pm-lr-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.012em;
+  margin-top: 4px;
+}
+body.pm-mobile-active .pm-task-card.pm-lr-card .pm-lr-sub {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+/* Marked emits align attributes; legacy table CSS otherwise forces left. */
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td)[align="right"]:not(:where(.pcx *, .pc-inline-card *, .prom-vp-card *, .prom-gp-card *)) { text-align: right; }
+:is(#prom-rmd, html) :is(#prom-rmd, body) :is(.msg:not(.user) .msg-content.markdown-body, .live-turn-prose > .live-turn-md, .pm-msg.from-ai .pm-bubble > .markdown-body, .pm-msg.from-ai .pm-bubble > .pm-live-md) :is(th, td)[align="center"]:not(:where(.pcx *, .pc-inline-card *, .prom-vp-card *, .prom-gp-card *)) { text-align: center; }
