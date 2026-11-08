@@ -8,7 +8,7 @@ const browser = await chromium.launch({headless:true});
 for (const width of [320,390]) {
  const page=await browser.newPage({viewport:{width,height:844}});
  await page.setContent('<html><body class="pm-mobile-active"><main class="pm-app"><div class="pm-msg from-user"><div class="pm-bubble">Original message</div></div><form id="pm-composer" class="pm-composer"><div class="pm-composer-row"><textarea id="pm-composer-input" class="pm-composer-input">Unsent draft</textarea><button type="submit">Send</button></div></form></main></body></html>');
- for(const file of ['mobile-shell.css','mobile.css']) await page.addStyleTag({content:fs.readFileSync(new URL(`web-ui/src/styles/${file}`,root),'utf8')});
+ for(const file of ['mobile-shell.css','mobile.css','mobile-message-edit.css']) await page.addStyleTag({content:fs.readFileSync(new URL(`web-ui/src/styles/${file}`,root),'utf8')});
  await page.evaluate((code)=>{
  const form=document.querySelector('form'),input=document.querySelector('textarea'),page=document;
  let messageComposerEdit=null; const __pmChat={editingMessageIndex:-1};
