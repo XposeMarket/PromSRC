@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "556db4718538210f",
-  "sourceDigest": "556db4718538210f9e7536c143f83bbe1005bfaf811066b056b0a5e087d2b433",
+  "buildId": "ae6a7da60741b01c",
+  "sourceDigest": "ae6a7da60741b01cb929b6b8c175b535e75d49a9c56e249a057c07e59661409b",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-QB3BUGYY.js",
-      "css": "/build/styles/desktop-DYSZORRF.css",
+      "css": "/build/styles/desktop-GLPYURHB.css",
       "modulePreloads": [
         "/build/chunks/chunk-4R74MHNR.js",
         "/build/chunks/chunk-64D6OPY6.js",
@@ -26,7 +26,7 @@
     "mobile": {
       "html": "/mobile.html",
       "js": "/build/entries/mobile-NDVSWG2B.js",
-      "css": "/build/styles/mobile-AFBIG744.css",
+      "css": "/build/styles/mobile-ZZYJF2AQ.css",
       "modulePreloads": []
     }
   },
@@ -134,15 +134,15 @@
         "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
         "/build/inline/index-inline-11-4550e6a395a8.js",
         "/build/inline/index-inline-12-047d20aba693.js",
-        "/build/styles/desktop-DYSZORRF.css"
+        "/build/styles/desktop-GLPYURHB.css"
       ],
       "files": 22,
-      "bytes": 964378,
-      "gzipBytes": 184880,
+      "bytes": 976876,
+      "gzipBytes": 185954,
       "jsBytes": 222281,
       "jsGzipBytes": 70222,
-      "cssBytes": 742097,
-      "cssGzipBytes": 114658
+      "cssBytes": 754595,
+      "cssGzipBytes": 115732
     },
     "mobile": {
       "paths": [
@@ -168,15 +168,15 @@
         "/build/inline/mobile-inline-01-606d0eb0eaa3.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
-        "/build/styles/mobile-AFBIG744.css"
+        "/build/styles/mobile-ZZYJF2AQ.css"
       ],
       "files": 23,
-      "bytes": 1063673,
-      "gzipBytes": 248186,
+      "bytes": 1076171,
+      "gzipBytes": 249227,
       "jsBytes": 501617,
       "jsGzipBytes": 158621,
-      "cssBytes": 562056,
-      "cssGzipBytes": 89565
+      "cssBytes": 574554,
+      "cssGzipBytes": 90606
     }
   },
   "assets": [
@@ -4717,10 +4717,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-DYSZORRF.css",
-      "bytes": 742097,
-      "gzipBytes": 114658,
-      "sha256": "9226054efb24d19e8c748ac275e31ddb9d821c673f9fd277971c33ce676c9e07",
+      "path": "/build/styles/desktop-GLPYURHB.css",
+      "bytes": 754595,
+      "gzipBytes": 115732,
+      "sha256": "08ed201842a9397ee76889c9f142e2b9ebff9bf14bb2377bc9b8cb6bc81a2b4f",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
@@ -4762,10 +4762,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-AFBIG744.css",
-      "bytes": 562056,
-      "gzipBytes": 89565,
-      "sha256": "5718239bea8eff29d42db7fb419fb4080ebc49353c924b64ee1c2af5cc3948f8",
+      "path": "/build/styles/mobile-ZZYJF2AQ.css",
+      "bytes": 574554,
+      "gzipBytes": 90606,
+      "sha256": "8e1c5993e9fb27d467cb2c70976ca13730aad5690b91514a0c4e318bd9d8dbb2",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }
