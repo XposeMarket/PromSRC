@@ -9,7 +9,8 @@ const loadShareModule = () => shareModulePromise ||= import('../share-file-cache
   ({ shareFileCache, shareOrDownloadFile } = m);
 });
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
-import { attachDrawerSearchMorph } from './mobile-drawer-search-morph.js';
+let drawerMorphModule;
+const loadDrawerMorph = () => drawerMorphModule ||= import('./mobile-drawer-search-morph.js').catch(error => { drawerMorphModule = null; throw error; });
 import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
@@ -1951,7 +1952,16 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     _renderDrawerSearchState(_drawerCallbacks);
   });
   _drawerSearchMorph?.dispose?.();
-  _drawerSearchMorph = attachDrawerSearchMorph(_drawerEl);
+  _drawerSearchMorph = null;
+  const morphDrawer = _drawerEl;
+  const morphInput = morphDrawer.querySelector('#pm-drawer-search-input');
+  const prepareMorph = () => loadDrawerMorph().then(({ attachDrawerSearchMorph }) => {
+    if (_drawerEl !== morphDrawer || !morphInput?.isConnected || _drawerSearchMorph) return;
+    _drawerSearchMorph = attachDrawerSearchMorph(morphDrawer);
+    if (document.activeElement === morphInput) morphInput.dispatchEvent(new Event('focus'));
+  }).catch(() => {});
+  morphInput?.addEventListener('pointerdown', prepareMorph, { once: true });
+  morphInput?.addEventListener('focus', prepareMorph, { once: true });
   _applyMobileTheme(_getTheme());
   // Capture live callbacks so refreshMobileDrawerSessions() and pull-to-refresh
   // can re-render the session list later (e.g. when the drawer is reopened after
