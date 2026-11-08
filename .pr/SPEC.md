@@ -15,6 +15,7 @@ Three carousel types center first/middle/last items on desktop/mobile; controls 
 ## Out of scope
 Theme selector, other cards, backend data, memory, permissions, publishing, merge/deployment.
 ## Files
+- .pr/SPEC.md
 - web-ui/src/cards/focused-carousel.js
 - web-ui/src/cards/card-runtime.js
 - scripts/test-focused-carousels.mjs
