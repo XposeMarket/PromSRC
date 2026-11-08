@@ -31,6 +31,7 @@ Carousel design, credential format expansion, OCR, upload storage, permission ch
 - web-ui/src/features/chat/secret-format-guard.js
 - scripts/test-secret-image-guard.mjs
 - scripts/test-protected-plugin-http.ts
+- scripts/test-mobile-chat-renderer-ownership.mjs
 
 ## Scope notes
 Generated UI synchronized using repository tooling. Workspace self/06-image-voice.md and self/17-desktop-web-ui.md updated separately.

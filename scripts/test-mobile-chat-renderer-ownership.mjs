@@ -152,6 +152,8 @@ const measurements = {
 // Same ~0.1% compression allowance.
 // #849 shared focused carousel hydration + compact product/open gallery styling:
 // measured main 288202 -> 290233 gzip (+2031). Retain ~0.1% compression allowance.
-assert(measurements.gzipBytes <= 290530, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #850 schema-aware raster attachment guard replaces serialized-body scanning:
+// measured main 290233 -> 290661 gzip (+428), still 33 modules. Retain ~0.1% allowance.
+assert(measurements.gzipBytes <= 290960, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
