@@ -64,9 +64,14 @@ export function retainTaskReferences(task: TaskRecord): void {
   // Existing pins remain on failed/revoked tasks. Terminal persistence must not fail on revocation.
   if (!['complete','failed','cancelled'].includes(task.status)) library().metadata.sharing().retainTask(task.id,task.teamSubagent.teamId,bindings);
 }
+/** Only team tasks can hold pins (retainTaskReferences requires a team). loadTask normalizes missing bindings to [],
+ * so an empty array alone must not route ordinary tasks through the reference database or a durable write.
+ * Team tasks still release after unselect-all, when historical pins can remain. */
+export function taskMayHoldReferencePins(task: TaskRecord): boolean {
+  return !!task.teamSubagent?.teamId && Array.isArray(task.referenceBindings);
+}
 export function releaseTerminalTaskReferences(task: TaskRecord): void {
-  // An array (even empty after unselect-all) means this task may still hold historical pins; undefined keeps the no-database fast path.
-  if (Array.isArray(task.referenceBindings) && ['complete','failed','cancelled'].includes(task.status) && !['running','pending'].includes(String(task.verificationStatus))) library().metadata.sharing().releaseTask(task.id);
+  if (taskMayHoldReferencePins(task) && ['complete','failed','cancelled'].includes(task.status) && !['running','pending'].includes(String(task.verificationStatus))) library().metadata.sharing().releaseTask(task.id);
 }
 
 /** Explicit selection is durable; selecting a collection freezes its CURRENT authorized members. */

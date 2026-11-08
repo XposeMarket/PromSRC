@@ -88,6 +88,15 @@ kase('6 unselect-all task releases historical pins only after a durable terminal
   assert.ok(order.includes('fsync')&&order.indexOf('fsync')<order.indexOf('release'),'pins released before durable terminal write: '+order.join(','));
 });
 
+kase('8 ordinary non-team terminal task skips reference DB and durable write', ()=>{
+  const t=tasks.createTask({title:'c8-plain',prompt:'p',sessionId:'c8',channel:'web'});
+  assert.deepEqual(tasks.loadTask(t.id).referenceBindings,[],'precondition: loader normalizes to []');
+  const fsMod=require('fs');const proto=Object.getPrototypeOf(sharing());const origFsync=fsMod.fsyncSync,origRel=proto.releaseTask;const order=[];
+  fsMod.fsyncSync=fd=>{order.push('fsync');return origFsync(fd);};proto.releaseTask=function(id){order.push('release');return origRel.call(this,id);};
+  try{tasks.updateTaskStatus(t.id,'complete');}finally{fsMod.fsyncSync=origFsync;proto.releaseTask=origRel;}
+  assert.deepEqual(order,[],'non-team task touched reference pins or durable write: '+order.join(','));
+});
+
 { const name='7 trusted team turn cannot read owner memory via related';
   try{ const team=mkTeam('C7');const t=mkTask(team,'c7');
     fs.writeFileSync(path.join(workspace,'MEMORY.md'),'# Memory\n## projects\n- [m:canry] owner-only canary fact [[stage-d-canary]]\n');

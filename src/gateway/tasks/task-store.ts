@@ -1275,10 +1275,10 @@ export function saveTask(task: TaskRecord, options: { referenceSelectionWrite?: 
     task.journal = task.journal.slice(-500);
   }
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
-  const { retainTaskReferences, releaseTerminalTaskReferences } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
+  const { retainTaskReferences, releaseTerminalTaskReferences, taskMayHoldReferencePins } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
   retainTaskReferences(task);
-  // Only tasks that ever held reference selections pay for a durable write before their pins are released.
-  const releasesPins = Array.isArray(task.referenceBindings) && ['complete', 'failed', 'cancelled'].includes(task.status);
+  // Only team tasks that can hold pins pay for a durable write before release; ordinary tasks keep the fast path.
+  const releasesPins = taskMayHoldReferencePins(task) && ['complete', 'failed', 'cancelled'].includes(task.status);
   writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2), releasesPins);
   releaseTerminalTaskReferences(task);
   upsertTaskSummary(task);
