@@ -19,6 +19,7 @@ Theme selector, other cards, backend data, memory, permissions, publishing, merg
 - web-ui/src/cards/focused-carousel.js
 - web-ui/src/cards/card-runtime.js
 - scripts/test-focused-carousels.mjs
+- scripts/test-mobile-chat-renderer-ownership.mjs
 - generated/public-web-ui/*
 ## Scope notes
 Runtime self/17,18,23 read; self/23 and surface docs updated in same turn (outside repo).
