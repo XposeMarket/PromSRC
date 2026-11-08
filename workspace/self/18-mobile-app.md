@@ -218,3 +218,5 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+- Integration correction: mobile-message-edit styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.

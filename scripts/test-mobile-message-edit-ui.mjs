@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const js = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
-const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8') + fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile-message-edit.css'), 'utf8');
 
 const start = js.indexOf('function _renderMobileUserEditComposer(');
 assert.ok(start > 0, 'edit composer renderer exists');
