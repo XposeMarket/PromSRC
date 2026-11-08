@@ -1,7 +1,7 @@
 # SPEC: Do not scan encoded screenshot bytes as credential text
 
 Surface: both
-Parity: fixed both: shared desktop/mobile request guard and backend chat admission; text/draft safeguards unchanged.
+Parity: shared module: web-ui/src/features/chat/secret-format-guard.js:20 imported by web-ui/src/api.js:1 and web-ui/src/mobile/mobile-api.js:1; backend admission shared. Chromium/WebKit behavioral tests, no visual change.
 Test: node scripts/test-secret-image-guard.mjs && npx tsx scripts/test-protected-plugin-http.ts
 Size justification: Bounded credential-boundary fix with client/backend parity tests.
 
