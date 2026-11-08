@@ -220,3 +220,10 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+### Drawer search morph (feat/mobile-search-morph, 2026-11-07)
+- When you focus the hamburger drawer's bottom-left search pill, it widens to 12px side margins (the same as the composer), fades out the theme and new-chat buttons, and moves up above the keyboard. It stays the same `#pm-drawer-search-input`, so focus, value and search behavior don't change. Helper: `web-ui/src/mobile/mobile-drawer-search-morph.js` (`attachDrawerSearchMorph`), wired in `mobile-shell.js`. `closeDrawer()` blurs the input and deactivates the morph. CSS is the final block in `mobile.css` (`.pm-drawer-search-morph` and `--pm-drawer-search-kb`).
+- The keyboard inset uses the composer's math (layout height minus the bottom of `visualViewport`), but the helper doesn't depend on the composer controller. It never touches `pm-keyboard-open` or the tab bar. Viewport and window listeners exist only while the field has focus. Escape inside the field collapses it without closing the drawer. When `visualViewport` is missing, the field still widens but doesn't lift. Reduced motion turns off the transitions.
+- Regression: `node scripts/test-mobile-drawer-search-morph.regression.mjs`. It checks the fake-DOM contract plus Playwright geometry with real `mobile.css`. Add `--shoot <dir>` to save screenshots.
+
+- Integration correction: mobile-drawer-search-morph styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.

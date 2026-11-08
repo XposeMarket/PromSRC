@@ -9,6 +9,8 @@ const loadShareModule = () => shareModulePromise ||= import('../share-file-cache
   ({ shareFileCache, shareOrDownloadFile } = m);
 });
 import { bindMobileThemePicker } from './mobile-theme-picker.js';
+let drawerMorphModule;
+const loadDrawerMorph = () => drawerMorphModule ||= import('./mobile-drawer-search-morph.js').catch(error => { drawerMorphModule = null; throw error; });
 import { resolveDrawerActiveRun } from './mobile-turn-lifecycle.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl, attachMobileSessionToProject, detachMobileSessionFromProject } from './mobile-api.js';
@@ -330,6 +332,7 @@ let _scrimEl = null;
 let _drawerSearch = '';
 let _drawerSearchTimer = null;
 let _drawerSearchSeq = 0;
+let _drawerSearchMorph = null;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _shellActiveTab = null;
@@ -1948,6 +1951,17 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState(_drawerCallbacks);
   });
+  _drawerSearchMorph?.dispose?.();
+  _drawerSearchMorph = null;
+  const morphDrawer = _drawerEl;
+  const morphInput = morphDrawer.querySelector('#pm-drawer-search-input');
+  const prepareMorph = () => loadDrawerMorph().then(({ attachDrawerSearchMorph }) => {
+    if (_drawerEl !== morphDrawer || !morphInput?.isConnected || _drawerSearchMorph) return;
+    _drawerSearchMorph = attachDrawerSearchMorph(morphDrawer);
+    if (document.activeElement === morphInput) morphInput.dispatchEvent(new Event('focus'));
+  }).catch(() => {});
+  morphInput?.addEventListener('pointerdown', prepareMorph, { once: true });
+  morphInput?.addEventListener('focus', prepareMorph, { once: true });
   _applyMobileTheme(_getTheme());
   // Capture live callbacks so refreshMobileDrawerSessions() and pull-to-refresh
   // can re-render the session list later (e.g. when the drawer is reopened after
@@ -3391,6 +3405,9 @@ export function closeDrawer() {
     return;
   }
   document.body.classList.remove('pm-mobile-drawer-open');
+  const drawerSearchInput = _drawerEl.querySelector('#pm-drawer-search-input');
+  if (drawerSearchInput && document.activeElement === drawerSearchInput) drawerSearchInput.blur();
+  _drawerSearchMorph?.deactivate?.();
   _drawerEl.classList.remove('open');
   _scrimEl.classList.remove('open');
   _stopDrawerGatewayHeartbeat();
