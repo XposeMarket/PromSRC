@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "45bc68b0278c9383",
-  "sourceDigest": "45bc68b0278c9383bbf5950a1706e46f6920f8c5018a4dc565b3776a0f3fcbc7",
+  "buildId": "418781d48e6244d9",
+  "sourceDigest": "418781d48e6244d94e8d38d4ed7a8289da3d34ce3c12a8ac264b8003c9e819e9",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -26,7 +26,7 @@
     "mobile": {
       "html": "/mobile.html",
       "js": "/build/entries/mobile-PPRW74ZK.js",
-      "css": "/build/styles/mobile-WELQPP2B.css",
+      "css": "/build/styles/mobile-BJNWZI5N.css",
       "modulePreloads": []
     }
   },
@@ -168,15 +168,15 @@
         "/build/inline/mobile-inline-01-606d0eb0eaa3.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
-        "/build/styles/mobile-WELQPP2B.css"
+        "/build/styles/mobile-BJNWZI5N.css"
       ],
       "files": 23,
-      "bytes": 1065821,
-      "gzipBytes": 248583,
+      "bytes": 1066042,
+      "gzipBytes": 248617,
       "jsBytes": 501617,
       "jsGzipBytes": 158622,
-      "cssBytes": 564204,
-      "cssGzipBytes": 89961
+      "cssBytes": 564425,
+      "cssGzipBytes": 89995
     }
   },
   "assets": [
@@ -4762,10 +4762,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-WELQPP2B.css",
-      "bytes": 564204,
-      "gzipBytes": 89961,
-      "sha256": "69073544e403207d9a3648ba5df2629462710d50f94e3a126bf83d7a39965e42",
+      "path": "/build/styles/mobile-BJNWZI5N.css",
+      "bytes": 564425,
+      "gzipBytes": 89995,
+      "sha256": "227dce3c0fa65f46a92070f102017bb94f379d65aae8b3875b252a1419bea47c",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }
