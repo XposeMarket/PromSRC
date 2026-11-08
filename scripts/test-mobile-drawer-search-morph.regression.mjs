@@ -116,7 +116,7 @@ const ORIGIN = 'http://drawer-morph.test';
 const cssUrl = ORIGIN + '/web-ui/src/styles/mobile.css';
 const modHttp = ORIGIN + '/web-ui/src/mobile/mobile-drawer-search-morph.js';
 const html = `<!doctype html><html data-theme="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="${cssUrl}"><style>html,body{margin:0;height:100%;background:radial-gradient(circle at 30% 20%,#3a2a6a,#0d0f18 70%)}
+<link rel="stylesheet" href="${cssUrl}"><link rel="stylesheet" href="${ORIGIN}/web-ui/src/styles/mobile-drawer-search-morph.css"><style>html,body{margin:0;height:100%;background:radial-gradient(circle at 30% 20%,#3a2a6a,#0d0f18 70%)}
 .list{padding:70px 22px;color:#ddd;font:15px system-ui}.list div{padding:13px 0;border-bottom:1px solid #ffffff14}
 .kb{position:fixed;left:0;right:0;bottom:0;background:#2b2d33;color:#999;font:13px system-ui;display:flex;align-items:center;justify-content:center;z-index:99}</style></head>
 <body class="pm-mobile-active"><aside class="pm-drawer open" style="position:fixed;inset:0;transform:none;width:100%;max-width:none">
