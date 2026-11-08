@@ -20,6 +20,8 @@ Mobile edit composer Cancel/Send used `.pm-msg-action`, whose late mobile overri
 
 Test: node scripts/test-mobile-message-edit-ui.mjs
 
+Parity: single-surface: desktop uses its own `.msg-edit-composer` (web-ui/src/pages/ChatPage.js:7569, components.css:1055) and has no body-level long-press portal; the bug was the mobile-only `body.pm-mobile-active .pm-msg-action` 30px override.
+
 ## Risks
 - Only mobile edit composer + long-press portal styling; desktop untouched (all selectors scoped to body.pm-mobile-active / mobile renderer).
 - Notice via edit composer layout regressions on phone; rollback = revert commit.
