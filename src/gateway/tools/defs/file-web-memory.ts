@@ -2234,8 +2234,9 @@ export function getFileWebMemoryTools(): any[] {
           required: ['action'],
           additionalProperties: false,
           properties: {
-            action: { type: 'string', enum: ['write', 'update', 'delete', 'read', 'search', 'recall', 'ideas', 'related', 'open'], description: 'Memory operation. open reopens original saved evidence using reference_id from search. Images are delivered to vision models; stored analysis is labelled separately.' },
-            reference_id: { type: 'string', description: 'For open: stable ref_ ID returned by memory search. Never a path or URL.' },
+            action: { type: 'string', enum: ['write', 'update', 'delete', 'read', 'search', 'recall', 'ideas', 'related', 'open', 'select', 'unselect'], description: 'Memory operation. Team select/unselect explicitly adds/removes evidence from durable exact-version task/session handoffs; never creates a grant. Use collection_id to freeze current granted members, or reference_id. content optionally explains the task purpose. open reopens original saved evidence using reference_id from search. Images are delivered to vision models; stored analysis is labelled separately.' },
+            reference_id: { type: 'string', description: 'For open/select/unselect: stable reference ID returned by memory search. Never a path or URL.' },
+            collection_id: { type: 'string', description: 'For team select/unselect: explicitly shared collection ID. Selection freezes current versions; new members do not silently join an existing task.' },
             version_id: { type: 'string', description: 'For open: optional exact saved version ID.' },
             offset: { type: 'integer', minimum: 0, description: 'For open: frame offset, default 0. limit defaults 6, maximum 12 images per open.' },
             file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/update/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },

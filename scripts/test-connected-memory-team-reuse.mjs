@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { ReferenceStore, readReferencePins } = require('../src/gateway/resources/reference-store.ts');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'reference-team-')), workspace=path.join(root,'workspace');
+let store;
+try {
+  store=new ReferenceStore(path.join(root,'resources'),workspace);
+  const seed=(id)=>{const r={id,operationId:`op-${id}`,workspace:store.workspace,resourceId:`res-${id}`,versionId:`v-${id}`,title:id,status:'saved',createdAt:new Date().toISOString()};store.prepare(r,[r]);store.complete(r.operationId);return r;};
+  seed('public-example');seed('private');
+  const sharing=store.sharing();
+  assert.equal(sharing.authorized('team-a','private'),undefined);
+  const collection=sharing.saveCollection({title:'UI examples',purpose:'Only this task'});
+  sharing.setMember(collection.id,'public-example',true);
+  const grant=sharing.grant('team-a','collection',collection.id);
+  assert.equal(sharing.grant('team-a','collection',collection.id).id,grant.id);
+  assert.equal(sharing.authorized('team-b','public-example'),undefined);
+  assert.throws(()=>sharing.setMember(collection.id,'private',true),/confirmation/);
+  assert.equal(sharing.authorized('team-a','private'),undefined);
+  const selected=sharing.select('team-a','public-example','Match spacing');
+  sharing.retainTask('task-1','team-a',[selected]);
+  store.close();store=new ReferenceStore(path.join(root,'resources'),workspace);
+  store.sharing().validate('team-a',[selected]);
+  assert.equal(store.sharing().collections()[0].purpose,'Only this task');
+  store.sharing().revoke(grant.id);
+  assert.throws(()=>store.sharing().validate('team-a',[selected]),/revoked/);
+  store.remove('public-example');
+  assert.ok(readReferencePins(path.join(root,'resources')).has('v-public-example'));
+  store.sharing().releaseTask('task-1');
+  assert.ok(!readReferencePins(path.join(root,'resources')).has('v-public-example'));
+  const reader=new ReferenceStore(path.join(root,'resources'),workspace,{readOnly:true});
+  assert.equal(reader.writable,false);assert.throws(()=>reader.sharing().grant('team-b','reference','private'),/writer|read.only/i);reader.close();
+  console.log('connected-memory-team-reuse: storage/grants/restart/revocation/pin-order/read-only PASS');
+} finally {store?.close();fs.rmSync(root,{recursive:true,force:true});}

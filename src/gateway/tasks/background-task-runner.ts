@@ -1,3 +1,5 @@
+import { taskReferenceChat } from '../resources/reference-team-runtime';
+
 /**
  * background-task-runner.ts
  *
@@ -1682,7 +1684,7 @@ export class BackgroundTaskRunner {
           });
         }
         const rawAttemptResult = await this._withRoundTimeout(
-          this.handleChat(
+          taskReferenceChat(task, this.handleChat.bind(this))(
             prompt,
             sessionId,
             wrappedSendSSE,
@@ -3220,7 +3222,7 @@ export class BackgroundTaskRunner {
     try {
       task.verificationStatus = 'running';
       saveTask(task);
-      const verifyResult = await this.handleChat(
+      const verifyResult = await taskReferenceChat(task, this.handleChat.bind(this))(
         verifyPrompt, verifySessionId, noOp,
         undefined, undefined, undefined,
         undefined, 'background_task',

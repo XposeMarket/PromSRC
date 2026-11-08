@@ -1,3 +1,5 @@
+import { teamReferenceChat } from '../resources/reference-team-runtime';
+
 import fs from 'fs';
 import path from 'path';
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config';
@@ -898,7 +900,7 @@ async function runTeamMemberRoomTurnInternal(
 
     const result = await runWithWorkspace(
       memberExecutionRoot(teamId),
-      () => deps.handleChat(
+      () => teamReferenceChat(teamId, undefined, deps.handleChat)(
       String(prompt || '').trim(),
       sessionId,
       trackingSse,
@@ -1225,7 +1227,7 @@ async function runTeamMemberDirectTurnInternal(
 
     const result = await runWithWorkspace(
       memberExecutionRoot(teamId),
-      () => deps.handleChat(
+      () => teamReferenceChat(teamId, undefined, deps.handleChat)(
       prompt,
       thread.sessionId,
       trackingSse,

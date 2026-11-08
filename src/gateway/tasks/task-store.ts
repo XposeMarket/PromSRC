@@ -261,6 +261,7 @@ export interface ProposalExecutionState {
 }
 
 export interface TaskRecord {
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
   id: string;
   title: string;
   prompt: string;                    // canonical immutable assignment envelope
@@ -760,14 +761,39 @@ function saveIndex(index: TaskIndex): void {
  * target. A crash mid-write can no longer leave a truncated task record.
  * Retries transient Windows sharing errors like saveIndex does.
  */
-function writeFileAtomic(target: string, payload: string): void {
+/** Flush the directory entry after rename. Only the platform's "directory handles cannot be fsynced" errors are
+ * tolerated (Windows: EISDIR/EPERM/EACCES on open/fsync of a directory, where NTFS rename is metadata-journaled).
+ * Real I/O errors propagate, so saveTask throws before releasing any reference pins. */
+function syncDirectoryForDurability(dir: string): void {
+  let dfd: number | undefined;
+  try {
+    dfd = fs.openSync(dir, 'r');
+    fs.fsyncSync(dfd);
+  } catch (err: any) {
+    const code = String(err?.code || '');
+    const unsupported = process.platform === 'win32' ? ['EISDIR', 'EPERM', 'EACCES'].includes(code) : ['EINVAL', 'ENOTSUP', 'EOPNOTSUPP'].includes(code);
+    if (!unsupported) throw err;
+  } finally {
+    if (dfd !== undefined) { try { fs.closeSync(dfd); } catch { /* already reported via fsync */ } }
+  }
+}
+
+function writeFileAtomic(target: string, payload: string, durable = false): void {
   const dir = path.dirname(target);
   let lastError: any;
   for (let attempt = 0; attempt < 5; attempt++) {
     const tmp = path.join(dir, `.${path.basename(target)}.${process.pid}.${Date.now()}.${taskIndexWriteCounter++}.tmp`);
     try {
-      fs.writeFileSync(tmp, payload, 'utf-8');
+      if (durable) {
+        // Flush before rename so a crash cannot keep a later side effect (pin release) while losing this record.
+        const fd = fs.openSync(tmp, 'w');
+        // writeFileSync(fd) loops until every byte is written (a single writeSync may short-write).
+        try { fs.writeFileSync(fd, payload, 'utf-8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      } else {
+        fs.writeFileSync(tmp, payload, 'utf-8');
+      }
       fs.renameSync(tmp, target);
+      if (durable) syncDirectoryForDurability(dir);
       return;
     } catch (err: any) {
       lastError = err;
@@ -1175,6 +1201,7 @@ export function createTask(params: {
   originatingSessionId?: string;
   suppressOriginDelivery?: boolean;
   voiceDispatch?: TaskRecord['voiceDispatch'];
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
 }): TaskRecord {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -1198,6 +1225,7 @@ export function createTask(params: {
     agentWorkspace: params.agentWorkspace,
     agentAllowedWorkPaths: params.agentAllowedWorkPaths,
     teamSubagent: params.teamSubagent,
+    referenceBindings: params.referenceBindings,
     // Schedule linkage
     scheduleId: params.scheduleId,
     // Executor model override
@@ -1247,19 +1275,30 @@ export function loadTask(id: string): TaskRecord | null {
   if (!fs.existsSync(p)) return null;
   try {
     const task = JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskRecord;
-    return { ...task, id: taskId, continuationHistory: normalizeContinuationHistory(task.continuationHistory) };
+    const { normalizeReferenceBindings } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
+    return { ...task, id: taskId, referenceBindings: normalizeReferenceBindings(task.referenceBindings), continuationHistory: normalizeContinuationHistory(task.continuationHistory) };
   } catch {
     return null;
   }
 }
 
-export function saveTask(task: TaskRecord): void {
+export function saveTask(task: TaskRecord, options: { referenceSelectionWrite?: boolean } = {}): void {
+  // Runner/checkpoint snapshots predate tool selections. Only the selection path may replace this field.
+  if (!options.referenceSelectionWrite && fs.existsSync(taskFilePath(task.id))) {
+    const persisted = JSON.parse(fs.readFileSync(taskFilePath(task.id), 'utf8')) as TaskRecord;
+    task.referenceBindings = persisted.referenceBindings;
+  }
   // Trim journal to last 500 entries to prevent unbounded growth
   if (task.journal.length > 500) {
     task.journal = task.journal.slice(-500);
   }
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
-  writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2));
+  const { retainTaskReferences, releaseTerminalTaskReferences, taskMayHoldReferencePins } = require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime');
+  retainTaskReferences(task);
+  // Only team tasks that can hold pins pay for a durable write before release; ordinary tasks keep the fast path.
+  const releasesPins = taskMayHoldReferencePins(task) && ['complete', 'failed', 'cancelled'].includes(task.status);
+  writeFileAtomic(taskFilePath(task.id), JSON.stringify(task, null, 2), releasesPins);
+  releaseTerminalTaskReferences(task);
   upsertTaskSummary(task);
   // Keep the durable journal searchable from the task's originating chat. A
   // dynamic import avoids coupling the task persistence module to the chat
@@ -1574,6 +1613,7 @@ export function deleteTask(id: string): boolean {
     }
   }
 
+  if (!fs.existsSync(p)) { try { (require('../resources/reference-team-runtime') as typeof import('../resources/reference-team-runtime')).releaseDeletedTaskReferences(taskId); } catch { /* keep pins conservatively if metadata is unavailable */ } }
   // Always remove from index to prevent stale list entries.
   if (inIndex) {
     removeFromIndex(taskId);

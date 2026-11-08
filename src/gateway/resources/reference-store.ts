@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { createRequire } from 'module';
 import { resolveConfinedStoragePath } from '../storage/storage-paths';
+import { ReferenceSharingStore, migrateReferenceSharing } from './reference-sharing';
 
 /** Canonical library metadata, never a rebuildable search index. Stage A only. */
 export const AUTOMATIC_REFERENCE_CAPTURE_READY = false;
@@ -83,7 +84,7 @@ export class ReferenceStore {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = FULL');
         const version = this.db.pragma('user_version', { simple: true });
-        if (version > 2) throw new Error('Reference database needs a newer Prometheus version');
+        if (version > 3) throw new Error('Reference database needs a newer Prometheus version');
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS saved_references (
             id TEXT NOT NULL, operation_id TEXT NOT NULL, workspace TEXT NOT NULL,
@@ -94,8 +95,8 @@ export class ReferenceStore {
             version_id TEXT NOT NULL, holder_kind TEXT NOT NULL, holder_id TEXT NOT NULL,
             PRIMARY KEY(version_id, holder_kind, holder_id));
           CREATE TABLE IF NOT EXISTS reference_settings (workspace TEXT PRIMARY KEY, data TEXT NOT NULL);
-          PRAGMA user_version = 2;
         `);
+        this.db.transaction(() => { migrateReferenceSharing(this.db); this.db.pragma('user_version = 3'); })();
       }
     } catch (error) { this.db?.close(); this.releaseWriter(); throw error; }
   }
@@ -275,6 +276,8 @@ export class ReferenceStore {
       this.db.prepare('DELETE FROM capture_operations WHERE workspace=? AND id=? AND state=?').run(this.workspace, ref.operationId, 'complete');
     })();
   }
+
+  sharing(): ReferenceSharingStore { return new ReferenceSharingStore(this.db, this.workspace, () => this.assertWriter(), id => this.get(id)); }
 
   pins(): Set<string> { return new Set(this.db.prepare('SELECT DISTINCT version_id FROM version_pins').all().map((row: any) => row.version_id)); }
 }

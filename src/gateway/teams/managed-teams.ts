@@ -103,6 +103,7 @@ export interface ManagerNote {
 }
 
 export interface TeamContextReference {
+  referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[];
   id: string;
   title: string;
   content: string;
@@ -630,7 +631,9 @@ function normalizeContextReference(raw: any): TeamContextReference | null {
   if (!raw || typeof raw !== 'object') return null;
   const title = String(raw.title || '').trim().slice(0, 120);
   const content = String(raw.content || '').trim().slice(0, 8000);
-  if (!title || !content) return null;
+  let referenceBindings: import('../resources/reference-sharing').SelectedReferenceBinding[];
+  try { referenceBindings = require('../resources/reference-team-runtime').normalizeReferenceBindings(raw.referenceBindings); } catch { return null; }
+  if (!title || (!content && !referenceBindings.length)) return null;
   const createdAt = Number(raw.createdAt) || Date.now();
   const updatedAt = Number(raw.updatedAt) || createdAt;
   return {
@@ -639,6 +642,7 @@ function normalizeContextReference(raw: any): TeamContextReference | null {
     content,
     createdAt,
     updatedAt,
+    referenceBindings,
     createdBy: String(raw.createdBy || '').trim() || undefined,
     updatedBy: String(raw.updatedBy || '').trim() || undefined,
   };
@@ -1652,6 +1656,7 @@ export function deleteManagedTeam(id: string): boolean {
   store.teams = store.teams.filter(t => t.id !== id);
   if (store.teams.length === before) return false;
   saveManagedTeamStore(store);
+  try { require('../resources/reference-service').getReferenceService(getConfig().getWorkspacePath()).metadata.sharing().removeTeam(id); } catch { /* inaccessible grants remain fail-closed if library is read-only */ }
   return true;
 }
 
@@ -2407,7 +2412,7 @@ export function listTeamContextReferences(teamId: string): TeamContextReference[
 
 export function addTeamContextReference(
   teamId: string,
-  input: { title: string; content: string; actor?: string },
+  input: { title: string; content: string; actor?: string; referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[] },
 ): TeamContextReference | null {
   invalidateCache();
   const team = getManagedTeam(teamId);
@@ -2415,7 +2420,9 @@ export function addTeamContextReference(
   const now = Date.now();
   const title = String(input?.title || '').trim().slice(0, 120);
   const content = String(input?.content || '').trim().slice(0, 8000);
-  if (!title || !content) return null;
+  let referenceBindings: TeamContextReference['referenceBindings'];
+  try {referenceBindings=require('../resources/reference-team-runtime').normalizeReferenceBindings(input.referenceBindings);}catch{return null;}
+  if (!title || (!content && !referenceBindings?.length)) return null;
   const actor = String(input?.actor || '').trim() || undefined;
   const next: TeamContextReference = {
     id: `ctx_${now.toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
@@ -2423,6 +2430,7 @@ export function addTeamContextReference(
     content,
     createdAt: now,
     updatedAt: now,
+    referenceBindings,
     createdBy: actor,
     updatedBy: actor,
   };
@@ -2435,7 +2443,7 @@ export function addTeamContextReference(
 export function updateTeamContextReference(
   teamId: string,
   refId: string,
-  patch: { title?: string; content?: string; actor?: string },
+  patch: { title?: string; content?: string; actor?: string; referenceBindings?: import('../resources/reference-sharing').SelectedReferenceBinding[] },
 ): TeamContextReference | null {
   invalidateCache();
   const team = getManagedTeam(teamId);
@@ -2446,12 +2454,15 @@ export function updateTeamContextReference(
   const existing = refs[idx];
   const title = patch.title !== undefined ? String(patch.title || '').trim().slice(0, 120) : existing.title;
   const content = patch.content !== undefined ? String(patch.content || '').trim().slice(0, 8000) : existing.content;
-  if (!title || !content) return null;
+  let referenceBindings: TeamContextReference['referenceBindings'];
+  try {referenceBindings=require('../resources/reference-team-runtime').normalizeReferenceBindings(patch.referenceBindings === undefined ? existing.referenceBindings : patch.referenceBindings);}catch{return null;}
+  if (!title || (!content && !referenceBindings?.length)) return null;
   refs[idx] = {
     ...existing,
     title,
     content,
     updatedAt: Date.now(),
+    referenceBindings,
     updatedBy: String(patch.actor || '').trim() || existing.updatedBy,
   };
   team.contextReferences = refs;

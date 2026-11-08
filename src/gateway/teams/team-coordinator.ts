@@ -1,3 +1,5 @@
+import { teamReferenceChat } from '../resources/reference-team-runtime';
+
 /**
  * team-coordinator.ts — Distinct Managed-Team Coordinator Agent
  *
@@ -838,7 +840,7 @@ export async function runCoordinatorConversation(
       };
 
 	      const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
-	      const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
+	      const result = await withTeamManagerWorkspaceScope(teamId, () => teamReferenceChat(teamId, undefined, _deps!.handleChat)(
 	        currentMessage,
 	        sessionId,
 	        trackingSse,
@@ -1139,7 +1141,7 @@ export async function runCoordinatorConversationDetailed(
         };
 
         const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
-        const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
+        const result = await withTeamManagerWorkspaceScope(teamId, () => teamReferenceChat(teamId, undefined, _deps!.handleChat)(
           currentMessage,
           sessionId,
           trackingSse,
@@ -1431,7 +1433,7 @@ export async function runCoordinatorReview(
       broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, event, data);
     };
     const managerRouting = prepareTeamManagerRuntime(team, sessionId);
-    const result = await withTeamManagerWorkspaceScope(teamId, () => _deps!.handleChat(
+    const result = await withTeamManagerWorkspaceScope(teamId, () => teamReferenceChat(teamId, undefined, _deps!.handleChat)(
       reviewPrompt,
       sessionId,
       trackingSse,
