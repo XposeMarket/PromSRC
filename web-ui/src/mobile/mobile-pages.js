@@ -7889,15 +7889,22 @@ function _renderMobileMessageActions(m, index) {
 }
 
 function _renderMobileUserEditComposer(m, index, attachmentHtml = '') {
-  const value = escapeHtml(String(m?._editingDraft ?? m?.body?.text ?? m?.content ?? ''));
+  const rawValue = String(m?._editingDraft ?? m?.body?.text ?? m?.content ?? '');
+  const value = escapeHtml(rawValue);
+  // Size the textarea to its content (3-8 rows, ~34 chars per wrapped row);
+  // CSS caps the height and the inline oninput grows it while typing.
+  const estRows = rawValue.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 34)), 0);
+  const rows = Math.min(8, Math.max(3, estRows));
   // Only stop propagation for non-action targets (e.g. tapping the textarea) so
   // the Cancel/Send buttons still reach the delegated threadEl click handler.
+  // Buttons use a dedicated class: the compact .pm-msg-action icon sizing
+  // (30px wide on mobile) squeezed the text labels into circles.
   return `<div class="pm-mobile-edit-composer" data-msg-edit-index="${index}" onclick="if(!event.target.closest('[data-msg-action]'))event.stopPropagation()">
-    <textarea class="pm-mobile-edit-input" rows="4" data-msg-edit-input="${index}">${value}</textarea>
+    <textarea class="pm-mobile-edit-input" rows="${rows}" data-msg-edit-input="${index}" oninput="this.style.height='auto';this.style.height=this.scrollHeight+2+'px'">${value}</textarea>
     ${attachmentHtml}
     <div class="pm-mobile-edit-actions">
-      <button type="button" class="pm-msg-action" data-msg-action="cancel-edit" data-msg-index="${index}">Cancel</button>
-      <button type="button" class="pm-msg-action primary" data-msg-action="submit-edit" data-msg-index="${index}">Send</button>
+      <button type="button" class="pm-mobile-edit-btn" data-msg-action="cancel-edit" data-msg-index="${index}">Cancel</button>
+      <button type="button" class="pm-mobile-edit-btn primary" data-msg-action="submit-edit" data-msg-index="${index}">Send</button>
     </div>
   </div>`;
 }

@@ -128,6 +128,8 @@ The router stores owner promises/ready state so revisiting a route can reuse loa
 If step 5 succeeds but step 6 fails, inspect host/origin and the shared `getDeviceToken()` path before issuing another pairing claim. Duplicate claims can make troubleshooting harder and do not repair a server auth mismatch.
 
 ## PWA and service worker checks
+- `PM_PWA_VERSION` must be the same in `web-ui/index.html` and `web-ui/src/mobile/mobile-pwa.js` (enforced by `scripts/test-mobile-settings-first-paint.mjs`). A mismatch made the mobile Settings handoff (`/?desktop=1&settings=1&settingsReturn=…`) register a different SW URL. Its `clients.claim()` fired `controllerchange` and reloaded the page: the "freezes then refreshes" first Settings open. The reload is skipped only for an uncontrolled handoff page; every other page keeps the update-recovery reload.
+- Handoff first paint: on phones the handoff modal stays hidden until the inline shim has run the dependency-free `settings-mobile-nav.js` (`html.settings-nav-ready`, with a 4 s safety reveal), so the desktop tab strip never flashes. The shim drops an open that is superseded by a close or reopen, and a tab picked during the controller load wins over the captured tab.
 - Verify the manifest resolves from the public origin with the expected content type.
 - Confirm install identity (name/short name/icons/theme) matches the current branded UI.
 - Test start URL and scope on the live mobile origin, not a desktop dev port by assumption.
@@ -222,3 +224,11 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+- Integration correction: mobile-message-edit styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.
+### Drawer search morph (feat/mobile-search-morph, 2026-11-07)
+- When you focus the hamburger drawer's bottom-left search pill, it widens to 12px side margins (the same as the composer), fades out the theme and new-chat buttons, and moves up above the keyboard. It stays the same `#pm-drawer-search-input`, so focus, value and search behavior don't change. Helper: `web-ui/src/mobile/mobile-drawer-search-morph.js` (`attachDrawerSearchMorph`), wired in `mobile-shell.js`. `closeDrawer()` blurs the input and deactivates the morph. CSS is the final block in `mobile.css` (`.pm-drawer-search-morph` and `--pm-drawer-search-kb`).
+- The keyboard inset uses the composer's math (layout height minus the bottom of `visualViewport`), but the helper doesn't depend on the composer controller. It never touches `pm-keyboard-open` or the tab bar. Viewport and window listeners exist only while the field has focus. Escape inside the field collapses it without closing the drawer. When `visualViewport` is missing, the field still widens but doesn't lift. Reduced motion turns off the transitions.
+- Regression: `node scripts/test-mobile-drawer-search-morph.regression.mjs`. It checks the fake-DOM contract plus Playwright geometry with real `mobile.css`. Add `--shoot <dir>` to save screenshots.
+
+- Integration correction: mobile-drawer-search-morph styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.
