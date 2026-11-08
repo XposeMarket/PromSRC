@@ -1,45 +1,25 @@
-# fix(mobile): readable message edit composer + sans long-press preview
-
-Tier: 1 (UI restore, outside the 8 sensitive areas)
-Surface: single:mobile
+# SPEC: Focused inline Sources, products and images
+Surface: both
+Parity: fixed both: shared cards runtime; Chromium desktop and WebKit mobile tests/screenshots, light/dark.
+Test: node scripts/test-focused-carousels.mjs
+Size justification: Shared component plus cross-surface browser regression; no backend changes.
 
 ## Problem
-Mobile edit composer Cancel/Send used `.pm-msg-action`, whose late mobile override (`body.pm-mobile-active .pm-msg-action { width:30px }`) squeezed the text labels into circles; the textarea was a fixed cramped 4 rows. The long-press clone/popover are appended to `<body>`, outside `.pm-app` (which owns `font-family`), so the preview fell back to serif.
-
-## Fix
-- Dedicated `.pm-mobile-edit-btn` (44px min height, natural padded width, nowrap, chat font, primary = orange).
-- Textarea: content-estimated rows (3-8), oninput auto-grow, bounded `max-height: min(45dvh,320px)` with scroll, 16px font (no iOS zoom).
-- Final-authority font rule for body-level long-press portal nodes.
-- Draft/edit/send/cancel semantics unchanged (same data-msg-action / data-msg-edit-input hooks).
-
+User wants one focused inline card with neighboring peeks and swipe-through navigation, like the theme selector rather than equally weighted strips/grids. Applies to Sources, product and image carousels. Tier 1 presentation only; primary model builds and reviews directly.
+## Existing code
+cards/card-runtime.js owns shared hydration. Desktop ChatPage.js and mobile/mobile-pages.js build sources/products; cards-data.js builds galleries. mobile-theme-picker.css demonstrates centered scroll snap.
 ## Chosen approach
-Scoped mobile-only CSS final-authority block plus a dedicated button class in the renderer (no change to the shared `.pm-msg-action` icon sizing, chat engine, storage or permissions).
-
+Shared focused-carousel helper enhances existing markup with native horizontal center snap, focused scale/opacity, position and previous/next controls. Preserves content, source/product links, gallery lightbox and single-item behavior. No parser, storage, permission or backend changes. Native scroll avoids custom touch gesture interception.
 ## Acceptance
-- Cancel/Send are pill text buttons >=44px tall with natural width at 320 and 390px viewports.
-- Textarea grows with content and caps at min(45dvh,320px) with internal scroll; short drafts stay compact.
-- Long-press lifted clone and popover render in the system sans font.
-- Cancel/Send/draft hooks unchanged; regression test passes.
-
+Three carousel types center first/middle/last items on desktop/mobile; controls and keyboard work; no page overflow. Links and lightboxes survive; reduced motion honored; no controls for one/zero items. Inserted cards hydrate and removed cards release ResizeObservers. No theme selector changes, popovers or changes to user messages/citation pills.
+## Out of scope
+Theme selector, other cards, backend data, memory, permissions, publishing, merge/deployment.
 ## Files
-- web-ui/src/mobile/mobile-chat-page-runtime.js
-- web-ui/src/mobile/mobile-chat-message-renderer.js
-- scripts/test-mobile-composer-edit.mjs
-- web-ui/src/mobile/mobile-pages.js
-- web-ui/src/styles/mobile.css
-- scripts/test-mobile-message-edit-ui.mjs
-- .pr/SPEC.md
-
-Test: node scripts/test-mobile-message-edit-ui.mjs
-
-Parity: single-surface: desktop uses its own `.msg-edit-composer` (web-ui/src/pages/ChatPage.js:7569, components.css:1055) and has no body-level long-press portal; the bug was the mobile-only `body.pm-mobile-active .pm-msg-action` 30px override.
-
+- web-ui/src/cards/focused-carousel.js
+- web-ui/src/cards/card-runtime.js
+- scripts/test-focused-carousels.mjs
+- generated/public-web-ui/*
+## Scope notes
+Runtime self/17,18,23 read; self/23 and surface docs updated in same turn (outside repo).
 ## Risks
-- Only mobile edit composer + long-press portal styling; desktop untouched (all selectors scoped to body.pm-mobile-active / mobile renderer).
-- Notice via edit composer layout regressions on phone; rollback = revert commit.
-
-## Composer edit revision (Raul Nov 7)
-Edit now borrows the normal bottom composer temporarily. Original user bubble remains visible, greyed out; Cancel restores prior draft. Submit routes to existing edit/rerun handler before question/slash/send handling. Edit text is transient and does not overwrite the ordinary saved composer draft. No backend/storage format change. Desktop intentionally retains its existing editor; request is mobile-only.
-Additional files: web-ui/src/mobile/mobile-chat-page-runtime.js, web-ui/src/mobile/mobile-chat-message-renderer.js, scripts/test-mobile-composer-edit.mjs.
-Test: node scripts/test-mobile-composer-edit.mjs
-Acceptance: same composer input, dimmed original bubble, visible Cancel, draft restored, no inline editor, existing rerun retained.
+CSS cascade and dynamic DOM insertion. Regression uses actual renderer declarations/styles on Chromium and WebKit. Rollback removes helper/runtime integration; no migrations.
