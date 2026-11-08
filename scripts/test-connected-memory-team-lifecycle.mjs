@@ -95,6 +95,28 @@ kase('8 ordinary non-team terminal task skips reference DB and durable write', (
   fsMod.fsyncSync=fd=>{order.push('fsync');return origFsync(fd);};proto.releaseTask=function(id){order.push('release');return origRel.call(this,id);};
   try{tasks.updateTaskStatus(t.id,'complete');}finally{fsMod.fsyncSync=origFsync;proto.releaseTask=origRel;}
   assert.deepEqual(order,[],'non-team task touched reference pins or durable write: '+order.join(','));
+  // Explicitly persisted empty array on an ordinary task must also keep the fast path.
+  const t2=tasks.createTask({title:'c8-plain-empty',prompt:'p',sessionId:'c8b',channel:'web',referenceBindings:[]});
+  assert.deepEqual(tasks.loadTask(t2.id).referenceBindings,[],'precondition: persisted [] on ordinary task');
+  const order2=[];fsMod.fsyncSync=fd=>{order2.push('fsync');return origFsync(fd);};proto.releaseTask=function(id){order2.push('release');return origRel.call(this,id);};
+  try{tasks.updateTaskStatus(t2.id,'failed');}finally{fsMod.fsyncSync=origFsync;proto.releaseTask=origRel;}
+  assert.deepEqual(order2,[],'ordinary task with persisted [] touched reference pins or durable write: '+order2.join(','));
+});
+
+kase('9 real directory-sync I/O error propagates and retains pins', ()=>{
+  const team=mkTeam('C9');const a=service.saveText({operationId:'c9-a',title:'C9 A',content:'A9 bytes'});
+  sharing().grant(team.id,'reference',a.id);const t=mkTask(team,'c9');
+  teamRun(team.id,t.id,'c9',()=>rt.selectTeamEvidence('c9',{referenceId:a.id,purpose:'t9'}));
+  const before=holderRows(t.id).length;assert.ok(before>0,'precondition: pins held');
+  // Platform-independent: directory opens get a real stand-in fd, and fsync on that fd fails with a genuine I/O error.
+  const fsMod=require('fs');const origFsync=fsMod.fsyncSync,origOpen=fsMod.openSync;let dirFd=null;
+  const sentinel=path.join(root,'c9-sentinel');fs.writeFileSync(sentinel,'x');
+  fsMod.openSync=(p,...rest)=>{let isDir=false;try{isDir=fs.statSync(p).isDirectory();}catch{}if(isDir){dirFd=origOpen(sentinel,'r');return dirFd;}return origOpen(p,...rest);};
+  fsMod.fsyncSync=fd=>{if(fd===dirFd){const e=new Error('simulated EIO');e.code='EIO';throw e;}return origFsync(fd);};
+  let threw=false;try{tasks.updateTaskStatus(t.id,'complete');}catch{threw=true;}finally{fsMod.fsyncSync=origFsync;fsMod.openSync=origOpen;}
+  assert.ok(dirFd!==null,'directory sync path not exercised');
+  assert.ok(threw,'EIO on directory sync was swallowed');
+  assert.equal(holderRows(t.id).length,before,'pins released despite failed durability checkpoint');
 });
 
 { const name='7 trusted team turn cannot read owner memory via related';

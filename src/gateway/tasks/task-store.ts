@@ -761,6 +761,23 @@ function saveIndex(index: TaskIndex): void {
  * target. A crash mid-write can no longer leave a truncated task record.
  * Retries transient Windows sharing errors like saveIndex does.
  */
+/** Flush the directory entry after rename. Only the platform's "directory handles cannot be fsynced" errors are
+ * tolerated (Windows: EISDIR/EPERM/EACCES on open/fsync of a directory, where NTFS rename is metadata-journaled).
+ * Real I/O errors propagate, so saveTask throws before releasing any reference pins. */
+function syncDirectoryForDurability(dir: string): void {
+  let dfd: number | undefined;
+  try {
+    dfd = fs.openSync(dir, 'r');
+    fs.fsyncSync(dfd);
+  } catch (err: any) {
+    const code = String(err?.code || '');
+    const unsupported = process.platform === 'win32' ? ['EISDIR', 'EPERM', 'EACCES'].includes(code) : ['EINVAL', 'ENOTSUP', 'EOPNOTSUPP'].includes(code);
+    if (!unsupported) throw err;
+  } finally {
+    if (dfd !== undefined) { try { fs.closeSync(dfd); } catch { /* already reported via fsync */ } }
+  }
+}
+
 function writeFileAtomic(target: string, payload: string, durable = false): void {
   const dir = path.dirname(target);
   let lastError: any;
@@ -770,12 +787,13 @@ function writeFileAtomic(target: string, payload: string, durable = false): void
       if (durable) {
         // Flush before rename so a crash cannot keep a later side effect (pin release) while losing this record.
         const fd = fs.openSync(tmp, 'w');
-        try { fs.writeSync(fd, payload, null, 'utf-8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        // writeFileSync(fd) loops until every byte is written (a single writeSync may short-write).
+        try { fs.writeFileSync(fd, payload, 'utf-8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       } else {
         fs.writeFileSync(tmp, payload, 'utf-8');
       }
       fs.renameSync(tmp, target);
-      if (durable) { try { const dfd = fs.openSync(dir, 'r'); try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); } } catch { /* directory fsync unsupported (Windows) */ } }
+      if (durable) syncDirectoryForDurability(dir);
       return;
     } catch (err: any) {
       lastError = err;
