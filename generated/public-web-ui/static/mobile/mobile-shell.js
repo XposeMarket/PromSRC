@@ -3265,6 +3265,11 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
           if (k && k.indexOf(sessionId) !== -1) keysToRemove.push(k);
         }
         keysToRemove.forEach(function(k) { localStorage.removeItem(k); });
+        // Chat tab must not reopen a chat that no longer exists.
+        var tabRoute = String(localStorage.getItem('pm_mobile_chat_tab_route') || '');
+        var tabRouteDecoded = tabRoute;
+        try { tabRouteDecoded = decodeURIComponent(tabRoute); } catch(e2) {}
+        if (tabRoute && (tabRoute.indexOf(sessionId) !== -1 || tabRouteDecoded.indexOf(sessionId) !== -1)) localStorage.removeItem('pm_mobile_chat_tab_route');
       } catch(e) {}
       close();
       if (_drawerEl && _drawerCallbacks) {

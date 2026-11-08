@@ -1584,6 +1584,9 @@ function _startMobileNewChat(navigate) {
   // so entering voice from this fresh chat cannot silently route back there.
   _exitMobileVoiceRoomForFreshChat('new_mobile_chat');
   _clearMobileLastChatSession();
+  // New Chat is the only action that should make the Chat tab land on a draft
+  // (key owned by the session-route module; inlined to keep the chat slice lean).
+  try { localStorage.removeItem('pm_mobile_chat_tab_route'); } catch {}
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
   resetMobileDraftModelRoute();
   _clearMobileDraftSessionState();
