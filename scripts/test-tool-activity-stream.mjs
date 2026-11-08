@@ -475,3 +475,44 @@ for (const [name, observation, state] of [
   assert.match(summary, /2 page fetches · 3 pages/, `summary shows page fan-out: ${summary}`);
 }
 console.log('[tool-activity-stream] multi-query search / multi-URL fetch labels passed');
+
+{
+  // tool_call wraps every connected-app / MCP call; rows must name the real tool.
+  const entries = [];
+  applyToolActivityEvent(entries, 'prepare', { id: 'tc1', action: 'tool_call' });
+  const running = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'tc1',
+    action: 'tool_call',
+    args: { name: 'connector_github_list_prs', arguments: { state: 'open' } },
+  });
+  assert.equal(entries.length, 1, 'wrapped call updates its preparing row');
+  assert.match(running.text, /Using GitHub · list PRs/, `running label names the inner tool: ${running.text}`);
+  const done = applyToolActivityEvent(entries, 'result', { toolCallId: 'tc1', action: 'tool_call', ok: true, result: '[]' });
+  assert.match(done.text, /Used GitHub · list PRs/, `finished label keeps the inner tool: ${done.text}`);
+  assert.doesNotMatch(done.text, /Tool Call/, 'never shows the bare wrapper name');
+
+  const api = applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'tc2', action: 'tool_call', args: JSON.stringify({ name: 'connector_github_api_request', arguments: { method: 'GET' } }),
+  });
+  assert.match(api.text, /GitHub · API request/, `string args are parsed: ${api.text}`);
+
+  const mcp = applyToolActivityEvent(entries, 'call', { toolCallId: 'tc3', action: 'tool_call', args: { name: 'mcp__vercel__list_deployments' } });
+  assert.match(mcp.text, /Vercel · list deployments/, `MCP names are readable: ${mcp.text}`);
+
+  const inner = applyToolActivityEvent(entries, 'call', { toolCallId: 'tc4', action: 'tool_call', args: { name: 'web_search', arguments: { query: 'nq futures' } } });
+  assert.match(inner.text, /Searching the web for .*nq futures/, `known inner tools reuse their own describer: ${inner.text}`);
+
+  const bare = applyToolActivityEvent(entries, 'call', { toolCallId: 'tc5', action: 'tool_call', args: {} });
+  assert.match(bare.text, /Using a connected tool/, `nameless wrapper is neutral: ${bare.text}`);
+  assert.doesNotMatch(bare.text, /undefined|Tool Call/);
+
+  const search = applyToolActivityEvent(entries, 'call', { toolCallId: 'ts1', action: 'tool_search', args: { query: 'list github pull requests' } });
+  assert.match(search.text, /Searching tools for .*list github pull requests/, search.text);
+  const searched = applyToolActivityEvent(entries, 'result', { toolCallId: 'ts1', action: 'tool_search', ok: true, result: 'ok' });
+  assert.match(searched.text, /Searched tools for .*list github pull requests/, searched.text);
+
+  applyToolActivityEvent(entries, 'call', { toolCallId: 'u1', action: 'mystery_tool', args: { query: 'abc' } });
+  const fallback = applyToolActivityEvent(entries, 'result', { toolCallId: 'u1', action: 'mystery_tool', ok: true, result: 'ok' });
+  assert.match(fallback.text, /Mystery Tool completed · abc/, `generic success keeps its target: ${fallback.text}`);
+}
+console.log('[tool-activity-stream] tool_call / tool_search connector labels passed');
