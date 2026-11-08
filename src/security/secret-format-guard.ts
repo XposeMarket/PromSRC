@@ -12,10 +12,36 @@ const SOURCES = [
 export function containsRecognizableSecret(text: unknown): boolean {
   return typeof text === 'string' && SOURCES.some(source => new RegExp(source).test(text));
 }
-/** Chat payloads can contain nested edited/queued messages; inspect strings, never echo. */
-export function payloadContainsRecognizableSecret(value: unknown, depth = 0): boolean {
+// Keep media classification/traversal aligned with the browser guard (test enforced).
+function isRasterBytes(key: string, value: unknown, parent: Record<string, unknown>): boolean {
+  if ((key !== 'base64' && key !== 'dataUrl') || typeof value !== 'string') return false;
+  const mime = parent.mimeType;
+  if (typeof mime !== 'string' || !/^image\/(png|jpeg|gif|webp)$/.test(mime)) return false;
+  let bytes = value;
+  if (bytes.startsWith('data:')) {
+    const prefix = `data:${mime};base64,`;
+    if (!bytes.startsWith(prefix)) return false;
+    bytes = bytes.slice(prefix.length);
+  } else if (key === 'dataUrl') return false;
+  if (!bytes || bytes.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(bytes)) return false;
+  try {
+    const head = atob(bytes.slice(0, 24));
+    if (mime === 'image/png') return head.startsWith('\x89PNG\r\n\x1a\n');
+    if (mime === 'image/jpeg') return head.startsWith('\xff\xd8\xff');
+    if (mime === 'image/gif') return /^GIF8[79]a/.test(head);
+    return head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP';
+  } catch { return false; }
+}
+
+/** Inspect text and metadata, not opaque raster transport bytes. Never echo input. */
+export function payloadContainsRecognizableSecret(value: unknown, depth = 0, attachmentArray = false, attachmentItem = false): boolean {
   if (containsRecognizableSecret(value)) return true;
   if (!value || typeof value !== 'object') return false;
   if (depth > 30) return true; // fail closed on malformed/deep chat data
-  return Object.values(value).some(item => payloadContainsRecognizableSecret(item, depth + 1));
+  if (Array.isArray(value)) return value.some(item => payloadContainsRecognizableSecret(item, depth + 1, false, attachmentArray));
+  return Object.entries(value).some(([key, item]) => {
+    if (containsRecognizableSecret(key)) return true;
+    if (attachmentItem && isRasterBytes(key, item, value as Record<string, unknown>)) return false;
+    return payloadContainsRecognizableSecret(item, depth + 1, key === 'attachments' || key === 'attachmentPreviews');
+  });
 }
