@@ -1126,3 +1126,15 @@ body.pm-mobile-active #pm-composer.has-pending-question .pm-mobile-question-popo
     pointer-events: none;
   }
 }
+
+/* Expanded agent rows are a scrolling list, not native switch gestures.
+   Keep button click handlers/pmHaptic, but don't let the invisible iOS switch
+   covering each row claim the finger gesture before the list can pan. */
+body.pm-mobile-active .pm-background-spawn-dock.is-open .pm-haptic-switch-overlay {
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-background-spawn-dock.is-open {
+  pointer-events: auto;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+}
