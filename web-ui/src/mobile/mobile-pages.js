@@ -7888,19 +7888,6 @@ function _renderMobileMessageActions(m, index) {
   </div>`;
 }
 
-function _renderMobileUserEditComposer(m, index, attachmentHtml = '') {
-  const value = escapeHtml(String(m?._editingDraft ?? m?.body?.text ?? m?.content ?? ''));
-  // Only stop propagation for non-action targets (e.g. tapping the textarea) so
-  // the Cancel/Send buttons still reach the delegated threadEl click handler.
-  return `<div class="pm-mobile-edit-composer" data-msg-edit-index="${index}" onclick="if(!event.target.closest('[data-msg-action]'))event.stopPropagation()">
-    <textarea class="pm-mobile-edit-input" rows="4" data-msg-edit-input="${index}">${value}</textarea>
-    ${attachmentHtml}
-    <div class="pm-mobile-edit-actions">
-      <button type="button" class="pm-msg-action" data-msg-action="cancel-edit" data-msg-index="${index}">Cancel</button>
-      <button type="button" class="pm-msg-action primary" data-msg-action="submit-edit" data-msg-index="${index}">Send</button>
-    </div>
-  </div>`;
-}
 
 function _normalizeMobileFileChanges(fileChanges) {
   const files = Array.isArray(fileChanges?.files) ? fileChanges.files : [];
@@ -9531,7 +9518,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileRichArtifacts": { enumerable: true, get: () => _renderMobileRichArtifacts },
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
-  "_renderMobileUserEditComposer": { enumerable: true, get: () => _renderMobileUserEditComposer },
   "_renderMobileVoiceLyrics": { enumerable: true, get: () => _renderMobileVoiceLyrics },
   "_renderMobileVoiceWorkgroup": { enumerable: true, get: () => _renderMobileVoiceWorkgroup },
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },
