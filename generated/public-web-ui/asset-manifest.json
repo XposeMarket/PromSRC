@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "556db4718538210f",
-  "sourceDigest": "556db4718538210f9e7536c143f83bbe1005bfaf811066b056b0a5e087d2b433",
+  "buildId": "26a785445d5a03b2",
+  "sourceDigest": "26a785445d5a03b246f349aad8f4f4f176bb4c8309127efed1a5dc9e7c005927",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -123,24 +123,24 @@
         "/build/chunks/chunk-WXZ4L2EE.js",
         "/build/entries/desktop-QB3BUGYY.js",
         "/build/inline/index-inline-01-213bcef90a36.js",
-        "/build/inline/index-inline-02-5b5877c21102.js",
+        "/build/inline/index-inline-02-ce665df57a08.js",
         "/build/inline/index-inline-03-57964227a42d.js",
-        "/build/inline/index-inline-04-64f7f61cd4c2.js",
+        "/build/inline/index-inline-04-6d2d7ec2eda1.js",
         "/build/inline/index-inline-05-606d0eb0eaa3.js",
         "/build/inline/index-inline-06-d0bf4f36f509.js",
         "/build/inline/index-inline-07-2ba5ab66be67.js",
         "/build/inline/index-inline-08-0b108e28f4b7.js",
         "/build/inline/index-inline-09-716f958618af.js",
         "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
-        "/build/inline/index-inline-11-4550e6a395a8.js",
+        "/build/inline/index-inline-11-fb76da1f308f.js",
         "/build/inline/index-inline-12-047d20aba693.js",
         "/build/styles/desktop-DYSZORRF.css"
       ],
       "files": 22,
-      "bytes": 964378,
-      "gzipBytes": 184880,
-      "jsBytes": 222281,
-      "jsGzipBytes": 70222,
+      "bytes": 965768,
+      "gzipBytes": 185343,
+      "jsBytes": 223671,
+      "jsGzipBytes": 70685,
       "cssBytes": 742097,
       "cssGzipBytes": 114658
     },
@@ -4589,10 +4589,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-02-5b5877c21102.js",
-      "bytes": 235,
-      "gzipBytes": 178,
-      "sha256": "5b5877c2110284e41b42c38795d72c9794caee06cec03d5198226a04bdcf0533",
+      "path": "/build/inline/index-inline-02-ce665df57a08.js",
+      "bytes": 488,
+      "gzipBytes": 249,
+      "sha256": "ce665df57a08bd0e566ffb672c960cf9d5d0d7c8cc5929f5b7b750216075bd79",
       "entryPoint": null,
       "imports": []
     },
@@ -4605,10 +4605,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-04-64f7f61cd4c2.js",
-      "bytes": 7565,
-      "gzipBytes": 2282,
-      "sha256": "64f7f61cd4c2556fcce9afc852f6d3d58aba4291b77209630ce223ffd7e02d76",
+      "path": "/build/inline/index-inline-04-6d2d7ec2eda1.js",
+      "bytes": 8511,
+      "gzipBytes": 2604,
+      "sha256": "6d2d7ec2eda1a7592e59d26541b2c92384c3ba692fcb3d2c447317c974491b17",
       "entryPoint": null,
       "imports": []
     },
@@ -4661,10 +4661,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-11-4550e6a395a8.js",
-      "bytes": 1688,
-      "gzipBytes": 792,
-      "sha256": "4550e6a395a8fb12ddc358e2cef971062df2e219c5429bcf539ca15907560173",
+      "path": "/build/inline/index-inline-11-fb76da1f308f.js",
+      "bytes": 1879,
+      "gzipBytes": 862,
+      "sha256": "fb76da1f308f5010a323b43d267346c4bbaa3b3a0a8ea46e51c86d2d9e67b961",
       "entryPoint": null,
       "imports": []
     },
