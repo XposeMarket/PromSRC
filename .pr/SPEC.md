@@ -25,6 +25,7 @@ Raw completion never mutates active/inactive parent replies. Worker details and 
 No history deletion, model routing, theme redesign, merge or deployment.
 
 ## Files
+- .pr/SPEC.md - tracked task scope and verification contract
 - src/gateway/routes/chat/pipeline/handle-chat.ts
 - web-ui/src/pages/ChatPage.js
 - web-ui/src/mobile/mobile-chat-renderer-runtime.js
