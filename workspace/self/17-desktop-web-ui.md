@@ -204,4 +204,3 @@ Desktop SSE and replay use source reasoning_summary, visibility summary, exact d
 
 ### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
 `features/tasks/task-detail-render.js` is shared by desktop TasksPage and mobile Tasks. Tool activity uses native details/summary with tool name and timestamp; arguments/results are hidden initially and use escaped pretty JSON or existing sanitized Markdown. Evidence renders actual content/value as Markdown, not raw object JSON. Open disclosures survive polling replacement. Existing compact activity retention/truncation is unchanged. No glass/navigation redesign. Not merged/live.
-

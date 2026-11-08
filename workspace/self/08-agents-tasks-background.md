@@ -163,4 +163,3 @@ Ordinary chat execution remains owned by its original runtime. Valid declared pr
 
 ### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
 Read-only `task-note-evidence.ts` projects existing main-workspace intraday notes into planned-run detail/evidence APIs using exact source session plus run start/end. Ambiguous overlapping planned runs are excluded, never guessed from title/thread. Missing source/timestamps or files yield no notes. Background tasks use existing write_note journal detail (legacy 2000-character saved limit), alongside the evidence bus. No writes, capture, migration or execution changes; detail-only reads. Not merged/live.
-
