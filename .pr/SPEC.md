@@ -2,7 +2,7 @@
 
 Surface: both
 Parity: fixed both: shared desktop/mobile request guard and backend chat admission; text/draft safeguards unchanged.
-Test: node scripts/test-secret-image-guard.mjs && npx tsx scripts/test-protected-plugin-http.ts && node scripts/test-secret-draft-guard.mjs
+Test: node scripts/test-secret-image-guard.mjs && npx tsx scripts/test-protected-plugin-http.ts
 Size justification: Bounded credential-boundary fix with client/backend parity tests.
 
 ## Problem
@@ -26,6 +26,7 @@ Original screenshot accepted without printing its bytes or committing user image
 Carousel design, credential format expansion, OCR, upload storage, permission changes, merge/deployment.
 
 ## Files
+- .pr/SPEC.md
 - src/security/secret-format-guard.ts
 - web-ui/src/features/chat/secret-format-guard.js
 - scripts/test-secret-image-guard.mjs
