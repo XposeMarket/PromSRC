@@ -18,6 +18,12 @@
 <style>
   html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
   html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
+  /* Phones: keep the handoff modal blank until the lightweight phone nav has
+     classed it (smh-home/smh-page), so the desktop tab strip never paints and
+     then jumps to the home list (first-paint layout shift / "freeze"). */
+  @media (max-width: 760px) {
+    html.mobile-settings-handoff:not(.settings-nav-ready) #settings-modal { visibility: hidden !important; }
+  }
 </style>
 <script>
   if (document.documentElement.classList.contains('mobile-settings-handoff')) {
@@ -25,6 +31,12 @@
     preload.rel = 'modulepreload';
     preload.href = '/src/pages/SettingsPage.js';
     document.head.appendChild(preload);
+    const navPreload = document.createElement('link');
+    navPreload.rel = 'modulepreload';
+    navPreload.href = '/src/settings/settings-mobile-nav.js';
+    document.head.appendChild(navPreload);
+    // Safety net: never leave the handoff modal blank if the nav module fails.
+    setTimeout(() => document.documentElement.classList.add('settings-nav-ready'), 4000);
   }
 </script>
 <link rel="manifest" href="/manifest.webmanifest">
@@ -195,7 +207,26 @@
       });
     };
 
+    // Each open/close bumps the token; an open that is still awaiting the lazy
+    // controller must not forward (and reopen) after a close or a newer open.
+    let settingsOpenToken = 0;
+    let settingsTabTouchedToken = -1;
+    const markSettingsNavReady = function markSettingsNavReady() {
+      document.documentElement.classList.add('settings-nav-ready');
+    };
+    // Lightweight phone nav (no deps) initialised before the heavy controller so
+    // the first paint already shows the final mobile layout.
+    const initEarlySettingsMobileNav = function initEarlySettingsMobileNav(startOnHome) {
+      if (!window.matchMedia?.('(max-width: 760px)').matches) { markSettingsNavReady(); return Promise.resolve(); }
+      return import('./src/settings/settings-mobile-nav.js')
+        .then((nav) => { nav.initSettingsMobileNav({ startOnHome }); })
+        .catch((err) => console.warn('[settings] early mobile nav failed:', err))
+        .finally(markSettingsNavReady);
+    };
+    window.__PROM_SETTINGS_OPEN_STATE = () => ({ openToken: settingsOpenToken, tabTouchedToken: settingsTabTouchedToken });
+
     const closeSettingsShim = function closeSettingsShim() {
+      settingsOpenToken += 1;
       if (document.documentElement.classList.contains('mobile-settings-handoff')) {
         if (window.__PROM_RETURN_FROM_MOBILE_SETTINGS?.()) return;
         import('./src/settings-return.js').then(({ returnFromMobileSettings }) => returnFromMobileSettings(location));
@@ -211,17 +242,23 @@
     const openSettingsShim = async function openSettingsShim(tab) {
       // The shim resolves a fallback tab before forwarding; remember whether the
       // caller asked for a specific section (phones open on the home list if not).
-      window.__promSettingsExplicitTab = !!tab;
+      const token = ++settingsOpenToken;
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'flex';
       document.body.classList.add('settings-page-open');
       window.queueNativeBrowserSurfaceSync?.({ force: true });
       const activeTab = applySettingsTabFallback(tab || window.settingsTab || 'system');
+      const early = initEarlySettingsMobileNav(!tab);
       try {
-        await window.__PROM_LOAD_SETTINGS();
+        await Promise.all([window.__PROM_LOAD_SETTINGS(), early]);
+        // Closed (or reopened) while the controller was loading: do not reopen.
+        if (token !== settingsOpenToken) return undefined;
         const loadedFn = window.openSettings;
         if (typeof loadedFn === 'function' && loadedFn !== openSettingsShim) {
-          return loadedFn(activeTab);
+          // A section picked during the load wins over the tab captured above.
+          const touched = settingsTabTouchedToken === token;
+          window.__promSettingsExplicitTab = !!tab || touched;
+          return loadedFn(touched ? (window.settingsTab || activeTab) : activeTab);
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
@@ -233,12 +270,16 @@
     openSettingsShim.__PROM_SHIM = true;
     window.openSettings = openSettingsShim;
 
+    let settingsTabSeq = 0;
     const setSettingsTabShim = async function setSettingsTabShim(tab) {
       const activeTab = applySettingsTabFallback(tab);
+      const seq = ++settingsTabSeq;
+      settingsTabTouchedToken = settingsOpenToken;
       try {
         await window.__PROM_LOAD_SETTINGS();
         const loadedFn = window.setSettingsTab;
-        if (typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
+        // Only the latest pick forwards; an older captured tab never overwrites it.
+        if (seq === settingsTabSeq && typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
           return loadedFn(activeTab);
         }
       } catch (err) {
@@ -315,6 +356,7 @@
 <link rel="stylesheet" href="src/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="src/styles/settings.css?v=full-page-settings-v2">
 <link rel="stylesheet" href="src/styles/surfaces-polish.css?v=ui-polish-2026-10">
+<link rel="stylesheet" href="src/styles/refined-markdown.css?v=refined-markdown-v1">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <meta name="application-name" content="Prometheus">
@@ -5681,14 +5723,22 @@
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v308-2026-08-24-chat-voice-trace';
+    // Must match web-ui/src/mobile/mobile-pwa.js: a different registration URL
+    // makes the /mobile -> desktop Settings handoff install a new SW, whose
+    // clients.claim() fires controllerchange and reloads the handoff page.
+    const PM_PWA_VERSION = 'pm-v314-2026-09-20-mobile-reconnect';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a
     // rebuild + gateway restart never leaves the device on stale assets.
     let _swReloadGuard = false;
+    // Scoped to the mobile Settings handoff only: a first-install claim on an
+    // uncontrolled handoff page has no stale assets to replace, so reloading it
+    // just repaints Settings. Every other page keeps the update-recovery reload.
+    const _swHadController = !!navigator.serviceWorker.controller;
+    const _swSettingsHandoff = document.documentElement.classList.contains('mobile-settings-handoff');
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (_swReloadGuard) return;
+      if (_swReloadGuard || (_swSettingsHandoff && !_swHadController)) return;
       _swReloadGuard = true;
       try {
         const pendingUntil = Number(sessionStorage.getItem('pm_reload_pending_until') || 0);

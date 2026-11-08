@@ -13,17 +13,24 @@
 <style>
   html.mobile-settings-handoff body > :not(#settings-modal):not(script):not(style):not(link) { visibility: hidden !important; }
   html.mobile-settings-handoff #settings-modal { display: flex !important; visibility: visible; }
+  /* Phones: keep the handoff modal blank until the lightweight phone nav has
+     classed it (smh-home/smh-page), so the desktop tab strip never paints and
+     then jumps to the home list (first-paint layout shift / "freeze"). */
+  @media (max-width: 760px) {
+    html.mobile-settings-handoff:not(.settings-nav-ready) #settings-modal { visibility: hidden !important; }
+  }
 </style>
-<script src="/build/inline/index-inline-02-5b5877c21102.js"></script>
+<script src="/build/inline/index-inline-02-ce665df57a08.js"></script>
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Prometheus</title>
 <script src="vendor/jsqr/jsQR.js"></script>
   <script src="/build/inline/index-inline-03-57964227a42d.js"></script>
-<script src="/build/inline/index-inline-04-64f7f61cd4c2.js"></script>
+<script src="/build/inline/index-inline-04-6d2d7ec2eda1.js"></script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <script src="/build/inline/index-inline-05-606d0eb0eaa3.js"></script>
 <script src="/build/inline/index-inline-06-d0bf4f36f509.js"></script>
-<link rel="stylesheet" href="/build/styles/desktop-DYSZORRF.css">
+<link rel="stylesheet" href="/build/styles/desktop-GLPYURHB.css">
+
 
 
 
@@ -5335,7 +5342,7 @@
 <link rel="modulepreload" href="/build/chunks/chunk-SK5Z3OGQ.js">
 <link rel="modulepreload" href="/build/chunks/chunk-WXZ4L2EE.js">
 <script type="module" src="/build/entries/desktop-4RDY5VLM.js"></script>
-<script src="/build/inline/index-inline-11-4550e6a395a8.js"></script>
+<script src="/build/inline/index-inline-11-fb76da1f308f.js"></script>
 
 <script src="/build/inline/index-inline-12-047d20aba693.js"></script>
 

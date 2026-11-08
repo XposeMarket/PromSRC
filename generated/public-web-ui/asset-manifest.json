@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "21f05f2981dd01e5",
-  "sourceDigest": "21f05f2981dd01e55e4cad6b1c0b6ad4cf1ffe832a31837b231ecc0a20ac7aa2",
+  "buildId": "34f68cb791fe11a5",
+  "sourceDigest": "34f68cb791fe11a5c957d3bba3a438f1b71df32f84b3191d41892a555dfc25a1",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-4RDY5VLM.js",
-      "css": "/build/styles/desktop-DYSZORRF.css",
+      "css": "/build/styles/desktop-GLPYURHB.css",
       "modulePreloads": [
         "/build/chunks/chunk-4R74MHNR.js",
         "/build/chunks/chunk-64D6OPY6.js",
@@ -26,7 +26,7 @@
     "mobile": {
       "html": "/mobile.html",
       "js": "/build/entries/mobile-SHYUHD5F.js",
-      "css": "/build/styles/mobile-6GIR37YZ.css",
+      "css": "/build/styles/mobile-CTLCNS6S.css",
       "modulePreloads": []
     }
   },
@@ -123,26 +123,26 @@
         "/build/chunks/chunk-WXZ4L2EE.js",
         "/build/entries/desktop-4RDY5VLM.js",
         "/build/inline/index-inline-01-213bcef90a36.js",
-        "/build/inline/index-inline-02-5b5877c21102.js",
+        "/build/inline/index-inline-02-ce665df57a08.js",
         "/build/inline/index-inline-03-57964227a42d.js",
-        "/build/inline/index-inline-04-64f7f61cd4c2.js",
+        "/build/inline/index-inline-04-6d2d7ec2eda1.js",
         "/build/inline/index-inline-05-606d0eb0eaa3.js",
         "/build/inline/index-inline-06-d0bf4f36f509.js",
         "/build/inline/index-inline-07-2ba5ab66be67.js",
         "/build/inline/index-inline-08-0b108e28f4b7.js",
         "/build/inline/index-inline-09-716f958618af.js",
         "/build/inline/index-inline-10-ecc8cfa8ff4d.js",
-        "/build/inline/index-inline-11-4550e6a395a8.js",
+        "/build/inline/index-inline-11-fb76da1f308f.js",
         "/build/inline/index-inline-12-047d20aba693.js",
-        "/build/styles/desktop-DYSZORRF.css"
+        "/build/styles/desktop-GLPYURHB.css"
       ],
       "files": 22,
-      "bytes": 964378,
-      "gzipBytes": 184880,
-      "jsBytes": 222281,
-      "jsGzipBytes": 70222,
-      "cssBytes": 742097,
-      "cssGzipBytes": 114658
+      "bytes": 978266,
+      "gzipBytes": 186417,
+      "jsBytes": 223671,
+      "jsGzipBytes": 70685,
+      "cssBytes": 754595,
+      "cssGzipBytes": 115732
     },
     "mobile": {
       "paths": [
@@ -168,15 +168,15 @@
         "/build/inline/mobile-inline-01-606d0eb0eaa3.js",
         "/build/inline/mobile-inline-02-0b108e28f4b7.js",
         "/build/inline/mobile-inline-03-0030786ff2fb.js",
-        "/build/styles/mobile-6GIR37YZ.css"
+        "/build/styles/mobile-CTLCNS6S.css"
       ],
       "files": 23,
-      "bytes": 1067312,
-      "gzipBytes": 249078,
+      "bytes": 1079810,
+      "gzipBytes": 250123,
       "jsBytes": 503485,
       "jsGzipBytes": 159277,
-      "cssBytes": 563827,
-      "cssGzipBytes": 89801
+      "cssBytes": 576325,
+      "cssGzipBytes": 90846
     }
   },
   "assets": [
@@ -4589,10 +4589,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-02-5b5877c21102.js",
-      "bytes": 235,
-      "gzipBytes": 178,
-      "sha256": "5b5877c2110284e41b42c38795d72c9794caee06cec03d5198226a04bdcf0533",
+      "path": "/build/inline/index-inline-02-ce665df57a08.js",
+      "bytes": 488,
+      "gzipBytes": 249,
+      "sha256": "ce665df57a08bd0e566ffb672c960cf9d5d0d7c8cc5929f5b7b750216075bd79",
       "entryPoint": null,
       "imports": []
     },
@@ -4605,10 +4605,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-04-64f7f61cd4c2.js",
-      "bytes": 7565,
-      "gzipBytes": 2282,
-      "sha256": "64f7f61cd4c2556fcce9afc852f6d3d58aba4291b77209630ce223ffd7e02d76",
+      "path": "/build/inline/index-inline-04-6d2d7ec2eda1.js",
+      "bytes": 8511,
+      "gzipBytes": 2604,
+      "sha256": "6d2d7ec2eda1a7592e59d26541b2c92384c3ba692fcb3d2c447317c974491b17",
       "entryPoint": null,
       "imports": []
     },
@@ -4661,10 +4661,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-11-4550e6a395a8.js",
-      "bytes": 1688,
-      "gzipBytes": 792,
-      "sha256": "4550e6a395a8fb12ddc358e2cef971062df2e219c5429bcf539ca15907560173",
+      "path": "/build/inline/index-inline-11-fb76da1f308f.js",
+      "bytes": 1879,
+      "gzipBytes": 862,
+      "sha256": "fb76da1f308f5010a323b43d267346c4bbaa3b3a0a8ea46e51c86d2d9e67b961",
       "entryPoint": null,
       "imports": []
     },
@@ -4717,10 +4717,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-DYSZORRF.css",
-      "bytes": 742097,
-      "gzipBytes": 114658,
-      "sha256": "9226054efb24d19e8c748ac275e31ddb9d821c673f9fd277971c33ce676c9e07",
+      "path": "/build/styles/desktop-GLPYURHB.css",
+      "bytes": 754595,
+      "gzipBytes": 115732,
+      "sha256": "08ed201842a9397ee76889c9f142e2b9ebff9bf14bb2377bc9b8cb6bc81a2b4f",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
@@ -4762,10 +4762,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-6GIR37YZ.css",
-      "bytes": 563827,
-      "gzipBytes": 89801,
-      "sha256": "0d7fc3cf31c9660bd42f27eba8492e76d731587b7c6ae141b61e1530b40d7218",
+      "path": "/build/styles/mobile-CTLCNS6S.css",
+      "bytes": 576325,
+      "gzipBytes": 90846,
+      "sha256": "8916a7d752b5eb566b03bc5b7d210bd8017d57b0b6a1f9dee420bb9d0e7f81f7",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }

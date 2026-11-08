@@ -124,6 +124,8 @@ The router stores owner promises/ready state so revisiting a route can reuse loa
 If step 5 succeeds but step 6 fails, inspect host/origin and the shared `getDeviceToken()` path before issuing another pairing claim. Duplicate claims can make troubleshooting harder and do not repair a server auth mismatch.
 
 ## PWA and service worker checks
+- `PM_PWA_VERSION` must be the same in `web-ui/index.html` and `web-ui/src/mobile/mobile-pwa.js` (enforced by `scripts/test-mobile-settings-first-paint.mjs`). A mismatch made the mobile Settings handoff (`/?desktop=1&settings=1&settingsReturn=…`) register a different SW URL. Its `clients.claim()` fired `controllerchange` and reloaded the page: the "freezes then refreshes" first Settings open. The reload is skipped only for an uncontrolled handoff page; every other page keeps the update-recovery reload.
+- Handoff first paint: on phones the handoff modal stays hidden until the inline shim has run the dependency-free `settings-mobile-nav.js` (`html.settings-nav-ready`, with a 4 s safety reveal), so the desktop tab strip never flashes. The shim drops an open that is superseded by a close or reopen, and a tab picked during the controller load wins over the captured tab.
 - Verify the manifest resolves from the public origin with the expected content type.
 - Confirm install identity (name/short name/icons/theme) matches the current branded UI.
 - Test start URL and scope on the live mobile origin, not a desktop dev port by assumption.
