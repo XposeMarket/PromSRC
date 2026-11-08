@@ -160,3 +160,7 @@ The background-restart-resume branch persists original assignment, resolved rout
 
 ## Planned ordinary-chat runs on Tasks (pending feat/planned-chat-tasks)
 Ordinary chat execution remains owned by its original runtime. Valid declared progress is persisted as per-runtime ownerPid atomic files in config-dir planned-chat-runs/ (polling reads fresh files without writes; live foreign process owners remain running), exposed in /api/bg-tasks as sourceKind planned_chat, and updated by planned_chat_updated. These are NOT BackgroundTaskRunner records: only Open chat is offered. Four runtime IDs yield four entries. Checklist completion does not finish execution. Terminal history retains up to 500 records; missing owners become interrupted. Restart recovery explicitly copies/links prior plan to the new attempt. Needs You uses existing request ownership and endpoints; no new execution or permission path. Not live until merge/deploy.
+
+### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
+Read-only `task-note-evidence.ts` projects existing main-workspace intraday notes into planned-run detail/evidence APIs using exact source session plus run start/end. Ambiguous overlapping planned runs are excluded, never guessed from title/thread. Missing source/timestamps or files yield no notes. Background tasks use existing write_note journal detail (legacy 2000-character saved limit), alongside the evidence bus. No writes, capture, migration or execution changes; detail-only reads. Not merged/live.
+

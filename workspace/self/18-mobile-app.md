@@ -218,3 +218,7 @@ Pending mobile chat picker work uses shared `web-ui/src/model-family-grouping.js
 
 ### Main-chat summary assembly
 Mobile live/replay use exact raw delta append and complete snapshot replace in the current reasoning_summary trace tail, visibility summary. Tool/commentary boundaries freeze history; private thinking never enters that trace. Generic agent_progress is unchanged. Collapse presentation requires #780 before shipping.
+
+### Pending Tasks readable details (fix/tasks-readable-details, Nov8)
+Mobile Tasks shares `features/tasks/task-detail-render.js` with desktop: minimal tool-name disclosures and sanitized Markdown evidence/run notes. `renderTasksPage` awaits the existing Markdown-vendor hook on cold direct navigation, because secondary routes do not otherwise load it. Native tool-open state is restored after polling while existing request-card preservation remains intact. No changes to glass shell or approval handlers. Not merged/live.
+
