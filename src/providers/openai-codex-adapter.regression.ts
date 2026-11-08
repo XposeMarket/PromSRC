@@ -220,6 +220,29 @@ async function main(): Promise<void> {
   assert.match(thoughtTerminalBlock, /text: ''/, 'accepted Thought submissions must not request a prose final');
   assert.match(thoughtTerminalBlock, /toolResults: allToolResults/, 'accepted Thought submissions must return the completed tool history');
 
+  {
+    // Image parts must survive Codex serialization whatever shape produced them.
+    // Regression: global provider anthropic + chat routed to Codex dropped screenshots.
+    const { buildVisionImagePart } = await import('../gateway/vision-chat');
+    const adapter = new OpenAICodexAdapter(process.cwd());
+    const b64 = Buffer.from('fake-png-bytes').toString('base64');
+    const canonical = buildVisionImagePart(b64, 'image/png');
+    assert.equal(canonical.type, 'image_url', 'buildVisionImagePart must return the canonical image_url part');
+    assert.equal(canonical.image_url.url, `data:image/png;base64,${b64}`);
+    const legacy = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } };
+    const input = (adapter as any).buildInput([
+      { role: 'user', content: [{ type: 'text', text: 'what is this?' }, canonical, legacy, { type: 'mystery' }] },
+    ]);
+    const content = input.find((item: any) => item.role === 'user')?.content || [];
+    const images = content.filter((part: any) => part.type === 'input_image');
+    assert.equal(images.length, 2, 'canonical and legacy image parts must both serialize to input_image');
+    assert.equal(images[0].image_url, `data:image/png;base64,${b64}`);
+    assert.equal(images[1].image_url, `data:image/jpeg;base64,${b64}`);
+    const omitted = content.find((part: any) => part.type === 'input_text' && /attachment omitted/.test(part.text));
+    assert.ok(omitted, 'unknown parts must leave a visible omission notice, never silent empty text');
+    assert.ok(!content.some((part: any) => part.type === 'input_text' && part.text === ''), 'no silent empty input_text parts');
+  }
+
   console.log('openai-codex stream and commentary replay regressions passed');
 }
 

@@ -427,14 +427,25 @@ export class OpenAICodexAdapter implements LLMProvider {
       // The Codex endpoint accepts input_image with image_url as a string —
       // either an HTTPS URL or a data URL (data:image/...;base64,...).
       if (Array.isArray(m.content)) {
-        const parts: any[] = m.content.map((part: ContentPart) => {
-          if (part.type === 'text') return { type: 'input_text', text: part.text };
-          if (part.type === 'image_url') {
-            const url = part.image_url.url;
+        const parts: any[] = m.content.map((part: ContentPart | any) => {
+          if (part?.type === 'text') return { type: 'input_text', text: String(part.text ?? '') };
+          if (part?.type === 'image_url') {
+            const url = String(part.image_url?.url || '');
             // Codex endpoint accepts image_url as a string (data URL or HTTPS URL).
-            return { type: 'input_image', image_url: url };
+            if (url) return { type: 'input_image', image_url: url };
           }
-          return { type: 'input_text', text: '' };
+          // Legacy Anthropic-shaped image block ({type:'image', source:{type:'base64'}}).
+          // Older producers emitted this when the global provider was Anthropic; the
+          // Codex route must still see the pixels instead of an empty string.
+          if (part?.type === 'image' && part.source?.type === 'base64' && part.source?.data) {
+            const mediaType = String(part.source.media_type || 'image/png');
+            return { type: 'input_image', image_url: `data:${mediaType};base64,${part.source.data}` };
+          }
+          if (part?.type === 'image' && typeof part.source?.url === 'string' && part.source.url) {
+            return { type: 'input_image', image_url: part.source.url };
+          }
+          console.warn(`[openai-codex] dropped unsupported content part type=${String(part?.type || 'unknown')}`);
+          return { type: 'input_text', text: `[attachment omitted: unsupported content part ${String(part?.type || 'unknown')}]` };
         });
         input.push({ role: m.role, content: parts });
         continue;
