@@ -367,7 +367,7 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
   const tabs = ['overview', 'activity', 'evidence'].map(key => `<button type="button" class="${tab === key ? 'active' : ''}" data-task-tab="${key}" data-task-id="${id}">${key[0].toUpperCase()}${key.slice(1)}</button>`).join('');
   let content = '';
   if (tab === 'activity') {
-    content = `<section>${_pmRenderActivity(view.activity, task.id)}</section>`;
+    content = `<section>${_pmRenderActivity(view.activity, merged.id)}</section>`;
   } else if (tab === 'evidence') {
     const artifacts = view.artifacts.length ? `<section><div class="pm-card-head">Artifacts</div><ul class="pm-lr-artifacts">${view.artifacts.map(a => `<li>${escapeHtml(String(a?.path || a?.name || a || '').slice(0, 240))}</li>`).join('')}</ul></section>` : '';
     content = `<section><div class="pm-card-head">Evidence</div>${_pmRenderTaskEvidence(view.evidence)}</section>${artifacts}`;
