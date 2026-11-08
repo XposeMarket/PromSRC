@@ -19054,3 +19054,54 @@ body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-thread {
 /* First-output status stays local to the pending assistant row. */
 pm-pending-status { display: block; margin: 6px 0; font-size: 12px; line-height: 1.5; color: var(--pm-text-muted, #9aa0ad); }
 pm-pending-status[hidden] { display: none; }
+
+/* Drawer search morph (mobile-drawer-search-morph.js). Focusing the bottom-left
+   search pill widens the same glass field to composer-like 12px margins, fades
+   the theme/new-chat buttons and lifts the bar by the measured keyboard inset.
+   Everything reverses when the class/var are removed on blur/Escape/close. */
+body.pm-mobile-active .pm-drawer-bottom-bar {
+  --pm-drawer-search-morph-ms: var(--pm-motion-layout-duration, 300ms);
+  transform: translate3d(0, calc(-1 * var(--pm-drawer-search-kb, 0px)), 0);
+  transition:
+    left var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    right var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    gap var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    transform var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1);
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-bottom-actions {
+  width: 100px;
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition:
+    width var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    opacity calc(var(--pm-drawer-search-morph-ms) * .7) ease,
+    transform var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    visibility 0s linear 0s;
+}
+body.pm-mobile-active .pm-drawer-bottom-bar.pm-drawer-search-morph {
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  gap: 0;
+}
+body.pm-mobile-active .pm-drawer-bottom-bar.pm-drawer-search-morph > .pm-drawer-bottom-actions {
+  width: 0;
+  opacity: 0;
+  transform: scale(.82);
+  visibility: hidden;
+  transition:
+    width var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    opacity calc(var(--pm-drawer-search-morph-ms) * .5) ease,
+    transform var(--pm-drawer-search-morph-ms) cubic-bezier(.2,.8,.2,1),
+    visibility 0s linear var(--pm-drawer-search-morph-ms);
+}
+body.pm-mobile-active .pm-drawer-bottom-bar.pm-drawer-search-morph > .pm-drawer-bottom-actions,
+body.pm-mobile-active .pm-drawer-bottom-bar.pm-drawer-search-morph > .pm-drawer-bottom-actions * {
+  pointer-events: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active .pm-drawer-bottom-bar,
+  body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-bottom-actions {
+    transition: none !important;
+  }
+}
