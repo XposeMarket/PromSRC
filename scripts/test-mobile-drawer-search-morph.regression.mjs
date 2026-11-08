@@ -98,7 +98,9 @@ function makeWorld({ vv = true } = {}) {
 assert.doesNotThrow(() => attachDrawerSearchMorph(null).dispose());
 // Source wiring: shell imports helper, closeDrawer deactivates.
 const shell = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-shell.js'), 'utf8');
-assert.match(shell, /import \{ attachDrawerSearchMorph \} from '\.\/mobile-drawer-search-morph\.js'/);
+assert.match(shell, /import\('\.\/mobile-drawer-search-morph\.js'\)/);
+assert.match(shell, /morphInput\?\.addEventListener\('focus', prepareMorph/);
+assert.match(shell, /_drawerEl !== morphDrawer \|\| !morphInput\?\.isConnected/);
 assert.match(shell, /_drawerSearchMorph\?\.deactivate\?\.\(\)/);
 const runtime = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-chat-page-runtime.js'), 'utf8');
 assert.ok(!runtime.includes('drawer-search-morph'), 'composer keyboard controller untouched');
