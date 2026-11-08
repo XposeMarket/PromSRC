@@ -8,7 +8,27 @@ export const FOCUSED_CSS = `
 .fc-track::-webkit-scrollbar{display:none}
 .fc-track.fc-track>*{box-sizing:border-box;flex:0 0 var(--fc-width);width:var(--fc-width);min-width:0;max-width:none;scroll-snap-align:center;transform:scale(.94);opacity:.6;transition:transform .18s ease,opacity .18s ease;transform-origin:center;white-space:normal}
 .fc-track.fc-track>.fc-active{transform:scale(1);opacity:1}
-.fc-track.fc-track>.pc-gallery-tile{height:240px;grid-column:auto;grid-row:auto}
+/* Open image rail: retain gallery data/lightbox, remove the enclosing card chrome. */
+.pcx.pc-gallery:has(>.fc-track){padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.pcx.pc-gallery:has(>.fc-track)>.pc-head{display:none}
+.fc-track.fc-track>.pc-gallery-tile{height:240px;grid-column:auto;grid-row:auto;background:transparent;border:0;box-shadow:none}
+/* Image-led products: no reserved title/body height, compact readable metadata. */
+.product-carousel>.fc-track>.pc-card{min-height:0}
+.product-carousel>.fc-track .pc-img-wrap{height:auto;flex:0 0 auto;aspect-ratio:3/2}
+.product-carousel>.fc-track .pc-card-body{flex:0 0 auto;gap:4px;padding:9px 11px 10px}
+.product-carousel>.fc-track .pc-title{min-height:0;-webkit-line-clamp:2;font-size:13px;font-weight:600;line-height:1.35}
+.product-carousel>.fc-track .pc-merchant{font-weight:500;line-height:1.2}
+.product-carousel>.fc-track .pc-stats{min-height:0;gap:5px;font-size:13px}
+.product-carousel>.fc-track .pc-price{font-weight:650}
+.product-carousel>.fc-track .pc-meta{-webkit-line-clamp:1;font-size:11px}
+.pm-product-carousel>.fc-track>.pm-product-card{gap:4px;padding-bottom:9px}
+.pm-product-carousel>.fc-track .pm-product-img-wrap{aspect-ratio:3/2;flex:0 0 auto;margin-bottom:4px}
+.pm-product-carousel>.fc-track .pm-product-img{object-fit:contain}
+.pm-product-carousel>.fc-track .pm-product-title{min-height:0;font-size:13px;font-weight:600;line-height:1.35}
+.pm-product-carousel>.fc-track .pm-product-meta{gap:2px;font-size:12px}
+.pm-product-carousel>.fc-track .pm-product-meta span{font-weight:650}
+.pm-product-carousel>.fc-track .pm-product-meta em{-webkit-line-clamp:1;font-size:11px}
+.pm-product-carousel>.fc-track .pm-product-rating{margin:0;font-size:11px}
 .fc-track.fc-track>.pc-gallery-tile img{object-fit:contain;transform:none}
 .fc-track:focus-visible{outline:2px solid var(--brand,var(--pm-orange,#c49343));outline-offset:-2px}
 .fc-controls{display:flex;align-items:center;justify-content:center;gap:12px;padding:0 0 8px;color:var(--pm-muted,var(--muted,currentColor));font:12px/1.4 system-ui}

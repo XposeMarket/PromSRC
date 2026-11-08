@@ -24,3 +24,6 @@ Theme selector, other cards, backend data, memory, permissions, publishing, merg
 Runtime self/17,18,23 read; self/23 and surface docs updated in same turn (outside repo).
 ## Risks
 CSS cascade and dynamic DOM insertion. Regression uses actual renderer declarations/styles on Chromium and WebKit. Rollback removes helper/runtime integration; no migrations.
+
+## Visual refinement (Nov 8)
+Multi-image galleries have no outer card background, border, padding or title strip; image buttons, accessible labels and lightbox data remain intact. Product images dominate a compact details section on both surfaces: no reserved title/card height, two-line title, one-line description, lighter metadata. Only enhanced multi-item carousels change; regression verifies computed chrome and image/detail proportions.

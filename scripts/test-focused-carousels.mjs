@@ -77,6 +77,16 @@ try {
       assert.equal(await track.locator('.fc-active').count(),1);checks++;
     }
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));checks++;
+    const galleryStyle=await page.locator('.pc-gallery').evaluate(g=>{const s=getComputedStyle(g);return {border:s.borderTopWidth,padding:s.paddingTop,background:s.backgroundColor,header:getComputedStyle(g.querySelector('.pc-head')).display};});
+    assert.deepEqual(galleryStyle,{border:'0px',padding:'0px',background:'rgba(0, 0, 0, 0)',header:'none'});checks++;
+    const productLayout=await page.locator('.fc-track').nth(1).locator('.fc-active').evaluate(c=>{
+      const image=c.querySelector('.pc-img-wrap,.pm-product-img-wrap');
+      const title=c.querySelector('.pc-title,.pm-product-title');
+      return {image:image.offsetHeight,details:c.offsetHeight-image.offsetHeight,minTitle:getComputedStyle(title).minHeight,titleWeight:getComputedStyle(title).fontWeight};
+    });
+    assert.ok(productLayout.image>productLayout.details,JSON.stringify(productLayout));checks++;
+    assert.equal(productLayout.minTitle,'0px');checks++;
+    assert.equal(productLayout.titleWeight,'600');checks++;
     const product=page.locator('.fc-track').nth(1).locator('a').first();
     assert.match(await product.getAttribute('href'),/example.com\/product/);checks++;
     await page.locator('.pc-gallery-tile').nth(1).click();
