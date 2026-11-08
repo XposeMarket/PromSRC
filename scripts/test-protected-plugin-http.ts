@@ -33,6 +33,12 @@ async function main() {
   const secret = 'sk-proj-' + 't'.repeat(32);
   const rejected = await call('/api/chat', {}, JSON.stringify({ message: secret }));
   assert.equal(rejected.status, 400); assert(!(await rejected.text()).includes(secret));
+  const rawImage = 'iVBORw0KGgoAAAANSUhEUgAA/AIza' + 'A'.repeat(35);
+  const imageBytes = rawImage + 'A'.repeat((4 - rawImage.length % 4) % 4);
+  const image = { mimeType: 'image/png', base64: imageBytes };
+  assert.equal((await call('/api/chat', {}, JSON.stringify({ message: 'Not a fan', attachments: [image] }))).status, 200);
+  assert.equal((await call('/api/chat', {}, JSON.stringify({ message: secret, attachments: [image] }))).status, 400);
+  assert.equal((await call('/api/chat', {}, JSON.stringify({ attachments: [{ ...image, name: secret }] }))).status, 400);
   console.log('PASS protected owner HTTP: forged Origin, cookie-only, body mismatch and replay blocked; approved desktop/trusted phone accepted; chat no echo.');
  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 }
