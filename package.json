@@ -58,6 +58,7 @@
     "test:mobile-connection-budget": "node scripts/test-mobile-connection-budget.mjs",
     "test:mobile-project-chat-drawer": "node scripts/test-mobile-project-chat-drawer.mjs",
     "test:mobile-drawer-tabbar": "node scripts/test-mobile-drawer-tabbar.mjs",
+    "test:mobile-chat-tab-restore": "node scripts/test-mobile-chat-tab-restore.mjs",
     "test:mobile-approval-card-copy": "node scripts/test-mobile-approval-card-copy.mjs",
     "test:needs-you-hotpath": "node scripts/test-needs-you-hotpath.mjs",
     "test:model-context-compaction": "tsx src/gateway/context/model-context-compaction.regression.ts && tsx src/gateway/context/context-selection.regression.ts && node scripts/test-context-selection-ui.mjs",
