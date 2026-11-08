@@ -218,6 +218,38 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   let flippedDirection = false;
   let disposed = false;
   let surfaceStateObserver = null;
+  let settleFrame = 0;
+  let settleUntil = 0;
+  let settleStableFrames = 0;
+  let settleLastRect = '';
+
+  // A body-class change (drawer close, voice mode) usually starts a transform
+  // transition on an ancestor. Measuring once at mutation time parks the
+  // fixed sensor where the surface was mid-slide, so taps miss it. Track the
+  // surface every frame until its rect has been stable for a few frames.
+  const settleSurfacePosition = () => {
+    if (disposed) return;
+    settleUntil = performance.now() + 1200;
+    settleStableFrames = 0;
+    if (settleFrame) return;
+    const step = () => {
+      settleFrame = 0;
+      if (disposed) return;
+      if (pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
+      const r = surface.getBoundingClientRect?.();
+      const key = r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '';
+      settleStableFrames = key === settleLastRect ? settleStableFrames + 1 : 0;
+      settleLastRect = key;
+      if (settleStableFrames >= 4 || performance.now() > settleUntil) return;
+      settleFrame = requestAnimationFrame(step);
+    };
+    settleFrame = requestAnimationFrame(step);
+  };
+  const onAncestorTransitionEnd = (event) => {
+    if (disposed || pointerId != null) return;
+    const target = event.target;
+    if (target && typeof target.contains === 'function' && target.contains(surface)) settleSurfacePosition();
+  };
 
   // iOS only recognizes the switch as a haptic trigger when its direction is
   // changed *before* it is moved underneath the active finger.
@@ -341,6 +373,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     surfaceStateObserver = new MutationObserver(() => {
       if (isSurfaceInactive()) cancelGesture();
       else if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+      settleSurfacePosition();
     });
     surfaceStateObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   }
@@ -348,6 +381,8 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     if (!disposed && pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
   };
   window.addEventListener('resize', onViewportResize, { passive: true });
+  document.addEventListener('transitionend', onAncestorTransitionEnd, true);
+  document.addEventListener('transitioncancel', onAncestorTransitionEnd, true);
   window.visualViewport?.addEventListener('resize', onViewportResize, { passive: true });
   window.visualViewport?.addEventListener('scroll', onViewportResize, { passive: true });
 
@@ -356,6 +391,10 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     disposed = true;
     surfaceStateObserver?.disconnect?.();
     surfaceStateObserver = null;
+    if (settleFrame) cancelAnimationFrame(settleFrame);
+    settleFrame = 0;
+    document.removeEventListener('transitionend', onAncestorTransitionEnd, true);
+    document.removeEventListener('transitioncancel', onAncestorTransitionEnd, true);
     releaseCapture();
     input.removeEventListener('lostpointercapture', onLostPointerCapture, true);
     window.removeEventListener('blur', onWindowBlur);
@@ -370,6 +409,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   };
   dispose.refresh = () => {
     if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+    settleSurfacePosition();
   };
   _hapticGestureDisposers.add(dispose);
   return dispose;
