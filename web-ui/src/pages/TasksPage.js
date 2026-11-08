@@ -826,12 +826,12 @@ function bgtProgressListHTML(progress) {
   return `<ol class="bgt-lr-steps">${progress.items.map((item, idx) => `<li class="is-${item.state}"><span class="bgt-lr-step-dot">${item.state === 'done' ? '✓' : item.state === 'failed' ? '!' : idx + 1}</span><span class="bgt-lr-step-text">${escHtml(item.text.slice(0, 200))}</span>${item.durationMs != null ? `<span class="bgt-lr-step-time">${escHtml(formatTaskDuration(item.durationMs))}</span>` : ''}</li>`).join('')}</ol>`;
 }
 
-function bgtActivityHTML(rows) {
+function bgtActivityHTML(rows, taskId) {
   if (!rows.length) return '<div style="color:var(--muted);padding:8px;font-size:12px">No activity recorded yet.</div>';
   const time = (t) => (t ? `<span class="bgt-lr-act-time">${escHtml(new Date(t).toLocaleTimeString())}</span>` : '');
-  return `<div class="bgt-lr-activity">${rows.map(row => {
+  return `<div class="bgt-lr-activity">${rows.map((row, idx) => {
     if (row.type === 'hidden') return `<details class="bgt-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="bgt-lr-act is-status">${escHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
-    if (row.type === 'tool') return renderTaskTool(row, renderMd, time(row.t));
+    if (row.type === 'tool') return renderTaskTool(row, renderMd, time(row.t), `${taskId}:${idx}`);
     if (row.type === 'error') return `<div class="bgt-lr-act is-error"><div class="bgt-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escHtml(row.name)}</code>` : ''}${time(row.t)}</div><div>${escHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="bgt-lr-act is-status"><div class="bgt-lr-act-line">${escHtml(String(row.text || '').slice(0, 300))}${time(row.t)}</div></div>`;
   }).join('')}</div>`;
@@ -874,7 +874,7 @@ function bgtRenderPlannedPanel(task, body) {
       ${bgtStartedFromHTML(view)}
       <div><div class="bgt-lr-label">Progress</div>${bgtProgressListHTML(view.progress)}</div>
     </div>
-    <div data-bgt-pane="activity">${bgtActivityHTML(view.activity)}</div>
+    <div data-bgt-pane="activity">${bgtActivityHTML(view.activity, task.id)}</div>
     <div data-bgt-pane="evidence">${renderTaskEvidence(view.evidence, renderMd, t => new Date(t).toLocaleString())}</div>
     <div class="bgt-lr-actions"><button class="bgt-icon-btn" style="width:auto;height:auto;padding:6px 12px" data-planned-chat-session="${escHtml(task.sessionId || '')}">Open chat</button></div>`;
   body.querySelectorAll('[data-planned-chat-session]').forEach(button => {
@@ -1154,7 +1154,7 @@ async function bgtRefreshOpenPanel() {
 
     <!-- Activity tab: paired tool rows, errors in red, noise collapsed; raw log kept below -->
     <div data-bgt-pane="activity" style="display:flex;flex-direction:column;gap:14px">
-      ${bgtActivityHTML(lrView.activity)}
+      ${bgtActivityHTML(lrView.activity, task.id)}
       <details class="bgt-lr-raw"><summary>Raw process log (latest first)</summary>
         <div style="font-family:monospace;font-size:11px;border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
           ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}

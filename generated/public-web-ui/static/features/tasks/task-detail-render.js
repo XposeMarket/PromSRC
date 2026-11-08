@@ -7,11 +7,11 @@ function detail(value, renderMarkdown) {
   try { return `<pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px">${escape(JSON.stringify(JSON.parse(text), null, 2))}</pre>`; }
   catch { return `<div class="markdown-body" style="${prose}">${renderMarkdown(text)}</div>`; }
 }
-export function renderTaskTool(row, renderMarkdown, time = '') {
-  const key = `${row.t || 0}:${row.name || 'tool'}`;
+export function renderTaskTool(row, renderMarkdown, time = '', identity = '') {
+  const key = `${identity}:${row.t || 0}:${row.name || 'tool'}`;
   return `<details class="task-tool-disclosure" data-task-tool="${escape(key)}" style="padding:8px 0;border-bottom:1px solid var(--line,rgba(128,128,128,.15));min-width:0">
-    <summary style="cursor:pointer;min-height:28px;line-height:28px;font-size:13px;overflow-wrap:anywhere"><span>${escape(row.name || 'tool')}</span>${row.error ? ' <small>Failed</small>' : ''}${time ? ` <span style="opacity:.6;font-size:11px">${time}</span>` : ''}</summary>
-    <div style="padding:8px 0 4px 14px;min-width:0">${row.call ? `<div style="opacity:.6;font-size:11px">Arguments</div>${detail(row.call, renderMarkdown)}` : ''}${row.result ? `<div style="opacity:.6;font-size:11px">Result</div>${detail(row.result, renderMarkdown)}` : '<div style="opacity:.6;font-size:12px">No result recorded in this activity snapshot.</div>'}</div>
+    <summary style="cursor:pointer;min-height:28px;line-height:28px;font-size:13px;overflow-wrap:anywhere"><span>${escape(row.name || 'tool')}</span>${row.error ? ' <small>Failed</small>' : row.pending ? ' <small>running…</small>' : ''}${time ? ` <span style="opacity:.6;font-size:11px">${time}</span>` : ''}</summary>
+    <div style="padding:8px 0 4px 14px;min-width:0">${row.call ? `<div style="opacity:.6;font-size:11px">Arguments</div>${detail(row.call, renderMarkdown)}` : ''}${row.result ? `<div style="opacity:.6;font-size:11px">Result</div>${detail(row.result, renderMarkdown)}` : `<div style="opacity:.6;font-size:12px">${row.pending ? 'Waiting for result…' : 'No result recorded in this activity snapshot.'}</div>`}</div>
   </details>`;
 }
 export function renderTaskEvidence(entries, renderMarkdown, formatTime = () => '') {

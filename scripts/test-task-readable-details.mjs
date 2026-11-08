@@ -25,6 +25,10 @@ try { for(const [engine,width,label] of [[chromium,1200,'desktop'],[webkit,390,'
   const {renderMd}=await import('/src/utils.js');
   const {renderTaskTool,renderTaskEvidence,rememberTaskTools}=await import('/src/features/tasks/task-detail-render.js');
   const main=document.querySelector('main');
+  const pending=renderTaskTool({t:3,name:'workspace_run',pending:true},renderMd,'','task:1');
+  if(!pending.includes('running…') || !pending.includes('Waiting for result…')) throw Error('Missing pending status');
+  const other=renderTaskTool({t:3,name:'workspace_run',pending:true},renderMd,'','task:2');
+  if(pending===other) throw Error('Disclosure identities collide');
   const note='## Verification notes\n\nChecked **mobile and desktop**.\n\n- Notes retain Markdown formatting.\n- Tool details stay collapsed until opened.\n\n> Existing glass navigation stays unchanged.\n\nUse `workspace_run` to inspect the test output.\n\n<img src=x onerror="window.pwned=1">';
   main.innerHTML='<h2>Activity</h2>'+renderTaskTool({t:1,name:'workspace_run',call:JSON.stringify({command:'npm run check:web-ui'}),result:'**Passed.** No errors.'},renderMd)+renderTaskTool({t:2,name:'write_note',call:JSON.stringify({content:'Verification completed'}),result:'Note saved.'},renderMd)+'<h2>Evidence</h2>'+renderTaskEvidence([{title:'Run note',content:note}],renderMd);
   window.restoreTools=rememberTaskTools; window.original=main.innerHTML;

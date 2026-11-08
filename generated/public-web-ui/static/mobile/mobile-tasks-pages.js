@@ -338,7 +338,7 @@ function _pmRenderLiveCard(t, { isOpen = false, body = '' } = {}) {
   </article>`;
 }
 
-function _pmRenderActivity(rows) {
+function _pmRenderActivity(rows, taskId) {
   if (!rows.length) return '<div class="pm-card-body">No activity recorded yet.</div>';
   return `<div class="pm-lr-activity" data-pm-task-journal>${rows.map((row, idx) => {
     const time = row.t ? `<span class="pm-lr-act-time">${escapeHtml(_formatTimeAgo(row.t))}</span>` : '';
@@ -346,7 +346,7 @@ function _pmRenderActivity(rows) {
       return `<details class="pm-lr-hidden"><summary>Hiding ${row.count} update${row.count === 1 ? '' : 's'} · Show</summary>${row.rows.map(r => `<div class="pm-lr-act is-status">${escapeHtml(String(r.text || r.kind || '').slice(0, 240))}</div>`).join('')}</details>`;
     }
     if (row.type === 'tool') {
-      return renderTaskTool(row, _renderMobileMarkdown, time);
+      return renderTaskTool(row, _renderMobileMarkdown, time, `${taskId}:${idx}`);
     }
     if (row.type === 'error') return `<div class="pm-lr-act is-error"><div class="pm-lr-act-line"><strong>Error</strong>${row.name ? ` <code>${escapeHtml(row.name)}</code>` : ''}${time}</div><div>${escapeHtml(String(row.text || '').slice(0, 400))}</div></div>`;
     return `<div class="pm-lr-act is-status"><div class="pm-lr-act-line">${escapeHtml(String(row.text || '').slice(0, 300))}${time}</div></div>`;
@@ -367,7 +367,7 @@ function _pmRenderTaskDetail(listTask, detail, detailEvidence, tab) {
   const tabs = ['overview', 'activity', 'evidence'].map(key => `<button type="button" class="${tab === key ? 'active' : ''}" data-task-tab="${key}" data-task-id="${id}">${key[0].toUpperCase()}${key.slice(1)}</button>`).join('');
   let content = '';
   if (tab === 'activity') {
-    content = `<section>${_pmRenderActivity(view.activity)}</section>`;
+    content = `<section>${_pmRenderActivity(view.activity, task.id)}</section>`;
   } else if (tab === 'evidence') {
     const artifacts = view.artifacts.length ? `<section><div class="pm-card-head">Artifacts</div><ul class="pm-lr-artifacts">${view.artifacts.map(a => `<li>${escapeHtml(String(a?.path || a?.name || a || '').slice(0, 240))}</li>`).join('')}</ul></section>` : '';
     content = `<section><div class="pm-card-head">Evidence</div>${_pmRenderTaskEvidence(view.evidence)}</section>${artifacts}`;
