@@ -4875,22 +4875,11 @@ Do not produce prose. Use the canonical thread tool now.` });
           30_000,
           Math.max(...spawnedBgRuns.map((run) => run.timeoutMs || 15 * 60_000)),
         );
-        const resultBlocks = joinedResults
-          .map((r, i) => {
-            if (!r) return null;
-            const state = r.state === 'completed' ? 'âœ“' : r.state === 'timed_out' ? 'â± timed out' : 'âœ— failed';
-            const body = r.state === 'completed' ? (r.result || '(no output)') : (r.error || r.state);
-            return `[Background Agent ${spawnedBgIds[i]} â€” ${state}]\n${body}`;
-          })
-          .filter(Boolean);
-        if (resultBlocks.length > 0) {
-	          sendSSE('info', { message: 'Background agents complete - merging results...' });
-	          const backgroundText = `Background agent response:\n${resultBlocks.join('\n\n')}`;
-	          finalText = [finalText, backgroundText]
-	            .map((part) => String(part || '').trim())
-	            .filter(Boolean)
-	            .join('\n\n');
-	          console.log(`[v2] BG MERGE: ${finalText.slice(0, 150)}`);
+        // Results belong to the internal inbox and worker details. The synthesis
+        // gate above consumes them; exhausting its guard must never concatenate
+        // unreviewed worker output into the parent's user-facing answer.
+        if (joinedResults.some(Boolean)) {
+          sendSSE('info', { message: 'Background agents settled; results available in agent details.' });
         }
       }
       // â”€â”€ End background agent finalization gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

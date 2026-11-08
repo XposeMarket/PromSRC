@@ -48464,11 +48464,7 @@ wsEventBus.on('bg_agent_event', (msg) => {
   // single bg_agent_done notification below is the lifecycle notification.
 });
 
-// ─── Background agent late-completion injection ───────────────
-// When a background agent finishes AFTER the main turn's finalization gate
-// already ran (or during the turn but after the done event), the server
-// sends bg_agent_done via WebSocket with the full result. We inject it into
-// the last AI message as a proper inner panel so it's visible to the user.
+// Background completions update their own dock/detail, never a parent reply.
 wsEventBus.on('bg_agent_done', (msg) => {
   completeBackgroundSpawnLane(msg || {});
   const sessionId = String(msg?.spawnerSessionId || msg?.sessionId || '').trim();
@@ -48481,64 +48477,11 @@ wsEventBus.on('bg_agent_done', (msg) => {
       { state: failed ? 'failed' : 'complete', title: failed ? 'Background agent needs attention' : 'Background agent complete' },
     );
   }
-  if (msg.state !== 'completed' || !msg.result) return;
-  // Route strictly by the spawner session. The result must never land in
-  // whichever chat happens to be open on this device.
-  if (!sessionId) return;
-  const isActiveTarget = sessionId === String(window.activeChatSessionId || '').trim();
-  if (isActiveTarget && window.isThinking) {
-    addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });
-    renderProcessLog();
-    return;
+  // The server owns synthesis and durable internal evidence. A late completion
+  // must not rewrite whichever answer happens to be last, active or inactive.
+  if (sessionId === String(window.activeChatSessionId || '').trim()) {
+    announceSourcePanelFileChanges(sessionId);
   }
-  const targetSession = window.chatSessions?.find(s => s.id === sessionId);
-  if (!targetSession) return;
-  if (!isActiveTarget) {
-    // Inactive chat: append to its stored history only; the server-side
-    // transcript stays authoritative when that chat is reopened.
-    const h = Array.isArray(targetSession.history) ? targetSession.history : [];
-    let idx = -1;
-    for (let i = h.length - 1; i >= 0; i--) {
-      if (h[i].role === 'ai' || h[i].role === 'assistant') { idx = i; break; }
-    }
-    if (idx === -1) return;
-    const prior = String(h[idx].content || '');
-    if (/background agent response:/i.test(prior)) return;
-    h[idx] = { ...h[idx], content: prior.trim() + '\n\nBackground agent response:\n' + String(msg.result || '') };
-    targetSession.history = h;
-    saveChatSessions();
-    return;
-  }
-  const history = targetSession.history || [];
-  // Find the last AI message
-  let lastAiIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'ai' || history[i].role === 'assistant') { lastAiIdx = i; break; }
-  }
-  if (lastAiIdx === -1) return;
-  const lastMsg = history[lastAiIdx];
-  const existingContent = String(lastMsg.content || '');
-  const nextFileChanges = mergeFileChangesWithBackground(lastMsg.fileChanges || null, window.activeChatSessionId) || lastMsg.fileChanges;
-  // Don't double-inject text, but still allow late file-change metadata to attach.
-  if (/background agent response:/i.test(existingContent)) {
-    if (nextFileChanges && nextFileChanges !== lastMsg.fileChanges) {
-      history[lastAiIdx] = { ...lastMsg, fileChanges: nextFileChanges };
-      persistActiveChat();
-      renderChatMessages();
-      announceSourcePanelFileChanges(window.activeChatSessionId);
-    }
-    return;
-  }
-  // Append the background agent inner panel marker
-  history[lastAiIdx] = {
-    ...lastMsg,
-    content: existingContent.trim() + '\n\nBackground agent response:\n' + String(msg.result || ''),
-    fileChanges: nextFileChanges,
-  };
-  persistActiveChat();
-  renderChatMessages();
-  if (nextFileChanges) announceSourcePanelFileChanges(window.activeChatSessionId);
-  addProcessEntry('info', `Background Agent ${msg.bgId}: result injected into reply.`, { actor: 'Background Agent' });
 });
 
 // ─── Coordinator progress: show team coordinator activity in process log ───

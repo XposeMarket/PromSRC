@@ -4508,8 +4508,10 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
 
 function _reconcileMobileBackgroundSpawnDockMarkup(host, markup) {
   if (!host) return;
+  const scrollState = captureKeyedScrollState(host, host);
   reconcileKeyedTimelineRows(host, markup, {
     scroller: host,
+    scrollState,
     setContents: (current, markup) => {
       const detailsState = _captureMobileTraceDetailsState(current);
       current.innerHTML = markup;
