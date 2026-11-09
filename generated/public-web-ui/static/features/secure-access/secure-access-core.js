@@ -498,9 +498,14 @@ function createMobileDockFit(host) {
     const parent = host.parentElement;
     // Target the real composer, never a nested protected-entry form.
     const composer = parent?.querySelector?.('#pm-composer');
+    const anchors = [composer, parent?.querySelector?.('#pm-chat-mode-launcher'), parent?.querySelector?.('#pm-new-chat-context-dock')];
+    const rects = anchors.filter(Boolean).filter((node) => {
+      const style = win.getComputedStyle(node);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+    }).map(node => node.getBoundingClientRect()).filter(rect => rect.height > 0);
     const op = host.offsetParent;
-    if (!composer || !op || typeof composer.getBoundingClientRect !== 'function') return;
-    const c = composer.getBoundingClientRect();
+    if (!rects.length || !op) return;
+    const c = rects.reduce((top, rect) => rect.top < top.top ? rect : top);
     const o = op.getBoundingClientRect();
     if (!(c.height > 0) || !(o.height > 0)) return;
     const viewTop = Math.max(Number(o.top) || 0, vv ? Number(vv.offsetTop) || 0 : 0);
