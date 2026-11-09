@@ -922,7 +922,19 @@ export async function browserUploadFile(
     observe?: BrowserObserveMode;
   },
 ): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    try {
+      const uploadPaths = toUploadPaths(options.file_path, options.file_paths);
+      const result = await callInHouseBrowser<{ count: number; names: string[] }>('upload-file', {
+        sessionId: resolved, ref: options.ref, selector: options.selector, file_paths: uploadPaths,
+      });
+      return `Selected ${result.count} file(s): ${result.names.join(', ')}. Check the page to confirm processing; nothing was published.`;
+    } catch (err: any) {
+      return `ERROR: In-house browser upload failed: ${err.message}`;
+    }
+  }
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
   try {
