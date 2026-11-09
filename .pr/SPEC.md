@@ -1,7 +1,7 @@
 # SPEC: Restore mobile protected credential setup
 
 Surface: both
-Parity: fixed both: shared protected card survives temporary app hiding; mobile renders connection artifacts and resumes the existing protected setup flow. Desktop connection cards remain supported.
+Parity: shared module: web-ui/src/features/secure-access/protected-plugin-card.js:53 is imported by both desktop and mobile; temporary app hiding retains DOM inputs on both surfaces. Mobile additionally renders connection artifacts via main/agent renderers. Desktop existing connection cards unchanged. Screenshots .pr/screenshots/desktop-protected-form.png and mobile-protected-form.png show shared form on both sizes.
 Test: node scripts/test-mobile-credential-cards.cjs
 Size justification: Shared card lifecycle plus mobile artifact wiring and browser regressions are one bounded credential UX fix.
 
