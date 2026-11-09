@@ -113,6 +113,26 @@ export class ConnectionOrchestrator {
     }
   }
 
+  /** Prepare a form, never launch OAuth, install a plugin, or grant consent. */
+  async prepareInput(id: string): Promise<ConnectionAttempt> {
+    const attempt = this.requireAttempt(id);
+    if (attempt.state !== 'awaiting_approval' || !attempt.plan) return attempt;
+    if (!['api-key', 'setup-token', 'connector-oauth'].includes(attempt.plan.strategy.adapter)) return attempt;
+    const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+    if (!adapter.prepare) return attempt;
+    const result = await adapter.prepare(this.context(attempt));
+    // No adapter can use this route to register or authenticate a connection.
+    if (result.state !== 'awaiting_secure_input' || result.connection) return attempt;
+    return this.applyResult(attempt, { ...result, configuration: { ...result.configuration, inputPreparedOnly: true } }, adapter.id);
+  }
+
+  /** Called only after an owner-authorized native app credential save. */
+  confirmPreparedInputSaved(id: string): void {
+    const attempt = this.requireAttempt(id);
+    if (attempt.state !== 'awaiting_secure_input' || !attempt.metadata?.inputPreparedOnly) return;
+    this.options.attempts.update(id, { metadata: { ...attempt.metadata, inputPreparedOnly: false } });
+  }
+
   connect(id: string, input?: Record<string, unknown>): Promise<ConnectionAttempt> {
     const pending = this.connectInFlight.get(id); if (pending) return pending;
     const task = this.connectOnce(id, input).finally(() => this.connectInFlight.delete(id));
@@ -125,8 +145,11 @@ export class ConnectionOrchestrator {
     if (!attempt.plan) attempt = await this.plan(id);
     if (!attempt.plan || attempt.state === 'failed') return attempt;
     if (attempt.state === 'awaiting_approval' && input?.approved !== true) return attempt;
-    if (attempt.state.startsWith('awaiting_') && attempt.state !== 'awaiting_approval') return attempt;
-    const adapter = this.options.adapters.resolve(attempt.plan.strategy);
+    if (attempt.state.startsWith('awaiting_') && attempt.state !== 'awaiting_approval') {
+      if (attempt.state !== 'awaiting_secure_input' || !attempt.metadata?.inputPreparedOnly || input?.approved !== true) return attempt;
+      attempt = this.options.attempts.update(id, { metadata: { ...attempt.metadata, inputPreparedOnly: false } });
+    }
+    const adapter = this.options.adapters.resolve(attempt.plan!.strategy);
     this.options.attempts.addProgress(attempt.id, { state: attempt.state, message: `Using ${adapter.displayName}.` });
     try {
       const result = await adapter.connect(this.context(attempt, input));
@@ -141,6 +164,7 @@ export class ConnectionOrchestrator {
     // Continue is progress, not consent. Only the owner-gated connect route approves.
     if (['awaiting_approval', 'cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
     if (!attempt.plan) throw new Error(`Connection attempt ${id} has no plan.`);
+    if (attempt.metadata?.inputPreparedOnly && attempt.plan.strategy.adapter === 'connector-oauth') return attempt;
     const adapter = this.options.adapters.resolve(attempt.plan.strategy);
     if (!adapter.continue) return attempt;
     try { return this.applyResult(attempt, await adapter.continue(this.context(attempt, input), input), adapter.id); }

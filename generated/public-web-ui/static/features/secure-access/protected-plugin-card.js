@@ -56,6 +56,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
   const parent = options.host || document.body;
   const root = el('section', { class: 'sa-card', role: 'dialog', 'aria-label': 'Protected plugin entry', 'data-protected-plugin-card': 'true' });
   if (!options.host) Object.assign(root.style, { position: 'fixed', zIndex: '10050', left: '50%', top: '12%', transform: 'translateX(-50%)', width: 'min(460px,92vw)', maxHeight: '75dvh', overflow: 'auto', background: 'var(--prom-surface,Canvas)' });
+  if (options.embedded) Object.assign(root.style, { padding: '0', border: '0', background: 'transparent', maxWidth: 'none' });
   parent.append(root);
   const inputs = [];
   let closed = false;
@@ -73,7 +74,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
   const handle = { close, get closed() { return closed; } };
   openCard = handle;
   window.addEventListener('pagehide', close); document.addEventListener('visibilitychange', onHide);
-  root.append(el('h3', { text: 'Add secret · protected entry' }), el('p', { class: 'sa-muted', text: 'Values go directly to this plugin’s protected storage, not the conversation, drafts or the model. Saving does not authorize posting or spending.' }));
+  root.append(el('h3', { text: options.title || 'Add secret · protected entry' }), el('p', { class: 'sa-muted', text: 'Values go directly to this plugin’s protected storage, not the conversation, drafts or the model. Saving does not authorize posting or spending.' }));
   const error = el('p', { class: 'sa-err', role: 'alert' });
   const status = el('p', { class: 'sa-muted', role: 'status', 'aria-live': 'polite' });
   root.append(error, status, el('button', { class: 'sa-btn', type: 'button', text: 'Cancel', onclick: close }));
@@ -94,7 +95,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
     selector.value = wanted;
     if (options.request || options.attemptId) selector.disabled = true;
     const form = el('form', { class: 'sa-form', autocomplete: 'off', novalidate: true });
-    root.insertBefore(el('label', { class: 'sa-field' }, el('span', { class: 'sa-lbl', text: 'Destination plugin' }), selector), error);
+    if (!options.serviceId) root.insertBefore(el('label', { class: 'sa-field' }, el('span', { class: 'sa-lbl', text: 'Destination plugin' }), selector), error);
     root.insertBefore(form, error);
     async function render() {
       clear(); inputs.length = 0; form.replaceChildren(); error.textContent = ''; status.textContent = ''; clearTimeout(expiryTimer);
@@ -116,7 +117,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
         const input = el('input', { class: 'sa-input', type: field.secret === false ? 'text' : 'password', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'data-prom-secret': 'true', required: field.required === true, 'aria-label': String(field.label || field.key) });
         inputs.push(input); form.append(el('label', { class: 'sa-field' }, el('span', { class: 'sa-lbl', text: String(field.label || field.key) }), input));
       }
-      const save = el('button', { class: 'sa-btn sa-pri', type: 'submit', text: service === 'x' ? 'Save app and continue to X sign-in' : 'Save protected key' });
+      const save = el('button', { class: 'sa-btn sa-pri', type: 'submit', text: nativeApp || service === 'x' ? 'Save and continue to sign-in' : 'Save key' });
       form.append(save);
       inputs[0]?.focus?.();
       form.onsubmit = async event => {
@@ -157,6 +158,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
             // so the UI never replays a ref. Only the non-bindable legacy path still returns a ref to continue with.
             if (result?.credentialRef) await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(request.attemptId)}/continue`, { credentialRef: result.credentialRef });
             clearTimeout(expiryTimer);
+            if (options.onSaved) { options.onSaved({ serviceId: service, stored: true }); close(); return; }
             form.replaceChildren(el('p', { class: 'sa-muted', text: result?.status === 'STORED_CONNECTION_PENDING' ? 'Key stored. Connection setup is pending; do not re-enter the key. Retry from Connections.' : 'Stored, not verified. Prometheus has no safe check for this key; saving alone does not mean connected.' }));
           }
           options.onSaved?.({ serviceId: service });

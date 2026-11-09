@@ -4,7 +4,7 @@ import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
 import { bindPluginCredential } from '../../connections/plugin-credential-binding';
-import { requireProtectedOwner } from './secure-access.router';
+import { requireProtectedOwner, ownerSurfaceState, secureInputTransportAllowed } from './secure-access.router';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -70,6 +70,13 @@ router.get('/api/connection-attempts/:id', (req, res) => {
   const attempt = getConnectionRuntime().orchestrator.getAttempt(req.params.id);
   if (!attempt) { res.status(404).json({ success: false, error: 'Connection attempt not found' }); return; }
   res.json({ success: true, attempt });
+});
+
+// A trusted surface may open an empty form. Only the existing protected save/connect routes authorize changes.
+router.post('/api/connection-attempts/:id/prepare-input', async (req, res) => {
+  if (!secureInputTransportAllowed(req) || !ownerSurfaceState(req).canApprove) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.prepareInput(req.params.id) }); }
+  catch { res.status(400).json({ error: 'PROTECTED_REQUEST_UNAVAILABLE' }); }
 });
 
 router.post('/api/connection-attempts/:id/connect', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {

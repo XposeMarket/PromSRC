@@ -12,7 +12,8 @@ export const SECURE_ACCESS_API = '/api/secure-access';
 const STYLE_ID = 'prom-secure-access-styles';
 
 const CSS = `
-.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-size:14px;line-height:1.45}
+.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-family:var(--font-sans,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);font-size:14px;line-height:1.45}
+.sa-card h2,.sa-card h3{margin:0;font-size:18px;line-height:1.3}.sa-card p{margin:0}.sa-card a.sa-btn{display:flex;align-items:center;justify-content:center;text-decoration:none}
 .sa-card *{box-sizing:border-box}
 .sa-hd{display:flex;gap:10px;align-items:flex-start}.sa-hd svg{flex:none;color:var(--sa-a);margin-top:2px}
 .sa-hd h3{font-size:15px;margin:0}.sa-muted,.sa-hd p{margin:0;color:var(--sa-m);font-size:12.5px;overflow-wrap:anywhere}
@@ -35,7 +36,7 @@ const CSS = `
 .sa-card details{border:1px solid var(--sa-b);border-radius:9px;padding:0 12px}
 .sa-card summary{min-height:40px;display:flex;align-items:center;cursor:pointer;font-weight:600;font-size:13px}
 .sa-card details ul,.sa-sum{margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--sa-m)}
-.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty{display:none}
+.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty,.sa-card>.sa-muted:empty{display:none}
 .sa-ok{color:var(--prom-success,#2f9e63)}.sa-warn{color:var(--prom-warning,#b7791f)}
 .sa-badge{display:inline-flex;align-items:center;border:1px solid var(--sa-b);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--sa-m);white-space:nowrap}
 .sa-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

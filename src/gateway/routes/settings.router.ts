@@ -2703,6 +2703,7 @@ router.post('/api/auth/x-api/credentials', (req, res, next) => requireProtectedO
       clientSecret: req.body?.clientSecret,
 
     });
+    if (req.body?.attemptId) getPluginConnectRuntime().orchestrator.confirmPreparedInputSaved(String(req.body.attemptId));
     res.json({
       success: true,
       redirect_uri: credentials.redirect_uri,
