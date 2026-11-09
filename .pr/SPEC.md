@@ -1,14 +1,13 @@
 # Native browser upload repair
 Surface: backend
-Parity: Shared upload tool used by desktop/mobile/channel and agents; requires Electron for in-house sessions, Playwright fallback unchanged.
+Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
 Test: node scripts/test-inhouse-upload.cjs
-
 ## Problem
-Active in-house browser uploads incorrectly report no session because upload only checks Playwright.
+Active native browser upload incorrectly reports no session.
 ## Chosen approach
-Tier 1 restore. Route existing native session to authenticated Electron RPC and select local files using CDP against the exact session webContents. No publication, new permission, or persisted state. Extra WIP explicitly approved by Raul card31f5e507. Read/update self/13-browser-desktop.md. Electron relaunch required after separately approved merge.
+Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
 ## Acceptance
-Hidden input and nested snapshot ref accept files in real Chromium; invalid paths/targets fail; debugger ownership preserved; native routing precedes Playwright. No TikTok post or schedule. Live proof pending deployed Electron.
+Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
 ## Files
 - src/gateway/browser-tools.ts
 - electron/main.js
@@ -16,3 +15,5 @@ Hidden input and nested snapshot ref accept files in real Chromium; invalid path
 - scripts/test-inhouse-upload.cjs
 - workspace/self/13-browser-desktop.md
 - .pr/SPEC.md
+## Risks
+Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.
