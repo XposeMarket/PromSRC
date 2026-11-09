@@ -132,10 +132,10 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
       }];
     }
 
-    if (!strategies.length && !descriptor && input.metadata?.officialSource !== true && (input.metadata?.endpoint || input.metadata?.baseUrl)) {
+    if (!strategies.length && !descriptor && !input.metadata?.pluginKind && input.metadata?.officialSource !== true && (input.metadata?.endpoint || input.metadata?.baseUrl)) {
       strategies = [{ id: `${serviceId}-openai-compatible`, adapter: 'openai-compatible-model', priority: 50, capabilities: input.requestedCapabilities, readOnly: true, authentication: { type: 'api-key' }, configuration: input.metadata, verification: ['endpoint.reachable', 'models.list', 'completion.minimal'] }];
     }
-    if (!strategies.length && !descriptor && input.metadata?.officialSource === true && typeof input.metadata?.protocol === 'string') {
+    if (!strategies.length && !descriptor && !input.metadata?.pluginKind && input.metadata?.officialSource === true && typeof input.metadata?.protocol === 'string') {
       const protocol = String(input.metadata.protocol).toLowerCase();
       const adapter = protocol === 'mcp-oauth' ? 'mcp-oauth'
         : protocol === 'mcp-http' ? 'mcp-http'

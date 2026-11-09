@@ -78,3 +78,18 @@ Test: node scripts/test-plugin-connect-flow.mjs
 
 ## Files
 - scripts/test-plugin-connect-http-ui.cjs
+
+## Files
+- scripts/test-plugin-connect-oauth-ui.cjs
+- scripts/test-plugin-connect-families.cjs
+- scripts/test-plugin-connect-electron.cjs
+
+## Continued acceptance testing
+2026-11-08: user authorized finishing remaining verification. Add loopback-only fake-provider OAuth UI lifecycle, real adapter family checks, and isolated native Electron checks. No live account login, deployment or physical-phone claim. Keep any packaged/physical acceptance gaps explicit rather than marking mock seams complete.
+
+## Files
+- src/connections/adapters/mcp-stdio.ts
+- src/connections/adapters/browser-session.ts
+
+## Family-test corrective scope
+Strict adapter-family regressions exposed three existing defects: local MCP connect skipped missing-command validation, unknown explicitly qualified provider fell back to metadata endpoint, and browser cancellation skipped the optional host cleanup hook. Restore these boundaries, retain unqualified custom endpoint fallback, and rerun strict tests. Sensitive restore fixes within approved Tier2 scope; scoped independent review required.
