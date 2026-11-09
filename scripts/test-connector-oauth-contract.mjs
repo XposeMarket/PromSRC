@@ -34,6 +34,8 @@ assert.deepEqual(descriptor.connection?.strategies?.[0]?.config?.registeredTools
   'connector_github_list_check_runs',
   'connector_github_get_file',
   'connector_github_search',
+  'connector_github_update_pr', 'connector_github_close_pr', 'connector_github_update_issue',
+  'connector_github_comment', 'connector_github_create_review', 'connector_github_list_review_comments', 'connector_github_api_request',
 ]);
 
 const migratedConnectorIds = ['github', 'gmail', 'google_drive', 'ga4', 'notion', 'slack', 'hubspot', 'salesforce', 'reddit'];

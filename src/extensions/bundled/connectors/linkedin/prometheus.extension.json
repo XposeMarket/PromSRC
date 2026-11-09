@@ -28,6 +28,7 @@
     ],
     "capabilities": ["social", "publishing"]
   },
+  "connection": { "schemaVersion": 1, "aliases": ["LinkedIn account"], "strategies": [{ "id": "linkedin-oauth", "adapter": "connector-oauth", "priority": 100, "capabilities": ["account.read"], "readOnlyDefault": true, "authentication": { "type": "oauth2", "scopes": ["openid", "profile", "email"] }, "config": { "connectorId": "linkedin", "provider": "linkedin" }, "verification": ["oauth.authentication", "account.identity", "safe-read"] }] },
   "setup": {
     "authType": "oauth",
     "statusMode": "oauth_connector",

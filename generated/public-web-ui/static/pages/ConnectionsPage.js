@@ -1,3 +1,5 @@
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { postJson as connectionOwnerPost } from '../features/secure-access/secure-access-core.js';
 /**
  * ConnectionsPage.js
  *
@@ -622,6 +624,11 @@ function openConnectorView(id) {
   }
 
   renderConnectorActions(connector, isConnected);
+  if (isConnected) {
+    const verify = document.createElement('button'); verify.className = 'cv-btn-connect'; verify.type = 'button'; verify.textContent = 'Ask Prom to verify';
+    verify.onclick = () => { closeConnectorView(); window.sendChat?.(`I connected the ${connector.name} plugin (connector:${connector.id}). Please verify its connection and available features using safe, read-only checks. Do not post, send, or spend.`); };
+    document.getElementById('cv-actions')?.append(verify);
+  }
   if (connector.isUserPlugin) {
     const actionsEl = document.getElementById('cv-actions');
     if (actionsEl) {
@@ -716,7 +723,9 @@ async function runConnectionAttemptAction(attemptId, operation, button) {
 async function continueConnectionAttempt(attemptId, input = {}, button) {
   if (button) { button.disabled = true; button.textContent = 'Continuing…'; }
   try {
-    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
+    const result = input?.approved === true
+      ? await connectionOwnerPost(api, `/api/connection-attempts/${encodeURIComponent(attemptId)}/connect`, {}, 'Approve connection')
+      : await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
     showToast('Connection updated', String(result?.attempt?.state || 'continued'), 'success');
     await loadConnectionsState();
     if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
@@ -936,6 +945,10 @@ function renderManagedOAuthActions(connector, isConnected) {
 }
 
 async function startCanonicalConnection(id) {
+  return startOAuthFlow(id);
+}
+
+async function startLegacyCanonicalConnection(id) {
   const connector = getConnectorById(id);
   if (!connector || !hasCanonicalOAuthStrategy(connector)) return;
   const strategy = connector.connection.strategies.find((item) => item?.adapter === 'connector-oauth');
@@ -1222,6 +1235,10 @@ async function pollXurlSetup() {
 }
 
 async function startOAuthFlow(id) {
+  return openConnectFlow(api, { serviceId: id, kind: 'connector' }, { onChanged: loadConnectionsState, onVerify: message => { closeConnectorView(); window.sendChat?.(message); } });
+}
+
+async function startLegacyOAuthFlow(id) {
   const connector = getConnectorById(id);
   if (!connector || connector.authType !== 'oauth') return;
 
@@ -1302,7 +1319,7 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
   if (!el || !connector) return;
 
   if (connector.id === 'x') {
-    el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px"><div style="font-size:12px;color:var(--muted)">X app Client ID / Secret are entered only in protected entry, then X sign-in continues in your browser.</div><button class="cv-btn-connect" onclick="saveConnectorCredentials('x')">Open protected entry</button></div>`;
+    void openProtectedPluginCard(protectedFetch, { serviceId: 'x', title: 'X app credentials', onSaved: () => loadConnectionsState?.() });
     return;
   }
   const info = connector.credInfo;

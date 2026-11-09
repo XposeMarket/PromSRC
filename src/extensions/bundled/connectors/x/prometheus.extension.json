@@ -97,6 +97,12 @@
       "x_api_oauth"
     ]
   },
+  "connection": {
+    "schemaVersion": 1, "aliases": ["Twitter", "X / Twitter", "x.com"], "domains": ["x.com", "twitter.com"],
+    "strategies": [{ "id": "x-oauth", "adapter": "connector-oauth", "priority": 100, "capabilities": ["account.read"], "readOnlyDefault": true,
+      "authentication": { "type": "oauth2", "pkceRequired": true },
+      "config": { "provider": "x", "connectorId": "x" }, "verification": ["oauth.authentication", "account.identity", "safe-read"] }]
+  },
   "setup": {
     "authType": "oauth",
     "statusMode": "generic",

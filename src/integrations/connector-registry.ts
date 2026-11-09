@@ -81,6 +81,7 @@ export function startOAuthFlowForConnector(id: string, expectedAccountId?: strin
   // Keep the completed result briefly so the UI cannot miss it between polls.
   callbackPromise
     .then((result) => {
+      if (pendingCallbacks.get(id) !== callbackPromise) return;
       pendingCallbacks.delete(id);
       completedCallbacks.set(id, {
         result,
@@ -88,6 +89,7 @@ export function startOAuthFlowForConnector(id: string, expectedAccountId?: strin
       });
     })
     .catch((err: any) => {
+      if (pendingCallbacks.get(id) !== callbackPromise) return;
       pendingCallbacks.delete(id);
       completedCallbacks.set(id, {
         result: { success: false, error: err?.message || String(err) },
@@ -128,6 +130,10 @@ export async function pollOAuthResult(id: string): Promise<OAuthCallbackResult |
  * Check if a connector is currently connected (has valid tokens).
  */
 /** True while a loopback OAuth listener for this connector is still waiting. */
+export function cancelConnectorOAuth(id: string): void {
+  connectors.get(id)?.cancelFlow(); pendingCallbacks.delete(id); completedCallbacks.delete(id);
+}
+
 export function hasPendingOAuthFlow(id: string): boolean {
   return pendingCallbacks.has(id);
 }

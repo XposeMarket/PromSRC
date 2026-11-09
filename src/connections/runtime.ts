@@ -1,4 +1,5 @@
 import { getConfig } from '../config/config';
+import { ConnectionStartService } from './start-service';
 import { getMCPManager } from '../gateway/mcp-manager';
 import { broadcastWS } from '../gateway/comms/broadcaster';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
@@ -45,12 +46,13 @@ export function registerOpenAiCompatibleProvider(context: ConnectionAdapterConte
   const providerId = String(configuration.providerId || context.attempt.serviceId).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   const models = Array.isArray(configuration.discoveredModels) ? configuration.discoveredModels.map(String) : [];
   const apiKeyRef = context.credentialRef ? deps.copyCredential(context.credentialRef, context.attempt.serviceId, context.attempt.id, 'api_key', `llm.provider-key.${providerId}`) : '';
-  const providers = { ...(cfg.llm?.providers || {}), [providerId]: { ...(cfg.llm?.providers?.[providerId] || {}), api_key: apiKeyRef, base_url: String(configuration.baseUrl || configuration.endpoint || ''), model: String(configuration.model || models[0] || '') } };
+  const existingProvider = cfg.llm?.providers?.[providerId] || {};
+  const providers = { ...(cfg.llm?.providers || {}), [providerId]: { ...existingProvider, api_key: apiKeyRef || existingProvider.api_key || '', base_url: String(configuration.baseUrl || configuration.endpoint || ''), model: String(configuration.model || existingProvider.model || models[0] || '') } };
   deps.updateConfig({ llm: { ...(cfg.llm || {}), providers } });
   return { providerId, models };
 }
 
-let singleton: { orchestrator: ConnectionOrchestrator; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
+let singleton: { orchestrator: ConnectionOrchestrator; start: ConnectionStartService; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
 
 function mcpServerId(context: ConnectionAdapterContext): string {
   return String(context.attempt.plan?.strategy.configuration?.mcpServerId || context.attempt.serviceId);
@@ -105,6 +107,7 @@ export function getConnectionRuntime() {
     },
     disconnectServer: async (context) => { await mcp.disconnect(mcpServerId(context)); },
     revokeOAuth: async (context) => { const { revokeMcpOAuth } = await import('../gateway/mcp-oauth.js'); await revokeMcpOAuth(mcpServerId(context)); },
+    cancelOAuth: async (context) => { const { cancelMcpOAuth } = require('../gateway/mcp-oauth') as typeof import('../gateway/mcp-oauth'); cancelMcpOAuth(mcpServerId(context)); },
     clearOAuth: async (context) => { const { clearMcpOAuth } = await import('../gateway/mcp-oauth.js'); clearMcpOAuth(mcpServerId(context)); },
   }));
 
@@ -141,7 +144,7 @@ export function getConnectionRuntime() {
         if (!response.ok) return { ok: false, error: `Model discovery returned HTTP ${response.status}.` };
         const body: any = await response.json();
         const models = Array.isArray(body?.data) ? body.data.map((item: any) => String(item?.id || '')).filter(Boolean) : [];
-        return { ok: true, models, streaming: true, toolCalling: true, details: { status: response.status } };
+        return { ok: true, models, details: { status: response.status, capabilityNote: 'Model listing does not verify streaming or tool calling.' } };
       } catch (error: any) { return { ok: false, error: String(error?.message || error) }; }
     },
     register: async (context, configuration) => registerOpenAiCompatibleProvider(context, configuration, {
@@ -154,7 +157,7 @@ export function getConnectionRuntime() {
   adapters.register(new CustomHttpConnectionAdapter({
     probe: async (_context, configuration) => {
       const endpoint = String(configuration.endpoint || configuration.url || '');
-      try { const response = await fetch(endpoint, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10_000) }); return { ok: response.status < 500, status: response.status }; }
+      try { const response = await fetch(endpoint, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10_000) }); return { ok: response.ok, status: response.status }; }
       catch (error: any) { return { ok: false, error: String(error?.message || error) }; }
     },
     register: async (context, configuration) => {
@@ -181,7 +184,7 @@ export function getConnectionRuntime() {
   }
   const plans = new PluginConnectionPlanResolver(() => mcp.getConfigs());
   const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, validateCredentialReference: (reference, serviceId, attemptId) => secureInput.ownsReference(reference, serviceId, attemptId), broadcast: broadcastWS });
-  singleton = { orchestrator, secureInput, adapters };
+  singleton = { orchestrator, start: new ConnectionStartService(orchestrator), secureInput, adapters };
   return singleton;
 }
 

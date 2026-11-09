@@ -1,4 +1,5 @@
 // Mobile Plugins page (replaces the old "More" landing on mobile only).
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
 //
 // One alphabetical list of everything the gateway can plug into the model:
 // bundled connectors, MCP servers, and plugins imported from Claude Code /
@@ -321,7 +322,7 @@ function openSheet(page, row, navigate, onChanged) {
   const primary = isOn
     ? (row.kind === 'imported' ? 'Uninstall' : 'Disconnect')
     : row.reauthRequired ? `Reconnect ${row.name}`
-    : (row.kind === 'imported' ? 'Finish setup' : (row.oneTap ? `Connect ${row.name}` : `Ask Prom to connect ${row.name}`));
+    : (row.kind === 'imported' ? 'Finish setup' : `Connect ${row.name}`);
   const primaryIsDisconnect = isOn;
   const wrap = document.createElement('div');
   wrap.className = 'pm-plugin-sheet-backdrop';
@@ -336,17 +337,21 @@ function openSheet(page, row, navigate, onChanged) {
       ${row.desc ? `<p class="pm-plugin-sheet-desc">${escapeHtml(row.desc)}</p>` : ''}
       ${details}
       ${perms}
+      ${isOn ? '<button class="pm-plugin-sheet-primary" type="button" data-plugin-verify>Ask Prom to verify</button>' : ''}
       <button class="${primaryIsDisconnect ? 'pm-plugin-sheet-danger' : 'pm-plugin-sheet-primary'}" type="button" data-plugin-primary>${escapeHtml(primary)}</button>
       ${!primaryIsDisconnect && canDisconnect ? `<button class="pm-plugin-sheet-danger" type="button" data-plugin-disconnect>${row.kind === 'imported' ? 'Uninstall' : 'Disconnect'}</button>` : ''}
       <p class="pm-plugin-sheet-note">${isOn
         ? (row.kind === 'imported' ? 'Removes the imported skills, MCP servers and hooks.' : `Removes Prometheus's access to ${escapeHtml(row.name)}. You can connect again any time.`)
         : row.reauthRequired
-          ? `${escapeHtml(row.name)}'s saved login expired or was revoked, so its tools are off until you sign in again. Prom handles the sign-in on your PC.`
+          ? `${escapeHtml(row.name)}'s saved login expired or was revoked, so its tools are off until you sign in again. Reconnect to open its sign-in or credential form.`
         : row.oneTap
           ? `Opens ${escapeHtml(row.name)}'s sign-in page. Tap Allow and you're done. No tokens to paste.`
-          : 'Prom handles this sign-in on your PC and asks before anything that writes or posts.'}</p>
+          : 'Connect opens this plugin’s setup. Your keys stay out of chat. You can ask Prom to verify afterward.'}</p>
     </div>`;
   const close = () => wrap.remove();
+  wrap.querySelector('[data-plugin-verify]')?.addEventListener('click', () => {
+    close(); askPromInChat(navigate, `I connected the ${row.name} plugin (${row.kind}:${row.id}). Please verify its connection and available features using safe, read-only checks. Do not post, send, or spend.`);
+  });
   wrap.addEventListener('click', (event) => { if (event.target === wrap) close(); });
   wrap.querySelector('.pm-plugin-sheet-close')?.addEventListener('click', close);
   const runDisconnect = async (button) => {
@@ -383,7 +388,7 @@ function openSheet(page, row, navigate, onChanged) {
       return;
     }
     close();
-    askPromInChat(navigate, connectMessage(row));
+    await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'mcp' ? 'mcp_preset' : ['connector', 'provider', 'integration'].includes(row.kind) ? row.kind : undefined }, { onChanged, onVerify: message => askPromInChat(navigate, message) });
   });
   // On <body>, not the page: a transformed page ancestor would pin a fixed
   // overlay to the page box instead of the viewport.

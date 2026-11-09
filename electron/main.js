@@ -3986,6 +3986,10 @@ async function startNativeBrowserRpcServer() {
         else if (pathName === '/snapshot') result = await snapshotNativeBrowserSurface(payload.sessionId);
         else if (pathName === '/click') result = await clickNativeBrowserSurface(payload);
         else if (pathName === '/fill') result = await fillNativeBrowserSurface(payload);
+        else if (pathName === '/upload-file') {
+          const { wc } = requireNativeViewForSession(payload.sessionId || '');
+          result = await require('./browser-upload.cjs').uploadNativeFiles(wc, payload);
+        }
         else if (pathName === '/input') result = await inputNativeBrowserSurface(payload);
         else if (pathName === '/screenshot') result = await screenshotNativeBrowserSurface(payload.sessionId);
         else if (pathName === '/console') result = nativeBrowserConsole(payload);

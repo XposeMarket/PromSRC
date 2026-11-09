@@ -1,4 +1,6 @@
 import type { OAuthCallbackResult, OAuthConnectorMetadata } from '../integrations/oauth-base';
+import { cancelConnectorOAuth } from '../integrations/connector-registry';
+import { buildXOAuthBridge } from './x-oauth-bridge';
 import {
   disconnectConnector,
   getConnector,
@@ -25,6 +27,8 @@ type ConnectorRuntime = {
   listContacts?: (limit?: number, after?: string) => Promise<any>;
   getIdentity?: () => Promise<any>;
   getMe?: () => Promise<any>;
+  getUserInfo?: () => Promise<any>;
+  userInfo?: () => Promise<any>;
 };
 
 const NATIVE_OAUTH_CONNECTORS: Readonly<Record<string, string>> = Object.freeze({
@@ -37,6 +41,7 @@ const NATIVE_OAUTH_CONNECTORS: Readonly<Record<string, string>> = Object.freeze(
   hubspot: 'HubSpot',
   salesforce: 'Salesforce',
   reddit: 'Reddit',
+  instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok',
 });
 
 function runtimeFor(id: string): ConnectorRuntime {
@@ -119,7 +124,18 @@ async function verifyNativeConnector(id: string): Promise<ConnectorOAuthVerifica
   let account = baseAccount(id);
   const tokens = tokensFor(id);
 
-  if (id === 'github' && connector.getUser) {
+  if (id === 'instagram' && connector.getProfile) {
+    const profile = await connector.getProfile();
+    if (!profile?.user_id && !profile?.id) throw new Error('Instagram returned no account identity.');
+    account = normalizeConnectionAccountIdentity({ provider: id, providerAccountId: profile.user_id || profile.id, username: profile.username, displayName: profile.name }, id);
+  } else if (id === 'linkedin' || id === 'tiktok') {
+    const read = connector.getUserInfo || connector.userInfo || connector.getMe || connector.getUser;
+    if (!read) throw new Error(`${id} safe account verifier unavailable.`);
+    const result = await read.call(connector); const profile = result?.data?.user || result;
+    const identity = profile?.sub || profile?.open_id;
+    if (!identity) throw new Error(`${id} returned no account identity.`);
+    account = normalizeConnectionAccountIdentity({ provider: id, providerAccountId: identity, username: profile.username, displayName: profile.name || profile.display_name }, id);
+  } else if (id === 'github' && connector.getUser) {
     const user = await connector.getUser();
     account = normalizeConnectionAccountIdentity({
       provider: id,
@@ -200,7 +216,7 @@ function metadataFor(id: string): OAuthConnectorMetadata | undefined {
 }
 
 export function buildConnectorOAuthBridges(): Readonly<Record<string, ConnectorOAuthBridge>> {
-  return Object.fromEntries(Object.entries(NATIVE_OAUTH_CONNECTORS).map(([id, name]) => [id, {
+  return { x: buildXOAuthBridge(), ...Object.fromEntries(Object.entries(NATIVE_OAUTH_CONNECTORS).map(([id, name]) => [id, {
     id,
     name,
     start: (expectedAccountId?: string, requestedScopes?: string[]) => startOAuthFlowForConnector(id, expectedAccountId, requestedScopes) as any,
@@ -218,7 +234,8 @@ export function buildConnectorOAuthBridges(): Readonly<Record<string, ConnectorO
     revoke: ['github', 'gmail', 'google_drive', 'ga4'].includes(id)
       ? async () => { await revokeConnectorAccess(id); }
       : undefined,
-    clear: () => { disconnectConnector(id); },
+    cancel: () => { cancelConnectorOAuth(id); },
+    clear: () => { cancelConnectorOAuth(id); disconnectConnector(id); },
     credentialReference: () => getConnector(id)?.credentialReference() || '',
-  } satisfies ConnectorOAuthBridge]));
+  } satisfies ConnectorOAuthBridge])) };
 }

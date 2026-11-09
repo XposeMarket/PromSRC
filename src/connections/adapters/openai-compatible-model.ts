@@ -32,8 +32,8 @@ export class OpenAiCompatibleModelConnectionAdapter implements ConnectionAdapter
     return [
       { id: `${connection.id}:reachability`, check: 'model.reachability', passed: probe.ok, message: probe.error, details: probe.details, verifiedAt: now },
       { id: `${connection.id}:models`, check: 'model.discovery', passed: Boolean(probe.models?.length), message: `${probe.models?.length || 0} model(s) discovered.`, verifiedAt: now },
-      { id: `${connection.id}:streaming`, check: 'model.streaming', passed: probe.streaming !== false, verifiedAt: now },
-      { id: `${connection.id}:tools`, check: 'model.tool-calling', passed: probe.toolCalling !== false, verifiedAt: now },
+      ...(probe.streaming === undefined ? [] : [{ id: `${connection.id}:streaming`, check: 'model.streaming', passed: probe.streaming === true, message: probe.streaming === undefined ? 'Streaming capability has not been tested.' : undefined, verifiedAt: now }]),
+      ...(probe.toolCalling === undefined ? [] : [{ id: `${connection.id}:tools`, check: 'model.tool-calling', passed: probe.toolCalling === true, message: probe.toolCalling === undefined ? 'Tool-calling capability has not been tested.' : undefined, verifiedAt: now }]),
     ];
   }
   async disconnect(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void> { await this.host.unregister?.(context, connection); }

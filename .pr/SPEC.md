@@ -1,36 +1,19 @@
-# SPEC: Keep background evidence out of replies and restore agent-list scrolling
-
-Surface: both
-Parity: fixed both: desktop completion routing and shared backend; mobile expanded agent dock tested separately.
-Test: node scripts/test-background-result-chat-scroll.mjs
-Size justification: bounded repair across completion and presentation boundaries.
-
+# Native browser upload repair
+Surface: backend
+Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
+Test: node scripts/test-inhouse-upload.cjs
 ## Problem
-Worker output is appended to ordinary replies by ChatPage bg_agent_done and a handle-chat finalization fallback. Raul also reports expanded mobile agent list cannot scroll past about seven rows.
-
-## Existing code
-Typed internal background results already feed model context and are excluded from visible history. Agent dock has overflow rules and keyed reconciliation; effective scrolling still requires reproduction.
-
-## Options
-1. Hide marker text: masks symptoms and loses evidence.
-2. Remove legacy raw append paths, preserve model synthesis and worker detail; repair confirmed scroll cause (chosen).
-
+Active native browser upload incorrectly reports no session.
 ## Chosen approach
-Use the existing internal result and agent-detail routes, never rewrite a prior answer from a completion event. Diagnose scroll with actual styles and renderer before changing it.
-
+Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
 ## Acceptance
-Raw completion never mutates active/inactive parent replies. Worker details and main-model evidence remain. Many-agent list can reach final row and retains position through updates. Desktop/mobile regression tests pass.
-
-## Out of scope
-No history deletion, model routing, theme redesign, merge or deployment.
-
+Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
 ## Files
-- .pr/SPEC.md - tracked task scope and verification contract
-- src/gateway/routes/chat/pipeline/handle-chat.ts
-- web-ui/src/pages/ChatPage.js
-- web-ui/src/mobile/mobile-chat-renderer-runtime.js
-- web-ui/src/styles/mobile-composer-stack.css
-- scripts/test-background-result-chat-scroll.mjs
-
+- src/gateway/browser-tools.ts
+- electron/main.js
+- electron/browser-upload.cjs
+- scripts/test-inhouse-upload.cjs
+- workspace/self/13-browser-desktop.md
+- .pr/SPEC.md
 ## Risks
-Completion evidence could be lost if synthesis path removed: retain and test internal routing. Scroll changes could affect collapse: test both states. Revert PR to roll back.
+Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.

@@ -1,4 +1,7 @@
 import { requireProtectedOwner } from './secure-access.router';
+import { requirePluginSetup } from './plugin-setup-access';
+import { nativeAppSetup } from '../../connections/native-app-setup';
+import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
 // src/gateway/routes/settings.router.ts
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
@@ -2690,16 +2693,18 @@ router.get('/api/auth/x-api/status', (_req, res) => {
   res.json({ success: true, ...getXApiOAuthStatus(CONFIG_DIR_PATH) });
 });
 
-router.post('/api/auth/x-api/credentials', (req, res, next) => requireProtectedOwner(req, res, next), (req, res) => {
-  if (Object.keys(req.body || {}).some(key => !['clientId', 'clientSecret'].includes(key))) {
+router.post('/api/auth/x-api/credentials', (req, res, next) => requirePluginSetup(req, res, next), (req, res) => {
+  if (Object.keys(req.body || {}).some(key => !['clientId', 'clientSecret', 'attemptId'].includes(key))) {
     res.status(400).json({ success: false, error: 'X_OAUTH_APP_FIELDS_REQUIRED' }); return;
   }
   try {
+    if (req.body?.attemptId) nativeAppSetup(getPluginConnectRuntime().orchestrator, String(req.body.attemptId), 'x');
     const credentials = saveXApiCredentials(CONFIG_DIR_PATH, {
       clientId: req.body?.clientId,
       clientSecret: req.body?.clientSecret,
 
     });
+    if (req.body?.attemptId) getPluginConnectRuntime().orchestrator.confirmPreparedInputSaved(String(req.body.attemptId));
     res.json({
       success: true,
       redirect_uri: credentials.redirect_uri,

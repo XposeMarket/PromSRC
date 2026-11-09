@@ -72,7 +72,7 @@ const host = document.getElementById('host');
 const request = { id: 'req1', sessionId: 's1', label: 'Demo', purpose: 'test', origin: 'https://demo.example', mode: 'existing', identifier: 'me@example.test', expiresAt: new Date(Date.now() + 60000).toISOString(), status: 'pending' };
 let resolvedMeta = null;
 const card = mod.mountSecureAccessCard(host, {
-  request, status: { persistentAllowed: false },
+  request, status: { persistentAllowed: false, owner: { canApprove: true } },
   fetchJson: fakeFetch({ 'POST /api/secure-access/requests/req1/submit': { credential: { id: 'cred1', storage: 'session' } } }),
   onResolved: (m) => { resolvedMeta = m; },
 });
@@ -106,7 +106,7 @@ card.destroy();
 // Generated password requires recovery confirmation before save.
 calls.length = 0;
 const card2 = mod.mountSecureAccessCard(host, {
-  request: { ...request, id: 'req2', mode: 'new' }, status: { persistentAllowed: true },
+  request: { ...request, id: 'req2', mode: 'new' }, status: { persistentAllowed: true, owner: { canApprove: true } },
   fetchJson: fakeFetch({ 'POST /api/secure-access/requests/req2/submit': { credential: { id: 'c2', storage: 'persistent' } } }),
 });
 const s2 = card2.el.querySelector('input[data-prom-secret]');
@@ -126,18 +126,18 @@ assert.equal(s2.value, '');
 card2.destroy();
 
 // Cancel and destroy clear typed values.
-const card3 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req3' }, status: {}, fetchJson: fakeFetch({ 'POST /api/secure-access/requests/req3/cancel': { ok: true } }) });
+const card3 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req3' }, status: { owner: { canApprove: true } }, fetchJson: fakeFetch({ 'POST /api/secure-access/requests/req3/cancel': { ok: true } }) });
 const s3 = card3.el.querySelector('input[data-prom-secret]');
 s3.value = CANARY;
 [...card3.el.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
 assert.equal(s3.value, '', 'cancel clears immediately');
 await flush();
 card3.destroy();
-const card4 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req4' }, status: {}, fetchJson: fakeFetch({}) });
+const card4 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req4' }, status: { owner: { canApprove: true } }, fetchJson: fakeFetch({}) });
 const s4 = card4.el.querySelector('input[data-prom-secret]');
 s4.value = CANARY; card4.destroy();
 assert.equal(s4.value, '', 'unmount clears');
-const card5 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req5' }, status: {}, fetchJson: fakeFetch({}) });
+const card5 = mod.mountSecureAccessCard(host, { request: { ...request, id: 'req5' }, status: { owner: { canApprove: true } }, fetchJson: fakeFetch({}) });
 const s5 = card5.el.querySelector('input[data-prom-secret]');
 s5.value = CANARY; card5.expire();
 assert.equal(s5.value, '', 'expiry clears');
@@ -170,7 +170,7 @@ const past = new Date(Date.now() - 1000).toISOString();
 const dock = mod.mountSecureAccessDock(dockHost, {
   sessionId: 's1',
   fetchJson: fakeFetch({
-    'GET /api/secure-access/status': { persistentAllowed: false },
+    'GET /api/secure-access/status': { persistentAllowed: false, owner: { canApprove: true } },
     'GET /api/secure-access/requests': { requests: [
       { ...request, id: 'd1', sessionId: 's1' },
       { ...request, id: 'd2', sessionId: 'other' },
@@ -202,7 +202,7 @@ assert.match(core, /\.sa-card \[hidden\][^{]*\{display:none!important\}/, 'scope
 assert.match(core, /\.sa-settings \[hidden\]/, 'settings panels respect [hidden]');
 {
   const exHost = document.createElement('div'); document.body.appendChild(exHost);
-  const ex = mod.mountSecureAccessCard(exHost, { request: { ...request, id: 'reqHidden', mode: 'existing' }, status: { persistentAllowed: true }, fetchJson: async () => ({}) });
+  const ex = mod.mountSecureAccessCard(exHost, { request: { ...request, id: 'reqHidden', mode: 'existing' }, status: { persistentAllowed: true, owner: { canApprove: true } }, fetchJson: async () => ({}) });
   const rec = ex.el.querySelector('input[type="checkbox"][id$="-recovery"]');
   assert.ok(rec && rec.closest('label').hidden === true, 'existing mode keeps recovery confirm hidden');
   ex.destroy?.();
@@ -230,4 +230,35 @@ assert.match(read('web-ui/src/features/secure-access/secure-access-desktop-dock.
 }
 
 console.log('secure-access UI tests passed');
+
+
+// Blocked surfaces must not present apparently tappable password controls.
+{
+  const h = document.createElement('div'); document.body.append(h);
+  const blocked = mod.mountSecureAccessCard(h, {
+    request: { id: 'blocked-mobile', mode: 'existing', label: 'Fixture', origin: 'https://example.com', expiresAt: new Date(Date.now()+60000).toISOString() },
+    status: { persistentAllowed: true, owner: { canApprove: false } }, fetchJson: fakeFetch({}),
+  });
+  assert.equal(h.querySelector('input[type="password"]'), null);
+  assert.ok(h.textContent.includes('Approvals are off'));
+  assert.ok([...h.querySelectorAll('button')].some(b => b.textContent === 'Cancel'));
+  blocked.destroy(); h.remove();
+}
+assert.match(core, /op\.scrollTop/, 'mobile absolute coordinates account for ancestor scroll');
+assert.match(core, /querySelector\?\.\('#pm-composer'\)/, 'dock anchors only to real composer');
+assert.match(core, /removeEventListener\?\.\('scroll', schedule, true\)/, 'capture scroll listener cleaned up');
+console.log('PASS blocked-owner presentation and mobile anchor regressions');
+// Paired entry does not enable management/sign-in approval or replacement.
+for (const replaces of [undefined, 'cred_existing']) {
+  const h = document.createElement('div'); document.body.append(h);
+  const card = mod.mountSecureAccessCard(h, {
+    request: { id: 'paired-mobile', mode: 'existing', replaces, label: 'Fixture', origin: 'https://example.com', expiresAt: new Date(Date.now()+60000).toISOString() },
+    status: { persistentAllowed: true, owner: { canApprove: false }, entry: { canEnter: true } }, fetchJson: fakeFetch({}),
+  });
+  const input = h.querySelector('input[type="password"]');
+  assert.equal(!!input, !replaces);
+  if (input) { assert.equal(input.disabled, false); input.value = 'synthetic-only'; }
+  card.destroy(); h.remove();
+}
+console.log('PASS paired fresh entry and blocked replacement');
 process.exit(0);

@@ -1,4 +1,13 @@
 import crypto from 'crypto';
+import { verifyDeviceToken } from '../pairing/pairing-store';
+
+type EntryProof = (token: string) => boolean;
+const defaultEntryProof: EntryProof = token => { try { return !!verifyDeviceToken(token); } catch { return false; } };
+function pairedEntryOk(req: Pick<Request, 'headers'>, verify: EntryProof): boolean {
+  const token = req.headers['x-pairing-token'];
+  return typeof token === 'string' && token.length > 0 && verify(token);
+}
+const ENTRY_SUBMIT = /^\/api\/secure-access\/requests\/[^/]+\/submit\/?$/;
 import { Router, type Request } from 'express';
 import { SECURE_ACCESS_OWNER_COOKIE, secureAccessOwnerToken, pairedDeviceOwnerProofTrusted } from '../../security/secure-access-owner';
 import { OWNER_CONSENT_HEADER, verifyConsent } from '../../security/secure-access-consent';
@@ -91,7 +100,7 @@ export function requireProtectedOwner(req: any, res: any, next: () => void, proo
   next();
 }
 
-export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime, proof: OwnerProof = defaultOwnerProof) {
+export function createSecureAccessRouter(runtime: typeof defaultRuntime = defaultRuntime, proof: OwnerProof = defaultOwnerProof, entryProof: EntryProof = defaultEntryProof) {
 const { getSecureAccess, secureAccessCredentials, secureAccessStatus, prepareProtectedLogin, submitProtectedLogin, cancelProtectedLogin } = runtime;
 const router = Router();
 const mutationTimes = new Map<string, number[]>();
@@ -102,7 +111,9 @@ router.use('/api/secure-access', (req, res, next) => {
   if (req.method !== 'GET' && !OWNER_EXEMPT.test(routePath)) {
     const device = ownerDeviceOk(req, proof);
     const cookie = !device && ownerCookieOk(req, proof);
-    if (!device && !cookie) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED', message: 'Approve this in the Prometheus desktop app or on a phone paired with it.' }); return; }
+    const entry = req.method === 'POST' && ENTRY_SUBMIT.test(routePath) && pairedEntryOk(req, entryProof);
+    res.locals.pairedEntryOnly = entry && !device;
+    if (!device && !cookie && !entry) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED', message: 'Approve this in the Prometheus desktop app or on a phone paired with it.' }); return; }
     if (cookie && CONSENT_REQUIRED.test(routePath) && !(proof.verifyConsent ? proof.verifyConsent(req) : false)) {
       res.status(403).json({ error: 'OWNER_CONSENT_REQUIRED', message: 'Confirm this in the Prometheus owner approval window.' }); return;
     }
@@ -120,12 +131,12 @@ const safe = (fn: (req: any) => any) => async (req: any, res: any) => {
   try { res.json(await fn(req)); } catch (error) { res.status(error instanceof AccessError ? 400 : 503).json({ error: error instanceof AccessError ? error.code : 'SECURE_ACCESS_UNAVAILABLE' }); }
 };
 // `owner` tells each surface whether it can approve here; surfaces without proof render a fail-closed state.
-router.get('/api/secure-access/status', safe(async req => ({ ...(await secureAccessStatus()), owner: ownerSurfaceState(req, proof) })));
+router.get('/api/secure-access/status', safe(async req => ({ ...(await secureAccessStatus()), owner: ownerSurfaceState(req, proof), entry: { canEnter: ownerProofOk(req, proof) || pairedEntryOk(req, entryProof) } })));
 
 router.get('/api/secure-access/requests', safe(req => ({ requests: getSecureAccess().listRequests(typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined) })));
 router.get('/api/secure-access/credentials', safe(() => ({ credentials: secureAccessCredentials() })));
 router.post('/api/secure-access/requests', safe(req => ({ request: getSecureAccess().create({ sessionId: req.body.sessionId, label: req.body.label, purpose: req.body.purpose, origin: req.body.origin, mode: req.body.mode, identifier: req.body.identifier }) })));
-router.post('/api/secure-access/requests/:id/submit', safe(req => ({ credential: getSecureAccess().submit(req.params.id, { identifier: req.body.identifier, secret: req.body.secret, remember: req.body.remember === true, generated: req.body.generated === true, recoveryConfirmed: req.body.recoveryConfirmed === true }) })));
+router.post('/api/secure-access/requests/:id/submit', safe(req => ({ credential: getSecureAccess().submit(req.params.id, { identifier: req.body.identifier, secret: req.body.secret, remember: req.body.remember === true, generated: req.body.generated === true, recoveryConfirmed: req.body.recoveryConfirmed === true }, { entryOnly: req.res.locals.pairedEntryOnly === true }) })));
 router.post('/api/secure-access/requests/:id/cancel', safe(req => { getSecureAccess().cancel(req.params.id); return { ok: true }; }));
 router.post('/api/secure-access/credentials/:id/revoke', safe(async req => { const credential = getSecureAccess().revoke(req.params.id); await cancelProtectedLogin(req.params.id); return { credential }; }));
 router.post('/api/secure-access/credentials/:id/grants', safe(req => ({ credential: getSecureAccess().grants(req.params.id, req.body.grants) })));

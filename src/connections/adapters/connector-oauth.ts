@@ -28,13 +28,14 @@ export interface ConnectorOAuthVerification {
 export interface ConnectorOAuthBridge {
   id: string;
   name: string;
-  start(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | Promise<OAuthStartResult>;
-  poll(): Promise<OAuthCallbackResult | null>;
+  start(expectedAccountId?: string, requestedScopes?: string[], attemptId?: string): OAuthStartResult | Promise<OAuthStartResult>;
+  poll(attemptId?: string): Promise<OAuthCallbackResult | null>;
   /** Tokens already stored (e.g. callback result was consumed or expired before continue ran). */
   isConnected?(): boolean;
   metadata(): OAuthConnectorMetadata | Promise<OAuthConnectorMetadata>;
   verify(): Promise<ConnectorOAuthVerification>;
   clear(): void | Promise<void>;
+  cancel?(attemptId?: string): void | Promise<void>;
   revoke?(): void | Promise<void>;
   credentialReference?(): string;
 }
@@ -119,6 +120,14 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return strategy.adapter === this.id || strategy.adapter === 'connector-oauth';
   }
 
+  async prepare(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    const bridge = this.bridgeFor(context);
+    if (!(await bridge.metadata()).clientIdConfigured) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
+    return { state: context.attempt.state };
+  }
+
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const strategy = context.attempt.plan?.strategy;
     if (!strategy) return this.planRequired();
@@ -127,7 +136,10 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     const requestedScopes = Array.isArray(strategy.authentication?.scopes)
       ? strategy.authentication.scopes.map(String)
       : undefined;
-    const started = await bridge.start(expectedAccountId, requestedScopes);
+    const started = await bridge.start(expectedAccountId, requestedScopes, context.attempt.id);
+    if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
     if (started.error || !started.authUrl) {
       return {
         state: 'failed',
@@ -159,7 +171,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
 
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const bridge = this.bridgeFor(context);
-    let result = await bridge.poll();
+    if (context.attempt.state === 'awaiting_secure_input') return this.connect(context);
+    let result = await bridge.poll(context.attempt.id);
     // The one-shot callback result can be gone (consumed by another poller,
     // expired, or lost to a gateway restart) while the tokens are stored.
     if (!result && bridge.isConnected?.()) result = { success: true };
@@ -225,6 +238,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return checks;
   }
 
+  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.bridgeFor(context).cancel?.(context.attempt.id); }
+
   async repair(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     return this.connect(context);
   }
@@ -232,8 +247,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
   async disconnect(context: ConnectionAdapterContext, _connection: ConnectionRecord): Promise<void> {
     const bridge = this.bridgeFor(context);
     try {
-      await bridge.revoke?.();
-      context.emitProgress?.('Provider revocation completed or was not required.', { remoteRevocation: 'completed' });
+      if (bridge.revoke) { await bridge.revoke(); context.emitProgress?.('Provider revocation completed.', { remoteRevocation: 'completed' }); }
+      else context.emitProgress?.('Remote revocation is unavailable; disconnect clears local access only.', { remoteRevocation: 'unavailable' });
     } catch (error: any) {
       // The local vault must still be cleared. The progress detail makes the
       // provider-side failure visible without returning credentials or tokens.

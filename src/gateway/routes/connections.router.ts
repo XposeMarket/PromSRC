@@ -1,4 +1,7 @@
 import { requireProtectedOwner } from './secure-access.router';
+import { requirePluginSetup } from './plugin-setup-access';
+import { nativeAppSetup } from '../../connections/native-app-setup';
+import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
 /**
  * connections.router.ts
@@ -317,7 +320,13 @@ router.get('/api/connections/xurl/poll', (_req: any, res: any) => {
   res.json(xurlSetupState || { pending: false, success: false, error: 'No xurl setup has been started yet.', output: [] });
 });
 
-router.post('/api/connections/credentials', (req, res, next) => requireProtectedOwner(req, res, next), async (req: any, res: any) => {
+router.post('/api/connections/credentials', (req, res, next) => requirePluginSetup(req, res, next), async (req: any, res: any) => {
+  if (req.body?.attemptId) {
+    try {
+      nativeAppSetup(getPluginConnectRuntime().orchestrator, String(req.body.attemptId), String(req.body.id));
+      if (Object.keys(req.body).some(key => !['id', 'clientId', 'clientSecret', 'attemptId'].includes(key))) throw new Error();
+    } catch { res.status(400).json({ error: 'STALE_OR_MISMATCHED_CONNECTION' }); return; }
+  }
   if (req.body?.id === 'x' && Object.keys(req.body || {}).some(key => !['id', 'clientId', 'clientSecret'].includes(key))) {
     res.status(400).json({ error: 'X_OAUTH_APP_FIELDS_REQUIRED' }); return;
   }
@@ -419,6 +428,7 @@ router.post('/api/connections/credentials', (req, res, next) => requireProtected
       };
       saveSavedConnections(connections);
     }
+    if (req.body?.attemptId) getPluginConnectRuntime().orchestrator.confirmPreparedInputSaved(String(req.body.attemptId));
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: 'SECURE_INPUT_INVALID' });

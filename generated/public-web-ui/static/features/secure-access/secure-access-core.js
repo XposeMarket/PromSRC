@@ -5,14 +5,16 @@
 //   They are read once at submit time, sent to the dedicated submit endpoint
 //   and cleared. Never stored in JS state, storage, chat/question data,
 //   notifications or console output. Nothing here writes storage at all.
-// - Cards clear secrets on success, cancel, expiry, hide, pagehide and unmount.
+// - Cards clear secrets on success, cancel, expiry, pagehide and unmount.
+//   Protected plugin entry alone allows brief app hiding (DOM only, five-minute cap).
 // - Only metadata (labels, origins, identifiers, states) is rendered/polled.
 
 export const SECURE_ACCESS_API = '/api/secure-access';
 const STYLE_ID = 'prom-secure-access-styles';
 
 const CSS = `
-.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-size:14px;line-height:1.45}
+.sa-card{--sa-b:var(--prom-border,color-mix(in srgb,currentColor 18%,transparent));--sa-m:var(--prom-muted,color-mix(in srgb,currentColor 62%,transparent));--sa-a:var(--prom-accent,var(--accent,#5b7cfa));border:1px solid var(--sa-b);border-radius:14px;background:var(--prom-surface,transparent);color:var(--prom-text,inherit);padding:14px;display:grid;gap:12px;max-width:460px;box-sizing:border-box;font-family:var(--font-sans,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif);font-size:14px;line-height:1.45}
+.sa-card h2,.sa-card h3{margin:0;font-size:18px;line-height:1.3}.sa-card p{margin:0}.sa-card a.sa-btn{display:flex;align-items:center;justify-content:center;text-decoration:none}
 .sa-card *{box-sizing:border-box}
 .sa-hd{display:flex;gap:10px;align-items:flex-start}.sa-hd svg{flex:none;color:var(--sa-a);margin-top:2px}
 .sa-hd h3{font-size:15px;margin:0}.sa-muted,.sa-hd p{margin:0;color:var(--sa-m);font-size:12.5px;overflow-wrap:anywhere}
@@ -35,7 +37,7 @@ const CSS = `
 .sa-card details{border:1px solid var(--sa-b);border-radius:9px;padding:0 12px}
 .sa-card summary{min-height:40px;display:flex;align-items:center;cursor:pointer;font-weight:600;font-size:13px}
 .sa-card details ul,.sa-sum{margin:0 0 10px;padding-left:18px;font-size:12.5px;color:var(--sa-m)}
-.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty{display:none}
+.sa-err{color:var(--prom-danger,#d64545);font-size:12.5px;margin:0}.sa-err:empty,.sa-card>.sa-muted:empty{display:none}
 .sa-ok{color:var(--prom-success,#2f9e63)}.sa-warn{color:var(--prom-warning,#b7791f)}
 .sa-badge{display:inline-flex;align-items:center;border:1px solid var(--sa-b);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--sa-m);white-space:nowrap}
 .sa-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -95,7 +97,7 @@ export function secureAccessErrorText(error, fallback) {
 // PR821 I1: actions that need a human-typed code in the native owner-approval window
 // when sent from the desktop app. Paired phones prove ownership with their device token.
 const CONSENT_ROUTE = /^\/api\/secure-access\/(requests\/[^/]+\/submit|credentials\/[^/]+\/(grants|replace|delete|login\/submit))$/;
-export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect)$/.test(route); }
+export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return /^\/api\/connection-attempts\/[^/]+\/connect$/.test(route) || CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect)$/.test(route); }
 export function ownerConsentBridge() {
   try { return globalThis.prometheusOwnerConsent && typeof globalThis.prometheusOwnerConsent.request === 'function' ? globalThis.prometheusOwnerConsent : null; } catch { return null; }
 }
@@ -195,8 +197,9 @@ export function mountSecureAccessCard(host, opts = {}) {
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
   const persistentAllowed = status.persistentAllowed === true;
-  // Fail closed (I1/I3): surfaces without owner proof never collect the secret at all.
-  const ownerBlocked = !!(status.owner && status.owner.canApprove === false);
+  // Entry capability is distinct from approval; replacement still needs owner proof.
+  const canEnter = request.replaces ? status.owner?.canApprove : (status.entry?.canEnter ?? status.owner?.canApprove);
+  const ownerBlocked = canEnter !== true;
   const uid = `sa-${String(request.id || Math.random()).replace(/[^a-zA-Z0-9_-]/g, '')}`;
   let remember = persistentAllowed;
   let busy = false;
@@ -290,7 +293,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('ul', {},
       el('li', { text: 'Prom never sees this value. It is sent straight to the local protected vault.' }),
       el('li', { text: `Use is limited to main Prom on exactly ${request.origin || 'this site'}.` }),
-      el('li', { text: 'This allows signing in only. Posting, sending, buying or other account actions still ask you separately.' }),
+      el('li', { text: 'Saving allows Prom to prepare sign-in on this site. Submitting the sign-in still needs approval; posting, sending and buying need separate approval too.' }),
       el('li', { text: 'Anyone already running programs as you on this computer is not blocked by this vault.' })));
 
   const form = el('form', { class: 'sa-form', autocomplete: 'on', novalidate: true, 'data-prom-no-draft': 'true' },
@@ -300,7 +303,11 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('div', { class: 'sa-row' }, saveBtn, cancelBtn));
 
   if (ownerBlocked) { secretInput.disabled = true; idInput.disabled = true; }
-  const body = el('div', { style: 'display:grid;gap:12px' }, ownerBlocked ? ownerSurfaceBanner(status) : null, form);
+  // Do not show a dead password field that looks like a broken touch target.
+  // Keep cancellation available; owner proof remains enforced by the server.
+  const body = el('div', { style: 'display:grid;gap:12px' },
+    ownerBlocked ? ownerSurfaceBanner(status) : null,
+    ownerBlocked ? el('div', { class: 'sa-row' }, cancelBtn) : form);
   const card = el('section', { class: 'sa-card', 'aria-labelledby': `${uid}-h`, 'data-secure-access-request': request.id || '' },
     el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
       el('h3', { id: `${uid}-h`, text: `${copy.title}: ${request.label || 'access'}` }),
@@ -491,15 +498,24 @@ function createMobileDockFit(host) {
     raf = 0;
     if (host.hidden || !host.isConnected) return;
     const parent = host.parentElement;
-    const composer = parent?.querySelector?.(':scope > form') || parent?.querySelector?.('form');
+    // Target the real composer, never a nested protected-entry form.
+    const composer = parent?.querySelector?.('#pm-composer');
+    const anchors = [composer, parent?.querySelector?.('#pm-chat-mode-launcher'), parent?.querySelector?.('#pm-new-chat-context-dock')];
+    const rects = anchors.filter(Boolean).filter((node) => {
+      const style = win.getComputedStyle(node);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+    }).map(node => node.getBoundingClientRect()).filter(rect => rect.height > 0);
     const op = host.offsetParent;
-    if (!composer || !op || typeof composer.getBoundingClientRect !== 'function') return;
-    const c = composer.getBoundingClientRect();
+    if (!rects.length || !op) return;
+    const c = rects.reduce((top, rect) => rect.top < top.top ? rect : top);
     const o = op.getBoundingClientRect();
     if (!(c.height > 0) || !(o.height > 0)) return;
     const viewTop = Math.max(Number(o.top) || 0, vv ? Number(vv.offsetTop) || 0 : 0);
-    const bottom = Math.max(8, Math.round(o.bottom - c.top + 8));
-    const maxH = Math.max(120, Math.round(c.top - viewTop - 12));
+    // Absolute positioning uses the scroller's padding box, whereas rects are
+    // viewport coordinates. Account for scrolling and the parent's border.
+    const parentBottom = o.top + op.clientTop + op.clientHeight;
+    const bottom = Math.max(8, Math.round(parentBottom - c.top + 8 - op.scrollTop));
+    const maxH = Math.max(0, Math.min(Math.round(c.top - viewTop - 12), Math.round((vv?.height || win.innerHeight) * 0.62)));
     host.style.bottom = `${bottom}px`;
     host.style.maxHeight = `${maxH}px`;
   }
@@ -510,6 +526,8 @@ function createMobileDockFit(host) {
   vv?.addEventListener?.('resize', schedule);
   vv?.addEventListener?.('scroll', schedule);
   win?.addEventListener?.('resize', schedule);
+  // Capture ancestor scrolling so the card stays attached to the composer.
+  win?.addEventListener?.('scroll', schedule, true);
   host.addEventListener?.('focusin', schedule);
   return {
     schedule,
@@ -519,6 +537,7 @@ function createMobileDockFit(host) {
       vv?.removeEventListener?.('resize', schedule);
       vv?.removeEventListener?.('scroll', schedule);
       win?.removeEventListener?.('resize', schedule);
+      win?.removeEventListener?.('scroll', schedule, true);
       host.removeEventListener?.('focusin', schedule);
     },
   };

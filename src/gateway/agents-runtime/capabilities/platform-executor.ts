@@ -359,6 +359,10 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           const discovery = runtime.orchestrator.discover(service);
           return { name, args, result: JSON.stringify({ discovery }, null, 2), error: false };
         }
+        if (action === 'start') {
+          const attempt = await runtime.start.start({ serviceId: String(args.service || args.service_id || ''), kind: args.kind, attemptId: args.connection_attempt_id });
+          return { name, args, result: JSON.stringify({ attempt }), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, attempt }], error: false };
+        }
         if (action === 'plan' || action === 'connect') {
           const existingAttemptId = String(args.connection_attempt_id || args.attempt_id || '').trim();
           if (existingAttemptId) {
@@ -366,14 +370,14 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
             if (!existing) return { name, args, result: `Connection attempt "${existingAttemptId}" not found.`, error: true };
             const attempt = action === 'plan'
               ? (existing.plan ? existing : await runtime.orchestrator.plan(existingAttemptId))
-              : await runtime.orchestrator.connect(existingAttemptId, { ...(args.input || {}), approved: args.approved === true });
+              : await runtime.orchestrator.connect(existingAttemptId, { approved: false });
             return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false };
           }
           const serviceId = String(args.service || args.service_id || '').trim();
           if (!serviceId) return { name, args, result: `${action} requires service`, error: true };
           const created = runtime.orchestrator.create({ serviceId, serviceName: args.service_name, requestedCapabilities: Array.isArray(args.requested_capabilities) ? args.requested_capabilities.map(String) : [], readOnly: args.read_only !== false, metadata: args.metadata });
           let attempt = await runtime.orchestrator.plan(created.id);
-          if (action === 'connect' && args.approved === true) attempt = await runtime.orchestrator.connect(created.id, { approved: true });
+          // A model-supplied approved flag is never owner consent. Return its action card.
           return { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false };
         }
         const attemptId = String(args.connection_attempt_id || args.attempt_id || '').trim();
