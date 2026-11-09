@@ -427,6 +427,7 @@ router.post('/api/connections/credentials', (req, res, next) => requireProtected
       };
       saveSavedConnections(connections);
     }
+    if (req.body?.attemptId) getPluginConnectRuntime().orchestrator.confirmPreparedInputSaved(String(req.body.attemptId));
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: 'SECURE_INPUT_INVALID' });

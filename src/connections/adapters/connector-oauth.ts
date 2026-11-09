@@ -120,6 +120,14 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return strategy.adapter === this.id || strategy.adapter === 'connector-oauth';
   }
 
+  async prepare(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    const bridge = this.bridgeFor(context);
+    if (!(await bridge.metadata()).clientIdConfigured) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
+    return { state: context.attempt.state };
+  }
+
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const strategy = context.attempt.plan?.strategy;
     if (!strategy) return this.planRequired();

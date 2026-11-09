@@ -23,6 +23,11 @@ export class ApiKeyConnectionAdapter implements ConnectionAdapter {
   constructor(private readonly options: ApiKeyAdapterOptions) {}
   supports(strategy: ConnectionStrategy): boolean { return strategy.adapter === 'api-key' || strategy.adapter === 'setup-token'; }
 
+  // Preparation only creates an expiring input session; saving still requires owner proof.
+  async prepare(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
+    return this.connect({ ...context, credentialRef: undefined });
+  }
+
   async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const strategy = context.attempt.plan?.strategy;
     if (!strategy) return { state: 'failed', error: { code: 'PLAN_REQUIRED', message: 'API-key setup requires a selected connection plan.', phase: 'planning' } };

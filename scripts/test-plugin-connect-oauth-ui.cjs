@@ -27,6 +27,8 @@ const proof = { ownerToken: () => OWNER, deviceTrusted: () => true, verifyDevice
   verifyConsent: req => consent.verifyConsent(req.headers[consent.OWNER_CONSENT_HEADER], req.method, req.originalUrl, req.rawBody).ok };
 const requireOwner = owner.requireProtectedOwner;
 owner.requireProtectedOwner = (req, res, next) => requireOwner(req, res, next, proof, () => true);
+const originalSurface = owner.ownerSurfaceState; owner.ownerSurfaceState = req => originalSurface(req, proof);
+owner.secureInputTransportAllowed = () => true;
 let url, runtime, connector, result = null, attemptOwner, mode = 'success', tokenReads = 0, safeReads = 0;
 let holdToken, releaseToken;
 const pending = new Map();
@@ -97,12 +99,12 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
         const page = await context.newPage(), errors = []; page.setDefaultTimeout(7000); console.log('RUN OAuth UI', label, mode);
         page.on('pageerror', e => errors.push(e.message));
         await page.exposeFunction('fixtureConsent', args => ({ approved: true, header: consent.mintConsent(OWNER, args.method, args.path, consent.sha256Hex(args.body)) }));
-        await page.goto(url); await page.click('#connect'); await page.getByRole('button', { name: 'Approve connection', exact: true }).click();
-        await page.getByRole('button', { name: 'Check authorization', exact: true }).waitFor();
+        await page.goto(url); await page.click('#connect');
+        await page.getByRole('button', { name: 'Check sign-in', exact: true }).waitFor();
         const attempt = runtime.orchestrator.listAttempts(1)[0];
         let authUrl;
-        if (label === 'desktop') { await page.getByRole('button', { name: 'Sign in with Fixture OAuth', exact: true }).click(); authUrl = await page.evaluate(() => window.authUrl); }
-        else { await page.getByText('Finish on your computer.', { exact: false }).waitFor(); assert.equal(await page.getByRole('button', { name: 'Sign in with Fixture OAuth', exact: true }).count(), 0); authUrl = attempt.requiredUserAction?.authorizationUrl; }
+        if (label === 'desktop') { await page.getByRole('button', { name: 'Sign in with Gmail', exact: true }).click(); authUrl = await page.evaluate(() => window.authUrl); }
+        else { await page.getByText('Finish sign-in on your computer,', { exact: false }).waitFor(); assert.equal(await page.getByRole('button', { name: 'Sign in with Gmail', exact: true }).count(), 0); authUrl = attempt.requiredUserAction?.authorizationUrl; }
         // Phone consent uses a separate browser page on this PC, not a fictitious phone-local callback.
         if (!authUrl) authUrl = runtime.orchestrator.getAttempt(attempt.id).requiredUserAction?.authorizationUrl;
         assert(authUrl, 'OAuth authorization URL missing');
@@ -113,20 +115,21 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
         if (mode === 'late-cancel') {
           const requested = new Promise(r => { holdToken = r; });
           const click = provider.click('#approve'); await requested;
-          await page.getByRole('button', { name: 'Cancel connection', exact: true }).click(); releaseToken(); await click;
-          await page.getByText('cancelled', { exact: true }).waitFor(); assert.equal(connector.loadTokens(), null); assert.equal(runtime.orchestrator.getAttempt(attempt.id).state, 'cancelled');
+          await page.getByRole('button', { name: 'Cancel setup', exact: true }).click(); releaseToken(); await click;
+          assert.equal(await page.locator('.sa-connect-overlay').count(), 0); assert.equal(connector.loadTokens(), null); assert.equal(runtime.orchestrator.getAttempt(attempt.id).state, 'cancelled');
         } else {
           await provider.click('#approve'); await provider.waitForURL(url + '/callback**');
-          await page.getByRole('button', { name: 'Check authorization', exact: true }).click();
+          await page.getByRole('button', { name: 'Check sign-in', exact: true }).click();
           if (mode === 'success' || mode === 'read-denied') {
-            await page.getByRole('button', { name: 'Verify connection', exact: true }).click();
-            await page.getByText(mode === 'success' ? 'connected' : 'degraded', { exact: true }).waitFor();
+            await page.getByText('Saved. Setup is complete', { exact: false }).waitFor();
+            await runtime.orchestrator.verify(attempt.id);
+            assert.equal(runtime.orchestrator.getAttempt(attempt.id).state, mode === 'success' ? 'connected' : 'degraded');
             if (mode === 'success') {
               const replay = await connector.handleCallback('replay', authorization.searchParams.get('state')); assert.equal(replay.success, false);
-              restore(); await page.goto(url + '?attemptId=' + attempt.id); await page.click('#connect'); await page.getByText('connected', { exact: true }).waitFor();
+              restore(); await page.goto(url + '?attemptId=' + attempt.id); await page.click('#connect'); await page.getByText('Connected. You’re ready', { exact: false }).waitFor();
               const out = process.env.PLUGIN_PROOF_DIR; if (out) { fs.mkdirSync(out, { recursive: true }); await page.screenshot({ path: path.join(out, label + '-oauth-e2e.png') }); }
             }
-          } else { await page.getByText('failed', { exact: true }).waitFor(); const failed = runtime.orchestrator.getAttempt(attempt.id); assert.equal(failed.error.code, 'OAUTH_FAILED'); assert.match(failed.error.message, mode === 'denied' ? /access_denied/ : mode === 'rate-limit' ? /429/ : /permissions/); assert.equal(connector.loadTokens(), null); }
+          } else { await page.getByText('This plugin needs additional setup.', { exact: false }).waitFor(); const failed = runtime.orchestrator.getAttempt(attempt.id); assert.equal(failed.error.code, 'OAUTH_FAILED'); assert.match(failed.error.message, mode === 'denied' ? /access_denied/ : mode === 'rate-limit' ? /429/ : /permissions/); assert.equal(connector.loadTokens(), null); }
         }
         assert.equal(errors.length, 0, errors.join('\n')); assert(!(await page.content()).includes(TOKEN)); assert(!(await page.evaluate(() => JSON.stringify(window.calls))).includes('chat'));
         await context.close(); console.log('PASS OAuth UI', label, mode);

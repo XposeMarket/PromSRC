@@ -1,0 +1,79 @@
+// Real shared controller/router/orchestrator + native app schema; synthetic owner/provider/credential sink.
+const assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const express = require('express'), { chromium } = require('playwright');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quick-connect-'));
+const load = p => require('../dist/' + p);
+const { ConnectionAttemptStore } = load('connections/attempt-store.js');
+const { ConnectionStore } = load('connections/connection-store.js');
+const { ConnectionActivityStore } = load('connections/activity-store.js');
+const { ConnectionAdapterRegistry } = load('connections/adapter-registry.js');
+const { ConnectionOrchestrator } = load('connections/orchestrator.js');
+const { ConnectionStartService } = load('connections/start-service.js');
+const { PluginConnectionPlanResolver } = load('connections/plugin-plan-resolver.js');
+const { ConnectorOAuthConnectionAdapter } = load('connections/adapters/connector-oauth.js');
+const { nativeAppSetup } = load('connections/native-app-setup.js');
+const owner = load('gateway/routes/secure-access.router.js');
+const consent = load('security/secure-access-consent.js');
+const OWNER = 'd'.repeat(64), CANARY = 'synthetic-native-secret';
+let configured = false, launches = 0, saves = 0;
+const proof = { ownerToken: () => OWNER, deviceTrusted: () => true, verifyDevice: v => v === 'fixture-phone', verifyConsent: req => consent.verifyConsent(req.headers[consent.OWNER_CONSENT_HEADER], req.method, req.originalUrl, req.rawBody).ok };
+consent.setConsentKeySourceForTests(() => OWNER);
+const requireOwner = owner.requireProtectedOwner, surface = owner.ownerSurfaceState;
+owner.requireProtectedOwner = (req, res, next) => requireOwner(req, res, next, proof, () => true);
+owner.ownerSurfaceState = req => surface(req, proof);
+const adapters = new ConnectionAdapterRegistry();
+adapters.register(new ConnectorOAuthConnectionAdapter({ x: { id: 'x', name: 'X', metadata: async () => ({ clientIdConfigured: configured, clientSecretConfigured: configured }), start: async () => { launches++; return { authUrl: 'https://x.com/i/oauth2/authorize?fixture=1' }; }, poll: async () => null, isConnected: () => false, cancel: () => {} } }));
+const orchestrator = new ConnectionOrchestrator({ attempts: new ConnectionAttemptStore(root), connections: new ConnectionStore(root), activity: new ConnectionActivityStore(root), adapters, plans: new PluginConnectionPlanResolver(() => []) });
+const runtime = { orchestrator, adapters, start: new ConnectionStartService(orchestrator) };
+load('connections/runtime.js').getConnectionRuntime = () => runtime;
+const app = express();
+app.use(express.json({ verify: (req, res, b) => req.rawBody = Buffer.from(b) }));
+app.get('/api/secure-access/status', (req, res) => res.json({ owner: surface(req, proof) }));
+app.get('/api/protected-plugins', (req, res) => res.json({ owner: surface(req, proof), storageAvailable: true, services: [{ id: 'x', name: 'X' }] }));
+app.get('/api/protected-plugins/app-schema/:id', (req, res) => { if (!surface(req, proof).canApprove) return res.sendStatus(403); res.json(nativeAppSetup(orchestrator, req.params.id)); });
+app.post('/api/auth/x-api/credentials', owner.requireProtectedOwner, (req, res) => {
+  nativeAppSetup(orchestrator, req.body.attemptId, 'x'); assert.equal(req.body.clientSecret, CANARY);
+  configured = true; saves++; orchestrator.confirmPreparedInputSaved(req.body.attemptId); res.json({ success: true });
+});
+app.use(load('gateway/routes/connections-v2.router.js').router);
+app.use('/src', express.static(path.resolve('web-ui/src')));
+app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;font:15px system-ui;background:#111315;color:#eee;--panel:#232629;--text:#eee}header{padding:24px;border-bottom:1px solid #333}main{padding:24px}button{font:inherit;padding:12px}</style><header>Plugins</header><main><button id="connect">Connect X / Twitter</button></main><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:a=>window.fixtureConsent(a)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v}document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'x',kind:'connector'});</script>`));
+(async () => { let server, browser; try {
+  server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r)); const url = `http://127.0.0.1:${server.address().port}`;
+  browser = await chromium.launch({ headless: true });
+  const out = path.resolve(process.env.QUICK_CONNECT_SCREENSHOTS || '.pr/screenshots'); fs.mkdirSync(out, { recursive: true });
+  const post = (route, body = {}, headers = {}) => fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json', origin: url, ...headers }, body: JSON.stringify(body) });
+  for (const [name, width, height] of [['desktop',1440,960],['mobile',390,844]]) {
+    configured = false;
+    const context = await browser.newContext({ viewport: { width, height } });
+    if (name === 'desktop') await context.addCookies([{ name: 'prom_sa_owner', value: OWNER, url }]);
+    else await context.setExtraHTTPHeaders({ 'x-pairing-token': 'fixture-phone' });
+    const page = await context.newPage(); page.setDefaultTimeout(8000);
+    await page.exposeFunction('fixtureConsent', a => ({ approved: true, header: consent.mintConsent(OWNER, a.method, a.path, consent.sha256Hex(a.body)) }));
+    await page.goto(url); const before = launches; await page.click('#connect'); await page.locator('input[type=password]').waitFor();
+    assert.equal(launches, before); assert.equal(await page.getByRole('button',{name:'Approve connection'}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Open protected entry'}).count(),0);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
+    await page.screenshot({ path: path.join(out,name+'-x-form.png') });
+    const attempt = orchestrator.listAttempts(1)[0], prefix = '/api/connection-attempts/' + attempt.id;
+    assert.equal((await post(prefix + '/prepare-input')).status,403);
+    assert.equal((await post(prefix + '/connect', { approved: true })).status,403);
+    const forged = await post(prefix + '/prepare-input', {}, {cookie:`prom_sa_owner=${OWNER}`,origin:'https://evil.example'}); assert.equal(forged.status,403);
+    await post(prefix + '/continue', { approved: true }); assert.equal(launches,before);
+    await page.locator('input[type=text]').fill('synthetic-client-id'); await page.locator('input[type=password]').fill(CANARY);
+    await page.getByRole('button',{name:'Save and continue to sign-in',exact:true}).click();
+    await page.getByRole('button',{name:'Check sign-in',exact:true}).waitFor(); assert.equal(launches,before+1);
+    assert.equal(await page.locator('input').count(),0); assert(!(await page.content()).includes(CANARY));
+    assert(!(await page.evaluate(()=>JSON.stringify(window.calls))).includes('/connect"')); // no second approval
+    orchestrator.cancel(attempt.id); await context.close();
+  }
+  const context = await browser.newContext({viewport:{width:390,height:844}}), page = await context.newPage();
+  await page.goto(url); await page.click('#connect'); await page.getByText('Pair this device first',{exact:true}).waitFor();
+  assert.equal(await page.locator('input').count(),0); assert(!(await page.content()).includes('OWNER_SURFACE_REQUIRED'));
+  assert.deepEqual(await page.evaluate(()=>window.calls),['/api/secure-access/status']);
+  await page.screenshot({path:path.join(out,'mobile-pairing.png')}); await context.close();
+  assert.equal(saves,2);
+  for(const file of ['src/gateway/routes/settings.router.ts','src/gateway/routes/connections.router.ts']) assert(fs.readFileSync(file,'utf8').includes('orchestrator.confirmPreparedInputSaved(String(req.body.attemptId))'));
+  console.log('PASS quick Connect: X form first desktop/paired mobile, no pre-save OAuth/extra approval/chat, spoofed owner/Origin blocked, save then sign-in, unpaired phone no inputs/actionable pairing. Owner/provider/save sink synthetic; real controller/router/schema/orchestrator.');
+} finally { await browser?.close(); if(server) await new Promise(r=>server.close(r)); fs.rmSync(root,{recursive:true,force:true}); }
+})().catch(e=>{console.error(e);process.exitCode=1});

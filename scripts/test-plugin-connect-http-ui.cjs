@@ -19,6 +19,8 @@ consent.setConsentKeySourceForTests(()=>OWNER);
 const proof={ownerToken:()=>OWNER,deviceTrusted:()=>true,verifyDevice:v=>v==='fixture-device',verifyConsent:req=>consent.verifyConsent(req.headers[consent.OWNER_CONSENT_HEADER],req.method,req.originalUrl,req.rawBody).ok};
 const requireOwner=owner.requireProtectedOwner;
 owner.requireProtectedOwner=(req,res,next)=>requireOwner(req,res,next,proof,()=>true);
+const originalSurface=owner.ownerSurfaceState;owner.ownerSurfaceState=(req)=>originalSurface(req,proof);
+owner.secureInputTransportAllowed=()=>true;
 load('config/config.js').getConfig=()=>({getConfigDir:()=>root});
 const secureInput=new SecureInputService(root,600000,()=>true);
 const adapters=new ConnectionAdapterRegistry();
@@ -32,7 +34,7 @@ app.get('/api/secure-access/status',(req,res)=>res.json({owner:owner.ownerSurfac
 app.get('/api/protected-plugins',(req,res)=>res.json({owner:owner.ownerSurfaceState(req,proof),storageAvailable:true,services:[{id:'stripe',name:'Synthetic Stripe fixture'}]}));
 app.use(load('gateway/routes/connections-v2.router.js').router);
 app.use('/src',express.static(path.resolve('web-ui/src')));
-app.get('/',(req,res)=>res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{font:15px system-ui;background:#151719;color:#eee;--panel:#242729;--text:#eee}button{padding:10px;margin:5px}h1{font-size:20px}</style><h1>Isolated protected connection test</h1><button id="connect">Connect fixture</button><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:args=>window.fixtureConsent(args)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v;}document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'stripe',kind:'connector',attemptId:new URLSearchParams(location.search).get('attemptId')||undefined});</script>`));
+app.get('/',(req,res)=>res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{font:15px system-ui;background:#151719;color:#eee;--panel:#242729;--text:#eee}button{padding:10px;margin:5px}h1{font-size:20px}</style><h1>Isolated protected connection test</h1><button id="connect">Connect fixture</button><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:args=>window.fixtureConsent(args)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v;}window.messages=[];document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'stripe',kind:'connector',attemptId:new URLSearchParams(location.search).get('attemptId')||undefined},{onVerify:m=>window.messages.push(m)});</script>`));
 (async()=>{let browser,server;try{
 server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const url=`http://127.0.0.1:${server.address().port}`;
 browser=await chromium.launch({headless:true});
@@ -40,19 +42,26 @@ for(const [label,width,height]of[['desktop',1440,960],['mobile',390,844]]){
  const ctx=await browser.newContext({viewport:{width,height}});await ctx.addCookies([{name:'prom_sa_owner',value:OWNER,url}]);
  const page=await ctx.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.exposeFunction('fixtureConsent',args=>({approved:true,header:consent.mintConsent(OWNER,args.method,args.path,consent.sha256Hex(args.body))}));
- await page.goto(url);await page.click('#connect');await page.getByRole('button',{name:'Approve connection',exact:true}).click();
- await page.getByRole('button',{name:'Open protected entry',exact:true}).click();
+ await page.goto(url);await page.click('#connect');
+ await page.locator('input[type=password]').waitFor();
+ assert.equal(await page.getByRole('button',{name:'Approve connection',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Open protected entry',exact:true}).count(),0);
+ assert(!(await page.evaluate(()=>JSON.stringify(window.calls))).includes('/connect"'));
+ const out=path.resolve(process.env.QUICK_CONNECT_SCREENSHOTS||'.pr/screenshots');fs.mkdirSync(out,{recursive:true});
+ await page.screenshot({path:path.join(out,label+'-key-form.png')});
  const input=page.locator('input[type=password]');await input.waitFor();await input.fill(CANARY);
- await page.getByRole('button',{name:/Save/}).click();await page.getByText('Stored, not verified.',{exact:false}).waitFor();
+ await page.getByRole('button',{name:/Save/}).click();await page.getByText('Saved. Setup is complete',{exact:false}).waitFor();
  assert.equal(await page.locator('input[type=password]').count(),0);
- await page.getByRole('button',{name:'Cancel',exact:true}).click();
- await page.getByRole('button',{name:'Verify connection',exact:true}).click();
- await page.getByText('connected',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>window.messages.length),0);
+ await page.getByRole('button',{name:'Ask Prom to verify',exact:true}).click();
+ assert.equal(await page.evaluate(()=>window.messages.length),1);
+ assert(!(await page.evaluate(()=>window.messages[0])).includes(CANARY));
+ const pending=runtime.orchestrator.listAttempts(1)[0];await runtime.orchestrator.verify(pending.id);
  assert(!(await page.content()).includes(CANARY));assert.equal(errors.length,0,errors.join('\n'));
  assert(!(await page.evaluate(()=>JSON.stringify(window.calls))).includes('chat'));
  await page.screenshot({path:path.join(root,label+'-protected-e2e.png')});
  const a=runtime.orchestrator.listAttempts(1)[0];assert.equal(a.state,'connected');restore();assert.equal(runtime.orchestrator.getAttempt(a.id).state,'connected');
- await page.goto(url+'?attemptId='+encodeURIComponent(a.id));await page.click('#connect');await page.getByText('connected',{exact:true}).waitFor();
+ await page.goto(url+'?attemptId='+encodeURIComponent(a.id));await page.click('#connect');await page.getByText('Connected. You’re ready',{exact:false}).waitFor();
  await ctx.close();
  // Use fresh persisted service state for the second viewport, not live user data.
  if(label==='desktop'){for(const f of ['connection-attempts.json','connections.json']){try{fs.unlinkSync(path.join(root,f))}catch{}}restore();}
