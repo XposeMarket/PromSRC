@@ -1,43 +1,41 @@
-# Paired-phone plugin setup
-
-## Tier
-Tier 1 + scoped opposite-model review under Raul's explicit fix request. Correct misplaced general owner-approval requirement for direct user plugin credential setup. Not a grant of agent/secure-access owner rights.
+# SPEC: Mobile protected access card fit and blocked-state clarity
+Surface: both
+Parity: fixed both: shared blocked-owner presentation; mobile-only dock geometry, desktop layout unchanged
+Test: node scripts/test-secure-access-ui.mjs
+Size justification: Bounded UI-only restoration; no credential or permission changes.
 
 ## Problem
-An enabled paired phone can use the app but cannot even enter plugin credentials without a second desktop owner-provenance opt-in. User explicitly wants direct credential entry/save from the app.
-
+User screenshots IMG_1649/1650 show a large protected sign-in card drifting relative to mobile chat and disabled password input perceived as a broken tap. Owner approval is unavailable on that phone; PR855 intentionally covers plugin setup only.
+## Existing code
+web-ui/src/features/secure-access/secure-access-core.js createMobileDockFit and mountSecureAccessCard.
+## Options
+- Remove permission check: rejected security regression.
+- Change paired-device permission: separate Tier2 policy change.
+- Fix geometry and hide unusable form while retaining explanation/cancel: smallest safe restoration.
 ## Chosen approach
-Separate plugin-configuration authorization from general owner consent. Enabled, server-validated paired-device tokens may prepare and submit typed plugin credentials using same-origin JSON over HTTPS (local test loopback retained). Desktop retains existing consent. Keep general password storage/access, grant mutation, pairing administration, destructive lifecycle and arbitrary executable setup owner-gated. No changes to stored pairing permissions or schemas. No credentials in chat.
-
-## Surface
-both
-
-## Files
-- src/gateway/routes/plugin-setup-access.ts
-- src/gateway/routes/protected-plugins.router.ts
-- src/gateway/routes/connections-v2.router.ts
-- src/gateway/routes/connections.router.ts
-- src/gateway/routes/settings.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/features/secure-access/protected-plugin-card.js
-- scripts/test-paired-plugin-setup.cjs
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-plugin-connect-http-ui.cjs
-- docs/PLUGIN-CONNECT.md
-- generated/public-web-ui/*
-- .pr/SPEC.md
-
+Correct ancestor-scroll coordinates, real composer anchor, viewport height cap and scroll lifecycle. Show owner-blocked explanation and cancel without a dead password form.
 ## Acceptance
-Existing enabled pairing with no owner provenance reaches X form and saves synthetic app credentials; API-key provider uses real vault path. Native desktop unaffected. Disabled/revoked/unknown/no tokens, hostile origin, HTTP remote and token-in-body reject; ordinary paired phone still cannot approve general secret access or launch local executables via connection approval. Explicit scope-bound save, restart and no-secret-output coverage retained. Tests use real pairing store in temp config, real routes/controller and synthetic external providers. Screenshots desktop/mobile, not claim physical phone certification. Build, sync, hard gates, scoped review; no merge/live permission change without approval.
-
-## Test
-node scripts/test-paired-plugin-setup.cjs
-
+Authorized card retains editable inputs and secret clearing. Unauthorized card collects no secrets and retains cancellation. Mobile card bounded above composer when scrolling and keyboard changes. Server gates unchanged.
+## Out of scope
+Granting owner approvals; changing browser-password permission policy; restart/deploy; TikTok publishing.
+## Files
+- `web-ui/src/features/secure-access/secure-access-core.js` - geometry and blocked UI
+- `scripts/test-secure-access-ui.mjs` - regression coverage
+- `workspace/self/18-mobile-app.md` - documentation
 ## Risks
-Paired-token possession authorizes plugin configuration by product intent, not general owner approval. Revoke/disable immediately removes it; do not treat ordinary gateway authentication or Origin alone as sufficient. No real X credentials/auth in tests.
+Mobile coordinate differences; validate browser geometry fixtures and review. No secrets used in tests.
 
-Surface: both
-Parity: shared controller and protected credential card used by desktop and mobile; backend authorization shared across both.
-Size justification: One narrow authorization correction touches shared helper, four existing route modules, both shared UI gates and real-pairing regression fixtures; generated UI is required synchronized output.
+## Scope notes
+- `.pr/SPEC.md` - task-specific specification replaces tracked prior specification.
 
-Test: node scripts/test-paired-plugin-setup.cjs
+## Approved Tier 2 extension: paired fresh credential entry
+Supersedes UI-only scope above. User locked plans/paired-website-entry/PLAN.md cardfcf199a8 and authorized build. Astra planning exception approved due Opus quota. Ordinary active pairing allows ONLY fresh request submission; separate entry.canEnter, unchanged owner.canApprove, broker entryOnly rejects replacements. Existing main-only credential use/preparation remains; final sign-in approval unchanged. No team grants or storage migration.
+Scope: src/gateway/routes/secure-access.router.ts, src/security/secure-access.ts, shared secure-access UI, scripts/test-secure-access-paired-entry.ts and UI tests, generated bundle, self18/self21, this spec.
+Test: npx tsx scripts/test-secure-access-paired-entry.ts; npx tsx scripts/test-secure-access-owner.ts; node scripts/test-secure-access-ui.mjs
+
+## Scope notes
+- `src/gateway/routes/secure-access.router.ts` - scoped paired entry authorization.
+- `src/security/secure-access.ts` - broker replacement prevention.
+- `scripts/test-secure-access-paired-entry.ts` - synthetic paired HTTP regressions.
+- `workspace/self/21-security-approvals-permissions.md` - separate entry/approval documentation.
+- `.pr/SPEC.md` - approved Tier2 scope amendment.

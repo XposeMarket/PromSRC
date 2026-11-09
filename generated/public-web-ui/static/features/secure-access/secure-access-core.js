@@ -196,8 +196,9 @@ export function mountSecureAccessCard(host, opts = {}) {
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
   const persistentAllowed = status.persistentAllowed === true;
-  // Fail closed (I1/I3): surfaces without owner proof never collect the secret at all.
-  const ownerBlocked = !!(status.owner && status.owner.canApprove === false);
+  // Entry capability is distinct from approval; replacement still needs owner proof.
+  const canEnter = request.replaces ? status.owner?.canApprove : (status.entry?.canEnter ?? status.owner?.canApprove);
+  const ownerBlocked = canEnter !== true;
   const uid = `sa-${String(request.id || Math.random()).replace(/[^a-zA-Z0-9_-]/g, '')}`;
   let remember = persistentAllowed;
   let busy = false;
@@ -291,7 +292,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('ul', {},
       el('li', { text: 'Prom never sees this value. It is sent straight to the local protected vault.' }),
       el('li', { text: `Use is limited to main Prom on exactly ${request.origin || 'this site'}.` }),
-      el('li', { text: 'This allows signing in only. Posting, sending, buying or other account actions still ask you separately.' }),
+      el('li', { text: 'Saving allows Prom to prepare sign-in on this site. Submitting the sign-in still needs approval; posting, sending and buying need separate approval too.' }),
       el('li', { text: 'Anyone already running programs as you on this computer is not blocked by this vault.' })));
 
   const form = el('form', { class: 'sa-form', autocomplete: 'on', novalidate: true, 'data-prom-no-draft': 'true' },
@@ -301,7 +302,11 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('div', { class: 'sa-row' }, saveBtn, cancelBtn));
 
   if (ownerBlocked) { secretInput.disabled = true; idInput.disabled = true; }
-  const body = el('div', { style: 'display:grid;gap:12px' }, ownerBlocked ? ownerSurfaceBanner(status) : null, form);
+  // Do not show a dead password field that looks like a broken touch target.
+  // Keep cancellation available; owner proof remains enforced by the server.
+  const body = el('div', { style: 'display:grid;gap:12px' },
+    ownerBlocked ? ownerSurfaceBanner(status) : null,
+    ownerBlocked ? el('div', { class: 'sa-row' }, cancelBtn) : form);
   const card = el('section', { class: 'sa-card', 'aria-labelledby': `${uid}-h`, 'data-secure-access-request': request.id || '' },
     el('div', { class: 'sa-hd' }, lockIcon(20), el('div', { style: 'display:grid;gap:2px;min-width:0;flex:1' },
       el('h3', { id: `${uid}-h`, text: `${copy.title}: ${request.label || 'access'}` }),
@@ -492,15 +497,24 @@ function createMobileDockFit(host) {
     raf = 0;
     if (host.hidden || !host.isConnected) return;
     const parent = host.parentElement;
-    const composer = parent?.querySelector?.(':scope > form') || parent?.querySelector?.('form');
+    // Target the real composer, never a nested protected-entry form.
+    const composer = parent?.querySelector?.('#pm-composer');
+    const anchors = [composer, parent?.querySelector?.('#pm-chat-mode-launcher'), parent?.querySelector?.('#pm-new-chat-context-dock')];
+    const rects = anchors.filter(Boolean).filter((node) => {
+      const style = win.getComputedStyle(node);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+    }).map(node => node.getBoundingClientRect()).filter(rect => rect.height > 0);
     const op = host.offsetParent;
-    if (!composer || !op || typeof composer.getBoundingClientRect !== 'function') return;
-    const c = composer.getBoundingClientRect();
+    if (!rects.length || !op) return;
+    const c = rects.reduce((top, rect) => rect.top < top.top ? rect : top);
     const o = op.getBoundingClientRect();
     if (!(c.height > 0) || !(o.height > 0)) return;
     const viewTop = Math.max(Number(o.top) || 0, vv ? Number(vv.offsetTop) || 0 : 0);
-    const bottom = Math.max(8, Math.round(o.bottom - c.top + 8));
-    const maxH = Math.max(120, Math.round(c.top - viewTop - 12));
+    // Absolute positioning uses the scroller's padding box, whereas rects are
+    // viewport coordinates. Account for scrolling and the parent's border.
+    const parentBottom = o.top + op.clientTop + op.clientHeight;
+    const bottom = Math.max(8, Math.round(parentBottom - c.top + 8 - op.scrollTop));
+    const maxH = Math.max(0, Math.min(Math.round(c.top - viewTop - 12), Math.round((vv?.height || win.innerHeight) * 0.62)));
     host.style.bottom = `${bottom}px`;
     host.style.maxHeight = `${maxH}px`;
   }
@@ -511,6 +525,8 @@ function createMobileDockFit(host) {
   vv?.addEventListener?.('resize', schedule);
   vv?.addEventListener?.('scroll', schedule);
   win?.addEventListener?.('resize', schedule);
+  // Capture ancestor scrolling so the card stays attached to the composer.
+  win?.addEventListener?.('scroll', schedule, true);
   host.addEventListener?.('focusin', schedule);
   return {
     schedule,
@@ -520,6 +536,7 @@ function createMobileDockFit(host) {
       vv?.removeEventListener?.('resize', schedule);
       vv?.removeEventListener?.('scroll', schedule);
       win?.removeEventListener?.('resize', schedule);
+      win?.removeEventListener?.('scroll', schedule, true);
       host.removeEventListener?.('focusin', schedule);
     },
   };
