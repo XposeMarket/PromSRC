@@ -25,6 +25,7 @@ function simulateEmbers({ enabled, mode = 'chat' }) {
   };
   const window = {
     currentMode: mode, innerWidth: 1300, innerHeight: 900,
+    PROM_RESOLVE_THEME: () => ({ ember: 'ember' }),
     addEventListener: (type, cb) => { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(cb); },
   };
   class MutationObserver { constructor(callback) { this.callback = callback; } observe() {} }
@@ -59,11 +60,11 @@ assert.equal(active.counts().pending, 1, 'returning to chat resumes animation');
 
 assert.match(app, /document\.dispatchEvent\(new CustomEvent\('prom-mode-change'/);
 assert.match(chat, /dockOpen \? lanes\.map\(\(lane\) => \[/);
-assert.match(chat, /const lazyClosedGroup = !streaming \|\| !isLiveCurrent;/);
+assert.match(chat, /const lazyClosedGroup = !openLiveCurrent;/);
 assert.match(chat, /lazyClosedGroup && !openAttr && toolBodyEntries\.length/);
 assert.match(chat, /\.join\('\|'\) : lanes\.length/);
 assert.match(chat, /if \(sess\.activeRun === nextActiveRun\) return;/);
-assert.match(chat, /if \(container && shouldFollow\) container\.scrollTop = container\.scrollHeight;/);
+assert.match(chat, /if \(shouldFollow\) list\.scrollTop = list\.scrollHeight;/);
 assert.doesNotMatch(chat.slice(chat.indexOf('function patchStreamingChatBubble('), chat.indexOf('function renderStreamingChatUpdate(')), /else container\.scrollTop = scrollTop/);
 assert.match(chat, /backgroundSpawnDockOffsetFrame !== null \|\| document\.hidden/);
 assert.match(chat, /if \(!document\.hidden && String\(window\.currentMode \|\| 'chat'\) === 'chat'\s*&& \(lane\.sessionId ===/);

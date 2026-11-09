@@ -269,7 +269,7 @@ body:not(.pm-mobile-active) .sidebar.collapsed ~ .workspace .page-view { left: 6
 /* One menu surface contract. Keep positioning and visibility owned by each
    menu; search/priority and Prom Bot use the same surface without pretending
    their richer content is a list of actions. */
-body:not(.pm-mobile-active) :is(.model-switcher-popover, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
+body:not(.pm-mobile-active) :is(.model-switcher-panel, .chat-attach-menu, .chat-header-menu, .chat-session-context-menu, .session-context-menu, #sidebar-priority-panel, .sidebar-search, #prom-bot-sidebar-section, .more-popover, #chat-text-selection-popover, #chat-new-context-popover, #voice-settings-popover) {
   box-sizing: border-box; padding: 6px; border-radius: 13px;
   border: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
   background: var(--panel) !important; color: var(--text);
@@ -316,3 +316,20 @@ body:not(.pm-mobile-active) #sidebar.collapsed :is(.nav-item, .new-chat):hover {
    clipping during the slide. Keep this self-only: descendant rules keyed on the
    motion classes restyle the whole panel subtree on every toggle. */
 body:not(.pm-mobile-active) :is(#sidebar, #right-panel).pm-panel-motion { overflow: hidden !important; }
+
+/* Compatibility for already-cloned legacy composers, not secure-entry cards. */
+body:not(.pm-mobile-active) .chat-input-area [data-add-secret] { display: none !important; }
+
+/* Compact desktop agent dock: hide the track, not overflow access. */
+body:not(.pm-mobile-active) .background-spawn-dock { gap: 5px; }
+body:not(.pm-mobile-active) .background-spawn-dock > .background-spawn-lane { flex-basis: min(156px, calc(100vw - 96px)); border-radius: 12px; }
+body:not(.pm-mobile-active) .background-spawn-dock.has-many { scrollbar-width: none; padding-bottom: 0; }
+body:not(.pm-mobile-active) .background-spawn-dock.has-many::-webkit-scrollbar { display: none; width: 0; height: 0; }
+body:not(.pm-mobile-active) .background-spawn-summary { min-height: 32px; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px; padding: 5px 7px; }
+body:not(.pm-mobile-active) .background-spawn-avatar { width: 22px; height: 22px; font-size: 8px; }
+body:not(.pm-mobile-active) .background-spawn-avatar svg { width: 16px; height: 16px; }
+body:not(.pm-mobile-active) .background-spawn-main { gap: 0; }
+body:not(.pm-mobile-active) .background-spawn-main strong { font-size: 11px; }
+body:not(.pm-mobile-active) .background-spawn-main em { font-size: 10px; line-height: 1.2; }
+body:not(.pm-mobile-active) .background-spawn-status { font-size: 8px; }
+body:not(.pm-mobile-active) .background-spawn-chevron { display: none; }
