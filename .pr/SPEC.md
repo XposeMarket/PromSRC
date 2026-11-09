@@ -24,3 +24,6 @@ Granting owner approvals; changing browser-password permission policy; restart/d
 - `workspace/self/18-mobile-app.md` - documentation
 ## Risks
 Mobile coordinate differences; validate browser geometry fixtures and review. No secrets used in tests.
+
+## Scope notes
+- `.pr/SPEC.md` - task-specific specification replaces tracked prior specification.
