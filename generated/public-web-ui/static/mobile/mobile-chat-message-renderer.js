@@ -1,3 +1,4 @@
+import { renderConnectionChatCards } from '../features/connectors/connection-chat-card.js';
 import { pendingStatusMarkup } from './mobile-ttft-state.js';
 import { highlightMobileVoiceMarkdown } from './mobile-voice-markdown-highlight.js';
 import { isMobileQuestionOnlyRow, isPendingMobileQuestion } from './mobile-question-rows.js';
@@ -223,6 +224,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     }
     if (b.browseState) inner += _renderBrowseCard(b.browseState);
     inner += _renderMobileRichArtifacts(b.text && !m.content ? { ...m, content: b.text } : m);
+    inner += renderConnectionChatCards(m);
     inner += _renderMobileVoiceWorkgroup(m);
     if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
       inner += _renderMobileProductCarousel(m);
