@@ -74,6 +74,7 @@ assert.deepEqual(modelChecks.map(c=>c.check),['model.reachability','model.discov
 console.log('PASS X unowned result/cancel and unknown model capability truth');
 
 // Persisted attempts survive runtime reconstruction; expired protected input renews consent.
+for (const explicit of [false, true]) {
 const lifeRoot = fs.mkdtempSync(path.join(os.tmpdir(),'plugin-life-'));
 try {
   const adapters = new ConnectionAdapterRegistry();
@@ -88,11 +89,14 @@ try {
   const file=path.join(lifeRoot,'connection-attempts.json'); const saved=JSON.parse(fs.readFileSync(file,'utf8'));
   saved.attempts[first.id].updatedAt=new Date(Date.now()-16*60_000).toISOString(); fs.writeFileSync(file,JSON.stringify(saved));
   orch=make(); start=new ConnectionStartService(orch);
-  const renewed=await start.start({serviceId:'x',kind:'connector'});
+  await assert.rejects(()=>start.start({serviceId:'github',kind:'connector',attemptId:first.id}),/IDENTITY/);
+  assert.equal(orch.getAttempt(first.id).state,'awaiting_secure_input');
+  const renewed=await start.start({serviceId:'x',kind:'connector',...(explicit ? {attemptId:first.id} : {})});
   assert.notEqual(renewed.id,first.id); assert.equal(renewed.state,'awaiting_approval');
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(orch.getAttempt(first.id).state,'cancelled');
   assert(orch.getAttempt(first.id).progress.some(p=>p.message.includes('cleanup failed')));
   assert.equal(new ConnectionAttemptStore(lifeRoot).get(first.id).state,'cancelled');
 } finally { fs.rmSync(lifeRoot,{recursive:true,force:true}); }
-console.log('PASS persisted resume, protected-entry expiry renewal and rejected cancellation cleanup');
+}
+console.log('PASS persisted resume, explicit/implicit protected-entry expiry renewal and rejected cancellation cleanup');

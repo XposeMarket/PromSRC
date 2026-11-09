@@ -26,7 +26,8 @@ export class ConnectionStartService {
       const discovery = this.orchestrator.discover(selector);
       if (!attempt || discovery.status !== 'resolved' || discovery.canonicalServiceId !== attempt.serviceId
         || (input.kind && attempt.metadata?.pluginKind !== input.kind)) throw new Error('SERVICE_IDENTITY_MISMATCH');
-      return attempt;
+      if (attempt.state !== 'awaiting_secure_input' || Date.now() - Date.parse(attempt.updatedAt) <= 15 * 60_000) return attempt;
+      this.orchestrator.cancel(attempt.id);
     }
     let created = this.orchestrator.create({ serviceId: selector, readOnly: true });
     if (created.state === 'awaiting_secure_input' && Date.now() - Date.parse(created.updatedAt) > 15 * 60_000) {
