@@ -1,19 +1,16 @@
-# Native browser upload repair
+# Connection runtime identity hotfix
+Tier: 1, review waived by Raul's explicit live steer Nov9.
 Surface: backend
-Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
-Test: node scripts/test-inhouse-upload.cjs
+Parity: shared backend runtime serves tools and HTTP for every client.
+Test: node --import tsx scripts/test-connection-runtime-identity.cjs
 ## Problem
-Active native browser upload incorrectly reports no session.
+Under tsx, static extensionless imports and dynamic .js imports instantiate separate runtime module copies. Tool-created attempt exists on disk but HTTP returns404 from stale module-local state.
 ## Chosen approach
-Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
-## Acceptance
-Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
+One process-global connection runtime, keyed by resolved configuration directory. Preserve normal resets across either import identity. No permission, vault, schema or transport changes.
 ## Files
-- src/gateway/browser-tools.ts
-- electron/main.js
-- electron/browser-upload.cjs
-- scripts/test-inhouse-upload.cjs
-- workspace/self/13-browser-desktop.md
+- src/connections/runtime.ts
+- scripts/test-connection-runtime-identity.cjs
+- workspace/self/12-connectors-mcp-integrations.md
 - .pr/SPEC.md
-## Risks
-Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.
+## Acceptance
+Mixed static/dynamic source imports share identity and attempts; resets invalidate both; isolated config never touches real accounts. Compile and existing connection regressions pass. Live restart + same tool-issued attempt GET200. User authorized live hotfix/deployment and PR, no independent review.

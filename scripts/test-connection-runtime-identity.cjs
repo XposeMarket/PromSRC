@@ -1,0 +1,31 @@
+// Exercise the real tsx CJS/static + ESM/dynamic split used by HTTP and tools.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-runtime-identity-'));
+process.env.PROMETHEUS_RUNTIME_DIR = path.join(root, 'runtime');
+process.env.PROMETHEUS_WORKSPACE_DIR = path.join(root, 'workspace');
+process.env.PROMETHEUS_CONFIG_DIR = path.join(root, 'runtime');
+(async () => {
+  const http = require('../src/connections/runtime.ts');
+  const tool = await import('../src/connections/runtime.js');
+  const a = http.getConnectionRuntime();
+  const b = tool.getConnectionRuntime();
+  assert.equal(a, b, 'HTTP and tool imports must share one runtime');
+  const attempt = b.orchestrator.create({serviceId: 'identity-fixture', readOnly: true});
+  assert.equal(a.orchestrator.getAttempt(attempt.id)?.id, attempt.id);
+  a.orchestrator.cancel(attempt.id);
+  assert.equal(b.orchestrator.getAttempt(attempt.id)?.state, 'cancelled');
+  const pending = b.secureInput.create({serviceId:'identity-fixture', attemptId:attempt.id, fields:[{key:'key',label:'Fixture',secret:true,required:true}]});
+  assert.equal(a.secureInput.status(pending.id).valid, true, 'in-memory handoff shared');
+  tool.resetConnectionRuntime();
+  const fresh = http.getConnectionRuntime();
+  assert.notEqual(fresh, a);
+  assert.equal(fresh, tool.getConnectionRuntime());
+  assert.equal(fresh.orchestrator.getAttempt(attempt.id)?.state, 'cancelled', 'durable state survives reset');
+  assert.equal(fresh.secureInput.status(pending.id).valid, false, 'reset invalidates transient handoff');
+  http.resetConnectionRuntime();
+  assert.notEqual(tool.getConnectionRuntime(), fresh, 'reset works in both directions');
+  console.log('PASS: mixed imports, attempt visibility, cancellation, secure handoff, bidirectional reset');
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => { fs.rmSync(root,{recursive:true,force:true}); });
