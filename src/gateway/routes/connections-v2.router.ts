@@ -5,7 +5,7 @@ import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
 import { bindPluginCredential } from '../../connections/plugin-credential-binding';
 import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
-import { pluginSetupSurfaceState, requirePluginSetup, PAIRED_PLUGIN_SETUP_ADAPTERS } from './plugin-setup-access';
+import { pluginSetupSurfaceState, requirePluginSetupAdapter } from './plugin-setup-access';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -82,8 +82,7 @@ router.post('/api/connection-attempts/:id/prepare-input', async (req, res) => {
 
 router.post('/api/connection-attempts/:id/connect', (req, res, next) => {
   const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
-  if (adapter && PAIRED_PLUGIN_SETUP_ADAPTERS.has(adapter)) requirePluginSetup(req, res, next);
-  else requireProtectedOwner(req, res, next);
+  requirePluginSetupAdapter(req, res, next, adapter);
 }, async (req, res) => {
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
@@ -114,7 +113,12 @@ router.get('/api/connection-secure-input/:sessionId', (req, res) => {
   res.status(status.valid ? 200 : 404).json({ success: status.valid, ...status });
 });
 
-router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requirePluginSetup(req, res, next), async (req, res) => {
+router.post('/api/connection-secure-input/:sessionId', (req, res, next) => {
+  const runtime = getConnectionRuntime();
+  const session = runtime.secureInput.status(req.params.sessionId);
+  const adapter = session.attemptId ? runtime.orchestrator.getAttempt(session.attemptId)?.plan?.strategy.adapter : undefined;
+  requirePluginSetupAdapter(req, res, next, adapter);
+}, async (req, res) => {
   try {
     const runtime = getConnectionRuntime();
     const session = runtime.secureInput.status(req.params.sessionId);

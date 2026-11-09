@@ -28,3 +28,9 @@ export function requirePluginSetup(req: any, res: any, next: () => void): void {
 
 /** Credential/sign-in flows only. Installing or launching local code still requires owner approval. */
 export const PAIRED_PLUGIN_SETUP_ADAPTERS = new Set(['api-key', 'setup-token', 'connector-oauth', 'mcp-oauth', 'openai-compatible-model']);
+
+
+export function requirePluginSetupAdapter(req: any, res: any, next: () => void, adapter?: string): void {
+  if (adapter && PAIRED_PLUGIN_SETUP_ADAPTERS.has(adapter)) requirePluginSetup(req, res, next);
+  else requireProtectedOwner(req, res, next);
+}
