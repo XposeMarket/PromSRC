@@ -75,3 +75,6 @@ Added src/integrations/connector-registry.ts if needed to close the existing nat
 - src/integrations/connector-registry.ts
 
 Test: node scripts/test-plugin-connect-flow.mjs
+
+## Files
+- scripts/test-plugin-connect-http-ui.cjs
