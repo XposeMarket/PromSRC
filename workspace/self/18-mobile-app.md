@@ -234,3 +234,6 @@ Mobile live/replay use exact raw delta append and complete snapshot replace in t
 - Integration correction: mobile-drawer-search-morph styles live in their own CSS module, loaded after mobile.css in source and production entry; legacy size guardrails remain unchanged.
 
 - The obsolete inline message editor and its context bridge/styles were removed; message edits exclusively borrow the bottom composer. Drawer morph helper loads on first search interaction with stale-node guards.
+
+## Protected sign-in card restoration (2026-11-09)
+Verified against base 9cfb1f007 plus this fix: `web-ui/src/features/secure-access/secure-access-core.js`, `createMobileDockFit` anchors specifically to #pm-composer, accounts for the containing block border/scroll offset, caps height to the visible viewport, and schedules on captured scroll with cleanup. `mountSecureAccessCard` shows explanation and Cancel instead of disabled password controls when owner.canApprove=false. Server owner proof remains mandatory; ordinary paired plugin configuration (PR855) does NOT authorize general browser-password entry or sign-in.

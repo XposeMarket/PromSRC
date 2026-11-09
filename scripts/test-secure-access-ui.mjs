@@ -230,4 +230,22 @@ assert.match(read('web-ui/src/features/secure-access/secure-access-desktop-dock.
 }
 
 console.log('secure-access UI tests passed');
+
+
+// Blocked surfaces must not present apparently tappable password controls.
+{
+  const h = document.createElement('div'); document.body.append(h);
+  const blocked = mod.mountSecureAccessCard(h, {
+    request: { id: 'blocked-mobile', mode: 'existing', label: 'Fixture', origin: 'https://example.com', expiresAt: new Date(Date.now()+60000).toISOString() },
+    status: { persistentAllowed: true, owner: { canApprove: false } }, fetchJson: fakeFetch({}),
+  });
+  assert.equal(h.querySelector('input[type="password"]'), null);
+  assert.ok(h.textContent.includes('Approvals are off'));
+  assert.ok([...h.querySelectorAll('button')].some(b => b.textContent === 'Cancel'));
+  blocked.destroy(); h.remove();
+}
+assert.match(core, /op\.scrollTop/, 'mobile absolute coordinates account for ancestor scroll');
+assert.match(core, /querySelector\?\.\('#pm-composer'\)/, 'dock anchors only to real composer');
+assert.match(core, /removeEventListener\?\.\('scroll', schedule, true\)/, 'capture scroll listener cleaned up');
+console.log('PASS blocked-owner presentation and mobile anchor regressions');
 process.exit(0);
