@@ -35,6 +35,7 @@ export interface ConnectorOAuthBridge {
   metadata(): OAuthConnectorMetadata | Promise<OAuthConnectorMetadata>;
   verify(): Promise<ConnectorOAuthVerification>;
   clear(): void | Promise<void>;
+  cancel?(): void | Promise<void>;
   revoke?(): void | Promise<void>;
   credentialReference?(): string;
 }
@@ -128,6 +129,9 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
       ? strategy.authentication.scopes.map(String)
       : undefined;
     const started = await bridge.start(expectedAccountId, requestedScopes);
+    if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {
+      return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
+    }
     if (started.error || !started.authUrl) {
       return {
         state: 'failed',
@@ -159,6 +163,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
 
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const bridge = this.bridgeFor(context);
+    if (context.attempt.state === 'awaiting_secure_input') return this.connect(context);
     let result = await bridge.poll();
     // The one-shot callback result can be gone (consumed by another poller,
     // expired, or lost to a gateway restart) while the tokens are stored.
@@ -225,6 +230,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return checks;
   }
 
+  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.bridgeFor(context).cancel?.(); }
+
   async repair(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     return this.connect(context);
   }
@@ -232,8 +239,8 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
   async disconnect(context: ConnectionAdapterContext, _connection: ConnectionRecord): Promise<void> {
     const bridge = this.bridgeFor(context);
     try {
-      await bridge.revoke?.();
-      context.emitProgress?.('Provider revocation completed or was not required.', { remoteRevocation: 'completed' });
+      if (bridge.revoke) { await bridge.revoke(); context.emitProgress?.('Provider revocation completed.', { remoteRevocation: 'completed' }); }
+      else context.emitProgress?.('Remote revocation is unavailable; disconnect clears local access only.', { remoteRevocation: 'unavailable' });
     } catch (error: any) {
       // The local vault must still be cleared. The progress detail makes the
       // provider-side failure visible without returning credentials or tokens.

@@ -12533,7 +12533,7 @@ function renderConnectionCardArtifact(artifact) {
 }
 
 async function connectionCardContinue(attemptId, input, button) {
-  try { if (button) button.disabled = true; const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) }); showToast?.('Connection updated', String(result?.attempt?.state || ''), 'success', 3000); await connectionCardRefresh(attemptId, button); }
+  try { if (button) button.disabled = true; const result = input?.approved === true ? await (await import('../features/connectors/connection-actions.js')).approveConnection(api, attemptId) : await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) }); showToast?.('Connection updated', String(result?.attempt?.state || ''), 'success', 3000); await connectionCardRefresh(attemptId, button); }
   catch (error) { showToast?.('Connection failed', String(error?.message || error), 'error', 5000); if (button) button.disabled = false; }
 }
 

@@ -310,18 +310,19 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'connection_ops',
-        description: 'Preferred universal plugin-backed setup orchestrator. discover resolves a natural service name without creating an attempt; plan creates/reuses a durable attempt and returns approval/research state; connect starts an approved strategy; continue resumes user-assisted auth; verify is the only authority for claiming readiness. Credentials must use secure input, never chat arguments.',
+        description: 'Preferred universal plugin-backed setup orchestrator. discover resolves a natural service name without creating an attempt; plan creates/reuses a durable attempt and returns approval/research state; start creates/resumes a canonical metadata-only action card; connection approval is owner-UI-only, never a tool flag; connect returns the owner action; continue resumes user-assisted auth; verify is the only authority for claiming readiness. Credentials must use secure input, never chat arguments.',
         parameters: {
           type: 'object', required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['discover', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections', 'set_tool_availability', 'set_exposure'] },
+            action: { type: 'string', enum: ['discover', 'start', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections', 'set_tool_availability', 'set_exposure'] },
             service: { type: 'string' }, service_id: { type: 'string' }, service_name: { type: 'string' },
             connection_attempt_id: { type: 'string' }, connection_id: { type: 'string' },
             detail: { type: 'string', enum: ['compact', 'full'], description: 'compact (default) returns bounded summaries; full returns complete canonical records.' },
             requested_capabilities: { type: 'array', items: { type: 'string' } }, read_only: { type: 'boolean' },
             available_tools: { type: 'array', items: { type: 'string' }, description: 'For set_tool_availability/set_exposure: exact connector or MCP tool names to make available to the model. Write tools remain subject to normal approval.' },
             tool_names: { type: 'array', items: { type: 'string' }, description: 'Compatibility alias for available_tools.' },
-            approved: { type: 'boolean' }, metadata: { type: 'object' }, input: { type: 'object' },
+            kind: { type: 'string', enum: ['connector', 'mcp_preset', 'provider', 'integration'], description: 'For start: pin the catalog kind when IDs collide.' },
+            metadata: { type: 'object' }, input: { type: 'object' },
           }, additionalProperties: false,
         },
       },

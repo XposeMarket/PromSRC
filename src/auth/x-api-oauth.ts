@@ -1,4 +1,5 @@
 import { assertPluginCredentialUse, pluginCredentialState, setPluginCredentialState } from '../security/plugin-credential-state';
+
 /**
  * x-api-oauth.ts
  *
@@ -547,6 +548,10 @@ export async function completeXApiOAuthWithCode(configDir: string, code: string)
     flow.lifecycle?.finish({ done: true, success: false, error });
     return { success: false, error };
   }
+}
+
+export function cancelXApiOAuthFlow(): void {
+  _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'OAuth cancelled.' });
 }
 
 export function pollXApiOAuthBackground(): BgOAuthResult {

@@ -39,6 +39,17 @@ router.get('/api/connection-attempts', (req, res) => {
   catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
 });
 
+router.post('/api/connection-attempts/start', async (req, res) => {
+  try {
+    const { serviceId, kind, attemptId } = req.body || {};
+    if (typeof serviceId !== 'string' || (kind && !['connector', 'mcp_preset', 'provider', 'integration'].includes(kind))) {
+      res.status(400).json({ success: false, error: 'INVALID_CONNECTION_TARGET' }); return;
+    }
+    const attempt = await getConnectionRuntime().start.start({ serviceId, kind, attemptId });
+    res.json({ success: true, attempt });
+  } catch (error: any) { res.status(400).json({ success: false, error: error.message }); }
+});
+
 router.post('/api/connection-attempts', async (req, res) => {
   try {
     const serviceId = String(req.body?.serviceId || req.body?.service || '').trim();
@@ -61,8 +72,8 @@ router.get('/api/connection-attempts/:id', (req, res) => {
   res.json({ success: true, attempt });
 });
 
-router.post('/api/connection-attempts/:id/connect', async (req, res) => {
-  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, req.body || {}) }); }
+router.post('/api/connection-attempts/:id/connect', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
+  try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 

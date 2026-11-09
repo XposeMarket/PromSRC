@@ -92,18 +92,20 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
     const wanted = String(options.serviceId || (services[0]?.id ?? 'x'));
     if (!known.has(wanted) && wanted !== 'x') selector.append(el('option', { value: wanted, text: wanted }));
     selector.value = wanted;
-    if (options.request) selector.disabled = true;
+    if (options.request || options.attemptId) selector.disabled = true;
     const form = el('form', { class: 'sa-form', autocomplete: 'off', novalidate: true });
     root.insertBefore(el('label', { class: 'sa-field' }, el('span', { class: 'sa-lbl', text: 'Destination plugin' }), selector), error);
     root.insertBefore(form, error);
     async function render() {
       clear(); inputs.length = 0; form.replaceChildren(); error.textContent = ''; status.textContent = ''; clearTimeout(expiryTimer);
       const service = selector.value;
-      let request = service === 'x' ? null : options.request || null;
-      if (service !== 'x' && !request) request = (await postJson(fetchJson, '/api/protected-plugins/request', { serviceId: service }))?.request || null;
+      const nativeApp = !!options.oauthApp && !!options.attemptId;
+      let request = nativeApp ? await fetchJson(`/api/protected-plugins/app-schema/${encodeURIComponent(options.attemptId)}`) : service === 'x' ? null : options.request || null;
+      if (nativeApp && request.serviceId !== service) throw new Error('UNSUPPORTED_PLUGIN');
+      if (!nativeApp && service !== 'x' && !request) request = (await postJson(fetchJson, '/api/protected-plugins/request', { serviceId: service }))?.request || null;
       if (closed) return;
-      const fields = service === 'x' ? X_FIELDS : Array.isArray(request?.fields) ? request.fields : [];
-      if (!fields.length || (service !== 'x' && (!request?.id || !request?.attemptId))) throw new Error('UNSUPPORTED_PLUGIN');
+      const fields = nativeApp ? request.fields : service === 'x' ? X_FIELDS : Array.isArray(request?.fields) ? request.fields : [];
+      if (!fields.length || (!nativeApp && service !== 'x' && (!request?.id || !request?.attemptId))) throw new Error('UNSUPPORTED_PLUGIN');
       const expires = Date.parse(request?.expiresAt || '');
       if (expires) {
         const left = expires - Date.now();
@@ -124,12 +126,20 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
         let values = Object.fromEntries(fields.map((field, i) => [field.key, inputs[i].value.trim()]));
         clear();
         try {
-          if (service === 'x') {
-            const body = { clientId: values.clientId, clientSecret: values.clientSecret };
+          if (nativeApp || service === 'x') {
+            const body = { clientId: values.clientId, clientSecret: values.clientSecret, ...(options.attemptId ? { attemptId: options.attemptId } : {}), ...(service !== 'x' ? { id: service } : {}) };
             values = null;
-            try { await postJson(fetchJson, '/api/auth/x-api/credentials', body, 'Save X OAuth app credentials'); }
+            try {
+              if (service === 'x') await postJson(fetchJson, '/api/auth/x-api/credentials', body, 'Save X OAuth app credentials');
+              else await postJson(fetchJson, '/api/connections/credentials', body, 'Save OAuth app credentials');
+            }
             finally { body.clientId = ''; body.clientSecret = ''; }
             let next;
+            if (options.attemptId) {
+              next = await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(options.attemptId)}/continue`, {});
+              options.onSaved?.({ serviceId: service, attempt: next.attempt });
+              close(); return;
+            }
             try { next = await postJson(fetchJson, '/api/auth/x-api/start', {}); } catch { throw new Error('OAUTH_UNAVAILABLE'); }
             const href = safeXAuthUrl(next?.authUrl || next?.auth_url);
             if (!next?.authUrl && !next?.auth_url) throw new Error('OAUTH_UNAVAILABLE');

@@ -95,7 +95,7 @@ export function secureAccessErrorText(error, fallback) {
 // PR821 I1: actions that need a human-typed code in the native owner-approval window
 // when sent from the desktop app. Paired phones prove ownership with their device token.
 const CONSENT_ROUTE = /^\/api\/secure-access\/(requests\/[^/]+\/submit|credentials\/[^/]+\/(grants|replace|delete|login\/submit))$/;
-export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect)$/.test(route); }
+export function needsOwnerConsent(path) { const route = String(path || '').split('?')[0]; return /^\/api\/connection-attempts\/[^/]+\/connect$/.test(route) || CONSENT_ROUTE.test(route) || /^\/api\/(connection-secure-input\/[^/]+|connections\/credentials|connections\/disconnect|auth\/x-api\/credentials|auth\/x-api\/disconnect|protected-plugins\/(?:x|connection\/[^/]+)\/delete|protected-plugins\/(?:x|connection\/[^/]+)\/disconnect|connections-v2\/[^/]+\/disconnect)$/.test(route); }
 export function ownerConsentBridge() {
   try { return globalThis.prometheusOwnerConsent && typeof globalThis.prometheusOwnerConsent.request === 'function' ? globalThis.prometheusOwnerConsent : null; } catch { return null; }
 }

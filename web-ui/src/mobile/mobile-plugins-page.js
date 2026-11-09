@@ -1,4 +1,5 @@
 // Mobile Plugins page (replaces the old "More" landing on mobile only).
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
 //
 // One alphabetical list of everything the gateway can plug into the model:
 // bundled connectors, MCP servers, and plugins imported from Claude Code /
@@ -383,7 +384,7 @@ function openSheet(page, row, navigate, onChanged) {
       return;
     }
     close();
-    askPromInChat(navigate, connectMessage(row));
+    await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'connector' ? 'connector' : undefined }, { onChanged });
   });
   // On <body>, not the page: a transformed page ancestor would pin a fixed
   // overlay to the page box instead of the viewport.

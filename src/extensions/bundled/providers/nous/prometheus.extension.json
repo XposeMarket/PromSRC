@@ -62,7 +62,7 @@
     "strategies": [
       {
         "id": "nous-hermes-local-proxy",
-        "adapter": "local-resource",
+        "adapter": "openai-compatible-model",
         "priority": 100,
         "capabilities": ["llm"],
         "readOnlyDefault": true,
@@ -71,9 +71,12 @@
         },
         "config": {
           "endpoint": "http://127.0.0.1:8645",
+          "baseUrl": "http://127.0.0.1:8645/v1",
+          "authentication": "none",
+          "providerId": "nous",
           "prerequisite": "hermes portal && hermes proxy start"
         },
-        "verification": ["endpoint.reachable", "models.list", "completion.minimal"]
+        "verification": ["endpoint.reachable", "models.list"]
       }
     ]
   }
