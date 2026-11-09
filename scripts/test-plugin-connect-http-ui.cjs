@@ -22,6 +22,12 @@ owner.requireProtectedOwner=(req,res,next)=>requireOwner(req,res,next,proof,()=>
 const originalSurface=owner.ownerSurfaceState;owner.ownerSurfaceState=(req)=>originalSurface(req,proof);
 owner.secureInputTransportAllowed=()=>true;
 load('config/config.js').getConfig=()=>({getConfigDir:()=>root});
+load('security/plugin-credential-state.js').protectedPluginStorageAvailable=()=>true;
+const pairing=load('gateway/pairing/pairing-store.js');
+const challenge=pairing.createPairingChallenge();
+const pending=pairing.createPendingRequest({challengeId:challenge.id,deviceName:'Fixture',deviceFingerprint:'fixture',userAgent:'test',ipHint:''});
+const phone=pairing.approvePendingRequest(pending.id);
+const setup=load('gateway/routes/plugin-setup-access.js');
 const secureInput=new SecureInputService(root,600000,()=>true);
 const adapters=new ConnectionAdapterRegistry();
 adapters.register(new ApiKeyConnectionAdapter({createCredentialSession:async(ctx,fields)=>secureInput.create({serviceId:ctx.attempt.serviceId,attemptId:ctx.attempt.id,fields}),verifyCredential:async(ref,ctx)=>{reads++;const value=JSON.parse(secureInput.readForConsumer(ref,ctx.attempt.serviceId,ctx.attempt.id)||'{}');return{ok:Object.values(value).includes(CANARY),message:'Synthetic fixed read verified'};}}));
@@ -31,7 +37,7 @@ restore();load('connections/runtime.js').getConnectionRuntime=()=>runtime;
 const app=express();app.use(express.json({verify:(req,res,b)=>req.rawBody=Buffer.from(b)}));
 app.use((req,res,next)=>{const json=res.json.bind(res);res.json=value=>{assert(!JSON.stringify(value).includes(CANARY),'secret echoed');return json(value)};next()});
 app.get('/api/secure-access/status',(req,res)=>res.json({owner:owner.ownerSurfaceState(req,proof)}));
-app.get('/api/protected-plugins',(req,res)=>res.json({owner:owner.ownerSurfaceState(req,proof),storageAvailable:true,services:[{id:'stripe',name:'Synthetic Stripe fixture'}]}));
+app.get('/api/protected-plugins',(req,res)=>res.json({owner:owner.ownerSurfaceState(req,proof),setup:setup.pluginSetupSurfaceState(req),storageAvailable:true,services:[{id:'stripe',name:'Synthetic Stripe fixture'}]}));
 app.use(load('gateway/routes/connections-v2.router.js').router);
 app.use('/src',express.static(path.resolve('web-ui/src')));
 app.get('/',(req,res)=>res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{font:15px system-ui;background:#151719;color:#eee;--panel:#242729;--text:#eee}button{padding:10px;margin:5px}h1{font-size:20px}</style><h1>Isolated protected connection test</h1><button id="connect">Connect fixture</button><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:args=>window.fixtureConsent(args)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v;}window.messages=[];document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'stripe',kind:'connector',attemptId:new URLSearchParams(location.search).get('attemptId')||undefined},{onVerify:m=>window.messages.push(m)});</script>`));
@@ -39,10 +45,10 @@ app.get('/',(req,res)=>res.type('html').send(`<!doctype html><meta name="viewpor
 server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const url=`http://127.0.0.1:${server.address().port}`;
 browser=await chromium.launch({headless:true});
 for(const [label,width,height]of[['desktop',1440,960],['mobile',390,844]]){
- const ctx=await browser.newContext({viewport:{width,height}});await ctx.addCookies([{name:'prom_sa_owner',value:OWNER,url}]);
+ const ctx=await browser.newContext({viewport:{width,height},...(label==='mobile'?{extraHTTPHeaders:{'X-Pairing-Token':phone.deviceToken}}:{})});if(label==='desktop')await ctx.addCookies([{name:'prom_sa_owner',value:OWNER,url}]);
  const page=await ctx.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.exposeFunction('fixtureConsent',args=>({approved:true,header:consent.mintConsent(OWNER,args.method,args.path,consent.sha256Hex(args.body))}));
- await page.goto(url);await page.click('#connect');
+ await page.goto(url);if(label==='mobile'){assert.equal(owner.ownerSurfaceState({headers:{'x-pairing-token':phone.deviceToken}}).canApprove,false);await page.evaluate(()=>{delete window.prometheusOwnerConsent;});}await page.click('#connect');
  await page.locator('input[type=password]').waitFor();
  assert.equal(await page.getByRole('button',{name:'Approve connection',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Open protected entry',exact:true}).count(),0);

@@ -83,7 +83,7 @@ export async function openProtectedPluginCard(fetchJson, options = {}) {
     const [st, catalog] = await Promise.all([fetchJson('/api/secure-access/status'), fetchJson('/api/protected-plugins')]);
     if (closed) return handle;
     // Fail closed before any input exists.
-    if (!st?.owner?.canApprove || catalog?.owner?.canApprove === false) { fail('OWNER_SURFACE_REQUIRED'); return handle; }
+    if (!(catalog?.setup?.canConfigure ?? (st?.owner?.canApprove && catalog?.owner?.canApprove !== false))) { fail('OWNER_SURFACE_REQUIRED'); return handle; }
     if (!catalog?.storageAvailable) { fail('PROTECTED_STORAGE_REQUIRED'); return handle; }
     const services = Array.isArray(catalog.services) ? catalog.services : [];
     const selector = el('select', { class: 'sa-input', 'aria-label': 'Destination plugin' });
