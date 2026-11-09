@@ -103,7 +103,10 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
     if (closed) return; panel.replaceChildren(); text('p', 'Opening setup…', 'sa-muted');
     try {
       if (!await ownerReady() || closed) return;
-      attempt = (await fetchJson('/api/connection-attempts/start', { method: 'POST', body: JSON.stringify(target) })).attempt;
+      attempt = target.attemptId
+        ? (await fetchJson(`/api/connection-attempts/${encodeURIComponent(target.attemptId)}`)).attempt
+        : (await fetchJson('/api/connection-attempts/start', { method: 'POST', body: JSON.stringify(target) })).attempt;
+      if (!attempt?.id || attempt.serviceId !== target.serviceId || (target.attemptId && attempt.id !== target.attemptId)) throw new Error('PROTECTED_REQUEST_UNAVAILABLE');
       if (attempt.state === 'awaiting_approval') {
         attempt = (await postJson(fetchJson, `/api/connection-attempts/${encodeURIComponent(attempt.id)}/prepare-input`, {})).attempt;
         if (attempt.state === 'awaiting_approval') {

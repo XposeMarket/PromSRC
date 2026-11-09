@@ -5,7 +5,8 @@
 //   They are read once at submit time, sent to the dedicated submit endpoint
 //   and cleared. Never stored in JS state, storage, chat/question data,
 //   notifications or console output. Nothing here writes storage at all.
-// - Cards clear secrets on success, cancel, expiry, hide, pagehide and unmount.
+// - Cards clear secrets on success, cancel, expiry, pagehide and unmount.
+//   Protected plugin entry alone allows brief app hiding (DOM only, five-minute cap).
 // - Only metadata (labels, origins, identifiers, states) is rendered/polled.
 
 export const SECURE_ACCESS_API = '/api/secure-access';
