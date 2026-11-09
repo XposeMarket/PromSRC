@@ -42,3 +42,7 @@ Do not detach local SSE state, replay over terminal turns, expose private thinki
 - scripts/test-main-chat-reasoning-summary.regression.mjs: inject scheduled-render dependency into real SSE switch fixture.
 - scripts/test-background-agent-stream-ui.mjs: current exact summary channel metadata, not obsolete agent_progress tag.
 - scripts/test-desktop-live-multithread-perf.mjs: theme registry stub and closed-current lazy render contract.
+
+## Follow-up: thinking placeholder and user bubbles
+Tier 1 presentation-only delta after reviewed head00062d1fa. Hide transport/setup metadata from the desktop conversation and use three animated thinking dots until real reasoning/tools/answer arrive. Keep approvals/plans/image placeholders visible and suppress empty dots while waiting for a question. Remove desktop user-bubble border/inset/pseudo frames for every built-in skin and custom palettes; mobile renderer/styles unchanged. Functional dots remain animated during streams, respecting reduced motion and hidden/paused state.
+Acceptance: executable renderer-state tests plus real Chromium desktop CSS checks for p1/gray/dark/blue/purple/custom, actual app preview with source assets, existing streaming/perf regression retained. No backend, permission, stored-data or provider change.

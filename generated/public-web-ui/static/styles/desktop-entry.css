@@ -67,3 +67,23 @@
     animation-play-state: paused !important;
   }
 }
+
+/* User messages use a filled surface, never an outlined frame, in every
+   desktop skin and chat pane. Keep focus rings and nested content untouched. */
+:root body:not(.pm-mobile-active) .msg.user .msg-body {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+:root body:not(.pm-mobile-active) .msg.user .msg-body::before,
+:root body:not(.pm-mobile-active) .msg.user .msg-body::after {
+  content: none !important;
+  display: none !important;
+}
+/* The tiny transform-only thinking dots are functional feedback, not a
+   decorative animation. Keep them alive without re-enabling expensive glows. */
+@media (min-width: 769px) and (prefers-reduced-motion: no-preference) {
+  body:not(.pm-mobile-active):not(.chat-document-hidden) #chat-messages.is-streaming
+  .msg-shell:not(.chat-paint-paused) [data-live-stream-body] .thinking-dot {
+    animation-play-state: running !important;
+  }
+}

@@ -14748,21 +14748,15 @@ function toggleUnifiedDesktopComposerDictation(inputId, button = null) {
 
 function renderSessionThinkingBodyHtml(sessionId) {
   const st = getSessionStreamState(sessionId) || {};
-  const startupProgressPattern = /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i;
-  const progressLines = (Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [])
-    .filter((line) => !startupProgressPattern.test(String(line || '').trim()));
-  const progressHtml = progressLines.length
-    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
-        ${progressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
-      </div>`
-    : '';
+  // Transport/setup diagnostics are not conversation content. Match mobile:
+  // keep the three-dot placeholder until reasoning, tools or an answer arrive.
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
+  const thinkingOnly = !showAnswerText && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
@@ -14784,11 +14778,11 @@ function renderSessionThinkingBodyHtml(sessionId) {
             ${assistantWorkTimerHtml}
             ${assistantStatusDividerHtml}
             ${!thinkingOnly ? activeModelBadgeHtml : ''}
-            ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
+            ${showLiveTrace ? liveTraceHtml : ''}
             ${pendingImageHtml}
             ${showAnswerText
               ? `<div id="streaming-text-content">${renderAssistantContent(st.streamingAIText)}</div>`
-              : (showLiveTrace || progressHtml || pendingImageHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || ''))
+              : (showLiveTrace || pendingImageHtml || liveApprovalsHtml || inlinePlanHtml ? '' : (window.PROM_THEME_ENGINE?.thinkingDotsHtml(String(st.turnStartedAt || '')) || '<div class="thinking" role="status" aria-label="Thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'))
             }
             ${liveApprovalsHtml}
             ${inlinePlanHtml}`;
@@ -14803,9 +14797,8 @@ function renderSessionThinkingHtml(sessionId) {
     && String(sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
   const st = getSessionStreamState(sessionId) || {};
   const hasNonQuestionThinking = !!String(st.streamingAIText || '').trim()
-    || !!Array.isArray(st.liveTraceEntries || []).length
-    || !!Array.isArray(st.currentProgressLines || []).length
-    || !!Array.isArray(st.pendingApprovals || []).length
+    || !!(st.liveTraceEntries || []).length
+    || !!(st.pendingApprovals || []).length
     || !!getRuntimePlanItems(st.runtimeProgressState).length;
   if (pendingQuestion && !hasNonQuestionThinking) return '';
   const thinkingOnly = !hasNonQuestionThinking;
@@ -15704,7 +15697,7 @@ function patchStreamingChatBubble(sessionId) {
   // Keep placeholder styling in sync when the first answer/tool arrives.
   const st = getSessionStreamState(sid) || {};
   bubble.classList.toggle('thinking-only', !String(st.streamingAIText || '').trim()
-    && !(st.liveTraceEntries || []).length && !(st.currentProgressLines || []).length
+    && !(st.liveTraceEntries || []).length
     && !(st.pendingApprovals || []).length && !getRuntimePlanItems(st.runtimeProgressState).length);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
