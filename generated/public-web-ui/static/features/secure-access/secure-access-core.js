@@ -196,8 +196,9 @@ export function mountSecureAccessCard(host, opts = {}) {
   const mode = MODE_COPY[request.mode] ? request.mode : 'existing';
   const copy = MODE_COPY[mode];
   const persistentAllowed = status.persistentAllowed === true;
-  // Fail closed (I1/I3): surfaces without owner proof never collect the secret at all.
-  const ownerBlocked = !!(status.owner && status.owner.canApprove === false);
+  // Entry capability is distinct from approval; replacement still needs owner proof.
+  const canEnter = request.replaces ? status.owner?.canApprove : (status.entry?.canEnter ?? status.owner?.canApprove);
+  const ownerBlocked = canEnter !== true;
   const uid = `sa-${String(request.id || Math.random()).replace(/[^a-zA-Z0-9_-]/g, '')}`;
   let remember = persistentAllowed;
   let busy = false;
@@ -291,7 +292,7 @@ export function mountSecureAccessCard(host, opts = {}) {
     el('ul', {},
       el('li', { text: 'Prom never sees this value. It is sent straight to the local protected vault.' }),
       el('li', { text: `Use is limited to main Prom on exactly ${request.origin || 'this site'}.` }),
-      el('li', { text: 'This allows signing in only. Posting, sending, buying or other account actions still ask you separately.' }),
+      el('li', { text: 'Saving allows Prom to prepare sign-in on this site. Submitting the sign-in still needs approval; posting, sending and buying need separate approval too.' }),
       el('li', { text: 'Anyone already running programs as you on this computer is not blocked by this vault.' })));
 
   const form = el('form', { class: 'sa-form', autocomplete: 'on', novalidate: true, 'data-prom-no-draft': 'true' },

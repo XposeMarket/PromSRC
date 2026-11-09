@@ -27,3 +27,15 @@ Mobile coordinate differences; validate browser geometry fixtures and review. No
 
 ## Scope notes
 - `.pr/SPEC.md` - task-specific specification replaces tracked prior specification.
+
+## Approved Tier 2 extension: paired fresh credential entry
+Supersedes UI-only scope above. User locked plans/paired-website-entry/PLAN.md cardfcf199a8 and authorized build. Astra planning exception approved due Opus quota. Ordinary active pairing allows ONLY fresh request submission; separate entry.canEnter, unchanged owner.canApprove, broker entryOnly rejects replacements. Existing main-only credential use/preparation remains; final sign-in approval unchanged. No team grants or storage migration.
+Scope: src/gateway/routes/secure-access.router.ts, src/security/secure-access.ts, shared secure-access UI, scripts/test-secure-access-paired-entry.ts and UI tests, generated bundle, self18/self21, this spec.
+Test: npx tsx scripts/test-secure-access-paired-entry.ts; npx tsx scripts/test-secure-access-owner.ts; node scripts/test-secure-access-ui.mjs
+
+## Scope notes
+- `src/gateway/routes/secure-access.router.ts` - scoped paired entry authorization.
+- `src/security/secure-access.ts` - broker replacement prevention.
+- `scripts/test-secure-access-paired-entry.ts` - synthetic paired HTTP regressions.
+- `workspace/self/21-security-approvals-permissions.md` - separate entry/approval documentation.
+- `.pr/SPEC.md` - approved Tier2 scope amendment.

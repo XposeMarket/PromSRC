@@ -237,3 +237,5 @@ Mobile live/replay use exact raw delta append and complete snapshot replace in t
 
 ## Protected sign-in card restoration (2026-11-09)
 Verified against base 9cfb1f007 plus this fix: `web-ui/src/features/secure-access/secure-access-core.js`, `createMobileDockFit` anchors specifically to #pm-composer, accounts for the containing block border/scroll offset, caps height to the visible viewport, and schedules on captured scroll with cleanup. `mountSecureAccessCard` shows explanation and Cancel instead of disabled password controls when owner.canApprove=false. Server owner proof remains mandatory; ordinary paired plugin configuration (PR855) does NOT authorize general browser-password entry or sign-in.
+
+PR857 paired-entry extension: the shared entry card uses `status.entry.canEnter` for new credentials, independent of `owner.canApprove`; replacement cards still require owner approval. This permits typing on an active paired phone without enabling sign-in approval. Unpaired/unknown status fails closed. Existing dock/scroll geometry remains. Actual iPhone verification awaits deployment; Chromium mobile/desktop component fixtures are not full-app proof.
