@@ -13593,7 +13593,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
     // Closed current groups are lazy too; their hidden tool bodies need no
     // per-token DOM, layout, or syntax highlighting. Toggle hydrates on demand.
-    const lazyClosedGroup = !openLiveCurrent;
+    const lazyClosedGroup = !(openLiveCurrent && isLiveCurrent);
     // Resolve progress only inside this tool group. This preserves earlier
     // groups and lets a summary that preceded the tool call remain attached
     // to the tool without resurrecting stale narration from another phase.

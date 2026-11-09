@@ -12,6 +12,21 @@ const extract = (source, name) => {
   assert.ok(start >= 0, name);
   return source.slice(start, source.indexOf('\n}', start) + 2);
 };
+// Explicitly opening the live group must not eagerly build historical bodies.
+{
+  const groups = ['old', 'current'].map(id => ({id,kind:'tools',entries:[{id,type:'tool',activity:{kind:'operation'}}]}));
+  const ctx = { liveTraceGroups:()=>groups, foldMobileReasoningSummaryGroups:g=>g, mobileReasoningSummaryTitle:()=>'',
+    desktopTraceProgressSummary:()=>'', liveTraceCurrentToolLabel:()=> 'Working', liveTraceToolSummary:()=> 'Earlier',
+    liveTraceSummaryKey:s=>s, isDesktopMutableProgressTraceEntry:()=>false, isDesktopTraceReasoningSummaryType:()=>false,
+    escHtml:s=>String(s), renderToolActivityIcon:()=>'', renderThinkingState:s=>s, waitCountdownHtml:()=>'',
+    rememberLazyTraceBody:entries=>entries[0].id, renderLiveTraceList:entries=>`<b>${entries[0].id} body</b>` };
+  vm.runInNewContext(extract(chat,'renderLiveTurnTrace'),ctx);
+  const html = ctx.renderLiveTurnTrace([], {streaming:true,openLiveCurrent:true});
+  assert.match(html,/data-lazy-trace="old"/,'old groups remain lazy while current is open');
+  assert.doesNotMatch(html,/<b>old body<\/b>/);
+  assert.match(html,/<b>current body<\/b>/,'explicit current group is expanded');
+}
+
 // Run the real local SSE reasoning branches: summary packets paint immediately;
 // private provider thinking stays private and does not become a visible trace.
 for (const type of ['thinking_delta', 'reasoning_summary', 'reasoning_summary_delta']) {

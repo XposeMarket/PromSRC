@@ -1,43 +1,36 @@
-# Desktop active-chat repair
-Tier: Tier 1 + scoped quick review (protected-entry hookup and renderer recovery boundary)
-Surface: sibling-check
-Parity: Desktop Electron + desktop web fixed; mobile working behavior is reference and regression checked.
-Test: node scripts/test-desktop-chat-polish-recovery.mjs
-Size justification: User-requested multi-area desktop repair, tests and generated mirrors.
+# SPEC: Keep background evidence out of replies and restore agent-list scrolling
+
+Surface: both
+Parity: fixed both: desktop completion routing and shared backend; mobile expanded agent dock tested separately.
+Test: node scripts/test-background-result-chat-scroll.mjs
+Size justification: bounded repair across completion and presentation boundaries.
 
 ## Problem
-Desktop retains an old Add secret composer button; reasoning fails to recover/stream like mobile; active threads lag; background cards are oversized with a visible scrollbar and initials; effort menu has an unwanted backing and stays open after selection.
+Worker output is appended to ordinary replies by ChatPage bg_agent_done and a handle-chat finalization fallback. Raul also reports expanded mobile agent list cannot scroll past about seven rows.
+
+## Existing code
+Typed internal background results already feed model context and are excluded from visible history. Agent dock has overflow rules and keyed reconciliation; effective scrolling still requires reproduction.
+
+## Options
+1. Hide marker text: masks symptoms and loses evidence.
+2. Remove legacy raw append paths, preserve model synthesis and worker detail; repair confirmed scroll cause (chosen).
 
 ## Chosen approach
-Repair owning desktop renderer and cascade. Reuse provider helpers. Measure active-thread rendering before optimizing. Preserve paste guards, stream ownership and private/summary visibility. No live edits or stored format changes.
+Use the existing internal result and agent-detail routes, never rewrite a prior answer from a completion event. Diagnose scroll with actual styles and renderer before changing it.
 
 ## Acceptance
-- No standing secret button; protected entry and guard remain.
-- Compact agent strip, no visible scrollbar, wheel/keyboard access and provider marks.
-- Floating panels without outer backing; successful effort selection closes picker.
-- Reopened active threads recover and continue reasoning without duplicates/terminal revival.
-- Measured improvement and reproducible regressions; desktop proof and mobile sibling checks.
-- Hard gates pass. Explicit merge approval required.
+Raw completion never mutates active/inactive parent replies. Worker details and main-model evidence remain. Many-agent list can reach final row and retains position through updates. Desktop/mobile regression tests pass.
+
+## Out of scope
+No history deletion, model routing, theme redesign, merge or deployment.
 
 ## Files
-- .pr/SPEC.md
+- .pr/SPEC.md - tracked task scope and verification contract
+- src/gateway/routes/chat/pipeline/handle-chat.ts
 - web-ui/src/pages/ChatPage.js
-- web-ui/src/styles/components.css
-- web-ui/src/styles/surfaces-polish.css
-- web-ui/src/legacy-desktop-bootstrap.js
-- web-ui/src/features/chat/*
-- web-ui/src/features/secure-access/secure-access-desktop-dock.js
-- scripts/test-desktop-chat-polish-recovery.mjs
-- scripts/test-main-chat-reasoning-summary.regression.mjs
-- scripts/test-background-agent-stream-ui.mjs
-- scripts/test-desktop-stream-snapshot.mjs
-- scripts/test-desktop-live-multithread-perf.mjs
-- generated/public-web-ui/*
+- web-ui/src/mobile/mobile-chat-renderer-runtime.js
+- web-ui/src/styles/mobile-composer-stack.css
+- scripts/test-background-result-chat-scroll.mjs
 
 ## Risks
-Do not detach local SSE state, replay over terminal turns, expose private thinking or alter approvals. Revert PR for rollback. Self docs 04/08/17 read; update17 with findings and verification.
-
-## Additional test updates
-- scripts/test-main-chat-reasoning-summary.regression.mjs: inject scheduled-render dependency into real SSE switch fixture.
-- scripts/test-background-agent-stream-ui.mjs: current exact summary channel metadata, not obsolete agent_progress tag.
-- scripts/test-desktop-live-multithread-perf.mjs: theme registry stub and closed-current lazy render contract.
+Completion evidence could be lost if synthesis path removed: retain and test internal routing. Scroll changes could affect collapse: test both states. Revert PR to roll back.

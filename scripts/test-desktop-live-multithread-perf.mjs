@@ -60,7 +60,7 @@ assert.equal(active.counts().pending, 1, 'returning to chat resumes animation');
 
 assert.match(app, /document\.dispatchEvent\(new CustomEvent\('prom-mode-change'/);
 assert.match(chat, /dockOpen \? lanes\.map\(\(lane\) => \[/);
-assert.match(chat, /const lazyClosedGroup = !openLiveCurrent;/);
+assert.match(chat, /const lazyClosedGroup = !\(openLiveCurrent && isLiveCurrent\);/);
 assert.match(chat, /lazyClosedGroup && !openAttr && toolBodyEntries\.length/);
 assert.match(chat, /\.join\('\|'\) : lanes\.length/);
 assert.match(chat, /if \(sess\.activeRun === nextActiveRun\) return;/);
