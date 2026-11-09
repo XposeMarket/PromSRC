@@ -7,7 +7,8 @@ function normalize(value: string): string { return String(value || '').toLowerCa
 function tokens(value: string): string[] { return normalize(value).split(' ').filter((item) => item.length > 1 && !['mcp', 'api', 'connector', 'plugin', 'server'].includes(item)); }
 
 function descriptorMatch(item: ReturnType<typeof listExtensionDescriptors>[number], query: string): ConnectionDiscoveryMatch | undefined {
-  if (!item.connection && !(item.setup?.authType === 'api_key' && item.setup.fields?.length)) return undefined;
+  // Identity exists independently of whether this host can execute its setup.
+  // Never replace an installed but unsupported service with a fuzzy match.
   const q = normalize(query);
   if (!q) return undefined;
   const identities = [
@@ -20,12 +21,12 @@ function descriptorMatch(item: ReturnType<typeof listExtensionDescriptors>[numbe
     const candidate = normalize(identity.value);
     if (!candidate) continue;
     if (candidate === q) { score = Math.max(score, identity.kind === 'id' ? 120 : 110); matchedOn.push(`${identity.kind}:exact`); continue; }
-    if (candidate.includes(q) || q.includes(candidate)) { score = Math.max(score, identity.kind === 'alias' ? 98 : 88); matchedOn.push(`${identity.kind}:phrase`); }
+    if (q.length > 1 && (` ${candidate} `.includes(` ${q} `) || ` ${q} `.includes(` ${candidate} `))) { score = Math.max(score, identity.kind === 'alias' ? 98 : 88); matchedOn.push(`${identity.kind}:phrase`); }
   }
   const queryTokens = tokens(q); const haystack = new Set(identities.flatMap((identity) => tokens(identity.value)));
   const overlap = queryTokens.filter((token) => haystack.has(token)).length;
   if (queryTokens.length && overlap) { score = Math.max(score, Math.round((overlap / queryTokens.length) * 75)); matchedOn.push(`tokens:${overlap}/${queryTokens.length}`); }
-  return score >= 55 ? { serviceId: item.id, serviceName: item.name, pluginId: item.id, score, matchedOn: [...new Set(matchedOn)] } : undefined;
+  return score >= 55 ? { serviceId: item.id, serviceName: item.name, pluginId: item.id, pluginKind: item.kind, selector: `${item.kind}:${item.id}`, score, matchedOn: [...new Set(matchedOn)] } : undefined;
 }
 
 function validateOfficialResearch(metadata?: Record<string, unknown>): void {
@@ -42,24 +43,29 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
 
   discover(service: string): ConnectionDiscoveryResult {
     const query = String(service || '').trim();
-    const matches = listExtensionDescriptors().map((item) => descriptorMatch(item, query)).filter((item): item is ConnectionDiscoveryMatch => Boolean(item)).sort((a, b) => b.score - a.score);
-    const mcpMatches = this.getMcpConfigs().map((item) => {
+    const qualified = /^(connector|mcp_preset|provider|integration):(.+)$/.exec(query);
+    const candidates = listExtensionDescriptors().filter(item => !qualified || (item.kind === qualified[1] && item.id === qualified[2]));
+    const matches = candidates.map((item) => descriptorMatch(item, qualified?.[2] || query)).filter((item): item is ConnectionDiscoveryMatch => Boolean(item)).sort((a, b) => b.score - a.score);
+    const mcpMatches = (qualified || !query ? [] : this.getMcpConfigs()).map((item) => {
       const exact = normalize(item.id) === normalize(query) || normalize(item.name || '') === normalize(query);
-      const phrase = normalize(item.id).includes(normalize(query)) || normalize(query).includes(normalize(item.id));
+      const phrase = query.length > 1 && (` ${normalize(item.id)} `.includes(` ${normalize(query)} `) || ` ${normalize(query)} `.includes(` ${normalize(item.id)} `));
       return (exact || phrase) ? { serviceId: item.id, serviceName: item.name || item.id, score: exact ? 115 : 85, matchedOn: [exact ? 'mcp:exact' : 'mcp:phrase'] } : undefined;
     }).filter((item): item is ConnectionDiscoveryMatch => Boolean(item));
     const combined = [...matches, ...mcpMatches].sort((a, b) => b.score - a.score);
     if (!combined.length) return { status: 'research_required', query, matches: [], nextAction: 'research_official_sources' };
-    if (combined.length > 1 && combined[1].score >= combined[0].score - 5 && combined[0].serviceId !== combined[1].serviceId) return { status: 'ambiguous', query, matches: combined.slice(0, 5), nextAction: 'select_match' };
+    if (combined.length > 1 && combined[1].score >= combined[0].score - 5 && (combined[0].serviceId !== combined[1].serviceId || combined[0].pluginKind !== combined[1].pluginKind)) return { status: 'ambiguous', query, matches: combined.slice(0, 5), nextAction: 'select_match' };
     return { status: 'resolved', query, matches: combined.slice(0, 5), canonicalServiceId: combined[0].serviceId, nextAction: 'plan' };
   }
 
   async resolve(input: { serviceId: string; requestedCapabilities: string[]; readOnly: boolean; metadata?: Record<string, unknown> }): Promise<ConnectionPlan> {
     validateOfficialResearch(input.metadata);
     const serviceId = String(input.serviceId || '').trim();
-    const discovery = this.discover(serviceId);
+    const selector = input.metadata?.pluginKind ? `${input.metadata.pluginKind}:${serviceId}` : serviceId;
+    const discovery = this.discover(selector);
+    if (discovery.status === 'ambiguous') throw new Error('AMBIGUOUS_SERVICE: select a kind-qualified service from discovery.');
     const canonicalServiceId = discovery.status === 'resolved' ? discovery.canonicalServiceId! : serviceId;
-    const descriptor = getExtensionDescriptor(canonicalServiceId);
+    const selectedKind = discovery.matches[0]?.pluginKind;
+    const descriptor = selectedKind ? listExtensionDescriptors().find(item => item.id === canonicalServiceId && item.kind === selectedKind) : getExtensionDescriptor(canonicalServiceId);
     const declared = descriptor?.connection?.strategies || [];
     const capabilityContracts: ConnectionCapabilityContract[] | undefined = descriptor?.connection?.requestedCapabilities?.map((item) => ({
       id: item.id,
@@ -100,7 +106,7 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
           ...(item.config || {}),
           providerApp: descriptor?.connection?.providerApp,
           registeredTools: getDeclaredExtensionTools(descriptor),
-          ...(input.metadata || {}),
+          // Installed adapter destinations cannot be overridden by caller metadata.
           // Credential field schema belongs to the installed plugin, never the model's metadata.
           ...(['api-key', 'setup-token'].includes(item.adapter) ? { credentialFields: item.config?.credentialFields } : {}),
         },
@@ -115,7 +121,7 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
         verification: ['credential.authentication'] }];
     }
     const mcp = this.getMcpConfigs().find((item) => normalize(item.id) === normalize(canonicalServiceId) || normalize(item.name || '') === normalize(canonicalServiceId));
-    if (!strategies.length && mcp) {
+    if (!strategies.length && mcp && (!descriptor || descriptor.kind === 'mcp_preset')) {
       const remote = mcp.transport === 'http' || mcp.transport === 'sse';
       strategies = [{
         id: `${mcp.id}-${remote ? 'mcp-oauth' : 'mcp-stdio'}`, adapter: remote ? 'mcp-oauth' : 'mcp-stdio',
@@ -126,10 +132,10 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
       }];
     }
 
-    if (!strategies.length && input.metadata?.officialSource !== true && (input.metadata?.endpoint || input.metadata?.baseUrl)) {
+    if (!strategies.length && !descriptor && !input.metadata?.pluginKind && input.metadata?.officialSource !== true && (input.metadata?.endpoint || input.metadata?.baseUrl)) {
       strategies = [{ id: `${serviceId}-openai-compatible`, adapter: 'openai-compatible-model', priority: 50, capabilities: input.requestedCapabilities, readOnly: true, authentication: { type: 'api-key' }, configuration: input.metadata, verification: ['endpoint.reachable', 'models.list', 'completion.minimal'] }];
     }
-    if (!strategies.length && input.metadata?.officialSource === true && typeof input.metadata?.protocol === 'string') {
+    if (!strategies.length && !descriptor && !input.metadata?.pluginKind && input.metadata?.officialSource === true && typeof input.metadata?.protocol === 'string') {
       const protocol = String(input.metadata.protocol).toLowerCase();
       const adapter = protocol === 'mcp-oauth' ? 'mcp-oauth'
         : protocol === 'mcp-http' ? 'mcp-http'
@@ -143,7 +149,9 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
         : 'custom-http';
       strategies = [{ id: `${serviceId}-${adapter}`, adapter, priority: 40, capabilities: input.requestedCapabilities, readOnly: input.readOnly, authentication: { type: String(input.metadata.authType || protocol), scopes: Array.isArray(input.metadata.scopes) ? input.metadata.scopes.map(String) : undefined }, configuration: input.metadata, verification: ['authentication', 'registration', 'safe-read'] }];
     }
-    if (!strategies.length) throw new Error(`No installed plugin or trusted connection strategy was found for "${serviceId}". Run discovery against official documentation before installing generated code.`);
+    if (!strategies.length) throw new Error(descriptor
+      ? `SETUP_UNAVAILABLE: ${descriptor.name} is installed (${descriptor.kind}:${descriptor.id}), but has no supported unified setup strategy. Use its existing ${descriptor.kind === 'provider' ? 'Models' : 'Plugins'} setup; do not substitute another service.`
+      : `No installed plugin or trusted connection strategy was found for "${serviceId}". Run discovery against official documentation before installing generated code.`);
 
     strategies.sort((a, b) => (b.priority || 0) - (a.priority || 0));
     const strategy = strategies[0];

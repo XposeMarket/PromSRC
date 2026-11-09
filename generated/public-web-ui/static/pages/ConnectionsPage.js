@@ -1,3 +1,5 @@
+import { openConnectFlow } from '../features/connectors/connect-flow.js';
+import { postJson as connectionOwnerPost } from '../features/secure-access/secure-access-core.js';
 /**
  * ConnectionsPage.js
  *
@@ -716,7 +718,9 @@ async function runConnectionAttemptAction(attemptId, operation, button) {
 async function continueConnectionAttempt(attemptId, input = {}, button) {
   if (button) { button.disabled = true; button.textContent = 'Continuing…'; }
   try {
-    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
+    const result = input?.approved === true
+      ? await connectionOwnerPost(api, `/api/connection-attempts/${encodeURIComponent(attemptId)}/connect`, {}, 'Approve connection')
+      : await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
     showToast('Connection updated', String(result?.attempt?.state || 'continued'), 'success');
     await loadConnectionsState();
     if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
@@ -1222,6 +1226,10 @@ async function pollXurlSetup() {
 }
 
 async function startOAuthFlow(id) {
+  return openConnectFlow(api, { serviceId: id, kind: 'connector' }, { onChanged: loadConnectionsState });
+}
+
+async function startLegacyOAuthFlow(id) {
   const connector = getConnectorById(id);
   if (!connector || connector.authType !== 'oauth') return;
 

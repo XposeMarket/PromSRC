@@ -97,6 +97,7 @@ export interface OAuthConnectorMetadata {
 }
 
 interface FlowState {
+  processing?: boolean;
   verifier?: string;
   state: string;
   createdAt: number;
@@ -405,6 +406,9 @@ export abstract class OAuthConnector {
     };
   }
 
+  private cancelListener?: () => void;
+  cancelFlow(): void { activeFlows.delete(this.cfg.id); this.cancelListener?.(); this.cancelListener = undefined; }
+
   startFlow(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult {
     this.loadCredentialsFromVault();
     if (!this.cfg.clientId) {
@@ -467,6 +471,8 @@ export abstract class OAuthConnector {
       return { success: false, error: 'Nonce mismatch — possible replay.' };
     }
 
+    if (flow.processing) return { success: false, error: 'OAuth callback already in progress.' };
+    flow.processing = true;
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
@@ -490,7 +496,7 @@ export abstract class OAuthConnector {
     }
 
     const data = await res.json() as any;
-    activeFlows.delete(this.cfg.id);
+    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
 
     if (!data?.access_token || typeof data.access_token !== 'string') {
       return { success: false, error: 'Token exchange returned no access token.' };
@@ -519,6 +525,8 @@ export abstract class OAuthConnector {
     if (flow.expectedAccountId && tokens.account_id && flow.expectedAccountId !== tokens.account_id) {
       return { success: false, error: 'OAuth account mismatch — the selected provider account did not authorize this connection.' };
     }
+    if (activeFlows.get(this.cfg.id) !== flow) return { success: false, error: 'OAuth session cancelled or replaced.' };
+    activeFlows.delete(this.cfg.id);
     this.saveTokens(tokens);
 
     return { success: true, account_email: tokens.account_email };
@@ -578,6 +586,12 @@ export abstract class OAuthConnector {
         }
       });
 
+      this.cancelListener = () => {
+        if (finished) return; finished = true;
+        if (timeout) clearTimeout(timeout);
+        server.close(() => undefined);
+        resolve({ success: false, error: 'OAuth cancelled.' });
+      };
       server.on('error', (e: any) => {
         if (finished) return;
         finished = true;

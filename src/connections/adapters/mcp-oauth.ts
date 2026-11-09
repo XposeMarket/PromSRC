@@ -8,6 +8,7 @@ export interface McpOAuthHost {
   disconnectServer?(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void>;
   revokeOAuth?(context: ConnectionAdapterContext): Promise<void>;
   clearOAuth?(context: ConnectionAdapterContext): Promise<void>;
+  cancelOAuth?(context: ConnectionAdapterContext): Promise<void>;
 }
 
 export class McpOAuthConnectionAdapter implements ConnectionAdapter {
@@ -47,6 +48,7 @@ export class McpOAuthConnectionAdapter implements ConnectionAdapter {
     ];
   }
   async repair(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> { await this.host.clearOAuth?.(context); return this.connect(context); }
+  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.host.cancelOAuth?.(context); }
   async disconnect(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void> {
     try {
       await this.host.disconnectServer?.(context, connection);

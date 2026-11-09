@@ -143,9 +143,13 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-export function clearMcpOAuth(id: string): void {
+export function cancelMcpOAuth(id: string): void {
   const flow = activeFlows.get(id);
   if (flow) { try { flow.server?.close(); } catch {} activeFlows.delete(id); }
+}
+
+export function clearMcpOAuth(id: string): void {
+  cancelMcpOAuth(id);
   if (testOverrides?.storage) {
     testOverrides.storage.delete(tokenKey(id));
     testOverrides.storage.delete(clientKey(id));
@@ -486,6 +490,7 @@ export async function handleMcpOAuthCallback(query: URLSearchParams): Promise<{ 
       code_verifier: flow.codeVerifier,
       ...(flow.client.client_secret ? { client_secret: flow.client.client_secret } : {}),
     }, isLocalServerUrl(flow.client.resource));
+    if (activeFlows.get(flow.serverId) !== flow || flow.status !== 'pending') return page(false, 'Authorization cancelled or replaced.');
     saveTokens(flow.serverId, tokens);
     flow.status = 'connected';
     return page(true, 'Authorization complete.', flow.serverId);

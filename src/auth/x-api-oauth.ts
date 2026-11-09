@@ -1,4 +1,5 @@
 import { assertPluginCredentialUse, pluginCredentialState, setPluginCredentialState } from '../security/plugin-credential-state';
+
 /**
  * x-api-oauth.ts
  *
@@ -450,7 +451,8 @@ export function getXApiOAuthStatus(configDir: string): XApiOAuthStatus {
   };
 }
 
-export async function startXApiOAuthFlowBackground(configDir: string): Promise<{ authUrl: string } | { error: string; needsCredentials?: boolean; redirectUri?: string }> {
+let connectionAttemptOwner: string | undefined;
+export async function startXApiOAuthFlowBackground(configDir: string, options: { openBrowser?: boolean; attemptId?: string } = {}): Promise<{ authUrl: string } | { error: string; needsCredentials?: boolean; redirectUri?: string }> {
   assertPluginCredentialUse(configDir, 'x');
   const credentials = loadXApiCredentials(configDir);
   if (!credentials) {
@@ -461,11 +463,13 @@ export async function startXApiOAuthFlowBackground(configDir: string): Promise<{
     };
   }
   if (_activeFlow && Date.now() - _activeFlow.createdAt < 10 * 60 * 1000) {
+    if (connectionAttemptOwner !== options.attemptId) return { error: 'X authorization belongs to another active flow. Finish or cancel it first.' };
     _bgResult = { done: false };
     return { authUrl: _activeFlow.authUrl };
   }
 
   _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'OAuth session expired.' });
+  connectionAttemptOwner = options.attemptId;
   const verifier = generateVerifier();
   const state = crypto.randomBytes(16).toString('hex');
   const params = new URLSearchParams({
@@ -518,7 +522,7 @@ export async function startXApiOAuthFlowBackground(configDir: string): Promise<{
 
   const listenPort = Number(callbackUrl.port || DEFAULT_CALLBACK_PORT);
   const onListen = () => {
-    openBrowser(authUrl);
+    if (options.openBrowser !== false) openBrowser(authUrl);
     lifecycle.arm({ done: true, success: false, error: 'Timed out waiting for X API OAuth callback.' });
   };
   if (callbackUrl.hostname === 'localhost') {
@@ -549,6 +553,12 @@ export async function completeXApiOAuthWithCode(configDir: string, code: string)
   }
 }
 
-export function pollXApiOAuthBackground(): BgOAuthResult {
+export function cancelXApiOAuthFlow(attemptId?: string): void {
+  if (attemptId && connectionAttemptOwner !== attemptId) return;
+  _activeFlow?.lifecycle?.finish({ done: true, success: false, error: 'OAuth cancelled.' });
+}
+
+export function pollXApiOAuthBackground(attemptId?: string): BgOAuthResult {
+  if (attemptId && connectionAttemptOwner !== attemptId) return { done: true, success: false, error: 'OAuth session unavailable after restart or replacement. Start again.' };
   return _bgResult;
 }

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConfig } from '../../config/config';
 import { getConnectionRuntime } from '../../connections/runtime';
 import { listExtensionDescriptors } from '../../extensions/registry';
@@ -18,6 +19,11 @@ function services() {
 router.use('/api/protected-plugins', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 router.get('/api/protected-plugins', (req, res) => {
   res.json({ services: services(), owner: ownerSurfaceState(req), storageAvailable: protectedPluginStorageAvailable() });
+});
+router.get('/api/protected-plugins/app-schema/:attemptId', (req, res) => {
+  if (!ownerSurfaceState(req).canApprove || !protectedPluginStorageAvailable()) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  try { res.json(nativeAppSetup(getConnectionRuntime().orchestrator, req.params.attemptId)); }
+  catch { res.status(400).json({ error: 'STALE_OR_MISMATCHED_CONNECTION' }); }
 });
 router.post('/api/protected-plugins/request', async (req, res) => {
   if (!secureInputTransportAllowed(req) || !ownerSurfaceState(req).canApprove) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
