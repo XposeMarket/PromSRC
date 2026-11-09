@@ -76,7 +76,7 @@ export function fromAnthropicWireToolName(name: string): string {
 
 /** Context window used for the system-prompt budget (mirrors model-context known table). */
 export function anthropicContextWindowTokens(model: string): number {
-  return /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i.test(String(model || ''))
+  return /^(claude-fable-5|claude-mythos-5-2|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/i.test(String(model || ''))
     ? 1_000_000
     : 200_000;
 }
@@ -289,6 +289,8 @@ import { normalizeAnthropicContent } from './anthropic-image';
 const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-fable-5-2',
+  'claude-mythos-5-2',
   'claude-fable-5-1',
   'claude-fable-5',
   'claude-opus-5-5',
@@ -431,7 +433,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
-    if (/^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/.test(name)) {
+    if (/^(claude-fable-5|claude-mythos-5-2|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6)|claude-haiku-5)(?:\b|[-_])/.test(name)) {
       return {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 128_000,
@@ -940,9 +942,10 @@ export class AnthropicAdapter implements LLMProvider {
     const configuredEffort = this.normalizeEffort((anthropicCfg as any).reasoning_effort, model);
     const requestedEffort = this.normalizeEffort(options?.think, model);
     const effort = requestedEffort || configuredEffort;
-    const extendedThinkingEnabled = options?.think !== false
+    // 5.2 thinking is always on, including automation's legacy think:false hint.
+    const extendedThinkingEnabled = /^claude-(?:fable|mythos)-5-2(?:-|$)/.test(model) || (options?.think !== false
       && options?.think !== 'none'
-      && (anthropicCfg.extended_thinking === true || !!options?.think);
+      && (anthropicCfg.extended_thinking === true || !!options?.think));
 
     const fastSpeed = normalizeSpeed('anthropic', model, options?.speed || anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
     const vaultTokens = !this.directConfig && this.configDir
