@@ -45,3 +45,8 @@ Shared desktop/mobile controller, protected form, native/key adapter preparation
 Surface: both
 Test: node scripts/test-plugin-quick-connect.cjs && node scripts/test-plugin-connect-http-ui.cjs
 Size justification: coordinated shared UI, protected-input sequencing and first-time OAuth lifecycle regression across native/key adapters; existing owner proof is preserved.
+
+Parity: same shared form/controller on desktop and mobile; specialist hosted MCP/provider/local flows preserved. Synthetic viewport evidence does not certify a physical phone.
+
+## Scope notes
+.pr/SPEC.md is the task-owned mini-spec and gate metadata.
