@@ -333,3 +333,19 @@ body:not(.pm-mobile-active) .background-spawn-main strong { font-size: 11px; }
 body:not(.pm-mobile-active) .background-spawn-main em { font-size: 10px; line-height: 1.2; }
 body:not(.pm-mobile-active) .background-spawn-status { font-size: 8px; }
 body:not(.pm-mobile-active) .background-spawn-chevron { display: none; }
+
+/* Filled user bubbles, without outline/inset/pseudo frames, in all desktop
+   skins and panes. Keep nested content and keyboard focus rings untouched. */
+:root body:not(.pm-mobile-active) .msg.user .msg-body { border: 0 !important; box-shadow: none !important; }
+:root body:not(.pm-mobile-active) .msg.user .msg-body::before,
+:root body:not(.pm-mobile-active) .msg.user .msg-body::after { content: none !important; display: none !important; }
+/* Functional transform-only dots survive the bundled stream paint pause. */
+@media (min-width: 769px) and (prefers-reduced-motion: no-preference) {
+  body:not(.pm-mobile-active):not(.chat-document-hidden) #chat-messages.is-streaming
+  .msg-shell:not(.chat-paint-paused) [data-live-stream-body] .thinking-dot { animation-play-state: running !important; }
+}
+body.chat-document-hidden:not(.pm-mobile-active) .thinking-dot,
+body:not(.pm-mobile-active) .chat-paint-paused .thinking-dot { animation-play-state: paused !important; }
+@media (prefers-reduced-motion: reduce) {
+  body:not(.pm-mobile-active) .thinking-dot { animation-play-state: paused !important; }
+}
