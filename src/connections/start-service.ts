@@ -28,7 +28,11 @@ export class ConnectionStartService {
         || (input.kind && attempt.metadata?.pluginKind !== input.kind)) throw new Error('SERVICE_IDENTITY_MISMATCH');
       return attempt;
     }
-    const created = this.orchestrator.create({ serviceId: selector, readOnly: true });
+    let created = this.orchestrator.create({ serviceId: selector, readOnly: true });
+    if (created.state === 'awaiting_secure_input' && Date.now() - Date.parse(created.updatedAt) > 15 * 60_000) {
+      this.orchestrator.cancel(created.id);
+      created = this.orchestrator.create({ serviceId: selector, readOnly: true });
+    }
     return created.plan || created.state !== 'requested' ? created : this.orchestrator.plan(created.id);
   }
 }

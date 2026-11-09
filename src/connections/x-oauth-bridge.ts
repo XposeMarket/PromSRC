@@ -8,8 +8,8 @@ export function buildXOAuthBridge(): ConnectorOAuthBridge {
   return {
     id: 'x', name: 'X / Twitter',
     isConnected: () => getXApiOAuthStatus(dir()).connected,
-    start: async () => startXApiOAuthFlowBackground(dir()) as any,
-    poll: async () => { const result = pollXApiOAuthBackground(); return result.done ? { success: !!result.success, error: result.error } : null; },
+    start: async (_account, _scopes, attemptId) => startXApiOAuthFlowBackground(dir(), { openBrowser: false, attemptId }) as any,
+    poll: async (attemptId) => { const result = pollXApiOAuthBackground(attemptId); return result.done ? { success: !!result.success, error: result.error } : null; },
     metadata: async () => {
       const s = getXApiOAuthStatus(dir());
       return { account: { providerAccountId: s.user_id, username: s.username }, grantedScopes: s.scopes,
@@ -25,7 +25,7 @@ export function buildXOAuthBridge(): ConnectorOAuthBridge {
       if (!body?.data?.id) throw new Error('X account verification returned no identity.');
       return { account: { provider: 'x', providerAccountId: String(body.data.id), username: body.data.username, displayName: body.data.name } };
     },
-    cancel: () => cancelXApiOAuthFlow(),
+    cancel: (attemptId) => cancelXApiOAuthFlow(attemptId),
     clear: () => { cancelXApiOAuthFlow(); clearXApiTokens(dir()); },
   };
 }

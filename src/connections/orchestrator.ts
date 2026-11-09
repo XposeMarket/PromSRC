@@ -197,7 +197,7 @@ export class ConnectionOrchestrator {
     const attempt = this.requireAttempt(id);
     if (['cancelled', 'connected', 'failed'].includes(attempt.state)) return attempt;
     const cancelled = this.transition(attempt, 'cancelled', 'Connection attempt cancelled.');
-    if (attempt.plan) { const adapter = this.options.adapters.resolve(attempt.plan.strategy); void adapter.cancel?.(this.context(attempt)); }
+    if (attempt.plan) { const adapter = this.options.adapters.resolve(attempt.plan.strategy); try { void Promise.resolve(adapter.cancel?.(this.context(attempt))).catch(() => this.options.attempts.addProgress(id, { state: 'cancelled', message: 'Cancellation cleanup failed; the attempt remains cancelled.' })); } catch { /* terminal state is retained */ } }
     return cancelled;
   }
 

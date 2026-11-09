@@ -384,7 +384,7 @@ function openSheet(page, row, navigate, onChanged) {
       return;
     }
     close();
-    await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'connector' ? 'connector' : undefined }, { onChanged });
+    await openConnectFlow(mobileGatewayFetch, { serviceId: row.id, kind: row.kind === 'mcp' ? 'mcp_preset' : ['connector', 'provider', 'integration'].includes(row.kind) ? row.kind : undefined }, { onChanged });
   });
   // On <body>, not the page: a transformed page ancestor would pin a fixed
   // overlay to the page box instead of the viewport.

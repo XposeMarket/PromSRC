@@ -6,7 +6,7 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
   const root = document.createElement('div'); root.className = 'sa-overlay';
   const panel = document.createElement('section'); panel.className = 'sa-card'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Connect plugin');
   Object.assign(root.style, { position: 'fixed', inset: '0', zIndex: '10040', background: 'rgba(0,0,0,.35)', display: 'grid', alignItems: 'center', justifyItems: 'center', padding: '18px' });
-  Object.assign(panel.style, { background: 'var(--panel, Canvas)', color: 'var(--text, CanvasText)', width: 'min(460px,92vw)', padding: '24px', borderRadius: '18px', maxHeight: '80dvh', overflow: 'auto' });
+  Object.assign(panel.style, { background: 'var(--panel, Canvas)', color: 'var(--text, CanvasText)', boxSizing: 'border-box', width: 'min(460px,calc(100vw - 36px))', padding: '24px', borderRadius: '18px', maxHeight: '80dvh', overflow: 'auto' });
   root.append(panel); (options.host || document.body).append(root);
   let attempt; let busy = false; let closed = false;
   const close = () => { closed = true; root.remove(); options.onChanged?.(); };
@@ -36,7 +36,9 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
       }));
     } else if (action?.type === 'oauth') {
       text('p', action.desktopRequired ? 'This provider returns to the PC. Complete sign-in there, then check here.' : 'Complete provider consent, then check here.');
-      button(action.label || 'Open provider sign-in', () => {
+      const phone = window.matchMedia('(max-width: 767px)').matches;
+      if (action.desktopRequired && phone) text('p', 'Finish on your computer. Open this same connection there to continue; do not open the loopback sign-in on this phone.');
+      else button(action.label || 'Open provider sign-in', () => {
         const url = new URL(action.authorizationUrl); if (url.protocol !== 'https:') throw new Error('Invalid provider authorization URL.');
         if (window.openPrometheusExternalLink) window.openPrometheusExternalLink(url.href, { target: '_blank', features: 'noopener,noreferrer' });
         else window.open(url.href, '_blank', 'noopener,noreferrer');

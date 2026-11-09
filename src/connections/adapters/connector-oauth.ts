@@ -28,14 +28,14 @@ export interface ConnectorOAuthVerification {
 export interface ConnectorOAuthBridge {
   id: string;
   name: string;
-  start(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | Promise<OAuthStartResult>;
-  poll(): Promise<OAuthCallbackResult | null>;
+  start(expectedAccountId?: string, requestedScopes?: string[], attemptId?: string): OAuthStartResult | Promise<OAuthStartResult>;
+  poll(attemptId?: string): Promise<OAuthCallbackResult | null>;
   /** Tokens already stored (e.g. callback result was consumed or expired before continue ran). */
   isConnected?(): boolean;
   metadata(): OAuthConnectorMetadata | Promise<OAuthConnectorMetadata>;
   verify(): Promise<ConnectorOAuthVerification>;
   clear(): void | Promise<void>;
-  cancel?(): void | Promise<void>;
+  cancel?(attemptId?: string): void | Promise<void>;
   revoke?(): void | Promise<void>;
   credentialReference?(): string;
 }
@@ -128,7 +128,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     const requestedScopes = Array.isArray(strategy.authentication?.scopes)
       ? strategy.authentication.scopes.map(String)
       : undefined;
-    const started = await bridge.start(expectedAccountId, requestedScopes);
+    const started = await bridge.start(expectedAccountId, requestedScopes, context.attempt.id);
     if ((started as any).needsCredentials || (started.error && !bridge.isConnected?.() && !(await bridge.metadata()).clientIdConfigured)) {
       return { state: 'awaiting_secure_input', configuration: { protectedPluginSetup: bridge.id } };
     }
@@ -164,7 +164,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const bridge = this.bridgeFor(context);
     if (context.attempt.state === 'awaiting_secure_input') return this.connect(context);
-    let result = await bridge.poll();
+    let result = await bridge.poll(context.attempt.id);
     // The one-shot callback result can be gone (consumed by another poller,
     // expired, or lost to a gateway restart) while the tokens are stored.
     if (!result && bridge.isConnected?.()) result = { success: true };
@@ -230,7 +230,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     return checks;
   }
 
-  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.bridgeFor(context).cancel?.(); }
+  async cancel(context: ConnectionAdapterContext): Promise<void> { await this.bridgeFor(context).cancel?.(context.attempt.id); }
 
   async repair(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     return this.connect(context);

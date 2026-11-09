@@ -63,3 +63,36 @@ await assert.rejects(()=>resolver.resolve({serviceId:'obsidian',requestedCapabil
 const nous = await resolver.resolve({serviceId:'nous',requestedCapabilities:[],readOnly:true});
 assert.equal(nous.strategy.adapter,'openai-compatible-model');assert.equal(nous.strategy.configuration.authentication,'none');
 console.log('PASS native schema correlation/cancel, configured MCP family, unsupported identity isolation, Nous endpoint strategy');
+
+const { pollXApiOAuthBackground, cancelXApiOAuthFlow } = require('../dist/auth/x-api-oauth.js');
+assert.equal(pollXApiOAuthBackground('unowned-fixture').success,false);
+cancelXApiOAuthFlow('unowned-fixture');
+const { OpenAiCompatibleModelConnectionAdapter: ModelAdapter } = require('../dist/connections/adapters/openai-compatible-model.js');
+// Unknown streaming/tool support is not a successful capability test.
+const modelChecks = await new ModelAdapter({probe:async()=>({ok:true,models:['fixture']})}).verify({}, {id:'fixture',configuration:{}});
+assert.deepEqual(modelChecks.map(c=>c.check),['model.reachability','model.discovery']);
+console.log('PASS X unowned result/cancel and unknown model capability truth');
+
+// Persisted attempts survive runtime reconstruction; expired protected input renews consent.
+const lifeRoot = fs.mkdtempSync(path.join(os.tmpdir(),'plugin-life-'));
+try {
+  const adapters = new ConnectionAdapterRegistry();
+  adapters.register({id:'lifecycle',kind:'connector-oauth',displayName:'Fixture',supports:()=>true,
+    connect:async()=>({state:'awaiting_secure_input'}),cancel:async()=>{throw Error('synthetic cleanup failure');}});
+  const make = () => new ConnectionOrchestrator({attempts:new ConnectionAttemptStore(lifeRoot),connections:new ConnectionStore(lifeRoot),activity:new ConnectionActivityStore(lifeRoot),adapters,plans:resolver});
+  let orch=make(); let start=new ConnectionStartService(orch);
+  const first=await start.start({serviceId:'x',kind:'connector'});
+  await orch.connect(first.id,{approved:true});
+  orch=make(); start=new ConnectionStartService(orch);
+  assert.equal((await start.start({serviceId:'x',kind:'connector',attemptId:first.id})).state,'awaiting_secure_input');
+  const file=path.join(lifeRoot,'connection-attempts.json'); const saved=JSON.parse(fs.readFileSync(file,'utf8'));
+  saved.attempts[first.id].updatedAt=new Date(Date.now()-16*60_000).toISOString(); fs.writeFileSync(file,JSON.stringify(saved));
+  orch=make(); start=new ConnectionStartService(orch);
+  const renewed=await start.start({serviceId:'x',kind:'connector'});
+  assert.notEqual(renewed.id,first.id); assert.equal(renewed.state,'awaiting_approval');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(orch.getAttempt(first.id).state,'cancelled');
+  assert(orch.getAttempt(first.id).progress.some(p=>p.message.includes('cleanup failed')));
+  assert.equal(new ConnectionAttemptStore(lifeRoot).get(first.id).state,'cancelled');
+} finally { fs.rmSync(lifeRoot,{recursive:true,force:true}); }
+console.log('PASS persisted resume, protected-entry expiry renewal and rejected cancellation cleanup');
