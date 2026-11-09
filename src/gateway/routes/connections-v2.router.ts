@@ -4,7 +4,8 @@ import { getConnectionRuntime } from '../../connections/runtime';
 import { getConfig } from '../../config/config';
 import { getExtensionDescriptor } from '../../extensions/registry';
 import { bindPluginCredential } from '../../connections/plugin-credential-binding';
-import { requireProtectedOwner, ownerSurfaceState, secureInputTransportAllowed } from './secure-access.router';
+import { requireProtectedOwner, secureInputTransportAllowed } from './secure-access.router';
+import { pluginSetupSurfaceState, requirePluginSetup, PAIRED_PLUGIN_SETUP_ADAPTERS } from './plugin-setup-access';
 
 export const router = Router();
 // N1: the redaction wrapper is scoped to connection routes only (router is mounted at '/').
@@ -74,12 +75,16 @@ router.get('/api/connection-attempts/:id', (req, res) => {
 
 // A trusted surface may open an empty form. Only the existing protected save/connect routes authorize changes.
 router.post('/api/connection-attempts/:id/prepare-input', async (req, res) => {
-  if (!secureInputTransportAllowed(req) || !ownerSurfaceState(req).canApprove) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
+  if (!secureInputTransportAllowed(req) || !pluginSetupSurfaceState(req).canConfigure) { res.status(403).json({ error: 'OWNER_SURFACE_REQUIRED' }); return; }
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.prepareInput(req.params.id) }); }
   catch { res.status(400).json({ error: 'PROTECTED_REQUEST_UNAVAILABLE' }); }
 });
 
-router.post('/api/connection-attempts/:id/connect', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
+router.post('/api/connection-attempts/:id/connect', (req, res, next) => {
+  const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
+  if (adapter && PAIRED_PLUGIN_SETUP_ADAPTERS.has(adapter)) requirePluginSetup(req, res, next);
+  else requireProtectedOwner(req, res, next);
+}, async (req, res) => {
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.connect(req.params.id, { approved: true }) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
@@ -109,7 +114,7 @@ router.get('/api/connection-secure-input/:sessionId', (req, res) => {
   res.status(status.valid ? 200 : 404).json({ success: status.valid, ...status });
 });
 
-router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requireProtectedOwner(req, res, next), async (req, res) => {
+router.post('/api/connection-secure-input/:sessionId', (req, res, next) => requirePluginSetup(req, res, next), async (req, res) => {
   try {
     const runtime = getConnectionRuntime();
     const session = runtime.secureInput.status(req.params.sessionId);

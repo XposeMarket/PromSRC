@@ -39,11 +39,11 @@ export async function openConnectFlow(fetchJson, target, options = {}) {
   };
   const refresh = async () => { attempt = (await fetchJson(`/api/connection-attempts/${encodeURIComponent(attempt.id)}`)).attempt; await render(); };
   const ownerReady = async () => {
-    const status = await fetchJson('/api/secure-access/status');
-    if (status?.owner?.canApprove) return true;
+    const status = await fetchJson('/api/protected-plugins');
+    if (status?.setup?.canConfigure ?? status?.owner?.canApprove) return true;
     panel.replaceChildren(); text('h2', 'Pair this device first');
     text('p', 'This device can view Prometheus, but it is not yet allowed to save account credentials.', 'sa-muted');
-    text('p', 'On your computer, open Prometheus → Settings → Pairing. Pair this phone and allow owner approvals. Then return here. You only need to do this once.', 'sa-muted');
+    text('p', 'Connect this device to your Prometheus using Settings → Pairing. An enabled paired device can save plugin credentials directly; no separate owner-approval permission is needed.', 'sa-muted');
     text('p', 'Alternatively, complete this connection in the Prometheus desktop app. No keys have been collected.', 'sa-muted');
     button('I’ve paired this device — retry', start, true); button('Close', close); return false;
   };

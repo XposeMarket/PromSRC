@@ -16,6 +16,13 @@ const owner = load('gateway/routes/secure-access.router.js');
 const consent = load('security/secure-access-consent.js');
 const OWNER = 'd'.repeat(64), CANARY = 'synthetic-native-secret';
 let configured = false, launches = 0, saves = 0;
+load('config/config.js').getConfig = () => ({ getConfigDir: () => root });
+load('security/plugin-credential-state.js').protectedPluginStorageAvailable = () => true;
+const pairing = load('gateway/pairing/pairing-store.js');
+const challenge = pairing.createPairingChallenge();
+const pending = pairing.createPendingRequest({challengeId:challenge.id,deviceName:'Fixture phone',deviceFingerprint:'fixture',userAgent:'test',ipHint:''});
+const phone = pairing.approvePendingRequest(pending.id);
+const setup = load('gateway/routes/plugin-setup-access.js');
 const proof = { ownerToken: () => OWNER, deviceTrusted: () => true, verifyDevice: v => v === 'fixture-phone', verifyConsent: req => consent.verifyConsent(req.headers[consent.OWNER_CONSENT_HEADER], req.method, req.originalUrl, req.rawBody).ok };
 consent.setConsentKeySourceForTests(() => OWNER);
 const requireOwner = owner.requireProtectedOwner, surface = owner.ownerSurfaceState;
@@ -29,9 +36,9 @@ load('connections/runtime.js').getConnectionRuntime = () => runtime;
 const app = express();
 app.use(express.json({ verify: (req, res, b) => req.rawBody = Buffer.from(b) }));
 app.get('/api/secure-access/status', (req, res) => res.json({ owner: surface(req, proof) }));
-app.get('/api/protected-plugins', (req, res) => res.json({ owner: surface(req, proof), storageAvailable: true, services: [{ id: 'x', name: 'X' }] }));
-app.get('/api/protected-plugins/app-schema/:id', (req, res) => { if (!surface(req, proof).canApprove) return res.sendStatus(403); res.json(nativeAppSetup(orchestrator, req.params.id)); });
-app.post('/api/auth/x-api/credentials', owner.requireProtectedOwner, (req, res) => {
+app.get('/api/protected-plugins', (req, res) => res.json({ owner: surface(req, proof), setup: setup.pluginSetupSurfaceState(req), storageAvailable: true, services: [{ id: 'x', name: 'X' }] }));
+app.get('/api/protected-plugins/app-schema/:id', (req, res) => { if (!setup.pluginSetupSurfaceState(req).canConfigure) return res.sendStatus(403); res.json(nativeAppSetup(orchestrator, req.params.id)); });
+app.post('/api/auth/x-api/credentials', setup.requirePluginSetup, (req, res) => {
   nativeAppSetup(orchestrator, req.body.attemptId, 'x'); assert.equal(req.body.clientSecret, CANARY);
   configured = true; saves++; orchestrator.confirmPreparedInputSaved(req.body.attemptId); res.json({ success: true });
 });
@@ -45,12 +52,12 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
   const post = (route, body = {}, headers = {}) => fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json', origin: url, ...headers }, body: JSON.stringify(body) });
   for (const [name, width, height] of [['desktop',1440,960],['mobile',390,844]]) {
     configured = false;
-    const context = await browser.newContext({ viewport: { width, height } });
+    const context = await browser.newContext({ viewport: { width, height }, ...(name === 'mobile' ? {extraHTTPHeaders:{'X-Pairing-Token':phone.deviceToken}} : {}) });
     if (name === 'desktop') await context.addCookies([{ name: 'prom_sa_owner', value: OWNER, url }]);
-    else await context.setExtraHTTPHeaders({ 'x-pairing-token': 'fixture-phone' });
+    else assert.equal(surface({headers:{'x-pairing-token':phone.deviceToken}},proof).canApprove,false);
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     await page.exposeFunction('fixtureConsent', a => ({ approved: true, header: consent.mintConsent(OWNER, a.method, a.path, consent.sha256Hex(a.body)) }));
-    await page.goto(url); const before = launches; await page.click('#connect'); await page.locator('input[type=password]').waitFor();
+    await page.goto(url); if(name === 'mobile') await page.evaluate(()=>{delete window.prometheusOwnerConsent;}); const before = launches; await page.click('#connect'); await page.locator('input[type=password]').waitFor();
     assert.equal(launches, before); assert.equal(await page.getByRole('button',{name:'Approve connection'}).count(),0);
     assert.equal(await page.getByRole('button',{name:'Open protected entry'}).count(),0);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
@@ -70,7 +77,7 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
   const context = await browser.newContext({viewport:{width:390,height:844}}), page = await context.newPage();
   await page.goto(url); await page.click('#connect'); await page.getByText('Pair this device first',{exact:true}).waitFor();
   assert.equal(await page.locator('input').count(),0); assert(!(await page.content()).includes('OWNER_SURFACE_REQUIRED'));
-  assert.deepEqual(await page.evaluate(()=>window.calls),['/api/secure-access/status']);
+  assert.deepEqual(await page.evaluate(()=>window.calls),['/api/protected-plugins']);
   await page.screenshot({path:path.join(out,'mobile-pairing.png')}); await context.close();
   assert.equal(saves,2);
   for(const file of ['src/gateway/routes/settings.router.ts','src/gateway/routes/connections.router.ts']) assert(fs.readFileSync(file,'utf8').includes('orchestrator.confirmPreparedInputSaved(String(req.body.attemptId))'));

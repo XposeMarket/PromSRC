@@ -1,4 +1,5 @@
 import { requireProtectedOwner } from './secure-access.router';
+import { requirePluginSetup } from './plugin-setup-access';
 import { nativeAppSetup } from '../../connections/native-app-setup';
 import { getConnectionRuntime as getPluginConnectRuntime } from '../../connections/runtime';
 import { setPluginCredentialState } from '../../security/plugin-credential-state';
@@ -319,7 +320,7 @@ router.get('/api/connections/xurl/poll', (_req: any, res: any) => {
   res.json(xurlSetupState || { pending: false, success: false, error: 'No xurl setup has been started yet.', output: [] });
 });
 
-router.post('/api/connections/credentials', (req, res, next) => requireProtectedOwner(req, res, next), async (req: any, res: any) => {
+router.post('/api/connections/credentials', (req, res, next) => requirePluginSetup(req, res, next), async (req: any, res: any) => {
   if (req.body?.attemptId) {
     try {
       nativeAppSetup(getPluginConnectRuntime().orchestrator, String(req.body.attemptId), String(req.body.id));
