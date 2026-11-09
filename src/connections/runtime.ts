@@ -107,7 +107,7 @@ export function getConnectionRuntime() {
     },
     disconnectServer: async (context) => { await mcp.disconnect(mcpServerId(context)); },
     revokeOAuth: async (context) => { const { revokeMcpOAuth } = await import('../gateway/mcp-oauth.js'); await revokeMcpOAuth(mcpServerId(context)); },
-    cancelOAuth: async (context) => { const { cancelMcpOAuth } = await import('../gateway/mcp-oauth.js'); cancelMcpOAuth(mcpServerId(context)); },
+    cancelOAuth: async (context) => { const { cancelMcpOAuth } = require('../gateway/mcp-oauth') as typeof import('../gateway/mcp-oauth'); cancelMcpOAuth(mcpServerId(context)); },
     clearOAuth: async (context) => { const { clearMcpOAuth } = await import('../gateway/mcp-oauth.js'); clearMcpOAuth(mcpServerId(context)); },
   }));
 

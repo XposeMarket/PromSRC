@@ -4119,7 +4119,7 @@
       "name": "GitHub",
       "kind": "integration",
       "origin": "installed-metadata",
-      "manifest": "C:/Users/rafel/AppData/Roaming/Prometheus/.prometheus/user-plugins/github/prometheus.extension.json",
+      "manifest": "<prometheus-data-dir>/.prometheus/user-plugins/github/prometheus.extension.json",
       "aliases": {
         "connection": [],
         "activation": []
