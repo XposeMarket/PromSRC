@@ -25,6 +25,7 @@ No new authorization, combined endpoints, OAuth replacement, storage/schema/agen
 - web-ui/src/styles/mobile.css
 - scripts/test-sign-in-presentation.mjs
 ## Scope notes
+.pr/SPEC.md records this approved visual scope and verification contracts (existing tracked spec).
 Generated UI synchronized. Workspace self docs 17,18,19,21 read/updated this turn outside checkout.
 ## Risks
 Global CSS/modal lifecycle collisions; browser fixtures test focus/clear/unmount. Revert scoped presentation changes; no data migration.
