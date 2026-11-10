@@ -8,11 +8,25 @@ Pass 1 audit (diagnostics/audit/codebase-2026-11-10) left modules that only thei
 ## Chosen approach
 Delete only candidates with zero imports, zero path-string/dynamic/glob/npm/CI/builder references, no docs describing them as current, and added more than 30 days ago. Delete their tests with them and fix docs that described them as live. Everything else is kept and listed in .pr/FIXER-REPORT.md.
 ## Files
-- apps/mobile/** (13 files, deleted)
-- src/gateway/runtime/execution-controller.ts, execution-controller.regression.ts (deleted)
-- src/gateway/recommendations/recommendation-service.ts, recommendation-service.regression.ts (deleted)
-- docs/RECOMMENDATIONS.md (deleted)
-- scripts/redact-private-skill-content.mjs (deleted)
+- apps/mobile/src/core/auth/index.ts
+- apps/mobile/src/core/auth/pairing-client.ts
+- apps/mobile/src/core/gateway/gateway-client.ts
+- apps/mobile/src/core/gateway/index.ts
+- apps/mobile/src/core/gateway/types.ts
+- apps/mobile/src/core/index.ts
+- apps/mobile/src/core/storage/gateway-credentials.ts
+- apps/mobile/src/core/storage/index.ts
+- apps/mobile/src/core/storage/storage.ts
+- apps/mobile/src/core/transport/http-client.ts
+- apps/mobile/src/core/transport/index.ts
+- apps/mobile/src/core/transport/sse.ts
+- apps/mobile/tests/gateway-client.test.ts
+- src/gateway/runtime/execution-controller.ts
+- src/gateway/runtime/execution-controller.regression.ts
+- src/gateway/recommendations/recommendation-service.ts
+- src/gateway/recommendations/recommendation-service.regression.ts
+- docs/RECOMMENDATIONS.md
+- scripts/redact-private-skill-content.mjs
 - docs/universal-execution-runtime.md
 - ARCHITECTURE.md
 - scripts/run-unwired-tests.mjs
