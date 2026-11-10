@@ -5130,6 +5130,10 @@ Do not produce prose. Use the canonical thread tool now.` });
         ));
       }
     };
+    // Snapshot before the up-front parallel batch: that batch dispatches every
+    // call of the round, and the ordered loop below only reuses its results.
+    // Snapshotting after it made fully parallel rounds look idle.
+    const toolDispatchCountAtRoundStart = toolDispatchCount;
     if (canRunParallelBatch) {
       for (const entry of parallelCallEntries) {
         preDispatchedCalls.add(entry.sourceCall);
@@ -5168,7 +5172,6 @@ Do not produce prose. Use the canonical thread tool now.` });
 
     const batchCreatedFiles = new Set<string>();
     let roundHadProgress = false;
-    const toolDispatchCountAtRoundStart = toolDispatchCount;
     resetProgressRoundStats();
 
     for (const call of toolCalls) {

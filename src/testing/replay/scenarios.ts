@@ -13,7 +13,7 @@
  */
 import assert from 'node:assert/strict';
 import type { ReplayTurnInput, ReplayTurnRun } from './harness';
-import { lastToolResultText, toolMessagesIn } from './scripted-provider';
+import { lastToolResultText, toolMessagesIn, type ScriptStep } from './scripted-provider';
 
 export interface ReplayScenario {
   id: string;
@@ -25,6 +25,28 @@ export interface ReplayScenario {
 }
 
 const resultsOf = (run: ReplayTurnRun) => (Array.isArray(run.result?.toolResults) ? run.result.toolResults : []);
+
+/**
+ * `rounds` consecutive rounds of two distinct parallel-safe reads, then a final
+ * text. Side requests the runtime makes mid-turn (context compaction) carry no
+ * tool surface; they get a canned summary and do not advance the round count.
+ */
+function parallelReadRounds(rounds: number): ScriptStep[] {
+  let mainCalls = 0;
+  const step: ScriptStep = (request) => {
+    if (request.toolNames.length === 0) return { text: 'Summary: listing skills in parallel rounds.' };
+    const round = mainCalls;
+    mainCalls += 1;
+    if (round >= rounds) return { text: 'All listed.' };
+    return {
+      toolCalls: [
+        { name: 'skill_list', args: { query: `alpha ${round}` } },
+        { name: 'skill_list', args: { query: `beta ${round}` } },
+      ],
+    };
+  };
+  return Array.from({ length: rounds * 3 }, () => step);
+}
 
 export const scenarios: ReplayScenario[] = [
   {
@@ -303,6 +325,26 @@ export const scenarios: ReplayScenario[] = [
       assert.match(String(run.result?.text), /Turn cut off: the model kept requesting calls that were not run/);
     },
   },
+  {
+    id: 'parallel-rounds-are-not-idle',
+    kind: 'contract',
+    contract: 'Rounds whose calls all ran as one parallel batch count as work; a long run of them does not end the turn.',
+    input: {
+      message: 'List many skills',
+      // 10 rounds is past the default idle-round limit of 8. Each round is two
+      // distinct parallel-safe reads, so the whole round runs as one batch.
+      script: parallelReadRounds(10),
+      providerOptions: { onExhausted: 'throw' },
+      timeoutMs: 60_000,
+    },
+    check(run) {
+      assert.equal(run.error, null);
+      assert.doesNotMatch(String(run.result?.text), /Turn cut off/);
+      assert.equal(run.result?.text, 'All listed.');
+      assert.equal(run.dispatched.length, 20, `dispatched ${run.dispatched.length} of 20 calls`);
+    },
+  },
+
   {
     id: 'malformed-tool-args-are-reported',
     kind: 'contract',
