@@ -1,19 +1,24 @@
-# OAuth pending action repair
-Tier: 1; Raul explicitly authorized live repair and waived separate review in this ongoing incident.
-Surface: backend
-Parity: shared backend connector adapter serves desktop/mobile and tools.
+# OAuth pending action and phone completion repair
+Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
+Surface: both
+Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
+Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
 ## Problem
-Native app save succeeds, but first pending OAuth poll returns state only and applyResult removes requiredUserAction. Shared UI falls into Preparing connection with no controls.
+Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
 ## Chosen approach
-Return the pending OAuth user action on empty polls. If an existing awaiting_oauth attempt has already lost its action, restart only its bound OAuth flow through the adapter to recover instructions; never request app credentials again. Terminal outcomes still clear actions.
+Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
 ## Files
 - .pr/SPEC.md
 - src/connections/adapters/connector-oauth.ts
+- src/connections/oauth-phone-handoff.ts
+- src/gateway/routes/connections-v2.router.ts
+- web-ui/src/features/connectors/connect-flow.js
+- web-ui/src/mobile/mobile-login-handoff.js
 - scripts/test-plugin-quick-connect.cjs
+- scripts/test-oauth-phone-handoff.cjs
 - workspace/self/12-connectors-mcp-integrations.md
 ## Acceptance
-Real shared form save -> two pending polls -> close/reopen retains exact action without new launch. Legacy missing-action attempt recovers once. Cancel cannot revive action. Desktop/mobile regression, typecheck/build and hard gates.
-Test: node scripts/test-plugin-quick-connect.cjs
-
+Test: node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
+Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
 ## Risks
-Recovery calls the existing attempt-bound start only when its action is missing and no success is reported; other active flow ownership remains enforced by the bridge. Repeated polls must not restart a valid action. No credentials or scopes changed. Rollback the single adapter hunk if regression fails.
+OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.

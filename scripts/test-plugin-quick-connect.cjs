@@ -15,7 +15,12 @@ const { nativeAppSetup } = load('connections/native-app-setup.js');
 const owner = load('gateway/routes/secure-access.router.js');
 const consent = load('security/secure-access-consent.js');
 const OWNER = 'd'.repeat(64), CANARY = 'synthetic-native-secret';
-let configured = false, launches = 0, saves = 0;
+let configured = false, launches = 0, saves = 0, authorized = false, expired = false;
+let providerPage, fixtureUrl, handoffSession, opens = 0;
+load('gateway/browser/inhouse-actions.js').browserOpenInHouse = async (sid, url) => {
+  assert(url.startsWith('https://x.com/i/oauth2/authorize?'));
+  handoffSession = sid; opens++; await providerPage.goto(fixtureUrl + '/provider'); return 'Browser opened';
+};
 load('config/config.js').getConfig = () => ({ getConfigDir: () => root });
 load('security/plugin-credential-state.js').protectedPluginStorageAvailable = () => true;
 const pairing = load('gateway/pairing/pairing-store.js');
@@ -29,7 +34,7 @@ const requireOwner = owner.requireProtectedOwner, surface = owner.ownerSurfaceSt
 owner.requireProtectedOwner = (req, res, next) => requireOwner(req, res, next, proof, () => true);
 owner.ownerSurfaceState = req => surface(req, proof);
 const adapters = new ConnectionAdapterRegistry();
-adapters.register(new ConnectorOAuthConnectionAdapter({ x: { id: 'x', name: 'X', metadata: async () => ({ clientIdConfigured: configured, clientSecretConfigured: configured }), start: async () => { launches++; return { authUrl: 'https://x.com/i/oauth2/authorize?fixture=1' }; }, poll: async () => null, isConnected: () => false, cancel: () => {} } }));
+adapters.register(new ConnectorOAuthConnectionAdapter({ x: { id: 'x', name: 'X', metadata: async () => ({ clientIdConfigured: configured, clientSecretConfigured: configured, account:{provider:'x',providerAccountId:'fixture-owner'} }), verify: async()=>({account:{provider:'x',providerAccountId:'fixture-owner'}}), start: async () => { expired=false; launches++; return { authUrl: 'https://x.com/i/oauth2/authorize?fixture=1' }; }, poll: async () => expired ? {success:false,error:'expired'} : authorized ? {done:true,success:true} : null, isConnected: () => authorized, cancel: () => {} } }));
 const attempts = new ConnectionAttemptStore(root);
 const orchestrator = new ConnectionOrchestrator({ attempts, connections: new ConnectionStore(root), activity: new ConnectionActivityStore(root), adapters, plans: new PluginConnectionPlanResolver(() => []) });
 const runtime = { orchestrator, adapters, start: new ConnectionStartService(orchestrator) };
@@ -44,16 +49,23 @@ app.post('/api/auth/x-api/credentials', setup.requirePluginSetup, (req, res) => 
   configured = true; saves++; orchestrator.confirmPreparedInputSaved(req.body.attemptId); res.json({ success: true });
 });
 app.use(load('gateway/routes/connections-v2.router.js').router);
+app.get('/provider', (req,res)=>res.type('html').send('<body style="background:#101114;color:white;font:20px system-ui;padding:30px"><h1>Authorize fixture X</h1><p>Allow Prometheus to access your account</p><button style="font:inherit;padding:20px" onclick="location.href=\'/provider-callback\'">Authorize app</button></body>'));
+app.get('/provider-callback',(req,res)=>{authorized=true;res.send('<h1>Connected to Prometheus</h1>');});
+app.post('/api/browser/login-view',(req,res)=>{assert.equal(req.body.sessionId,handoffSession);res.json({success:true,chromePaired:false});});
+app.get('/api/browser/login-frame',async(req,res)=>{try { assert.equal(req.query.sessionId,handoffSession);res.json({success:true,image:'data:image/png;base64,'+(await providerPage.screenshot()).toString('base64'),viewportWidth:390,viewportHeight:650,url:providerPage.url(),title:'Fixture X'}); } catch { res.status(409).json({error:'fixture closing'}); } });
+app.get('/api/browser/login-state',(req,res)=>res.json({success:true,url:providerPage.url(),editables:[]}));
+app.post('/api/browser/login-input',async(req,res)=>{assert.equal(req.body.sessionId,handoffSession);if(req.body.action==='click')await providerPage.mouse.click(req.body.x,req.body.y);res.json({success:true});});
 app.use('/src', express.static(path.resolve('web-ui/src')));
-app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><style>body{margin:0;font:15px system-ui;background:#111315;color:#eee;--panel:#232629;--text:#eee}header{padding:24px;border-bottom:1px solid #333}main{padding:24px}button{font:inherit;padding:12px}</style><header>Plugins</header><main><button id="connect">Connect X / Twitter</button></main><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:a=>window.fixtureConsent(a)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v}document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'x',kind:'connector'});</script>`));
+app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/src/styles/mobile.css"><style>body{margin:0;font:15px system-ui;background:#111315;color:#eee;--panel:#232629;--text:#eee}header{padding:24px;border-bottom:1px solid #333}main{padding:24px}button{font:inherit;padding:12px}</style><header>Plugins</header><main><button id="connect">Connect X / Twitter</button></main><script type="module">import{openConnectFlow}from'/src/features/connectors/connect-flow.js';window.calls=[];window.prometheusOwnerConsent={request:a=>window.fixtureConsent(a)};async function api(p,o={}){window.calls.push(p);const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...o.headers}});const v=await r.json();if(!r.ok)throw Error(v.error);return v}document.querySelector('#connect').onclick=()=>openConnectFlow(api,{serviceId:'x',kind:'connector'});</script>`));
 (async () => { let server, browser; try {
   server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r)); const url = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true });
+  fixtureUrl = url; providerPage = await browser.newPage({viewport:{width:390,height:650}});
   const out = path.resolve(process.env.QUICK_CONNECT_SCREENSHOTS || '.pr/screenshots'); fs.mkdirSync(out, { recursive: true });
   const post = (route, body = {}, headers = {}) => fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json', origin: url, ...headers }, body: JSON.stringify(body) });
   for (const [name, width, height] of [['desktop',1440,960],['mobile',390,844]]) {
-    configured = false;
-    const context = await browser.newContext({ viewport: { width, height }, ...(name === 'mobile' ? {extraHTTPHeaders:{'X-Pairing-Token':phone.deviceToken}} : {}) });
+    configured = false; authorized = false;
+    const context = await browser.newContext({ viewport: { width, height }, hasTouch: name === 'mobile', ...(name === 'mobile' ? {extraHTTPHeaders:{'X-Pairing-Token':phone.deviceToken}} : {}) });
     if (name === 'desktop') await context.addCookies([{ name: 'prom_sa_owner', value: OWNER, url }]);
     else assert.equal(surface({headers:{'x-pairing-token':phone.deviceToken}},proof).canApprove,false);
     const page = await context.newPage(); page.setDefaultTimeout(8000);
@@ -88,6 +100,46 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
     await page.getByRole('button',{name:'Check sign-in',exact:true}).waitFor();
     assert.equal(await page.locator('input').count(),0); assert.equal(launches,before+1);
     await page.screenshot({path:path.join(out,name+'-x-pending-sign-in.png')});
+    if(name==='mobile') {
+      // Expired/restarted attempts retain saved credentials and explicitly retry through Connect.
+      expired = true;
+      await page.getByRole('button',{name:'Check sign-in',exact:true}).click();
+      await page.getByRole('button',{name:'Restart authorization',exact:true}).click();
+      await page.getByRole('button',{name:/^Authorize .+ on this phone$/}).waitFor();
+      assert.equal(await page.locator('input[type=password]').count(),0);
+      const active=orchestrator.listAttempts(1)[0];
+      assert.notEqual(active.id,attempt.id); assert.equal(orchestrator.getAttempt(attempt.id).state,'cancelled');
+      Object.assign(attempt,active);
+      const openRoute='/api/connection-attempts/'+active.id+'/oauth-handoff';
+      assert.equal((await post(openRoute,{},{})).status,403);
+      assert.equal((await post(openRoute,{}, {'X-Pairing-Token':'bad'})).status,403);
+      const beforeOpen=opens;
+      await page.getByRole('button',{name:/^Authorize .+ on this phone$/}).click();
+      await page.locator('.pm-lh.is-open').waitFor();
+      await page.waitForFunction(()=>document.querySelector('.pm-lh img')?.naturalWidth>0);
+      assert.equal(opens,beforeOpen+1); assert.equal(handoffSession,'connection_oauth_'+attempt.id);
+      assert.equal(await page.locator('.sa-connect-overlay').isVisible(),false);
+      await page.screenshot({path:path.join(out,'mobile-x-phone-browser.png')});
+      await page.locator('.pm-lh').getByRole('button',{name:'Done',exact:true}).click();
+      await page.getByRole('button',{name:/^Authorize .+ on this phone$/}).waitFor();
+      assert.equal(await page.locator('input[type=password]').count(),0);
+      await page.getByRole('button',{name:/^Authorize .+ on this phone$/}).click();
+      await page.waitForFunction(()=>document.querySelector('.pm-lh img')?.naturalWidth>0);
+      await page.waitForTimeout(450); // Wait for the real sheet entrance tween before mapping a physical touch.
+      const box=await providerPage.getByRole('button',{name:'Authorize app'}).boundingBox();
+      const image=page.locator('.pm-lh img'); const rect=await image.boundingBox();
+      const scale=Math.min(rect.width/390,rect.height/650),left=rect.x+(rect.width-390*scale)/2;
+      await page.touchscreen.tap(left+(box.x+box.width/2)*scale,rect.y+(box.y+box.height/2)*scale);
+      await providerPage.waitForURL('**/provider-callback',{timeout:8000});
+      await page.locator('.pm-lh').getByRole('button',{name:"I'm in",exact:true}).click();
+      await page.getByText('Connected. You’re ready to use this plugin.',{exact:true}).waitFor().catch(async e=>{console.error('STATE',JSON.stringify(orchestrator.getAttempt(attempt.id)));console.error('UI',await page.locator('body').innerText());throw e;});
+      await page.screenshot({path:path.join(out,'mobile-x-phone-connected.png')});
+      assert.equal(orchestrator.getAttempt(attempt.id).state,'connected');
+      assert.equal((await post(openRoute,{}, {'X-Pairing-Token':phone.deviceToken})).status,409);
+      assert(!(await page.content()).includes(CANARY));
+      await page.getByRole('button',{name:'Done',exact:true}).click();
+      await context.close(); continue;
+    }
     await page.getByRole('button',{name:'Done',exact:true}).click();
     // Recover an attempt damaged by the pre-fix poll without collecting credentials again.
     attempts.update(attempt.id,{requiredUserAction:undefined});
