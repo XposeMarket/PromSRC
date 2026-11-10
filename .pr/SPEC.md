@@ -1,37 +1,19 @@
-# Content-aware approvals
-Surface: both
-Parity: Shared preview component in desktop chat/Teams/Tasks/Proposals and phone chat/Tasks/Proposals. Existing decisions and channel text fallback retained.
-Test: node --import tsx src/gateway/content-review.regression.ts
-Size justification: One shared preview contract spans existing approval, proposal, generation, and desktop/mobile hosts; generated UI churn is required by sync.
+# Native browser upload repair
+Surface: backend
+Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
+Test: node scripts/test-inhouse-upload.cjs
 ## Problem
-Approvals hide media and full captions/prompts. Raul approved the phone design and explicitly requested immediate solo build without tier/planning/review-agent ceremony. No merge authorization.
+Active native browser upload incorrectly reports no session.
 ## Chosen approach
-Extend existing cards with bounded content metadata and authenticated workspace media, full text and destination/settings. Inline edits request a new prepared approval, never mutate an authorized click. Proposal revision snapshots include previews. Gated generation tools derive previews from actual args, paid video quotes capture shot prompts/references. Preserve old cards. No new global generation gate or posting automation.
+Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
 ## Acceptance
-Image/video/carousel/full text previews on both surfaces. Unsafe paths/text rejected or escaped. Long captions retained. Changes reject original grant and return feedback. Session/tool/one-shot tests retained. Proposal revision persistence tested. Video quote content changes require new review. Build/sync/typecheck/regression and actual renderer screenshots.
+Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
 ## Files
+- src/gateway/browser-tools.ts
+- electron/main.js
+- electron/browser-upload.cjs
+- scripts/test-inhouse-upload.cjs
+- workspace/self/13-browser-desktop.md
 - .pr/SPEC.md
-- src/gateway/content-review.ts
-- src/gateway/content-review.regression.ts
-- src/gateway/video-content-review.ts
-- src/gateway/video-pending-approvals.ts
-- src/gateway/final-action-approvals.ts
-- src/gateway/verification-flow.ts
-- src/gateway/approval-actions.ts
-- src/gateway/agents-runtime/handlers/default-tools.ts
-- src/gateway/tools/defs/cis-system.ts
-- src/gateway/routes/settings.router.ts
-- src/gateway/routes/video-project.routes.ts
-- src/gateway/proposals/proposal-store.ts
-- web-ui/src/components/ContentReview.js
-- web-ui/src/pages/ChatPage.js
-- web-ui/src/pages/TeamsPage.js
-- web-ui/src/pages/TasksPage.js
-- web-ui/src/pages/ProposalsPage.js
-- web-ui/src/mobile/mobile-pages.js
-- web-ui/src/mobile/mobile-tasks-pages.js
-- web-ui/src/mobile/mobile-proposals-pages.js
-- scripts/test-content-review-ui.mjs
-- workspace/self/21-security-approvals-permissions.md
 ## Risks
-Preview metadata does not attest browser composer state or freeze file bytes. Require new prepared request after edit, retain visual recheck. No new claim of verified publication; existing approved state is not posted. Generation autopolicies remain unchanged. Actual live publication/payment not tested or authorized. Rollback revert feature commit. Self docs read/updated: self/21-security-approvals-permissions.md.
+Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.
