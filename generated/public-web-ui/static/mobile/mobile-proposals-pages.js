@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 // Proposals route owner. Loaded only when its route or a shared dependent feature is requested.
 import {
   ICONS,
@@ -49,7 +51,7 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
           </div>
           <button class="pm-icon-btn" data-open-proposal="${escapeHtml(proposal.id)}" aria-label="Open proposal">${ICONS.dots}</button>
         </div>
-        <p>${escapeHtml(proposal.summary || '')}</p>
+        <p>${escapeHtml(proposal.summary || '')}</p>${renderContentReview(proposal)}
         ${_pmProposalFiles(proposal)}
         ${proposal.estimatedImpact ? `<p class="pm-proposal-impact">Impact: ${escapeHtml(proposal.estimatedImpact)}</p>` : ''}
         <div class="pm-more-meta-row"><span>Submitted: ${escapeHtml(_pmDateTime(proposal.createdAt))}</span><span>${escapeHtml(proposal.executorAgentId || 'main')}</span></div>
@@ -136,7 +138,7 @@ async function _renderProposalReview(page, { proposalId, navigate }) {
             <div class="pm-proposal-badges">${_pmProposalPriority(proposal)}${_pmProposalStatus(proposal)}<span>${escapeHtml(proposal.type || 'proposal')}</span></div>
           </div>
         </div>
-        <p>${escapeHtml(proposal.summary || '')}</p>
+        <p>${escapeHtml(proposal.summary || '')}</p>${renderContentReview(proposal)}
         ${_pmProposalFiles(proposal, 4)}
         ${proposal.estimatedImpact ? `<p class="pm-proposal-impact">Impact: ${escapeHtml(proposal.estimatedImpact)}</p>` : ''}
       </section>

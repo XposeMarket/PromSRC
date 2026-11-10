@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
 
@@ -622,6 +624,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--pm-muted);gap:10px;">
         <span>${escapeHtml(entry.source)}</span><span>${escapeHtml(nyRelTime(entry.createdAt))}</span>
       </div>
+      ${renderContentReview(payload)}
       ${facts}
       <div class="pm-card-actions">${actions}</div>
     </article>`;

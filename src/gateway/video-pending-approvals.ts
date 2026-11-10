@@ -1,3 +1,6 @@
+import { videoContentReview } from './video-content-review.js';
+import type { ContentReview } from './content-review.js';
+
 /**
  * video-pending-approvals.ts
  *
@@ -12,6 +15,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 export interface VideoPendingApproval {
+  contentReview?: ContentReview;
   id: string;
   workspacePath: string;
   sessionId: string;
@@ -57,8 +61,11 @@ export function recordVideoApproval(input: Omit<VideoPendingApproval, 'id' | 'cr
   knownWorkspaces.add(path.resolve(input.workspacePath));
   // One pending quote per project+action: a re-quote replaces the older one.
   const kept = readApprovals(input.workspacePath).filter((a) => !(a.projectId === input.projectId && a.action === input.action));
+  let contentReview: ContentReview | undefined;
+  try { contentReview = videoContentReview(input.workspacePath, input.projectId, input.args, Number(input.quotedUsd) || 0); } catch { /* Legacy/missing project stays a plain quote, not a fabricated preview. */ }
   const record: VideoPendingApproval = {
     ...input,
+    contentReview,
     quotedUsd: Number(input.quotedUsd) || 0,
     shotIds: Array.isArray(input.shotIds) ? input.shotIds.map(String) : undefined,
     id: `vpa_${randomUUID().slice(0, 12)}`,

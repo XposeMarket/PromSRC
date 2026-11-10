@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 /**
  * ProposalsPage.js - F3b Extract
  *
@@ -184,7 +186,7 @@ function renderProposals(proposals, filter = getProposalFilterValue()) {
             <span style="font-size:10px;font-weight:700;color:${displayStatus.color};text-transform:uppercase">${displayStatus.icon} ${escHtml(displayStatus.label)}${executingSpinner}</span>
             <span style="font-size:10px;color:var(--muted)">${escHtml(proposal.type)}</span>
           </div>
-          <div style="font-size:12px;color:var(--fg);margin-bottom:6px;opacity:0.8">${escHtml(proposal.summary)}</div>
+          <div style="font-size:12px;color:var(--fg);margin-bottom:6px;opacity:0.8">${escHtml(proposal.summary)}</div>${renderContentReview(proposal)}
           ${files ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">${files}</div>` : ''}
           ${proposal.estimatedImpact ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Impact: ${escHtml(proposal.estimatedImpact)}</div>` : ''}
           ${resultText && (isExecuted || isFailed) ? `<div style="font-size:11px;padding:6px 8px;border-radius:6px;background:${isFailed ? 'rgba(224,92,92,0.1)' : 'rgba(58,170,107,0.1)'};border:1px solid ${isFailed ? '#e05c5c44' : '#3aaa6b44'};margin-bottom:6px;color:var(--fg)">${escHtml(resultText.slice(0, 200))}${resultText.length > 200 ? '...' : ''}</div>` : ''}

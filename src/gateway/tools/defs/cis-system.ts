@@ -833,6 +833,15 @@ export function getCisSystemTools(): any[] {
             surface: { type: 'string', description: 'App/site/window/account context, e.g. "X in Chrome" or "Slack desktop".' },
             next_tool_name: { type: 'string', enum: ['browser_click', 'browser_press_key', 'desktop_click', 'desktop_press_key'], description: 'Exact next tool that will consume the one-shot approval.' },
             next_tool_args: { type: 'object', description: 'Optional subset of the exact next tool args to bind this approval to, excluding final_action_approval_id.' },
+            content_review: { type: 'object', description: 'Show the exact prepared content in the approval card. Attach workspace-relative media paths, full text, destination and settings. This preview does not verify browser state; inspect the composer again before executing. Changes require a fresh request.', required: ['kind', 'text'], properties: {
+              kind: { type: 'string', enum: ['post', 'generation', 'proposal'] },
+              text: { type: 'string', description: 'Full caption/body or generation prompt, never a filename.' },
+              platform: { type: 'string' }, account: { type: 'string' }, visibility: { type: 'string' }, timing: { type: 'string' },
+              model: { type: 'string' }, cost: { type: 'string', description: 'Quoted/estimated cost or subscription usage. Say unknown when not quoted.' },
+              media: { type: 'array', maxItems: 12, items: { type: 'object', required: ['kind', 'path'], properties: {
+                kind: { type: 'string', enum: ['image', 'video'] }, path: { type: 'string', description: 'Workspace-relative original media file, in posting order.' }, label: { type: 'string' }, cover: { type: 'string', description: 'Workspace-relative video cover image.' },
+              } } },
+            } },
             screenshot_id: { type: 'string', description: 'Optional screenshot_id for the prepared UI state.' },
           },
         },
@@ -964,6 +973,7 @@ export function getCisSystemTools(): any[] {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
           properties: {
+            content_review: { type: 'object', description: 'Optional content preview: {kind:"proposal",text:"full caption or prompt",platform,account,visibility,timing,model,cost,media:[{kind:"image"|"video",path:"workspace-relative file",cover?:"image path",label?:"description"}]}. Shows artifacts, not publication consent. Maximum 12 media and 32000 text characters.' },
             type: {
               type: 'string',
               enum: proposalTypeEnum,
