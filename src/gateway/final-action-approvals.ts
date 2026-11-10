@@ -21,7 +21,7 @@ export interface FinalActionApprovalRequest {
   screenshotId?: string;
   /** Use window after the user approves. The window starts at grant time, not request time. */
   ttlMs?: number;
-  /** Grant expiry. Unset while the approval is pending, because pending cards do not expire. */
+  /** Grant expiry, set at approval time. Unset while pending; pending cards are bounded separately by the approval-queue stale sweep (verification-flow.ts, createdAt-based). */
   expiresAt?: number;
 }
 interface FinalActionGrant extends FinalActionApprovalRequest {
