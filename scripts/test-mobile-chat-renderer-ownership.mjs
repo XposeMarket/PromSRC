@@ -154,6 +154,8 @@ const measurements = {
 // measured main 288202 -> 290233 gzip (+2031). Retain ~0.1% compression allowance.
 // #850 schema-aware raster attachment guard replaces serialized-body scanning:
 // measured main 290233 -> 290661 gzip (+428), still 33 modules. Retain ~0.1% allowance.
-assert(measurements.gzipBytes <= 290960, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// #861 phone OAuth pending-action handoff combined with #853 desktop chat polish:
+// measured main+#861 291292 gzip (+631 over #850 ceiling base). Retain ~0.1% compression allowance.
+assert(measurements.gzipBytes <= 291600, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
