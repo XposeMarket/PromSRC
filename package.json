@@ -106,6 +106,7 @@
     "test:context-routing-foundation": "node scripts/test-context-routing-foundation.mjs",
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
     "test:replay": "tsx src/testing/replay/replay-scenarios.regression.ts",
+    "test:idle-round-ceiling": "tsx src/testing/replay/idle-round-ceiling.regression.ts",
     "test:giant-split-parity": "tsx src/testing/replay/giant-split-parity.regression.ts",
     "test:restart-replay-guard": "tsx src/gateway/chat/restart-replay-guard.regression.ts",
     "test:mobile-reconnect-empty-row-reuse": "node scripts/test-mobile-reconnect-empty-row-reuse.mjs",
