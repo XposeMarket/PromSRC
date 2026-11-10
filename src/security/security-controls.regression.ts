@@ -53,7 +53,7 @@ import { sanitizeToolLog } from './log-scrubber';
   assert.match(!replay.ok ? replay.message : '', /already used/);
 
   // Expired grant -> refused.
-  const expired = { ...createFinalActionApprovalScope({ actionKind: 'purchase', nextToolName: 'browser_click' }), expiresAt: Date.now() - 1 };
+  const expired = { ...createFinalActionApprovalScope({ actionKind: 'purchase', nextToolName: 'browser_click' }), ttlMs: undefined, expiresAt: Date.now() - 1 };
   grantFinalActionApproval('session-a', 'fa-2', expired);
   const late = consumeFinalActionApproval({ sessionId: 'session-a', approvalId: 'fa-2', toolName: 'browser_click', toolArgs: {} });
   assert.equal(late.ok, false);
@@ -62,7 +62,32 @@ import { sanitizeToolLog } from './log-scrubber';
   // Unknown action kinds collapse to 'other'; TTL is clamped to at most an hour.
   const odd = createFinalActionApprovalScope({ actionKind: 'launch-missiles', ttlMs: 10 * 24 * 3600 * 1000 });
   assert.equal(odd.actionKind, 'other');
-  assert.ok((odd.expiresAt || 0) - Date.now() <= 60 * 60 * 1000 + 50);
+  assert.ok((odd.ttlMs || 0) <= 60 * 60 * 1000);
+  // Pending scopes carry no expiry; a slow human answer must not pre-expire the grant.
+  assert.equal(odd.expiresAt, undefined);
+
+  // Regression (OUTSIDE TikTok, 2026-11-10): the card was answered >10 min after it was
+  // requested, and the approved Post click was rejected as expired. The clock now starts at grant.
+  const realNow = Date.now;
+  try {
+    let fakeNow = realNow();
+    Date.now = () => fakeNow;
+    const slow = createFinalActionApprovalScope({ actionKind: 'post', nextToolName: 'browser_click', nextToolArgs: { ref: '@7' } });
+    fakeNow += 45 * 60 * 1000; // human answers 45 min later
+    grantFinalActionApproval('session-a', 'fa-slow', slow);
+    fakeNow += 60 * 1000; // agent clicks a minute after approval
+    assert.equal(consumeFinalActionApproval({ sessionId: 'session-a', approvalId: 'fa-slow', toolName: 'browser_click', toolArgs: { ref: '@7' } }).ok, true);
+
+    // But the post-approval window is still enforced.
+    const stale = createFinalActionApprovalScope({ actionKind: 'post', nextToolName: 'browser_click' });
+    grantFinalActionApproval('session-a', 'fa-stale', stale);
+    fakeNow += 11 * 60 * 1000;
+    const staleUse = consumeFinalActionApproval({ sessionId: 'session-a', approvalId: 'fa-stale', toolName: 'browser_click', toolArgs: {} });
+    assert.equal(staleUse.ok, false);
+    assert.match(!staleUse.ok ? staleUse.message : '', /expired/);
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 // ── Public distribution build ────────────────────────────────────────────────

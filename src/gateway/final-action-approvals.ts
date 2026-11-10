@@ -19,6 +19,9 @@ export interface FinalActionApprovalRequest {
   nextToolArgs?: Record<string, any>;
   contentReview?: ContentReview;
   screenshotId?: string;
+  /** Use window after the user approves. The window starts at grant time, not request time. */
+  ttlMs?: number;
+  /** Grant expiry, set at approval time. Unset while pending; pending cards are bounded separately by the approval-queue stale sweep (verification-flow.ts, createdAt-based). */
   expiresAt?: number;
 }
 interface FinalActionGrant extends FinalActionApprovalRequest {
@@ -87,17 +90,24 @@ export function createFinalActionApprovalScope(input: {
     nextToolName: normalizeToolName(input.nextToolName) || undefined,
     nextToolArgs: input.nextToolArgs && typeof input.nextToolArgs === 'object' ? input.nextToolArgs : undefined,
     screenshotId: String(input.screenshotId || '').trim() || undefined,
-    expiresAt: Date.now() + ttlMs,
+    // Do not stamp expiresAt here. A human may answer the card long after the agent
+    // asked (phone, away from desk), and a request-time clock made approvals that
+    // arrived after 10 min unusable. grantFinalActionApproval starts the clock.
+    ttlMs,
   };
 }
 
 export function grantFinalActionApproval(sessionId: string, approvalId: string, scope: FinalActionApprovalRequest, grantedBy = 'approval'): FinalActionGrant {
+  const grantedAt = Date.now();
+  const ttlMs = Number(scope.ttlMs);
   const grant: FinalActionGrant = {
     ...scope,
     approvalId,
     sessionId,
-    grantedAt: Date.now(),
+    grantedAt,
     grantedBy,
+    // Use window starts when the user approves. Scopes without ttlMs keep an explicit expiresAt.
+    expiresAt: Number.isFinite(ttlMs) && ttlMs > 0 ? grantedAt + ttlMs : scope.expiresAt,
   };
   grants.set(approvalId, grant);
   return grant;
