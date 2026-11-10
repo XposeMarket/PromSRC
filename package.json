@@ -80,6 +80,8 @@
     "check:web-ui": "node scripts/check-public-web-ui-sync.js && node scripts/check-web-ui-module-globals.mjs && npm run test:theme-tokens",
     "test:theme-tokens": "node scripts/test-theme-tokens.mjs",
     "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
+    "test:workspace-tracking-guard": "node scripts/test-workspace-tracking-guard.mjs",
+    "audit:privacy": "node scripts/test-workspace-tracking-guard.mjs && node scripts/audit-repo-privacy.mjs --strict-current",
     "test:desktop-live-multithread-perf": "node scripts/test-desktop-live-multithread-perf.mjs",
     "test:stream-persistence": "node scripts/test-stream-persistence-budget.mjs",
     "test:static-compression": "node scripts/test-static-compression.mjs",

@@ -15,6 +15,12 @@ type CorpusQuery = { query: string; expectedLine: number };
 
 const workspacePath = path.resolve(process.env.PROMETHEUS_MEMORY_ATOM_TEST_WORKSPACE || 'workspace');
 const memoryPath = path.join(workspacePath, 'MEMORY.md');
+if (!fs.existsSync(memoryPath)) {
+  // workspace/MEMORY.md is personal data and is not tracked in this repository.
+  // Point PROMETHEUS_MEMORY_ATOM_TEST_WORKSPACE at a workspace that has the corpus.
+  console.log('memory-atoms regression skipped: workspace/MEMORY.md is not present in this checkout');
+  process.exit(0);
+}
 const raw = fs.readFileSync(memoryPath, 'utf8');
 const atoms = parseMemoryAtoms(raw);
 

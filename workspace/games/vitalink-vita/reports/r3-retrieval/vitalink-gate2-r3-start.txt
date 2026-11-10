@@ -1,4 +1,0 @@
-VitaLink Gate 2 passive Bluetooth probe R3
-stage=module_start-entered-before-bt-call
-bluetooth_import=ksceBtGetConfiguration-only
-radio_mutation=none
