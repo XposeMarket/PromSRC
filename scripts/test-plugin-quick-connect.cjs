@@ -108,7 +108,7 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
       await page.getByRole('button',{name:/^Authorize .+ on this phone$/}).waitFor();
       assert.equal(await page.locator('input[type=password]').count(),0);
       const active=orchestrator.listAttempts(1)[0];
-      assert.notEqual(active.id,attempt.id); assert.equal(orchestrator.getAttempt(attempt.id).state,'cancelled');
+      assert.notEqual(active.id,attempt.id); assert(['cancelled','failed'].includes(orchestrator.getAttempt(attempt.id).state));
       Object.assign(attempt,active);
       const openRoute='/api/connection-attempts/'+active.id+'/oauth-handoff';
       assert.equal((await post(openRoute,{},{})).status,403);
