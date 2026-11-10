@@ -1,19 +1,15 @@
-# Native browser upload repair
+# OAuth pending action repair
+Tier: 1; Raul explicitly authorized live repair and waived separate review in this ongoing incident.
 Surface: backend
-Parity: Shared desktop/mobile/channel/agent tool. Electron native session routing repaired; Playwright unchanged.
-Test: node scripts/test-inhouse-upload.cjs
+Parity: shared backend connector adapter serves desktop/mobile and tools.
 ## Problem
-Active native browser upload incorrectly reports no session.
+Native app save succeeds, but first pending OAuth poll returns state only and applyResult removes requiredUserAction. Shared UI falls into Preparing connection with no controls.
 ## Chosen approach
-Tier 1 restore: native-first routing, authenticated Electron session-owned CDP file selection. Extra WIP approved card31f5e507. No publishing or permission changes.
-## Acceptance
-Real Chromium hidden input and ref upload, bad path/target failures and debugger cleanup pass. Typecheck and hard gates. Live TikTok test after merge and Electron relaunch.
+Return the pending OAuth user action on empty polls. If an existing awaiting_oauth attempt has already lost its action, restart only its bound OAuth flow through the adapter to recover instructions; never request app credentials again. Terminal outcomes still clear actions.
 ## Files
-- src/gateway/browser-tools.ts
-- electron/main.js
-- electron/browser-upload.cjs
-- scripts/test-inhouse-upload.cjs
-- workspace/self/13-browser-desktop.md
-- .pr/SPEC.md
-## Risks
-Electron must relaunch or new route unavailable; errors fail closed. File selection is not successful remote processing. Revert commit to roll back. No permission or saved-state changes.
+- src/connections/adapters/connector-oauth.ts
+- scripts/test-plugin-quick-connect.cjs
+- workspace/self/12-connectors-mcp-integrations.md
+## Acceptance
+Real shared form save -> two pending polls -> close/reopen retains exact action without new launch. Legacy missing-action attempt recovers once. Cancel cannot revive action. Desktop/mobile regression, typecheck/build and hard gates.
+Test: node scripts/test-plugin-quick-connect.cjs

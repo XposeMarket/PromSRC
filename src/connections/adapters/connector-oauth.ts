@@ -176,7 +176,15 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
     // The one-shot callback result can be gone (consumed by another poller,
     // expired, or lost to a gateway restart) while the tokens are stored.
     if (!result && bridge.isConnected?.()) result = { success: true };
-    if (!result) return { state: 'awaiting_oauth' };
+    if (!result) {
+      // Pending polls must retain the action: applyResult replaces it on every result.
+      // Older attempts may already have lost it; rebuild only their bound OAuth flow.
+      const action = context.attempt.requiredUserAction;
+      if (action?.type === 'oauth' && action.authorizationUrl) {
+        return { state: 'awaiting_oauth', userAction: action };
+      }
+      return this.connect(context);
+    }
     if (!result.success) {
       return {
         state: 'reauth_required',

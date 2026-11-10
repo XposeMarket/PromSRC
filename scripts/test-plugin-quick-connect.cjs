@@ -30,7 +30,8 @@ owner.requireProtectedOwner = (req, res, next) => requireOwner(req, res, next, p
 owner.ownerSurfaceState = req => surface(req, proof);
 const adapters = new ConnectionAdapterRegistry();
 adapters.register(new ConnectorOAuthConnectionAdapter({ x: { id: 'x', name: 'X', metadata: async () => ({ clientIdConfigured: configured, clientSecretConfigured: configured }), start: async () => { launches++; return { authUrl: 'https://x.com/i/oauth2/authorize?fixture=1' }; }, poll: async () => null, isConnected: () => false, cancel: () => {} } }));
-const orchestrator = new ConnectionOrchestrator({ attempts: new ConnectionAttemptStore(root), connections: new ConnectionStore(root), activity: new ConnectionActivityStore(root), adapters, plans: new PluginConnectionPlanResolver(() => []) });
+const attempts = new ConnectionAttemptStore(root);
+const orchestrator = new ConnectionOrchestrator({ attempts, connections: new ConnectionStore(root), activity: new ConnectionActivityStore(root), adapters, plans: new PluginConnectionPlanResolver(() => []) });
 const runtime = { orchestrator, adapters, start: new ConnectionStartService(orchestrator) };
 load('connections/runtime.js').getConnectionRuntime = () => runtime;
 const app = express();
@@ -72,7 +73,31 @@ app.get('/', (req, res) => res.type('html').send(`<!doctype html><meta name="vie
     await page.getByRole('button',{name:'Check sign-in',exact:true}).waitFor(); assert.equal(launches,before+1);
     assert.equal(await page.locator('input').count(),0); assert(!(await page.content()).includes(CANARY));
     assert(!(await page.evaluate(()=>JSON.stringify(window.calls))).includes('/connect"')); // no second approval
-    orchestrator.cancel(attempt.id); await context.close();
+    const originalAction = orchestrator.getAttempt(attempt.id).requiredUserAction;
+    // Wait for multiple real controller polls, not just the first successful save frame.
+    await page.waitForFunction(p => window.calls.filter(v => v === p + '/continue').length >= 3, prefix);
+    await page.getByRole('button',{name:'Check sign-in',exact:true}).waitFor();
+    assert.deepEqual(orchestrator.getAttempt(attempt.id).requiredUserAction, originalAction);
+    assert.equal(launches,before+1);
+    await page.getByRole('button',{name:'Done',exact:true}).click();
+    await page.evaluate(async id => {
+      const {openConnectFlow}=await import('/src/features/connectors/connect-flow.js');
+      const api=async(p,o={})=>{const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...(o.headers||{})}});if(!r.ok)throw new Error('fixture request failed');return r.json()};
+      window.reopened=await openConnectFlow(api,{serviceId:'x',attemptId:id});
+    },attempt.id);
+    await page.getByRole('button',{name:'Check sign-in',exact:true}).waitFor();
+    assert.equal(await page.locator('input').count(),0); assert.equal(launches,before+1);
+    await page.screenshot({path:path.join(out,name+'-x-pending-sign-in.png')});
+    await page.getByRole('button',{name:'Done',exact:true}).click();
+    // Recover an attempt damaged by the pre-fix poll without collecting credentials again.
+    attempts.update(attempt.id,{requiredUserAction:undefined});
+    await orchestrator.continue(attempt.id);
+    assert.equal(orchestrator.getAttempt(attempt.id).requiredUserAction.type,'oauth');
+    assert.equal(launches,before+2);
+    await orchestrator.continue(attempt.id); assert.equal(launches,before+2);
+    orchestrator.cancel(attempt.id);
+    assert.equal(orchestrator.getAttempt(attempt.id).requiredUserAction,undefined);
+    await context.close();
   }
   const context = await browser.newContext({viewport:{width:390,height:844}}), page = await context.newPage();
   await page.goto(url); await page.click('#connect'); await page.getByText('Pair this device first',{exact:true}).waitFor();
