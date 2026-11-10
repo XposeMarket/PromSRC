@@ -8,6 +8,8 @@ Saved credentials lost pending action after poll. After that fix, mobile still s
 ## Chosen approach
 Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
 ## Files
+- src/connections/runtime.ts
+- scripts/test-connection-runtime-identity.cjs
 - .pr/SPEC.md
 - src/connections/adapters/connector-oauth.ts
 - src/connections/oauth-phone-handoff.ts
@@ -18,7 +20,10 @@ Retain/recover pending action; wire mobile loopback connector OAuth to the exist
 - scripts/test-oauth-phone-handoff.cjs
 - workspace/self/12-connectors-mcp-integrations.md
 ## Acceptance
-Test: node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
+Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
 Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
 ## Risks
 OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
+
+## Scope notes
+Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.

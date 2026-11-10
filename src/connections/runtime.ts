@@ -52,15 +52,23 @@ export function registerOpenAiCompatibleProvider(context: ConnectionAdapterConte
   return { providerId, models };
 }
 
-let singleton: { orchestrator: ConnectionOrchestrator; start: ConnectionStartService; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
+type ConnectionRuntime = { orchestrator: ConnectionOrchestrator; start: ConnectionStartService; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry };
+// tsx can evaluate CJS/static and ESM/dynamic imports as separate module copies.
+// HTTP and tools must nevertheless share attempts AND in-memory secure-input state.
+const runtimeKey = Symbol.for('prometheus.connection-runtime.v1');
+const runtimeHost = globalThis as typeof globalThis & { [runtimeKey]?: Map<string, ConnectionRuntime> };
+function runtimeCache(): Map<string, ConnectionRuntime> {
+  return runtimeHost[runtimeKey] ??= new Map();
+}
 
 function mcpServerId(context: ConnectionAdapterContext): string {
   return String(context.attempt.plan?.strategy.configuration?.mcpServerId || context.attempt.serviceId);
 }
 
 export function getConnectionRuntime() {
-  if (singleton) return singleton;
   const configDir = getConfig().getConfigDir();
+  const cached = runtimeCache().get(configDir);
+  if (cached) return cached;
   const attempts = new ConnectionAttemptStore(configDir);
   const connections = new ConnectionStore(configDir);
   migrateLegacyConnections(connections);
@@ -184,8 +192,9 @@ export function getConnectionRuntime() {
   }
   const plans = new PluginConnectionPlanResolver(() => mcp.getConfigs());
   const orchestrator = new ConnectionOrchestrator({ attempts, connections, adapters, activity, plans, validateCredentialReference: (reference, serviceId, attemptId) => secureInput.ownsReference(reference, serviceId, attemptId), broadcast: broadcastWS });
-  singleton = { orchestrator, start: new ConnectionStartService(orchestrator), secureInput, adapters };
-  return singleton;
+  const runtime = { orchestrator, start: new ConnectionStartService(orchestrator), secureInput, adapters };
+  runtimeCache().set(configDir, runtime);
+  return runtime;
 }
 
-export function resetConnectionRuntime(): void { singleton = null; }
+export function resetConnectionRuntime(): void { runtimeCache().clear(); }
