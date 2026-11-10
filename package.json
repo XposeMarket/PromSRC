@@ -1,7 +1,7 @@
 {
   "name": "prometheus",
   "version": "1.0.17",
-  "description": "Prometheus â€” Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "engines": {
     "node": ">=20.20.0 <23"
   },
@@ -230,6 +230,7 @@
     "test:connection-plan-scopes": "tsx src/connections/plugin-plan-resolver.regression.ts",
     "test:gmail-mime": "tsx src/integrations/connectors/gmail-mime.regression.ts",
     "test:plugin-tool-surface": "tsx src/connections/tool-surface.regression.ts",
+    "test:api-key-adapter": "tsx src/connections/api-key-adapter.regression.ts",
     "test:x-api-request-policy": "tsx src/gateway/tools/x-api-request-policy.regression.ts",
     "test:oauth-callback-lifecycle": "tsx src/auth/oauth-callback-lifecycle.regression.ts",
     "test:connector-oauth": "npm run build:backend && node scripts/test-connector-oauth-contract.mjs",

@@ -22,6 +22,8 @@ import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { migrateLegacyConnections } from './legacy-migration';
 import { reconcileNativeConnectorToolSnapshots } from './native-tool-reconcile';
+import { getDeclaredExtensionTools } from '../extensions/tool-contracts.js';
+import { getExtensionDescriptor } from '../extensions/registry';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
 import { setPluginCredentialState } from '../security/plugin-credential-state';
 export {
@@ -130,7 +132,25 @@ export function getConnectionRuntime() {
 
   adapters.register(new ApiKeyConnectionAdapter({
     createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
-    verifyCredential: async () => ({ ok: false, message: 'Stored, not verified: this adapter has no safe authentication verifier.' }),
+    declaredTools: (pluginId) => getDeclaredExtensionTools(getExtensionDescriptor(pluginId) as any),
+    // Safe read: run one of the plugin's own read-only tools that needs no arguments.
+    // It uses the stored key through the normal credential path; nothing is returned to the model.
+    verifyCredential: async (_reference, _context, connection) => {
+      const registry = getExtensionRuntimeRegistry();
+      const probe = (connection.tools || [])
+        .filter((tool) => tool.risk === 'read-only')
+        .map((tool) => registry.listTools().find((item) => item.name === tool.name))
+        .find((tool) => tool && !(Array.isArray(tool.parameters?.required) && tool.parameters.required.length));
+      if (!probe) return { ok: false, message: 'Stored, not verified: the plugin has no argument-free read-only tool to probe.' };
+      try {
+        const result = await registry.executeTool(probe.name, {});
+        return result?.error
+          ? { ok: false, message: `Safe read ${probe.name} failed: ${String(result.result || '').slice(0, 200)}` }
+          : { ok: true, message: `Safe read ${probe.name} succeeded.` };
+      } catch (error: any) {
+        return { ok: false, message: `Safe read ${probe.name} failed: ${String(error?.message || error).slice(0, 200)}` };
+      }
+    },
     clearCredential: async (reference, context) => {
       setPluginCredentialState(configDir, context.attempt.serviceId, true, 'disconnected');
       secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true });
