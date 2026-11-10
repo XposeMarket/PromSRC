@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 import { foldMobileReasoningSummaryGroups, mobileReasoningSummaryTitle } from '../mobile/mobile-reasoning-summary-fold.js';
 import { agentAvatarHtml } from '../components/provider-logo.js';
 import { liveTraceSummaryKey, desktopTraceProgressSummary as formatDesktopTraceProgressSummary } from '../features/chat/trace-summary-presentation.js';
@@ -44576,6 +44578,7 @@ function renderInlineApprovalRequest(item) {
         ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
       </div>
     </div>
+    ${renderContentReview(approval)}
     ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
     ${approval.humanDetail ? `<div class="chat-approval-subdetail">${escHtml(approval.humanDetail)}</div>` : ''}
     ${pending && devPlan?.reasoning ? `<div class="chat-approval-scope"><span>Reasoning</span>${escHtml(String(devPlan.reasoning))}</div>` : ''}

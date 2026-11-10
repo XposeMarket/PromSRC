@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 import { renderTaskTool, renderTaskEvidence, rememberTaskTools } from '../features/tasks/task-detail-render.js';
 import { preserveRequestCards } from '../features/tasks/preserve-request-cards.js';
 
@@ -389,7 +391,7 @@ function renderVideoApprovalCard(item) {
   const p = item.payload || {};
   const id = escHtml(String(p.id || item.id || ''));
   const usd = Number(p.quotedUsd || 0).toFixed(2);
-  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">Paid video run: ~$${escHtml(usd)}</div><div class="chat-approval-body">${escHtml(String(p.summary || 'Approve the quoted cost to start generating.'))}</div><div class="chat-approval-actions"><button class="chat-approval-btn" onclick="bgtVideoApprovalDismiss('${id}')">Dismiss</button><button class="chat-approval-btn chat-approval-approve" onclick="bgtVideoApprovalApprove('${id}')">Approve</button></div></div>`;
+  return `<div class="chat-approval-card chat-approval-card-low"><div class="chat-approval-title">Paid video run: ~$${escHtml(usd)}</div><div class="chat-approval-body">${escHtml(String(p.summary || 'Approve the quoted cost to start generating.'))}</div>${renderContentReview(p)}<div class="chat-approval-actions"><button class="chat-approval-btn" onclick="bgtVideoApprovalDismiss('${id}')">Dismiss</button><button class="chat-approval-btn chat-approval-approve" onclick="bgtVideoApprovalApprove('${id}')">Approve</button></div></div>`;
 }
 
 function renderTeamEscalationCard(item) {

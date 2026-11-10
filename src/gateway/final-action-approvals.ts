@@ -1,3 +1,5 @@
+import { normalizeContentReview, type ContentReview } from './content-review.js';
+
 export type FinalActionKind =
   | 'post'
   | 'send'
@@ -15,6 +17,7 @@ export interface FinalActionApprovalRequest {
   surface?: string;
   nextToolName?: string;
   nextToolArgs?: Record<string, any>;
+  contentReview?: ContentReview;
   screenshotId?: string;
   expiresAt?: number;
 }
@@ -66,6 +69,7 @@ export function createFinalActionApprovalScope(input: {
   surface?: string;
   nextToolName?: string;
   nextToolArgs?: Record<string, any>;
+  contentReview?: ContentReview;
   screenshotId?: string;
   ttlMs?: number;
 }): FinalActionApprovalRequest {
@@ -76,6 +80,7 @@ export function createFinalActionApprovalScope(input: {
   const ttlMs = Math.max(30_000, Math.min(60 * 60 * 1000, Number(input.ttlMs || DEFAULT_TTL_MS)));
   return {
     actionKind,
+    contentReview: normalizeContentReview(input.contentReview),
     targetLabel: String(input.targetLabel || '').trim().slice(0, 160) || actionKind,
     summary: String(input.summary || '').trim().slice(0, 1200) || `Approve final ${actionKind} action.`,
     surface: String(input.surface || '').trim().slice(0, 220) || undefined,

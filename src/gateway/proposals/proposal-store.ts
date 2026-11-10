@@ -1,3 +1,5 @@
+import { normalizeContentReview, type ContentReview } from '../content-review.js';
+
 /**
  * proposal-store.ts
  *
@@ -82,6 +84,7 @@ export interface ProposalExecutionStep {
 }
 
 export interface ProposalContentSnapshot {
+  contentReview?: ContentReview;
   executionMode?: ProposalExecutionMode;
   type: ProposalType;
   priority: ProposalPriority;
@@ -130,6 +133,7 @@ export interface ProposalApprovalSnapshot {
 }
 
 export interface Proposal {
+  contentReview?: ContentReview;
   id: string;
   executionMode?: ProposalExecutionMode;
   type: ProposalType;
@@ -168,6 +172,7 @@ export interface Proposal {
 }
 
 export interface ProposalUpdateInput {
+  contentReview?: ContentReview;
   executionMode?: ProposalExecutionMode;
   type?: ProposalType;
   priority?: ProposalPriority;
@@ -380,6 +385,7 @@ function normalizeProposalTeamExecution(raw: any): ProposalTeamExecution | undef
 
 function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalContentSnapshot>): ProposalContentSnapshot {
   return {
+    contentReview: normalizeContentReview(proposal.contentReview),
     executionMode: normalizeProposalExecutionMode((proposal as any).executionMode),
     type: proposal.type,
     priority: proposal.priority,
@@ -404,6 +410,7 @@ function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalCon
 function normalizeRevision(raw: any): ProposalRevision {
   const snapshotRaw = (raw && typeof raw.snapshot === 'object') ? raw.snapshot : {};
   const snapshot: ProposalContentSnapshot = {
+    contentReview: normalizeContentReview(snapshotRaw.contentReview),
     executionMode: normalizeProposalExecutionMode(snapshotRaw.executionMode || snapshotRaw.execution_mode),
     type: (snapshotRaw.type || 'general') as ProposalType,
     priority: (snapshotRaw.priority || 'medium') as ProposalPriority,
@@ -435,6 +442,7 @@ function normalizeRevision(raw: any): ProposalRevision {
 function normalizeProposal(raw: Proposal): Proposal {
   const normalized: Proposal = {
     ...raw,
+    contentReview: normalizeContentReview(raw.contentReview),
     executionMode: normalizeProposalExecutionMode((raw as any).executionMode || (raw as any).execution_mode),
     type: (raw.type || 'general') as ProposalType,
     priority: (raw.priority || 'medium') as ProposalPriority,
@@ -651,6 +659,7 @@ export function updatePendingProposal(
   const before = buildProposalContentSnapshot(proposal);
   const next: Proposal = { ...proposal };
 
+  if (updates.contentReview !== undefined) next.contentReview = normalizeContentReview(updates.contentReview);
   if (updates.type !== undefined) next.type = updates.type;
   if (updates.executionMode !== undefined || (updates as any).execution_mode !== undefined) {
     next.executionMode = normalizeProposalExecutionMode(updates.executionMode || (updates as any).execution_mode);

@@ -1796,6 +1796,20 @@ router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
   }
 });
 
+// Revision requests reject the old grant; the origin must prepare and request again.
+router.post('/api/approvals/:id/content-changes', requireGatewayAuth, (req, res) => {
+  const queue = getApprovalQueue();
+  const approval = queue.get(req.params.id);
+  if (!approval) { res.status(404).json({ success: false, error: 'Approval not found' }); return; }
+  if (approval.status !== 'pending') { res.status(409).json({ success: false, error: 'Approval already resolved' }); return; }
+  if (approval.approvalKind !== 'final_action' || !approval.finalAction?.contentReview) { res.status(400).json({ success: false, error: 'This request has no editable content preview' }); return; }
+  const feedback = req.body?.feedback;
+  if (typeof feedback !== 'string' || !feedback.trim() || feedback.length > 32000) { res.status(400).json({ success: false, error: 'Feedback must contain 1–32000 characters' }); return; }
+  queue.update(approval.id, { contentReviewFeedback: feedback });
+  const result = resolveApprovalDecision({ approvalId: approval.id, decision: 'rejected', resolvedBy: 'content_changes' });
+  res.status(result.statusCode).json(result.statusCode === 200 ? { success: true, approval: result.approval } : { success: false, error: result.error });
+});
+
 router.patch('/api/approvals/:id', requireGatewayAuth, (req, res) => {
   try {
     const queue = getApprovalQueue();

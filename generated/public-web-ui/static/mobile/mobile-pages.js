@@ -1,3 +1,5 @@
+import { renderContentReview } from '../components/ContentReview.js';
+
 // Chat and inline Voice route owner.
 import { mobileStreamOwner } from './mobile-stream-owner.js';
 import { reconcileMobileStaleRuns } from './mobile-turn-lifecycle.js';
@@ -7324,6 +7326,7 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     </div>
     <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
     ${subtitle ? `<div class="pm-approval-sub ${isFinalAction ? '' : 'mono'}">${escapeHtml(subtitle)}</div>` : ''}
+    ${renderContentReview(approval)}
     ${human.summary ? `<blockquote class="pm-approval-quote">${escapeHtml(human.summary)}</blockquote>` : ''}
     ${pending ? _pmRenderCommandRunLink(approval) : ''}
     ${actionsHtml}

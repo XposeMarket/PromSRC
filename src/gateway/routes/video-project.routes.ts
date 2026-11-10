@@ -1,3 +1,5 @@
+import { videoContentReview } from '../video-content-review.js';
+
 /**
  * HTTP surface for generative video projects. Mirrors the video_project tool
  * so the editor UI, phone and Prom all drive the same server-owned document.
@@ -203,6 +205,9 @@ export function registerVideoProjectRoutes(router: IRouter): void {
       const ws = getConfig().getWorkspacePath();
       const record = getVideoApproval(ws, req.params.approvalId);
       if (!record) return res.status(404).json({ success: false, error: 'Approval not found or already handled.' });
+      if (record.contentReview && JSON.stringify(record.contentReview) !== JSON.stringify(videoContentReview(record.workspacePath, record.projectId, record.args, record.quotedUsd))) {
+        return res.status(409).json({success:false,error:'The project content changed since this quote. Request a new generation approval.'});
+      }
       const { executeVideoProject } = await import('../../media-engine/tool.js');
       const result = await executeVideoProject({ ...record.args, action: record.action, projectId: record.projectId, approved: true }, { workspacePath: record.workspacePath, sessionId: record.sessionId });
       clearVideoApproval(ws, record.id);

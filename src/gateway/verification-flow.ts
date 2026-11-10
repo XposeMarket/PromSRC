@@ -1,3 +1,5 @@
+import { generationContentReview, type ContentReview } from './content-review.js';
+
 // src/gateway/verification-flow.ts
 import crypto from 'crypto';
 import fs from 'fs';
@@ -20,6 +22,7 @@ interface VerificationSession {
 // /api/approvals (GET) and /api/approvals/:id (POST approve/reject).
 
 export interface ApprovalRecord {
+  contentReview?: ContentReview;
   id: string;
   /** The chat session or task that triggered this approval */
   sessionId: string;
@@ -66,7 +69,9 @@ export interface ApprovalRecord {
     };
     expiresAt?: number;
   };
+  contentReviewFeedback?: string;
   finalAction?: {
+    contentReview?: import('./content-review.js').ContentReview;
     actionKind: string;
     targetLabel: string;
     summary: string;
@@ -126,6 +131,7 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     agentId: record.agentId,
     originType: record.originType,
     originLabel: record.originLabel,
+    contentReview: record.contentReview,
     toolName: record.toolName,
     toolArgs: truncateApprovalValue(record.toolArgs || {}),
     approvalKind: record.approvalKind,
@@ -158,7 +164,8 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
       requiresAdmin: true,
     } : undefined,
     devSourceEdit: record.devSourceEdit ? truncateApprovalValue(record.devSourceEdit) : undefined,
-    finalAction: record.finalAction ? truncateApprovalValue(record.finalAction) : undefined,
+    finalAction: record.finalAction ? { ...truncateApprovalValue(record.finalAction), contentReview: record.finalAction.contentReview } : undefined,
+    contentReviewFeedback: record.contentReviewFeedback,
     devApplyLive: record.devApplyLive ? truncateApprovalValue(record.devApplyLive) : undefined,
     createdAt: record.createdAt,
     status: record.status,
@@ -263,6 +270,7 @@ class ApprovalQueue {
     const id = crypto.randomUUID();
     const record: ApprovalRecord = {
       ...partial,
+      contentReview: generationContentReview(partial.toolName, partial.toolArgs || {}),
       id,
       createdAt: new Date().toISOString(),
       status: 'pending',
@@ -430,6 +438,7 @@ class ApprovalQueue {
    * Returns the updated record or null if not found / already resolved.
    */
   update(id: string, fields: {
+    contentReviewFeedback?: string;
     reason?: string;
     action?: string;
     devSourceEdit?: Partial<ApprovalRecord['devSourceEdit']>;
@@ -437,9 +446,15 @@ class ApprovalQueue {
   }): ApprovalRecord | null {
     const record = this.records.get(id);
     if (!record || record.status !== 'pending') return null;
+    if (fields.contentReviewFeedback !== undefined) record.contentReviewFeedback = fields.contentReviewFeedback;
     if (fields.reason !== undefined) record.reason = fields.reason;
     if (fields.action !== undefined) record.action = fields.action;
-    if (fields.toolArgs) record.toolArgs = { ...record.toolArgs, ...fields.toolArgs };
+    if (fields.toolArgs) {
+      const toolArgs = { ...record.toolArgs, ...fields.toolArgs };
+      const contentReview = generationContentReview(record.toolName, toolArgs);
+      record.toolArgs = toolArgs;
+      record.contentReview = contentReview;
+    }
     if (fields.devSourceEdit && record.devSourceEdit) {
       record.devSourceEdit = { ...record.devSourceEdit, ...fields.devSourceEdit } as ApprovalRecord['devSourceEdit'];
       if (fields.devSourceEdit.plan !== undefined && record.devSourceEdit) {
