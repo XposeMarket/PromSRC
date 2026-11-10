@@ -58,6 +58,8 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5/i, input: 1.25, output: 10.00, cacheRead: 0.125 },
   { provider: /^(openai|openai_codex)$/i, model: /^o[134]/i, input: 2.50, output: 10.00, cacheRead: 1.25 },
 
+  // Official 5.2 rates; precede the legacy Fable family fallback.
+  { provider: /^anthropic$/i, model: /^claude-(?:fable|mythos)-5-2(?:-|$)/i, input: 8.00, output: 40.00, cacheRead: 0.20, cacheWrite: 10.00 },
   { provider: /^anthropic$/i, model: /fable/i, input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
   { provider: /^anthropic$/i, model: /opus-4-(6|7|8)|opus-4\.(6|7|8)/i, input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
   { provider: /^anthropic$/i, model: /opus/i, input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },

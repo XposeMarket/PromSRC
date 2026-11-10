@@ -88,6 +88,18 @@ router.post('/api/connection-attempts/:id/connect', (req, res, next) => {
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
 });
 
+// Same paired-device/native-owner boundary as Connect. URL and browser identity are server-derived.
+router.post('/api/connection-attempts/:id/oauth-handoff', (req, res, next) => {
+  const adapter = getConnectionRuntime().orchestrator.getAttempt(req.params.id)?.plan?.strategy.adapter;
+  requirePluginSetupAdapter(req, res, next, adapter);
+}, async (req, res) => {
+  try {
+    const { openConnectionPhoneHandoff } = await import('../../connections/oauth-phone-handoff');
+    const handoff = await openConnectionPhoneHandoff(getConnectionRuntime().orchestrator.getAttempt(req.params.id));
+    res.set('Cache-Control', 'no-store').json({ success: true, ...handoff });
+  } catch { res.status(409).json({ success: false, error: 'OAUTH_HANDOFF_UNAVAILABLE' }); }
+});
+
 router.post('/api/connection-attempts/:id/continue', async (req, res) => {
   try { res.json({ success: true, attempt: await getConnectionRuntime().orchestrator.continue(req.params.id, req.body || {}) }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
