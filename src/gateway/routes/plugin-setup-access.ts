@@ -12,25 +12,53 @@ function pairedPluginDevice(req: Pick<Request, 'headers'>): boolean {
   if (typeof token !== 'string' || !token) return false;
   try { return !!verifyDeviceToken(token); } catch { return false; }
 }
+
+/** The three checks behind plugin setup. Injectable so regressions can drive the real guards over HTTP. */
+export type PluginSetupGates = {
+  storageAvailable: () => boolean;
+  pairedDevice: (req: Pick<Request, 'headers'>) => boolean;
+  ownerGate: (req: any, res: any, next: () => void) => void;
+};
+const defaultGates: PluginSetupGates = {
+  storageAvailable: () => protectedPluginStorageAvailable(),
+  pairedDevice: pairedPluginDevice,
+  ownerGate: (req, res, next) => requireProtectedOwner(req, res, next),
+};
+
 export function pluginSetupSurfaceState(req: Pick<Request, 'headers'>) {
   const owner = ownerSurfaceState(req);
   const paired = pairedPluginDevice(req);
   return { canConfigure: owner.canApprove || paired, surface: paired ? 'paired_device' : owner.surface };
 }
-export function requirePluginSetup(req: any, res: any, next: () => void): void {
+export function requirePluginSetup(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates): void {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
   if (!secureInputTransportAllowed(req)) { res.status(403).json({ success: false, error: 'SECURE_ORIGIN_REQUIRED' }); return; }
-  if (!protectedPluginStorageAvailable()) { res.status(409).json({ success: false, error: 'PROTECTED_STORAGE_REQUIRED' }); return; }
-  if (pairedPluginDevice(req)) { next(); return; }
+  if (!gates.storageAvailable()) { res.status(409).json({ success: false, error: 'PROTECTED_STORAGE_REQUIRED' }); return; }
+  if (gates.pairedDevice(req)) { next(); return; }
   // Desktop retains exact-request native consent. General secure-access routes do not use this guard.
-  requireProtectedOwner(req, res, next);
+  gates.ownerGate(req, res, next);
 }
 
-/** Credential/sign-in flows only. Installing or launching local code still requires owner approval. */
-export const PAIRED_PLUGIN_SETUP_ADAPTERS = new Set(['api-key', 'setup-token', 'connector-oauth', 'mcp-oauth', 'openai-compatible-model']);
+/**
+ * Legacy typed-credential save (`/api/connections/credentials`). The body picks the connector id and
+ * accepts keys, tokens and OAuth app fields, so a paired device may use it only to complete a pending
+ * connection attempt: the handler then validates that attempt and limits the fields. Without an
+ * attempt id the request needs owner proof, exactly like other protected changes.
+ */
+export function requireAttemptBoundPluginSetup(req: any, res: any, next: () => void, gates: PluginSetupGates = defaultGates): void {
+  const attemptId = req?.body?.attemptId;
+  if (typeof attemptId === 'string' && attemptId) requirePluginSetup(req, res, next, gates);
+  else gates.ownerGate(req, res, next);
+}
 
+/**
+ * Credential/sign-in flows only. Installing or launching local code still requires owner approval.
+ * `openai-compatible-model` is deliberately absent: it writes a model provider base URL, and every
+ * prompt sent to that provider goes to that endpoint.
+ */
+export const PAIRED_PLUGIN_SETUP_ADAPTERS = new Set(['api-key', 'setup-token', 'connector-oauth', 'mcp-oauth']);
 
-export function requirePluginSetupAdapter(req: any, res: any, next: () => void, adapter?: string): void {
-  if (adapter && PAIRED_PLUGIN_SETUP_ADAPTERS.has(adapter)) requirePluginSetup(req, res, next);
-  else requireProtectedOwner(req, res, next);
+export function requirePluginSetupAdapter(req: any, res: any, next: () => void, adapter?: string, gates: PluginSetupGates = defaultGates): void {
+  if (adapter && PAIRED_PLUGIN_SETUP_ADAPTERS.has(adapter)) requirePluginSetup(req, res, next, gates);
+  else gates.ownerGate(req, res, next);
 }

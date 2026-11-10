@@ -37,7 +37,7 @@ try {
   const noOrigin = req(active.deviceToken); delete noOrigin.headers.origin; assert.equal(invoke(noOrigin).allowed, false);
   const bodyOnly = req(); bodyOnly.body.token = active.deviceToken; assert.equal(invoke(bodyOnly).allowed, false);
   available = false; assert.equal(invoke(good).status, 409); available = true;
-  for (const id of ['mcp-stdio', 'local-resource', 'browser-session', 'unknown', undefined]) {
+  for (const id of ['openai-compatible-model', 'mcp-stdio', 'local-resource', 'browser-session', 'unknown', undefined]) {
     assert(!setup.PAIRED_PLUGIN_SETUP_ADAPTERS.has(id));
     assert.equal(invoke(good, (req,res,next)=>setup.requirePluginSetupAdapter(req,res,next,id)).allowed,false);
   }
