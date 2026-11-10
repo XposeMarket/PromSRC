@@ -88,6 +88,9 @@ export function relabelModelSelect(select, provider = '') {
   if (!select || select.tagName !== 'SELECT') return;
   for (const option of Array.from(select.options || [])) {
     const value = String(option.value || '').trim();
-    if (value) option.textContent = formatModelDisplayName(value, provider);
+    if (value) {
+      option.textContent = formatModelDisplayName(value, provider);
+      if (value.replace(/^anthropic\//, '') === 'claude-mythos-5-2') option.textContent += ' (verified organization required)';
+    }
   }
 }

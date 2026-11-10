@@ -16,6 +16,12 @@ export type ResolvedAgentRouting = {
 };
 
 const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  'fable-5.2': 'claude-fable-5-2',
+  'fable-5-2': 'claude-fable-5-2',
+  'claude-fable-5.2': 'claude-fable-5-2',
+  'mythos-5.2': 'claude-mythos-5-2',
+  'mythos-5-2': 'claude-mythos-5-2',
+  'claude-mythos-5.2': 'claude-mythos-5-2',
   'fable-5.1': 'claude-fable-5-1',
   'fable-5-1': 'claude-fable-5-1',
   'claude-fable-5.1': 'claude-fable-5-1',

@@ -129,9 +129,9 @@ export function normalizeReasoningEffort(provider: string, model: string, value:
 export function supportsFastSpeed(provider: string, model: string): boolean {
   const id = String(provider || '').trim().toLowerCase();
   const name = slug(model);
-  // Fast mode is Claude Opus 5 / Opus 4.8 only. It was removed on Opus 4.7 -
+  // Fast mode supports Fable/Mythos 5.2 and Opus 5 / 4.8. Removed on Opus 4.7 -
   // sending speed: 'fast' there now errors - so 4.7 must not be listed here.
-  if (id === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
+  if (id === 'anthropic') return /^claude-(?:(?:fable|mythos)-5-2|opus-(?:5|4-8))(?:-|$)/.test(name);
   if (id === 'openai' || id === 'openai_codex') {
     if (/^gpt-6\.1-terra(?:-|$)/.test(name)) return true;
     return /^(?:gpt-6(?:\.1)?-(?:astra|sol|luna)|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
