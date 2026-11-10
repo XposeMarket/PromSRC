@@ -117,7 +117,7 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
     // Installed setup schemas are server-owned typed API-key destinations, not research fallbacks.
     if (!strategies.length && descriptor?.setup?.authType === 'api_key' && descriptor.setup.fields?.length) {
       strategies = [{ id: `${descriptor.id}-manifest-key`, adapter: 'api-key', priority: 80, capabilities: [], readOnly: true,
-        authentication: { type: 'api-key' }, configuration: { credentialFields: descriptor.setup.fields.map(field => ({ key: field.key, label: field.label, required: field.required, secret: field.secret !== false })) },
+        authentication: { type: 'api-key' }, configuration: { registeredTools: getDeclaredExtensionTools(descriptor), credentialFields: descriptor.setup.fields.map(field => ({ key: field.key, label: field.label, required: field.required, secret: field.secret !== false })) },
         verification: ['credential.authentication'] }];
     }
     const mcp = this.getMcpConfigs().find((item) => normalize(item.id) === normalize(canonicalServiceId) || normalize(item.name || '') === normalize(canonicalServiceId));

@@ -22,6 +22,8 @@ import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { migrateLegacyConnections } from './legacy-migration';
 import { reconcileNativeConnectorToolSnapshots } from './native-tool-reconcile';
+import { getDeclaredExtensionTools } from '../extensions/tool-contracts.js';
+import { getExtensionDescriptor } from '../extensions/registry';
 import { invalidateConnectionToolSurfaceCache } from './tool-surface';
 import { setPluginCredentialState } from '../security/plugin-credential-state';
 export {
@@ -56,6 +58,7 @@ type ConnectionRuntime = { orchestrator: ConnectionOrchestrator; start: Connecti
 // tsx can evaluate CJS/static and ESM/dynamic imports as separate module copies.
 // HTTP and tools must nevertheless share attempts AND in-memory secure-input state.
 const runtimeKey = Symbol.for('prometheus.connection-runtime.v1');
+const API_KEY_SAFE_READ_TIMEOUT_MS = 15_000;
 const runtimeHost = globalThis as typeof globalThis & { [runtimeKey]?: Map<string, ConnectionRuntime> };
 function runtimeCache(): Map<string, ConnectionRuntime> {
   return runtimeHost[runtimeKey] ??= new Map();
@@ -130,7 +133,32 @@ export function getConnectionRuntime() {
 
   adapters.register(new ApiKeyConnectionAdapter({
     createCredentialSession: async (context, fields) => secureInput.create({ serviceId: context.attempt.serviceId, attemptId: context.attempt.id, fields }),
-    verifyCredential: async () => ({ ok: false, message: 'Stored, not verified: this adapter has no safe authentication verifier.' }),
+    declaredTools: (pluginId) => getDeclaredExtensionTools(getExtensionDescriptor(pluginId) as any),
+    // Safe read: run one of the plugin's own read-only tools that needs no arguments.
+    // It uses the stored key through the normal credential path; nothing is returned to the model.
+    verifyCredential: async (_reference, _context, connection) => {
+      const registry = getExtensionRuntimeRegistry();
+      const probe = (connection.tools || [])
+        .filter((tool) => tool.risk === 'read-only')
+        .map((tool) => registry.listTools().find((item) => item.name === tool.name))
+        .find((tool) => tool && !(Array.isArray(tool.parameters?.required) && tool.parameters.required.length));
+      if (!probe) return { ok: false, message: 'Stored, not verified: the plugin has no argument-free read-only tool to probe.' };
+      // Plugin output/errors are never persisted: they could echo the credential. Report a fixed message only.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), API_KEY_SAFE_READ_TIMEOUT_MS); });
+        const result = await Promise.race([registry.executeTool(probe.name, {}), timeout]);
+        if (result === 'timeout') return { ok: false, message: `Safe read ${probe.name} timed out.`, details: { probe: probe.name, reason: 'timeout' } };
+        return result?.error
+          ? { ok: false, message: `Safe read ${probe.name} failed. Check the key, then reconnect.`, details: { probe: probe.name, reason: 'tool_error' } }
+          : { ok: true, message: `Safe read ${probe.name} succeeded.`, details: { probe: probe.name } };
+      } catch {
+        return { ok: false, message: `Safe read ${probe.name} failed. Check the key, then reconnect.`, details: { probe: probe.name, reason: 'exception' } };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    credentialUsable: (reference, context) => secureInput.ownsReference(reference, context.attempt.serviceId, context.attempt.id) === true,
     clearCredential: async (reference, context) => {
       setPluginCredentialState(configDir, context.attempt.serviceId, true, 'disconnected');
       secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true });
