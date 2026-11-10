@@ -17,6 +17,8 @@ Untrack everything under workspace/ except workspace/skills/** (minus .history/ 
 - src/gateway/memory-index/memory-atoms.regression.ts
 - .pr/SPEC.md
 - workspace/** (index removals only, outside skills/ and self/)
+- scripts/pr-finish.ps1 (gate reads git file names with core.quotepath=off, so non-ASCII paths match the scope check)
+
 ## Acceptance
 Test: node scripts/test-workspace-tracking-guard.mjs && node scripts/audit-repo-privacy.mjs --strict-current && npx tsc --noEmit -p .
 git ls-files workspace lists only workspace/skills/** (no .history) and workspace/self/**. Skill and self-doc tests still pass.
