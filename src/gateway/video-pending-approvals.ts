@@ -62,7 +62,7 @@ export function recordVideoApproval(input: Omit<VideoPendingApproval, 'id' | 'cr
   // One pending quote per project+action: a re-quote replaces the older one.
   const kept = readApprovals(input.workspacePath).filter((a) => !(a.projectId === input.projectId && a.action === input.action));
   let contentReview: ContentReview | undefined;
-  try { contentReview = videoContentReview(input.workspacePath, input.projectId, input.args, Number(input.quotedUsd) || 0); } catch { /* Legacy/missing project stays a plain quote, not a fabricated preview. */ }
+  try { contentReview = videoContentReview(input.workspacePath, input.projectId, input.args, Number(input.quotedUsd) || 0); } catch { /* Legacy/missing project stays a plain quote, not a fabricated preview. Approve refuses it (decideVideoApproval): no review, no paid run. */ }
   const record: VideoPendingApproval = {
     ...input,
     contentReview,
