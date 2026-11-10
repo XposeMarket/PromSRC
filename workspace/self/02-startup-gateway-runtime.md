@@ -24,7 +24,6 @@
 | Express app | `src/gateway/core/app.ts` → app factory | Middleware/static UI/health and app-level route mounting. |
 | HTTP server | `src/gateway/core/server.ts` → `createServer()` | HTTP/HTTPS, sockets, upgrades/WebSocket and gateway fast paths. |
 | Startup orchestration | `src/gateway/core/startup.ts` | Startup responsibilities split from server entry. |
-| Execution control | `src/gateway/runtime/execution-controller.ts` | Coordinates admitted runtime execution and stop/abort semantics. |
 | Node runtime abstraction | `src/gateway/runtime/node-runtime.ts` | Runtime/process snapshot/reporting surface. |
 | Gateway handoff | `src/gateway/runtime/gateway-handoff-{host,client,bridge,protocol}.ts` | Durable coordination/forwarding for gateway ownership changes. |
 | Lifecycle/restart context | `src/gateway/lifecycle.ts`, `src/runtime/supervisor-restart-request.ts`, `src/gateway/runtime/handoff-restart-forward.ts` | Shutdown hooks and explicit restart/handoff records. |

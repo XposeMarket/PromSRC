@@ -43,7 +43,7 @@ function walk(dir, out) {
 }
 
 const candidates = [];
-for (const dir of ['scripts', 'src', 'apps']) walk(path.join(root, dir), candidates);
+for (const dir of ['scripts', 'src']) walk(path.join(root, dir), candidates);
 
 const references = [fs.readFileSync(path.join(root, 'package.json'), 'utf8')];
 const workflows = path.join(root, '.github', 'workflows');

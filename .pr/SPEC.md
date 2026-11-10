@@ -1,29 +1,25 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
-Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
+# Dead-code sweep, pass 2
+Tier: 1; owner-approved deletion of proven-unused code, stacked on #871 (chore/dead-code-sweep).
+Surface: none
+Parity: no runtime behavior change on desktop, web, mobile PWA or channels; deleted modules had no runtime importer.
+Size justification: deletions only (17 files) plus doc lines that described the deleted modules as live.
 ## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
+Pass 1 audit (diagnostics/audit/codebase-2026-11-10) left modules that only their own tests import, an unconsumed apps/mobile native-app core, and one-off scripts nothing calls.
 ## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
+Delete only candidates with zero imports, zero path-string/dynamic/glob/npm/CI/builder references, no docs describing them as current, and added more than 30 days ago. Delete their tests with them and fix docs that described them as live. Everything else is kept and listed in .pr/FIXER-REPORT.md.
 ## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
+- apps/mobile/** (13 files, deleted)
+- src/gateway/runtime/execution-controller.ts, execution-controller.regression.ts (deleted)
+- src/gateway/recommendations/recommendation-service.ts, recommendation-service.regression.ts (deleted)
+- docs/RECOMMENDATIONS.md (deleted)
+- scripts/redact-private-skill-content.mjs (deleted)
+- docs/universal-execution-runtime.md
+- ARCHITECTURE.md
+- scripts/run-unwired-tests.mjs
+- workspace/self/02-startup-gateway-runtime.md
 - .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
 ## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
+Test: npx tsc --noEmit -p . && npm run test:docs-evidence && npm run test:crash-recovery
+No remaining reference to any deleted path outside generated inventories and dated investigation notes.
 ## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
-
-## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+A path-string loader missed by search would fail at runtime; mitigated by repo-wide rg on basenames including the live workspace skills catalog. Rollback: revert this one commit.

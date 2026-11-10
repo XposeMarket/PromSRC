@@ -11,7 +11,7 @@ Related: [SECURITY.md](SECURITY.md) (trust model and enforcement),
 ## Layers
 
 ```
- Surfaces      Electron desktop (electron/main.js) · web UI (web-ui/src) · mobile PWA + native app (apps/mobile)
+ Surfaces      Electron desktop (electron/main.js) · web UI (web-ui/src) · mobile PWA (web-ui/src/mobile)
                CLI (src/cli) · Telegram and other channels (src/gateway/comms) · webhooks/triggers (src/gateway/triggers)
                                    │
  Gateway       src/gateway/server-v2.ts  (HTTP/SSE/WebSocket, auth, admission, routing, lifecycle)

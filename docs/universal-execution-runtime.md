@@ -31,17 +31,9 @@ Automatic replay is fail-closed:
 
 This prevents a worker crash from blindly repeating side effects such as posts, purchases, file mutations, or external API writes.
 
-## Controller
+## Controller (removed)
 
-`src/gateway/runtime/execution-controller.ts` wraps the existing live-runtime registry rather than creating another journal. It provides one lifecycle:
-
-1. establish ownership (`prepared`);
-2. mark the run active (`running`);
-3. checkpoint waits/tool work/commit boundaries;
-4. complete, fail, or cancel;
-5. ask the contract for a recovery decision after restart.
-
-The controller also produces a bounded worker envelope/correlation packet for future complete-turn child-process RPC.
+An earlier `src/gateway/runtime/execution-controller.ts` wrapped the live-runtime registry with a prepared/running/checkpoint/complete lifecycle and a worker envelope packet. No runtime lane ever adopted it, so it was deleted in the 2026-11 dead-code sweep. The contract in `execution-contract.ts` (including `decideExecutionReplay(...)`) remains; a lane that migrates should add its lifecycle wrapper together with the first real caller.
 
 ## Migration path
 
@@ -79,7 +71,7 @@ Child commands/processes launched by a turn still require explicit ownership and
 
 ## Regression coverage
 
-`execution-controller.regression.ts` covers:
+`src/gateway/runtime/crash-fault-injection.regression.ts` (`npm run test:crash-recovery`) loads `execution-contract.ts` directly. The deleted controller's regression covered:
 
 - stable execution IDs across attempts;
 - safe read-only reruns;
@@ -91,7 +83,7 @@ Child commands/processes launched by a turn still require explicit ownership and
 Suggested validation:
 
 ```bash
-npx tsx src/gateway/runtime/execution-controller.regression.ts
+npm run test:crash-recovery
 npx tsc --noEmit
 npm run test:restart-retrigger
 npm run test:runtime-workers
