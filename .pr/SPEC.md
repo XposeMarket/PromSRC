@@ -1,6 +1,6 @@
 # Stop tracking personal workspace data
 Tier: 1; privacy fix for a public repository, no runtime behavior change.
-Surface: neither (repository hygiene, CI guard)
+Surface: backend
 Parity: n/a, no UI.
 Size justification: 2,880 file deletions are index-only (git rm -r; files stay on disk for the owner). Hand-written change is small: .gitignore section, one guard module, one audit hook, one test, CI step, npm scripts, one test skip.
 ## Problem
@@ -22,3 +22,7 @@ Test: node scripts/test-workspace-tracking-guard.mjs && node scripts/audit-repo-
 git ls-files workspace lists only workspace/skills/** (no .history) and workspace/self/**. Skill and self-doc tests still pass.
 ## Risks
 Personal files remain in Git history; this change does not rewrite history (needs a separate, owner-approved filter-repo and force-push). prom_repo_sync will no longer sync personal workspace files through this repo, because they are now ignored; the owner needs another backup path for them. Rollback: revert this commit (files are still on disk).
+
+## Scope notes
+- .gitmodules: git rm -r removed the stale workspace/PromSite submodule entry automatically, because that gitlink was under workspace/.
+- Every workspace/** deletion (including non-ASCII paths under workspace/games/) is an index-only removal covered by the workspace/** line in Files.
