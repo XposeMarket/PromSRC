@@ -1,6 +1,6 @@
 # Dead-code sweep, pass 2
 Tier: 1; owner-approved deletion of proven-unused code, stacked on #871 (chore/dead-code-sweep).
-Surface: none
+Surface: backend
 Parity: no runtime behavior change on desktop, web, mobile PWA or channels; deleted modules had no runtime importer.
 Size justification: deletions only (17 files) plus doc lines that described the deleted modules as live.
 ## Problem
@@ -23,3 +23,6 @@ Test: npx tsc --noEmit -p . && npm run test:docs-evidence && npm run test:crash-
 No remaining reference to any deleted path outside generated inventories and dated investigation notes.
 ## Risks
 A path-string loader missed by search would fail at runtime; mitigated by repo-wide rg on basenames including the live workspace skills catalog. Rollback: revert this one commit.
+
+## Scope notes
+Stacked on PR #871 (chore/dead-code-sweep, 10371a1f3), which is not yet on origin/main. Every other file in the diff against origin/main (ARCHITECTURE_ANALYSIS.md, package.json, package-lock.json, runtime-dependencies.public.json, tsconfig.json, three.min.js, the ten skill-migration scripts, scripts/prune-dist.js, scripts/test-prune-dist.mjs, scripts/stateful-dynamic-imports.baseline.json, src/connections/discovery-service.ts, src/gateway/llm-primary.ts, src/security/index.ts, the three web-ui deletions and their generated twins) belongs to #871 and is unchanged here. This branch adds only the files listed above.
