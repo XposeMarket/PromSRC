@@ -9,6 +9,7 @@ import { executeAnalyzeVideo } from './../../../tools/media-analysis';
 import { listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot } from './../../../workspace-history';
 import { DEFAULT_FILE_TOOL_EXCLUDES, buildFileIntelligence, buildNoMatchHints, collectGrepMatchesInText, compareGrepMatches, createSearchMatcher, formatGrepToolResult, matchesGlobList, parseGlobList, readSimpleGitignore, resolveResultCharBudget, shouldSkipSearchPath, summarizeFileForTool, type SearchMatcher } from './../../../tools/file-intelligence';
 import { getProcessSupervisor } from './../../process/supervisor';
+import { capCommandOutput, resolveCommandOutputLimit } from './../command-output-cap';
 import { normalizeDevSourcePatchsetArgs, splitLinesEolSafe } from './../../dev-source-patchset';
 import { executeAgentBuilderTool } from './../agent-builder-integration';
 import { parseSchedulePattern } from './../../scheduling/schedule-pattern';
@@ -1634,7 +1635,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         if (waitTimer) clearTimeout(waitTimer);
         if (!exit) {
           const run = supervisor.get(runId);
-          const tail = supervisor.log(runId, 4000).combined.slice(-4000);
+          const tail = capCommandOutput(supervisor.log(runId).combined, { maxChars: args.maxChars ?? args.max_chars, runId });
           return {
             name, args,
             result: `${runId} is ${run?.state || 'running'} after ${Math.round(waitMs / 1000)}s.\n${tail || '(no output yet)'}\nUse process_status/process_log for progress or call process_wait again.`,
@@ -1647,7 +1648,7 @@ export async function handleMiscTool(ctx: handleMiscToolContext): Promise<Awaite
         return {
           name,
           args,
-          result: `${runId} [${outcome.label}]\n${output.slice(0, 4000) || '(no output)'}`,
+          result: `${runId} [${outcome.label}]\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId }) || '(no output)'}`,
           error: !outcome.ok,
           extra: {
             runId,

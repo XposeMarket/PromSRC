@@ -1224,7 +1224,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             stdin: { type: 'boolean', description: 'Keep stdin open for interactive processes.' },
             runId: { type: 'string', description: 'Process runId for status/log/wait/kill/submit.' },
             limit: { type: 'number', description: 'Max process records for status.' },
-            maxChars: { type: 'number', description: 'Max log characters for log.' },
+            maxChars: { type: 'number', description: 'Max characters to return. run/wait/yielded output defaults to 4000 (clamped 1000-100000); longer output keeps the start and end with a truncation marker that names the runId for action:log. For log, the number of log characters to return.' },
             data: { type: 'string', description: 'Text to send for submit.' },
           },
         },
