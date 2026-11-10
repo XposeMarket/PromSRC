@@ -158,11 +158,6 @@
       "count": 1
     },
     {
-      "file": "src/gateway/llm-primary.ts",
-      "target": "src/providers/factory.ts",
-      "count": 1
-    },
-    {
       "file": "src/gateway/mcp-manager.ts",
       "target": "src/connections/tool-surface.ts",
       "count": 1

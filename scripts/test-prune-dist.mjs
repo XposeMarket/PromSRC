@@ -37,6 +37,7 @@ try {
   // Owned dist output
   const owned = [
     'dist/.tsbuildinfo',
+    'dist/config/build-identity.json',
     'dist/cli/index.js', 'dist/cli/index.js.map', 'dist/cli/index.d.ts', 'dist/cli/index.d.ts.map',
     'dist/gateway/chat/view.js',
     'dist/config/soul.md',
