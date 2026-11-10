@@ -11,6 +11,8 @@ export interface ApiKeyAdapterOptions {
   clearCredential?: (credentialRef: string, context: ConnectionAdapterContext) => Promise<void>;
   /** Tools the installed plugin declares (contracts.tools / ownership.tools). Used when an older plan snapshot lacks them. */
   declaredTools?: (pluginId: string) => string[];
+  /** True only while the stored reference is still owned by this service/attempt (false after disconnect/delete). */
+  credentialUsable?: (credentialRef: string, context: ConnectionAdapterContext) => boolean;
 }
 
 function registeredToolsFor(strategy: ConnectionStrategy, context: ConnectionAdapterContext, options: ApiKeyAdapterOptions): string[] {
@@ -79,8 +81,12 @@ export class ApiKeyConnectionAdapter implements ConnectionAdapter {
   async repair(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionAdapterResult> {
     const strategy = context.attempt.plan?.strategy;
     if (!strategy) return { state: 'failed', error: { code: 'PLAN_REQUIRED', message: 'API-key repair requires a selected connection plan.', phase: 'planning' } };
-    if (!connection.credentialRef) return this.connect({ ...context, credentialRef: undefined });
-    return { state: 'verifying', connection: this.storedConnection(strategy, context, connection.credentialRef) };
+    // Never revive a disconnected record or a deleted/foreign credential: require a fresh protected save instead.
+    const disconnected = connection.enabled === false || connection.authState === 'none' || connection.health === 'unavailable';
+    const usable = Boolean(connection.credentialRef) && !disconnected
+      && this.options.credentialUsable?.(connection.credentialRef!, context) === true;
+    if (!usable) return this.connect({ ...context, credentialRef: undefined });
+    return { state: 'verifying', connection: this.storedConnection(strategy, context, connection.credentialRef!) };
   }
 
   async continue(context: ConnectionAdapterContext, input: Record<string, unknown> = {}): Promise<ConnectionAdapterResult> {

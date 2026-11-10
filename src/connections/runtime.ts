@@ -58,6 +58,7 @@ type ConnectionRuntime = { orchestrator: ConnectionOrchestrator; start: Connecti
 // tsx can evaluate CJS/static and ESM/dynamic imports as separate module copies.
 // HTTP and tools must nevertheless share attempts AND in-memory secure-input state.
 const runtimeKey = Symbol.for('prometheus.connection-runtime.v1');
+const API_KEY_SAFE_READ_TIMEOUT_MS = 15_000;
 const runtimeHost = globalThis as typeof globalThis & { [runtimeKey]?: Map<string, ConnectionRuntime> };
 function runtimeCache(): Map<string, ConnectionRuntime> {
   return runtimeHost[runtimeKey] ??= new Map();
@@ -142,15 +143,22 @@ export function getConnectionRuntime() {
         .map((tool) => registry.listTools().find((item) => item.name === tool.name))
         .find((tool) => tool && !(Array.isArray(tool.parameters?.required) && tool.parameters.required.length));
       if (!probe) return { ok: false, message: 'Stored, not verified: the plugin has no argument-free read-only tool to probe.' };
+      // Plugin output/errors are never persisted: they could echo the credential. Report a fixed message only.
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const result = await registry.executeTool(probe.name, {});
+        const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), API_KEY_SAFE_READ_TIMEOUT_MS); });
+        const result = await Promise.race([registry.executeTool(probe.name, {}), timeout]);
+        if (result === 'timeout') return { ok: false, message: `Safe read ${probe.name} timed out.`, details: { probe: probe.name, reason: 'timeout' } };
         return result?.error
-          ? { ok: false, message: `Safe read ${probe.name} failed: ${String(result.result || '').slice(0, 200)}` }
-          : { ok: true, message: `Safe read ${probe.name} succeeded.` };
-      } catch (error: any) {
-        return { ok: false, message: `Safe read ${probe.name} failed: ${String(error?.message || error).slice(0, 200)}` };
+          ? { ok: false, message: `Safe read ${probe.name} failed. Check the key, then reconnect.`, details: { probe: probe.name, reason: 'tool_error' } }
+          : { ok: true, message: `Safe read ${probe.name} succeeded.`, details: { probe: probe.name } };
+      } catch {
+        return { ok: false, message: `Safe read ${probe.name} failed. Check the key, then reconnect.`, details: { probe: probe.name, reason: 'exception' } };
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     },
+    credentialUsable: (reference, context) => secureInput.ownsReference(reference, context.attempt.serviceId, context.attempt.id) === true,
     clearCredential: async (reference, context) => {
       setPluginCredentialState(configDir, context.attempt.serviceId, true, 'disconnected');
       secureInput.clearReference(reference, context.attempt.serviceId, context.attempt.id, { persistedLegacy: true });

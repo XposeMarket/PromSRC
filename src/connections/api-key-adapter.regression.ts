@@ -18,6 +18,7 @@ async function main(): Promise<void> {
   const adapter = new ApiKeyConnectionAdapter({
     createCredentialSession: async () => ({ id: 'session_1' }),
     declaredTools: (pluginId) => (pluginId === 'demo' ? tools : []),
+    credentialUsable: (ref) => ref === 'vault:ref_1',
     verifyCredential: async (_ref, _ctx, connection) => { verifyCalls.push(connection); return { ok: true, message: 'probe ok' }; },
   });
 
@@ -52,6 +53,17 @@ async function main(): Promise<void> {
   const repaired = await adapter.repair(context(tools), { id: 'c1', credentialRef: 'vault:ref_1', registeredTools: [], tools: [] } as any);
   assert.equal(repaired.state, 'verifying');
   assert.equal(repaired.connection!.registered, true);
+
+  // Repair must not revive a disconnected record or a credential this attempt no longer owns.
+  const disconnected = await adapter.repair(context(tools), { id: 'c1', enabled: false, authState: 'none', health: 'unavailable', credentialRef: 'vault:ref_1', registeredTools: [], tools: [] } as any);
+  assert.equal(disconnected.state, 'awaiting_secure_input');
+  assert.equal(disconnected.connection, undefined);
+  const foreign = await adapter.repair(context(tools), { id: 'c1', enabled: true, credentialRef: 'vault:deleted', registeredTools: [], tools: [] } as any);
+  assert.equal(foreign.state, 'awaiting_secure_input');
+  assert.equal(foreign.connection, undefined);
+  // No ownership check wired = fail closed.
+  const unchecked = new ApiKeyConnectionAdapter({ createCredentialSession: async () => ({ id: 's' }), declaredTools: () => tools });
+  assert.equal((await unchecked.repair(context(tools), { id: 'c1', enabled: true, credentialRef: 'vault:ref_1' } as any)).state, 'awaiting_secure_input');
 
   // Without a verifier, verify stays honest.
   const bare = new ApiKeyConnectionAdapter({ createCredentialSession: async () => ({ id: 's' }) });
