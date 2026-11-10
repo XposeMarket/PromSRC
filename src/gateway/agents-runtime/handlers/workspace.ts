@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { looksLikeNativeFileToolBypass } from './../native-file-tool-bypass';
+import { capCommandOutput } from './../command-output-cap';
 import { shouldTrackTerminalWorkspaceChanges } from './../../terminal-service';
 import { getConfig } from './../../../config/config';
 import { jsonEditGuardError } from './../../../tools/json-edit-guard';
@@ -1830,7 +1831,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
             return {
               name,
               args,
-              result: `${normalizedCmd} [${elevated.timedOut ? 'administrator timeout' : `administrator exit ${elevated.exitCode}`}] cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+              result: `${normalizedCmd} [${elevated.timedOut ? 'administrator timeout' : `administrator exit ${elevated.exitCode}`}] cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars }) || '(no output)'}`,
               error: !ok,
               extra: {
                 elevated: true,
@@ -1867,7 +1868,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
         const yieldedCommandResult = (captured: { runId?: string; stdout: string }) => ({
           name,
           args,
-          result: `${normalizedCmd} [still running] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${captured.stdout.slice(-4000) || '(no output yet)'}\nUse process_status/process_log to inspect it, process_wait for a bounded wait, or process_kill to stop it.`,
+          result: `${normalizedCmd} [still running] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(captured.stdout, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output yet)'}\nUse process_status/process_log to inspect it, process_wait for a bounded wait, or process_kill to stop it.`,
           error: false,
           extra: { runId: captured.runId, stillRunning: true },
         });
@@ -1930,7 +1931,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,
                 error: !outcome.ok,
                 extra: {
                   ...(captured.runId ? { runId: captured.runId } : {}),
@@ -1980,7 +1981,7 @@ export async function handleWorkspaceTool(ctx: handleWorkspaceToolContext): Prom
               const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${capCommandOutput(output, { maxChars: args.maxChars ?? args.max_chars, runId: captured.runId }) || '(no output)'}`,
                 error: !outcome.ok,
                 extra: {
                   ...(captured.runId ? { runId: captured.runId } : {}),
