@@ -1,29 +1,30 @@
-# OAuth pending action and phone completion repair
-Tier: 1; explicit live-fix authorization and separate review waiver in this incident.
+# SPEC: Refresh website sign-in cards and protected entry
 Surface: both
-Parity: shared module: web-ui/src/features/connectors/connect-flow.js:92 shared controller and backend; mobile uses existing secure browser viewer, desktop retains external-browser flow. Real Chromium tests at desktop1440/mobile390.
-Size justification: one bounded end-to-end authorization repair requires shared controller, existing viewer, route helper, two regression tests and docs.
-## Problem
-Saved credentials lost pending action after poll. After that fix, mobile still suppresses loopback authorization and sends user to PC.
-## Chosen approach
-Retain/recover pending action; wire mobile loopback connector OAuth to the existing in-house login handoff with paired/native-owner checks and server-derived browser identity/URL. Recheck exact attempt on viewer return, keep secrets DOM-only. No public callback or redirect config changes.
-## Files
-- src/connections/runtime.ts
-- scripts/test-connection-runtime-identity.cjs
-- .pr/SPEC.md
-- src/connections/adapters/connector-oauth.ts
-- src/connections/oauth-phone-handoff.ts
-- src/gateway/routes/connections-v2.router.ts
-- web-ui/src/features/connectors/connect-flow.js
-- web-ui/src/mobile/mobile-login-handoff.js
-- scripts/test-plugin-quick-connect.cjs
-- scripts/test-oauth-phone-handoff.cjs
-- workspace/self/12-connectors-mcp-integrations.md
-## Acceptance
-Test: node --import tsx scripts/test-connection-runtime-identity.cjs && node scripts/test-oauth-phone-handoff.cjs && node scripts/test-plugin-quick-connect.cjs
-Actual shared form -> save -> pending polls -> phone viewer -> provider callback -> connected; close/reopen without key reentry; desktop unchanged. Reject unpaired/spoofed/expired/terminal/wrong-adapter handoffs; no caller URL/session override. Build/UI checks plus live browser readiness. Synthetic test provider is not real X consent.
-## Risks
-OAuth user consent still required by X; do not claim account connection until live status says connected. In-house Electron bridge required, fail clearly if unavailable. Preserve existing user approval and callback state/PKCE validation. Rollback only this branch's changed files, preserving other live hotfixes.
+Parity: fixed both: shared secure-access core/presentation mounted by desktop/mobile docks and Saved access; browser handoff styled in both renderers.
+Test: node scripts/test-secure-access-ui.mjs && node scripts/test-sign-in-presentation.mjs
+Size justification: Cohesive presentation-only refresh with shared dialog lifecycle, two handoff renderers and browser regressions.
 
+## Problem
+Raul approved plans/sign-in-visual-refresh/PLAN.md and screenshots then requested implementation. Existing website entry/approval are dense inline forms.
+## Existing code
+secure-access-core.js owns entry, receipt, approval, clearing and transport. Browser handoffs in ChatPage.js/mobile-chat-renderer-runtime.js. Pending Tasks lane imports shared mounts; no overlapping edits.
+## Options
+CSS-only cannot provide launcher-to-modal. Replacing authorization is unnecessary. Smallest complete solution: presentation wrapper around existing cards/endpoints.
+## Chosen approach
+Tier 1 visual polish plus scoped opposite-model review. Native dialog, mobile sheet/desktop modal, neutral pills and in-field reveal. Save-only entry and prepared sign-in remain separate. No permission/storage/backend changes. Browser handoff retains current browser and completion decisions.
+## Acceptance
+Compact Continue/Skip, visible exact site, reachable actions, dark/light and 320/390/1440 widths. Clear secret on close/cancel/expiry/destroy/pagehide. Preserve replacement owner gate, mode variants, recovery, outcome semantics and default remembrance. Save never submits sign-in. No drafts/chat/log/storage secret exposure.
+## Out of scope
+No new authorization, combined endpoints, OAuth replacement, storage/schema/agent/channel changes or merge/deploy without Raul approval. Synthetic tests do not claim real iPhone keyboard/autofill or real account sign-in.
+## Files
+- web-ui/src/features/secure-access/secure-access-core.js
+- web-ui/src/features/secure-access/sign-in-presentation.js
+- web-ui/src/mobile/mobile-chat-renderer-runtime.js
+- web-ui/src/pages/ChatPage.js
+- web-ui/src/styles/components.css
+- web-ui/src/styles/mobile.css
+- scripts/test-sign-in-presentation.mjs
 ## Scope notes
-Folded PR860 runtime identity hotfix already on live into this branch to eliminate docs/spec collision. Runtime code unchanged from deployed version. Both previous repairs remain available as standalone PRs; no merge performed.
+Generated UI synchronized. Workspace self docs 17,18,19,21 read/updated this turn outside checkout.
+## Risks
+Global CSS/modal lifecycle collisions; browser fixtures test focus/clear/unmount. Revert scoped presentation changes; no data migration.
