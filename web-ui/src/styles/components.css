@@ -9670,3 +9670,11 @@ p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
 .ce-studio-take video, .ce-studio-take img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
 .ce-studio-take__meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px 4px 8px; background: #121218; color: var(--ce-dim, rgba(255,255,255,0.6)); font-size: 10.5px; }
 .ce-studio-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: #fdba74; padding: 0 6px; }
+
+/* Website sign-in handoff: neutral action family; existing browser and decision flow. */
+.chat-question-card:has(.pq-login-handoff){border-radius:24px;padding:20px}
+.chat-question-card .pq-login-handoff{flex-direction:column;align-items:stretch;gap:12px}
+.chat-question-card .pq-login-origin{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.chat-question-card .pq-login-open{min-height:49px;border-radius:28px;background:var(--text-primary,#f4f4f4);color:var(--bg-secondary,#222);font-weight:600}
+.chat-question-card .pq-login-note{line-height:1.6}
+.chat-question-card:has(.pq-login-handoff) .pq-actions button{border-radius:28px;min-height:44px}
